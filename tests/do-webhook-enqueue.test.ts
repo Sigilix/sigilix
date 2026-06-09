@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest"
 import { enqueuePrReviewJob } from "../src/do/webhook-enqueue"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { EnqueueRequest } from "../src/do/types"
 
 interface DoCall {

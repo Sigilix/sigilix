@@ -25,7 +25,7 @@
 // Failure posture: read / write failures log + return a clean miss,
 // they NEVER fail the overview pipeline.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 export interface CachedFileRow {
   path: string

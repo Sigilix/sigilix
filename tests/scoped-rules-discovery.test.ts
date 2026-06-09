@@ -38,7 +38,7 @@ import {
   readScopedRulesManifest,
   scopedRulesKey,
 } from "../src/lib/scoped-rules-kv"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 describe("parseRuleFrontmatter", () => {
   it("returns the body verbatim when no frontmatter is present", () => {

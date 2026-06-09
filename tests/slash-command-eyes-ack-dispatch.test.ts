@@ -15,7 +15,7 @@ vi.mock("../src/lib/slash-command-eyes-ack", () => ({
 }))
 
 import { queueGithubMention } from "../src/index"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 interface FakePayloadOpts {
   body?: string

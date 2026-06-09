@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { PrReviewRunDO } from "../src/do/pr-review-run"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type {
   EnqueueRequest,
   PickupRequest,

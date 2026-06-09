@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest"
 import { migrateOneRepo } from "../src/lib/index-migrate-to-repo-id"
 import { GitHubClient } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { RepoIndexManifestV1 } from "../src/lib/repo-index-manifest"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {

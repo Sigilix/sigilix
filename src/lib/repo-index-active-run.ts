@@ -5,7 +5,7 @@
 // KV failure → queue retry), NEVER explicitly cleared (a slow old run must not
 // delete a newer run's lease), reclaimed by overwrite (next bootstrap) + TTL.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
 
 const KV_KEY_PREFIX = "repo-index-active-run:"

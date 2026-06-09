@@ -23,7 +23,7 @@
 // Telemetry: emits `pr-review-skipped-noop-merge` so we can count
 // budget saved + correlate with customer "Update branch" usage.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const KV_KEY_PREFIX = "pr-review-diff-hash:"
 const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days, mirrors pr-last-reviewed

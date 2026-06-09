@@ -12,7 +12,8 @@ import {
   runnerEvidenceBadgeImg,
 } from "../src/lib/badge-assets"
 import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
-import worker, { type Env } from "../src/index"
+import worker from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function ctx(): ExecutionContext {
   return {

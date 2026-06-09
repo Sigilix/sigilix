@@ -5,7 +5,7 @@ import {
   evaluatePromptVersionSuppression,
   filterReasonsForSuppression,
 } from "../src/lib/triage-pr-stale-mark"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { StaleReason } from "../src/lib/review-manifest"
 
 function envWith(over: Partial<Env> = {}): Env {

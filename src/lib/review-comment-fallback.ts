@@ -36,7 +36,7 @@
 // exercised through the ensemble's integration path.
 
 import type { GitHubClient } from "./github"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 /** The marker every Sigilix review body starts with. Same marker the
  *  formal-review path uses (see `formatReviewBody` in

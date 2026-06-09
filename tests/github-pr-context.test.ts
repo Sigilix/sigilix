@@ -24,7 +24,7 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import { fetchPullRequestContext } from "../src/lib/github-pr-context"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 beforeEach(() => {
   mockMethods.getPullRequest.mockReset()

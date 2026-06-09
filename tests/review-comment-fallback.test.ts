@@ -21,7 +21,7 @@ import {
   renderReviewCommentFallback,
 } from "../src/lib/review-comment-fallback"
 import { GitHubClient } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 let logSpy: ReturnType<typeof vi.spyOn>
 let warnSpy: ReturnType<typeof vi.spyOn>

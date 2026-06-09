@@ -67,7 +67,7 @@ import {
   renderTestingEvidenceBlock,
 } from "../src/lib/testing-evidence-pack"
 import type { ReviewableMap } from "../src/lib/diff-positions"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",

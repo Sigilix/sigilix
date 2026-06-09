@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest"
 import { resolveDoConfig } from "../src/do/config"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function envWith(over: Record<string, string | undefined> = {}): Env {
   return over as unknown as Env

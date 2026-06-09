@@ -32,7 +32,7 @@ import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/li
 import { enqueueIndexJobsForRepos } from "../src/lib/index-producer"
 import { readRepoIndexManifest } from "../src/lib/repo-index-manifest"
 import { debugActiveGraphVersion } from "../src/lib/repo-graph-client"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const mockListInstalls = vi.mocked(listAppInstallationIds)
 const mockListRepos = vi.mocked(listInstallationRepoFullNames)

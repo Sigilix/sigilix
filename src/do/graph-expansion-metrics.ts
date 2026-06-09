@@ -14,7 +14,7 @@
 // posted review.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const RETENTION_DAYS = 35
 const DAY_MS = 86_400_000

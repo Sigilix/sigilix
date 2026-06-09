@@ -16,7 +16,7 @@ import {
   deleteGraph,
 } from "../src/lib/repo-graph-client"
 import { indexNamespace } from "../src/lib/repo-index-manifest"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // ─── Minimal DO stub ─────────────────────────────────────────────────────────
 //

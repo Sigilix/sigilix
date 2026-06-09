@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest"
 import { handleReviewStatusRoute } from "../src/do/status-route"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { StatusResponse } from "../src/do/types"
 
 interface DoStubArgs {

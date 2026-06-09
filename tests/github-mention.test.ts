@@ -70,7 +70,7 @@ import {
   LEGACY_REVIEW_BODY_MARKER,
   SIGILIX_REVIEW_BODY_MARKER,
 } from "../src/lib/dismiss-prior-reviews"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 beforeEach(() => {
   getInstallationTokenMock.mockReset()

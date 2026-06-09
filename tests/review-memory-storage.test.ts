@@ -14,7 +14,7 @@ import type {
   ReviewMemorySignal,
   ReviewMemoryStorageScope,
 } from "../src/lib/review-memory/types"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // ─── KV stub matching the existing project convention ─────────
 

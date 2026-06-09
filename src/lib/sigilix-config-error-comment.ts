@@ -15,7 +15,7 @@
 // Same head SHA → same marker → idempotent.
 
 import type { GitHubClient } from "./github"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const RAW_SNIPPET_MAX = 500
 const KV_TTL_SECONDS = 24 * 60 * 60 // 1 day

@@ -47,7 +47,7 @@ import {
   parseDismissReason,
 } from "./dismiss-reasons"
 import { recordDismissalMetric } from "./validation-metrics-client"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const KV_PREFIX = "gh-mention"

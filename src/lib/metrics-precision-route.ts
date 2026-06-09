@@ -4,7 +4,7 @@
 // dashboard. Ties to SIG-114 (systemic FP-rate). Mirrors /metrics/dismissals'
 // auth contract so the dogwatch curls all metrics endpoints with one token.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { loadPrecisionProfile } from "./precision-profile/store"
 import {

@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest"
 import { isSynthBypassEligible, isSynthBypassEnabled } from "../src/lib/triage-pr-review-ensemble"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function envWith(flag: string | undefined): Env {
   // The helpers only read OPENCLAW_SYNTH_BYPASS_ENABLED off Env; the

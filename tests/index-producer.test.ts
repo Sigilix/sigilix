@@ -16,7 +16,8 @@ import {
   isIndexerEnabled,
   parseFullName,
 } from "../src/lib/index-producer"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeEnv(over: Partial<Env> = {}, sendImpl?: (msg: unknown) => Promise<void> | void): {
   env: Env

@@ -8,7 +8,7 @@
 // OPENCLAW_MULTICORPUS_RETRIEVAL is "on" (the webhook producers gate on the
 // flag before enqueueing, so the consumers trust that gate).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient } from "./github"
 import { readReviewManifest } from "./review-manifest"

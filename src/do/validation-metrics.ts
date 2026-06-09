@@ -13,7 +13,7 @@
 // INSERT … ON CONFLICT increments so concurrent reviews never lose a count.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import {
   ALL_DISMISS_REASONS,
   type DismissReason,

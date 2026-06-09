@@ -64,7 +64,7 @@ import {
   truncateForGitHub,
   handlePrDescribe,
 } from "../src/lib/triage-pr-describe"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]

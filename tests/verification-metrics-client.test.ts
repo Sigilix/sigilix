@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 import { recordVerificationMetricsBounded } from "../src/lib/verification-metrics-client"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { RecordVerificationArgs } from "../src/do/verification-metrics"
 
 const ITEMS: RecordVerificationArgs[] = [

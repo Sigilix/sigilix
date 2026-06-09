@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest"
 import { lookupRunnerEvidence, validateRunnerSarifConsistency, readRunnerEvidenceMode } from "../src/lib/runner-evidence/lookup"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 async function sha256(s: string): Promise<string> {
   const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))

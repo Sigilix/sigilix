@@ -28,7 +28,8 @@
 // All operations remain best-effort: a KV/GitHub blip can't take
 // down the review pipeline. Telemetry events flow regardless.
 
-import type { Env, JobMessage } from "../index"
+import type { Env } from "../shared/types/env"
+import type { JobMessage } from "../shared/types/job"
 import { GitHubClient } from "./github"
 
 /**

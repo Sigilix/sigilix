@@ -25,7 +25,7 @@ import { isPrLabelsEnabled, loadSigilixConfig } from "./sigilix-config"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_LABEL_SCHEMA } from "./schemas"
 import { PR_LABEL_PROMPT } from "../prompts/pr-labels"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS_PER_RUN = 5

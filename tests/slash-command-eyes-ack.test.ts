@@ -33,7 +33,7 @@ vi.mock("../src/lib/github", async (importActual) => {
 })
 
 import { postSlashCommandEyesAck } from "../src/lib/slash-command-eyes-ack"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeEnv(): Env {
   return {

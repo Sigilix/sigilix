@@ -18,7 +18,7 @@
 // ARC-237 incremental delete (currently out of scope; PR 3 commit 1
 // does full re-index on push) can target removed files by path.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
 
 const KV_KEY_PREFIX = "repo-index-vectors:"

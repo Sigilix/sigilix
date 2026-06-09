@@ -6,7 +6,7 @@
 // GitHub/config/KV I/O chain.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const {
   mockCaptureTopLevelReviewFeedback,

@@ -56,7 +56,8 @@ vi.mock("../src/lib/repo-policy", async () => {
 })
 
 import { dispatchJob } from "../src/index"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeEnv(): Env {
   return {

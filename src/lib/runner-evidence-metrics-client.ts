@@ -3,7 +3,7 @@
 // RPCs. Callers own the non-fatal try/catch (telemetry must never break a
 // review or a request).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type {
   RunnerEvidenceMetricsDO,
   RecordRunnerEvidenceArgs,

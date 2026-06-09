@@ -29,7 +29,7 @@ import {
 } from "../src/lib/dynamic-dispatcher"
 import type { ClassifiedDiffFile } from "../src/lib/diff-file-classify"
 import type { SigilixConfig } from "../src/lib/sigilix-config"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const EMPTY_CONFIG: SigilixConfig = {}
 

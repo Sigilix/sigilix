@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest"
 import { RepoGraphDO, resolveRelative, MAX_BLAST_IDS, DEFAULT_EXPANSION_ROWS } from "../src/do/repo-graph"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 // ─── Adapter-level regression tests ──────────────────────────────

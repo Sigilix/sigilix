@@ -1,7 +1,7 @@
 // SIG-185 — webhook dispatch wrappers for review-memory feedback capture.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
 
 const {

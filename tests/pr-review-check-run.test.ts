@@ -50,7 +50,7 @@ import {
   startInProgressCheckRun,
 } from "../src/lib/pr-review-check-run"
 import { GitHubHttpError, type CheckRunAnnotation } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true

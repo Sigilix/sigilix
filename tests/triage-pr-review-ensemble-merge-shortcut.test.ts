@@ -55,7 +55,7 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import { handlePrReviewEnsemble } from "../src/lib/triage-pr-review-ensemble"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub(): Env["OPENCLAW_STATE"] {
   const store = new Map<string, string>()

@@ -11,7 +11,7 @@ vi.mock("../src/lib/index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn() 
 import { runIndexBackfill } from "../src/lib/index-backfill"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/lib/github-app"
 import { enqueueIndexJobsForRepos } from "../src/lib/index-producer"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const mockListInstalls = vi.mocked(listAppInstallationIds)
 const mockListRepos = vi.mocked(listInstallationRepoFullNames)

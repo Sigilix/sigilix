@@ -17,7 +17,7 @@ import {
 import { applyPrecisionProfile } from "../src/lib/precision-profile/apply"
 import { loadPrecisionProfile, recordOutcome } from "../src/lib/precision-profile/store"
 import type { OutcomeEvent, PatternStat, PrecisionProfile } from "../src/lib/precision-profile/types"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const TS = "2026-06-04T00:00:00.000Z"
 const ev = (outcome: OutcomeEvent["outcome"], patternHash = "p1", category: OutcomeEvent["category"] = "logic"): OutcomeEvent =>

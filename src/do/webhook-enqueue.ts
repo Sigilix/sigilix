@@ -6,7 +6,7 @@
 // The DO call is `await stub.fetch(...)`-ed (NOT `ctx.waitUntil`) so a
 // transport / non-OK failure bubbles up as a 503 to GitHub for redelivery.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type { EnqueueRequest } from "./types"
 import { buildPausedKey, buildIgnoredKey } from "../lib/pr-lifecycle-commands"
 

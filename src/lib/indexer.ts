@@ -40,7 +40,8 @@
 // slice upserts to the same IDs — Vectorize replaces in place. Safe
 // against queue retries + bootstrap-side double-fanout.
 
-import type { Env, JobMessage } from "../index"
+import type { Env } from "../shared/types/env"
+import type { JobMessage } from "../shared/types/job"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import {

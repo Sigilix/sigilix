@@ -32,7 +32,7 @@ import {
   batchWriteFileCache,
   type CachedFileRow,
 } from "./pr-overview-file-cache"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // SIG-84: exported so the stub-post helper (`pr-overview-stub.ts`) can

@@ -32,7 +32,7 @@
 //   eliminating a future PR cycle. Phase 4b becomes a flag-flip, not
 //   a code change.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 export type SpecialistRole = "logic" | "security" | "performance" | "tests"
 

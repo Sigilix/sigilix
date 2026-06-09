@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest"
 import { ValidationMetricsDO } from "../src/do/validation-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 function makeDoInstance() {

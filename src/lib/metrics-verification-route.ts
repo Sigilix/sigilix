@@ -5,7 +5,7 @@
 // other /metrics/* endpoints); reports the current OPENCLAW_VERIFICATION_MODE so
 // the reader knows the numbers reflect shadow vs off.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"

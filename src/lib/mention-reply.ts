@@ -19,7 +19,7 @@ import {
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "./schemas"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
 import {

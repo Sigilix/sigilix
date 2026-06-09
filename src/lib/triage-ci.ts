@@ -25,7 +25,7 @@ import {
   planCiSuggestions,
   submitCiSuggestionReview,
 } from "./ci-suggestions"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const CI_MARKER = "<!-- sigilix:ci-triage -->"

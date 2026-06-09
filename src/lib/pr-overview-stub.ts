@@ -78,7 +78,7 @@
 // resets its body to the review-in-progress placeholder, and rewrites
 // the KV flag.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import {

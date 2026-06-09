@@ -11,7 +11,7 @@
 // concurrency cap. If the corpus outgrows the bound, move the compute to the
 // scheduled() cron + cache the result (this endpoint then reads the cache).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { listKeys, mapWithConcurrency, FETCH_CONCURRENCY } from "./kv-scan"
 import { attributeDismissals, dedupeDismissals, buildFindingIndex, findingKey } from "./fp-rate/attribute"

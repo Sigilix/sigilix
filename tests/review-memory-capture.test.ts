@@ -9,7 +9,7 @@ import {
   hasStaleDismissedReviewFeedbackSignal,
 } from "../src/lib/review-memory/capture"
 import { buildKey } from "../src/lib/review-memory/storage"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { GitHubClient } from "../src/lib/github"
 import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
 import { computePathSha256, hydrateClaimIds } from "../src/lib/review-memory/marker"

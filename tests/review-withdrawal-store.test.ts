@@ -14,7 +14,7 @@ import {
   loadWithdrawals,
   type WithdrawalRecord,
 } from "../src/lib/review-withdrawal-store"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // ── KV stub ───────────────────────────────────────────────────────
 

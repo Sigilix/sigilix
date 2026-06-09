@@ -2,7 +2,7 @@
 // validator shadow-telemetry counters. Lets the rollout dogwatch curl the
 // would-drop rates per gate × reason without Cloudflare Worker log access.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryValidationMetrics } from "./validation-metrics-client"
 import { parseSecurityValidatorMode } from "./validate-security-finding"

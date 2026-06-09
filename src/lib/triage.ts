@@ -12,7 +12,7 @@ import { getMarker, setMarker } from "./dedupe"
 import { markBotAuthoredComment } from "./bot-authored-comments"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"

@@ -18,7 +18,7 @@
 // Idempotent + safe to run hourly: the consumer freshness-skips repos
 // whose manifest was written between the cron's read and the job pickup.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "./github-app"
 import { enqueueIndexJobsForRepos, parseFullName } from "./index-producer"
 import { readRepoIndexManifest } from "./repo-index-manifest"

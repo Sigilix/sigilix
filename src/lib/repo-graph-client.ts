@@ -5,7 +5,7 @@
 // the GDPR delete path (T8).  No runtime unit tests — tsc validates
 // types; T7/T8 exercise the wrappers end-to-end.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
 import type {
   RepoGraphDO,

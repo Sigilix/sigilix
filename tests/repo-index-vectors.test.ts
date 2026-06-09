@@ -14,7 +14,7 @@ import {
   appendVectorCoverage,
   type RepoIndexVectorsV1,
 } from "../src/lib/repo-index-vectors"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

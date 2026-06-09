@@ -14,7 +14,7 @@
 // increments so concurrent reviews never lose a count.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // Retention: 35 days of daily buckets so the endpoint can serve a 30-day window
 // with margin. GC runs via a daily alarm; queries always filter by day so

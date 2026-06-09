@@ -116,4 +116,42 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
       securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
     })
   })
+
+  it("defaults every validator to its parser's default when the env var is absent", () => {
+    // Parity with the AST-scan-modes default test. The validator parsers each have
+    // their own default ("off"/"shadow"/…), so the expected side calls each parser
+    // with `undefined` — this pins the full contract shape (a dropped or renamed
+    // field fails `toEqual`) AND that the absent case routes through every parser.
+    expect(parseEnsembleConfig({}).validatorModes).toEqual({
+      securityValidatorMode: parseSecurityValidatorMode(undefined),
+      testsValidatorMode: parseTestsValidatorMode(undefined),
+      logicValidatorMode: parseLogicValidatorMode(undefined),
+      logicRefutationMode: parseLogicRefutationMode(undefined),
+      refutationSurvivalMode: parseRefutationSurvivalMode(undefined),
+      logicClaimRefutationMode: parseLogicClaimRefutationMode(undefined),
+      perfValidatorMode: parsePerfValidatorMode(undefined),
+      inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(undefined),
+      absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(undefined),
+      windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(undefined),
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(undefined),
+      securityUsageValidatorMode: parseSecurityUsageValidatorMode(undefined),
+    })
+  })
+
+  it("routes the raw env value through each parser (the edge does not pre-normalize)", () => {
+    // Normalization (trim + lowercase) is the parser's job and has its own suite;
+    // here we only guard that the edge hands the RAW, un-mangled env string to the
+    // right parser — so a stray `.trim()` added in parseEnsembleConfig is caught.
+    const env = { OPENCLAW_SECURITY_VALIDATOR_MODE: "  ENFORCE  ", OPENCLAW_LOGIC_VALIDATOR_MODE: "Shadow" }
+    expect(parseEnsembleConfig(env).validatorModes.securityValidatorMode).toBe(parseSecurityValidatorMode("  ENFORCE  "))
+    expect(parseEnsembleConfig(env).validatorModes.logicValidatorMode).toBe(parseLogicValidatorMode("Shadow"))
+  })
+
+  it("treats explicit empty / whitespace-only distinctly from absent (per-parser contract)", () => {
+    // Absent (undefined) vs explicit "" / "   " can differ per parser; the edge must
+    // forward the explicit value, not collapse it to the absent default.
+    const c = parseEnsembleConfig({ OPENCLAW_SECURITY_VALIDATOR_MODE: "", OPENCLAW_LOGIC_VALIDATOR_MODE: "   " })
+    expect(c.validatorModes.securityValidatorMode).toBe(parseSecurityValidatorMode(""))
+    expect(c.validatorModes.logicValidatorMode).toBe(parseLogicValidatorMode("   "))
+  })
 })

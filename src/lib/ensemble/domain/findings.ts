@@ -237,3 +237,59 @@ export function computeFindingDelta(
   }
   return { newCount, stillOpenCount, likelyFixedCount, carriedOverCount }
 }
+
+// SIG-318 (PR 12a): moved verbatim from triage-pr-review-ensemble.ts (the
+// adjudicate phase calls it on the validated verdict). Pure (apart from the
+// in-place score mutation) — no env / network / storage — so it belongs in the
+// findings domain alongside the consensus ranking it runs next to. Re-exported
+// from the god-file so existing importers (the AST-emit test) are unaffected.
+/**
+ * SIG-310: enforce that a `deterministic_emit` AST rule's SEVERITY is a HARD
+ * score ceiling on any finding it produces. The synth picks `score` freely
+ * (the rendered `severity` is advisory text only), so without this a
+ * warning-severity type smell (the optional-alias drift) could be emitted at
+ * P0/P1, breaking the zero-P0/P1-FP bar (code-review MAJOR on #294).
+ *
+ * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
+ * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
+ * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
+ * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
+ *
+ * SIG-312 (CodeRabbit #296): a `warning`/`security` emit (the dynamic-HTML
+ * advisory) DOES create a ceiling, BUT a SPECIALIST-backed security finding is
+ * exempt — its score is the model's TRUST JUDGMENT legitimately escalating a
+ * surfaced sink to P0/P1, and demoting it would hide a REAL caught XSS at P2.
+ * Only a deterministic-ONLY security advisory (no specialist source — its
+ * `sourceFindingIds` are empty or reference only the `ast/…` emit) is capped.
+ * `provenanceFindings` aligns by index with `findings` (same walk in
+ * validateForSubmission). Returns the count clamped. Pure (apart from the
+ * in-place score mutation); exported for test.
+ */
+export function clampAstEmitScores(
+  findings: Array<{ path: string; line: number; category: string; score: number }>,
+  astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
+  provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
+): number {
+  const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
+  const emitCeils = astFindings
+    .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
+    .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
+  if (emitCeils.length === 0) return 0
+  let clamped = 0
+  for (let i = 0; i < findings.length; i++) {
+    const finding = findings[i]!
+    const ceil = emitCeils
+      .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
+      .reduce((m, e) => Math.min(m, e.ceil), 5)
+    if (ceil >= 5 || finding.score <= ceil) continue
+    // SIG-312: never demote a SPECIALIST-backed security finding (the model's
+    // escalation of a real sink). Cap only a deterministic-only one.
+    if (finding.category === "security") {
+      const srcIds = provenanceFindings?.[i]?.sourceFindingIds ?? []
+      if (srcIds.some((id) => !id.startsWith("ast/"))) continue
+    }
+    finding.score = ceil
+    clamped++
+  }
+  return clamped
+}

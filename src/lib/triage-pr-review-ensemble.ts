@@ -83,9 +83,6 @@ import {
   buildDeletedLineTextByLine,
   type ChangedLines,
 } from "@/features/ast-rules"
-import {
-  computeTestToSourceAddedRatio,
-} from "./test-ratio-damper"
 import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
 import {
   loadWithdrawals,
@@ -155,14 +152,9 @@ import {
 import {
   evaluateScanFactDismissal,
 } from "./validate-security-finding"
-import { durableObjectClassSpans } from "@/features/ast-rules"
 import {
   buildChangedLineTextByPath,
 } from "./validate-logic-finding"
-import {
-  clampTrivialSyncIoSeverity,
-  clampIntentionalLiveEvalSerialLoopSeverity,
-} from "./validate-perf-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -199,7 +191,6 @@ import {
 } from "./logic-prompt-budget"
 import {
   isPrOverviewEnabled,
-  isFindingEvidenceVisible,
   loadSigilixConfig,
   passesLabelGate,
   renderPathInstructionsForPrompt,
@@ -439,6 +430,7 @@ import {
   annotateWithConsensus,
   computeFindingKey,
   computeFindingDelta,
+  clampAstEmitScores,
 } from "./ensemble/domain/findings"
 import type { PrReviewVerdictWithIds } from "./ensemble/domain/findings"
 import { parseEnsembleConfig } from "./ensemble/config"
@@ -449,6 +441,7 @@ export {
   annotateWithConsensus,
   computeFindingKey,
   computeFindingDelta,
+  clampAstEmitScores,
 }
 export type { ConsensusRanked, FindingDelta } from "./ensemble/domain/findings"
 // SIG-318 (PR 7): the fan-out POLICY domain (min-specialists early-exit mode +
@@ -488,6 +481,11 @@ export {
   evaluateTestingFindingCitation,
 } from "./ensemble/domain/validation"
 export type { ValidatedOutput, SynthesizerProvenance } from "./ensemble/domain/validation"
+// SIG-318 (PR 12a): the post-synthesis ADJUDICATE phase (validateForSubmission +
+// the AST-emit/perf severity clamps + consensus re-ranking) moved to the app
+// layer. It imports each dependency from its canonical domain/leaf home, so the
+// dependency rule holds (app → domain, never back into this orchestrator).
+import { adjudicateFindings } from "./ensemble/app/adjudicate"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -1078,57 +1076,6 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
     : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by the entry's \`severity\` field: an \`error\` entry is a PROVEN-dangerous sink — score it on its merits (typically P0/P1 for security). A \`warning\` entry is an ADVISORY the scanner surfaced but can't fully prove (a dynamic HTML sink whose value might be a trusted constant; a \`role_hint:"logic"\` type-design smell) — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker, whatever its \`role_hint\`. (If your own specialist independently judges a \`warning\` security advisory to be a real P0/P1, that specialist finding 'covers' the entry per the rule above and stands on its merits — the P2 ceiling applies only to the deterministic advisory.) (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
   return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
-}
-
-/**
- * SIG-310: enforce that a `deterministic_emit` AST rule's SEVERITY is a HARD
- * score ceiling on any finding it produces. The synth picks `score` freely
- * (the rendered `severity` is advisory text only), so without this a
- * warning-severity type smell (the optional-alias drift) could be emitted at
- * P0/P1, breaking the zero-P0/P1-FP bar (code-review MAJOR on #294).
- *
- * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
- * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
- * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
- * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
- *
- * SIG-312 (CodeRabbit #296): a `warning`/`security` emit (the dynamic-HTML
- * advisory) DOES create a ceiling, BUT a SPECIALIST-backed security finding is
- * exempt — its score is the model's TRUST JUDGMENT legitimately escalating a
- * surfaced sink to P0/P1, and demoting it would hide a REAL caught XSS at P2.
- * Only a deterministic-ONLY security advisory (no specialist source — its
- * `sourceFindingIds` are empty or reference only the `ast/…` emit) is capped.
- * `provenanceFindings` aligns by index with `findings` (same walk in
- * validateForSubmission). Returns the count clamped. Pure (apart from the
- * in-place score mutation); exported for test.
- */
-export function clampAstEmitScores(
-  findings: Array<{ path: string; line: number; category: string; score: number }>,
-  astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
-  provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
-): number {
-  const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
-  const emitCeils = astFindings
-    .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
-    .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
-  if (emitCeils.length === 0) return 0
-  let clamped = 0
-  for (let i = 0; i < findings.length; i++) {
-    const finding = findings[i]!
-    const ceil = emitCeils
-      .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
-      .reduce((m, e) => Math.min(m, e.ceil), 5)
-    if (ceil >= 5 || finding.score <= ceil) continue
-    // SIG-312: never demote a SPECIALIST-backed security finding (the model's
-    // escalation of a real sink). Cap only a deterministic-only one.
-    if (finding.category === "security") {
-      const srcIds = provenanceFindings?.[i]?.sourceFindingIds ?? []
-      if (srcIds.some((id) => !id.startsWith("ast/"))) continue
-    }
-    finding.score = ceil
-    clamped++
-  }
-  return clamped
 }
 
 /**
@@ -4632,435 +4579,36 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── Post-synthesis validation ─────────────────────────────
-    // SIG-141: line spans of DurableObject class declarations in the changed
-    // files, parsed from the AST (not raw text). Authz findings inside a DO
-    // class body are false (the binding is the trust boundary). Best-effort:
-    // derived from the already-fetched changed JS/TS head content
-    // (astFilesByPath) — empty when AST features are off, which is fail-safe
-    // (no suppression → findings kept, never hidden).
-    const doClassSpans = durableObjectClassSpans(astFilesByPath, astCache)
-    // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
-    // demote sites can tag body-routed findings with their reason when enabled.
-    const trustLedgerMode = ensembleConfig.flags.trustLedgerMode
-    const showEvidence = isFindingEvidenceVisible(sigilixConfig, env)
-    // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
-    // validateForSubmission. telemetry.synthesizer.verdict was captured from the
-    // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
-    // and the SIG-287 degraded floor) replace effectiveSynth* with the pair that
-    // is actually validated and posted. Without this, the `validated.provenance`
-    // assignment below leaves synthesizer.verdict (raw, shorter) index-MISALIGNED
-    // with synthesizer.provenance, breaking fp-rate dismissal attribution and
-    // recall-alarm counts (both pair verdict.findings[i] <-> provenance[i] by
-    // index). No-op when nothing augmented (effectiveSynth* === synthOutput.*);
-    // restores the pre-recovery invariant when they did (CodeRabbit #304).
-    if (telemetry.synthesizer) {
-      telemetry.synthesizer.verdict = effectiveSynthVerdict
-      telemetry.synthesizer.provenance = effectiveSynthProvenance
-    }
-    // SIG-347 (AC #3): compute the diff-wide test-to-source added-line ratio
-    // once from the FULL PR diff (reused as the addedLineTextByLine arg below,
-    // so the map is built once). The gate damps kept testing findings when
-    // the ratio is positive (> THRESHOLD).
-    const fullPrAddedLineText = buildAddedLineTextByLine(fullPrDiff)
-    const testToSourceRatio = computeTestToSourceAddedRatio(fullPrAddedLineText)
-    // SIG-318 (PR 0b): bind the validate args so the golden-capture hook below
-    // records the EXACT object passed to validateForSubmission (no behavior
-    // change — same object, same call). The hook is a no-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on".
-    const validateArgs = {
-      trustLedgerEnabled: trustLedgerMode !== "off",
-      synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
-      reviewable,
-      specialistVerdicts: synthInputVerdicts,
-      // SIG-314: admit the (post-shadow-strip) deterministic AST emit ids as
-      // valid provenance so an unmatched emit survives the hallucination guard.
-      astFindingIds: astResult.findings.map((f) => f.astFindingId),
-      // SIG-113: thread the testing-evidence pack through so the
-      // citation gate fires on uncited `category: "testing"` findings.
-      // Empty pack (no source/test files) → gate no-ops via the
-      // pure helper's "pack undefined or empty" branch.
-      testingEvidence: testingEvidencePackWithCoverage,
-      onTestingFindingDropped: (finding, reason) => {
-        console.log(JSON.stringify({
-          event: "pr-review-testing-finding-dropped",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          dropReason: reason,
-          findingPath: finding.path,
-          findingLine: finding.line,
-          findingHeadline: finding.headline.slice(0, 120),
-          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
-          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
-        }))
-      },
-      // SIG-108: thread the security fact manifest + mode through so
-      // the evidence gate fires on sev>=4 security findings. Default
-      // `shadow` — the gate only counts/telemeters what WOULD drop
-      // until the operator flips OPENCLAW_SECURITY_VALIDATOR_MODE to
-      // "enforce".
-      securityManifest: securityManifest.manifest,
-      // SIG-141: DurableObject class spans — authz findings inside a DO class
-      // body are suppressed (the binding is the trust boundary).
-      durableObjectClassSpans: doClassSpans,
-      securityValidatorMode: ensembleConfig.validatorModes.securityValidatorMode,
-      onSecurityFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          cweId: finding.cweId ?? null,
-          evidenceId: finding.evidenceId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-111: thread the tests-finding specificity gate mode +
-      // telemetry through. Default `shadow` — counts/telemeters the
-      // would-drop until the operator flips OPENCLAW_TESTS_VALIDATOR_MODE
-      // to "enforce". Reuses the `pr-review-finding-rejected-validation`
-      // event with a `gate: "tests"` discriminator.
-      testsValidatorMode: ensembleConfig.validatorModes.testsValidatorMode,
-      // SIG-118: thread the real coverage-gap set so both the SIG-113
-      // citation gate and the SIG-111 specificity gate accept a
-      // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
-      // citation. Empty when coverage ingestion is off / yielded nothing.
-      coverageGaps: coverageGapSet,
-      // SIG-347 (AC #3): diff-wide test-to-source ratio drives the damper.
-      testToSourceRatio,
-      addedLineTextByLine: fullPrAddedLineText,
-      onTestFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "tests",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
-          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "tests", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-109: thread the logic evidence + mode. Evidence is built
-      // PR-A-contained — added-line text from the FULL PR diff +
-      // roleHint:logic AST findings (NO symbol retrieval; that's SIG-121).
-      // Default `shadow` — the gate only counts/telemeters what WOULD
-      // drop until the operator flips OPENCLAW_LOGIC_VALIDATOR_MODE to
-      // "enforce". Reuses the `pr-review-finding-rejected-validation`
-      // event with a `gate: "logic"` discriminator.
-      logicEvidence: {
-        changedLineTextByPath,
-        astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
-      },
-      logicValidatorMode: ensembleConfig.validatorModes.logicValidatorMode,
-      onLogicFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-308: logic-refutation backstop. Default `off` in code; wrangler
-      // sets `shadow` so production counts/telemeters the would-flag rate
-      // (a sev>=4 logic finding lacking a survival rationale) until the
-      // operator flips OPENCLAW_LOGIC_REFUTATION_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "logic-refutation"`).
-      logicRefutationMode: ensembleConfig.validatorModes.logicRefutationMode,
-      onLogicRefutationFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic-refutation",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-325: generalized refutation-survival gate. Default `off` in code;
-      // wrangler sets `shadow` so production counts/telemeters the would-demote
-      // (a sev>=4 self-originated security finding lacking a mechanism rationale)
-      // until the operator flips OPENCLAW_REFUTATION_SURVIVAL_MODE to "enforce".
-      // Reuses the `pr-review-finding-rejected-validation` event (`gate:
-      // "refutation-survival"`). `dropped` here = "demoted to body".
-      refutationSurvivalMode: ensembleConfig.validatorModes.refutationSurvivalMode,
-      onRefutationSurvivalFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "refutation-survival",
-          lens: info.lens,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          evidenceId: finding.evidenceId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "refutation-survival", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
-      // finding only when its claim (control-flow / sync-race / retry
-      // idempotency / literal-string regex hallucination) is PROVABLY false
-      // against the AST of the cited file (`fullFileByPath` =
-      // `astFilesByPath`). Default
-      // `shadow` — counts/telemeters the would-drop until the operator flips
-      // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
-      logicClaimRefutationMode: ensembleConfig.validatorModes.logicClaimRefutationMode,
-      onLogicClaimRefutationFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic-claim-refutation",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-claim-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-110: thread perf evidence + mode. Evidence is the same
-      // changed-line text + the roleHint:performance AST findings. Default
-      // `shadow` — counts/telemeters the would-drop until the operator
-      // flips OPENCLAW_PERF_VALIDATOR_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "perf"`).
-      perfEvidence: {
-        changedLineTextByPath,
-        astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
-      },
-      perfValidatorMode: ensembleConfig.validatorModes.perfValidatorMode,
-      profile: sigilixConfig.profile ?? "chill",
-      onPerfFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "perf",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-281 PR C (Rec 4): inline-grounding gate. Default `shadow` —
-      // counts/telemeters the would-demote until the operator flips
-      // OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate:
-      // "inline-grounding"`). `dropped` here = "demoted to body".
-      inlineGroundingValidatorMode: ensembleConfig.validatorModes.inlineGroundingValidatorMode,
-      onInlineGroundingFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "inline-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-290 v1: absence-claim grounding gate. Default `off` — the gate
-      // doesn't run at all until the operator flips
-      // OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE to "shadow" (count/telemeter,
-      // keep inline) or "enforce" (demote ungrounded absence-claims to the
-      // body). `wasTruncated` + `droppedTooLarge` are the in-scope diff-
-      // packing signals from `handlePrReviewEnsemble`. Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate:
-      // "absence-grounding"`). `dropped` here = "demoted to body".
-      absenceClaimValidatorMode: ensembleConfig.validatorModes.absenceClaimValidatorMode,
+    // SIG-318 (PR 12a): the adjudicate phase — validateForSubmission, the
+    // AST-emit + performance severity clamps, and the consensus re-ranking —
+    // moved verbatim to ensemble/app/adjudicate. The phase mutates `telemetry`
+    // (synthesizer re-point + postValidation) and `validated` (in-place clamps)
+    // by reference; the consensus outputs flow downstream unchanged.
+    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } = adjudicateFindings({
+      env,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      telemetry,
+      validationSink: args.validationSink,
+      sigilixConfig,
+      fullPrDiff,
       wasTruncated,
-      droppedPaths: droppedTooLarge,
-      onAbsenceFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "absence-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // Cross-cutting over-fire Option B: window-blindness gate. Default off
-      // until OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE is flipped to shadow
-      // (count/telemeter, keep inline) or enforce (demote a sev>=4 logic
-      // positive-misread whose guard is provably out-of-window). Threads
-      // `astFilesByPath` as the full-file source. Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "window-blindness"`).
-      // `dropped` here = "demoted to body".
-      windowBlindnessValidatorMode: ensembleConfig.validatorModes.windowBlindnessValidatorMode,
-      fullFileByPath: astFilesByPath,
+      droppedTooLarge,
+      reviewable,
+      astFilesByPath,
       astCache,
-      onWindowBlindnessFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "window-blindness",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-          // Shadow-validation payload (Kimi nit): the cited subject + the
-          // out-of-window guard line a human checks before the enforce flip.
-          matchedIdentifier: info.matchedIdentifier,
-          guardLine: info.guardLine,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "window-blindness", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-293 v1: security-grounding gate (secrets-exposure). Default
-      // `off` — the gate doesn't run until the operator flips
-      // OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE to "shadow" (count/
-      // telemeter, keep inline) or "enforce" (demote a secrets-exposure
-      // finding whose cited line holds no credential token). Reuses the
-      // `securityManifest` + `addedLineTextByLine` already threaded above,
-      // and the `pr-review-finding-rejected-validation` event (`gate:
-      // "security-grounding"`). `dropped` here = "demoted to body".
-      securityGroundingValidatorMode: ensembleConfig.validatorModes.securityGroundingValidatorMode,
-      onSecurityGroundingFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
-      // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
-      securityUsageValidatorMode: ensembleConfig.validatorModes.securityUsageValidatorMode,
-      onSecurityUsageFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security-usage",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-    } satisfies Parameters<typeof validateForSubmission>[0]
-    const validated = validateForSubmission(validateArgs)
-    // SIG-318 (PR 0b): golden-output capture seam #1 (validate). No-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on"; off/unset → byte-identical behavior.
-    captureGolden(env, "validate", { args: validateArgs, output: validated })
-    if (telemetry.synthesizer) {
-      telemetry.synthesizer.provenance = validated.provenance
-    }
-    telemetry.postValidation = {
-      droppedForInvalidLine: validated.droppedForInvalidLine,
-      remappedInvalidLineToInline: validated.remappedInvalidLineToInline,
-      droppedForHallucination: validated.droppedForHallucination,
-      demotedScore1: validated.demotedScore1,
-      droppedForVaguePrefix: validated.droppedForVaguePrefix,
-      droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
-      droppedForFailedValidation: validated.droppedForFailedValidation,
-      droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
-      droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
-      droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
-      droppedForFailedLogicClaimRefutation: validated.droppedForFailedLogicClaimRefutation,
-      droppedForFailedRefutationSurvival: validated.droppedForFailedRefutationSurvival,
-      droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
-      droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
-      droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
-      droppedForFailedWindowBlindnessValidation: validated.droppedForFailedWindowBlindnessValidation,
-      droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
-      droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
-    }
-
-    // SIG-310: a deterministic_emit AST rule's SEVERITY is a HARD score ceiling
-    // on any finding it produces. The synth picks `score` freely (advisory text
-    // only), so a warning-severity type smell — the optional-alias drift — could
-    // otherwise be emitted at P0/P1, breaking the zero-P0/P1-FP bar (code-review
-    // MAJOR). Deterministically clamp any finding co-located (±2 lines, same
-    // path, same category) with a NON-`error` emitWhenUnmatched AST finding to
-    // that rule's tier (warning→3/P2, info→2). `error` security emit rules are
-    // never clamped — a P0/P1 injection/TLS sink is the correct outcome there.
-    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings, validated.cleanFindingProvenance)
-    if (astEmitClamped > 0) {
-      console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
-    }
-
-    // BT1/SIG-342: deterministic performance severity clamps. These do NOT
-    // drop findings; they only cap narrow proof-backed FP shapes below the
-    // P0/P1 blocker tier. Clamp BOTH the inline verdict findings AND the
-    // body-only (unanchored) findings (CodeRabbit #298): a demoted-to-body
-    // finding would otherwise keep its sev>=4 score in the body/event output.
-    const perfClampLines = buildAddedLineTextByLine(fullPrDiff)
-    const trivialSyncIoClamped =
-      clampTrivialSyncIoSeverity(validated.verdict.findings, perfClampLines) +
-      clampTrivialSyncIoSeverity(validated.unanchoredFindings, perfClampLines)
-    if (trivialSyncIoClamped > 0) {
-      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: trivialSyncIoClamped }))
-    }
-    const liveEvalSerialClamped =
-      clampIntentionalLiveEvalSerialLoopSeverity(validated.verdict.findings, perfClampLines) +
-      clampIntentionalLiveEvalSerialLoopSeverity(validated.unanchoredFindings, perfClampLines)
-    if (liveEvalSerialClamped > 0) {
-      console.log(JSON.stringify({ event: "perf-live-eval-serial-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: liveEvalSerialClamped }))
-    }
-
-    // ARC-270 — consensus-aware re-ranking. Strictly additive: we
-    // don't change the verdict gate (`chooseReviewEvent`), drop
-    // findings, or touch scores. Just reorder so multi-specialist
-    // findings surface first and capture a consensus count per
-    // finding for the body annotation below.
-    const consensusRanked = computeConsensusRanking(
-      validated.verdict,
-      validated.cleanFindingProvenance,
-    )
-    const consensusVerdict = consensusRanked.verdict
-    const consensusProvenance = consensusRanked.provenance
-    const consensusByIndex = consensusRanked.consensusByIndex
-    const highConsensusCount = consensusByIndex.filter((c) => c >= 2).length
-    if (consensusVerdict.findings.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-review-consensus-rerank",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        finding_count: consensusVerdict.findings.length,
-        high_consensus_count: highConsensusCount,
-        max_consensus: consensusByIndex.reduce((m, c) => Math.max(m, c), 0),
-      }))
-    }
+      astResult,
+      coverageGapSet,
+      securityManifest,
+      changedLineTextByPath,
+      testingEvidencePackWithCoverage,
+      synthInputVerdicts,
+      effectiveSynthVerdict,
+      effectiveSynthProvenance,
+    })
 
     // ARC-280: shadow-mode branch deleted. The dual-mode routing
     // (shadow vs post) is gone — post is the only mode. The

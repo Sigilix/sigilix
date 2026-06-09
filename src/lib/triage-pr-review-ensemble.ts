@@ -83,9 +83,6 @@ import {
   buildDeletedLineTextByLine,
   type ChangedLines,
 } from "@/features/ast-rules"
-import {
-  computeTestToSourceAddedRatio,
-} from "./test-ratio-damper"
 import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
 import {
   loadWithdrawals,
@@ -155,14 +152,9 @@ import {
 import {
   evaluateScanFactDismissal,
 } from "./validate-security-finding"
-import { durableObjectClassSpans } from "@/features/ast-rules"
 import {
   buildChangedLineTextByPath,
 } from "./validate-logic-finding"
-import {
-  clampTrivialSyncIoSeverity,
-  clampIntentionalLiveEvalSerialLoopSeverity,
-} from "./validate-perf-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -199,7 +191,6 @@ import {
 } from "./logic-prompt-budget"
 import {
   isPrOverviewEnabled,
-  isFindingEvidenceVisible,
   loadSigilixConfig,
   passesLabelGate,
   renderPathInstructionsForPrompt,
@@ -365,10 +356,6 @@ import {
   resolveShadowConfig,
 } from "./shadow-bakeoff-config"
 import {
-  buildShadowVerdictComparison,
-  emitShadowCutShort,
-  emitShadowRunFailed,
-  emitShadowVerdictComparison,
   type FindingForOverlap,
 } from "./shadow-bakeoff-telemetry"
 import {
@@ -439,6 +426,7 @@ import {
   annotateWithConsensus,
   computeFindingKey,
   computeFindingDelta,
+  clampAstEmitScores,
 } from "./ensemble/domain/findings"
 import type { PrReviewVerdictWithIds } from "./ensemble/domain/findings"
 import { parseEnsembleConfig } from "./ensemble/config"
@@ -449,6 +437,7 @@ export {
   annotateWithConsensus,
   computeFindingKey,
   computeFindingDelta,
+  clampAstEmitScores,
 }
 export type { ConsensusRanked, FindingDelta } from "./ensemble/domain/findings"
 // SIG-318 (PR 7): the fan-out POLICY domain (min-specialists early-exit mode +
@@ -488,6 +477,18 @@ export {
   evaluateTestingFindingCitation,
 } from "./ensemble/domain/validation"
 export type { ValidatedOutput, SynthesizerProvenance } from "./ensemble/domain/validation"
+// SIG-318 (PR 12a): the post-synthesis ADJUDICATE phase (validateForSubmission +
+// the AST-emit/perf severity clamps + consensus re-ranking) moved to the app
+// layer. It imports each dependency from its canonical domain/leaf home, so the
+// dependency rule holds (app → domain, never back into this orchestrator).
+import { adjudicateFindings } from "./ensemble/app/adjudicate"
+// SIG-318 (PR 12b): the shadow-bakeoff SETTLE phase (the outer-finally shadow
+// comparison emit) + the ShadowBakeoffState holder moved to the app layer.
+import {
+  settleShadowBakeoff,
+  type ShadowBakeoffState,
+  type ProdSpecialistSnapshot,
+} from "./ensemble/app/shadow-settle"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -732,161 +733,28 @@ export function graphOverlapStats(a: {
 
 // ──────────────────────────────────────────────────────────────────────────
 
-/**
- * Sentinels returned by `raceWithShadowGrace`.
- *
- *  - `SHADOW_GRACE_EXPIRED` — the wall-clock grace deadline fired OR the
- *    parent `orchCtrl.signal` aborted before the shadow promise settled.
- *    Caller emits `shadow-cut-short` with the reason it detected.
- *  - `SHADOW_RUN_FAILED`    — the shadow promise itself REJECTED. The
- *    shadow runners catch every internal failure and return a structured
- *    `{verdictOk:false, ...}` shape, so a rejection means the runner
- *    threw outside its own try/catch (programming bug, OOM, runtime
- *    tear-down). Caller emits the dedicated `shadow-run-failed` event so
- *    dashboards don't mis-attribute a real crash to a benign timeout.
- *
- * Both are unique symbols so callers can discriminate via `===` and
- * TypeScript narrows the underlying `T` correctly. Exported so unit
- * tests assert without re-declaring the sentinel.
- */
-export const SHADOW_GRACE_EXPIRED = Symbol("shadow_grace_expired")
-export const SHADOW_RUN_FAILED = Symbol("shadow_run_failed")
-
-/**
- * ARC-283 Phase B1b CR-2: compose multiple `AbortSignal`s into one
- * that aborts as soon as ANY input aborts. Used at each shadow
- * dispatch site so the finally block can cancel an in-flight shadow
- * request (per-shadow controller) WITHOUT giving up the existing
- * "orch timeout also kills shadow" behavior (orchCtrl).
- *
- * Returns a fresh `AbortSignal` from an internal `AbortController`.
- * The reason of the FIRST signal to fire is forwarded onto the
- * composed signal so listeners can see WHY it aborted (grace_deadline,
- * orch_aborted, run_failed, ...). Pre-aborted inputs are honored
- * synchronously — the returned signal will already be aborted.
- *
- * No-op when no signals are provided — returns a never-aborting
- * signal (the AbortController is GC'd alongside the signal it owns).
- */
-export function composeSignals(...signals: readonly AbortSignal[]): AbortSignal {
-  const ctrl = new AbortController()
-  for (const s of signals) {
-    if (s.aborted) {
-      ctrl.abort(s.reason)
-      return ctrl.signal
-    }
-    s.addEventListener(
-      "abort",
-      () => {
-        if (!ctrl.signal.aborted) ctrl.abort(s.reason)
-      },
-      { once: true },
-    )
-  }
-  return ctrl.signal
+// SIG-318 (PR 12b): the shadow-bakeoff GRACE primitives (the race sentinels,
+// `composeSignals`, the run-failed wrapper + guard, and `raceWithShadowGrace`)
+// moved to ./ensemble/domain/shadow-grace — they are pure (Web globals only) and
+// the app-layer shadow-settle phase needs them without importing this god-file.
+// Value-imported for the orchestrator's own use + re-exported so existing
+// importers (the shadow-grace-race test) are unaffected.
+import {
+  SHADOW_GRACE_EXPIRED,
+  SHADOW_RUN_FAILED,
+  composeSignals,
+  isShadowRunFailed,
+  raceWithShadowGrace,
+  type ShadowRunFailedOutcome,
+} from "./ensemble/domain/shadow-grace"
+export {
+  SHADOW_GRACE_EXPIRED,
+  SHADOW_RUN_FAILED,
+  composeSignals,
+  isShadowRunFailed,
+  raceWithShadowGrace,
 }
-
-/**
- * Wrapper around the rejection from a shadow promise so the caller
- * can emit a `shadow-run-failed` event with the underlying message.
- * Carries the failure message alongside the sentinel; using a tagged
- * shape instead of throwing keeps `raceWithShadowGrace` resolve-only
- * and preserves the prod return path.
- *
- * The discriminator field is named `__shadowRunFailed` (mangled,
- * starting with underscores) so the type-guard `isShadowRunFailed`
- * narrows reliably even when `T` itself happens to be an object. We
- * can't use plain `"kind" in shadow` because `T = ShadowRunResult`
- * is a structurally-typed object too and TypeScript can't prove the
- * tag is unique to the failure variant.
- */
-export interface ShadowRunFailedOutcome {
-  readonly __shadowRunFailed: typeof SHADOW_RUN_FAILED
-  readonly message: string
-}
-
-/** Type-guard for the run-failed sentinel-wrapper. */
-export function isShadowRunFailed(value: unknown): value is ShadowRunFailedOutcome {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "__shadowRunFailed" in value &&
-    (value as { __shadowRunFailed: unknown }).__shadowRunFailed === SHADOW_RUN_FAILED
-  )
-}
-
-/**
- * Races `promise` against an absolute wall-clock `deadline` (ms since
- * epoch). Used by the `handlePrReviewEnsemble` finally block to cap
- * the shadow tail at `SHADOW_FINALIZE_GRACE_MS` so prod return +
- * shadow comparison stay inside the 900s CF Queues consumer ceiling.
- *
- * Resolution table:
- *   - promise resolves first → its value
- *   - promise rejects first  → `{kind: SHADOW_RUN_FAILED, message}`
- *   - deadline fires first   → `SHADOW_GRACE_EXPIRED`
- *   - signal aborted first   → `SHADOW_GRACE_EXPIRED`
- *
- * Never rejects. CR-1: the rejection branch used to resolve with
- * `SHADOW_GRACE_EXPIRED`, which caused the finally block to emit
- * `shadow-cut-short` on a runner crash — misclassifying real failure
- * signal as a timeout. Splitting the two sentinels keeps each event
- * accurate.
- */
-export function raceWithShadowGrace<T>(
-  promise: Promise<T>,
-  deadline: number,
-  signal: AbortSignal,
-): Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome> {
-  if (signal.aborted) return Promise.resolve(SHADOW_GRACE_EXPIRED)
-  const remaining = Math.max(0, deadline - Date.now())
-  return new Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome>((resolve) => {
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      resolve(SHADOW_GRACE_EXPIRED)
-    }, remaining)
-    const onAbort = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      // Orchestrator was torn down — treat the same as a grace
-      // expiry from the comparison's perspective (we can no longer
-      // wait for the shadow). The finally consumer reads
-      // `orchCtrl.signal.aborted` to label the reason on the
-      // emitted `shadow-cut-short` event.
-      resolve(SHADOW_GRACE_EXPIRED)
-    }
-    signal.addEventListener("abort", onAbort, { once: true })
-    promise.then(
-      (value) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        signal.removeEventListener("abort", onAbort)
-        resolve(value)
-      },
-      (err: unknown) => {
-        // Shadow runners catch internally and return structured
-        // failure — a rejection here means something exploded outside
-        // the runner's own catch. Surface as the FAILED sentinel so
-        // the finally consumer can emit `shadow-run-failed`, not
-        // `shadow-cut-short`. Pre-CR-1 we incorrectly mapped this to
-        // `SHADOW_GRACE_EXPIRED`, hiding runner crashes in the
-        // cut-short bucket.
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        signal.removeEventListener("abort", onAbort)
-        resolve({
-          __shadowRunFailed: SHADOW_RUN_FAILED,
-          message: err instanceof Error ? err.message : String(err),
-        })
-      },
-    )
-  })
-}
+export type { ShadowRunFailedOutcome }
 
 // SIG-362 (PR 10): the model-call core moved out — the per-role model lineups +
 // the retry executor + the specialist/synth runners → ensemble/adapters/
@@ -1081,57 +949,6 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
 }
 
 /**
- * SIG-310: enforce that a `deterministic_emit` AST rule's SEVERITY is a HARD
- * score ceiling on any finding it produces. The synth picks `score` freely
- * (the rendered `severity` is advisory text only), so without this a
- * warning-severity type smell (the optional-alias drift) could be emitted at
- * P0/P1, breaking the zero-P0/P1-FP bar (code-review MAJOR on #294).
- *
- * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
- * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
- * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
- * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
- *
- * SIG-312 (CodeRabbit #296): a `warning`/`security` emit (the dynamic-HTML
- * advisory) DOES create a ceiling, BUT a SPECIALIST-backed security finding is
- * exempt — its score is the model's TRUST JUDGMENT legitimately escalating a
- * surfaced sink to P0/P1, and demoting it would hide a REAL caught XSS at P2.
- * Only a deterministic-ONLY security advisory (no specialist source — its
- * `sourceFindingIds` are empty or reference only the `ast/…` emit) is capped.
- * `provenanceFindings` aligns by index with `findings` (same walk in
- * validateForSubmission). Returns the count clamped. Pure (apart from the
- * in-place score mutation); exported for test.
- */
-export function clampAstEmitScores(
-  findings: Array<{ path: string; line: number; category: string; score: number }>,
-  astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
-  provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
-): number {
-  const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
-  const emitCeils = astFindings
-    .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
-    .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
-  if (emitCeils.length === 0) return 0
-  let clamped = 0
-  for (let i = 0; i < findings.length; i++) {
-    const finding = findings[i]!
-    const ceil = emitCeils
-      .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
-      .reduce((m, e) => Math.min(m, e.ceil), 5)
-    if (ceil >= 5 || finding.score <= ceil) continue
-    // SIG-312: never demote a SPECIALIST-backed security finding (the model's
-    // escalation of a real sink). Cap only a deterministic-only one.
-    if (finding.category === "security") {
-      const srcIds = provenanceFindings?.[i]?.sourceFindingIds ?? []
-      if (srcIds.some((id) => !id.startsWith("ast/"))) continue
-    }
-    finding.score = ceil
-    clamped++
-  }
-  return clamped
-}
-
-/**
  * Shadow-first gate for a deterministic AST security floor. In `post` mode the
  * rule's findings flow through untouched; in any other mode (`off`/`shadow`) they
  * are STRIPPED from the submission (and their `perFinding` provenance dropped),
@@ -1251,26 +1068,24 @@ export async function handlePrReviewEnsemble(
   //     a synthetic "prod did not run" prod outcome)
   // The shadow promise itself never throws — `runShadowSpecialist` /
   // `runShadowSynth` catch + return structured failure on every path.
-  type ProdSpecialistSnapshot = {
-    verdictOk: boolean
-    modelUsed: string
-    attemptsUsed: number
-    elapsedMs: number
-    findings: readonly FindingForOverlap[]
-  }
-  const shadowSpecialistPromises = new Map<SpecialistRole, Promise<ShadowRunResult>>()
-  const prodSpecialistSnapshots = new Map<SpecialistRole, ProdSpecialistSnapshot>()
-  let shadowSynthPromise: Promise<ShadowRunResult> | null = null
-  // ARC-283 Phase B1b CR-2: per-shadow AbortController so the finally
-  // block can `.abort(reason)` any shadow request that didn't settle
-  // before the grace deadline / orch tear-down. Pre-CR-2 we emitted
-  // `shadow-cut-short` but left the in-flight HTTP request alive,
-  // silently doubling provider rate-limit pressure past the cut.
   //
-  // Keyed by the role the controller belongs to; `"synth"` is used
-  // for the single shadow synth controller. Map cleared as each entry
-  // settles so the finally loop only sees still-pending shadows.
-  const shadowAbortControllers = new Map<SpecialistRole | "synth", AbortController>()
+  // SIG-318 (PR 12b): the four loose containers (`specialistPromises`,
+  // `prodSnapshots`, `abortControllers`, `synthPromise`) are bundled into one
+  // `ShadowBakeoffState` holder threaded by reference into `settleShadowBakeoff`.
+  // `abortControllers` (ARC-283 Phase B1b CR-2): per-shadow AbortController so the
+  // finally block can `.abort(reason)` any shadow request that didn't settle
+  // before the grace deadline / orch tear-down (pre-CR-2 we emitted
+  // `shadow-cut-short` but left the in-flight HTTP request alive, silently
+  // doubling provider rate-limit pressure past the cut). Keyed by the role the
+  // controller belongs to; `"synth"` is the single shadow synth controller. Map
+  // cleared as each entry settles so the finally loop only sees still-pending
+  // shadows.
+  const shadowState: ShadowBakeoffState = {
+    specialistPromises: new Map<SpecialistRole, Promise<ShadowRunResult>>(),
+    prodSnapshots: new Map<SpecialistRole, ProdSpecialistSnapshot>(),
+    abortControllers: new Map<SpecialistRole | "synth", AbortController>(),
+    synthPromise: null,
+  }
 
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
@@ -3462,7 +3277,7 @@ export async function handlePrReviewEnsemble(
       // controller, the cut-short emit was a pure log line and the
       // request kept consuming provider capacity.
       const shadowCtrl = new AbortController()
-      shadowAbortControllers.set(role, shadowCtrl)
+      shadowState.abortControllers.set(role, shadowCtrl)
       const composedSignal = composeSignals(orchCtrl.signal, shadowCtrl.signal)
       const shadowPromise = runShadowSpecialist({
         role,
@@ -3482,9 +3297,9 @@ export async function handlePrReviewEnsemble(
         // doesn't re-abort an already-finished call. Doesn't drop
         // the promise itself; the finally block still awaits to
         // emit comparison telemetry.
-        shadowAbortControllers.delete(role)
+        shadowState.abortControllers.delete(role)
       })
-      shadowSpecialistPromises.set(role, shadowPromise)
+      shadowState.specialistPromises.set(role, shadowPromise)
     }
 
     // ARC-284: track per-specialist start time so the fanout summary
@@ -3843,7 +3658,7 @@ export async function handlePrReviewEnsemble(
     // modelUsed). Findings are projected to the overlap-helper's
     // shape so the `finally` block stays a thin wrapper.
     for (const v of specialistVerdicts) {
-      if (!shadowSpecialistPromises.has(v.role)) continue
+      if (!shadowState.specialistPromises.has(v.role)) continue
       const findings: FindingForOverlap[] = v.verdict
         ? v.verdict.findings.map((f) => ({
             path: f.path,
@@ -3852,7 +3667,7 @@ export async function handlePrReviewEnsemble(
             score: f.score,
           }))
         : []
-      prodSpecialistSnapshots.set(v.role, {
+      shadowState.prodSnapshots.set(v.role, {
         verdictOk: v.verdict !== null,
         modelUsed: v.modelUsed ?? SPECIALIST_CONFIGS[v.role].primary,
         attemptsUsed: v.attemptsUsed ?? 0,
@@ -4245,9 +4060,9 @@ export async function handlePrReviewEnsemble(
         // grace deadline fires instead of leaving the request to
         // burn provider capacity invisibly.
         const shadowSynthCtrl = new AbortController()
-        shadowAbortControllers.set("synth", shadowSynthCtrl)
+        shadowState.abortControllers.set("synth", shadowSynthCtrl)
         const composedSynthSignal = composeSignals(orchCtrl.signal, shadowSynthCtrl.signal)
-        shadowSynthPromise = runShadowSynth({
+        shadowState.synthPromise = runShadowSynth({
           shadowConfig: shadowSynthConfig,
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
@@ -4256,7 +4071,7 @@ export async function handlePrReviewEnsemble(
           signal: composedSynthSignal,
           perfCtx,
         }).finally(() => {
-          shadowAbortControllers.delete("synth")
+          shadowState.abortControllers.delete("synth")
         })
       }
 
@@ -4632,435 +4447,36 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── Post-synthesis validation ─────────────────────────────
-    // SIG-141: line spans of DurableObject class declarations in the changed
-    // files, parsed from the AST (not raw text). Authz findings inside a DO
-    // class body are false (the binding is the trust boundary). Best-effort:
-    // derived from the already-fetched changed JS/TS head content
-    // (astFilesByPath) — empty when AST features are off, which is fail-safe
-    // (no suppression → findings kept, never hidden).
-    const doClassSpans = durableObjectClassSpans(astFilesByPath, astCache)
-    // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
-    // demote sites can tag body-routed findings with their reason when enabled.
-    const trustLedgerMode = ensembleConfig.flags.trustLedgerMode
-    const showEvidence = isFindingEvidenceVisible(sigilixConfig, env)
-    // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
-    // validateForSubmission. telemetry.synthesizer.verdict was captured from the
-    // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
-    // and the SIG-287 degraded floor) replace effectiveSynth* with the pair that
-    // is actually validated and posted. Without this, the `validated.provenance`
-    // assignment below leaves synthesizer.verdict (raw, shorter) index-MISALIGNED
-    // with synthesizer.provenance, breaking fp-rate dismissal attribution and
-    // recall-alarm counts (both pair verdict.findings[i] <-> provenance[i] by
-    // index). No-op when nothing augmented (effectiveSynth* === synthOutput.*);
-    // restores the pre-recovery invariant when they did (CodeRabbit #304).
-    if (telemetry.synthesizer) {
-      telemetry.synthesizer.verdict = effectiveSynthVerdict
-      telemetry.synthesizer.provenance = effectiveSynthProvenance
-    }
-    // SIG-347 (AC #3): compute the diff-wide test-to-source added-line ratio
-    // once from the FULL PR diff (reused as the addedLineTextByLine arg below,
-    // so the map is built once). The gate damps kept testing findings when
-    // the ratio is positive (> THRESHOLD).
-    const fullPrAddedLineText = buildAddedLineTextByLine(fullPrDiff)
-    const testToSourceRatio = computeTestToSourceAddedRatio(fullPrAddedLineText)
-    // SIG-318 (PR 0b): bind the validate args so the golden-capture hook below
-    // records the EXACT object passed to validateForSubmission (no behavior
-    // change — same object, same call). The hook is a no-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on".
-    const validateArgs = {
-      trustLedgerEnabled: trustLedgerMode !== "off",
-      synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
-      reviewable,
-      specialistVerdicts: synthInputVerdicts,
-      // SIG-314: admit the (post-shadow-strip) deterministic AST emit ids as
-      // valid provenance so an unmatched emit survives the hallucination guard.
-      astFindingIds: astResult.findings.map((f) => f.astFindingId),
-      // SIG-113: thread the testing-evidence pack through so the
-      // citation gate fires on uncited `category: "testing"` findings.
-      // Empty pack (no source/test files) → gate no-ops via the
-      // pure helper's "pack undefined or empty" branch.
-      testingEvidence: testingEvidencePackWithCoverage,
-      onTestingFindingDropped: (finding, reason) => {
-        console.log(JSON.stringify({
-          event: "pr-review-testing-finding-dropped",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          dropReason: reason,
-          findingPath: finding.path,
-          findingLine: finding.line,
-          findingHeadline: finding.headline.slice(0, 120),
-          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
-          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
-        }))
-      },
-      // SIG-108: thread the security fact manifest + mode through so
-      // the evidence gate fires on sev>=4 security findings. Default
-      // `shadow` — the gate only counts/telemeters what WOULD drop
-      // until the operator flips OPENCLAW_SECURITY_VALIDATOR_MODE to
-      // "enforce".
-      securityManifest: securityManifest.manifest,
-      // SIG-141: DurableObject class spans — authz findings inside a DO class
-      // body are suppressed (the binding is the trust boundary).
-      durableObjectClassSpans: doClassSpans,
-      securityValidatorMode: ensembleConfig.validatorModes.securityValidatorMode,
-      onSecurityFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          cweId: finding.cweId ?? null,
-          evidenceId: finding.evidenceId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-111: thread the tests-finding specificity gate mode +
-      // telemetry through. Default `shadow` — counts/telemeters the
-      // would-drop until the operator flips OPENCLAW_TESTS_VALIDATOR_MODE
-      // to "enforce". Reuses the `pr-review-finding-rejected-validation`
-      // event with a `gate: "tests"` discriminator.
-      testsValidatorMode: ensembleConfig.validatorModes.testsValidatorMode,
-      // SIG-118: thread the real coverage-gap set so both the SIG-113
-      // citation gate and the SIG-111 specificity gate accept a
-      // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
-      // citation. Empty when coverage ingestion is off / yielded nothing.
-      coverageGaps: coverageGapSet,
-      // SIG-347 (AC #3): diff-wide test-to-source ratio drives the damper.
-      testToSourceRatio,
-      addedLineTextByLine: fullPrAddedLineText,
-      onTestFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "tests",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
-          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "tests", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-109: thread the logic evidence + mode. Evidence is built
-      // PR-A-contained — added-line text from the FULL PR diff +
-      // roleHint:logic AST findings (NO symbol retrieval; that's SIG-121).
-      // Default `shadow` — the gate only counts/telemeters what WOULD
-      // drop until the operator flips OPENCLAW_LOGIC_VALIDATOR_MODE to
-      // "enforce". Reuses the `pr-review-finding-rejected-validation`
-      // event with a `gate: "logic"` discriminator.
-      logicEvidence: {
-        changedLineTextByPath,
-        astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
-      },
-      logicValidatorMode: ensembleConfig.validatorModes.logicValidatorMode,
-      onLogicFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-308: logic-refutation backstop. Default `off` in code; wrangler
-      // sets `shadow` so production counts/telemeters the would-flag rate
-      // (a sev>=4 logic finding lacking a survival rationale) until the
-      // operator flips OPENCLAW_LOGIC_REFUTATION_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "logic-refutation"`).
-      logicRefutationMode: ensembleConfig.validatorModes.logicRefutationMode,
-      onLogicRefutationFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic-refutation",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-325: generalized refutation-survival gate. Default `off` in code;
-      // wrangler sets `shadow` so production counts/telemeters the would-demote
-      // (a sev>=4 self-originated security finding lacking a mechanism rationale)
-      // until the operator flips OPENCLAW_REFUTATION_SURVIVAL_MODE to "enforce".
-      // Reuses the `pr-review-finding-rejected-validation` event (`gate:
-      // "refutation-survival"`). `dropped` here = "demoted to body".
-      refutationSurvivalMode: ensembleConfig.validatorModes.refutationSurvivalMode,
-      onRefutationSurvivalFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "refutation-survival",
-          lens: info.lens,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          evidenceId: finding.evidenceId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "refutation-survival", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
-      // finding only when its claim (control-flow / sync-race / retry
-      // idempotency / literal-string regex hallucination) is PROVABLY false
-      // against the AST of the cited file (`fullFileByPath` =
-      // `astFilesByPath`). Default
-      // `shadow` — counts/telemeters the would-drop until the operator flips
-      // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
-      logicClaimRefutationMode: ensembleConfig.validatorModes.logicClaimRefutationMode,
-      onLogicClaimRefutationFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "logic-claim-refutation",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-claim-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-110: thread perf evidence + mode. Evidence is the same
-      // changed-line text + the roleHint:performance AST findings. Default
-      // `shadow` — counts/telemeters the would-drop until the operator
-      // flips OPENCLAW_PERF_VALIDATOR_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "perf"`).
-      perfEvidence: {
-        changedLineTextByPath,
-        astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
-      },
-      perfValidatorMode: ensembleConfig.validatorModes.perfValidatorMode,
-      profile: sigilixConfig.profile ?? "chill",
-      onPerfFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "perf",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-281 PR C (Rec 4): inline-grounding gate. Default `shadow` —
-      // counts/telemeters the would-demote until the operator flips
-      // OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE to "enforce". Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate:
-      // "inline-grounding"`). `dropped` here = "demoted to body".
-      inlineGroundingValidatorMode: ensembleConfig.validatorModes.inlineGroundingValidatorMode,
-      onInlineGroundingFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "inline-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-290 v1: absence-claim grounding gate. Default `off` — the gate
-      // doesn't run at all until the operator flips
-      // OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE to "shadow" (count/telemeter,
-      // keep inline) or "enforce" (demote ungrounded absence-claims to the
-      // body). `wasTruncated` + `droppedTooLarge` are the in-scope diff-
-      // packing signals from `handlePrReviewEnsemble`. Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate:
-      // "absence-grounding"`). `dropped` here = "demoted to body".
-      absenceClaimValidatorMode: ensembleConfig.validatorModes.absenceClaimValidatorMode,
+    // SIG-318 (PR 12a): the adjudicate phase — validateForSubmission, the
+    // AST-emit + performance severity clamps, and the consensus re-ranking —
+    // moved verbatim to ensemble/app/adjudicate. The phase mutates `telemetry`
+    // (synthesizer re-point + postValidation) and `validated` (in-place clamps)
+    // by reference; the consensus outputs flow downstream unchanged.
+    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } = adjudicateFindings({
+      env,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      telemetry,
+      validationSink: args.validationSink,
+      sigilixConfig,
+      fullPrDiff,
       wasTruncated,
-      droppedPaths: droppedTooLarge,
-      onAbsenceFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "absence-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // Cross-cutting over-fire Option B: window-blindness gate. Default off
-      // until OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE is flipped to shadow
-      // (count/telemeter, keep inline) or enforce (demote a sev>=4 logic
-      // positive-misread whose guard is provably out-of-window). Threads
-      // `astFilesByPath` as the full-file source. Reuses the
-      // `pr-review-finding-rejected-validation` event (`gate: "window-blindness"`).
-      // `dropped` here = "demoted to body".
-      windowBlindnessValidatorMode: ensembleConfig.validatorModes.windowBlindnessValidatorMode,
-      fullFileByPath: astFilesByPath,
+      droppedTooLarge,
+      reviewable,
+      astFilesByPath,
       astCache,
-      onWindowBlindnessFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "window-blindness",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-          // Shadow-validation payload (Kimi nit): the cited subject + the
-          // out-of-window guard line a human checks before the enforce flip.
-          matchedIdentifier: info.matchedIdentifier,
-          guardLine: info.guardLine,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "window-blindness", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-293 v1: security-grounding gate (secrets-exposure). Default
-      // `off` — the gate doesn't run until the operator flips
-      // OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE to "shadow" (count/
-      // telemeter, keep inline) or "enforce" (demote a secrets-exposure
-      // finding whose cited line holds no credential token). Reuses the
-      // `securityManifest` + `addedLineTextByLine` already threaded above,
-      // and the `pr-review-finding-rejected-validation` event (`gate:
-      // "security-grounding"`). `dropped` here = "demoted to body".
-      securityGroundingValidatorMode: ensembleConfig.validatorModes.securityGroundingValidatorMode,
-      onSecurityGroundingFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security-grounding",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-      // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
-      // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
-      securityUsageValidatorMode: ensembleConfig.validatorModes.securityUsageValidatorMode,
-      onSecurityUsageFindingDropped: (finding, info) => {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "security-usage",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: info.reason,
-          dropped: info.dropped,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          cweId: finding.cweId ?? null,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped, category: finding.category })
-      },
-    } satisfies Parameters<typeof validateForSubmission>[0]
-    const validated = validateForSubmission(validateArgs)
-    // SIG-318 (PR 0b): golden-output capture seam #1 (validate). No-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on"; off/unset → byte-identical behavior.
-    captureGolden(env, "validate", { args: validateArgs, output: validated })
-    if (telemetry.synthesizer) {
-      telemetry.synthesizer.provenance = validated.provenance
-    }
-    telemetry.postValidation = {
-      droppedForInvalidLine: validated.droppedForInvalidLine,
-      remappedInvalidLineToInline: validated.remappedInvalidLineToInline,
-      droppedForHallucination: validated.droppedForHallucination,
-      demotedScore1: validated.demotedScore1,
-      droppedForVaguePrefix: validated.droppedForVaguePrefix,
-      droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
-      droppedForFailedValidation: validated.droppedForFailedValidation,
-      droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
-      droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
-      droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
-      droppedForFailedLogicClaimRefutation: validated.droppedForFailedLogicClaimRefutation,
-      droppedForFailedRefutationSurvival: validated.droppedForFailedRefutationSurvival,
-      droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
-      droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
-      droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
-      droppedForFailedWindowBlindnessValidation: validated.droppedForFailedWindowBlindnessValidation,
-      droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
-      droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
-    }
-
-    // SIG-310: a deterministic_emit AST rule's SEVERITY is a HARD score ceiling
-    // on any finding it produces. The synth picks `score` freely (advisory text
-    // only), so a warning-severity type smell — the optional-alias drift — could
-    // otherwise be emitted at P0/P1, breaking the zero-P0/P1-FP bar (code-review
-    // MAJOR). Deterministically clamp any finding co-located (±2 lines, same
-    // path, same category) with a NON-`error` emitWhenUnmatched AST finding to
-    // that rule's tier (warning→3/P2, info→2). `error` security emit rules are
-    // never clamped — a P0/P1 injection/TLS sink is the correct outcome there.
-    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings, validated.cleanFindingProvenance)
-    if (astEmitClamped > 0) {
-      console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
-    }
-
-    // BT1/SIG-342: deterministic performance severity clamps. These do NOT
-    // drop findings; they only cap narrow proof-backed FP shapes below the
-    // P0/P1 blocker tier. Clamp BOTH the inline verdict findings AND the
-    // body-only (unanchored) findings (CodeRabbit #298): a demoted-to-body
-    // finding would otherwise keep its sev>=4 score in the body/event output.
-    const perfClampLines = buildAddedLineTextByLine(fullPrDiff)
-    const trivialSyncIoClamped =
-      clampTrivialSyncIoSeverity(validated.verdict.findings, perfClampLines) +
-      clampTrivialSyncIoSeverity(validated.unanchoredFindings, perfClampLines)
-    if (trivialSyncIoClamped > 0) {
-      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: trivialSyncIoClamped }))
-    }
-    const liveEvalSerialClamped =
-      clampIntentionalLiveEvalSerialLoopSeverity(validated.verdict.findings, perfClampLines) +
-      clampIntentionalLiveEvalSerialLoopSeverity(validated.unanchoredFindings, perfClampLines)
-    if (liveEvalSerialClamped > 0) {
-      console.log(JSON.stringify({ event: "perf-live-eval-serial-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: liveEvalSerialClamped }))
-    }
-
-    // ARC-270 — consensus-aware re-ranking. Strictly additive: we
-    // don't change the verdict gate (`chooseReviewEvent`), drop
-    // findings, or touch scores. Just reorder so multi-specialist
-    // findings surface first and capture a consensus count per
-    // finding for the body annotation below.
-    const consensusRanked = computeConsensusRanking(
-      validated.verdict,
-      validated.cleanFindingProvenance,
-    )
-    const consensusVerdict = consensusRanked.verdict
-    const consensusProvenance = consensusRanked.provenance
-    const consensusByIndex = consensusRanked.consensusByIndex
-    const highConsensusCount = consensusByIndex.filter((c) => c >= 2).length
-    if (consensusVerdict.findings.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-review-consensus-rerank",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        finding_count: consensusVerdict.findings.length,
-        high_consensus_count: highConsensusCount,
-        max_consensus: consensusByIndex.reduce((m, c) => Math.max(m, c), 0),
-      }))
-    }
+      astResult,
+      coverageGapSet,
+      securityManifest,
+      changedLineTextByPath,
+      testingEvidencePackWithCoverage,
+      synthInputVerdicts,
+      effectiveSynthVerdict,
+      effectiveSynthProvenance,
+    })
 
     // ARC-280: shadow-mode branch deleted. The dual-mode routing
     // (shadow vs post) is gone — post is the only mode. The
@@ -7241,185 +6657,23 @@ export async function handlePrReviewEnsemble(
     return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
   } finally {
     clearTimeout(orchTimer)
-    // ARC-283 Phase B1b — shadow comparison emit. Runs on EVERY
-    // return path (success, skip-notice bail, outer-catch
-    // internal_error). When shadow was disabled the maps stay empty
-    // and this block is a zero-cost no-op. Each await is individually
-    // try/wrap'd — a shadow-side crash MUST NOT take down the prod
-    // return value the function already produced.
-    //
-    // ARC-283 review pass: a pathologically slow shadow can no longer
-    // hold the queue consumer past the 900s CF Queues ceiling. Each
-    // shadow await is raced against `shadowDeadline` (finally-start +
-    // SHADOW_FINALIZE_GRACE_MS). On grace expiry we emit
-    // `shadow-cut-short` and skip the comparison emit for that role.
-    const finallyStartMs = Date.now()
-    const shadowDeadline = finallyStartMs + SHADOW_FINALIZE_GRACE_MS
-    if (shadowSpecialistPromises.size > 0) {
-      for (const [role, shadowPromise] of shadowSpecialistPromises) {
-        try {
-          // Shadow comparison is per-role + must serialize on the
-          // same wall-clock; each await independently catches its own
-          // failure so an early role error can't poison the rest. The
-          // grace race shares one absolute deadline across all roles,
-          // so a slow first role can't starve the others.
-          const shadow = await raceWithShadowGrace(
-            shadowPromise,
-            shadowDeadline,
-            orchCtrl.signal,
-          )
-          if (shadow === SHADOW_GRACE_EXPIRED) {
-            // ARC-283 Phase B1b CR-2: abort the in-flight shadow
-            // request BEFORE emitting the telemetry, so the underlying
-            // HTTP call actually stops consuming provider capacity.
-            // The controller is only present when the runner hasn't
-            // settled yet (the .finally() in the dispatch site clears
-            // it on settle).
-            const reason: "grace_deadline" | "orch_aborted" =
-              orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
-            const ctrl = shadowAbortControllers.get(role)
-            if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
-            emitShadowCutShort(perfCtx, {
-              role,
-              elapsedAtCutMs: Date.now() - finallyStartMs,
-              reason,
-            })
-            continue
-          }
-          if (isShadowRunFailed(shadow)) {
-            // ARC-283 Phase B1b CR-1: shadow runner crashed outside
-            // its own catch. Emit the dedicated `shadow-run-failed`
-            // event so dashboards distinguish a runner crash from a
-            // grace-deadline cut. Abort any controller that's still
-            // around (defensive — the .finally() should have cleared
-            // it already since the promise settled).
-            const ctrl = shadowAbortControllers.get(role)
-            if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
-            emitShadowRunFailed(perfCtx, { role, message: shadow.message })
-            continue
-          }
-          const prodSnapshot = prodSpecialistSnapshots.get(role)
-          // When the prod path errored before the fan-out settled
-          // (orchestrator caught an exception inside try{} before
-          // `collectSpecialistVerdicts` ran), there's no prod
-          // snapshot. Build a synthetic "prod did not run" entry so
-          // the comparison still emits — operators can pivot on
-          // `prodVerdictOk === false && prodAttemptsUsed === 0` to
-          // filter these out of the bake-off analysis.
-          const prod = prodSnapshot ?? {
-            verdictOk: false,
-            modelUsed: SPECIALIST_CONFIGS[role].primary,
-            attemptsUsed: 0,
-            elapsedMs: 0,
-            findings: [] as readonly FindingForOverlap[],
-          }
-          const comparison = buildShadowVerdictComparison({
-            role,
-            prodModelDefault: SPECIALIST_CONFIGS[role].primary,
-            prod,
-            shadow: {
-              verdictOk: shadow.verdictOk,
-              modelUsed: shadow.modelUsed,
-              attemptsUsed: shadow.attemptsUsed,
-              elapsedMs: shadow.elapsedMs,
-              findings: shadow.findings,
-              ...(shadow.failureReason !== undefined
-                ? { failureReason: shadow.failureReason }
-                : {}),
-            },
-          })
-          emitShadowVerdictComparison(perfCtx, comparison)
-        } catch (err) {
-          // Defensive: a shadow-side crash (shouldn't happen — the
-          // runner catches every failure path internally) must NOT
-          // corrupt the prod return value the function already
-          // produced. Surface as a structured event for CF Logs
-          // mirroring the Task-4 `model-attempt-emit-error` shape.
-          console.warn(JSON.stringify({
-            event: "shadow-specialist-emit-error",
-            owner, repo, prNumber,
-            headSha: headSha.slice(0, 7),
-            role,
-            message: err instanceof Error ? err.message : String(err),
-          }))
-        }
-      }
-    }
-    if (shadowSynthPromise !== null) {
-      try {
-        const shadow = await raceWithShadowGrace(
-          shadowSynthPromise,
-          shadowDeadline,
-          orchCtrl.signal,
-        )
-        if (shadow === SHADOW_GRACE_EXPIRED) {
-          // ARC-283 Phase B1b CR-2: cancel in-flight synth before
-          // emitting telemetry so the HTTP request actually stops.
-          const reason: "grace_deadline" | "orch_aborted" =
-            orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
-          const ctrl = shadowAbortControllers.get("synth")
-          if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
-          emitShadowCutShort(perfCtx, {
-            role: "synth",
-            elapsedAtCutMs: Date.now() - finallyStartMs,
-            reason,
-          })
-        } else if (isShadowRunFailed(shadow)) {
-          // ARC-283 Phase B1b CR-1: shadow synth runner crashed.
-          // Emit the dedicated `shadow-run-failed` event.
-          const ctrl = shadowAbortControllers.get("synth")
-          if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
-          emitShadowRunFailed(perfCtx, { role: "synth", message: shadow.message })
-        } else {
-          // Build the prod synth snapshot from telemetry.synthesizer.
-          // Every exit path that runs the synth populates this field;
-          // the only case where it's null is the outer-catch path that
-          // fired BEFORE the inner synth try ran. In that case prod
-          // never produced any synth output — same synthetic "prod
-          // did not run" shape as the specialist branch above.
-          const prodSynthTel = telemetry.synthesizer
-          const prodSynthFindings: FindingForOverlap[] = prodSynthTel?.verdict
-            ? prodSynthTel.verdict.findings.map((f) => ({
-                path: f.path,
-                line: f.line,
-                category: f.category,
-                score: f.score,
-              }))
-            : []
-          const prod: ProdSpecialistSnapshot = {
-            verdictOk: prodSynthTel?.verdict != null,
-            modelUsed: prodSynthTel?.modelUsed ?? SYNTHESIZER_CONFIG.primary,
-            attemptsUsed: prodSynthTel?.attemptsUsed ?? 0,
-            elapsedMs: prodSynthTel?.elapsedMs ?? 0,
-            findings: prodSynthFindings,
-          }
-          const comparison = buildShadowVerdictComparison({
-            role: "synth",
-            prodModelDefault: SYNTHESIZER_CONFIG.primary,
-            prod,
-            shadow: {
-              verdictOk: shadow.verdictOk,
-              modelUsed: shadow.modelUsed,
-              attemptsUsed: shadow.attemptsUsed,
-              elapsedMs: shadow.elapsedMs,
-              findings: shadow.findings,
-              ...(shadow.failureReason !== undefined
-                ? { failureReason: shadow.failureReason }
-                : {}),
-            },
-          })
-          emitShadowVerdictComparison(perfCtx, comparison)
-        }
-      } catch (err) {
-        // Same defensive shape as the specialist branch above.
-        console.warn(JSON.stringify({
-          event: "shadow-synth-emit-error",
-          owner, repo, prNumber,
-          headSha: headSha.slice(0, 7),
-          message: err instanceof Error ? err.message : String(err),
-        }))
-      }
-    }
+    // SIG-318 (PR 12b): the ARC-283 shadow-comparison emit (the entire finally
+    // body after `clearTimeout`) moved verbatim to ensemble/app/shadow-settle.
+    // It runs on EVERY return path (success, skip-notice bail, outer-catch);
+    // when shadow is disabled the holder's maps are empty + `synthPromise` is
+    // null and it is a zero-cost no-op. Awaited exactly as the original finally
+    // body was, so the shadow tail still gates the function's settle.
+    await settleShadowBakeoff({
+      shadowState,
+      telemetry,
+      perfCtx,
+      orchCtrl,
+      shadowFinalizeGraceMs: SHADOW_FINALIZE_GRACE_MS,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+    })
   }
 }
 

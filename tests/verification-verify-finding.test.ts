@@ -14,7 +14,7 @@ import {
 } from "../src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
-import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
+import { buildAddedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
 import { readVerificationMode, readReanchorEnabled } from "../src/lib/verification/mode"
 import type { Env } from "../src/shared/types/env"
 

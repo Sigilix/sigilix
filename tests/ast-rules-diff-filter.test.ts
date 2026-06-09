@@ -12,8 +12,8 @@ import {
   buildDeletedLineTextByLine,
   nodeOverlapsChanged,
   findReviewPosition,
-} from "../src/lib/ast-rules/diff-filter"
-import { astFindingId, pathHash7 } from "../src/lib/ast-rules/finding-id"
+} from "@/features/ast-rules/domain/diff-filter"
+import { astFindingId, pathHash7 } from "@/features/ast-rules/domain/finding-id"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const DIFF_ADD_BLOCK = `diff --git a/src/foo.ts b/src/foo.ts

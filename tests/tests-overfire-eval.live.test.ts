@@ -19,7 +19,7 @@ import {
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
 import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
-import { buildAddedLineTextByLine, buildDeletedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
+import { buildAddedLineTextByLine, buildDeletedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
 import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS } from "../src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
 import {

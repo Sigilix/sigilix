@@ -83,7 +83,7 @@ import {
   buildChangedLines,
   buildDeletedLineTextByLine,
   type ChangedLines,
-} from "./ast-rules/diff-filter"
+} from "@/features/ast-rules"
 import {
   computeTestToSourceAddedRatio,
   dampTestingScoreForRatio,
@@ -158,7 +158,7 @@ import {
   type SecurityValidatorMode,
   type SecurityDropReason,
 } from "./validate-security-finding"
-import { durableObjectClassSpans, lineInDurableObjectClass, type LineSpan } from "./durable-object-spans"
+import { durableObjectClassSpans, lineInDurableObjectClass, type LineSpan } from "@/features/ast-rules"
 import { findingClaimsIntraInstanceRace } from "./validate-do-race-finding"
 import {
   evaluateTestFinding,
@@ -339,13 +339,13 @@ import {
 import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
-import { runAstRules } from "./ast-rules/runner"
-import { createAstCache, type AstCache } from "./ast-rules/parse-cache"
-import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
-import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou-race"
-import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { runAstRules } from "@/features/ast-rules"
+import { createAstCache, type AstCache } from "@/features/ast-rules"
+import { analyzeHelperBypass, renderAsymmetryHints } from "@/features/ast-rules"
+import { analyzeToctouRace, renderToctouHints } from "@/features/ast-rules"
+import { renderAstFindingsAsJsonForSynth } from "@/features/ast-rules"
 import { buildFactsByRole } from "./role-scoped-facts"
-import { postAstInlineFindings } from "./ast-rules/inline-poster"
+import { postAstInlineFindings } from "@/features/ast-rules"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"

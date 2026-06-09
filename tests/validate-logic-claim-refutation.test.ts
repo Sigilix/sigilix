@@ -11,8 +11,8 @@ import {
   parseLogicClaimRefutationMode,
   LOGIC_CLAIM_REFUTATION_MIN_SEVERITY,
 } from "../src/lib/validate-logic-claim-refutation"
-import { createAstCache } from "../src/lib/ast-rules/parse-cache"
-import { LARGE_FILE_BYTES } from "../src/lib/ast-rules/parser"
+import { createAstCache } from "@/features/ast-rules/domain/parse-cache"
+import { LARGE_FILE_BYTES } from "@/features/ast-rules/domain/parser"
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

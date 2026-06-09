@@ -28,8 +28,7 @@
 import type { SecretHit } from "./secret-scan"
 import type { DepVulnFinding } from "@/features/dep-vulns"
 import type { SarifFinding } from "@/features/sarif-evidence"
-import type { AstFinding } from "./ast-rules/types"
-import { DYNAMIC_HTML_SINK_RULE_ID } from "./ast-rules/scan-dynamic-html-sink"
+import { DYNAMIC_HTML_SINK_RULE_ID, type AstFinding } from "@/features/ast-rules"
 
 /**
  * One deterministic security fact, keyed by its `evidenceId`. The

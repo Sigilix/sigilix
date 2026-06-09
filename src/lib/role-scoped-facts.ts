@@ -19,8 +19,7 @@
 // exercise in isolation).
 
 import type { SpecialistRole } from "./ensemble-router"
-import type { AstFinding } from "./ast-rules/types"
-import { renderAstFindingsForPrompt } from "./ast-rules/render"
+import { renderAstFindingsForPrompt, type AstFinding } from "@/features/ast-rules"
 
 export interface RoleScopedFactInputs {
   /** ARC-187 secret-scan hits block (security). */

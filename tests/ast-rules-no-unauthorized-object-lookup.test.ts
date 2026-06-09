@@ -5,11 +5,11 @@
 // this rule must NEVER fire on authz-aware / principal-scoped code).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst, type AstNode } from "../src/lib/ast-rules/walker"
-import { noUnauthorizedObjectLookup } from "../src/lib/ast-rules/rules/no-unauthorized-object-lookup"
-import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
+import { noUnauthorizedObjectLookup } from "@/features/ast-rules/domain/rules/no-unauthorized-object-lookup"
+import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
+import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 // CodeRabbit #302: route through the production `walkAst` dispatch (keyed on the
 // rule's own `nodeTypes`) so the suite catches nodeTypes / walker drift, not

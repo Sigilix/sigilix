@@ -6,7 +6,7 @@
 // follow-up); an oversized declaration line-splits via splitOversizedWindow.
 
 import { type Chunk, MAX_CHUNK_CHARS, splitOversizedWindow } from "./chunk-core"
-import { parseSource, type SourceExt } from "./ast-rules/parser"
+import { parseSource, type SourceExt } from "@/features/ast-rules"
 
 const JS_TS_EXTS: ReadonlySet<string> = new Set([
   ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",

@@ -37,7 +37,7 @@
 //   orchestrator decides what to do with the verdict.
 
 import type { PrReviewFinding } from "./triage-pr-review"
-import type { AstFinding } from "./ast-rules/types"
+import type { AstFinding } from "@/features/ast-rules"
 
 /**
  * Validator mode. `shadow` (default): emit telemetry counting what

@@ -37,7 +37,7 @@
 
 import type { PrReviewFinding } from "./triage-pr-review"
 import { deriveSecurityBucket, type SecurityBucket } from "./validate-security-finding"
-import { blank } from "./ast-rules/scan-utils"
+import { blank } from "@/features/ast-rules"
 
 export type SecurityUsageValidatorMode = "off" | "shadow" | "enforce"
 

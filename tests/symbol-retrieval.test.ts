@@ -6,7 +6,7 @@ import {
   shouldRunSymbolRetrieval,
   mergeLogicSnapshot,
 } from "../src/lib/symbol-retrieval"
-import { buildChangedLines } from "../src/lib/ast-rules/diff-filter"
+import { buildChangedLines } from "@/features/ast-rules/domain/diff-filter"
 import type { RetrievedChunk } from "../src/lib/retrieval"
 
 function chunk(path: string, a: number, b: number): RetrievedChunk {

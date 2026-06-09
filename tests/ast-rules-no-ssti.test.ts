@@ -4,10 +4,10 @@
 // `res.render` view names, non-engine receivers).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst, type AstNode } from "../src/lib/ast-rules/walker"
-import { noSsti } from "../src/lib/ast-rules/rules/no-ssti"
-import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
+import { noSsti } from "@/features/ast-rules/domain/rules/no-ssti"
+import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 function runRule(source: string, path = "src/routes/render.ts"): AstRuleHit[] {
   const r = parseSource(source, ".ts")

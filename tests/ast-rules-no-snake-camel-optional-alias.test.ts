@@ -3,11 +3,11 @@
 // drift trap both CodeRabbit + Greptile catch at the type declaration).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst } from "../src/lib/ast-rules/walker"
-import { noSnakeCamelOptionalAlias } from "../src/lib/ast-rules/rules/no-snake-camel-optional-alias"
-import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst } from "@/features/ast-rules/domain/walker"
+import { noSnakeCamelOptionalAlias } from "@/features/ast-rules/domain/rules/no-snake-camel-optional-alias"
+import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
+import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 function append(out: AstRuleHit[], hit: AstRuleVisitResult): void {
   if (!hit) return

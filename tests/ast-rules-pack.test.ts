@@ -3,10 +3,10 @@
 // contract test (Codex MAJOR #3) locking the 10-rule set.
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst } from "../src/lib/ast-rules/walker"
-import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRule, AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst } from "@/features/ast-rules/domain/walker"
+import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
   if (!hit) return

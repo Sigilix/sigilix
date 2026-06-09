@@ -4,7 +4,7 @@
 // regressions from common overfire shapes. The live harness replays these diffs
 // through the real performance specialist and reports raw vs post-gate metrics.
 
-import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
+import { buildAddedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
 import {
   clampIntentionalLiveEvalSerialLoopSeverity,
   clampTrivialSyncIoSeverity,

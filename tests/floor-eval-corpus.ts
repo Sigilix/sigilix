@@ -18,17 +18,17 @@
 // containing SQL keywords, `_.render`, …); the vuln set includes a known FN the
 // open-redirect floor currently MISSES so the ruler surfaces it.
 
-import type { AstRule } from "../src/lib/ast-rules/types"
-import { noUnauthorizedObjectLookup } from "../src/lib/ast-rules/rules/no-unauthorized-object-lookup"
-import { noInsecureRandomToken } from "../src/lib/ast-rules/rules/no-insecure-random-token"
-import { noOpenRedirect } from "../src/lib/ast-rules/rules/no-open-redirect"
-import { noSsrf } from "../src/lib/ast-rules/rules/no-ssrf"
-import { noPathTraversal } from "../src/lib/ast-rules/rules/no-path-traversal"
-import { noSqlInjection } from "../src/lib/ast-rules/rules/no-sql-injection"
-import { noSsti } from "../src/lib/ast-rules/rules/no-ssti"
-import { noNosqlInjection } from "../src/lib/ast-rules/rules/no-nosql-injection"
-import { noPrototypePollution } from "../src/lib/ast-rules/rules/no-prototype-pollution"
-import { noXxe } from "../src/lib/ast-rules/rules/no-xxe"
+import type { AstRule } from "@/features/ast-rules/domain/types"
+import { noUnauthorizedObjectLookup } from "@/features/ast-rules/domain/rules/no-unauthorized-object-lookup"
+import { noInsecureRandomToken } from "@/features/ast-rules/domain/rules/no-insecure-random-token"
+import { noOpenRedirect } from "@/features/ast-rules/domain/rules/no-open-redirect"
+import { noSsrf } from "@/features/ast-rules/domain/rules/no-ssrf"
+import { noPathTraversal } from "@/features/ast-rules/domain/rules/no-path-traversal"
+import { noSqlInjection } from "@/features/ast-rules/domain/rules/no-sql-injection"
+import { noSsti } from "@/features/ast-rules/domain/rules/no-ssti"
+import { noNosqlInjection } from "@/features/ast-rules/domain/rules/no-nosql-injection"
+import { noPrototypePollution } from "@/features/ast-rules/domain/rules/no-prototype-pollution"
+import { noXxe } from "@/features/ast-rules/domain/rules/no-xxe"
 
 export interface FloorEval {
   id: string

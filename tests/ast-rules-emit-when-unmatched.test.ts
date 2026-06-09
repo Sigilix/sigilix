@@ -3,10 +3,10 @@
 // off) is told to emit an unmatched flagged entry.
 
 import { describe, it, expect } from "vitest"
-import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import { renderAstFindingsAsJsonForSynth } from "../src/lib/ast-rules/render"
+import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
+import { renderAstFindingsAsJsonForSynth } from "@/features/ast-rules/render/render"
 import { buildAstFindingsSynthBlock, clampAstEmitScores, validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
-import type { AstFinding } from "../src/lib/ast-rules/types"
+import type { AstFinding } from "@/features/ast-rules/domain/types"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 

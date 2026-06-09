@@ -6,7 +6,7 @@ import {
   dynamicReviewEvidenceMode,
   renderDynamicReviewEvidenceBlock,
 } from "../src/lib/review-evidence-pack"
-import type { ChangedLines } from "../src/lib/ast-rules/diff-filter"
+import type { ChangedLines } from "@/features/ast-rules/domain/diff-filter"
 import type { TestingEvidencePack } from "../src/lib/testing-evidence-pack"
 
 describe("dynamicReviewEvidenceMode", () => {

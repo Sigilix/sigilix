@@ -18,7 +18,7 @@ import {
 } from "../src/lib/validate-logic-finding"
 import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
-import type { AstFinding } from "../src/lib/ast-rules/types"
+import type { AstFinding } from "@/features/ast-rules/domain/types"
 import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 

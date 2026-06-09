@@ -3,10 +3,10 @@
 // FP-safety set (non-credential randomness + CSPRNG + plurals + test files).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst, type AstNode } from "../src/lib/ast-rules/walker"
-import { noInsecureRandomToken } from "../src/lib/ast-rules/rules/no-insecure-random-token"
-import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
+import { noInsecureRandomToken } from "@/features/ast-rules/domain/rules/no-insecure-random-token"
+import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 function runRule(source: string, path = "src/auth/tokens.ts"): AstRuleHit[] {
   const r = parseSource(source, ".ts")

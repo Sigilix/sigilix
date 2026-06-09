@@ -4,8 +4,8 @@
 // for each TS-surface fixture, (b) walkAst traverses without throwing.
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst } from "../src/lib/ast-rules/walker"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst } from "@/features/ast-rules/domain/walker"
 
 function assertParsesAndWalks(code: string, ext: ".js" | ".jsx" | ".ts" | ".tsx" | ".mts" | ".cts" | ".mjs" | ".cjs"): void {
   const r = parseSource(code, ext)

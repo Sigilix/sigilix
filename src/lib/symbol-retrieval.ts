@@ -11,9 +11,7 @@
 // (per Codex sign-off §2). Single Vectorize namespace → the bias is via query
 // terms, not a separate index.
 
-import { parseSource, type SourceExt } from "./ast-rules/parser"
-import { walkAst, type AstNode } from "./ast-rules/walker"
-import { nodeOverlapsChanged, type ChangedLines } from "./ast-rules/diff-filter"
+import { parseSource, walkAst, nodeOverlapsChanged, type SourceExt, type AstNode, type ChangedLines } from "@/features/ast-rules"
 import type { RetrievedChunk } from "./retrieval"
 
 const MAX_SYMBOLS = 30

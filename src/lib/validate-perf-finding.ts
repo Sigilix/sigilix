@@ -29,7 +29,7 @@
 //   NEVER dropped. This module is pure and mode-agnostic.
 
 import type { PrReviewFinding } from "./triage-pr-review"
-import type { AstFinding } from "./ast-rules/types"
+import type { AstFinding } from "@/features/ast-rules"
 import { buildChangedLineTextByPath } from "./validate-logic-finding"
 
 export { buildChangedLineTextByPath }

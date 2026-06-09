@@ -2,7 +2,7 @@
 // runner pipeline as the AST rules (changed-line filter, finding id, emit flag).
 
 import { describe, it, expect } from "vitest"
-import { runAstRules } from "../src/lib/ast-rules/runner"
+import { runAstRules } from "@/features/ast-rules/app/runner"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1 }

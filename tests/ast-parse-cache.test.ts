@@ -6,8 +6,8 @@
 // and large-file skips too; (3) apply the shared LARGE_FILE_BYTES ceiling.
 
 import { describe, it, expect } from "vitest"
-import { createAstCache, LARGE_FILE_SKIP_PREFIX, AST_CACHE_CONFLICT_PREFIX } from "../src/lib/ast-rules/parse-cache"
-import { LARGE_FILE_BYTES } from "../src/lib/ast-rules/parser"
+import { createAstCache, LARGE_FILE_SKIP_PREFIX, AST_CACHE_CONFLICT_PREFIX } from "@/features/ast-rules/domain/parse-cache"
+import { LARGE_FILE_BYTES } from "@/features/ast-rules/domain/parser"
 
 const SRC = "export function f(a: number): number { return a + 1 }\n"
 

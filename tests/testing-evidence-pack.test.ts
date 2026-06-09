@@ -1,7 +1,7 @@
 // SIG-113: testing-specialist evidence-pack unit tests.
 
 import { describe, it, expect } from "vitest"
-import { buildDeletedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
+import { buildDeletedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,

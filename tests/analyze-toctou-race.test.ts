@@ -4,7 +4,7 @@
 // these pin the FIRE/SILENT boundary, especially the atomicity exclusions.
 
 import { describe, it, expect } from "vitest"
-import { analyzeToctouRace, renderToctouHints } from "../src/lib/ast-rules/analyze-toctou-race"
+import { analyzeToctouRace, renderToctouHints } from "@/features/ast-rules/domain/analyze-toctou-race"
 
 const m = (...fns: string[]) => new Map([["svc.ts", fns.join("\n\n")]])
 const fired = (src: string) => analyzeToctouRace(m(src)).map((h) => h.fn)

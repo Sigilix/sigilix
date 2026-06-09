@@ -4,11 +4,11 @@
 // binding (kills the re.exec/db.exec self-FP — dogfood PR #296).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "../src/lib/ast-rules/parser"
-import { walkAst } from "../src/lib/ast-rules/walker"
-import { noExecShellInterpolation } from "../src/lib/ast-rules/rules/no-exec-shell-interpolation"
-import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+import { parseSource } from "@/features/ast-rules/domain/parser"
+import { walkAst } from "@/features/ast-rules/domain/walker"
+import { noExecShellInterpolation } from "@/features/ast-rules/domain/rules/no-exec-shell-interpolation"
+import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
+import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
 
 function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
   if (!hit) return

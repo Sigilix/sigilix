@@ -37,8 +37,7 @@
 // call site. This module is pure and mode-agnostic.
 
 import type { PrReviewFinding } from "./triage-pr-review"
-import { parseSource, type SourceExt } from "./ast-rules/parser"
-import type { AstCache } from "./ast-rules/parse-cache"
+import { parseSource, type SourceExt, type AstCache } from "@/features/ast-rules"
 import { extractCitedIdentifiers } from "./validate-window-blindness"
 
 export type LogicClaimRefutationMode = "off" | "shadow" | "enforce"

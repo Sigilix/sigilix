@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest"
 import { buildFactsByRole } from "../src/lib/role-scoped-facts"
-import type { AstFinding } from "../src/lib/ast-rules/types"
+import type { AstFinding } from "@/features/ast-rules/domain/types"
 
 function ast(overrides: Partial<AstFinding> = {}): AstFinding {
   return {

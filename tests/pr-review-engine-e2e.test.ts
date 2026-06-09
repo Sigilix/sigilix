@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { runAstRules } from "../src/lib/ast-rules/runner"
+import { runAstRules } from "@/features/ast-rules/app/runner"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 import {
   assessApprovalReadiness,

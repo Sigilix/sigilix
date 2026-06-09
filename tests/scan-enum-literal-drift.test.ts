@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest"
 import {
   buildGlobalUnionMap,
   scanSqlEnumDrift,
-} from "../src/lib/ast-rules/scan-enum-literal-drift"
+} from "@/features/ast-rules/domain/scan-enum-literal-drift"
 
 // The REAL pr/10 shared/types.ts shape — note TWO distinct `status` unions
 // (Invoice and Charge). A column-name-only match would be ambiguous and miss the

@@ -4,7 +4,7 @@
 // hint still wastes the model's attention, so these pin the asymmetry condition.
 
 import { describe, it, expect } from "vitest"
-import { analyzeHelperBypass, renderAsymmetryHints } from "../src/lib/ast-rules/analyze-helper-bypass"
+import { analyzeHelperBypass, renderAsymmetryHints } from "@/features/ast-rules/domain/analyze-helper-bypass"
 
 // A helper that aggregates `refunds`, a sibling that USES it, and a mutator that
 // BYPASSES it — the pr/10 D8 shape, minimised.

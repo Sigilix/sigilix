@@ -1,0 +1,57 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": []
+    },
+    "unanchoredFindings": [],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 1,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "tests"
+          ],
+          "sourceFindingIds": [
+            "tests-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onTestingFindingDropped",
+      "finding": {
+        "path": "src/lib/foo.ts",
+        "line": 2,
+        "headline": "Module ships without tests"
+      },
+      "payload": "no-citation"
+    }
+  ]
+}

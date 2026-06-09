@@ -1,0 +1,92 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": [
+        {
+          "path": "src/middleware/auth.ts",
+          "line": 6,
+          "score": 4,
+          "category": "logic",
+          "headline": "`next()` runs after 403 response, causing a double-response error",
+          "body": "When `svc.isAdmin(req.user)` returns false, the middleware sends `res.status(403).end()` and then calls `next()`.",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "logic"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
+    },
+    "unanchoredFindings": [],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 1,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "logic"
+        ],
+        "sourceFindingIds": [
+          "logic-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "logic"
+          ],
+          "sourceFindingIds": [
+            "logic-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onLogicClaimRefutationFindingDropped",
+      "finding": {
+        "path": "src/middleware/auth.ts",
+        "line": 6,
+        "headline": "`next()` runs after 403 response, causing a double-response error"
+      },
+      "payload": {
+        "reason": "control-flow-claim-refuted-by-guard",
+        "dropped": false
+      }
+    }
+  ]
+}

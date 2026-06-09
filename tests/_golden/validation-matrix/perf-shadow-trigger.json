@@ -1,0 +1,92 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": [
+        {
+          "path": "src/lib/orders.ts",
+          "line": 17,
+          "score": 4,
+          "category": "performance",
+          "headline": "Performance could be improved",
+          "body": "This area is slow.",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "performance"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
+    },
+    "unanchoredFindings": [],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 1,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "performance"
+        ],
+        "sourceFindingIds": [
+          "performance-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "performance"
+          ],
+          "sourceFindingIds": [
+            "performance-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onPerfFindingDropped",
+      "finding": {
+        "path": "src/lib/orders.ts",
+        "line": 17,
+        "headline": "Performance could be improved"
+      },
+      "payload": {
+        "reason": "unanchored-perf-claim",
+        "dropped": false
+      }
+    }
+  ]
+}

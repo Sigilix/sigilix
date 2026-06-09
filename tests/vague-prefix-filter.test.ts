@@ -134,7 +134,7 @@ describe("hasVaguePrefix", () => {
 
 // ── Integration with validateForSubmission ────────────────────
 
-import type { SynthesizerProvenance } from "../src/lib/synth-output-schema"
+import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 function makeReviewable(): ReviewableMap {

@@ -1,0 +1,89 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": []
+    },
+    "unanchoredFindings": [
+      {
+        "path": "src/parse/ndjson.ts",
+        "line": 17,
+        "score": 4,
+        "category": "security",
+        "headline": "SSRF via attacker-controlled Content-Type",
+        "body": "The decode path is driven by an attacker-controlled header.",
+        "cweId": "CWE-918",
+        "evidenceId": "NONE",
+        "evidence": {
+          "specialistsThatFlagged": [
+            "security"
+          ],
+          "specialistsThatDeclined": [],
+          "deterministicFactIds": [],
+          "retrievalChunkIds": [],
+          "relatedPriorPRs": [],
+          "synthDecision": "kept",
+          "consensusScore": 1
+        },
+        "scope": "line",
+        "trust": {
+          "tier": "body-only-ungrounded",
+          "surface": "body",
+          "demoteReason": "refutation-survival"
+        }
+      }
+    ],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 1,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "security"
+          ],
+          "sourceFindingIds": [
+            "security-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onRefutationSurvivalFindingDropped",
+      "finding": {
+        "path": "src/parse/ndjson.ts",
+        "line": 17,
+        "headline": "SSRF via attacker-controlled Content-Type"
+      },
+      "payload": {
+        "reason": "refutation-survival-missing",
+        "dropped": true,
+        "lens": "security"
+      }
+    }
+  ]
+}

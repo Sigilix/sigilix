@@ -3237,25 +3237,12 @@ export function getProposedChangeScopeMismatch(finding: PrReviewFinding): Propos
   return { anchorLines, replacementLines, replacementToAnchorRatio }
 }
 
-/**
- * SIG-127: classify a finding's anchored added-line TEXT as substantive
- * code or a structural line. File/block-level findings (e.g. "lacks
- * integration tests") often get anchored by the model to a structural
- * line — a bare `}`, a blank line — and then render as an inline
- * comment "on an empty line." Such findings are routed to the review
- * summary body instead (see `buildReviewSubmission`).
- *
- * Non-substantive when `text` is undefined, empty/whitespace-only, or
- * consists ONLY of structural punctuation/whitespace
- * (`{ } ( ) [ ] ; ,` and whitespace). Substantive otherwise.
- *
- * Pure — exported for tests.
- */
-export function isSubstantiveAnchorLine(text: string | undefined): boolean {
-  if (text === undefined) return false
-  if (text.trim() === "") return false
-  return !/^[\s{}()[\];,]*$/.test(text)
-}
+// SIG-360 / SIG-127: `isSubstantiveAnchorLine` moved to a shared/util leaf
+// (@/shared/util/anchor-lines) so domain/feature code can reference it without
+// importing this god-file (which would invert the dependency rule). Re-exported
+// here so the existing importers of this module are unchanged.
+import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
+export { isSubstantiveAnchorLine }
 
 /**
  * SIG-159 PR1 (anchor walk-forward): when a finding's anchor line isn't

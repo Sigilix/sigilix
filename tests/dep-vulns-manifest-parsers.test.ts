@@ -5,7 +5,7 @@ import {
   parsePackageJson,
   parsePackageLock,
   rootDepNames,
-} from "../src/lib/dep-vulns/manifest-parsers"
+} from "@/features/dep-vulns/domain/manifest-parsers"
 
 describe("parsePackageJson", () => {
   it("returns null on invalid JSON", () => {

@@ -10,7 +10,7 @@ import {
   type SecurityFactManifest,
 } from "../src/lib/security-evidence-manifest"
 import type { SecretHit } from "../src/lib/secret-scan"
-import type { DepVulnFinding } from "../src/lib/dep-vulns/scanner"
+import type { DepVulnFinding } from "@/features/dep-vulns"
 import type { SarifFinding } from "../src/lib/sarif-evidence/types"
 import type { AstFinding } from "../src/lib/ast-rules/types"
 import { DYNAMIC_HTML_SINK_RULE_ID } from "../src/lib/ast-rules/scan-dynamic-html-sink"

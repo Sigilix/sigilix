@@ -338,7 +338,7 @@ import {
 } from "./review-manifest"
 import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
-import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
+import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
 import { runAstRules } from "./ast-rules/runner"
 import { createAstCache, type AstCache } from "./ast-rules/parse-cache"
 import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
@@ -368,7 +368,7 @@ import {
 } from "./sarif-evidence/render"
 import { buildSarifCheckAnnotations } from "./sarif-evidence/annotations"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
-import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
+import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
 import {
   buildSigilixMarker,
   categoryFromRoleHint,

@@ -5,8 +5,8 @@
 // suppressed by `>= 1.4.2`. Lock the regression test in.
 
 import { describe, it, expect } from "vitest"
-import { matchVersion } from "../src/lib/dep-vulns/version-matcher"
-import type { AdvisoryRecord } from "../src/lib/dep-vulns/advisory-db"
+import { matchVersion } from "@/features/dep-vulns/domain/version-matcher"
+import type { AdvisoryRecord } from "@/features/dep-vulns/domain/advisory-db"
 
 const baseAdvisory: AdvisoryRecord = {
   id: "TEST-1",

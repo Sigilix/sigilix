@@ -49,6 +49,11 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // SIG-318: `@/*` → `src/*` path alias (mirrors tsconfig `paths`) so vitest
+      // resolves `@/...` imports the same way tsc + the wrangler/esbuild bundle
+      // do. `@rollup/plugin-alias` only matches a `@` that is exact or followed
+      // by `/`, so npm-scoped packages like `@cloudflare/*` are unaffected.
+      "@": path.resolve(__dirname, "./src"),
       // ARC-190: Cloudflare's `cloudflare:workers` virtual module is
       // only resolvable at Workers runtime. In vitest (Node) we
       // alias it to a tiny shim that exports a DurableObject base

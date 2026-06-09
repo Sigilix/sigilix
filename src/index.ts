@@ -21,7 +21,7 @@
 //   typed JobMessage → returns 200 in ~50ms → queue() handler runs the
 //   actual work (Ollama + GitHub/Linear API calls) with full budget.
 
-import { triageIssue } from "./lib/triage"
+import { triageIssue } from "@/lib/triage"
 import {
   detectRecallAlarm,
   recallOutcomeFromTelemetry,

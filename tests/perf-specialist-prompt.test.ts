@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "../src/prompts/pr-review-specialists"
-import { PR_REVIEW_SCHEMA } from "../src/lib/schemas"
+import { PR_REVIEW_SCHEMA } from "../src/shared/domain/schemas"
 import { PROMPT_VERSION } from "../src/prompts/pr-review"
 import perfExamples from "../src/prompts/perf-examples.json"
 

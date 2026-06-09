@@ -24,8 +24,8 @@ import {
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
-import { parseFirstJsonObject } from "./json-extract"
-import { PR_IMPROVE_SCHEMA } from "./schemas"
+import { parseFirstJsonObject } from "../shared/util/json-extract"
+import { PR_IMPROVE_SCHEMA } from "../shared/domain/schemas"
 import { PR_IMPROVE_PROMPT } from "../prompts/pr-improve"
 import {
   parseDiffToReviewablePositions,

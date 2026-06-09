@@ -8,10 +8,10 @@
 
 import { generate } from "./ollama"
 import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
-import { getMarker, setMarker } from "./dedupe"
+import { getMarker, setMarker } from "../shared/util/dedupe"
 import { markBotAuthoredComment } from "./bot-authored-comments"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
-import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
+import { ISSUE_TRIAGE_SCHEMA } from "../shared/domain/schemas"
 import type { Env } from "../shared/types/env"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 

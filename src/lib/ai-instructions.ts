@@ -19,7 +19,7 @@
 // Fail-open: a missing file / fetch error yields no guidance (review unchanged).
 
 import type { GitHubClient } from "./github"
-import { pathMatchesAny } from "./path-glob"
+import { pathMatchesAny } from "../shared/util/path-glob"
 
 /**
  * Priority order — the FIRST non-empty file found at the repo head wins (no

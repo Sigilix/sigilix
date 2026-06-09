@@ -26,7 +26,7 @@ import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
-import { withTimeout } from "./with-timeout"
+import { withTimeout } from "../shared/util/with-timeout"
 import type { Env } from "../shared/types/env"
 
 const READ_FILE_MAX_LINES = 200

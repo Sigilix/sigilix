@@ -17,8 +17,8 @@ import {
   type IssueComment,
   type ReviewComment,
 } from "./github"
-import { parseFirstJsonObject } from "./json-extract"
-import { GITHUB_MENTION_SCHEMA } from "./schemas"
+import { parseFirstJsonObject } from "../shared/util/json-extract"
+import { GITHUB_MENTION_SCHEMA } from "../shared/domain/schemas"
 import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"

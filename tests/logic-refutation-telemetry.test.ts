@@ -6,7 +6,7 @@
 // Phase 3 backstop is the recall safety rail.
 
 import { describe, expect, it } from "vitest"
-import { PR_REVIEW_SCHEMA } from "../src/lib/schemas"
+import { PR_REVIEW_SCHEMA } from "../src/shared/domain/schemas"
 import { buildClearedLogicCandidateTelemetry } from "../src/lib/triage-pr-review"
 import type { ClearedLogicCandidate } from "../src/lib/triage-pr-review"
 

@@ -41,7 +41,7 @@ import {
   deriveSide,
   type ReviewableMap,
 } from "./diff-positions"
-import { parseFirstJsonObject } from "./json-extract"
+import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { type StackContext } from "./pr-stack"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
 import {

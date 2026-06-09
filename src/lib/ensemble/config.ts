@@ -22,6 +22,13 @@ import { parseAbsenceClaimValidatorMode } from "../validate-absence-grounding"
 import { parseWindowBlindnessValidatorMode } from "../validate-window-blindness"
 import { parseSecurityGroundingValidatorMode } from "../validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "../validate-security-usage"
+import { parseReceiptJoinMode } from "../verification/verify-finding-receipt"
+import { parseLogicPromptBudgetMode } from "../logic-prompt-budget"
+import { parseAstEmitFloorMode } from "../degraded-finding-floor"
+import { parseTrustLedgerMode } from "../trust-ledger-thread"
+import { resolveClaimShadowMode } from "../review-memory/shadow-match"
+import { resolvePrecisionMode } from "../precision-profile/mode"
+import { parseReviewOutputSurface } from "../pr-review-check-run"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
@@ -51,6 +58,22 @@ export interface EnsembleConfigEnv {
   OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string | undefined
+  // feature-flag / mode reads (PR 5b)
+  OPENCLAW_INGEST_AI_INSTRUCTIONS?: string | undefined
+  OPENCLAW_DYNAMIC_DISPATCHER_MODE?: string | undefined
+  OPENCLAW_SYMBOL_RETRIEVAL?: string | undefined
+  OPENCLAW_BRANCH_AWARE_RETRIEVAL?: string | undefined
+  OPENCLAW_ASYMMETRY_HINTS?: string | undefined
+  OPENCLAW_TOCTOU_HINTS?: string | undefined
+  OPENCLAW_RECEIPTJOIN_MODE?: string | undefined
+  OPENCLAW_LOGIC_PROMPT_BUDGET?: string | undefined
+  OPENCLAW_SYNTH_RECOVERY?: string | undefined
+  OPENCLAW_AST_EMIT_FLOOR?: string | undefined
+  OPENCLAW_TRUST_LEDGER?: string | undefined
+  OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW?: string | undefined
+  OPENCLAW_REVIEW_MEMORY_CLAIMS?: string | undefined
+  OPENCLAW_PRECISION_PROFILE_MODE?: string | undefined
+  OPENCLAW_REVIEW_OUTPUT_SURFACE?: string | undefined
 }
 
 // The exact normalization the inline scan call sites used: default "off", trim,
@@ -84,6 +107,29 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
       securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
       securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
+    },
+    flags: {
+      // Raw pass-through / `=== "on"` flags: store the unparsed value so the call
+      // site's own comparison stays byte-identical.
+      ingestAiInstructions: env.OPENCLAW_INGEST_AI_INSTRUCTIONS,
+      dynamicDispatcherMode: env.OPENCLAW_DYNAMIC_DISPATCHER_MODE,
+      // Helper-normalized at the call site (shouldRunSymbolRetrieval /
+      // shouldRunBranchAwareRetrieval) — branch-aware is read twice, so the raw
+      // value keeps both sites identical.
+      symbolRetrieval: env.OPENCLAW_SYMBOL_RETRIEVAL,
+      branchAwareRetrieval: env.OPENCLAW_BRANCH_AWARE_RETRIEVAL,
+      // Inline-normalized (default "off", trim + lowercase) — reuse `scanMode`.
+      asymmetryHints: scanMode(env.OPENCLAW_ASYMMETRY_HINTS),
+      toctouHints: scanMode(env.OPENCLAW_TOCTOU_HINTS),
+      receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
+      logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
+      synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
+      astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
+      trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
+      reviewMemoryClaimShadowMode: resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW),
+      reviewMemoryClaims: env.OPENCLAW_REVIEW_MEMORY_CLAIMS,
+      precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
+      reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
     },
   }
 }

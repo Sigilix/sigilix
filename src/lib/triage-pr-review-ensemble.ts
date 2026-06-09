@@ -98,7 +98,7 @@ import {
 } from "./review-withdrawal-store"
 import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
-import { parseReviewOutputSurface, applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
+import { applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
@@ -255,7 +255,6 @@ import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
   applyLogicPromptBudget,
-  parseLogicPromptBudgetMode,
 } from "./logic-prompt-budget"
 import {
   isPrOverviewEnabled,
@@ -354,14 +353,13 @@ import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
   extractReceiptScanResults,
-  parseReceiptJoinMode,
   type ReceiptScanResult,
 } from "./verification/verify-finding-receipt"
 import { parseSarif } from "./sarif-evidence/sarif-parser"
 import { normalizeSarifPath } from "./sarif-evidence/path-normalize"
 import { recordVerificationMetricsBounded } from "./verification-metrics-client"
 import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
-import { annotateFindingTrust, parseTrustLedgerMode } from "./trust-ledger-thread"
+import { annotateFindingTrust } from "./trust-ledger-thread"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -383,11 +381,10 @@ import {
 } from "./review-memory/claim-extractor"
 import {
   shadowMatchReviewMemoryClaims,
-  resolveClaimShadowMode,
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, applySynthSourceFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits, parseAstEmitFloorMode } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, applySynthSourceFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -402,7 +399,6 @@ import { resolveReviewMemoryConfig } from "./sigilix-config"
 // patterns, record outcome signal). Shadow-gated; recall-safe.
 import { loadPrecisionProfile, recordOutcome } from "./precision-profile/store"
 import { applyPrecisionProfile } from "./precision-profile/apply"
-import { resolvePrecisionMode } from "./precision-profile/mode"
 import type {
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,
@@ -1796,7 +1792,7 @@ export async function handlePrReviewEnsemble(
     let sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
     const shouldLoadAiInstructions = shouldIngestAiInstructions(
       sigilixConfig.guidance,
-      env.OPENCLAW_INGEST_AI_INSTRUCTIONS,
+      ensembleConfig.flags.ingestAiInstructions,
     )
 
     // ARC-273: label gate. When the operator configures
@@ -2028,7 +2024,7 @@ export async function handlePrReviewEnsemble(
     //
     // Dispatcher is wrapped in try/catch so a defense-in-depth throw
     // can't poison the legacy review pipeline (CR M3 fix from PR #183).
-    const dispatcherMode = env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
+    const dispatcherMode = ensembleConfig.flags.dynamicDispatcherMode
     if (
       dispatcherMode === "shadow"
       || dispatcherMode === "enforce"
@@ -2323,17 +2319,17 @@ export async function handlePrReviewEnsemble(
     // retrieval consumes between here and the block below, so the value is
     // identical to reading it at the block.
     const wantSymbolRetrieval = shouldRunSymbolRetrieval(
-      env.OPENCLAW_SYMBOL_RETRIEVAL,
+      ensembleConfig.flags.symbolRetrieval,
       router.specialists,
       preflightCache.budgetRemaining(),
     )
     const wantBranchAware =
-      (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
+      (ensembleConfig.flags.branchAwareRetrieval ?? "").trim().toLowerCase() === "on"
     const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
     // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
     // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
-    const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
-    const toctouMode = (env.OPENCLAW_TOCTOU_HINTS ?? "off").trim().toLowerCase()
+    const asymmetryMode = ensembleConfig.flags.asymmetryHints
+    const toctouMode = ensembleConfig.flags.toctouHints
     // Cross-cutting over-fire Option B: the window-blindness gate reads the full
     // file from `astFilesByPath` to find a guard the model never saw. It must
     // trigger the fetch itself (CodeRabbit #329) — else, if every OTHER
@@ -2379,7 +2375,7 @@ export async function handlePrReviewEnsemble(
     // is a no-op ⇒ identical to today's main-only behavior.
     let branchVectors: BranchVector[] = []
     let branchSetElapsedMs = 0
-    if (shouldRunBranchAwareRetrieval(env.OPENCLAW_BRANCH_AWARE_RETRIEVAL, astFilesByPath)) {
+    if (shouldRunBranchAwareRetrieval(ensembleConfig.flags.branchAwareRetrieval, astFilesByPath)) {
       const startMs = Date.now()
       try {
         branchVectors = await withComposedTimeout(
@@ -3073,7 +3069,7 @@ export async function handlePrReviewEnsemble(
     // off) would silently no-op (CodeRabbit). The runner-evidence-specific
     // outputs (the trust-pill badge + the adoption metric) stay gated on
     // `runnerMode` below; only the shared lookup is decoupled.
-    const receiptJoinMode = parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE)
+    const receiptJoinMode = ensembleConfig.flags.receiptJoinMode
     let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
     // SIG-285 v2 PR1: the verified receipt's UN-FILTERED HEAD-scan index, built
     // below + joined to findings after submission (receipt-join verification).
@@ -3834,7 +3830,7 @@ export async function handlePrReviewEnsemble(
     // `enforce` emit `logic-prompt-budget` telemetry once per
     // ensemble run with the logic role's full prompt size + per-
     // section breakdown.
-    const logicPromptBudgetMode = parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET)
+    const logicPromptBudgetMode = ensembleConfig.flags.logicPromptBudgetMode
 
     // SIG-235 — min-specialists early exit. Build per-role
     // AbortControllers (mirroring the shadow path above) so the
@@ -4844,7 +4840,7 @@ export async function handlePrReviewEnsemble(
     // citing only AST-emit ids are NOT recovered here (sourceById is specialist-
     // only) — AST/SIG-310 deterministic recovery is a deliberate Part-1 gap,
     // fast-follow; it is precision-safe (those emits were already truncated).
-    const synthRecoveryMode = (env.OPENCLAW_SYNTH_RECOVERY ?? "off").trim().toLowerCase()
+    const synthRecoveryMode = ensembleConfig.flags.synthRecovery
     if (synthRecoveryMode !== "off"
       && effectiveSynthProvenance.findings.length > effectiveSynthVerdict.findings.length) {
       const sourceById = new Map<string, PrReviewFinding & { id: string }>()
@@ -4941,7 +4937,7 @@ export async function handlePrReviewEnsemble(
     // injects. Recall-positive + P2/P3-capped (never mints a P0/P1).
     // Validated parse — a misconfig / typo FAILS CLOSED to "off" rather than
     // silently enabling on any non-"off" string (CodeRabbit/Sigilix #330).
-    const astEmitFloorMode = parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR)
+    const astEmitFloorMode = ensembleConfig.flags.astEmitFloorMode
     if (astEmitFloorMode !== "off") {
       const floored = injectUnmatchedAstEmits({
         findings: effectiveSynthVerdict.findings,
@@ -4973,7 +4969,7 @@ export async function handlePrReviewEnsemble(
     const doClassSpans = durableObjectClassSpans(astFilesByPath, astCache)
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
-    const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
+    const trustLedgerMode = ensembleConfig.flags.trustLedgerMode
     const showEvidence = isFindingEvidenceVisible(sigilixConfig, env)
     // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
     // validateForSubmission. telemetry.synthesizer.verdict was captured from the
@@ -5481,7 +5477,7 @@ export async function handlePrReviewEnsemble(
     // soften", never over-soften). When NOT active, the soften loop below
     // simply doesn't decrement, turning off the pre-Phase-4 uncalibrated
     // always-on soften.
-    const claimShadowMode = resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW)
+    const claimShadowMode = ensembleConfig.flags.reviewMemoryClaimShadowMode
     // `reviewMemoryConfig` is scoped to the review-memory injection block
     // above; re-resolve the per-repo bool here (pure + cheap) from the
     // function-scoped sigilixConfig.
@@ -5489,7 +5485,7 @@ export async function handlePrReviewEnsemble(
       claimShadowMode,
       resolveReviewMemoryConfig(sigilixConfig).claimSoftening,
     )
-    const claimsEnabled = env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
+    const claimsEnabled = ensembleConfig.flags.reviewMemoryClaims === "on"
 
     // Reusable claim-extractor model closure. Shared by the SIG-280 PR C
     // warm veto below and the Phase-2/3 extraction site further down, so
@@ -5831,7 +5827,7 @@ export async function handlePrReviewEnsemble(
     // NOTE: `shadow` leaves the posted review byte-identical, but DOES still
     // write `stale` outcomes to KV (building the corpus is the point of shadow);
     // only `enforce` changes what's posted.
-    const precisionMode = resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE)
+    const precisionMode = ensembleConfig.flags.precisionProfileMode
     let precisionKept = postWithdrawalFindings
     if (precisionMode !== "off") {
       // Key on the owner/repo slug — the SAME key the dismiss path
@@ -6904,7 +6900,7 @@ export async function handlePrReviewEnsemble(
     // still registers its verdict (APPROVE / REQUEST_CHANGES) + summary
     // body, but doesn't double-post each finding as a review comment. The
     // `both` and `comments` surfaces keep inline comments untouched.
-    const reviewOutputSurface = parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE)
+    const reviewOutputSurface = ensembleConfig.flags.reviewOutputSurface
     const { suppressedComments } = applyOutputSurfaceToSubmission(submission, reviewOutputSurface)
     if (suppressedComments > 0) {
       console.log(JSON.stringify({

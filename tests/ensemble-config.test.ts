@@ -19,6 +19,13 @@ import { parseAbsenceClaimValidatorMode } from "../src/lib/validate-absence-grou
 import { parseWindowBlindnessValidatorMode } from "../src/lib/validate-window-blindness"
 import { parseSecurityGroundingValidatorMode } from "../src/lib/validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "../src/lib/validate-security-usage"
+import { parseReceiptJoinMode } from "../src/lib/verification/verify-finding-receipt"
+import { parseLogicPromptBudgetMode } from "../src/lib/logic-prompt-budget"
+import { parseAstEmitFloorMode } from "../src/lib/degraded-finding-floor"
+import { parseTrustLedgerMode } from "../src/lib/trust-ledger-thread"
+import { resolveClaimShadowMode } from "../src/lib/review-memory/shadow-match"
+import { resolvePrecisionMode } from "../src/lib/precision-profile/mode"
+import { parseReviewOutputSurface } from "../src/lib/pr-review-check-run"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -153,5 +160,117 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
     const c = parseEnsembleConfig({ OPENCLAW_SECURITY_VALIDATOR_MODE: "", OPENCLAW_LOGIC_VALIDATOR_MODE: "   " })
     expect(c.validatorModes.securityValidatorMode).toBe(parseSecurityValidatorMode(""))
     expect(c.validatorModes.logicValidatorMode).toBe(parseLogicValidatorMode("   "))
+  })
+})
+
+describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => {
+  it("wires each env var to the correct flag field via the SAME expression the old inline read used (no cross-wire)", () => {
+    // Distinct values per var so a swapped env-var OR a swapped parser/strategy is
+    // caught. The expected side reproduces the EXACT pre-migration read for each
+    // field — parsed flags call the same parser, normalized flags reproduce the
+    // inline `(x ?? "off").trim().toLowerCase()`, raw flags echo the env value.
+    const env = {
+      OPENCLAW_INGEST_AI_INSTRUCTIONS: "on",
+      OPENCLAW_DYNAMIC_DISPATCHER_MODE: "shadow",
+      OPENCLAW_SYMBOL_RETRIEVAL: "on",
+      OPENCLAW_BRANCH_AWARE_RETRIEVAL: "ON",
+      OPENCLAW_ASYMMETRY_HINTS: "  SHADOW  ",
+      OPENCLAW_TOCTOU_HINTS: "On",
+      OPENCLAW_RECEIPTJOIN_MODE: "enforce",
+      OPENCLAW_LOGIC_PROMPT_BUDGET: "shadow",
+      OPENCLAW_SYNTH_RECOVERY: "  ON  ",
+      OPENCLAW_AST_EMIT_FLOOR: "shadow",
+      OPENCLAW_TRUST_LEDGER: "on",
+      OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW: "soften",
+      OPENCLAW_REVIEW_MEMORY_CLAIMS: "on",
+      OPENCLAW_PRECISION_PROFILE_MODE: "enforce",
+      OPENCLAW_REVIEW_OUTPUT_SURFACE: "annotations",
+    }
+    // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
+    // reads used: default "off", trim, lowercase.
+    const scanMode = (v: string | undefined): string => (v ?? "off").trim().toLowerCase()
+    expect(parseEnsembleConfig(env).flags).toEqual({
+      // raw pass-through (use site does its own comparison / forwards unparsed)
+      ingestAiInstructions: env.OPENCLAW_INGEST_AI_INSTRUCTIONS,
+      dynamicDispatcherMode: env.OPENCLAW_DYNAMIC_DISPATCHER_MODE,
+      symbolRetrieval: env.OPENCLAW_SYMBOL_RETRIEVAL,
+      branchAwareRetrieval: env.OPENCLAW_BRANCH_AWARE_RETRIEVAL,
+      reviewMemoryClaims: env.OPENCLAW_REVIEW_MEMORY_CLAIMS,
+      // inline-normalized (default "off", trim + lowercase)
+      asymmetryHints: scanMode(env.OPENCLAW_ASYMMETRY_HINTS),
+      toctouHints: scanMode(env.OPENCLAW_TOCTOU_HINTS),
+      synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
+      // parsed via each field's own dedicated parser
+      receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
+      logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
+      astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
+      trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
+      reviewMemoryClaimShadowMode: resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW),
+      precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
+      reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
+    })
+  })
+
+  it("defaults every flag the same way its old inline read defaulted when the env var is absent", () => {
+    // Pins the full contract shape (a dropped/renamed field fails `toEqual`) AND
+    // that the absent case routes through the right default per strategy: raw →
+    // undefined, normalized → "off", parsed → the parser's own default.
+    expect(parseEnsembleConfig({}).flags).toEqual({
+      ingestAiInstructions: undefined,
+      dynamicDispatcherMode: undefined,
+      symbolRetrieval: undefined,
+      branchAwareRetrieval: undefined,
+      reviewMemoryClaims: undefined,
+      asymmetryHints: "off",
+      toctouHints: "off",
+      synthRecovery: "off",
+      receiptJoinMode: parseReceiptJoinMode(undefined),
+      logicPromptBudgetMode: parseLogicPromptBudgetMode(undefined),
+      astEmitFloorMode: parseAstEmitFloorMode(undefined),
+      trustLedgerMode: parseTrustLedgerMode(undefined),
+      reviewMemoryClaimShadowMode: resolveClaimShadowMode(undefined),
+      precisionProfileMode: resolvePrecisionMode(undefined),
+      reviewOutputSurface: parseReviewOutputSurface(undefined),
+    })
+  })
+
+  it("normalizes the inline-normalized flags with trim + lowercase (the old inline contract)", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_ASYMMETRY_HINTS: "  ON  ",
+      OPENCLAW_TOCTOU_HINTS: "Shadow",
+      OPENCLAW_SYNTH_RECOVERY: "  POST  ",
+    }).flags
+    expect(c.asymmetryHints).toBe("on")
+    expect(c.toctouHints).toBe("shadow")
+    expect(c.synthRecovery).toBe("post")
+  })
+
+  it("forwards the raw value un-mangled for the raw / `=== \"on\"` flags (no edge normalization)", () => {
+    // These call sites do their own normalization (`shouldRunSymbolRetrieval`, the
+    // inline `(x ?? "").trim().toLowerCase() === "on"`, `=== "on"`), so the edge
+    // must hand them the RAW env string — a stray `.trim()` here would change
+    // behavior. A whitespace-padded value must survive verbatim.
+    const env = {
+      OPENCLAW_INGEST_AI_INSTRUCTIONS: "  on  ",
+      OPENCLAW_DYNAMIC_DISPATCHER_MODE: " enforce_rules ",
+      OPENCLAW_SYMBOL_RETRIEVAL: "  ON ",
+      OPENCLAW_BRANCH_AWARE_RETRIEVAL: " on ",
+      OPENCLAW_REVIEW_MEMORY_CLAIMS: " on ",
+    }
+    const c = parseEnsembleConfig(env).flags
+    expect(c.ingestAiInstructions).toBe(env.OPENCLAW_INGEST_AI_INSTRUCTIONS)
+    expect(c.dynamicDispatcherMode).toBe(env.OPENCLAW_DYNAMIC_DISPATCHER_MODE)
+    expect(c.symbolRetrieval).toBe(env.OPENCLAW_SYMBOL_RETRIEVAL)
+    expect(c.branchAwareRetrieval).toBe(env.OPENCLAW_BRANCH_AWARE_RETRIEVAL)
+    expect(c.reviewMemoryClaims).toBe(env.OPENCLAW_REVIEW_MEMORY_CLAIMS)
+  })
+
+  it("routes the raw env value through each parser (the edge does not pre-normalize parsed flags)", () => {
+    // Normalization is each parser's own job (its own suite); here we only guard
+    // that the edge hands the RAW string to the right parser, so a stray `.trim()`
+    // added in parseEnsembleConfig is caught.
+    const env = { OPENCLAW_RECEIPTJOIN_MODE: "  ENFORCE  ", OPENCLAW_TRUST_LEDGER: "On" }
+    expect(parseEnsembleConfig(env).flags.receiptJoinMode).toBe(parseReceiptJoinMode("  ENFORCE  "))
+    expect(parseEnsembleConfig(env).flags.trustLedgerMode).toBe(parseTrustLedgerMode("On"))
   })
 })

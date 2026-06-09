@@ -62,7 +62,11 @@ function p0p1InputHeadlines(findings: readonly PrReviewFinding[]): string[] {
 }
 
 /** The sum of every HARD-DROP-class gate counter — a P0/P1 may legitimately
- *  leave both finding containers ONLY when one of these recorded a drop. */
+ *  leave both finding containers ONLY when one of these recorded a drop.
+ *  CAVEAT: this is a per-OUTPUT total, not per-finding — it is airtight only
+ *  while each case carries at most one P0/P1 (true today, see header). If a
+ *  future case has N>1 P0/P1s, bind the counter delta to the specific vanished
+ *  finding (or assert hardDropTotal >= number-vanished) to avoid masking. */
 function hardDropTotal(out: ValidatedOut): number {
   return (
     out.droppedForFailedLogicValidation +

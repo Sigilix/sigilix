@@ -289,7 +289,7 @@ import {
   runPerfBudgetsCheck,
   renderPerfBudgetsForPrompt,
   type PerfBudgetsHit,
-} from "./perf-budgets"
+} from "../shared/domain/perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
 import {
   handlePrOverview,
@@ -316,7 +316,7 @@ import {
   runDeterministicChecks,
   renderHitsForPrompt,
   type DeterministicCheckHit,
-} from "./deterministic-checks"
+} from "../shared/domain/deterministic-checks"
 import {
   runSecretScan,
   renderSecretHitsForPrompt,

@@ -33,15 +33,15 @@
 //   a code change.
 
 import type { Env } from "../shared/types/env"
+import { ALL_SPECIALISTS } from "../shared/domain/specialist-role"
+import type { SpecialistRole } from "../shared/domain/specialist-role"
 
-export type SpecialistRole = "logic" | "security" | "performance" | "tests"
-
-export const ALL_SPECIALISTS: readonly SpecialistRole[] = [
-  "logic",
-  "security",
-  "performance",
-  "tests",
-] as const
+// SIG-382: `SpecialistRole` + `ALL_SPECIALISTS` moved to a shared/domain leaf so
+// pure shared code (config-domain) can use the role type without importing this
+// lib module (which would invert the dependency rule). Re-exported here so the
+// existing importers of this module are unchanged.
+export { ALL_SPECIALISTS }
+export type { SpecialistRole }
 
 export interface RouterDecision {
   /** Specialists the orchestrator should fan out to. */

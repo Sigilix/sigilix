@@ -9,7 +9,7 @@
 // Moved verbatim from triage-pr-review-ensemble.ts and re-exported there, so
 // existing importers (tests) are unaffected.
 
-import { ALL_SPECIALISTS, type SpecialistRole } from "../../ensemble-router"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist-role"
 
 /**
  * SIG-235 — min-specialists early exit mode parser. Returns one of:

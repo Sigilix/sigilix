@@ -16,12 +16,12 @@ const mockUpdateReviewBody = vi.fn()
 const mockGetIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/lib/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+vi.mock("../src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -37,7 +37,7 @@ vi.mock("../src/lib/github", async () => {
 
 import { handlePrStaleMark } from "../src/lib/triage-pr-stale-mark"
 import { writeReviewManifest, type ReviewManifestV1 } from "../src/lib/review-manifest"
-import { GitHubHttpError } from "../src/lib/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 
 function makeKvStub() {

@@ -20,7 +20,13 @@
 // Linear handler treats this as "no PR fetch happens for this comment"
 // and continues with retrieval-only context.
 
-import { BRANCH_STATE_SEGMENT } from "./index-branch"
+// SIG-380 / P1a: this adapter must import INWARD only (shared/*) — never from
+// lib/feature code. `BRANCH_STATE_SEGMENT` is owned by `src/lib/index-branch.ts`
+// (`export const BRANCH_STATE_SEGMENT = "__branch__"`); we inline the literal here
+// rather than re-introduce a `shared/adapters -> lib` edge. It's a stable KV-prefix
+// token — keep the two in sync if index-branch ever changes it (a later phase that
+// relocates the index-branch module can collapse this back to a shared import).
+const BRANCH_STATE_SEGMENT = "__branch__"
 
 export type InstallationLookup =
   | { ok: true; installationId: number }

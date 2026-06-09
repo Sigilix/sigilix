@@ -28,11 +28,11 @@
 // intact until Phase 5 confirms zero canary regressions.
 
 import type { Env } from "../../shared/types/env"
-import { GitHubClient } from "../github"
+import { GitHubClient } from "../../shared/adapters/github"
 import {
   getInstallationToken,
   listInstallationRepoFullNames,
-} from "../github-app"
+} from "../../shared/adapters/github/github-app"
 import { parseFullName } from "../index-producer"
 import { buildRepoIdKey, unionRecords } from "./storage"
 import type {

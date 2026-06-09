@@ -11,8 +11,9 @@
 // failed job's plain-text log, concat them.
 
 import { generate } from "./ollama"
-import { getInstallationToken } from "./github-app"
-import { GitHubClient, GitHubHttpError, type WorkflowJob } from "./github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import type { WorkflowJob } from "../shared/types/github"
 import { retrieveChunks } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"
 import { parseFirstJsonObject } from "../shared/util/json-extract"

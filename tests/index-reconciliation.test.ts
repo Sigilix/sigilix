@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest"
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   listAppInstallationIds: vi.fn(),
   listInstallationRepoFullNames: vi.fn(),
 }))
@@ -28,7 +28,7 @@ vi.mock("../src/lib/repo-graph-client", () => ({
 }))
 
 import { runIndexReconciliation } from "../src/lib/index-reconciliation"
-import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/lib/github-app"
+import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/shared/adapters/github/github-app"
 import { enqueueIndexJobsForRepos } from "../src/lib/index-producer"
 import { readRepoIndexManifest } from "../src/lib/repo-index-manifest"
 import { debugActiveGraphVersion } from "../src/lib/repo-graph-client"

@@ -3,7 +3,7 @@
 // (mirrors tests/sigilix-config.test.ts).
 
 import { describe, it, expect } from "vitest"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 import {
   filterAiInstructionsForChangedPaths,
   buildAiInstructionGuidance,

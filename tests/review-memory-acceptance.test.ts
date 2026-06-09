@@ -19,7 +19,7 @@ import {
   computePathSha256,
 } from "../src/lib/review-memory/marker"
 import type { Env } from "../src/shared/types/env"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
 
 interface KvStub {

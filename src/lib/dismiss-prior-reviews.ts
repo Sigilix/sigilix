@@ -19,7 +19,7 @@
 // comment into their own review body; the login check guarantees we
 // only ever count our own App's reviews.
 
-import { GitHubClient } from "./github"
+import { GitHubClient } from "../shared/adapters/github"
 
 /** The marker every Sigilix review body starts with — see
  *  `buildReviewSubmission` / `buildFallbackSubmission` in

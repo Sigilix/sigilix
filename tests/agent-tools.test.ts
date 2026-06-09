@@ -25,12 +25,12 @@ vi.mock("../src/lib/github-pr-context", async () => {
   }
 })
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/lib/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+vi.mock("../src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -40,7 +40,7 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import { createAgentTools, type AgentToolsContext } from "../src/lib/agent-tools"
-import { GitHubClient } from "../src/lib/github"
+import { GitHubClient } from "../src/shared/adapters/github"
 import { encodeBranchName } from "../src/lib/index-branch"
 import type { Env } from "../src/shared/types/env"
 

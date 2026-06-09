@@ -24,8 +24,8 @@ import { applyDescribeToBody } from "./describe-apply"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
-import { getInstallationToken } from "./github-app"
-import { GitHubClient, GitHubHttpError } from "./github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
 import {
   loadSigilixConfig,
   loadSigilixConfigRaw,

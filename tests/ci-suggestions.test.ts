@@ -15,7 +15,7 @@ import {
   CI_SUGGESTION_MARKER,
   type CiSuggestionClient,
 } from "../src/lib/ci-suggestions"
-import { GitHubHttpError, type SubmitReviewBody } from "../src/lib/github"
+import { GitHubHttpError, type SubmitReviewBody } from "../src/shared/adapters/github"
 
 // A small unified diff: line 2 is added; lines 1 and 3 are context. All
 // three are RIGHT-reviewable in the new file.

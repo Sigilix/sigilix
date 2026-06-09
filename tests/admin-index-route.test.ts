@@ -4,12 +4,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 
 // Mock the App-JWT installation resolver so the route can be tested without a
 // real RSA key / GitHub API call.
-vi.mock("../src/lib/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
+vi.mock("../src/shared/adapters/github/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
 vi.mock("../src/lib/index-backfill", () => ({ runIndexBackfill: vi.fn() }))
 vi.mock("../src/lib/index-reconciliation", () => ({ runIndexReconciliation: vi.fn() }))
 
 import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "../src/lib/admin-index-route"
-import { resolveRepoInstallationId } from "../src/lib/github-app"
+import { resolveRepoInstallationId } from "../src/shared/adapters/github/github-app"
 import { runIndexBackfill } from "../src/lib/index-backfill"
 import { runIndexReconciliation } from "../src/lib/index-reconciliation"
 import type { Env } from "../src/shared/types/env"

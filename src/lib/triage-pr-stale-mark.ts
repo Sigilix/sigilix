@@ -11,8 +11,8 @@
 // Spec: docs/superpowers/specs/2026-05-06-arc-184-review-provenance-stale-markers-design.md
 // Plan: docs/superpowers/plans/2026-05-06-arc-184-review-provenance.md
 
-import { GitHubClient, GitHubHttpError } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import {
   readReviewManifest,
   computeFileListHash,

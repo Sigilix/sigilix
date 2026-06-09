@@ -9,11 +9,11 @@
 // flag before enqueueing, so the consumers trust that gate).
 
 import type { Env } from "../shared/types/env"
-import { getInstallationToken } from "./github-app"
-import { GitHubClient } from "./github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient } from "../shared/adapters/github"
 import { readReviewManifest } from "./review-manifest"
 import { buildLinearAuth, LinearClient } from "./linear"
-import { listTeamRepoMappings } from "./github-installation"
+import { listTeamRepoMappings } from "../shared/adapters/github/github-installation"
 import {
   upsertPrDoc,
   upsertIssueDoc,

@@ -65,7 +65,7 @@
 //   - `unanchored-comment-upsert-stale-kv-recovered`   — KV held a stale id; scan returned a fresher one
 
 import type { Env } from "../shared/types/env"
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 import {
   buildSigilixUnanchoredMarker,
   computeUnanchoredFingerprint,

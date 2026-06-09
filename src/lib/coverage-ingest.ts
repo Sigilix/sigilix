@@ -27,7 +27,7 @@
 // unit-tested; the fetch orchestration (`ingestCoverage`) is impure.
 
 import { unzipSync } from "fflate"
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 import { buildChangedLines } from "./sarif-evidence/diff-lines"
 
 /** COMPRESSED artifact size cap, checked against `size_in_bytes` BEFORE download. */

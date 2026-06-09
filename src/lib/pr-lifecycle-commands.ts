@@ -25,8 +25,8 @@
 // can always retry the slash command.
 
 import type { Env } from "../shared/types/env"
-import { GitHubClient } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { renderSlashCommandAck, type SlashCommand } from "./slash-commands"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
 

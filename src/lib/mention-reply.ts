@@ -26,7 +26,7 @@ import {
   listIndexedRepos,
   listTeamRepoMappings,
   parseTeamGithubRepo,
-} from "./github-installation"
+} from "../shared/adapters/github/github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "../shared/util/xml-escape"
 import { runAgentLoop } from "./agent-loop"

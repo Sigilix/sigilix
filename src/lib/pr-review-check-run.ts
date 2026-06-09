@@ -12,8 +12,9 @@
 // underlying review pipeline. The check is an indicator ON TOP OF
 // the real review — the review must always go through.
 
-import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import type { CheckRunAnnotation } from "../shared/types/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { runnerEvidenceBadgeImg } from "./badge-assets"
 import type { Env } from "../shared/types/env"
 

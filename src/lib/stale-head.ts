@@ -26,8 +26,8 @@
 // commit lands, every guard hit posts/updates the sticky.
 
 import type { Env } from "../shared/types/env"
-import { GitHubClient } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { enqueuePrReviewJob } from "../do/webhook-enqueue"
 
 export const STALE_HEAD_MARKER = "<!-- sigilix:stale-head-skipped -->"

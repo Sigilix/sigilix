@@ -42,8 +42,8 @@
 
 import type { Env } from "../shared/types/env"
 import type { JobMessage } from "../shared/types/job"
-import { GitHubClient, GitHubHttpError } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,

@@ -100,7 +100,6 @@ import {
   type PrReviewFinding,
   type CoverageRoles,
   type DeltaBadgeCounts,
-  buildClearedLogicCandidateTelemetry,
   buildBodyOnlyCheckAnnotations,
   buildFallbackSubmission,
   buildReviewSubmissionWithMetadata,
@@ -150,9 +149,6 @@ import {
   buildSecurityFactManifest,
 } from "./security-evidence-manifest"
 import {
-  evaluateScanFactDismissal,
-} from "./validate-security-finding"
-import {
   buildChangedLineTextByPath,
 } from "./validate-logic-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
@@ -171,11 +167,7 @@ import {
   parseDiffToReviewablePositions,
 } from "./diff-positions"
 import {
-  SPECIALIST_PROMPTS,
-  SYNTHESIZER_PROMPT,
   buildSpecialistInitialMessage,
-  buildSynthesizerInitialMessage,
-  renderSpecialistVerdictsForSynth,
 } from "../prompts/pr-review-specialists"
 import {
   detectStack,
@@ -187,9 +179,6 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "../shared/types/github"
 import { withComposedTimeout } from "./agent-loop"
 import {
-  applyLogicPromptBudget,
-} from "./logic-prompt-budget"
-import {
   isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
@@ -197,11 +186,9 @@ import {
   resolvePathInstructionsForChangedPaths,
   resolveCostControlsConfig,
   resolveDocsReviewConfig,
-  resolveCommandConfig,
   resolveAstRulesConfig,
   resolveCoverageConfig,
   resolvePerfBudgetsConfig,
-  type SigilixConfig,
 } from "./sigilix-config"
 import {
   buildAiInstructionGuidance,
@@ -289,7 +276,6 @@ import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs
 import { annotateFindingTrust } from "./trust-ledger-thread"
 import {
   renderSarifFindingsForPrompt,
-  renderSarifFindingsAsJsonForSynth,
 } from "@/features/sarif-evidence"
 import { buildSarifCheckAnnotations } from "@/features/sarif-evidence"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
@@ -311,7 +297,6 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, applySynthSourceFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -319,8 +304,6 @@ import {
   type WarmSoftenCandidate,
   type WarmSoftenDecision,
 } from "./review-memory/calibration"
-import { runReviewMemoryLookup } from "./review-memory/lookup"
-import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 // SIG-147: per-repo precision-profile feedback loop (suppress repeatedly-dismissed
 // patterns, record outcome signal). Shadow-gated; recall-safe.
@@ -328,39 +311,25 @@ import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/fe
 import type {
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,
-  ReviewMemoryFinding,
   ReviewMemorySkipReason,
 } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "./merge-guard"
 import {
   type EnsembleRunCtx,
-  type SynthSummary,
-  computeSpecialistFanoutSummary,
   emitPhaseCompleted,
-  emitSpecialistFanoutSummary,
-  emitSynthSummary,
-  narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
   emitReviewSlo,
   makeTokenRecorder,
 } from "./ensemble-slo-telemetry"
-// ARC-283 Phase B1b — shadow-mode bake-off harness. Imports are
-// no-ops when `env.SHADOW_BAKEOFF_ROLES` is unset/empty (the only
-// code path that fires is `parseShadowEnabledRoles("")` → empty
-// Set → every `resolveShadowConfig` returns null → no fan-out).
+// ARC-283 Phase B1b — shadow-mode bake-off harness. SIG-318 (PR 12c): the
+// fan-out + kick-off entry points (`parseShadowEnabledRoles`, `resolveShadowConfig`,
+// `runShadowSpecialist`, `runShadowSynth`, `FindingForOverlap`) followed the
+// specialists+synth seam into ensemble/app; the orchestrator only keeps
+// `ShadowRunResult` for the `ShadowBakeoffState` holder it threads through.
 import {
-  parseShadowEnabledRoles,
-  resolveShadowConfig,
-} from "./shadow-bakeoff-config"
-import {
-  type FindingForOverlap,
-} from "./shadow-bakeoff-telemetry"
-import {
-  runShadowSpecialist,
-  runShadowSynth,
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../shared/types/env"
@@ -489,6 +458,39 @@ import {
   type ShadowBakeoffState,
   type ProdSpecialistSnapshot,
 } from "./ensemble/app/shadow-settle"
+// SIG-318 (PR 12c): the SYNTH-input + synth-outcome PURE helpers (synth-input
+// builder + verdict truncation, the synth-attempt outcome classifier + retry
+// message, and the synth-bypass eligibility predicates) moved to the synth
+// domain. Value-imported for internal use + re-exported below so existing
+// importers (tests + siblings) are unaffected. `ApprovalReadinessSourceVerdict`
+// is re-exported too (the god-file's `collectApprovalReadinessSourceFindings`
+// reads it). `SynthAttemptOutcome` is type-imported for the `EnsembleTelemetry`
+// `synthRetry.outcome` union (import-back).
+import {
+  buildSynthInputVerdicts,
+  classifySynthOutcome,
+  buildSynthRetryMessage,
+  truncateVerdictToTokens,
+  buildAstFindingsSynthBlock,
+  isSynthBypassEnabled,
+  isSynthBypassEligible,
+  type ApprovalReadinessSourceVerdict,
+  type SynthAttemptOutcome,
+} from "./ensemble/domain/synth"
+export {
+  buildSynthInputVerdicts,
+  classifySynthOutcome,
+  buildSynthRetryMessage,
+  truncateVerdictToTokens,
+  buildAstFindingsSynthBlock,
+  isSynthBypassEnabled,
+  isSynthBypassEligible,
+}
+export type { ApprovalReadinessSourceVerdict, SynthAttemptOutcome }
+// SIG-318 (PR 12c): the SPECIALISTS+SYNTH seam (shadow + prod fan-out, the
+// SIG-235 quorum collector, collectSpecialistVerdicts, the coverage gate, the
+// synth-bypass / synthesizer path + the recall floors) moved to the app layer.
+import { runSpecialistsAndSynthesize } from "./ensemble/app/specialists"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -501,7 +503,6 @@ const TOP_K_BRANCH = 6
 // Mirrors the ≤4 cap on BFS graph-node additions — keeps the additive context
 // from crowding out the primary vector-hit retrieval.
 const GRAPH_BLAST_PROMPT_CAP = 4
-const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 export interface ResolveDynamicEvidencePromptBlockArgs {
   env: DynamicReviewEvidenceEnv
   filesByPath: ReadonlyMap<string, string>
@@ -598,54 +599,6 @@ export const BLAST_RADIUS_RESOLUTION_READY = true
 export function graphRetrievalEnabled(env: Env): boolean {
   const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
   return v === "shadow" || v === "post"
-}
-
-/**
- * SIG-228 Phase 3c: returns true when `OPENCLAW_SYNTH_BYPASS_ENABLED` is
- * `"on"`. Default-off keeps the always-synth legacy behavior in dev/test
- * and in any production environment where the flag was never flipped.
- * Production wrangler.toml ships this `"on"` so the bypass fires for
- * single-specialist no-major reviews (the dispatcher's hot path).
- */
-export function isSynthBypassEnabled(env: Env): boolean {
-  return (env.OPENCLAW_SYNTH_BYPASS_ENABLED ?? "").trim().toLowerCase() === "on"
-}
-
-/**
- * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
- * can pin the gate without spinning up the full ensemble. Returns true
- * iff ALL of:
- *
- *   1. `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`.
- *   2. The DISPATCHER decided to fan out to exactly 1 specialist
- *      (`dispatchedCount === 1`). The hot path is "router narrowed
- *      to 1 on purpose" — NOT "router fanned out to N, only 1 came
- *      back." The latter is a degraded-coverage run and MUST run
- *      synth so it can render the `[DEGRADED COVERAGE]` block.
- *   3. Exactly 1 candidate verdict came back non-null (sanity-check;
- *      the only way this differs from #2 is if the single dispatched
- *      specialist itself failed, which makes the bypass impossible).
- *   4. None of that candidate's findings have `score >= 4`.
- *
- * Here `score >= 4` is the major/critical SEVERITY threshold (P0/P1) — this is
- * a synth-skip optimization, NOT the posted verdict. The verdict rule
- * (`chooseReviewEventForRenderedFindings` / `isTrivialFinding`) now blocks on
- * ANY substantive finding regardless of severity; the bypass only avoids the
- * synthesizer when a lone specialist has no P0/P1, which never changes the
- * posted event. The orchestrator's inline bypass branch reads the predicate
- * verbatim — keep these in sync.
- */
-export function isSynthBypassEligible(
-  env: Env,
-  dispatchedCount: number,
-  candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
-): boolean {
-  if (!isSynthBypassEnabled(env)) return false
-  if (dispatchedCount !== 1) return false
-  if (candidates.length !== 1) return false
-  const sole = candidates[0]
-  if (!sole || !sole.verdict) return false
-  return sole.verdict.findings.every((f) => f.score < 4)
 }
 
 /**
@@ -766,15 +719,15 @@ export type { ShadowRunFailedOutcome }
 //     reads it) AND re-exported from the domain (type).
 //   - `SPECIALIST_CONFIGS`/`SYNTHESIZER_CONFIG` were exported here → imported
 //     (the orchestrator + finalize telemetry read them) AND re-exported.
-//   - `SYNTHESIZER_MODEL`/`SPECIALIST_MODELS`/`CLAIM_EXTRACTOR_CONFIG`/
-//     `CLAIM_EXTRACTOR_TIMEOUT_MS` were private here → import-back only.
+//   - `CLAIM_EXTRACTOR_CONFIG`/`CLAIM_EXTRACTOR_TIMEOUT_MS` were private here →
+//     import-back only. SIG-318 (PR 12c): `SYNTHESIZER_MODEL`/`SPECIALIST_MODELS`
+//     followed the specialists+synth seam into ensemble/app — no longer imported
+//     here (the model-provider adapter still owns them; the app reads them direct).
 import type { ModelConfig } from "./ensemble/domain/model-policy"
 export type { ModelConfig }
 import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
-  SYNTHESIZER_MODEL,
-  SPECIALIST_MODELS,
   CLAIM_EXTRACTOR_CONFIG,
   CLAIM_EXTRACTOR_TIMEOUT_MS,
 } from "./ensemble/adapters/model-provider"
@@ -918,35 +871,6 @@ export async function prepareSubmissionAffordance(args: {
 
 // SIG-361 (PR 9): `resolveReviewEventOverride` moved to the verdict domain
 // (imported + re-exported above).
-
-/**
- * Build the `[AST RULE FINDINGS]` synth-prompt block (pure, exported for test).
- * ARC-181 + SIG-245: the SUPERSEDE-and-drop instruction (drop a specialist
- * finding that matches an AST entry on (path,line,role_hint)) is only safe when the
- * AST version will actually be POSTED — i.e. when `astRules.autoInline` is ON.
- * With autoInline OFF (the DEFAULT) the AST findings are never posted anywhere,
- * so telling the synth to drop the matching specialist finding silently loses a
- * real issue that BOTH engines caught. Verified in prod telemetry (e2e-backend
- * PR#1): the security specialist EMITTED shell-injection + disabled-TLS findings
- * on src/services/exec.ts, the synth dropped them as `superseded_by_ast/*`, and
- * the AST version was never re-injected — 2 real P0/P1 bugs vanished. So when
- * autoInline is OFF, the synth must KEEP its matching findings and use the AST
- * entries only for confidence + Fix-Plan ordering. Genuine cross-specialist
- * duplicates are still merged via the synth's separate `duplicate` drop reason.
- */
-export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: boolean): string {
-  if (astFindingsJson.length === 0) return ""
-  // SIG-309 PR2 note: the emit rule's "already covered" test uses (path, line)
-  // — deliberately BROADER than the confirmation rule's (path, line, role_hint).
-  // A same-line specialist finding of ANY role almost certainly concerns the
-  // same security sink, so the broader key biases toward "already covered" →
-  // suppress the synth emit. That's the FP-safe direction (fewer emits, never
-  // a double-post), at a marginal recall cost on the rare cross-role same-line case.
-  const instruction = autoInline
-    ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
-    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by the entry's \`severity\` field: an \`error\` entry is a PROVEN-dangerous sink — score it on its merits (typically P0/P1 for security). A \`warning\` entry is an ADVISORY the scanner surfaced but can't fully prove (a dynamic HTML sink whose value might be a trusted constant; a \`role_hint:"logic"\` type-design smell) — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker, whatever its \`role_hint\`. (If your own specialist independently judges a \`warning\` security advisory to be a real P0/P1, that specialist finding 'covers' the entry per the rule above and stands on its merits — the P2 ceiling applies only to the deterministic advisory.) (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
-  return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
-}
 
 /**
  * Shadow-first gate for a deterministic AST security floor. In `post` mode the
@@ -3257,1194 +3181,53 @@ export async function handlePrReviewEnsemble(
       return message
     }
 
-    // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
-    // prod Promise.allSettled below so both lineups run in parallel
-    // (NOT serially). Shadow shares prod's `orchCtrl.signal` — when
-    // the outer orchestrator times out, shadow aborts with it. No
-    // new wall-clock budget. The shadow promise never throws (the
-    // runner catches + structures every failure path) but the
-    // `finally`-block consumer still wraps the await in try/catch
-    // to defend the prod return path.
-    const shadowEnabledRoles = parseShadowEnabledRoles(env.SHADOW_BAKEOFF_ROLES)
-    for (const role of router.specialists) {
-      const shadowConfig = resolveShadowConfig(role, shadowEnabledRoles)
-      if (shadowConfig === null) continue
-      // ARC-283 Phase B1b CR-2: per-shadow AbortController, composed
-      // with orchCtrl. Either source can abort the in-flight HTTP
-      // request: orchCtrl when the outer 895s wall fires, the
-      // per-shadow controller when the finally block decides the
-      // shadow is past its grace cap. Without the per-shadow
-      // controller, the cut-short emit was a pure log line and the
-      // request kept consuming provider capacity.
-      const shadowCtrl = new AbortController()
-      shadowState.abortControllers.set(role, shadowCtrl)
-      const composedSignal = composeSignals(orchCtrl.signal, shadowCtrl.signal)
-      const shadowPromise = runShadowSpecialist({
-        role,
-        shadowConfig,
-        apiKey: env.OLLAMA_API_KEY,
-        systemPrompt: SPECIALIST_PROMPTS[role],
-        // SIG-113: pick per-role initial message — tests specialist
-        // gets the testing-evidence block, others get the
-        // classification block.
-        userMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
-        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-        signal: composedSignal,
-        perfCtx,
-      }).finally(() => {
-        // Settled (success OR runner-caught failure) — clear the
-        // controller so the finally block's still-pending sweep
-        // doesn't re-abort an already-finished call. Doesn't drop
-        // the promise itself; the finally block still awaits to
-        // emit comparison telemetry.
-        shadowState.abortControllers.delete(role)
-      })
-      shadowState.specialistPromises.set(role, shadowPromise)
-    }
-
-    // ARC-284: track per-specialist start time so the fanout summary
-    // can name the slowest role. The fan-out below waits for ALL to
-    // settle by default; SIG-235 quorum collector below opt-in
-    // early-exits when `N-1` of `N` succeed.
-    const fanoutStartMs = Date.now()
-    const perSpecialistStart = new Map<string, number>()
-    const perSpecialistEnd = new Map<string, number>()
-    for (const role of router.specialists) perSpecialistStart.set(role, Date.now())
-
-    // SIG-236 — parse the logic-prompt-budget mode once per ensemble
-    // so the per-role map below doesn't re-read env. `off` (the
-    // default) skips the measurement+emit entirely. `shadow` /
-    // `enforce` emit `logic-prompt-budget` telemetry once per
-    // ensemble run with the logic role's full prompt size + per-
-    // section breakdown.
-    const logicPromptBudgetMode = ensembleConfig.flags.logicPromptBudgetMode
-
-    // SIG-235 — min-specialists early exit. Build per-role
-    // AbortControllers (mirroring the shadow path above) so the
-    // quorum collector can cancel a single laggard's outstanding
-    // attempts without affecting the others. composeSignals fires on
-    // EITHER orchCtrl OR the per-role controller — same pattern as
-    // the shadow path so the ladder cancels cleanly mid-attempt.
-    const earlyExitMode = ensembleConfig.flags.minSpecialistsEarlyExitMode
-    const prodSpecialistAbortControllers = new Map<SpecialistRole, AbortController>()
-    // Tracks roles whose perSpecialistEnd has been frozen at the early-
-    // exit cancel point. Used by the `.finally()` below to skip
-    // overwriting an already-recorded end-time if the cancelled
-    // promise eventually settles (race-hardening for any future await
-    // between fan-out and `computeSpecialistFanoutSummary`).
-    const earlyExitCancelledRoles = new Set<SpecialistRole>()
-    type RolePromise = {
-      role: SpecialistRole
-      ctrl: AbortController
-      promise: Promise<PromiseSettledResult<SpecialistRunResult>>
-    }
-    const rolePromises: RolePromise[] = router.specialists.map((role) => {
-      const ctrl = new AbortController()
-      prodSpecialistAbortControllers.set(role, ctrl)
-      const composedSignal = composeSignals(orchCtrl.signal, ctrl.signal)
-      // SIG-236: build the initialMessage ONCE per role so the
-      // logic-prompt-budget measurement sees exactly what runSpecialist
-      // sees, and we don't waste a second messageForRole + appendRoleRule
-      // pass.
-      let initialMessage = appendRoleRule(messageForRole(role), role, sigilixConfig)
-      if (role === "logic") {
-        // SIG-287/SIG-236: off→passthrough, shadow→measure-only, enforce→TRIM
-        // the logic prompt to the cap (returns the prompt the model receives)
-        // so logic stops timing out on its uniquely-large prompt. Belt-and-
-        // suspenders try/catch (CR catch on PR #191): `applyLogicPromptBudget`
-        // already fails open internally, but instrumentation MUST NOT break the
-        // fan-out even if a future refactor removes the inner guard — on any
-        // throw, fall back to the un-trimmed prompt (logic still runs).
-        try {
-          initialMessage = applyLogicPromptBudget({
-            mode: logicPromptBudgetMode,
-            prompt: initialMessage,
-            owner, repo, prNumber, headSha,
-          })
-        } catch (err) {
-          console.warn(JSON.stringify({
-            event: "logic-prompt-budget-call-site-error",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            message: err instanceof Error ? err.message : String(err),
-          }))
-        }
-      }
-      const promise = withComposedTimeout(
-        // Use the composed signal `withComposedTimeout` provides — it
-        // aborts on EITHER the per-specialist 270s timer OR the outer
-        // orch abort OR the per-role early-exit abort. Passing
-        // `orchCtrl.signal` directly only cancels the await wrapper,
-        // leaving the in-flight model fetch alive until the outer
-        // 490s wall fires (CR catch on PR #42).
-        (signal) => runSpecialist({
-          role,
-          apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: SPECIALIST_PROMPTS[role],
-          // SIG-113: tests specialist gets the testing-evidence
-          // block; other specialists get the classification block.
-          initialMessage,
-          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal,
-          // ARC-283 Phase B1b: thread the orchestrator's perfCtx
-          // through so per-attempt `model-attempt-completed` events
-          // share correlation fields with the surrounding ensemble
-          // telemetry.
-          perfCtx,
-        }),
-        SPECIALIST_TIMEOUT_MS,
-        composedSignal,
-      ).finally(() => {
-        // M2 race-hardening: only record end-time if the role's
-        // end-time wasn't already frozen by the early-exit synthetic
-        // entry. Today's flow is synchronous from fan-out to fanout-
-        // summary so the race doesn't fire, but this prevents a
-        // future await from triggering a late-set overwrite.
-        if (!earlyExitCancelledRoles.has(role)) {
-          perSpecialistEnd.set(role, Date.now())
-        }
-        prodSpecialistAbortControllers.delete(role)
-      }).then(
-        (value): PromiseSettledResult<SpecialistRunResult> => ({ status: "fulfilled", value }),
-        (reason): PromiseSettledResult<SpecialistRunResult> => ({ status: "rejected", reason }),
-      )
-      return { role, ctrl, promise }
-    })
-
-    // SIG-235 quorum collector. Drains role promises one at a time;
-    // when `N-1` of `N` have returned a non-null verdict AND mode is
-    // "on", cancels the remaining role(s) and continues to synth.
-    // Late verdicts from cancelled roles are logged + discarded.
-    //
-    // Modes:
-    //   off    — pure Promise.all (legacy semantics, default)
-    //   shadow — wait for all, but log when early-exit WOULD have fired
-    //   on     — cancel laggard + proceed to synth as soon as N-1 succeed
-    let specialistResults: PromiseSettledResult<SpecialistRunResult>[]
-    let earlyExitFiredAtMs: number | null = null
-    let cancelledRolesAtExit: SpecialistRole[] = []
-    let earlyExitWouldFireAtMs: number | null = null
-    // SIG-236: log the protected-role early-exit suppression at most once.
-    let earlyExitProtectedLogged = false
-    if (earlyExitMode === "off") {
-      // Legacy: wait for everyone.
-      specialistResults = await Promise.all(rolePromises.map((rp) => rp.promise))
-    } else {
-      const settledResults = new Map<SpecialistRole, PromiseSettledResult<SpecialistRunResult>>()
-      // Each pending promise carries its role so Promise.race can
-      // identify which one resolved without an index lookup.
-      //
-      // CodeRabbit catch (Major): the tracked-promise SELF-REMOVES
-      // from `pending` in its `.then(...)` (microtask 1) so by the
-      // time `Promise.race(...)` resumes the loop (microtask 2),
-      // `pending` accurately reflects "still in-flight" — never
-      // "in-flight OR just-settled-this-tick-but-not-yet-consumed."
-      // Without this, a microtask burst where multiple specialists
-      // resolve simultaneously can race-pick role A, leave already-
-      // resolved roles B/C in `pending`, hit the early-exit threshold,
-      // abort B/C via their AbortControllers, and synthesize null
-      // verdicts for them — silently dropping real verdicts.
-      const pending = new Map<SpecialistRole, Promise<{ role: SpecialistRole; result: PromiseSettledResult<SpecialistRunResult> }>>()
-      for (const rp of rolePromises) {
-        const tracked = rp.promise.then((result) => {
-          pending.delete(rp.role)
-          return { role: rp.role, result }
-        })
-        pending.set(rp.role, tracked)
-      }
-      const N = router.specialists.length
-      const quorumThreshold = N - 1
-      while (pending.size > 0) {
-        const settled = await Promise.race(pending.values())
-        // `pending.delete(settled.role)` already happened in the
-        // `.then` above — `settledResults.set` records the result.
-        settledResults.set(settled.role, settled.result)
-
-        const succeededCount = Array.from(settledResults.values()).filter(
-          (r) => r.status === "fulfilled" && r.value.verdict !== null,
-        ).length
-
-        // SIG-236: logic is the intentional long-pole (rich graph+symbol context,
-        // ~110s per-attempt). It is a PROTECTED role — early-exit must NOT cancel
-        // it, or flipping early-exit to "on" would silently re-break logic
-        // availability (the regression this fix closes). Early-exit can still fire
-        // to drop a genuinely stuck non-logic role. decideEarlyExitAction is the
-        // pure, unit-tested decision.
-        const logicProtectedPending =
-          router.specialists.includes("logic") && pending.has("logic")
-        const earlyExitAction = decideEarlyExitAction({
-          mode: earlyExitMode,
-          succeededCount,
-          quorumThreshold,
-          pendingCount: pending.size,
-          logicProtectedPending,
-        })
-        if (earlyExitAction !== "none") {
-          const nowMs = Date.now()
-          if (earlyExitAction === "suppress-protected") {
-            // Keep awaiting logic — its 110s per-attempt cap bounds it, not
-            // early-exit. Fall through (no break) to the next Promise.race.
-            if (!earlyExitProtectedLogged) {
-              earlyExitProtectedLogged = true
-              console.log(JSON.stringify({
-                event: "ensemble-early-exit-suppressed-protected-role",
-                owner, repo, prNumber,
-                mode: "on",
-                protectedRole: "logic",
-                succeededRoles: Array.from(settledResults.entries())
-                  .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
-                  .map(([role]) => role),
-                pendingRoles: Array.from(pending.keys()),
-                elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
-              }))
-            }
-          } else if (earlyExitAction === "cancel") {
-            earlyExitFiredAtMs = nowMs
-            cancelledRolesAtExit = Array.from(pending.keys())
-            // Abort the laggards' AbortControllers — composedSignal
-            // propagates the cancel into the in-flight attempt.
-            for (const rp of rolePromises) {
-              if (pending.has(rp.role)) {
-                rp.ctrl.abort()
-                // Background watcher for the late-verdict-discard
-                // event. Doesn't block the synth path.
-                rp.promise
-                  .then((result) => {
-                    if (result.status === "fulfilled" && result.value.verdict !== null) {
-                      console.log(JSON.stringify({
-                        event: "ensemble-late-verdict-discarded",
-                        owner, repo, prNumber,
-                        role: rp.role,
-                        attemptsUsed: result.value.attemptsUsed,
-                        modelUsed: result.value.modelUsed,
-                      }))
-                    }
-                  })
-                  .catch(() => { /* discard cancellation errors */ })
-              }
-            }
-            break
-          } else if (earlyExitAction === "shadow-mark" && earlyExitWouldFireAtMs === null) {
-            // Shadow: log the would-fire and keep awaiting. Only the
-            // FIRST time the threshold is crossed (subsequent settles
-            // would also satisfy `>= quorumThreshold` and we don't
-            // need duplicate events).
-            earlyExitWouldFireAtMs = nowMs
-            console.log(JSON.stringify({
-              event: "ensemble-min-specialists-early-exit-would-fire",
-              owner, repo, prNumber,
-              mode: "shadow",
-              succeededRoles: Array.from(settledResults.entries())
-                .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
-                .map(([role]) => role),
-              pendingRoles: Array.from(pending.keys()),
-              dispatchedRoles: router.specialists,
-              elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
-            }))
-          }
-        }
-      }
-
-      // Reassemble into router.specialists order so downstream
-      // `collectSpecialistVerdicts(roles, results, ...)` zips correctly.
-      // Cancelled-but-not-settled roles (only possible in "on" mode
-      // after early-exit) get a synthetic null-verdict entry so the
-      // [DEGRADED COVERAGE] block fires the same way as a legitimate
-      // ladder-exhaust failure.
-      //
-      // `failureReason: "early_exit_aborted"` is intentional — the
-      // collector's `timedOut: /abort/i || /timeout/i` regex at
-      // `collectSpecialistVerdicts` line ~6327 catches it, so these
-      // cancellations land in the same telemetry bucket as legitimate
-      // timer/parent-signal aborts. Lets the `/metrics/validation`
-      // dashboard treat early-exit cancels like timeouts (which they
-      // structurally are — primary started but was forcibly stopped).
-      //
-      // `attemptsUsed: 1` is a conservative MINIMUM (CR catch). The
-      // cancelled promise may have spent 1-3 attempts (primary +
-      // optional retry + optional fallback) before the cancel
-      // propagated, but synth-firing immediately means we can't
-      // await the real count without losing the wall-time win that
-      // motivates early-exit. Charging 1 acknowledges the primary
-      // definitely started; undercount risk on retry/fallback paths
-      // is bounded by the role's `maxAttempts()` and the daily-budget
-      // gate already has slack from the worst-case
-      // `MAX_CALLS_PER_ENSEMBLE_RUN` reservation.
-      specialistResults = router.specialists.map((role) => {
-        const r = settledResults.get(role)
-        if (r !== undefined) return r
-        earlyExitCancelledRoles.add(role)
-        const startMs = perSpecialistStart.get(role) ?? Date.now()
-        const nowMs = Date.now()
-        perSpecialistEnd.set(role, nowMs)
-        return {
-          status: "fulfilled" as const,
-          value: {
-            verdict: null,
-            modelUsed: SPECIALIST_CONFIGS[role].primary,
-            attemptsUsed: 1,
-            elapsedMs: nowMs - startMs,
-            failureReason: "early_exit_aborted",
-          } satisfies SpecialistRunResult,
-        }
-      })
-
-      if (earlyExitFiredAtMs !== null) {
-        const succeededRoles = Array.from(settledResults.entries())
-          .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
-          .map(([role]) => role)
-        console.log(JSON.stringify({
-          event: "ensemble-min-specialists-early-exit-fired",
-          owner, repo, prNumber,
-          mode: "on",
-          succeededRoles,
-          cancelledRoles: cancelledRolesAtExit,
-          dispatchedRoles: router.specialists,
-          elapsedMsAtFire: earlyExitFiredAtMs - fanoutStartMs,
-        }))
-      }
-    }
-    const fanoutEndMs = Date.now()
-    emitPhaseCompleted(perfCtx, "specialist_fanout", fanoutStartMs, fanoutEndMs)
-
-    // Collect specialist verdicts (with stable IDs assigned).
-    const specialistVerdicts = collectSpecialistVerdicts(
-      router.specialists,
-      specialistResults,
-      telemetry,
-    )
-
-    // SIG-282 Phase 2: reconcile the security specialist's explicit
-    // false-positive dismissals against the manifest and emit telemetry.
-    // A dismissal is ACCEPTED only when its evidenceId resolves AND the
-    // underlying fact is a dismissible (warn-level) candidate; a dismissal
-    // aimed at a high-confidence provider hit is REJECTED + logged — a
-    // possible real-secret wave-off worth a human's attention. This is
-    // observability + a safety rail; Phase 1's framing already keeps the
-    // false-positive finding from being emitted.
-    const securityDismissals =
-      specialistVerdicts.find((v) => v.role === "security")?.verdict?.dismissedScanFacts ?? []
-    for (const d of securityDismissals) {
-      const decision = evaluateScanFactDismissal(d, securityManifest.manifest)
-      console.log(JSON.stringify({
-        event: "pr-review-scan-fact-dismissed",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        evidenceId: d.evidenceId,
-        ruleId: decision.ruleId,
-        accepted: decision.accepted,
-        rejectReason: decision.accepted ? null : decision.reason,
-      }))
-    }
-
-    // SIG-308 Phase 2: telemeter the logic specialist's cleared candidates —
-    // correctness concerns it refuted against an in-code mitigation instead of
-    // emitting a finding. There is no manifest to reconcile against (logic
-    // candidates are self-generated), so this is pure observability of the
-    // cleared-rate; the recall safety rail is the Phase 3 backstop. Phase 1's
-    // framing already keeps the refuted finding from being emitted.
-    const clearedLogicCandidates =
-      specialistVerdicts.find((v) => v.role === "logic")?.verdict?.clearedLogicCandidates ?? []
-    for (const ev of buildClearedLogicCandidateTelemetry(clearedLogicCandidates, {
-      owner, repo, prNumber, headSha,
-    })) {
-      console.log(JSON.stringify(ev))
-    }
-
-    // ARC-283 Phase B1b — snapshot per-role prod outcomes for the
-    // shadow comparison emit in `finally`. Only writes for roles
-    // that have a shadow promise queued; for everyone else we'd
-    // never emit a comparison anyway. Reading from `specialistVerdicts`
-    // (not `specialistResults`) so we get the same shape downstream
-    // telemetry sees (stable-id-assigned verdict, dedupe-corrected
-    // modelUsed). Findings are projected to the overlap-helper's
-    // shape so the `finally` block stays a thin wrapper.
-    for (const v of specialistVerdicts) {
-      if (!shadowState.specialistPromises.has(v.role)) continue
-      const findings: FindingForOverlap[] = v.verdict
-        ? v.verdict.findings.map((f) => ({
-            path: f.path,
-            line: f.line,
-            category: f.category,
-            score: f.score,
-          }))
-        : []
-      shadowState.prodSnapshots.set(v.role, {
-        verdictOk: v.verdict !== null,
-        modelUsed: v.modelUsed ?? SPECIALIST_CONFIGS[v.role].primary,
-        attemptsUsed: v.attemptsUsed ?? 0,
-        elapsedMs: v.elapsedMs,
-        findings,
-      })
-    }
-
-    // ARC-284 (Sigilix PR #95 catch): specialist-fanout-summary
-    // computation moved into `computeSpecialistFanoutSummary` so the
-    // slowestRole / fallbacksUsed / totalAttemptsUsed logic is unit-
-    // testable. The orchestrator just maps its CollectedVerdict[] +
-    // per-role timing into the helper's input shape.
-    //
-    // Emitted BEFORE the coverage / quorum gate below so the event
-    // fires even on the "all specialists failed" bail path.
-    {
-      const summary = computeSpecialistFanoutSummary({
-        dispatchedRoles: router.specialists,
-        inputs: specialistVerdicts.map((v) => ({
-          role: v.role,
-          verdictOk: v.verdict !== null,
-          attemptsUsed: v.attemptsUsed,
-          modelUsed: v.modelUsed,
-          fallbackModel: SPECIALIST_CONFIGS[v.role].fallback,
-        })),
-        perRoleStartMs: perSpecialistStart,
-        perRoleEndMs: perSpecialistEnd,
-        fanoutStartMs,
-        fanoutEndMs,
-      })
-      emitSpecialistFanoutSummary(perfCtx, summary)
-    }
-
-    // ─── Coverage check (ARC-277) ──────────────────────────────
-    //
-    // Pre-ARC-277, this was a quorum gate that bailed to `skipped`
-    // whenever fewer than min(2, dispatched.length) specialists
-    // returned. The fall-back to Phase 3 plus the silent-success
-    // bug chain that ARC-258 / ARC-275 chased made that gate the
-    // single biggest contributor to "Sigilix went silent" reports.
-    //
-    // New contract:
-    //   - 0/N succeeded: still bail to `skipped` (synth has
-    //     nothing to merge from; will revisit in ARC-278 once
-    //     synth retry + comment fallback land).
-    //   - 1 ≤ succeeded < dispatched: continue to synth with a
-    //     `[DEGRADED COVERAGE]` prompt block + structured
-    //     telemetry. `checkQuorum` is no longer the gate.
-    //   - succeeded === dispatched: full coverage, no prompt
-    //     change, no degraded-coverage telemetry.
-    const succeeded = specialistVerdicts.filter((v) => v.verdict !== null)
-    if (succeeded.length === 0) {
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
-      telemetry.fellBackReason = "specialists_all_failed"
-      // CR Minor catch on PR #92: name the roles the router
-      // actually dispatched, since `specialists_all_failed` fires
-      // whether 4/4 or 1/1 specialists failed.
-      return bailWithSkipNotice("specialists_all_failed", {
-        dispatchedRoles: router.specialists,
-      })
-    }
-    const degradedCoverage = succeeded.length < router.specialists.length
-      ? computeDegradedCoverage(router.specialists, succeeded.map((v) => v.role))
-      : null
-    if (degradedCoverage) {
-      // Record the partial-coverage telemetry but DON'T bail. Synth
-      // runs on the partial input + a degraded-coverage block in
-      // the prompt.
-      telemetry.fellBackReason = "specialists_degraded"
-      telemetry.degradedCoverage = degradedCoverage
-      console.log(JSON.stringify({
-        event: "ensemble-specialists-degraded",
-        owner, repo, prNumber,
-        roles_returned: degradedCoverage.rolesReturned,
-        roles_missing: degradedCoverage.rolesMissing,
-      }))
-    }
-
-    // ─── SIG-228 Phase 3c: synth-bypass single-specialist hot path ─
-    //
-    // When the dispatcher returns exactly 1 specialist AND none of
-    // that specialist's findings have `score >= 4` (major/critical),
-    // skip the synthesizer LLM round-trip entirely. The specialist's
-    // verdict IS the submission verdict — there's no cross-specialist
-    // consensus to compute, and no major-severity finding that
-    // benefits from synth-level rewriting.
-    //
-    // Saves ~15-25s on the hot path (the typical synth elapsed window
-    // on `gpt-oss:120b-cloud`). Flag-gated behind
-    // `OPENCLAW_SYNTH_BYPASS_ENABLED`; default-off in dev/test,
-    // default-on in production (wrangler.toml).
-    //
-    // Reaches here only AFTER the `succeeded.length === 0` bail above
-    // (line ~2894) — the bypass branch's `synthInputVerdicts[0]!`
-    // assertion is safe by construction. If the order is ever flipped,
-    // re-add a guard on the bypass branch.
-    //
-    // `synthInputVerdicts` is hoisted out so both the bypass path AND
-    // the synth path read the same truncated verdicts. `truncateVerdictToTokens`
-    // sorts findings by score DESC and pops from the end, so major
-    // findings always survive truncation as long as any space remains.
-    // The bypass eligibility check below intentionally reads from the
-    // UNTRUNCATED `succeeded` array (not `synthInputVerdicts`) so that a
-    // hypothetical extreme-token-pressure case dropping a `score >= 4`
-    // finding can't sneak past the bypass gate — CR phase-end catch on
-    // PR #188.
-    const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
-
-    // Bypass eligibility: dispatched-count gate + succeeded-count gate
-    // both live in the helper. The hot path is "dispatcher narrowed to
-    // 1 specialist on purpose" — NOT "dispatcher fanned out to N, only
-    // 1 returned." The latter is a degraded-coverage run where the
-    // customer expected multiple perspectives; we MUST run synth there
-    // so it can render the `[DEGRADED COVERAGE]` block and acknowledge
-    // the gap.
-    //
-    // Evaluated against the untruncated `succeeded` array — see the
-    // hoist comment above on `synthInputVerdicts` for why.
-    //
-    // HARD-DISABLE the bypass whenever synth shadow bake-off is
-    // configured for this run. Otherwise flipping the bypass on would
-    // silently halve the shadow synth signal on the bypass-eligible
-    // population — exactly the cohort the bake-off measures. The
-    // shadow comparator matters more than the bypass perf win during
-    // the bake-off window; flip `SHADOW_BAKEOFF_ROLES` back to "" to
-    // re-enable bypass.
-    const synthBypassEligible =
-      !shadowEnabledRoles.has("synth") &&
-      isSynthBypassEligible(
-        env,
-        router.specialists.length,
-        succeeded,
-      )
-
-    // Hoisted from the original synth section below so the bypass
-    // path can populate them too — the post-synth validation code
-    // reads from one source of truth regardless of which branch fired.
-    //
-    // `synthStartMs` is captured inside each branch so the metric stays
-    // apples-to-apples vs pre-SIG-228 telemetry: synth branch starts
-    // its clock right before the LLM call, bypass branch right before
-    // its near-zero construction. Otherwise the synth-path elapsedMs
-    // would silently accrete prompt-building + review-memory-lookup
-    // time and overstate the bypass savings on rollout dashboards.
-    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
-    let synthStartMs: number
-    let synthAttemptsUsed = 0
-    let synthRetryUsed = false
-    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
-    // SIG-276 Phase 3: the injected memories captured in the synth-path
-    // scope (where `reviewMemoryResult` is alive) so the Site-2 shadow
-    // matcher — which runs later, in the outer post-synth scope — can read
-    // them. Stays [] on the synth-bypass branch (no memory injection there).
-    let shadowMemoriesForPhase3: ReviewMemoryFinding[] = []
-
-    if (synthBypassEligible) {
-      synthStartMs = Date.now()
-      // Bypass: construct a synth-equivalent output directly from the
-      // single specialist's truncated verdict. The provenance entries
-      // declare every kept finding as sourced from that one specialist
-      // with `action: "kept"` — the only legal shape when synth never
-      // ran. The `modelUsed` sentinel lets telemetry consumers
-      // distinguish bypass elapsed-ms from real synth elapsed-ms.
-      //
-      // Known tradeoffs (M2/M3 from code-reviewer): the bypass also
-      // skips synth's contextual signals — AST supersession (drops
-      // specialist findings that share `(path, line, role_hint)` with
-      // a deterministic AST entry), SARIF Fix-Plan ordering, GRAPH
-      // CONTEXT contradiction, REVIEW MEMORY softening, and the
-      // unified PR-wide summary rewrite. On the 1-role no-major hot
-      // path those signals are typically empty or low-signal; on a
-      // 1-role + populated-AST/SARIF/memory PR they would actually
-      // do useful work. Worth filing a follow-up to either disable
-      // bypass when those blocks are non-empty OR fold a minimal
-      // post-bypass supersession pass.
-      const sole = synthInputVerdicts[0]!
-      const verdict = sole.verdict
-      synthOutput = {
-        verdict,
-        provenance: {
-          findings: verdict.findings.map((f) => ({
-            sourceSpecialists: [sole.role],
-            sourceFindingIds: [f.id],
-            action: "kept" as const,
-            verifiedViaRetrieval: false,
-          })),
-          dropped: [],
-        },
-        // `elapsedMs: 0` here is overwritten by `synthEntry.elapsedMs =
-        // Date.now() - synthStartMs` below; kept as a defensive stub
-        // so callers reading `synthOutput.elapsedMs` directly (vs
-        // via the telemetry entry) never see undefined.
-        elapsedMs: 0,
-        modelUsed: "synth-bypass-single-specialist",
-        attemptsUsed: 0,
-      }
-      telemetry.synthBypass = {
-        reason: "single_specialist_no_major",
-        specialistRole: sole.role,
-        findingCount: verdict.findings.length,
-      }
-      // Set reviewMemory + synthRetry explicitly for telemetry parity
-      // with the synth path — bypass produces a shape that rollout
-      // dashboards can filter for without ambiguity.
-      // `reason: "retrieval-disabled-config"` is the closest
-      // ReviewMemorySkipReason that captures "the bypass path
-      // skipped review memory by configuration choice" (the synth-
-      // bypass IS a configuration choice).
-      telemetry.reviewMemory = {
-        skipped: true,
-        reason: "retrieval-disabled-config",
-        findingsCount: 0,
-      }
-      telemetry.synthRetry = { used: false, outcome: "n/a" }
-      console.log(JSON.stringify({
-        event: "ensemble-synth-bypassed",
-        owner, repo, prNumber,
-        role: sole.role,
-        findingCount: verdict.findings.length,
-      }))
-    } else {
-      synthStartMs = Date.now()
-
-    // ─── Synthesizer ───────────────────────────────────────────
-    const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
-    const synthMessage = buildSynthesizerInitialMessage({
+    // ─── SIG-318 (PR 12c): the SPECIALISTS+SYNTH seam ─────────
+    // The shadow + prod specialist fan-out, the SIG-235 quorum collector,
+    // collectSpecialistVerdicts, the dismissal/cleared telemetry + prod
+    // snapshots + fanout summary, the ARC-277 coverage gate, the synth-bypass /
+    // synthesizer path (+ retry ladder + telemetry + summary), and the recall
+    // floors all moved verbatim to ensemble/app/specialists (which delegates the
+    // synth phase to ensemble/app/synthesize + the floors to ensemble/app/recall-
+    // floors). The phase mutates `telemetry` + `shadowState` by reference; its
+    // skip-notice bails return the `exit` arm, forwarded here.
+    const specialistsPhase = await runSpecialistsAndSynthesize({
+      env,
+      owner,
+      repo,
       prNumber,
-      diff,
-      specialistVerdictsBlock: synthVerdictBlock,
-      ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-      ...(matchedPathInstructions.length > 0
-        ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions) }
-        : {}),
-      ...(stackBlock.length > 0 ? { stackBlock } : {}),
-      // ARC-277: when one or more specialists didn't return, tell
-      // synth which roles it's missing so it can constrain its
-      // output and acknowledge the gap in `summary`.
-      ...(degradedCoverage ? { degradedCoverage } : {}),
-      // SIG-138 Phase 2: synth sees graph neighbors in post mode.
-      ...(graphCtxForPrompt.length > 0 ? { graphContext: graphCtxForPrompt } : {}),
-      ...(dynamicEvidenceBlockForPrompt.length > 0
-        ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt }
-        : {}),
-    })
-
-    // ARC-181 Task 8: thread structured AST findings into the synth
-    // prompt for (path, line, role_hint) supersession matching.
-    const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
-    // SIG-245: only instruct supersession-and-drop when the AST version will be
-    // posted (autoInline ON). With it OFF (default) the drop silently loses
-    // double-detected real findings — see buildAstFindingsSynthBlock.
-    const synthMessageWithAst =
-      synthMessage + buildAstFindingsSynthBlock(astFindingsForSynth, astRulesConfig.autoInline)
-
-    // ARC-188: append SARIF structured findings + SBOM summary on
-    // top of the AST-augmented prompt. Synth gets the machine-
-    // readable JSON for Fix Plan ordering (direct-dep findings
-    // outrank deep-transitive). Empty when no SARIF run + no SBOM.
-    const sarifSynthBlock = renderSarifFindingsAsJsonForSynth(
-      sarifFindings,
-      sarifResult.skipped ? undefined : sarifResult.sbom,
-    )
-    const synthMessageWithSarif = sarifSynthBlock.length > 0
-      ? `${synthMessageWithAst}\n\n[SARIF EVIDENCE — synth-only structured]\n\n\`\`\`\n${sarifSynthBlock}\n\`\`\``
-      : synthMessageWithAst
-
-    // ─── ARC-189: cross-PR review-memory injection ────────────
-    // Synth-only (specialists do NOT see this block — we want them to
-    // surface the finding and let synth decide whether to soften).
-    // Gates per spec §5.2 truth table: env=on AND sigilix.json
-    // enabled=true. Lookup pipeline does its own gate-check; this
-    // outer guard avoids paying the (cheap) lookup cost when
-    // disabled.
-    const reviewMemoryConfig = resolveReviewMemoryConfig(sigilixConfig)
-    const reviewMemoryResult = await runReviewMemoryLookup({
-      env, owner, repo, prNumber,
-      paths: filePaths,
-      config: reviewMemoryConfig,
-      // SIG-247 Phase 1: thread the immutable repo.id so the lookup
-      // hits the dual-write keyspace. When absent (legacy queue
-      // message / slash-command raw-send), the lookup degrades to
-      // legacy-only reads and the canary telemetry `key_mode` field
-      // surfaces the gap.
+      headSha,
       ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+      ensembleConfig,
+      telemetry,
+      perfCtx,
+      orchCtrl,
+      shadowState,
+      bailWithSkipNotice,
+      sigilixConfig,
+      router,
+      messageForRole,
+      securityManifest,
+      diff,
+      matchedPathInstructions,
+      stackBlock,
+      graphCtxForPrompt,
+      dynamicEvidenceBlockForPrompt,
+      astResult,
+      astRulesConfig,
+      sarifFindings,
+      sarifResult,
+      filePaths,
     })
-    const memoryBlock = reviewMemoryResult.skipped
-      ? ""
-      : renderReviewMemoryForPrompt(reviewMemoryResult.findings)
-    // SIG-276 Phase 3: hand the injected memories (which carry telemetry
-    // `shadowClaims` when the shadow flag is on) to the outer-scope holder
-    // for the Site-2 shadow matcher. Telemetry-only; never affects the
-    // prompt or softening.
-    shadowMemoriesForPhase3 = reviewMemoryResult.skipped
-      ? []
-      : reviewMemoryResult.findings
-    // Codex BLOCKING on plan v2: gate the append on memoryBlock
-    // length, NOT sarifBlock length. The two blocks are independent.
-    const synthMessageWithMemory = memoryBlock.length > 0
-      ? `${synthMessageWithSarif}\n\n${memoryBlock}`
-      : synthMessageWithSarif
-    telemetry.reviewMemory = reviewMemoryResult.skipped
-      ? {
-          skipped: true,
-          reason: reviewMemoryResult.reason,
-          findingsCount: 0,
-        }
-      : {
-          skipped: false,
-          findingsCount: reviewMemoryResult.findings.length,
-          memoriesInjected: reviewMemoryResult.findings.length,
-          durationMs: reviewMemoryResult.durationMs,
-        }
-
-    // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
-    // Without this, `withComposedTimeout` rejection on synth's own 180s
-    // timer bubbles to the outer catch and is recorded as
-    // `internalError: "Operation aborted"` with `synthesizer: null` —
-    // the spec promised `synthesizer.timedOut: true` for this case.
-    //
-    // SIG-228 Phase 3c: `synthOutput`, `synthStartMs`, `synthRetryUsed`,
-    // `synthRetryOutcome` + `synthAttemptsUsed` are now declared in
-    // outer scope (just before the bypass-or-synth branch above) so
-    // both paths populate the same identifiers.
-    // ARC-278 (CR catch on PR #90): runSynthesizer wraps
-    // runWithRetryAndFallback, which already does its own internal
-    // primary+retry+fallback. So `attempt.attemptsUsed` from a single
-    // outer call can be 1, 2, or 3+. Accumulate the real count across
-    // BOTH attempts (and across a local timeout, where the outer call
-    // never returned attemptsUsed at all — treat as 1).
-    // This feeds `finalize()`'s daily-budget charge; under-counting
-    // here would under-charge the budget and over-count head-room.
-    //
-    // SIG-228 Phase 3c: hoisted to outer scope (see comment block at
-    // the top of the bypass-or-synth branch above).
-    try {
-      // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
-      // fallbacks}} override. Specialists left untouched on the v3.1
-      // LOCKED lineup. v1 limitation: ModelConfig.fallback is a single
-      // string — only the first user-supplied fallback reaches the
-      // synth runtime. Telemetry records the dropped count.
-      const reviewCmdConfig = resolveCommandConfig(sigilixConfig, "review")
-      const synthSystemPrompt = reviewCmdConfig.promptAddendum
-        ? `${SYNTHESIZER_PROMPT}\n\n[REPO-SPECIFIC GUIDANCE]\n${reviewCmdConfig.promptAddendum}`
-        : SYNTHESIZER_PROMPT
-      const synthConfigOverride: ModelConfig | undefined = (
-        reviewCmdConfig.modelPrimary !== null ||
-        reviewCmdConfig.modelFallbacks.override
-      )
-        ? {
-            primary: reviewCmdConfig.modelPrimary ?? SYNTHESIZER_CONFIG.primary,
-            retries: SYNTHESIZER_CONFIG.retries,
-            fallback: reviewCmdConfig.modelFallbacks.override
-              ? (reviewCmdConfig.modelFallbacks.models[0] ?? SYNTHESIZER_CONFIG.fallback)
-              : SYNTHESIZER_CONFIG.fallback,
-          }
-        : undefined
-      if (
-        reviewCmdConfig.promptAddendum !== null ||
-        reviewCmdConfig.modelPrimary !== null ||
-        reviewCmdConfig.modelFallbacks.override
-      ) {
-        console.log(JSON.stringify({
-          event: "command-config-resolved",
-          owner, repo, prNumber,
-          command: "review",
-          hasPromptAddendum: reviewCmdConfig.promptAddendum !== null,
-          modelPrimary: reviewCmdConfig.modelPrimary,
-          modelFallbacksCount: reviewCmdConfig.modelFallbacks.override
-            ? reviewCmdConfig.modelFallbacks.models.length
-            : 0,
-        }))
-      }
-
-      // ARC-283 Phase B1b — shadow synth kick-off. Fires BEFORE
-      // `attempt1` so both lineups run in parallel; the shadow
-      // promise is captured at the outer scope so `finally` can
-      // settle it even when prod synth bails to skip-notice.
-      // Same `synthSystemPrompt` + `synthMessageWithMemory` the prod
-      // path uses, so the comparison is apples-to-apples on input.
-      // Shadow shares `orchCtrl.signal` — aborts with the outer
-      // orchestrator timer. The shadow synth is allowed to take
-      // longer than the prod synth's 420s budget; what bounds it
-      // is the 895s outer orchestrator wall.
-      const shadowSynthConfig = resolveShadowConfig("synth", shadowEnabledRoles)
-      if (shadowSynthConfig !== null) {
-        // ARC-283 Phase B1b CR-2: per-shadow synth AbortController,
-        // same pattern as the specialist fan-out above. Lets the
-        // finally block cancel an in-flight synth shadow when the
-        // grace deadline fires instead of leaving the request to
-        // burn provider capacity invisibly.
-        const shadowSynthCtrl = new AbortController()
-        shadowState.abortControllers.set("synth", shadowSynthCtrl)
-        const composedSynthSignal = composeSignals(orchCtrl.signal, shadowSynthCtrl.signal)
-        shadowState.synthPromise = runShadowSynth({
-          shadowConfig: shadowSynthConfig,
-          apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: synthSystemPrompt,
-          userMessage: synthMessageWithMemory,
-          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal: composedSynthSignal,
-          perfCtx,
-        }).finally(() => {
-          shadowState.abortControllers.delete("synth")
-        })
-      }
-
-      // ARC-278: extract the attempt-runner so we can call it twice
-      // (primary + at most one retry). The closure captures every
-      // input that's stable between attempts (system prompt, config
-      // override, env, orchCtrl); only `userMessage` and `timeoutMs`
-      // vary per call. Returns null on local timeout (so callers
-      // don't have to discriminate between catch and `failureReason:
-      // "aborted"` shapes). Re-throws on orchestrator-wall abort.
-      const attemptSynth = async (
-        userMessage: string,
-        timeoutMs: number,
-      ): Promise<Awaited<ReturnType<typeof runSynthesizer>> | null> => {
-        try {
-          return await withComposedTimeout(
-            // Use the composed signal so a synth-only timeout actually
-            // cancels the underlying model call. Passing `orchCtrl.signal`
-            // directly only rejects this await; the in-flight model fetch
-            // would keep running until the outer 490s orch wall fires
-            // (CR catch on PR #42).
-            (signal) => runSynthesizer({
-              apiKey: env.OLLAMA_API_KEY,
-              systemPrompt: synthSystemPrompt,
-              userMessage,
-              chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-              signal,
-              // ARC-283 Phase B1b: same correlation context as the
-              // specialist fan-out above.
-              perfCtx,
-              ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
-            }),
-            timeoutMs,
-            orchCtrl.signal,
-          )
-        } catch (err) {
-          // Orchestrator-wall abort propagates — that's the
-          // internal_error path. Synth-local timer is a local
-          // failure: return null so the retry path can run.
-          if (orchCtrl.signal.aborted) throw err
-          return null
-        }
-      }
-
-      const attempt1 = await attemptSynth(synthMessageWithMemory, SYNTHESIZER_TIMEOUT_MS)
-      synthOutput = attempt1 ?? undefined
-      // attempt1 === null → local timeout, runSynthesizer never returned
-      // anything; charge 1 for the in-flight call. attempt1 !== null →
-      // trust the inner retry/fallback count.
-      synthAttemptsUsed += attempt1?.attemptsUsed ?? 1
-      const attempt1Outcome = classifySynthOutcome(synthOutput, attempt1 === null)
-
-      // ARC-278: if the primary attempt failed in a way we can
-      // retry, run one more attempt with a tightened prompt hint.
-      // Retry budget is bounded by SYNTHESIZER_RETRY_TIMEOUT_MS
-      // (which fits inside RESERVED_HEADROOM_MS, per the static
-      // invariant at module load). On retry success → telemetry
-      // logs which path recovered; on retry failure → existing
-      // failure-handling code below still fires.
-      if (attempt1Outcome !== "ok") {
-        synthRetryUsed = true
-        const retryUserMessage = buildSynthRetryMessage(synthMessageWithMemory, attempt1Outcome)
-        console.log(JSON.stringify({
-          event: "synth-retry-dispatched",
-          owner, repo, prNumber,
-          attempt1_outcome: attempt1Outcome,
-        }))
-        const attempt2 = await attemptSynth(retryUserMessage, SYNTHESIZER_RETRY_TIMEOUT_MS)
-        synthOutput = attempt2 ?? undefined
-        // Same attempts-accounting rationale as attempt1 above.
-        synthAttemptsUsed += attempt2?.attemptsUsed ?? 1
-        const attempt2Outcome = classifySynthOutcome(synthOutput, attempt2 === null)
-        synthRetryOutcome = attempt2Outcome
-        console.log(JSON.stringify({
-          event: "synth-retry-completed",
-          owner, repo, prNumber,
-          attempt1_outcome: attempt1Outcome,
-          retry_outcome: attempt2Outcome,
-          recovered: attempt2Outcome === "ok",
-        }))
-      }
-    } catch (err) {
-      // If the orchestrator's outer signal aborted, propagate — outer
-      // timeout is a genuine internal_error and lands in the top-level
-      // catch as before.
-      if (orchCtrl.signal.aborted) throw err
-      // Defensive: any other unexpected throw from the attempt-runner
-      // gets recorded as a synth-local timeout (same shape as the
-      // pre-ARC-278 behavior). Should be unreachable since
-      // attemptSynth handles its own catch — but kept as a safety
-      // net so a future refactor that surfaces a thrown exception
-      // doesn't crash the dispatcher.
-      telemetry.synthesizer = {
-        model: SYNTHESIZER_MODEL,
-        modelUsed: SYNTHESIZER_MODEL,
-        // Defensive catch-block — `synthAttemptsUsed` may or may not
-        // have been incremented depending on which await threw.
-        // Fall back to a minimum of 1 if accounting got skipped.
-        attemptsUsed: Math.max(1, synthAttemptsUsed),
-        verdict: null,
-        provenance: null,
-        elapsedMs: Date.now() - synthStartMs,
-        timedOut: true,
-        failureReason: "synth_timeout",
-      }
-      telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
-      telemetry.fellBackReason = "synth_timeout"
-      return bailWithSkipNotice("synth_timeout")
-    }
-
-    // ARC-278: persist the retry telemetry regardless of which path
-    // wins below. Done BEFORE the post-call processing so even
-    // happy-path success carries `synthRetry: { used: false,
-    // outcome: "n/a" }` for stable rollout analysis.
-    telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
-
-    // ARC-278: if both attempts locally timed out, synthOutput is
-    // undefined here. Synthesize a stub entry that matches the
-    // pre-ARC-278 "synth-local timeout caught in the outer catch"
-    // shape so the failure-handling code below stays uniform.
-    if (synthOutput === undefined) {
-      telemetry.synthesizer = {
-        model: SYNTHESIZER_MODEL,
-        modelUsed: SYNTHESIZER_MODEL,
-        // CR catch on PR #90: trust the accumulated count from
-        // attempt1.attemptsUsed (+ attempt2.attemptsUsed if retry
-        // ran). Local-timeout branches charge 1 per missed
-        // returned-attempt count, so the minimum is correctly 1 for
-        // a single-attempt timeout, 2 for primary-then-retry both
-        // locally timing out.
-        attemptsUsed: Math.max(1, synthAttemptsUsed),
-        verdict: null,
-        provenance: null,
-        elapsedMs: Date.now() - synthStartMs,
-        timedOut: true,
-        failureReason: "synth_timeout",
-      }
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
-      telemetry.fellBackReason = "synth_timeout"
-      return bailWithSkipNotice("synth_timeout")
-    }
-    } // SIG-228 Phase 3c: close the `else { /* synth path */ }` opened
-      // above the prompt-building block.
-
-    // Phase 4a.2: withComposedTimeout no longer throws when its own
-    // timer or the orch signal aborts an abort-aware factory — it
-    // returns the factory's structured wrapFailure with
-    // failureReason="aborted". That now reaches this branch instead of
-    // the synth_timeout catch above, so derive timedOut + fellBackReason
-    // here too. Without this, synth-timer aborts would silently land in
-    // synth_failed_parse with timedOut=false (CR catch on PR #44).
-    const synthFailureReason = synthOutput.failureReason ?? ""
-    const synthAborted = /abort/i.test(synthFailureReason) || /timeout/i.test(synthFailureReason)
-
-    const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
-      model: SYNTHESIZER_MODEL,
-      modelUsed: synthOutput.modelUsed,
-      // ARC-278 (CR catch on PR #90): use the accumulated count.
-      // `synthAttemptsUsed` sums each outer-attempt's inner
-      // attemptsUsed (where each is itself
-      // primary+retry+cross-provider-fallback inside
-      // runWithRetryAndFallback). The previous `+ 1` undercounted
-      // whenever the inner retry/fallback fired.
-      attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
-      verdict: synthOutput.verdict,
-      provenance: synthOutput.provenance,
-      elapsedMs: Date.now() - synthStartMs,
-      timedOut: synthAborted,
-    }
-    if (synthOutput.failureReason) synthEntry.failureReason = synthOutput.failureReason
-    if (synthOutput.failureRawAnswer) synthEntry.failureRawAnswer = synthOutput.failureRawAnswer
-    telemetry.synthesizer = synthEntry
-
-    if (!synthOutput.verdict || !synthOutput.provenance) {
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
-      const synthFailReason: SkipNoticeReason = synthAborted
-        ? "synth_timeout"
-        : synthOutput.failureReason === "synth_invalid_provenance"
-          ? "synth_invalid_provenance"
-          : "synth_failed_parse"
-      telemetry.fellBackReason = synthFailReason
-      return bailWithSkipNotice(synthFailReason)
-    }
-
-    // ARC-284: phase + synth summary fire on the SUCCESS join. Failure
-    // paths above (`return bailWithSkipNotice(...)`) skip these — the
-    // skip-notice event captures the bail reason; synth-summary is
-    // scoped to "synth produced a usable verdict."
-    emitPhaseCompleted(perfCtx, "synth", synthStartMs)
-    {
-      const inputFindingCount = synthInputVerdicts.reduce(
-        (sum, v) => sum + (v.verdict?.findings.length ?? 0),
-        0,
-      )
-      const summary: SynthSummary = {
-        elapsedMs: Date.now() - synthStartMs,
-        attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
-        retryUsed: synthRetryUsed,
-        // ARC-284 Sigilix-PR-#95 catch: coercion extracted to
-        // `narrowSynthRetryOutcome` for unit-testability. Collapses
-        // the orchestrator-internal `"n/a"` and `"exhausted-budget"`
-        // sentinels to `null` for the telemetry contract.
-        retryOutcome: narrowSynthRetryOutcome(synthRetryUsed, synthRetryOutcome),
-        inputSpecialistCount: synthInputVerdicts.length,
-        inputFindingCount,
-        outputFindingCount: synthOutput.verdict.findings.length,
-        modelUsed: synthOutput.modelUsed,
-      }
-      emitSynthSummary(perfCtx, summary)
-    }
-
-    // ─── SIG-287: degraded-coverage finding floor ──────────────
-    // On a degraded run (a dispatched specialist — in practice `logic` —
-    // timed out), the synth can shrug: emit a low-confidence verdict that
-    // DROPS what the surviving specialists found (PR #218: synth emitted 0
-    // findings while `performance` had a real score-2 finding). The event
-    // downgrade (#219) already stops a degraded review from posting a
-    // confident APPROVE; this re-injects the score>=2 findings the synth
-    // dropped so the partial COMMENT shows what was actually found, rather
-    // than an empty "partial review". Re-injected findings flow through the
-    // SAME post-synth pipeline below (validators, anchor repair, withdrawal
-    // suppression, inline-grounding, score-1 demotion) — nothing is force-
-    // posted. Only runs when degraded; full-coverage reviews are untouched.
-    // `synthOutput.verdict`/`.provenance` are non-null here (the bail above
-    // returns otherwise). Capture into locals so the floor can replace them
-    // for validation WITHOUT reassigning `synthOutput` (which would widen its
-    // type back to nullable + perturb the downstream soften path that reads
-    // `synthOutput.provenance.softened`).
-    let effectiveSynthVerdict = synthOutput.verdict
-    let effectiveSynthProvenance = synthOutput.provenance
-
-    // SIG-317: synth verdict-truncation recovery (runs BEFORE the degraded floor
-    // so recovery re-aligns verdict↔provenance first). On target-rich PRs the
-    // synth writes a COMPLETE provenance but a SHORTER verdict.findings — it
-    // details the top-ranked findings (security-first) and silently truncates
-    // the verbose tail, losing real subtle findings it MARKED KEPT (pr/10:
-    // provenance 20, verdict 8 — a score-5 N+1, the cents bug, a floating
-    // promise all lost). Recover the tail from the cited specialist sources; the
-    // recovered findings flow through the SAME post-synth gates below, so this
-    // CANNOT lower precision — the gates remain the authority. Modes:
-    // `off` (default) inert, `shadow` logs the recoverable count, `on` applies.
-    //
-    // The helper ALWAYS returns a 1:1-aligned (verdict, provenance) pair — it
-    // trims the truncated orphan tail to verdict length, then re-appends only the
-    // recovered entries. So in `on` we install the result UNCONDITIONALLY whenever
-    // the truncation branch runs, even when nothing qualified for recovery: the
-    // trim alone re-aligns the arrays so the degraded floor downstream appends
-    // onto an aligned base (otherwise the stale longer provenance survives and
-    // validateForSubmission mispairs the floor's restored findings — Codex SIG-317
-    // review). The non-recovered case is behavior-identical for posting (the
-    // ignored tail was never paired), so trimming it costs no recall. Orphans
-    // citing only AST-emit ids are NOT recovered here (sourceById is specialist-
-    // only) — AST/SIG-310 deterministic recovery is a deliberate Part-1 gap,
-    // fast-follow; it is precision-safe (those emits were already truncated).
-    const synthRecoveryMode = ensembleConfig.flags.synthRecovery
-    if (synthRecoveryMode !== "off"
-      && effectiveSynthProvenance.findings.length > effectiveSynthVerdict.findings.length) {
-      const sourceById = new Map<string, PrReviewFinding & { id: string }>()
-      for (const v of synthInputVerdicts) {
-        for (const f of v.verdict?.findings ?? []) {
-          const id = (f as { id?: unknown }).id
-          if (typeof id === "string") sourceById.set(id, f as PrReviewFinding & { id: string })
-        }
-      }
-      const rec = recoverTruncatedSynthFindings({
-        findings: effectiveSynthVerdict.findings,
-        provenanceFindings: effectiveSynthProvenance.findings,
-        sourceById,
-      })
-      if (rec.recovered.length > 0) {
-        console.log(JSON.stringify({
-          event: "pr-review-synth-truncation-recovered",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: synthRecoveryMode,
-          verdictLen: effectiveSynthVerdict.findings.length,
-          provenanceLen: effectiveSynthProvenance.findings.length,
-          recoveredCount: rec.recovered.length,
-          recovered: rec.recovered.map((r) => ({ id: r.id, score: r.score, category: r.category })),
-        }))
-      }
-      if (synthRecoveryMode === "on") {
-        // Install unconditionally — `rec` is always aligned (trim ± recovery).
-        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: rec.findings }
-        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: rec.provenanceFindings }
-      }
-    }
-
-    // SIG-351: full-coverage source-finding floor. Prompt-level FP
-    // adjudication is allowed ONLY when the synth records a proof-like drop
-    // (`false positive on diff inspection` / AST supersession). If a score>=4
-    // source finding is neither represented in kept provenance nor proof-dropped,
-    // restore it before validation. This is recall-only: restored findings still
-    // pass through the normal hallucination, grounding, validator, anchor, and
-    // rendering gates below.
-    {
-      const floored = applySynthSourceFindingFloor({
-        findings: effectiveSynthVerdict.findings,
-        provenanceFindings: effectiveSynthProvenance.findings,
-        provenanceDropped: effectiveSynthProvenance.dropped,
-        specialists: synthInputVerdicts
-          .filter((v) => v.verdict !== null)
-          .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
-        // SIG-351: verify `superseded_by_ast/<id>` suppressions against the REAL
-        // AST id set — same source SIG-314 uses for the kept-path hallucination
-        // guard (validateForSubmission's `astFindingIds`, below). A spoofed
-        // `<id>` is NOT honored, so the floor restores the finding (recall-safe).
-        astFindingIds: new Set(astResult.findings.map((f) => f.astFindingId)),
-      })
-      if (floored.restored.length > 0) {
-        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
-        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
-        console.log(JSON.stringify({
-          event: "pr-review-synth-source-findings-restored",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          restoredCount: floored.restored.length,
-          restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
-        }))
-      }
-    }
-
-    if (degradedCoverage) {
-      const floored = applyDegradedCoverageFindingFloor({
-        findings: effectiveSynthVerdict.findings,
-        provenanceFindings: effectiveSynthProvenance.findings,
-        specialists: synthInputVerdicts
-          .filter((v) => v.verdict !== null)
-          .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
-      })
-      if (floored.restored.length > 0) {
-        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
-        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
-        console.log(JSON.stringify({
-          event: "pr-review-degraded-source-findings-restored",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          rolesMissing: degradedCoverage.rolesMissing,
-          restoredCount: floored.restored.length,
-          restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
-        }))
-      }
-    }
-
-    // SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-
-    // SURFACE any `emitWhenUnmatched` (warning/info) AST finding the synth did
-    // NOT emit — the proven subtle needle (cents-as-dollars, enum drift) the
-    // model crowded out of its verdict tail. The injected finding cites the
-    // `astFindingId` (SIG-314 admits it) and flows through every post-synth gate
-    // below, so nothing is force-posted; it just can't be silently dropped.
-    // `off` skips; `shadow` logs what WOULD inject (no behavior change); `on`
-    // injects. Recall-positive + P2/P3-capped (never mints a P0/P1).
-    // Validated parse — a misconfig / typo FAILS CLOSED to "off" rather than
-    // silently enabling on any non-"off" string (CodeRabbit/Sigilix #330).
-    const astEmitFloorMode = ensembleConfig.flags.astEmitFloorMode
-    if (astEmitFloorMode !== "off") {
-      const floored = injectUnmatchedAstEmits({
-        findings: effectiveSynthVerdict.findings,
-        provenanceFindings: effectiveSynthProvenance.findings,
-        astFindings: astResult.findings,
-      })
-      if (floored.injected.length > 0) {
-        console.log(JSON.stringify({
-          event: "pr-review-ast-emit-floor-injected",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: astEmitFloorMode,
-          injectedCount: floored.injected.length,
-          injected: floored.injected,
-        }))
-        if (astEmitFloorMode === "on") {
-          effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
-          effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
-        }
-      }
-    }
+    if (specialistsPhase.kind === "exit") return specialistsPhase.result
+    const {
+      succeeded,
+      degradedCoverage,
+      synthInputVerdicts,
+      synthOutput,
+      shadowMemoriesForPhase3,
+      effectiveSynthVerdict,
+      effectiveSynthProvenance,
+    } = specialistsPhase
 
     // ─── Post-synthesis validation ─────────────────────────────
     // SIG-318 (PR 12a): the adjudicate phase — validateForSubmission, the
@@ -6679,22 +5462,9 @@ export async function handlePrReviewEnsemble(
 
 // ─── helpers ──────────────────────────────────────────────────────────
 
-/**
- * ARC-174: append the per-role rule from `sigilix.json` to a
- * specialist's initial message. No-op when the config defines no rule
- * for that role. The role-specific rule is rendered as a labeled
- * block so the specialist can clearly attribute it to repo config
- * rather than mistake it for ambient context.
- */
-function appendRoleRule(
-  baseMessage: string,
-  role: SpecialistRole,
-  config: SigilixConfig,
-): string {
-  const rule = config.rules?.[role]
-  if (!rule) return baseMessage
-  return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
-}
+// SIG-318 (PR 12c): `appendRoleRule` (private) moved with the specialists+synth
+// seam to ensemble/app/specialists (its only callers were the shadow + prod
+// specialist fan-out).
 
 // SIG-362 (PR 10): `maxAttempts` (private) moved to ensemble/domain/model-policy;
 // `MAX_CALLS_PER_ENSEMBLE_RUN` (derived from the configs) moved to the
@@ -6795,18 +5565,10 @@ export type {
   SynthesizerRunArgs,
 } from "./ensemble/adapters/model-provider"
 import {
-  runSpecialist,
   runWithRetryAndFallback,
-  runSynthesizer,
-  type SpecialistRunResult,
 } from "./ensemble/adapters/model-provider"
 
 // ─── verdict post-processing ──────────────────────────────────────────
-
-export interface ApprovalReadinessSourceVerdict {
-  role: SpecialistRole
-  verdict: (PrReviewVerdict & { findings: Array<PrReviewFinding & { id: string }> }) | null
-}
 
 export function collectApprovalReadinessSourceFindings(
   sourceVerdicts: ReadonlyArray<ApprovalReadinessSourceVerdict>,
@@ -6825,165 +5587,10 @@ export function collectApprovalReadinessSourceFindings(
   })
 }
 
-export function buildSynthInputVerdicts<T extends ApprovalReadinessSourceVerdict>(
-  sourceVerdicts: ReadonlyArray<T>,
-  maxTokens: number = SPECIALIST_VERDICT_TOKEN_CAP,
-): Array<T & { verdict: PrReviewVerdictWithIds }> {
-  const out: Array<T & { verdict: PrReviewVerdictWithIds }> = []
-  for (const source of sourceVerdicts) {
-    if (!source.verdict) continue
-    out.push({
-      ...source,
-      verdict: truncateVerdictToTokens(source.verdict, maxTokens),
-    } as T & { verdict: PrReviewVerdictWithIds })
-  }
-  return out
-}
-
-function collectSpecialistVerdicts(
-  roles: SpecialistRole[],
-  results: Array<PromiseSettledResult<SpecialistRunResult>>,
-  telemetry: EnsembleTelemetry,
-): CollectedVerdict[] {
-  const out: CollectedVerdict[] = []
-  for (let i = 0; i < roles.length; i++) {
-    const role = roles[i]!
-    const settled = results[i]
-    if (!settled || settled.status === "rejected") {
-      const reason = settled?.status === "rejected"
-        ? (settled.reason instanceof Error ? settled.reason.message : String(settled.reason))
-        : "unknown_settlement"
-      const collected: CollectedVerdict = { role, verdict: null, elapsedMs: 0, failureReason: reason }
-      out.push(collected)
-      // No attemptsUsed available — the wrapper threw before runSpecialist
-      // returned, so we don't know how many attempts ran. Leave undefined
-      // so finalize()'s defensive `?? 1` kicks in.
-      telemetry.specialistVerdicts.push({
-        role,
-        model: SPECIALIST_MODELS[role],
-        verdict: null,
-        failureReason: reason,
-        elapsedMs: 0,
-        timedOut: reason.includes("timeout") || reason.includes("aborted"),
-      })
-      continue
-    }
-    const value = settled.value
-    if (!value.verdict) {
-      const collected: CollectedVerdict = {
-        role,
-        verdict: null,
-        elapsedMs: value.elapsedMs,
-        attemptsUsed: value.attemptsUsed,
-        modelUsed: value.modelUsed,
-      }
-      if (value.failureReason) collected.failureReason = value.failureReason
-      if (value.failureRawAnswer) collected.failureRawAnswer = value.failureRawAnswer
-      out.push(collected)
-      // Phase 4a.2: aborts (timer- or parent-signal-driven) now reach
-      // this branch via withComposedTimeout's grace window — the
-      // factory's structured wrapFailure(reason="aborted", ...) flows
-      // through Promise.allSettled as a fulfilled value with verdict
-      // null. Derive timedOut from the reason string so timer-driven
-      // aborts stay visible in telemetry. The reason can be the
-      // canonical "aborted" (signal.aborted check between attempts),
-      // a DOMException message like "The operation was aborted." (when
-      // fetch threw mid-attempt), or `fallback_failed: ... aborted`
-      // (primary AND fallback both aborted) — a single /abort/i regex
-      // captures all three.
-      const reason = value.failureReason ?? ""
-      const telEntry: EnsembleTelemetry["specialistVerdicts"][number] = {
-        role,
-        model: SPECIALIST_MODELS[role],
-        modelUsed: value.modelUsed,
-        attemptsUsed: value.attemptsUsed,
-        verdict: null,
-        elapsedMs: value.elapsedMs,
-        timedOut: /abort/i.test(reason) || /timeout/i.test(reason),
-      }
-      if (value.failureReason) telEntry.failureReason = value.failureReason
-      if (value.failureRawAnswer) telEntry.failureRawAnswer = value.failureRawAnswer
-      telemetry.specialistVerdicts.push(telEntry)
-      continue
-    }
-    const withIds = assignStableFindingIds(role, value.verdict)
-    out.push({
-      role,
-      verdict: withIds,
-      elapsedMs: value.elapsedMs,
-      attemptsUsed: value.attemptsUsed,
-      modelUsed: value.modelUsed,
-    })
-    telemetry.specialistVerdicts.push({
-      role,
-      model: SPECIALIST_MODELS[role],
-      modelUsed: value.modelUsed,
-      attemptsUsed: value.attemptsUsed,
-      verdict: withIds,
-      elapsedMs: value.elapsedMs,
-      timedOut: false,
-    })
-  }
-  return out
-}
-
-/**
- * ARC-278: classified outcome of one synth attempt. `ok` means we
- * have a usable verdict + provenance; the three failure shapes line
- * up with the three skip gates the pre-ARC-278 code bailed on
- * (timeout / parse / invalid-provenance).
- */
-export type SynthAttemptOutcome = "ok" | "timeout" | "parse" | "provenance"
-
-/**
- * ARC-278: pure helper. Classify the result of one
- * `runSynthesizer(...)` call (or the `null` we substitute for
- * synth-local timeout) into one of four outcomes. Encapsulates the
- * subtle Phase 4a.2 abort-rather-than-throw shape — without this,
- * three call sites duplicated the `/abort|timeout/i.test(failureReason)`
- * regex match.
- */
-export function classifySynthOutcome(
-  output: Awaited<ReturnType<typeof runSynthesizer>> | null | undefined,
-  localTimeout: boolean,
-): SynthAttemptOutcome {
-  if (localTimeout) return "timeout"
-  if (!output) return "timeout" // defensive — caller's null/undefined → treat as timeout
-  const reason = output.failureReason ?? ""
-  if (/abort/i.test(reason) || /timeout/i.test(reason)) return "timeout"
-  if (output.verdict && output.provenance) return "ok"
-  return output.failureReason === "synth_invalid_provenance" ? "provenance" : "parse"
-}
-
-/**
- * ARC-278: prepend a per-outcome retry hint to the original synth
- * user message. Pure — exposed for unit tests that pin the prompt
- * text (which feeds the model's recovery behavior on retry).
- *
- * For `timeout`: a terse "be prompter and more concise" hint, since
- * the model already had the full schema + verdict block on attempt
- * 1 and timeout suggests either it stalled mid-generation OR the
- * retry-side environment was overloaded. Hint is short to avoid
- * burning tokens on retry overhead.
- *
- * For `parse` / `provenance`: a constraint reminder pointed at the
- * specific failure mode. The retry runs at the smaller
- * SYNTHESIZER_RETRY_TIMEOUT_MS budget, so the model only has time
- * for one tight re-emission — we tell it exactly what to fix.
- */
-export function buildSynthRetryMessage(
-  originalMessage: string,
-  outcome: SynthAttemptOutcome,
-): string {
-  if (outcome === "ok") return originalMessage
-  const hint =
-    outcome === "parse"
-      ? "RETRY: Your previous response could not be parsed as JSON. Re-emit ONLY a single JSON object matching the schema. No prose. No markdown fence. No leading or trailing text."
-      : outcome === "provenance"
-      ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], softened?: [...] }`. Each `provenance.findings[i].sourceFindingIds[]` and each `provenance.softened[i].sourceFindingId` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
-      : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
-  return `${originalMessage}\n\n${hint}`
-}
+// SIG-318 (PR 12c): `collectSpecialistVerdicts` (private) moved with the
+// specialists+synth seam to ensemble/app/specialists (its only caller was the
+// post-fanout collect step; it reads the model-provider adapter, which only the
+// app layer may import).
 
 export function checkQuorum(
   succeeded: CollectedVerdict[],
@@ -7013,25 +5620,6 @@ export function checkQuorum(
   const dispatchedLogicOrSec = dispatchedSet.has("logic") || dispatchedSet.has("security")
   if (!dispatchedLogicOrSec) return true
   return succeeded.some((v) => v.role === "logic" || v.role === "security")
-}
-
-/**
- * Truncate a verdict's JSON-stringified form to fit the token cap.
- * Drops lowest-score findings first to preserve severity. Approximate
- * — uses 4 chars/token estimate.
- */
-export function truncateVerdictToTokens(
-  verdict: PrReviewVerdictWithIds,
-  maxTokens: number,
-): PrReviewVerdictWithIds {
-  const charBudget = maxTokens * 4
-  const working = { ...verdict, findings: [...verdict.findings] }
-  // Sort findings by score DESC so we drop the lowest first.
-  working.findings.sort((a, b) => b.score - a.score)
-  while (JSON.stringify(working).length > charBudget && working.findings.length > 0) {
-    working.findings.pop()
-  }
-  return working
 }
 
 /**

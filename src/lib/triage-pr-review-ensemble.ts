@@ -32,7 +32,8 @@
 // customer-facing review, ensemble writes telemetry only. In `post` mode
 // the ensemble verdict gets posted to GitHub.
 
-import { chat, type ChatMessage } from "./ollama-chat"
+import { chat } from "../shared/adapters/model"
+import type { ChatMessage } from "../shared/ports/model"
 // ARC-283 Phase B1b: re-export ChatMessage so the shadow runner can
 // type its `runWithRetryAndFallback` calls without reaching past
 // this module into ./ollama-chat.
@@ -76,7 +77,7 @@ import {
   type DynamicReviewEvidenceMode,
   type DynamicReviewEvidencePack,
 } from "./review-evidence-pack"
-import { embedText } from "./embeddings"
+import { embedText } from "../shared/adapters/model"
 import {
   buildAddedLineTextByLine,
   buildChangedLines,

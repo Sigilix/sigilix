@@ -13,8 +13,8 @@ const { mockChat } = vi.hoisted(() => ({
   mockChat: vi.fn(),
 }))
 
-vi.mock("../src/lib/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/ollama-chat")>("../src/lib/ollama-chat")
+vi.mock("../src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/model/ollama-chat")>("../src/shared/adapters/model/ollama-chat")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),

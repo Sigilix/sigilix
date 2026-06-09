@@ -22,13 +22,14 @@
 //                          ignores the signal past the grace, the
 //                          wrapper throws to unblock the caller.
 
-import { chat, isChatDisabledError } from "./ollama-chat"
+import { chat } from "../shared/adapters/model"
+import { isChatDisabledError } from "../shared/adapters/model/ollama-chat"
 import type {
   ChatArgs,
   ChatMessage,
   ChatResult,
   ChatToolDef,
-} from "./ollama-chat"
+} from "../shared/ports/model"
 import type { AgentTool } from "./agent-tools"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import type { Env } from "../shared/types/env"

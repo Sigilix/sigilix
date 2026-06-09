@@ -7,11 +7,11 @@ import { runShadowSpecialist, runShadowSynth } from "../src/lib/shadow-bakeoff-r
 // Mock `chat` so we don't make real HTTP calls. The runner ultimately
 // calls runWithRetryAndFallback → attemptChat → chat. We control the
 // last hop.
-vi.mock("../src/lib/ollama-chat", () => ({
+vi.mock("../src/shared/adapters/model/ollama-chat", () => ({
   chat: vi.fn(),
 }))
 
-import { chat } from "../src/lib/ollama-chat"
+import { chat } from "../src/shared/adapters/model"
 
 const CTX: EnsembleRunCtx = {
   owner: "Arc-and-Anchor",

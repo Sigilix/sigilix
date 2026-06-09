@@ -9,7 +9,7 @@ import {
   type BranchVector,
 } from "../src/lib/branch-retrieval"
 import type { RetrievedChunk } from "../src/lib/retrieval"
-import { embedText } from "../src/lib/embeddings"
+import { embedText } from "../src/shared/adapters/model"
 
 function rc(path: string, a: number, b: number, score: number, content = "x"): RetrievedChunk {
   return { path, lineStart: a, lineEnd: b, content, score }

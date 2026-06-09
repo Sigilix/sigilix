@@ -6,7 +6,7 @@
 // board surface, no `lib/projects.mjs`, no codebase retrieval (deferred to
 // the PR-side worker which still has access to repo checkouts).
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
 import { getMarker, setMarker } from "../shared/util/dedupe"
 import { markBotAuthoredComment } from "./bot-authored-comments"

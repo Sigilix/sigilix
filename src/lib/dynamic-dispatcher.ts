@@ -57,7 +57,7 @@ import {
   type DiffSignals,
   type SpecialistRole,
 } from "./ensemble-router"
-import { chat } from "./ollama-chat"
+import { chat } from "../shared/adapters/model"
 import {
   buildSanitizedMetadataBlock,
   type SanitizedMetadata,

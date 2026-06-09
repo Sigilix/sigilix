@@ -11,7 +11,7 @@ import {
 } from "../src/lib/security-evidence-manifest"
 import type { SecretHit } from "../src/lib/secret-scan"
 import type { DepVulnFinding } from "@/features/dep-vulns"
-import type { SarifFinding } from "../src/lib/sarif-evidence/types"
+import type { SarifFinding } from "@/features/sarif-evidence"
 import type { AstFinding } from "../src/lib/ast-rules/types"
 import { DYNAMIC_HTML_SINK_RULE_ID } from "../src/lib/ast-rules/scan-dynamic-html-sink"
 

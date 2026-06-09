@@ -19,7 +19,7 @@ import { verifyGitHubOidcToken } from "./runner-oidc/verify"
 import { validateRunnerProvenance } from "./runner-oidc/provenance"
 import type { GitHubOidcClaims } from "./runner-oidc/types"
 import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-cache"
-import { parseSarif } from "./sarif-evidence/sarif-parser"
+import { parseSarif } from "@/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES

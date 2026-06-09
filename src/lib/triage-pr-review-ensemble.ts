@@ -346,7 +346,7 @@ import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
-import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
+import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode, readReanchorEnabled } from "./verification/mode"
@@ -357,16 +357,16 @@ import {
   extractReceiptScanResults,
   type ReceiptScanResult,
 } from "./verification/verify-finding-receipt"
-import { parseSarif } from "./sarif-evidence/sarif-parser"
-import { normalizeSarifPath } from "./sarif-evidence/path-normalize"
+import { parseSarif } from "@/features/sarif-evidence"
+import { normalizeSarifPath } from "@/features/sarif-evidence"
 import { recordVerificationMetricsBounded } from "./verification-metrics-client"
 import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
 import { annotateFindingTrust } from "./trust-ledger-thread"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
-} from "./sarif-evidence/render"
-import { buildSarifCheckAnnotations } from "./sarif-evidence/annotations"
+} from "@/features/sarif-evidence"
+import { buildSarifCheckAnnotations } from "@/features/sarif-evidence"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
 import {

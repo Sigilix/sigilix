@@ -35,7 +35,7 @@
 // Pure + side-effect-free (like verify-finding.ts) so it is trivially testable.
 
 import type { PrReviewFinding } from "../triage-pr-review"
-import type { SarifRun } from "../sarif-evidence/types"
+import type { SarifRun } from "@/features/sarif-evidence"
 import { findingKey, type VerificationCheck, type VerificationResult } from "./verify-finding"
 
 export { findingKey }

@@ -28,7 +28,7 @@
 
 import { unzipSync } from "fflate"
 import type { GitHubClient } from "../shared/adapters/github"
-import { buildChangedLines } from "./sarif-evidence/diff-lines"
+import { buildChangedLines } from "@/features/sarif-evidence"
 
 /** COMPRESSED artifact size cap, checked against `size_in_bytes` BEFORE download. */
 const COMPRESSED_CAP = 5 * 1024 * 1024

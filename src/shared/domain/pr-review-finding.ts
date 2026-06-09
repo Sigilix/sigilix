@@ -351,3 +351,25 @@ export interface CoverageRoles {
   readonly dispatched: readonly string[]
   readonly succeeded: readonly string[]
 }
+
+export function isDeletionSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+}
+
+export function isReplacementSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return (
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" &&
+    repl.length > 0
+  )
+}
+
+// SIG-281 PR C: exported so the inline-grounding gate
+// (validate-inline-grounding.ts) can reuse the canonical "has a
+// committable fix" predicate instead of re-deriving the
+// suggestedReplacement / kind logic (avoids drift).
+export function hasStructuredFix(finding: PrReviewFinding): boolean {
+  return isDeletionSuggestion(finding) || isReplacementSuggestion(finding)
+}

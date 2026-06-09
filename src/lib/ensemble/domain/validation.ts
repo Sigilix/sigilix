@@ -8,8 +8,10 @@
 // testing-citation) WITH a recorded drop counter; every gate fails CLOSED to KEEP
 // when uncertain. Behavior is pinned by
 // tests/validation-golden-matrix + tests/validation-never-drop; do not regenerate
-// those fixtures. The lateral `validate-*` / trust-ledger gate imports below are
-// tracked for relocation into the domain in SIG-385.
+// those fixtures. The `validate-*` / trust-ledger gate family now lives in-domain
+// under `./gates/` (SIG-385); the only residual laterals are the pure lib helpers
+// (secret-scan reached via the gates; the type-only evidence/config leaves), which
+// are shared with the orchestrator and stay at the edge.
 
 import type {
   PrReviewVerdict,
@@ -21,9 +23,10 @@ import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist
 import { deriveSide, type ReviewableMap } from "@/shared/util/diff-positions"
 import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
 import type { PrReviewVerdictWithIds } from "./findings"
-// SIG-385: ACCEPTED LATERAL gate imports — these `validate-*` modules + the
-// trust-ledger/test-ratio helpers remain siblings of the god-file for now; they
-// are tracked for relocation into the domain layer in SIG-385.
+// SIG-385: the validation gate family now lives IN this domain layer, under
+// `./gates/`. These are in-domain sibling imports — no longer laterals to the
+// god-file. The remaining documented laterals are the pure lib helpers below
+// (secret-scan via the gates, the type-only evidence/config leaves).
 import {
   evaluateSecurityFinding,
   deriveSecurityBucket,
@@ -31,72 +34,72 @@ import {
   AUTHZ_BUCKET,
   type SecurityValidatorMode,
   type SecurityDropReason,
-} from "../../validate-security-finding"
-import { findingClaimsIntraInstanceRace } from "../../validate-do-race-finding"
+} from "./gates/validate-security-finding"
+import { findingClaimsIntraInstanceRace } from "./gates/validate-do-race-finding"
 import {
   evaluateTestFinding,
   parseCoverageGapRef,
   type TestsValidatorMode,
   type TestDropReason,
-} from "../../validate-test-finding"
+} from "./gates/validate-test-finding"
 import {
   evaluateLogicFinding,
   type LogicValidatorMode,
   type LogicDropReason,
   type LogicEvidence,
-} from "../../validate-logic-finding"
+} from "./gates/validate-logic-finding"
 import {
   evaluateLogicRefutation,
   type LogicRefutationMode,
   type LogicRefutationDropReason,
-} from "../../validate-logic-refutation"
+} from "./gates/validate-logic-refutation"
 import {
   evaluateRefutationSurvival,
   type RefutationSurvivalMode,
   type RefutationSurvivalDropReason,
-} from "../../validate-refutation-survival"
+} from "./gates/validate-refutation-survival"
 import {
   evaluateLogicClaimRefutation,
   type LogicClaimRefutationMode,
   type LogicClaimDropReason,
-} from "../../validate-logic-claim-refutation"
+} from "./gates/validate-logic-claim-refutation"
 import {
   evaluatePerfFinding,
   perfFindingIsSelfOriginated,
   type PerfValidatorMode,
   type PerfDropReason,
   type PerfEvidence,
-} from "../../validate-perf-finding"
+} from "./gates/validate-perf-finding"
 import {
   evaluateInlineGrounding,
   type InlineGroundingValidatorMode,
   type InlineGroundingDropReason,
-} from "../../validate-inline-grounding"
+} from "./gates/validate-inline-grounding"
 import {
   evaluateAbsenceGrounding,
   type AbsenceClaimValidatorMode,
   type AbsenceGroundingDropReason,
-} from "../../validate-absence-grounding"
+} from "./gates/validate-absence-grounding"
 import {
   evaluateWindowBlindness,
   type WindowBlindnessValidatorMode,
   type WindowBlindnessDropReason,
-} from "../../validate-window-blindness"
+} from "./gates/validate-window-blindness"
 import {
   evaluateSecurityGrounding,
   type SecurityGroundingValidatorMode,
   type SecurityGroundingDropReason,
-} from "../../validate-security-grounding"
+} from "./gates/validate-security-grounding"
 import {
   evaluateSecurityUsage,
   type SecurityUsageValidatorMode,
   type SecurityUsageDropReason,
-} from "../../validate-security-usage"
-import { annotateFindingTrust } from "../../trust-ledger-thread"
+} from "./gates/validate-security-usage"
+import { annotateFindingTrust } from "./gates/trust-ledger-thread"
 import {
   dampTestingScoreForRatio,
   TEST_RATIO_DAMPER_THRESHOLD,
-} from "../../test-ratio-damper"
+} from "./gates/test-ratio-damper"
 import type { TestingEvidencePack } from "../../testing-evidence-pack"
 import type { SecurityFact } from "../../security-evidence-manifest"
 import type { SigilixProfile } from "../../sigilix-config"

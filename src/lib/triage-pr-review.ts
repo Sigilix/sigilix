@@ -174,7 +174,13 @@ import type { FindingCategory } from "@/shared/domain/finding-category"
 export { FINDING_CATEGORIES }
 export type { FindingCategory }
 
-import { STACK_ORIGINS, REVIEW_FINDING_SCOPES } from "@/shared/domain/pr-review-finding"
+import {
+  STACK_ORIGINS,
+  REVIEW_FINDING_SCOPES,
+  isDeletionSuggestion,
+  isReplacementSuggestion,
+  hasStructuredFix,
+} from "@/shared/domain/pr-review-finding"
 import type {
   StackOrigin,
   ReviewFindingScope,
@@ -193,6 +199,11 @@ import type {
 // importing this god-file (which would invert the dependency rule). Re-exported
 // here so the existing importers of this module are unchanged.
 export { STACK_ORIGINS, REVIEW_FINDING_SCOPES }
+// SIG-385: the structured-fix predicate trio hoisted to the shared/domain leaf
+// (pure finding-vocabulary predicates). `hasStructuredFix` was exported from
+// here (validate-inline-grounding rode it), so it is re-exported to keep that
+// importer unchanged; the other two are module-private render helpers.
+export { hasStructuredFix }
 export type {
   StackOrigin,
   ReviewFindingScope,
@@ -3048,28 +3059,6 @@ function formatFenceSection(label: string, content: string, lang: string): strin
   if (clean.length === 0) return ""
   const fence = fenceForContent(clean)
   return [label, fence + lang, clean, fence].join("\n")
-}
-
-function isDeletionSuggestion(finding: PrReviewFinding): boolean {
-  const repl = finding.suggestedReplacement
-  return finding.kind === "delete" && typeof repl === "string" && repl.length === 0
-}
-
-function isReplacementSuggestion(finding: PrReviewFinding): boolean {
-  const repl = finding.suggestedReplacement
-  return (
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" &&
-    repl.length > 0
-  )
-}
-
-// SIG-281 PR C: exported so the inline-grounding gate
-// (validate-inline-grounding.ts) can reuse the canonical "has a
-// committable fix" predicate instead of re-deriving the
-// suggestedReplacement / kind logic (avoids drift).
-export function hasStructuredFix(finding: PrReviewFinding): boolean {
-  return isDeletionSuggestion(finding) || isReplacementSuggestion(finding)
 }
 
 function formatFindingStructuredDetailsMarkdown(

@@ -25,7 +25,7 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
-import { recordOutcome } from "./precision-profile/store"
+import { recordOutcome } from "@/features/precision-profile"
 import {
   parseFindingCategory,
   parseFindingFingerprint,

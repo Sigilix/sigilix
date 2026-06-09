@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import { handlePrecisionMetricsRoute } from "../src/lib/metrics-precision-route"
-import { recordOutcome } from "../src/lib/precision-profile/store"
+import { recordOutcome } from "@/features/precision-profile"
 import type { Env } from "../src/shared/types/env"
 
 const TOKEN = "metrics-token"

@@ -6,13 +6,13 @@
 
 import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
-import { loadPrecisionProfile } from "./precision-profile/store"
 import {
+  loadPrecisionProfile,
   BOOST_THRESHOLD,
   SUPPRESS_THRESHOLD,
   isCategoryBoosted,
   isPatternSuppressed,
-} from "./precision-profile/ema"
+} from "@/features/precision-profile"
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {

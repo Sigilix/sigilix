@@ -47,9 +47,9 @@ import {
   type ParsedReviewFeedback,
 } from "./parse-dismissal"
 import { appendSignal } from "./storage"
-import { recordOutcome } from "../precision-profile/store"
+import { recordOutcome } from "@/features/precision-profile"
 import { recordDismissalMetric } from "../validation-metrics-client"
-import type { FindingOutcome } from "../precision-profile/types"
+import type { FindingOutcome } from "@/features/precision-profile"
 import {
   parseFindingOutcomeMarkers,
 } from "../pr-finding-markers"

@@ -24,7 +24,7 @@ import { parseLogicPromptBudgetMode } from "../src/lib/logic-prompt-budget"
 import { parseAstEmitFloorMode } from "../src/lib/degraded-finding-floor"
 import { parseTrustLedgerMode } from "../src/lib/trust-ledger-thread"
 import { resolveClaimShadowMode } from "../src/lib/review-memory/shadow-match"
-import { resolvePrecisionMode } from "../src/lib/precision-profile/mode"
+import { resolvePrecisionMode } from "@/features/precision-profile"
 import { parseReviewOutputSurface } from "../src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "../src/lib/ensemble/domain/policy"
 

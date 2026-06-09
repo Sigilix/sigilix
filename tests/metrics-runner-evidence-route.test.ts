@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { handleRunnerEvidenceMetricsRoute } from "../src/lib/metrics-runner-evidence-route"
 import { RunnerEvidenceMetricsDO } from "../src/do/runner-evidence-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"

@@ -39,7 +39,8 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import { dispatchJob } from "../src/index"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeEnv(): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
   const store = new Map<string, string>()

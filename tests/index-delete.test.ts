@@ -36,7 +36,7 @@ import {
 } from "../src/lib/repo-index-vectors"
 import { activeRunKey } from "../src/lib/repo-index-active-run"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 interface KvListPage {
   keys: Array<{ name: string }>

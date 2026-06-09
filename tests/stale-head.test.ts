@@ -64,7 +64,7 @@ import {
   STALE_HEAD_MARKER,
   MAX_STALE_HEAD_REQUEUES,
 } from "../src/lib/stale-head"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true

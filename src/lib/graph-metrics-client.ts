@@ -1,7 +1,7 @@
 // SIG-152: thin typed wrappers for the single global GraphMetricsDO.
 // Callers own the non-fatal try/catch (telemetry must never break a review).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type { GraphMetricsDO, RecordSampleArgs, GraphMetricsQuery } from "../do/graph-metrics"
 
 const GLOBAL_INSTANCE = "global"

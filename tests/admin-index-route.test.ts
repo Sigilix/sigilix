@@ -12,7 +12,7 @@ import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRo
 import { resolveRepoInstallationId } from "../src/lib/github-app"
 import { runIndexBackfill } from "../src/lib/index-backfill"
 import { runIndexReconciliation } from "../src/lib/index-reconciliation"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { JobMessage } from "../src/lib/job-message"
 
 const mockResolve = vi.mocked(resolveRepoInstallationId)

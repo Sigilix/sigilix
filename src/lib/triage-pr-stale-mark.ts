@@ -22,7 +22,7 @@ import {
   type ReviewManifestV1,
   type StaleReason,
 } from "./review-manifest"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // ─── ARC-189 Task 11: PROMPT_VERSION stale suppression ────────
 

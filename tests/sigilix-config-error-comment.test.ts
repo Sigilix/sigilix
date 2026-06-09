@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from "vitest"
 import { postConfigErrorComment } from "../src/lib/sigilix-config-error-comment"
 import type { GitHubClient } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function fakeKV(initial: Record<string, string> = {}) {
   const store = { ...initial }

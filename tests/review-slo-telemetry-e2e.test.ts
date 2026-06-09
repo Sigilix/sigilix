@@ -89,7 +89,7 @@ import {
 } from "../src/lib/ensemble-slo-telemetry"
 import type { EnsembleRunCtx } from "../src/lib/ensemble-perf-telemetry"
 import { ALL_SPECIALISTS } from "../src/lib/ensemble-router"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // ─── shared helpers ─────────────────────────────────────────────────
 

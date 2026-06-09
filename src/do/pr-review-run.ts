@@ -8,7 +8,7 @@
 // /status). Task 6 lands the alarm() handler.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type {
   EnqueueAction,
   EnqueueRequest,

@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import type { RunState } from "../src/do/types"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // ─── Mock the GitHub check-run primitives BEFORE importing the DO ──
 

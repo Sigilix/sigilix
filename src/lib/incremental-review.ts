@@ -22,7 +22,7 @@
 // `DiffMode` union in case the incremental path is re-introduced
 // behind a guard later.)
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const KV_KEY_PREFIX = "pr-last-reviewed:"
 const TTL_SECONDS = 30 * 24 * 60 * 60  // 30 days, matches telemetry TTL

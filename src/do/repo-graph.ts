@@ -15,7 +15,7 @@
 // so those slot in as additional public methods.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // ─── Logging ─────────────────────────────────────────────────────
 

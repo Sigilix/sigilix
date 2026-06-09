@@ -14,7 +14,7 @@ import {
   buildPrUrl,
   preparePrReviewCounter,
 } from "../src/lib/pr-review-counter"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 interface MockKv {
   store: Map<string, string>

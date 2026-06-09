@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { RunnerReceiptDO } from "../src/do/runner-receipt"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 function makeDo(): RunnerReceiptDO {

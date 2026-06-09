@@ -41,7 +41,8 @@ import {
   WARMUP_CALLOUT_MARKER,
 } from "../src/lib/warmup"
 import { GitHubClient } from "../src/lib/github"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

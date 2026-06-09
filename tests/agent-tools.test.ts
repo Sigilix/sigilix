@@ -42,7 +42,7 @@ vi.mock("../src/lib/github", async () => {
 import { createAgentTools, type AgentToolsContext } from "../src/lib/agent-tools"
 import { GitHubClient } from "../src/lib/github"
 import { encodeBranchName } from "../src/lib/index-branch"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 beforeEach(() => {
   mockRetrieveChunks.mockReset()

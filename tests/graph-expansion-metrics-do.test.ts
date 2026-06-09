@@ -9,7 +9,7 @@ import {
   BUCKET_LOWERS,
   type GraphExpansionSample,
 } from "../src/do/graph-expansion-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 function makeDo(): { do_: GraphExpansionMetricsDO; getAlarm: () => number | null } {

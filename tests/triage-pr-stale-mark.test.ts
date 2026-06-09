@@ -38,7 +38,7 @@ vi.mock("../src/lib/github", async () => {
 import { handlePrStaleMark } from "../src/lib/triage-pr-stale-mark"
 import { writeReviewManifest, type ReviewManifestV1 } from "../src/lib/review-manifest"
 import { GitHubHttpError } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()

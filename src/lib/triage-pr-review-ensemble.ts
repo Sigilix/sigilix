@@ -442,7 +442,7 @@ import {
   runShadowSynth,
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 // SIG-318 (PR 0b): golden-output safety harness capture hook. Flag-gated
 // (OPENCLAW_GOLDEN_CAPTURE), off by default → byte-identical behavior.
 import { captureGolden } from "./ensemble-golden-capture"

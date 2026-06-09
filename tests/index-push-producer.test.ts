@@ -49,7 +49,8 @@ import {
 } from "../src/lib/index-producer"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "../src/lib/repo-index-manifest"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

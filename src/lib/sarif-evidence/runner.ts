@@ -16,7 +16,7 @@
 // v1 per spec §3.5).
 
 import type { GitHubClient } from "../github"
-import type { Env } from "../../index"
+import type { Env } from "../../shared/types/env"
 import { parseSarif } from "./sarif-parser"
 import { normalizeSarifPath } from "./path-normalize"
 import { resolveTaxonomy } from "./taxonomy"

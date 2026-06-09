@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import { graphExpansionMode, injectArm } from "../src/lib/graph-expansion-mode"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const env = (v: string | undefined): Env => ({ OPENCLAW_GRAPH_EXPANSION: v }) as unknown as Env
 

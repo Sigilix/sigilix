@@ -35,7 +35,7 @@ import {
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
 import { PR_DESCRIBE_SCHEMA } from "./schemas"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 

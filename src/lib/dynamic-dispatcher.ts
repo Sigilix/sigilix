@@ -50,7 +50,7 @@
 // is the LLM call, which composes the caller's AbortSignal so the
 // dispatcher can never outlive the orchestrator's 8s budget.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type { ClassifiedDiffFile } from "./diff-file-classify"
 import {
   ALL_SPECIALISTS,

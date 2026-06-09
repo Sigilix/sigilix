@@ -15,7 +15,7 @@
 // incremented attempt — a legitimate new submission, not a replay.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // Replay rows only need to outlive the OIDC token's exp window (~minutes); 7d is
 // generous and bounds growth. GC runs via a daily alarm.

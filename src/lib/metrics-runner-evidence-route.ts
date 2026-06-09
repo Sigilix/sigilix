@@ -6,7 +6,7 @@
 // /metrics/graph), and reports the current OPENCLAW_RUNNER_EVIDENCE_MODE so the
 // reader knows whether the numbers reflect shadow or post.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryRunnerEvidenceMetrics } from "./runner-evidence-metrics-client"
 import { readRunnerEvidenceMode } from "./runner-evidence/lookup"

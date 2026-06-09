@@ -16,7 +16,7 @@
 // SHA). Different consumers, different invariants — leave that key
 // alone.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const KV_KEY_PREFIX = "pr-review-manifest:"
 const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days

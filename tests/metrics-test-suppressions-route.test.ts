@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { handleTestSuppressionsMetricsRoute } from "../src/lib/metrics-test-suppressions-route"
 import { ValidationMetricsDO } from "../src/do/validation-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"

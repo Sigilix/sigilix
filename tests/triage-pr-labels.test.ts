@@ -54,7 +54,7 @@ vi.mock("../src/lib/ollama", () => ({
 }))
 
 import { buildLabelCandidates, handlePrLabels, parseLabelResponse } from "../src/lib/triage-pr-labels"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()

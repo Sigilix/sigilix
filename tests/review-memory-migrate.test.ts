@@ -6,7 +6,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { migrateOneRepoReviewMemory } from "../src/lib/review-memory/migrate"
 import { GitHubClient } from "../src/lib/github"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,

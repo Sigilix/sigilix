@@ -15,7 +15,7 @@
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import { runnerEvidenceBadgeImg } from "./badge-assets"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // SIG-216 (founder sign-off 2026-05-25): Sigilix originally followed
 // Greptile's pattern of NOT posting Check annotations. GitHub renders

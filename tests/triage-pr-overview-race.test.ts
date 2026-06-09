@@ -65,7 +65,7 @@ vi.mock("../src/lib/ollama", () => ({
 }))
 
 import { handlePrOverview } from "../src/lib/triage-pr-overview"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()

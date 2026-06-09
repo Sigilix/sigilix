@@ -9,7 +9,7 @@
 // indexer-but-fresh-rules combination can't exist beyond the manifest's
 // own validity window.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import {
   buildScopedRulesManifest,
   type ScopedRulesManifest,

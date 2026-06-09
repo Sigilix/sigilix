@@ -10,7 +10,7 @@
 //               demotion + body-routing lands in PR 4.
 // Anything else is treated as `off` defensively.
 
-import type { Env } from "../../index"
+import type { Env } from "../../shared/types/env"
 
 export type VerificationMode = "off" | "shadow" | "enforce"
 

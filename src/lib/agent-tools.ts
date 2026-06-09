@@ -27,7 +27,7 @@ import { retrieveChunks, type RetrievedChunk } from "./retrieval"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import { withTimeout } from "./with-timeout"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const READ_FILE_MAX_LINES = 200
 const READ_FILE_LOOP_BUDGET_BYTES = 50_000

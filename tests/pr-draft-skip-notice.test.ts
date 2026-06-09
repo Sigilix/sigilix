@@ -5,7 +5,7 @@ import {
   renderDraftSkipSupersededNotice,
   supersedeDraftPrSkipNotice,
 } from "../src/lib/pr-draft-skip-notice"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { GitHubClient } from "../src/lib/github"
 
 function makeEnv(): { env: Env; kv: Map<string, string> } {

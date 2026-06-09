@@ -4,7 +4,7 @@
 // repo with no manifest). Idempotent: the consumer freshness-skips repos that
 // already have a current manifest, so re-running is safe.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "./github-app"
 import { enqueueIndexJobsForRepos } from "./index-producer"
 

@@ -61,7 +61,8 @@ vi.mock("../src/lib/pr-review-check-run", async () => {
 })
 
 import { dispatchJob, prMetaIsClosedOrMerged } from "../src/index"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 function makeEnv(): Env {
   const store = new Map<string, string>()

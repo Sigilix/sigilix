@@ -83,7 +83,8 @@ import { scopedRulesKey } from "../src/lib/scoped-rules-kv"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
 import { CHUNKER_VERSION } from "../src/lib/indexer"
 import { encodeBranchName } from "../src/lib/index-branch"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 
 interface Sent {
   message: JobMessage

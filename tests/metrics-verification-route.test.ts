@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest"
 import { handleVerificationMetricsRoute } from "../src/lib/metrics-verification-route"
 import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "../src/do/verification-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"

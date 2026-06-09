@@ -13,7 +13,7 @@
 // INSERT … ON CONFLICT increments so concurrent reviews never lose a count.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 // Single source of truth for the verdict enum (the check produces it); imported
 // for local use + re-exported as part of this DO's public API.
 import type { VerificationVerdict } from "../lib/verification/verify-finding"

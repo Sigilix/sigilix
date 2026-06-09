@@ -6,7 +6,7 @@
 // per-reason counter surface) but flow through dedicated record/query
 // helpers so callers don't have to know about the synthetic-gate encoding.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type {
   ValidationMetricsDO,
   RecordBatchArgs,

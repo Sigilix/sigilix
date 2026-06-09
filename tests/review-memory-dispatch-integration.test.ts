@@ -1,7 +1,7 @@
 // SIG-185 — integration coverage for review-memory dispatch wrappers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 const VALID_MARKER =
   "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"

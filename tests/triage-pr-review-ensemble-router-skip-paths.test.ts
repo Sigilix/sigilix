@@ -124,7 +124,7 @@ import {
   handlePrReviewEnsemble,
   ORCHESTRATOR_TIMEOUT_MS,
 } from "../src/lib/triage-pr-review-ensemble"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub(): Env["OPENCLAW_STATE"] {
   const store = new Map<string, string>()

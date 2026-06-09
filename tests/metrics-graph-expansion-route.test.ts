@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { handleGraphExpansionMetricsRoute } from "../src/lib/metrics-graph-expansion-route"
 import { GraphExpansionMetricsDO, type GraphExpansionSample } from "../src/do/graph-expansion-metrics"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"

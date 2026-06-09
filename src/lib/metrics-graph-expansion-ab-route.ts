@@ -11,7 +11,7 @@
 // recall proxy. "More findings" is only good if they're REAL — a future pass
 // can cross-join the dismissal corpus to net out FPs per arm.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { listKeys, mapWithConcurrency, FETCH_CONCURRENCY } from "./kv-scan"
 import { createdMsFromKey } from "./fp-rate/ingest"

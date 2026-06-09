@@ -7,7 +7,8 @@
 
 import { describe, it, expect, vi } from "vitest"
 import { runPrReviewWithDoCallback } from "../src/do/consumer-wrapper"
-import type { Env, JobMessage } from "../src/index"
+import type { Env } from "../src/shared/types/env"
+import type { JobMessage } from "../src/shared/types/job"
 import type { PickupResponse, RunResultRequest } from "../src/do/types"
 import { GitHubHttpError } from "../src/lib/github"
 

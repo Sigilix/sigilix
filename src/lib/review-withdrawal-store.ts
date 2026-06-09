@@ -18,7 +18,7 @@
 // - Expiry: 30-day TTL (founder confirmed PR-lifetime; 30d is a safe upper
 //   bound. Clean prefix-delete on `pull_request.closed` is a follow-up).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { type DismissReason, isDismissReason } from "./dismiss-reasons"
 
 const MATCH_THRESHOLD = 0.75

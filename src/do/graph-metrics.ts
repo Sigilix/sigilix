@@ -10,7 +10,7 @@
 // `post` flip depends on).
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 const RETENTION_DAYS = 35
 const MAX_LAST_SEEN = 100

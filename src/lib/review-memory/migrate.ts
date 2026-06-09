@@ -27,7 +27,7 @@
 // window. PR B explicitly does NOT delete legacy keys — they stay
 // intact until Phase 5 confirms zero canary regressions.
 
-import type { Env } from "../../index"
+import type { Env } from "../../shared/types/env"
 import { GitHubClient } from "../github"
 import {
   getInstallationToken,

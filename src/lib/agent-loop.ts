@@ -31,7 +31,7 @@ import type {
 } from "./ollama-chat"
 import type { AgentTool } from "./agent-tools"
 import { parseFirstJsonObject } from "./json-extract"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 // ──────────────────────────────────────────────────────────────── types
 

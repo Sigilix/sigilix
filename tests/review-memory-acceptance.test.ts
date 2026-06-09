@@ -18,7 +18,7 @@ import {
   buildSigilixMarker,
   computePathSha256,
 } from "../src/lib/review-memory/marker"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 import type { GitHubClient } from "../src/lib/github"
 import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
 

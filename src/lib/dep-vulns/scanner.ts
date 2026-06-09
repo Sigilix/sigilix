@@ -12,7 +12,7 @@
 // Spec: docs/superpowers/specs/2026-05-06-arc-186-dep-vulns-design.md
 
 import type { GitHubClient } from "../github"
-import type { Env } from "../../index"
+import type { Env } from "../../shared/types/env"
 import { loadAdvisoryDb, type AdvisoryRecord } from "./advisory-db"
 import {
   parsePackageJson,

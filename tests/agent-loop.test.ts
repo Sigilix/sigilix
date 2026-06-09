@@ -28,7 +28,7 @@ import {
 } from "../src/lib/agent-loop"
 import type { AgentTool } from "../src/lib/agent-tools"
 import { ChatDisabledError } from "../src/lib/ollama-chat"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 beforeEach(() => {
   mockChat.mockReset()

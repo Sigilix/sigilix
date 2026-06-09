@@ -16,7 +16,7 @@ import {
 // line-anchoring tests exercise the real index, not a duplicate.
 import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
 import { readVerificationMode, readReanchorEnabled } from "../src/lib/verification/mode"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 // New side: line 9 = context, line 10 = the injection, line 11 = a safe line.
 const DIFF = `diff --git a/src/db.ts b/src/db.ts

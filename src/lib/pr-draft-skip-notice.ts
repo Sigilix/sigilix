@@ -1,4 +1,4 @@
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import type { GitHubClient } from "./github"
 
 const DRAFT_SKIP_MARKER = "<!-- sigilix:draft-skip -->"

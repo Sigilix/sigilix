@@ -14,7 +14,7 @@
 //   - run the provenance gate BEFORE the (heavier) SARIF parse, so a merely-
 //     authenticated-but-unauthorized caller never reaches the parse.
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { verifyGitHubOidcToken } from "./runner-oidc/verify"
 import { validateRunnerProvenance } from "./runner-oidc/provenance"
 import type { GitHubOidcClaims } from "./runner-oidc/types"

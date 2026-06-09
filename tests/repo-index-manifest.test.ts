@@ -16,7 +16,7 @@ import {
   writeRepoIndexManifest,
   type RepoIndexManifestV1,
 } from "../src/lib/repo-index-manifest"
-import type { Env } from "../src/index"
+import type { Env } from "../src/shared/types/env"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

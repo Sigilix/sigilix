@@ -7,7 +7,7 @@
 // caveat as review-memory's `appendSignal`); the EMA + MIN_OBSERVATIONS gate
 // absorbs the occasional lost fold.
 
-import type { Env } from "../../index"
+import type { Env } from "../../shared/types/env"
 import { emptyProfile, foldOutcomeIntoProfile } from "./ema"
 import {
   PRECISION_PROFILE_SCHEMA_VERSION,

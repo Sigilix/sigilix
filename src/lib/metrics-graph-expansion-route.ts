@@ -5,7 +5,7 @@
 // Cloudflare log access. Reuses the shared OPENCLAW_VALIDATION_METRICS_TOKEN
 // bearer (same as the other /metrics/* endpoints).
 
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryGraphExpansionMetrics } from "./graph-expansion-metrics-client"
 import { graphExpansionMode } from "./graph-expansion-mode"

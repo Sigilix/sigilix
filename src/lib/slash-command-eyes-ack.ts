@@ -17,7 +17,7 @@
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import type { GhMentionSurface } from "./github-mention"
-import type { Env } from "../index"
+import type { Env } from "../shared/types/env"
 
 export interface SlashCommandEyesAckArgs {
   env: Env

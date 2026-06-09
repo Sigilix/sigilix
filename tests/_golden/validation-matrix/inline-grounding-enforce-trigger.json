@@ -1,0 +1,81 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": []
+    },
+    "unanchoredFindings": [
+      {
+        "path": "src/lib/orders.ts",
+        "line": 17,
+        "score": 2,
+        "category": "style",
+        "headline": "naming is inconsistent here",
+        "body": "rename for clarity",
+        "evidence": {
+          "specialistsThatFlagged": [
+            "logic"
+          ],
+          "specialistsThatDeclined": [],
+          "deterministicFactIds": [],
+          "retrievalChunkIds": [],
+          "relatedPriorPRs": [],
+          "synthDecision": "kept",
+          "consensusScore": 1
+        },
+        "scope": "line"
+      }
+    ],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 1,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "logic"
+          ],
+          "sourceFindingIds": [
+            "logic-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onInlineGroundingFindingDropped",
+      "finding": {
+        "path": "src/lib/orders.ts",
+        "line": 17,
+        "headline": "naming is inconsistent here"
+      },
+      "payload": {
+        "reason": "ungrounded-inline-finding",
+        "dropped": true
+      }
+    }
+  ]
+}

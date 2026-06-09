@@ -1,0 +1,84 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": [
+        {
+          "path": "src/lib/foo.ts",
+          "line": 17,
+          "score": 4,
+          "category": "testing",
+          "headline": "New `parseConfig` export ships without tests",
+          "body": "The new `parseConfig` function has no sibling test file in this PR; its error path is untested.",
+          "evidenceRefs": [
+            "siblingMapping:src/lib/foo.ts->NONE"
+          ],
+          "evidence": {
+            "specialistsThatFlagged": [
+              "tests"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [
+              "siblingMapping:src/lib/foo.ts->NONE"
+            ],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
+    },
+    "unanchoredFindings": [],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 0,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "tests"
+        ],
+        "sourceFindingIds": [
+          "tests-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "tests"
+          ],
+          "sourceFindingIds": [
+            "tests-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": []
+}

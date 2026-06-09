@@ -1,0 +1,90 @@
+{
+  "output": {
+    "verdict": {
+      "summary": "T",
+      "confidence": 3,
+      "confidenceReason": "R.",
+      "findings": []
+    },
+    "unanchoredFindings": [
+      {
+        "path": "src/db.ts",
+        "line": 17,
+        "score": 4,
+        "category": "security",
+        "headline": "SQL injection in query builder",
+        "body": "User input is concatenated directly into the SQL string.",
+        "cweId": "CWE-89",
+        "evidenceId": "sarif:fake:000000000000:17",
+        "evidence": {
+          "specialistsThatFlagged": [
+            "security"
+          ],
+          "specialistsThatDeclined": [],
+          "deterministicFactIds": [
+            "sarif:fake:000000000000:17"
+          ],
+          "retrievalChunkIds": [],
+          "relatedPriorPRs": [],
+          "synthDecision": "kept",
+          "consensusScore": 1
+        },
+        "scope": "line",
+        "trust": {
+          "tier": "body-only-ungrounded",
+          "surface": "body",
+          "demoteReason": "security-evidence"
+        }
+      }
+    ],
+    "droppedForInvalidLine": 0,
+    "remappedInvalidLineToInline": 0,
+    "droppedForHallucination": 0,
+    "demotedScore1": 0,
+    "droppedForVaguePrefix": 0,
+    "droppedForUncitedTestingEvidence": 0,
+    "droppedForFailedValidation": 1,
+    "droppedForFailedTestValidation": 0,
+    "droppedForFailedLogicValidation": 0,
+    "droppedForFailedLogicRefutation": 0,
+    "droppedForFailedLogicClaimRefutation": 0,
+    "droppedForFailedRefutationSurvival": 0,
+    "droppedForFailedPerfValidation": 0,
+    "droppedForFailedInlineGroundingValidation": 0,
+    "droppedForFailedAbsenceGroundingValidation": 0,
+    "droppedForFailedWindowBlindnessValidation": 0,
+    "droppedForFailedSecurityGroundingValidation": 0,
+    "droppedForFailedSecurityUsageValidation": 0,
+    "cleanFindingProvenance": [],
+    "provenance": {
+      "findings": [
+        {
+          "sourceSpecialists": [
+            "security"
+          ],
+          "sourceFindingIds": [
+            "security-0"
+          ],
+          "action": "kept",
+          "verifiedViaRetrieval": false
+        }
+      ],
+      "dropped": [],
+      "softened": []
+    }
+  },
+  "telemetry": [
+    {
+      "callback": "onSecurityFindingDropped",
+      "finding": {
+        "path": "src/db.ts",
+        "line": 17,
+        "headline": "SQL injection in query builder"
+      },
+      "payload": {
+        "reason": "fabricated-evidence-id",
+        "dropped": true
+      }
+    }
+  ]
+}

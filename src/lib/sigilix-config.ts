@@ -29,14 +29,14 @@
 //   - JSON Schema validation — defer until field set stabilizes
 
 import type { GitHubClient } from "../shared/adapters/github"
-import type { SpecialistRole } from "./ensemble-router"
-import type { ResolvedPerfBudgets } from "./perf-budgets"
-import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
+import type { SpecialistRole } from "../shared/domain/specialist-role"
+import type { ResolvedPerfBudgets } from "../shared/domain/perf-budgets"
+import { parseDeterministicChecks, type DeterministicCheck } from "../shared/domain/deterministic-checks"
 import { pathMatchesAny } from "../shared/util/path-glob"
 import {
   DEFAULT_PRE_MERGE_GATES_CONFIG,
   type ResolvedPreMergeGatesConfig,
-} from "./pre-merge-gates"
+} from "../shared/domain/pre-merge-gates"
 
 export const SIGILIX_CONFIG_PATH = "sigilix.json"
 

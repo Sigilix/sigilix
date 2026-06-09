@@ -218,7 +218,7 @@ independent assessment / refutation survival.
 
 ## Supporting machinery
 
-- **Perf budgets** (`src/lib/perf-budgets.ts`; schema in `src/lib/sigilix-config.ts`) —
+- **Perf budgets** (`src/shared/domain/perf-budgets.ts`; schema in `src/lib/sigilix-config.ts`) —
   `sigilix.json::perfBudgets` declares `{ p50LatencyBudgetMs, p95LatencyBudgetMs,
   bundleSizeBudgetKb, hotPaths: string[] }`. A PR touching a declared hot path injects a
   fact that primes the performance specialist (it does not itself emit a finding). The
@@ -272,7 +272,7 @@ per-bucket remediation rendered verbatim in production output.
 - `src/lib/validate-logic-finding.ts` · `validate-perf-finding.ts` · `validate-test-finding.ts` — domain gates
 - `src/lib/security-evidence-manifest.ts` — security fact manifest
 - `src/lib/symbol-retrieval.ts` · `src/lib/perf-retrieval.ts` — per-domain retrieval
-- `src/lib/perf-budgets.ts` · `src/lib/sigilix-config.ts` — `perfBudgets` / `coverage` schema
+- `src/shared/domain/perf-budgets.ts` · `src/lib/sigilix-config.ts` — `perfBudgets` / `coverage` schema
 - `src/lib/coverage-ingest.ts` — LCOV coverage-gap facts (SIG-118)
 - `src/lib/shadow-bakeoff-runner.ts` · `shadow-bakeoff-telemetry.ts` · `shadow-bakeoff-config.ts` — per-specialist bake-off (SIG-86)
 - `src/lib/metrics-validation-route.ts` — `GET /metrics/validation` shadow counters

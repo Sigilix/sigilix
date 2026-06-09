@@ -9,7 +9,7 @@ import {
   renderPreMergeGatesSection,
   runPreMergeGates,
   type ResolvedPreMergeGatesConfig,
-} from "../src/lib/pre-merge-gates"
+} from "../src/shared/domain/pre-merge-gates"
 import { resolvePreMergeGatesConfig } from "../src/lib/sigilix-config"
 
 describe("evaluateTitleFormatGate", () => {

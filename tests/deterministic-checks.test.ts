@@ -7,7 +7,7 @@ import {
   runDeterministicChecks,
   renderHitsForPrompt,
   type DeterministicCheck,
-} from "../src/lib/deterministic-checks"
+} from "../src/shared/domain/deterministic-checks"
 
 const mkDiff = (path: string, addedLines: string[], oldStart = 1, newStart = 1) => {
   const lines = [

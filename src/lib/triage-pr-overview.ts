@@ -27,7 +27,7 @@ import {
   runPreMergeGates,
   renderPreMergeGatesSection,
   type GateResult,
-} from "./pre-merge-gates"
+} from "../shared/domain/pre-merge-gates"
 import {
   batchReadFileCache,
   batchWriteFileCache,

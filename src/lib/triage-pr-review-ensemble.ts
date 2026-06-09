@@ -112,15 +112,26 @@ import {
   buildBodyOnlyCheckAnnotations,
   buildFallbackSubmission,
   buildReviewSubmissionWithMetadata,
-  chooseReviewEvent,
-  computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
   previewFallbackSubmissionEvent,
   previewReviewSubmissionEvent,
-  type ReviewEvent,
-  type ReviewEventOverride,
   type ReviewSuggestionEmission,
 } from "./triage-pr-review"
+// SIG-361 (PR 9): the verdict domain. The moved names import directly from the
+// leaf (the inward direction per the dependency rule); `severityTier` is
+// import-back (was private here — NOT re-exported), while
+// `LOW_CONFIDENCE_COMMENT_THRESHOLD` + `resolveReviewEventOverride` were exported
+// at HEAD (tests import the latter from this path), so both are re-exported to
+// preserve this module's public surface.
+import {
+  chooseReviewEvent,
+  computeShadowGateDivergence,
+  severityTier,
+  LOW_CONFIDENCE_COMMENT_THRESHOLD,
+  resolveReviewEventOverride,
+  type ReviewEvent,
+} from "./ensemble/domain/verdict"
+export { LOW_CONFIDENCE_COMMENT_THRESHOLD, resolveReviewEventOverride }
 // SIG-360: `isSubstantiveAnchorLine` relocated to a shared/util leaf so the
 // validation domain can reference it without importing this god-file's sibling.
 import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
@@ -491,11 +502,8 @@ export type { ValidatedOutput, SynthesizerProvenance } from "./ensemble/domain/v
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
-// SIG-287: synth confidence (1-5) at or below this downgrades an otherwise-
-// clean APPROVE to a neutral COMMENT — a low-confidence review must not read as
-// a confident sign-off. Degraded coverage (a missing specialist) ALSO triggers
-// the downgrade independently of this. Tunable knob; 2 = "low".
-export const LOW_CONFIDENCE_COMMENT_THRESHOLD = 2
+// SIG-361 (PR 9): `LOW_CONFIDENCE_COMMENT_THRESHOLD` moved to the verdict domain
+// (imported + re-exported above).
 // SIG-129: branch chunks to consider per pass before merge dedup/re-rank.
 // Matches retrieval.ts TOP_K (6) so a pass can be fully branch-sourced.
 const TOP_K_BRANCH = 6
@@ -1271,25 +1279,8 @@ export async function prepareSubmissionAffordance(args: {
 // handled inside the ensemble itself (an early `skipped` return
 // with `fellBackReason: "daily_budget_exhausted"` once it lands).
 
-/**
- * Resolve the review-event override (pure, exported for test). A real
- * approval-readiness blocker escalates to REQUEST_CHANGES. Otherwise an
- * INCOMPLETE review — SIG-287 degraded coverage / low confidence, OR SIG-245
- * files dropped from review (diff-budget spill / too-large) — downgrades an
- * otherwise-clean APPROVE to a neutral COMMENT ("Sigilix looked, but this is
- * not a full sign-off"), so the body's caveat/notice actually renders instead
- * of being discarded by the marker-only APPROVE body. A clean, complete review
- * returns undefined (no override → APPROVE/REQUEST_CHANGES derived from findings).
- */
-export function resolveReviewEventOverride(args: {
-  hasApprovalBlocker: boolean
-  reviewIncomplete: boolean
-  filesDroppedCount: number
-}): ReviewEventOverride | undefined {
-  if (args.hasApprovalBlocker) return "REQUEST_CHANGES"
-  if (args.reviewIncomplete || args.filesDroppedCount > 0) return "COMMENT"
-  return undefined
-}
+// SIG-361 (PR 9): `resolveReviewEventOverride` moved to the verdict domain
+// (imported + re-exported above).
 
 /**
  * Build the `[AST RULE FINDINGS]` synth-prompt block (pure, exported for test).
@@ -5934,6 +5925,7 @@ export async function handlePrReviewEnsemble(
     // rubber-stamping a review it couldn't actually complete.
     const synthConfidence =
       typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
+    // TODO(SIG-364): extract an isLowConfidence predicate into domain/verdict when the orchestrator is thinned — the comparison direction is policy.
     const reviewIncomplete =
       degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
     // SIG-245: files dropped from review (diff-budget spill into a later batch,
@@ -7813,18 +7805,8 @@ function countLines(diff: string): number {
   return n
 }
 
-/**
- * SIG-216: bucket a finding's score (1-5) into the same P0/P1/P2/P3
- * severity tiers the review body uses (`severityBadgeImg` in
- * `triage-pr-review.ts`) so the overview prompt and the review body
- * speak the same language. Pure.
- */
-function severityTier(score: number): "P0" | "P1" | "P2" | "P3" {
-  if (score >= 5) return "P0"
-  if (score === 4) return "P1"
-  if (score === 3) return "P2"
-  return "P3"
-}
+// SIG-361 (PR 9): `severityTier` moved to the verdict domain (imported above;
+// import-back only, NOT re-exported — it was private here).
 
 /**
  * SIG-216: count findings by P0/P1/P2/P3 severity tier for the

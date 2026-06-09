@@ -19,7 +19,13 @@ import {
   type DismissReason,
   isDismissReason,
 } from "../lib/dismiss-reasons"
-import type { FindingCategory } from "../lib/triage-pr-review"
+// SIG-363: `ValidationRejectionEvent` moved to the ensemble domain leaf so the
+// sink ports + orchestrator reference it without importing this DO. Re-exported
+// here so existing importers (the dispatcher, the god-file) are unchanged. The
+// move also lifts the `FindingCategory` reference (the type's `category` field)
+// onto the leaf, killing this DO's documented `../lib/triage-pr-review` coupling.
+import type { ValidationRejectionEvent } from "../lib/ensemble/domain/metric-events"
+export type { ValidationRejectionEvent }
 
 // Retention: keep 35 days of daily buckets so the endpoint can serve up to a
 // 30-day window with margin. GC runs via a daily alarm; queries always filter
@@ -66,41 +72,6 @@ CREATE TABLE IF NOT EXISTS repeat_fp_counts (
 );
 CREATE INDEX IF NOT EXISTS repeat_fp_by_day ON repeat_fp_counts(day);
 `
-
-/**
- * One validator-gate rejection (the shape the ensemble collects + forwards).
- *
- * SIG-173: discriminated union — `"gate-rejection"` is the existing
- * shadow/enforce telemetry the validator gates push; `"dismissal-reason"`
- * is the per-reason rollup written when `@sigilix dismiss <reason>`
- * succeeds in `github-mention.ts`. Both flow through the same DO so a
- * single endpoint surface can serve both rollups, and the `daily_counts`
- * table is the natural place for the per-reason counter
- * (gate = `"dismissal"`, reason = `<DismissReason>`, kept = 0).
- */
-export type ValidationRejectionEvent =
-  | {
-      kind: "gate-rejection"
-      gate: string
-      reason: string
-      /** true = actually dropped (enforce mode); false = would-drop (shadow). */
-      dropped: boolean
-      /**
-       * SIG-245: the rejected finding's own category (logic/security/
-       * performance/testing/…), distinct from `gate` (the validator that
-       * fired). The gate×category split surfaces the meta-FP class — e.g. the
-       * security gate firing on a `testing`/`docs`-category finding — that a
-       * gate-only rollup can't see. Optional: absent on gates with no finding
-       * in scope (the verification re-anchor/refuted gates). Typed to the
-       * canonical `FindingCategory` so callers can't pass a typo'd bucket; the
-       * record path also trims defensively (the event crosses an RPC boundary).
-       */
-      category?: FindingCategory
-    }
-  | {
-      kind: "dismissal-reason"
-      reason: DismissReason
-    }
 
 /** Synthetic gate name used to file dismissal-reason rows in `daily_counts`. */
 export const DISMISSAL_METRICS_GATE = "dismissal"

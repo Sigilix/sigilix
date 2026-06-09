@@ -44,17 +44,11 @@ CREATE TABLE IF NOT EXISTS last_seen_pr (
 CREATE INDEX IF NOT EXISTS graph_last_seen_by_at ON last_seen_pr(last_seen_at);
 `
 
-/** One PR review's graph-retrieval measurement (mirrors the logged event). */
-export interface GraphRetrievalSample {
-  /** effective graph-retrieval mode: "shadow" | "post". */
-  mode: string
-  jaccard: number
-  addedCount: number
-  nodeCount: number
-  cappedNodeCount: number
-  blastCallerCount: number
-  blastDependentCount: number
-}
+// SIG-363: `GraphRetrievalSample` moved to the ensemble domain leaf so the
+// graph-metrics sink + orchestrator reference it without importing this DO.
+// Re-exported here so existing importers are unchanged.
+import type { GraphRetrievalSample } from "../lib/ensemble/domain/metric-events"
+export type { GraphRetrievalSample }
 
 export interface RecordSampleArgs {
   owner: string

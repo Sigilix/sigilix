@@ -9,7 +9,7 @@
 //     structured JSON for the synth prompt + appended SBOM summary
 //     for Fix Plan ordering (spec §3.6a).
 
-import type { SarifFinding, SbomSummary } from "./types"
+import type { SarifFinding, SbomSummary } from "@/features/sarif-evidence/domain/types"
 
 const PER_FILE_RENDER_CAP = 10
 

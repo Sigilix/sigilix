@@ -1,7 +1,7 @@
 // ARC-188 — SARIF parser tests.
 
 import { describe, it, expect } from "vitest"
-import { parseSarif } from "../src/lib/sarif-evidence/sarif-parser"
+import { parseSarif } from "@/features/sarif-evidence/domain/sarif-parser"
 
 const minimalReport = {
   version: "2.1.0",

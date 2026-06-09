@@ -5,7 +5,7 @@
 // encoding, artifactLocation.index out-of-bounds.
 
 import { describe, it, expect } from "vitest"
-import { normalizeSarifPath } from "../src/lib/sarif-evidence/path-normalize"
+import { normalizeSarifPath } from "@/features/sarif-evidence/domain/path-normalize"
 
 describe("normalizeSarifPath — happy paths", () => {
   it("plain relative path passes through", () => {

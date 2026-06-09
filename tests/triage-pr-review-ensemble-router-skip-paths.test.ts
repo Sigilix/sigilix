@@ -110,9 +110,9 @@ vi.mock("../src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-vi.mock("../src/lib/sarif-evidence/runner", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/sarif-evidence/runner")>(
-    "../src/lib/sarif-evidence/runner",
+vi.mock("@/features/sarif-evidence", async () => {
+  const actual = await vi.importActual<typeof import("@/features/sarif-evidence")>(
+    "@/features/sarif-evidence",
   )
   return {
     ...actual,

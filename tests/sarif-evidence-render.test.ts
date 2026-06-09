@@ -4,8 +4,8 @@ import { describe, it, expect } from "vitest"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
-} from "../src/lib/sarif-evidence/render"
-import type { SarifFinding, SbomSummary } from "../src/lib/sarif-evidence/types"
+} from "@/features/sarif-evidence/render/render"
+import type { SarifFinding, SbomSummary } from "@/features/sarif-evidence/domain/types"
 
 const F = (overrides: Partial<SarifFinding> = {}): SarifFinding => ({
   ruleId: "X",

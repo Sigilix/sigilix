@@ -15,13 +15,13 @@
 // inline comments — that's deferred to v2 (auto-inline NOT wired in
 // v1 per spec §3.5).
 
-import type { GitHubClient } from "../../shared/adapters/github"
-import type { Env } from "../../shared/types/env"
-import { parseSarif } from "./sarif-parser"
-import { normalizeSarifPath } from "./path-normalize"
-import { resolveTaxonomy } from "./taxonomy"
-import { buildSbomSummary } from "./sbom-summary"
-import { buildChangedLines, nodeOverlapsChanged } from "./diff-lines"
+import type { GitHubClient } from "@/shared/adapters/github"
+import type { Env } from "@/shared/types/env"
+import { parseSarif } from "@/features/sarif-evidence/domain/sarif-parser"
+import { normalizeSarifPath } from "@/features/sarif-evidence/domain/path-normalize"
+import { resolveTaxonomy } from "@/features/sarif-evidence/domain/taxonomy"
+import { buildSbomSummary } from "@/features/sarif-evidence/domain/sbom-summary"
+import { buildChangedLines, nodeOverlapsChanged } from "@/features/sarif-evidence/domain/diff-lines"
 import type {
   SarifFinding,
   SarifFindingCategory,
@@ -30,7 +30,7 @@ import type {
   SarifRule,
   SbomSummary,
   Severity,
-} from "./types"
+} from "@/features/sarif-evidence/domain/types"
 
 // 8 MiB (was 2 MiB). MUST stay >= the runner-ingest MAX_BODY_BYTES so a verified
 // receipt's SARIF that the ingest accepted is never rejected here as too-large

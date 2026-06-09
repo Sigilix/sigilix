@@ -5,7 +5,7 @@
 // Kimi MINOR #4: SARIF level mapping.
 
 import { describe, it, expect } from "vitest"
-import { runSarifEvidence, type ResolvedSarifConfig } from "../src/lib/sarif-evidence/runner"
+import { runSarifEvidence, type ResolvedSarifConfig } from "@/features/sarif-evidence/app/runner"
 import type { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 

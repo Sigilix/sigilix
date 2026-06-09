@@ -26,6 +26,7 @@ import { parseTrustLedgerMode } from "../src/lib/trust-ledger-thread"
 import { resolveClaimShadowMode } from "../src/lib/review-memory/shadow-match"
 import { resolvePrecisionMode } from "../src/lib/precision-profile/mode"
 import { parseReviewOutputSurface } from "../src/lib/pr-review-check-run"
+import { parseMinSpecialistsEarlyExitMode } from "../src/lib/ensemble/domain/policy"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -185,6 +186,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_REVIEW_MEMORY_CLAIMS: "on",
       OPENCLAW_PRECISION_PROFILE_MODE: "enforce",
       OPENCLAW_REVIEW_OUTPUT_SURFACE: "annotations",
+      OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT: "shadow",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -208,6 +210,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewMemoryClaimShadowMode: resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW),
       precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
       reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
+      minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT),
     })
   })
 
@@ -231,6 +234,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewMemoryClaimShadowMode: resolveClaimShadowMode(undefined),
       precisionProfileMode: resolvePrecisionMode(undefined),
       reviewOutputSurface: parseReviewOutputSurface(undefined),
+      minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(undefined),
     })
   })
 

@@ -4,7 +4,12 @@
 //
 // Dependency rule: a `ports/*` file imports ONLY from `@/lib/ensemble/domain/*`,
 // `@/shared/*`, and `@/shared/types/github` — never outward (no adapter, no
-// concrete client, no `triage-pr-review*` sibling, no value code).
+// concrete client, no `triage-pr-review*` sibling, no value code). The one
+// concession (SIG-363): a few ports take a TYPE-ONLY import of a PURE
+// contract type that still lives in a `@/lib/*` or `@/do/*` sibling (e.g.
+// `ReviewManifestFinding`, `Record{Verification,RunnerEvidence}Args`), each
+// flagged with a COUPLING NOTE in its file — to be repointed when that type is
+// lifted to a leaf. No value code or god-file import ever crosses the boundary.
 
 export type {
   ModelProviderPort,
@@ -35,20 +40,21 @@ export type { RunnerReceiptPort, RunnerEvidenceState } from "./runner-receipt"
 
 export type { ClockPort } from "./clock"
 
-// DEFERRED to PR 11 (SIG-363, which owns the graph + persistence adapters):
-//   - GraphPort           — its payload types (GraphContextNode/Expansion + the
-//                           definition/caller/import row types) live in the
-//                           `@/do/repo-graph` infra layer; defining the port
-//                           cleanly means extracting those contract types to a
-//                           leaf first (done alongside the graph adapter), not an
-//                           outward `@/do/*` import from a port.
-//   - the metric SINK ports (validation / verification / graph / graph-expansion /
-//                           runner-evidence) — these must take a *domain event*,
-//                           not the DO's `Record*Args` (whose types transitively
-//                           reach `triage-pr-review`'s `FindingTrustTier` /
-//                           `FindingCategory`). The domain event types are
-//                           extracted with the PR-8 believability core (which
-//                           consumes `ValidationRejectionEvent` via an injected
-//                           callback) + the `FindingTrustTier`→shared/domain lift.
-// The pure domain core (PR 8/9) depends on NONE of the deferred ports, so pulling
-// these later blocks nothing — and keeps every `ports/*` file strictly inward-only.
+export type { GraphPort } from "./graph"
+
+export type { EnsemblePersistencePort, EnsembleTelemetrySummary } from "./persistence"
+
+// SIG-363: the graph READ port + the persistence obligations + the metric SINK
+// ports landed here. The sink ports take the DOMAIN event vocabulary
+// (`@/lib/ensemble/domain/metric-events`); the `FindingCategory` /
+// `FindingTrustTier` references that used to reach the `triage-pr-review`
+// god-file were lifted onto the shared/domain leaves, so NO `ports/*` file
+// touches a god-file or any value code (the only outward refs are the
+// type-only coupling-note exceptions above).
+export type {
+  ValidationMetricsSink,
+  GraphMetricsSink,
+  GraphExpansionMetricsSink,
+  VerificationMetricsSink,
+  RunnerEvidenceMetricsSink,
+} from "./sinks"

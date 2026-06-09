@@ -77,23 +77,12 @@ CREATE TABLE IF NOT EXISTS daily_expansion_mode (
 CREATE INDEX IF NOT EXISTS expansion_hist_by_day ON daily_expansion_hist(day);
 `
 
-/** One PR review's graph-expansion measurement (mirrors the logged event). */
-export interface GraphExpansionSample {
-  /** effective graph-expansion mode: "shadow" | "post". */
-  mode: string
-  graphAvailable: boolean
-  /** treatment − control: the cross-file context gain the GO/KILL keys off. */
-  netNewTokens: number
-  /** filesByPath-only tokens (what PR1 saw, no cross-file fetch). */
-  controlTokens: number
-  /** treatment total tokens (control + cross-file). */
-  totalTokens: number
-  fetchEnabled: boolean
-  fetchFiles: number
-  fetchBytes: number
-  fetchElapsedMs: number
-  budgetExhausted: boolean
-}
+// SIG-363: `GraphExpansionSample` moved to the ensemble domain leaf so the
+// graph-expansion sink + orchestrator reference it without importing this DO.
+// Re-exported here so existing importers (incl. `hasFiniteMetrics` below) are
+// unchanged.
+import type { GraphExpansionSample } from "../lib/ensemble/domain/metric-events"
+export type { GraphExpansionSample }
 
 export interface RecordExpansionSampleArgs {
   occurredAt?: string

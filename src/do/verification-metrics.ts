@@ -20,7 +20,10 @@ import type { VerificationVerdict } from "../lib/verification/verify-finding"
 export type { VerificationVerdict }
 // SIG Trust Ledger v0: the per-finding trust tier is recorded as the `verdict`
 // column under TRUSTLEDGER_CATEGORY (a separate corpus, like receipt-join).
-import type { FindingTrustTier } from "../lib/triage-pr-review"
+// SIG-363: imported from the shared/domain leaf (not the `../lib/triage-pr-review`
+// god-file) so the sink port can reference `RecordVerificationArgs`'s closure
+// without an outward god-file dependency.
+import type { FindingTrustTier } from "@/shared/domain/pr-review-finding"
 
 const RETENTION_DAYS = 35 // rolling window kept on disk; GC'd daily by the alarm
 const DAY_MS = 86_400_000

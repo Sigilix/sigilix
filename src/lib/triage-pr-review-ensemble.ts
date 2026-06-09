@@ -96,7 +96,6 @@ import {
 } from "./review-withdrawal-store"
 import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
 import type { CheckRunAnnotation } from "../shared/types/github"
 import { applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import {
@@ -269,14 +268,10 @@ import {
 } from "./incremental-review"
 import { recordReviewedDiffHash } from "./noop-merge-detect"
 import {
-  computeFileListHash,
   readReviewManifest,
-  writeReviewManifest,
   type ReviewManifestFinding,
-  type ReviewManifestV1,
 } from "./review-manifest"
 import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
-import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
 import { runAstRules } from "@/features/ast-rules"
 import { createAstCache, type AstCache } from "@/features/ast-rules"
@@ -394,7 +389,6 @@ import {
   renderGraphExpansionForPrompt,
   netNewCrossFileBodies,
 } from "./graph-context-expansion"
-import { TELEMETRY_TTL_DAYS } from "./fp-rate/attribute"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
@@ -7429,84 +7423,6 @@ export async function handlePrReviewEnsemble(
   }
 }
 
-// ─── ARC-184 manifest helper ──────────────────────────────────────────
-
-/**
- * Best-effort write of the review-provenance manifest from the
- * ensemble post-mode submit paths. Captures the full manifest shape
- * required by Linear AC #1 (head/base/merge-base SHAs, file-list hash,
- * prompt version, model id, target id). KV write failures degrade
- * gracefully — never block the review flow.
- *
- * Skipped when the kill-switch is set: `OPENCLAW_REVIEW_MANIFEST_ENABLED=off`.
- */
-async function writeReviewManifestForEnsemble(args: {
-  env: Env
-  client: GitHubClient
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-  baseSha: string
-  modelId: string
-  reviewId: number
-  /** ARC-271: per-finding snapshot for the next push's delta
-   *  computation. Optional — when absent or empty, the manifest
-   *  omits the `findings` field and the next review surfaces no
-   *  delta (e.g., the review had zero findings to record). */
-  findings?: ReviewManifestFinding[]
-}): Promise<void> {
-  const { env, client, owner, repo, prNumber, headSha, baseSha, modelId, reviewId, findings } = args
-  if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED === "off") return
-  try {
-    const [files, mergeBaseSha] = await Promise.all([
-      client.listPullFilesForManifest(owner, repo, prNumber),
-      baseSha ? client.getMergeBase(owner, repo, baseSha, headSha) : Promise.resolve(null),
-    ])
-    const fileListHash = await computeFileListHash(files)
-    const manifest: ReviewManifestV1 = {
-      v: 1,
-      prNumber,
-      baseSha,
-      headSha,
-      mergeBaseSha,
-      fileListHash,
-      promptVersion: PROMPT_VERSION,
-      modelId,
-      target: { kind: "review", reviewId },
-      reviewedAt: Date.now(),
-      // CodeRabbit MAJOR catch on PR #83: include `findings` whenever
-      // the caller passed an array (even empty), so "previous review
-      // had zero findings" is distinguishable from "no ARC-271
-      // snapshot exists". The next push reads the empty array and
-      // correctly classifies all current findings as `new`.
-      ...(findings !== undefined ? { findings } : {}),
-    }
-    const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
-    if (ok) {
-      console.log(JSON.stringify({
-        event: "review-manifest-written",
-        owner, repo, prNumber,
-        headSha, baseSha, modelId,
-        promptVersion: PROMPT_VERSION,
-        target: { kind: "review", id: reviewId },
-      }))
-    } else {
-      console.error(JSON.stringify({
-        event: "review-manifest-write-failed",
-        owner, repo, prNumber,
-        err: "writeReviewManifest returned false",
-      }))
-    }
-  } catch (err) {
-    console.error(JSON.stringify({
-      event: "review-manifest-write-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-  }
-}
-
 // ─── helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -7538,14 +7454,9 @@ export { MAX_CALLS_PER_ENSEMBLE_RUN } from "./ensemble/adapters/model-provider"
 // runs in `finalize()` so the per-day cumulative count is recorded
 // for telemetry / future-policy use. A hard cap that bails the
 // ensemble early on budget exhaustion is a separate follow-up.
-
-async function incrementDailyBudget(env: Env, by: number): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10)
-  const key = `ensemble-budget:${today}`
-  const raw = await env.OPENCLAW_STATE.get(key)
-  const used = raw ? Number.parseInt(raw, 10) : 0
-  await env.OPENCLAW_STATE.put(key, String(used + by), { expirationTtl: 48 * 60 * 60 })
-}
+//
+// SIG-363 (PR 11): `incrementDailyBudget` moved to ensemble/adapters/persistence
+// (it was private here → imported-back, not re-exported).
 
 function countLines(diff: string): number {
   let n = 0
@@ -7590,130 +7501,26 @@ function countByCategory(
   return out
 }
 
-/** Single-page cap on `listPullRequestReviews`. Reviews are returned
- *  in ASC (oldest-first) submission order, so a freshly-posted review
- *  sits at the END of the list — meaning a >=100-review PR pushes our
- *  just-submitted review off page 1. Treat the cap as inconclusive
- *  rather than flipping a real submit to `not_persisted`. */
-const REVIEW_LIST_PAGE_CAP = 100
+// SIG-363 (PR 11): the per-installation client factory (`buildClient`), the
+// post-submit visibility check (`verifyReviewPersisted`), and its page-cap
+// constant (`REVIEW_LIST_PAGE_CAP`) moved to ensemble/adapters/review-sink. All
+// three were private here → imported-back, not re-exported (the public surface
+// is unchanged).
+import {
+  buildClient,
+  verifyReviewPersisted,
+} from "./ensemble/adapters/review-sink"
 
-/**
- * ARC-258 follow-up (PR #84 anomaly, refined after PR #86): after
- * `submitReview` returns a 2xx, verify the review is actually
- * visible publicly. The Check Run reflects whatever the ensemble
- * returns — a fake-looking 2xx whose review never appears in the
- * Reviews tab would otherwise produce a green "Review posted"
- * check with no review behind it.
- *
- * PR #86 observation: `getReview(id)` is fetch-by-id and returns
- * the review object even when GitHub has left it in `PENDING`
- * (draft) state — invisible to anyone but the App that authored
- * it. The public list endpoint (`listPullRequestReviews`) filters
- * `PENDING` rows out, which mirrors what's actually visible in
- * the Reviews tab. The earlier 404-only verify missed the silent-
- * success case it was built to catch. We now use the list endpoint
- * and require the row to be present AND in a published state
- * (anything but `PENDING`).
- *
- * Cap handling (code-review on this PR): the list endpoint has no
- * `direction` parameter and returns ASC. With `per_page=100`
- * single-page, a PR with >=100 prior reviews pushes our just-
- * submitted review off page 1 and verify would wrongly flip a
- * legitimate submit to `errored`. When the list returns the page
- * cap, default to `true` (inconclusive → assume persisted) and
- * emit `pr-review-verify-list-capped` so we notice when this
- * actually fires.
- *
- * Returns:
- *   - `true` when the review id appears in the public list with a
- *     non-`PENDING` state.
- *   - `true` defensively when the list returns the page cap
- *     (`REVIEW_LIST_PAGE_CAP`) and the row isn't on page 1 — we
- *     can't tell from one page whether the review is missing or
- *     just paginated. Inconclusive → assume persisted.
- *   - `false` when it's absent from the (non-capped) list OR
- *     present but in `PENDING` (silently rejected by GitHub).
- *   - `true` defensively on any GET error — a transient blip on
- *     the verify path should NOT mark a real submit as errored.
- *
- * `submitPath` is the dispatcher-side label of which submit path
- * called us (`inline-anchored` / `anchorless-fallback` / `phase3`).
- * It flows into the verify-side telemetry so log analysis can
- * slice missing/pending rates per path without joining records.
- */
-async function verifyReviewPersisted(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  reviewId: number,
-  submitPath: string,
-  submittedState: string,
-): Promise<boolean> {
-  try {
-    const list = await client.listPullRequestReviews(owner, repo, prNumber)
-    const found = list.find((r) => r.id === reviewId)
-    if (found) {
-      if (found.state === "PENDING") {
-        console.warn(JSON.stringify({
-          event: "pr-review-verify-pending",
-          owner, repo, prNumber, review_id: reviewId,
-          submit_path: submitPath,
-          submitted_state: submittedState,
-        }))
-        return false
-      }
-      return true
-    }
-    // Not on page 1. If the list hit the per-page cap we can't
-    // tell missing-from-everywhere apart from on-a-later-page;
-    // assume persisted and emit a distinct event so we notice.
-    if (list.length >= REVIEW_LIST_PAGE_CAP) {
-      console.warn(JSON.stringify({
-        event: "pr-review-verify-list-capped",
-        owner, repo, prNumber, review_id: reviewId,
-        submit_path: submitPath,
-        list_size: list.length,
-        note: "listPullRequestReviews returned page cap; cannot confirm review present, defaulting to verified=true.",
-      }))
-      return true
-    }
-    console.warn(JSON.stringify({
-      event: "pr-review-verify-missing",
-      owner, repo, prNumber, review_id: reviewId,
-      submit_path: submitPath,
-      submitted_state: submittedState,
-      list_size: list.length,
-    }))
-    return false
-  } catch (err) {
-    // Network blip / transient 5xx — we'd rather false-positive a
-    // posted review than false-negative one that actually exists.
-    // The Check Run's `success` conclusion stays; if the review
-    // genuinely didn't post, the customer will notice and we can
-    // grep telemetry for `pr-review-verify-error`.
-    console.warn(JSON.stringify({
-      event: "pr-review-verify-error",
-      owner, repo, prNumber, review_id: reviewId,
-      submit_path: submitPath,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-    return true
-  }
-}
-
-async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
-  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
-  }
-  const token = await getInstallationToken({
-    kv: env.OPENCLAW_STATE,
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_PRIVATE_KEY,
-    installationId,
-  })
-  return new GitHubClient({ token })
-}
+// SIG-363 (PR 11): the KV write obligations — the review-provenance manifest
+// (`writeReviewManifestForEnsemble`), the per-day budget counter
+// (`incrementDailyBudget`), and the SLO/FP-rate telemetry record
+// (`writeTelemetry`) — moved to ensemble/adapters/persistence. All were private
+// here → imported-back, not re-exported.
+import {
+  writeReviewManifestForEnsemble,
+  incrementDailyBudget,
+  writeTelemetry,
+} from "./ensemble/adapters/persistence"
 
 // ─── specialist + synth runners (moved) ──────────────────────────────────
 // SIG-362 (PR 10): the specialist runner, the retry-and-fallback executor, the
@@ -8504,14 +8311,4 @@ async function finalize(
     )
   })
   return reviewMeta !== undefined ? { status, telemetry, reviewMeta } : { status, telemetry }
-}
-
-async function writeTelemetry(env: Env, telemetry: EnsembleTelemetry): Promise<void> {
-  const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
-  const key = `ensemble-review-telemetry:${reverseTs}:${telemetry.owner}/${telemetry.repo}#${telemetry.prNumber}`
-  // TTL sourced from TELEMETRY_TTL_DAYS so the write expiry and the fp-rate
-  // unmatched-dismissal classification can't drift (SIG-306).
-  await env.OPENCLAW_STATE.put(key, JSON.stringify(telemetry), {
-    expirationTtl: TELEMETRY_TTL_DAYS * 24 * 60 * 60,
-  })
 }

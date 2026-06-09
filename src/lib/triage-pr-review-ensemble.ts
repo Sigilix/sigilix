@@ -183,7 +183,6 @@ import {
 } from "./validate-refutation-survival"
 import {
   evaluateLogicClaimRefutation,
-  parseLogicClaimRefutationMode,
   type LogicClaimRefutationMode,
   type LogicClaimDropReason,
 } from "./validate-logic-claim-refutation"
@@ -208,7 +207,6 @@ import {
 } from "./validate-absence-grounding"
 import {
   evaluateWindowBlindness,
-  parseWindowBlindnessValidatorMode,
   type WindowBlindnessValidatorMode,
   type WindowBlindnessDropReason,
 } from "./validate-window-blindness"
@@ -515,6 +513,7 @@ import {
 } from "./ensemble/domain/findings"
 import type { PrReviewVerdictWithIds } from "./ensemble/domain/findings"
 import { parseEnsembleConfig } from "./ensemble/config"
+import type { EnsembleConfig } from "./ensemble/domain/config"
 export {
   assignStableFindingIds,
   computeConsensusRanking,
@@ -1238,6 +1237,14 @@ export interface EnsembleHandlerArgs {
   installationId: number
   env: Env
   /**
+   * SIG-318 (PR 5a): the typed, parse-once ensemble settings, produced at the
+   * Worker edge (`parseEnsembleConfig(env)` in src/index.ts) and injected here so
+   * the handler reads config instead of `env.OPENCLAW_*`. Optional: when omitted
+   * (tests / non-edge callers) the handler falls back to parsing `env` itself — a
+   * transitional safety net removed when the orchestrator is thinned (PR 12).
+   */
+  ensembleConfig?: EnsembleConfig
+  /**
    * ARC-251: prior stale-head requeue depth, threaded through by the
    * dispatcher from the JobMessage. Undefined = 0. Forwarded to
    * `handleStaleHead` when either ensemble guard fires.
@@ -1482,6 +1489,20 @@ export function applyAstScanGate<
 
 // ─── orchestrator ──────────────────────────────────────────────────────
 
+/**
+ * SIG-318 (PR 5a): resolve the typed ensemble config. The Worker edge
+ * (src/index.ts) parses it once via `parseEnsembleConfig(env)` and injects it as
+ * `args.ensembleConfig`; callers that omit it (tests / non-edge paths) fall back to
+ * parsing `env` here. The fallback is transitional and is removed when the
+ * orchestrator is thinned (PR 12). Exported so the inject-vs-parse contract is
+ * unit-tested directly.
+ */
+export function resolveEnsembleConfig(
+  args: Pick<EnsembleHandlerArgs, "env" | "ensembleConfig">,
+): EnsembleConfig {
+  return args.ensembleConfig ?? parseEnsembleConfig(args.env)
+}
+
 export async function handlePrReviewEnsemble(
   args: EnsembleHandlerArgs,
 ): Promise<EnsembleResult> {
@@ -1492,6 +1513,9 @@ export async function handlePrReviewEnsemble(
   // queries that may filter on it.
   const mode = "post" as const
   const { owner, repo, prNumber, headSha, installationId, env } = args
+  // SIG-318 (PR 5a): typed config parsed once at the Worker edge and injected via
+  // args (fallback parses env for non-edge callers — transitional, see PR 12).
+  const ensembleConfig = resolveEnsembleConfig(args)
   const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const startMs = Date.now()
   const orchCtrl = new AbortController()
@@ -2316,12 +2340,12 @@ export async function handlePrReviewEnsemble(
     // AST/symbol feature is off, the map stays empty and the gate silently
     // fail-opens (keeps) on every finding, i.e. becomes a no-op.
     const wantWindowBlindness =
-      parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE) !== "off"
+      ensembleConfig.validatorModes.windowBlindnessValidatorMode !== "off"
     // SIG-328: the logic-claim refutation gate also needs the full-file source
     // map for its AST proof — trigger the fetch so it can't silently no-op (and
     // mis-read as "0 would-drops") if the other AST features are ever flipped off.
     const wantLogicClaimRefutation =
-      parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE) !== "off"
+      ensembleConfig.validatorModes.logicClaimRefutationMode !== "off"
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
@@ -2858,12 +2882,10 @@ export async function handlePrReviewEnsemble(
     // promoting. The rule is structurally P2-capped (clampAstEmitScores), so the
     // residual risk we're measuring is middleware-only-authz false positives,
     // never a P0/P1.
-    // SIG-318: env-derived settings parsed ONCE into a typed EnsembleConfig
-    // (the AST security-scan modes for now; the Config grows per cluster and this
-    // parse consolidates to the orchestrator edge as later clusters migrate). The
-    // scanner gates below read config.astScanModes.* instead of env.OPENCLAW_*,
-    // removing the inline env-reading traps.
-    const ensembleConfig = parseEnsembleConfig(env)
+    // SIG-318 (PR 5a): env-derived settings come from the typed EnsembleConfig
+    // resolved once at the top of the handler (parsed at the Worker edge and
+    // injected via args; see resolveEnsembleConfig). The scanner gates below read
+    // ensembleConfig.astScanModes.* — no inline env.OPENCLAW_* reads.
     const authzIdorMode = ensembleConfig.astScanModes.authzIdor
     if (authzIdorMode !== "post") {
       const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")

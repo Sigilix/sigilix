@@ -49,7 +49,8 @@ import {
   completeCheckRun,
   startInProgressCheckRun,
 } from "../src/lib/pr-review-check-run"
-import { GitHubHttpError, type CheckRunAnnotation } from "../src/shared/adapters/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
+import type { CheckRunAnnotation } from "../src/shared/types/github"
 import type { Env } from "../src/shared/types/env"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {

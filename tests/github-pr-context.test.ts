@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { GitHubHttpError, type PullRequestMeta, type PrChangedFile } from "../src/shared/adapters/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
+import type { PullRequestMeta, PrChangedFile } from "../src/shared/types/github"
 
 const mockMethods = {
   getPullRequest: vi.fn(),

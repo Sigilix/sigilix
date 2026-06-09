@@ -20,13 +20,10 @@
 // Linear handler treats this as "no PR fetch happens for this comment"
 // and continues with retrieval-only context.
 
-// SIG-380 / P1a: this adapter must import INWARD only (shared/*) — never from
-// lib/feature code. `BRANCH_STATE_SEGMENT` is owned by `src/lib/index-branch.ts`
-// (`export const BRANCH_STATE_SEGMENT = "__branch__"`); we inline the literal here
-// rather than re-introduce a `shared/adapters -> lib` edge. It's a stable KV-prefix
-// token — keep the two in sync if index-branch ever changes it (a later phase that
-// relocates the index-branch module can collapse this back to a shared import).
-const BRANCH_STATE_SEGMENT = "__branch__"
+// SIG-380 / SIG-318: the keyspace token comes from a pure shared/domain leaf so
+// this adapter imports INWARD only (`shared/*`) — never from `lib` — and shares
+// one definition with `src/lib/index-branch.ts` (no inline drift hazard).
+import { BRANCH_STATE_SEGMENT } from "../../domain/index-keys"
 
 export type InstallationLookup =
   | { ok: true; installationId: number }

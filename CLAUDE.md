@@ -78,7 +78,7 @@ applies to you. This file adds the operating rules specific to working as an age
 ## Model-eval testing (the live specialists)
 
 Some tests run a **real review specialist through a live model** — e.g. the subtle-logic
-recall ruler that measures the logic specialist (`tests/logic-recall-eval.live.test.ts`,
+recall ruler that measures the logic specialist (`e2e/logic-recall-eval.live.test.ts`,
 `npm run logic-recall-eval`). These need a **Turbo-entitled `OLLAMA_API_KEY`** — the same
 Ollama Turbo (`ollama.com`) endpoint prod uses. Put the shared testing key in your
 **gitignored `.dev.vars`**:

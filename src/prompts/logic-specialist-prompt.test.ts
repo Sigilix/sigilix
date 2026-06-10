@@ -1,0 +1,63 @@
+// SIG-245 subtle-logic recall — pins the two logic-lens focus bullets the
+// benchmark showed Sigilix was missing (non-atomic read-modify-write and
+// cross-tier field-name drift), and that both are phrased FP-safe (grounded).
+
+import { describe, expect, it } from "vitest"
+import { SPECIALIST_PROMPTS } from "@/prompts/pr-review-specialists"
+
+describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => {
+  const logic = SPECIALIST_PROMPTS.logic
+
+  it("instructs flagging non-atomic read-modify-write of a shared counter", () => {
+    expect(logic).toContain("non-atomic read-modify-write")
+    // directs an action, not just mentions the term (CodeRabbit)
+    expect(logic).toContain("Flag only when ALL hold")
+    // grounded — require ALL of: shared/persistent, non-atomic, and not transaction/lock-serialized
+    expect(logic).toContain("shared/persistent")
+    expect(logic).toContain("not an in-place SET count = count + 1")
+    expect(logic).toContain("transaction or row lock")
+  })
+
+  it("instructs detecting cross-tier field-name drift (camel/snake mismatch)", () => {
+    expect(logic).toContain("cross-tier field-name drift")
+    // directs detection + grounded gating, not just mentions the term (CodeRabbit)
+    expect(logic).toContain("before flagging")
+    expect(logic).toContain("camelCaseField")
+    expect(logic).toContain("snake_case")
+  })
+
+  it("keeps both bullets FP-safe (confirm against the type/contract; mapping layers are fine)", () => {
+    expect(logic).toContain("Confirm the mismatch against the type or contract")
+    expect(logic).toContain("DTO/mapping layer that renames fields is correct")
+  })
+
+  it("clears same-delivery idempotency while preserving duplicate-operation recall", () => {
+    expect(logic).toContain("IDEMPOTENCY GUARD MAKES A RETRYABLE SIDE EFFECT SAFE")
+    expect(logic).toContain("do NOT also demand an order-status / paid-state guard for that SAME retry hypothesis")
+    expect(logic).toContain("event/message DELIVERY id")
+    expect(logic).toContain("Keep duplicate logical operations in scope")
+    expect(logic).toContain("multiple distinct delivery ids can represent the SAME order / operation")
+    expect(logic).toContain("crypto.randomUUID()")
+    expect(logic).toContain("Stripe webhook handler")
+    expect(logic).toContain("idempotencyKey: event.id")
+  })
+
+  it("states JS/TS return semantics before clearing tail-call reachability claims", () => {
+    expect(logic).toContain("TRACE THE RETURNS BEFORE CLAIMING REACHABILITY")
+    expect(logic).toContain("a `return` inside an `if` block exits the ENCLOSING function/callback")
+    expect(logic).toContain("return res.status(403).end()")
+    expect(logic).toContain("the following `next()` is NOT reached on the forbidden path")
+    expect(logic).toContain("exits the enclosing function/callback, not just the block")
+  })
+
+  it("requires a visible contract before flagging substring search UX semantics", () => {
+    expect(logic).toContain("SEARCH SEMANTICS NEED A VISIBLE CONTRACT")
+    expect(logic).toContain("String.prototype.includes")
+    expect(logic).toContain("includes(\"\")")
+    expect(logic).toContain("This carve-out is ONLY for substring search UX preferences")
+    expect(logic).toContain("division by zero, null dereference, out-of-bounds")
+    expect(logic).toContain("case-insensitive search")
+    expect(logic).toContain("empty queries returning no rows")
+    expect(logic).toContain("explicit contract, test, API comment, or requirement")
+  })
+})

@@ -49,7 +49,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     GITHUB_APP_ID: "1",
     GITHUB_PRIVATE_KEY: "key",
     OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({
-      "Arc-and-Anchor/rema-portal": "12345",
+      "Sigilix/rema-portal": "12345",
     }),
     ...overrides,
   } as Env
@@ -86,7 +86,7 @@ describe("fetchPullRequestContext", () => {
     ] as PrChangedFile[])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 162,
       env: makeEnv(),
@@ -117,7 +117,7 @@ describe("fetchPullRequestContext", () => {
   it("returns not_found when meta call returns 404", async () => {
     mockMethods.getPullRequest.mockRejectedValue(new GitHubHttpError(404, "not found"))
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 999,
       env: makeEnv(),
@@ -128,7 +128,7 @@ describe("fetchPullRequestContext", () => {
   it("returns forbidden when meta call returns 403", async () => {
     mockMethods.getPullRequest.mockRejectedValue(new GitHubHttpError(403, "forbidden"))
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -139,7 +139,7 @@ describe("fetchPullRequestContext", () => {
   it("returns timeout when meta call aborts", async () => {
     mockMethods.getPullRequest.mockRejectedValue(abortError())
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -153,7 +153,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -170,7 +170,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -186,7 +186,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockRejectedValue(abortError())
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -203,7 +203,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockRejectedValue(new GitHubHttpError(403, "forbidden"))
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -220,7 +220,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -240,7 +240,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -264,7 +264,7 @@ describe("fetchPullRequestContext", () => {
     )
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -283,7 +283,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),
@@ -301,7 +301,7 @@ describe("fetchPullRequestContext", () => {
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
     const result = await fetchPullRequestContext({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 1,
       env: makeEnv(),

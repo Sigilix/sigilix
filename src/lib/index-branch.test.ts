@@ -63,27 +63,27 @@ describe("index branch helpers", () => {
 
   it("parses branch namespaces into encoded segments (branch name irrecoverable)", async () => {
     const encoded = await encodeBranchName("dev")
-    expect(parseBranchNamespace(`arc-and-anchor/sigilix/__branch__/${encoded}`)).toEqual({
-      owner: "arc-and-anchor",
+    expect(parseBranchNamespace(`sigilix/sigilix/__branch__/${encoded}`)).toEqual({
+      owner: "sigilix",
       repo: "sigilix",
       encodedBranch: encoded,
-      namespace: `arc-and-anchor/sigilix/__branch__/${encoded}`,
+      namespace: `sigilix/sigilix/__branch__/${encoded}`,
     })
-    expect(parseBranchNamespace("arc-and-anchor/sigilix")).toBeNull()
+    expect(parseBranchNamespace("sigilix/sigilix")).toBeNull()
     // Legacy variable-length encodings no longer parse.
-    expect(parseBranchNamespace("arc-and-anchor/sigilix/__branch__/h646576")).toBeNull()
+    expect(parseBranchNamespace("sigilix/sigilix/__branch__/h646576")).toBeNull()
   })
 
   it("resolves default branches to the existing repo namespace", async () => {
     expect(await resolveIndexTarget({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       defaultBranch: "main",
       branch: "main",
     })).toMatchObject({
       branch: "main",
       stateRepo: "sigilix",
-      namespace: "arc-and-anchor/sigilix",
+      namespace: "sigilix/sigilix",
       isDefault: true,
     })
   })
@@ -91,14 +91,14 @@ describe("index branch helpers", () => {
   it("resolves non-default branches to isolated state and namespace", async () => {
     const encoded = await encodeBranchName("dev")
     expect(await resolveIndexTarget({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       defaultBranch: "main",
       branch: "dev",
     })).toMatchObject({
       branch: "dev",
       stateRepo: `sigilix/__branch__/${encoded}`,
-      namespace: `arc-and-anchor/sigilix/__branch__/${encoded}`,
+      namespace: `sigilix/sigilix/__branch__/${encoded}`,
       isDefault: false,
     })
     expect(isBranchStateRepo(`sigilix/__branch__/${encoded}`)).toBe(true)

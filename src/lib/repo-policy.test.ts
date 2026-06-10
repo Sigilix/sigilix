@@ -16,8 +16,8 @@ describe("parseSensitiveRepos", () => {
   })
 
   it("parses a single entry", () => {
-    const set = parseSensitiveRepos("Arc-and-Anchor/private")
-    expect(set.has("arc-and-anchor/private")).toBe(true)
+    const set = parseSensitiveRepos("Sigilix/private")
+    expect(set.has("sigilix/private")).toBe(true)
     expect(set.size).toBe(1)
   })
 
@@ -36,12 +36,12 @@ describe("parseSensitiveRepos", () => {
 
 describe("isRepoSensitive", () => {
   it("returns false when env is unset (no sensitive repos by default)", () => {
-    expect(isRepoSensitive(undefined, "Arc-and-Anchor", "anything")).toBe(false)
-    expect(isRepoSensitive("", "Arc-and-Anchor", "anything")).toBe(false)
+    expect(isRepoSensitive(undefined, "Sigilix", "anything")).toBe(false)
+    expect(isRepoSensitive("", "Sigilix", "anything")).toBe(false)
   })
 
   it("returns true for an exact-match sensitive repo", () => {
-    expect(isRepoSensitive("Arc-and-Anchor/private", "Arc-and-Anchor", "private")).toBe(true)
+    expect(isRepoSensitive("Sigilix/private", "Sigilix", "private")).toBe(true)
   })
 
   it("matches case-insensitively", () => {

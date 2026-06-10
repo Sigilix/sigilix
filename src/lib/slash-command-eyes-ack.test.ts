@@ -49,14 +49,14 @@ describe("postSlashCommandEyesAck — surface routing", () => {
     addReactionToReviewCommentMock.mockClear()
     await postSlashCommandEyesAck({
       env: makeEnv(),
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       commentId: 4242,
       surface: "issue",
       installationId: 99,
     })
     expect(addReactionToIssueCommentMock).toHaveBeenCalledOnce()
-    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 4242, "eyes")
+    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 4242, "eyes")
     expect(addReactionToReviewCommentMock).not.toHaveBeenCalled()
   })
 
@@ -65,14 +65,14 @@ describe("postSlashCommandEyesAck — surface routing", () => {
     addReactionToReviewCommentMock.mockClear()
     await postSlashCommandEyesAck({
       env: makeEnv(),
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       commentId: 4242,
       surface: "review-comment",
       installationId: 99,
     })
     expect(addReactionToReviewCommentMock).toHaveBeenCalledOnce()
-    expect(addReactionToReviewCommentMock).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 4242, "eyes")
+    expect(addReactionToReviewCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 4242, "eyes")
     expect(addReactionToIssueCommentMock).not.toHaveBeenCalled()
   })
 })
@@ -85,7 +85,7 @@ describe("postSlashCommandEyesAck — failure swallow", () => {
     await expect(
       postSlashCommandEyesAck({
         env: makeEnv(),
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         commentId: 4242,
         surface: "issue",
@@ -102,7 +102,7 @@ describe("postSlashCommandEyesAck — failure swallow", () => {
     await expect(
       postSlashCommandEyesAck({
         env: makeEnv(),
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         commentId: 4242,
         surface: "issue",
@@ -122,7 +122,7 @@ describe("postSlashCommandEyesAck — failure swallow", () => {
     await expect(
       postSlashCommandEyesAck({
         env,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         commentId: 4242,
         surface: "issue",

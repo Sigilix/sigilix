@@ -25,7 +25,7 @@ import { encodeBranchName } from "@/src/lib/index-branch"
 
 function basePr(overrides: Partial<PrContext> = {}): PrContext {
   return {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "rema-portal",
     number: 162,
     title: "Port headless logic",
@@ -41,7 +41,7 @@ function basePr(overrides: Partial<PrContext> = {}): PrContext {
 describe("renderPrContext — happy path", () => {
   it("renders all sections with correct attributes", () => {
     const out = renderPrContext(basePr())
-    expect(out).toContain('owner="Arc-and-Anchor"')
+    expect(out).toContain('owner="Sigilix"')
     expect(out).toContain('repo="rema-portal"')
     expect(out).toContain('number="162"')
     expect(out).toContain('state="merged"')
@@ -137,7 +137,7 @@ describe("renderPrContext — adversarial XML injection", () => {
 describe("renderPrUnavailable — failed-fetch placeholder", () => {
   function failure(overrides: Partial<LinkedPrFailure> = {}): LinkedPrFailure {
     return {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
       number: 162,
       reason: "not_found",
@@ -148,7 +148,7 @@ describe("renderPrUnavailable — failed-fetch placeholder", () => {
   it("renders a self-closing tag with owner/repo/number/reason", () => {
     const out = renderPrUnavailable(failure())
     expect(out).toBe(
-      '<pr_unavailable owner="Arc-and-Anchor" repo="rema-portal" number="162" reason="not_found" />'
+      '<pr_unavailable owner="Sigilix" repo="rema-portal" number="162" reason="not_found" />'
     )
   })
 
@@ -217,25 +217,25 @@ describe("resolveLinearAgentRepoScope", () => {
   it("scopes Linear agent availableRepos to the requesting tenant owner", async () => {
     // SIG-218: bounded-length encoded branch segment.
     const encodedDev = await encodeBranchName("dev")
-    const branchRepo = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
+    const branchRepo = `sigilix/sigilix/__branch__/${encodedDev}`
     const env = makeEnv([
-      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:sigilix/sigilix",
       `repo-index-manifest:${branchRepo}`,
-      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:sigilix/rubberfit",
       "repo-index-manifest:acme/sigilix",
     ])
 
     const scope = await resolveLinearAgentRepoScope(env, {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
     })
 
     expect(scope).toEqual({
-      repo: "arc-and-anchor/sigilix",
-      mappedRepo: "arc-and-anchor/sigilix",
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
       availableRepos: [
-        "arc-and-anchor/rubberfit",
-        "arc-and-anchor/sigilix",
+        "sigilix/rubberfit",
+        "sigilix/sigilix",
         branchRepo,
       ],
       status: "mapped_indexed",
@@ -294,15 +294,15 @@ describe("resolveLinearAgentRepoScope", () => {
   })
 
   it("keeps tenant repos available but clears the default when it is not indexed", async () => {
-    const env = makeEnv(["repo-index-manifest:arc-and-anchor/rubberfit"])
+    const env = makeEnv(["repo-index-manifest:sigilix/rubberfit"])
 
     await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
     })).resolves.toEqual({
       repo: null,
-      mappedRepo: "arc-and-anchor/sigilix",
-      availableRepos: ["arc-and-anchor/rubberfit"],
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/rubberfit"],
       status: "mapped_default_not_indexed",
     })
   })
@@ -312,10 +312,10 @@ describe("resolveLinearAgentRepoScope", () => {
       OPENCLAW_STATE: {
         list: async (): Promise<Page> => ({ keys: [], list_complete: true }),
         get: async (key: string): Promise<string | null> => {
-          if (key !== "repo-index-manifest:arc-and-anchor/sigilix") return null
+          if (key !== "repo-index-manifest:sigilix/sigilix") return null
           return JSON.stringify({
             v: 1,
-            owner: "Arc-and-Anchor",
+            owner: "Sigilix",
             repo: "sigilix",
             headSha: "h",
             runId: "run",
@@ -334,12 +334,12 @@ describe("resolveLinearAgentRepoScope", () => {
     }
 
     await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
     })).resolves.toMatchObject({
-      repo: "arc-and-anchor/sigilix",
-      mappedRepo: "arc-and-anchor/sigilix",
-      availableRepos: ["arc-and-anchor/sigilix"],
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/sigilix"],
       status: "mapped_indexed",
     })
   })
@@ -351,10 +351,10 @@ describe("resolveLinearAgentRepoScope", () => {
           throw new Error("KV list transient")
         },
         get: async (key: string): Promise<string | null> => {
-          if (key !== "repo-index-manifest:arc-and-anchor/sigilix") return null
+          if (key !== "repo-index-manifest:sigilix/sigilix") return null
           return JSON.stringify({
             v: 1,
-            owner: "Arc-and-Anchor",
+            owner: "Sigilix",
             repo: "sigilix",
             headSha: "h",
             runId: "run",
@@ -373,12 +373,12 @@ describe("resolveLinearAgentRepoScope", () => {
     }
 
     await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
     })).resolves.toMatchObject({
-      repo: "arc-and-anchor/sigilix",
-      mappedRepo: "arc-and-anchor/sigilix",
-      availableRepos: ["arc-and-anchor/sigilix"],
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/sigilix"],
       status: "mapped_indexed",
     })
   })
@@ -487,19 +487,19 @@ describe("buildAgentInitialUserMessage", () => {
   it("SIG-221: single indexed repo names it as the default soft prior", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
-      repo: "arc-and-anchor/sigilix",
-      mappedRepo: "arc-and-anchor/sigilix",
-      availableRepos: ["arc-and-anchor/sigilix"],
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/sigilix"],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/sigilix'")
-    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("[INDEXED REPOS] 'sigilix/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] sigilix/sigilix")
     // SIG-221: single-repo prompt now uses the unified universe-aware
     // variant — the default is named as a soft prior but the agent
     // still gets the indexed-list framing for consistency.
     expect(out).toContain("retrieve_codebase takes a 'repo' argument")
-    expect(out).toContain("default for this Linear team is 'arc-and-anchor/sigilix'")
+    expect(out).toContain("default for this Linear team is 'sigilix/sigilix'")
   })
 
   it("describes multiple indexed repos and names the default namespace", async () => {
@@ -507,23 +507,23 @@ describe("buildAgentInitialUserMessage", () => {
     // longer recoverable from the namespace, so the prompt renders the
     // structural shape "(non-default branch index)" instead of "branch 'dev'".
     const encodedDev = await encodeBranchName("dev")
-    const branchRepo = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
+    const branchRepo = `sigilix/sigilix/__branch__/${encodedDev}`
     const out = buildAgentInitialUserMessage({
       ...base,
-      repo: "arc-and-anchor/sigilix",
-      mappedRepo: "arc-and-anchor/sigilix",
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
       availableRepos: [
-        "arc-and-anchor/rubberfit",
-        "arc-and-anchor/sigilix",
+        "sigilix/rubberfit",
+        "sigilix/sigilix",
         branchRepo,
       ],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix' (non-default branch index)")
-    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("[INDEXED REPOS] 'sigilix/rubberfit', 'sigilix/sigilix', 'sigilix/sigilix' (non-default branch index)")
+    expect(out).toContain("[DEFAULT REPO] sigilix/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
-    expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
+    expect(out).toContain("The default for this Linear team is 'sigilix/sigilix'")
     // SIG-221: default is a soft prior — agent picks a different repo when
     // the question is about one.
     expect(out).toContain("pick a different repo from the list when the question is about one")
@@ -535,41 +535,41 @@ describe("buildAgentInitialUserMessage", () => {
   it("caps the prompt-visible namespace list without dropping the default repo", () => {
     const availableRepos = Array.from(
       { length: 52 },
-      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+      (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`,
     )
     const out = buildAgentInitialUserMessage({
       ...base,
-      repo: "arc-and-anchor/repo-00",
-      mappedRepo: "arc-and-anchor/repo-00",
+      repo: "sigilix/repo-00",
+      mappedRepo: "sigilix/repo-00",
       availableRepos,
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("'arc-and-anchor/repo-00'")
-    expect(out).toContain("'arc-and-anchor/repo-49'")
+    expect(out).toContain("'sigilix/repo-00'")
+    expect(out).toContain("'sigilix/repo-49'")
     expect(out).toContain("... (+2 more)")
-    expect(out).not.toContain("'arc-and-anchor/repo-50'")
-    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-00")
+    expect(out).not.toContain("'sigilix/repo-50'")
+    expect(out).toContain("[DEFAULT REPO] sigilix/repo-00")
   })
 
   it("keeps the default repo visible when it falls after the namespace cap", () => {
     const availableRepos = Array.from(
       { length: 52 },
-      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+      (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`,
     )
     const out = buildAgentInitialUserMessage({
       ...base,
-      repo: "arc-and-anchor/repo-51",
-      mappedRepo: "arc-and-anchor/repo-51",
+      repo: "sigilix/repo-51",
+      mappedRepo: "sigilix/repo-51",
       availableRepos,
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("'arc-and-anchor/repo-00'")
-    expect(out).not.toContain("'arc-and-anchor/repo-49'")
-    expect(out).toContain("'arc-and-anchor/repo-51'")
+    expect(out).toContain("'sigilix/repo-00'")
+    expect(out).not.toContain("'sigilix/repo-49'")
+    expect(out).toContain("'sigilix/repo-51'")
     expect(out).toContain("... (+2 more)")
-    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-51")
+    expect(out).toContain("[DEFAULT REPO] sigilix/repo-51")
   })
 
   it("describes indexed repos without a default and tells the agent to choose by subject", () => {
@@ -578,13 +578,13 @@ describe("buildAgentInitialUserMessage", () => {
       repo: null,
       mappedRepo: null,
       availableRepos: [
-        "arc-and-anchor/rubberfit",
-        "arc-and-anchor/sigilix",
+        "sigilix/rubberfit",
+        "sigilix/sigilix",
       ],
       repoStatus: "unmapped",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[INDEXED REPOS] 'sigilix/rubberfit', 'sigilix/sigilix'")
     expect(out).toContain("[DEFAULT REPO] (none configured)")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("Pick the indexed choice that best matches the issue's subject")
@@ -598,13 +598,13 @@ describe("buildAgentInitialUserMessage", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
-      mappedRepo: "arc-and-anchor/sigilix",
+      mappedRepo: "sigilix/sigilix",
       availableRepos: [],
       repoStatus: "mapped_not_indexed",
     })
 
-    expect(out).toContain("[MAPPED REPO] arc-and-anchor/sigilix")
-    expect(out).toContain("[DEFAULT REPO] (not indexed: arc-and-anchor/sigilix)")
+    expect(out).toContain("[MAPPED REPO] sigilix/sigilix")
+    expect(out).toContain("[DEFAULT REPO] (not indexed: sigilix/sigilix)")
     expect(out).toContain("indexing may be in progress")
     expect(out).toContain("Answer from the issue and thread context only")
     // SIG-221: the hard "Do not call retrieve_codebase" gate is removed.

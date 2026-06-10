@@ -38,20 +38,20 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     // Sanity baseline for the orphan test below: the modern key shape
     // purges cleanly.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
     expect(result.status).toBe("complete")
     expect(result.vectorIds).toBe(3)
     expect(deletedBatches).toHaveLength(1)
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(false)
   })
 
   it("deletes an ORPHANED OLD-shape (bare <repo>) record when manifest.owner matches", async () => {
@@ -64,11 +64,11 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
     store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors()))
     // No new-shape record exists.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -90,8 +90,8 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     // different namespaces, so both id sets must be deleteByIds'd and
     // both KV keys removed.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     // Same-owner legacy orphan with DIFFERENT (old-namespace) ids.
     store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
     store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors({
@@ -100,7 +100,7 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -110,23 +110,23 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     const allDeleted = new Set(deletedBatches.flat())
     expect(allDeleted).toEqual(new Set(["id-a1", "id-a2", "id-b1", "old-id-1", "old-id-2"]))
     // All four KV keys gone.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(false)
     expect(store.has(legacyRepoIndexManifestKey("sigilix"))).toBe(false)
     expect(store.has(legacyRepoIndexVectorsKey("sigilix"))).toBe(false)
   })
 
   it("keeps a coexisting DIFFERENT-owner legacy orphan untouched while purging the new-shape record", async () => {
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     // Legacy orphan belongs to a DIFFERENT tenant — must survive.
     store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
     store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -135,8 +135,8 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     expect(result.vectorIds).toBe(3)
     expect(new Set(deletedBatches.flat())).toEqual(new Set(["id-a1", "id-a2", "id-b1"]))
     // New-shape gone, other tenant's legacy orphan survives.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(false)
     expect(store.has(legacyRepoIndexManifestKey("sigilix"))).toBe(true)
     expect(store.has(legacyRepoIndexVectorsKey("sigilix"))).toBe(true)
   })
@@ -145,7 +145,7 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     // The legacy bare key `repo-index-vectors:sigilix` is exactly where a
     // genuine cross-tenant collision can still occur post-SIG-132: two
     // orgs each indexed a repo named `sigilix` pre-migration. When
-    // Arc-and-Anchor uninstalls, a `different-org`-owned orphan under the
+    // Sigilix uninstalls, a `different-org`-owned orphan under the
     // shared bare key MUST survive.
     const { kv, store } = makeKvStub()
     store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
@@ -153,7 +153,7 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -172,12 +172,12 @@ describe("handleInstallationDeleted — SIG-132 orphan discovery", () => {
     // that prefix. Discovery matches on the manifest BODY's owner (not
     // the key shape) so the orphan is found and fanned out to delete.
     const { kv, store } = makeKvStub()
-    store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest({ repo: "sigilix", owner: "Arc-and-Anchor" })))
-    store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors({ repo: "sigilix", owner: "Arc-and-Anchor" })))
+    store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest({ repo: "sigilix", owner: "Sigilix" })))
+    store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors({ repo: "sigilix", owner: "Sigilix" })))
 
     const { env } = makeEnv({ kv })
     const { results, anyError } = await handleInstallationDeleted({
-      env, installationId: 99, ownerLogin: "Arc-and-Anchor",
+      env, installationId: 99, ownerLogin: "Sigilix",
     })
 
     expect(anyError).toBe(false)
@@ -192,40 +192,40 @@ describe("handleInstallationDeleted — SIG-132 orphan discovery", () => {
 describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
   it("invokes deleteGraph for the resolved owner/repo on a normal uninstall", async () => {
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
     expect(result.status).toBe("complete")
     // The graph stub records the DO namespace string (indexNamespace(owner, repo)).
-    // indexNamespace lowercases: "arc-and-anchor/sigilix".
+    // indexNamespace lowercases: "sigilix/sigilix".
     expect(graphDeletedNamespaces).toHaveLength(1)
-    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    expect(graphDeletedNamespaces[0]).toBe("sigilix/sigilix")
   })
 
   it("graph delete runs even when OPENCLAW_INDEXER_ENABLED is absent (ungated by indexer flag)", async () => {
     // The delete path must not check OPENCLAW_INDEXER_ENABLED. Verify by
     // ensuring the graph delete fires on an env that does NOT define the flag.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     // Explicitly confirm the flag is absent on the env stub.
     expect((env as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
 
     await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-repos-removed",
     })
 
     expect(graphDeletedNamespaces).toHaveLength(1)
-    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    expect(graphDeletedNamespaces[0]).toBe("sigilix/sigilix")
   })
 
   it("graph delete fires for the requested owner/repo even when safeToTouchRepoOnlyState is false (owner mismatch)", async () => {
@@ -235,35 +235,35 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     // it must NOT gate the graph delete. Repo-only KV/vector cleanup is still
     // skipped on mismatch.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
     expect(result.status).toBe("owner-mismatch-skip")
     // Repo-only KV/vector records are protected (different owner).
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(true)
     // Graph delete DOES fire for the requested namespace (tenant-safe by design).
     expect(graphDeletedNamespaces).toHaveLength(1)
-    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    expect(graphDeletedNamespaces[0]).toBe("sigilix/sigilix")
   })
 
   it("graph delete failure is best-effort: logs an error and sets status=partial but other arms complete", async () => {
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
 
     const { env, deletedBatches } = makeEnv({
       kv,
       graphDeleteImpl: async () => { throw new Error("DO unavailable") },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -285,8 +285,8 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     // indexNamespace(owner, repo), not the vector id-list, so there is no
     // stranding risk and deferral serves no purpose.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
 
     const { env, graphDeletedNamespaces } = makeEnv({
       kv,
@@ -295,7 +295,7 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
       },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -305,12 +305,12 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(result.errors.some((e) => e.includes("vectorize.deleteByIds"))).toBe(true)
     expect(result.vectorsKvDeleted).toBe(false)
     expect(result.manifestDeleted).toBe(false)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(true)
 
     // Graph delete still fired unconditionally (owner guard passed).
     expect(graphDeletedNamespaces).toHaveLength(1)
-    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    expect(graphDeletedNamespaces[0]).toBe("sigilix/sigilix")
   })
 
   it("owner-mismatch AND graph delete throws → status=partial (not owner-mismatch-skip)", async () => {
@@ -324,15 +324,15 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     // owner-mismatch label so callers surface a 503 and GitHub
     // redelivers for the failed compliance delete.
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
 
     const { env } = makeEnv({
       kv,
       graphDeleteImpl: async () => { throw new Error("DO write failed") },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -341,8 +341,8 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(result.errors.some((e) => e.includes("graph.delete"))).toBe(true)
     // Repo-only state (KV/Vectorize) is still protected — the owner guard
     // correctly blocked those arms.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(true)
   })
 
   it("owner-mismatch AND graph delete succeeds → status=owner-mismatch-skip (happy path unaffected)", async () => {
@@ -350,12 +350,12 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     // where owner mismatch AND graph delete succeeds — that should remain
     // "owner-mismatch-skip" (no errors in result.errors).
     const { kv, store } = makeKvStub()
-    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
-    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      env, owner: "Sigilix", repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -364,9 +364,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(result.errors).toEqual([])
     // Graph delete still fired.
     expect(graphDeletedNamespaces).toHaveLength(1)
-    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    expect(graphDeletedNamespaces[0]).toBe("sigilix/sigilix")
     // Repo-only KV untouched.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
-    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Sigilix", "sigilix"))).toBe(true)
   })
 })

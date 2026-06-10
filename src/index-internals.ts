@@ -364,11 +364,11 @@ export interface QueueGithubMentionArgs {
  * `pull_request_review_comment.created`:
  *
  *   1. PR number + comment id are present
- *   2. comment author is NOT Arc itself (prevents reply loops)
- *   3. EITHER body @-mentions Arc, OR (review-comment surface AND has
+ *   2. comment author is NOT Sigilix itself (prevents reply loops)
+ *   3. EITHER body @-mentions Sigilix, OR (review-comment surface AND has
  *      `in_reply_to_id`) — the second branch is the cheap webhook
- *      signal for "this might be a reply in Arc's thread"; the
- *      handler does the actual chain walk to confirm Arc was above.
+ *      signal for "this might be a reply in Sigilix's thread"; the
+ *      handler does the actual chain walk to confirm Sigilix was above.
  *      Wasted-queue cost is tiny (Cloudflare Queues are ~$0.40/M
  *      messages); the upside is users don't have to retype @arc on
  *      every reply.
@@ -386,7 +386,7 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
   if (typeof prNumber !== "number") {
     return new Response("missing pr number\n", { status: 400 })
   }
-  // Self-author guard runs BEFORE the mention check so Arc's own
+  // Self-author guard runs BEFORE the mention check so Sigilix's own
   // replies (which obviously have `in_reply_to_id` on review-comment)
   // can't open a feedback loop via the implicit-thread path.
   if (isArcGithubLogin(comment.user?.login ?? null)) {

@@ -14,7 +14,7 @@ import {
   type CurrentPrInput,
 } from "@/src/lib/pr-stack"
 
-const REPO = "Arc-and-Anchor/sigilix"
+const REPO = "Sigilix/sigilix"
 
 function pr(
   n: number,

@@ -169,7 +169,7 @@ describe("prepareSubmissionAffordance", () => {
     const puts: Array<[string, string]> = []
     const affordance = await prepareSubmissionAffordance({
       env: makeCounterEnv(store, puts),
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 168,
       event: "COMMENT",
@@ -182,19 +182,19 @@ describe("prepareSubmissionAffordance", () => {
   })
 
   it("renders REQUEST_CHANGES counters only after the posted review is confirmed", async () => {
-    const key = "pr-review-counter:Arc-and-Anchor/sigilix#168"
+    const key = "pr-review-counter:Sigilix/sigilix#168"
     const store = new Map<string, string>([[key, "7"]])
     const puts: Array<[string, string]> = []
     const affordance = await prepareSubmissionAffordance({
       env: makeCounterEnv(store, puts),
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 168,
       event: "REQUEST_CHANGES",
     })
 
     expect(affordance.reviewCounter).toBe(8)
-    expect(affordance.retriggerUrl).toBe("https://github.com/Arc-and-Anchor/sigilix/pull/168")
+    expect(affordance.retriggerUrl).toBe("https://github.com/Sigilix/sigilix/pull/168")
     expect(store.get(key)).toBe("7")
     expect(puts).toHaveLength(0)
 

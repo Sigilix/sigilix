@@ -593,7 +593,7 @@ describe("scoped-rules KV read fails open on transient errors", () => {
 
   it("readScopedRulesManifest tags KV throws as kind=kv-error (does not propagate)", async () => {
     const env = makeEnvWithFailingGet("KV outage")
-    const result = await readScopedRulesManifest(env, "Arc-and-Anchor", "sigilix")
+    const result = await readScopedRulesManifest(env, "Sigilix", "sigilix")
     expect(result.kind).toBe("kv-error")
     if (result.kind === "kv-error") {
       expect(result.err).toContain("KV outage")
@@ -603,7 +603,7 @@ describe("scoped-rules KV read fails open on transient errors", () => {
   it("loadCompiledScopedRulesManifest returns an empty manifest + emits telemetry on KV throw", async () => {
     const env = makeEnvWithFailingGet("transient KV failure")
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    const compiled = await loadCompiledScopedRulesManifest(env, "Arc-and-Anchor", "sigilix")
+    const compiled = await loadCompiledScopedRulesManifest(env, "Sigilix", "sigilix")
     // Empty manifest — orchestrator treats this as "no scoped rules
     // configured", same as the missing/invalid cases.
     expect(compiled.perDirectoryRules).toEqual([])
@@ -613,7 +613,7 @@ describe("scoped-rules KV read fails open on transient errors", () => {
     const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
     const readFailed = events.find((e) => e.event === "scoped-rules-manifest-read-failed")
     expect(readFailed).toBeDefined()
-    expect(readFailed.owner).toBe("Arc-and-Anchor")
+    expect(readFailed.owner).toBe("Sigilix")
     expect(readFailed.repo).toBe("sigilix")
     expect(typeof readFailed.err).toBe("string")
     warnSpy.mockRestore()
@@ -623,8 +623,8 @@ describe("scoped-rules KV read fails open on transient errors", () => {
     // Sanity that the imported helper still produces the documented
     // shape — pinning the key contract so a future rename to the KV
     // prefix doesn't silently drift between writer + reader.
-    expect(scopedRulesKey("Arc-and-Anchor", "Sigilix")).toBe(
-      "repo-index-rules:arc-and-anchor/sigilix",
+    expect(scopedRulesKey("Sigilix", "Sigilix")).toBe(
+      "repo-index-rules:sigilix/sigilix",
     )
   })
 })

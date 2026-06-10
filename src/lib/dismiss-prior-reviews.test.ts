@@ -64,7 +64,7 @@ afterEach(() => {
 })
 
 const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 42,
   currentReviewId: 1000,

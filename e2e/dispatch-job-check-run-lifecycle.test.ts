@@ -68,7 +68,7 @@ function makeEnv(): Env {
 
 const job: JobMessage = {
   type: "pr-review",
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 237,
   headSha: "a".repeat(40),

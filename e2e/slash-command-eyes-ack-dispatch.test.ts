@@ -27,7 +27,7 @@ function makePayload(opts: FakePayloadOpts = {}) {
   return {
     action: "created",
     installation: { id: 99 },
-    repository: { name: "sigilix", owner: { login: "Arc-and-Anchor" } },
+    repository: { name: "sigilix", owner: { login: "Sigilix" } },
     issue: { number: 7, pull_request: { url: "..." } },
     comment: {
       id: opts.commentId ?? 4242,
@@ -41,7 +41,7 @@ function makePayload(opts: FakePayloadOpts = {}) {
 function makeEnv(opts: { coalesceKeyExists?: boolean } = {}): { env: Env; queueSent: unknown[] } {
   const store = new Map<string, string>()
   if (opts.coalesceKeyExists) {
-    store.set("slash-cmd:help:Arc-and-Anchor/sigilix#7", String(Date.now()))
+    store.set("slash-cmd:help:Sigilix/sigilix#7", String(Date.now()))
   }
   const queueSent: unknown[] = []
   const env = {
@@ -71,14 +71,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     const res = await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "MEMBER" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(1)
     expect(eyesAckDispatchMock).toHaveBeenCalledOnce()
     expect(eyesAckDispatchMock).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       commentId: 4242,
       surface: "issue",
@@ -92,14 +92,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     const res = await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix review", authorAssoc: "MEMBER" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(1)
     expect(queueSent[0]).toMatchObject({
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
     })
@@ -112,7 +112,7 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     const res = await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "FIRST_TIME_CONTRIBUTOR" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(res.status).toBe(403)
@@ -126,7 +126,7 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     const res = await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "MEMBER" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(res.status).toBe(202)
@@ -140,7 +140,7 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     const res = await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "@sigilix what does this do?" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(res.status).toBe(202)
@@ -165,7 +165,7 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix describe garbage", authorAssoc: "MEMBER" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "issue", prNumber: 7,
     })
     expect(queueSent).toHaveLength(0)
@@ -179,7 +179,7 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     await queueGithubMention({
       env, ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix improve", authorAssoc: "OWNER" }),
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      owner: "Sigilix", repo: "sigilix", installationId: 99,
       surface: "review-comment", prNumber: 7,
     })
     expect(eyesAckDispatchMock).toHaveBeenCalledWith(expect.objectContaining({

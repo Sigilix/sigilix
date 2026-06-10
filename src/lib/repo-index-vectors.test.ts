@@ -36,7 +36,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 const SAMPLE_VECTORS: RepoIndexVectorsV1 = {
   v: 1,
   repo: "sigilix",
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   runId: "0123456789abcdef",
   byPath: {
     "src/a.ts": ["aaa", "bbb"],
@@ -46,8 +46,8 @@ const SAMPLE_VECTORS: RepoIndexVectorsV1 = {
 
 describe("repoIndexVectorsKey", () => {
   it("keys by the lowercased <owner>/<repo> namespace", () => {
-    expect(repoIndexVectorsKey("Arc-and-Anchor", "Sigilix")).toBe(
-      "repo-index-vectors:arc-and-anchor/sigilix",
+    expect(repoIndexVectorsKey("Sigilix", "Sigilix")).toBe(
+      "repo-index-vectors:sigilix/sigilix",
     )
     expect(repoIndexVectorsKey("ACME", "API")).toBe("repo-index-vectors:acme/api")
   })
@@ -59,15 +59,15 @@ describe("writeRepoIndexVectors — SIG-243 Phase 2b dual-write", () => {
     const withId: RepoIndexVectorsV1 = { ...SAMPLE_VECTORS, githubRepoId: 808247824 }
     const ok = await writeRepoIndexVectors(makeEnv(kv), withId)
     expect(ok).toBe(true)
-    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-vectors:sigilix/sigilix")).toBe(true)
     expect(store.has("repo-vectors:808247824")).toBe(true)
-    expect(store.get("repo-vectors:808247824")).toBe(store.get("repo-index-vectors:arc-and-anchor/sigilix"))
+    expect(store.get("repo-vectors:808247824")).toBe(store.get("repo-index-vectors:sigilix/sigilix"))
   })
 
   it("does NOT dual-write when githubRepoId is absent (legacy path)", async () => {
     const { kv, store } = makeKvStub()
     await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
-    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-vectors:sigilix/sigilix")).toBe(true)
     expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
   })
 
@@ -110,7 +110,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
       kind: "ok" as const,
       vectors: {
         v: 1 as const,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         githubRepoId: 808247824,
         runId: "0123456789abcdef",
@@ -119,7 +119,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     }
     const outcome = computeMerge({
       existing,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       githubRepoId: undefined, // continuation shard didn't carry it
       runId: "0123456789abcdef", // same run as the stored record
@@ -143,7 +143,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
       kind: "ok" as const,
       vectors: {
         v: 1 as const,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         githubRepoId: 999999999,
         runId: "0123456789abcdef",
@@ -152,7 +152,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     }
     const outcome = computeMerge({
       existing,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       githubRepoId: 808247824,
       runId: "0123456789abcdef",
@@ -176,7 +176,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
       kind: "ok" as const,
       vectors: {
         v: 1 as const,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         githubRepoId: 0,
         runId: "0123456789abcdef",
@@ -185,7 +185,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     }
     const outcome = computeMerge({
       existing: corrupt,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       githubRepoId: undefined,
       runId: "0123456789abcdef",
@@ -204,7 +204,7 @@ describe("read/write round-trip", () => {
     const { kv } = makeKvStub()
     const ok = await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
     expect(ok).toBe(true)
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.vectors).toEqual(SAMPLE_VECTORS)
@@ -213,14 +213,14 @@ describe("read/write round-trip", () => {
 
   it("returns missing when no record exists", async () => {
     const { kv } = makeKvStub()
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "nothing")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "nothing")
     expect(result.kind).toBe("missing")
   })
 
   it("returns invalid/json-parse for non-JSON", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:arc-and-anchor/sigilix", "{not json")
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-vectors:sigilix/sigilix", "{not json")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("json-parse")
   })
@@ -228,10 +228,10 @@ describe("read/write round-trip", () => {
   it("returns invalid/wrong-version for v0 records", async () => {
     const { kv, store } = makeKvStub()
     store.set(
-      "repo-index-vectors:arc-and-anchor/sigilix",
+      "repo-index-vectors:sigilix/sigilix",
       JSON.stringify({ ...SAMPLE_VECTORS, v: 2 }),
     )
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("wrong-version")
   })
@@ -240,19 +240,19 @@ describe("read/write round-trip", () => {
     const { kv, store } = makeKvStub()
     const bad = { ...SAMPLE_VECTORS } as Partial<RepoIndexVectorsV1>
     delete bad.owner
-    store.set("repo-index-vectors:arc-and-anchor/sigilix", JSON.stringify(bad))
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-vectors:sigilix/sigilix", JSON.stringify(bad))
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("shape")
   })
 
   it("returns invalid/shape on non-array byPath value", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:arc-and-anchor/sigilix", JSON.stringify({
+    store.set("repo-index-vectors:sigilix/sigilix", JSON.stringify({
       ...SAMPLE_VECTORS,
       byPath: { "src/a.ts": "not-an-array" },
     }))
-    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("shape")
   })
@@ -260,15 +260,15 @@ describe("read/write round-trip", () => {
   it("deleteRepoIndexVectors removes the record under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
     await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
-    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
-    await deleteRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
-    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(false)
+    expect(store.has("repo-index-vectors:sigilix/sigilix")).toBe(true)
+    await deleteRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
+    expect(store.has("repo-index-vectors:sigilix/sigilix")).toBe(false)
   })
 })
 
 describe("computeMerge — run-aware semantics", () => {
   const base = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     runId: "run-A",
     activeRunId: "run-A" as string | null,
@@ -284,7 +284,7 @@ describe("computeMerge — run-aware semantics", () => {
     if (outcome.action === "created") {
       expect(outcome.vectors.byPath).toEqual({ "src/a.ts": ["a1", "a2"] })
       expect(outcome.vectors.repo).toBe("sigilix")
-      expect(outcome.vectors.owner).toBe("Arc-and-Anchor")
+      expect(outcome.vectors.owner).toBe("Sigilix")
       expect(outcome.vectors.runId).toBe("run-A")
     }
   })
@@ -295,7 +295,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "run-A",
+          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
           byPath: { "src/a.ts": ["a1"], "src/b.ts": ["b1"] },
         },
       },
@@ -315,7 +315,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "run-A",
+          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -333,7 +333,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "run-B-stale",
+          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-B-stale",
           byPath: { "src/old.ts": ["x"] },
         },
       },
@@ -356,7 +356,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "current-run",
+          v: 1, owner: "Sigilix", repo: "sigilix", runId: "current-run",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -376,7 +376,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "other-run",
+          v: 1, owner: "Sigilix", repo: "sigilix", runId: "other-run",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -461,8 +461,8 @@ describe("flattenIds", () => {
 describe("appendVectorCoverage", () => {
   it("creates the record with the given runId when none exists", async () => {
     const { kv } = makeKvStub()
-    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", { "src/a.ts": ["a1", "a2"] })
-    const r = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-1", { "src/a.ts": ["a1", "a2"] })
+    const r = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
     expect(r.kind).toBe("ok")
     if (r.kind === "ok") {
       expect(r.vectors.runId).toBe("run-1")
@@ -473,13 +473,13 @@ describe("appendVectorCoverage", () => {
   it("unions into an existing record and PRESERVES its runId (coverage doesn't claim ownership)", async () => {
     const { kv } = makeKvStub()
     await writeRepoIndexVectors(makeEnv(kv), {
-      v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "run-A",
+      v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
       byPath: { "src/a.ts": ["a1"] },
     })
     // A different (e.g. superseded) run appends coverage — must not drop run-A's
     // ids and must not steal ownership of the runId field.
-    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-B", { "src/a.ts": ["a2"], "src/b.ts": ["b1"] })
-    const r = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-B", { "src/a.ts": ["a2"], "src/b.ts": ["b1"] })
+    const r = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
     expect(r.kind).toBe("ok")
     if (r.kind === "ok") {
       expect(r.vectors.runId).toBe("run-A") // preserved
@@ -490,16 +490,16 @@ describe("appendVectorCoverage", () => {
 
   it("is a no-op for an empty slice (no write)", async () => {
     const { kv, store } = makeKvStub()
-    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", {})
+    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-1", {})
     expect(store.size).toBe(0)
   })
 
   it("fails closed when the existing record is invalid (does NOT silently discard prior coverage)", async () => {
     const { kv, store } = makeKvStub()
     // Corrupt ledger that may already hold earlier batches' ids.
-    store.set("repo-index-vectors:arc-and-anchor/sigilix", "{corrupt json")
+    store.set("repo-index-vectors:sigilix/sigilix", "{corrupt json")
     await expect(
-      appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", { "src/a.ts": ["a1"] }),
+      appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-1", { "src/a.ts": ["a1"] }),
     ).rejects.toThrow(/coverage write failed.*invalid/)
   })
 

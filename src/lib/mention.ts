@@ -127,7 +127,7 @@ export function isLikelyBotAuthor(displayName: string | null | undefined): boole
  * Detect a CodeRabbit-authored handle. Used by the GitHub webhook
  * router to filter the pr-review re-run to CR's `pull_request_review.
  * submitted` events specifically (we re-run pr-review after CR
- * finishes its own review so Arc has CR's findings to compare
+ * finishes its own review so Sigilix has CR's findings to compare
  * against).
  *
  * Pattern matches `coderabbitai`, `coderabbitai[bot]`, and
@@ -161,7 +161,7 @@ export function isArcGithubLogin(login: string | null | undefined): boolean {
 
 /**
  * True if any review comment in the thread above (or at) `sourceId`
- * was authored by Arc. Powers "implicit mention" — once Arc has spoken
+ * was authored by Sigilix. Powers "implicit mention" — once Sigilix has spoken
  * in a thread, replies in that thread don't need an explicit @-mention
  * to trigger a response. Without this, users have to retype @arc on
  * every back-and-forth, which feels broken next to CR's behavior.
@@ -173,7 +173,7 @@ export function isArcGithubLogin(login: string | null | undefined): boolean {
  *
  * Scoped to PR review-comment threads (real reply chains). Top-level
  * `issue_comment` events have no chain structure on GitHub's side, so
- * implicit-mention there would mean "Arc commented at any point on the
+ * implicit-mention there would mean "Sigilix commented at any point on the
  * PR" → too eager; mention-only is the right default.
  */
 export function arcInThreadAbove<
@@ -187,7 +187,7 @@ export function arcInThreadAbove<
   // Visited-set defends against self-referential / cyclic chains
   // without a fixed iteration cap (a legitimate long thread can
   // exceed any small constant — a hard cap there would silently
-  // skip Arc when it's truly above the source).
+  // skip Sigilix when it's truly above the source).
   const seen = new Set<number>()
   while (typeof curId === "number" && !seen.has(curId)) {
     seen.add(curId)

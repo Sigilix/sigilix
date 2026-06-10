@@ -33,7 +33,7 @@ function makeDoState(): {
       async getAlarm(): Promise<number | null> { return alarms.alarmAt },
       async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
     },
-    id: { toString: () => "Arc-and-Anchor/sigilix#7", name: "Arc-and-Anchor/sigilix#7" },
+    id: { toString: () => "Sigilix/sigilix#7", name: "Sigilix/sigilix#7" },
     store,
     alarms,
   } as unknown as DurableObjectState
@@ -62,7 +62,7 @@ const SAMPLE_RUN_ID = "11111111-1111-4111-8111-111111111111"
 function seedState(store: Map<string, unknown>, over: Partial<RunState> = {}): RunState {
   const s: RunState = {
     schemaVersion: 1,
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     runId: SAMPLE_RUN_ID,

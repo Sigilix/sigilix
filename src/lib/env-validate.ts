@@ -1,7 +1,7 @@
 // Boot-time validation that every team-repo mapping has a matching
 // installation entry. Catches the silent-failure mode where a team is
 // configured to fetch PRs but the install map doesn't cover its target
-// repo — without this, Arc would just abstain at runtime and look dumb.
+// repo — without this, Sigilix would just abstain at runtime and look dumb.
 //
 // Cloudflare Workers can't read `env` at module top-level (env is per-
 // request), so we run validation on first request per env signature

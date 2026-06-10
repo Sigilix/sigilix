@@ -35,19 +35,19 @@ function makeEnv(kv: MockKv): Env {
   return { OPENCLAW_STATE: kv.asEnv } as unknown as Env
 }
 
-const OWNER = "Arc-and-Anchor"
+const OWNER = "Sigilix"
 const REPO = "sigilix"
 const PR = 42
 
 describe("buildReviewCounterKey", () => {
   it("uses the documented shape", () => {
-    expect(buildReviewCounterKey(OWNER, REPO, PR)).toBe("pr-review-counter:Arc-and-Anchor/sigilix#42")
+    expect(buildReviewCounterKey(OWNER, REPO, PR)).toBe("pr-review-counter:Sigilix/sigilix#42")
   })
 })
 
 describe("buildPrUrl", () => {
   it("constructs the github.com PR URL", () => {
-    expect(buildPrUrl(OWNER, REPO, PR)).toBe("https://github.com/Arc-and-Anchor/sigilix/pull/42")
+    expect(buildPrUrl(OWNER, REPO, PR)).toBe("https://github.com/Sigilix/sigilix/pull/42")
   })
 })
 
@@ -56,24 +56,24 @@ describe("bumpPrReviewCounter", () => {
     const kv = makeKv()
     const next = await bumpPrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
     expect(next).toBe(1)
-    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("1")
+    expect(kv.store.get("pr-review-counter:Sigilix/sigilix#42")).toBe("1")
   })
 
   it("increments the prior counter", async () => {
-    const kv = makeKv({ "pr-review-counter:Arc-and-Anchor/sigilix#42": "5" })
+    const kv = makeKv({ "pr-review-counter:Sigilix/sigilix#42": "5" })
     const next = await bumpPrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
     expect(next).toBe(6)
-    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("6")
+    expect(kv.store.get("pr-review-counter:Sigilix/sigilix#42")).toBe("6")
   })
 
   it("treats a garbage KV value as 0 (defensive parse)", async () => {
-    const kv = makeKv({ "pr-review-counter:Arc-and-Anchor/sigilix#42": "not-a-number" })
+    const kv = makeKv({ "pr-review-counter:Sigilix/sigilix#42": "not-a-number" })
     const next = await bumpPrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
     expect(next).toBe(1)
   })
 
   it("treats a negative KV value as 0 (defensive parse)", async () => {
-    const kv = makeKv({ "pr-review-counter:Arc-and-Anchor/sigilix#42": "-5" })
+    const kv = makeKv({ "pr-review-counter:Sigilix/sigilix#42": "-5" })
     const next = await bumpPrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
     expect(next).toBe(1)
   })
@@ -132,14 +132,14 @@ describe("bumpPrReviewCounter", () => {
 
 describe("preparePrReviewCounter", () => {
   it("returns the next visible value without writing until persist is called", async () => {
-    const kv = makeKv({ "pr-review-counter:Arc-and-Anchor/sigilix#42": "2" })
+    const kv = makeKv({ "pr-review-counter:Sigilix/sigilix#42": "2" })
     const prepared = await preparePrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
 
     expect(prepared.value).toBe(3)
-    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("2")
+    expect(kv.store.get("pr-review-counter:Sigilix/sigilix#42")).toBe("2")
 
     await prepared.persist()
-    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("3")
+    expect(kv.store.get("pr-review-counter:Sigilix/sigilix#42")).toBe("3")
   })
 
   it("makes persist idempotent", async () => {
@@ -149,7 +149,7 @@ describe("preparePrReviewCounter", () => {
     await prepared.persist()
     await prepared.persist()
 
-    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("1")
+    expect(kv.store.get("pr-review-counter:Sigilix/sigilix#42")).toBe("1")
   })
 
   it("does not write the synthetic value when the read failed", async () => {

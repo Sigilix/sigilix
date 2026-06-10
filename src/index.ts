@@ -1,4 +1,4 @@
-// Arc Worker — Linear webhooks → triage; GitHub webhooks → PR review.
+// Sigilix Worker — Linear webhooks → triage; GitHub webhooks → PR review.
 //
 // Routes:
 //   GET  /                     liveness probe

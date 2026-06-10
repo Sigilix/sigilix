@@ -35,7 +35,7 @@ function makeClient(getRepository: (owner: string, repo: string) => Promise<{ de
 const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   v: 1,
   repo: "sigilix",
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   headSha: "a".repeat(40),
   runId: "0123456789abcdef",
   fileCount: 42,
@@ -53,70 +53,70 @@ describe("migrateOneRepo — outcome state machine", () => {
   it("returns 'manifest-missing' when no manifest exists at the legacy key", async () => {
     const { kv } = makeKvStub()
     const client = makeClient(async () => null)
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("manifest-missing")
   })
 
   it("returns 'manifest-invalid' when the legacy manifest has bad shape", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", "{not json}")
+    store.set("repo-index-manifest:sigilix/sigilix", "{not json}")
     const client = makeClient(async () => null)
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("manifest-invalid")
   })
 
   it("returns 'already-migrated' when manifest already has a positive integer githubRepoId", async () => {
     const { kv, store } = makeKvStub()
     store.set(
-      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:sigilix/sigilix",
       JSON.stringify({ ...SAMPLE_MANIFEST, githubRepoId: 808247824 }),
     )
     const client = makeClient(async () => {
       throw new Error("should not be called — manifest already migrated")
     })
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("already-migrated")
     expect(outcome.githubRepoId).toBe(808247824)
   })
 
   it("returns 'github-404' when the GitHub repo is gone", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     const client = makeClient(async () => null)
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("github-404")
   })
 
   it("returns 'github-no-id' when GitHub responds without a positive integer id", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     const client = makeClient(async () => ({ default_branch: "main", id: undefined }))
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("github-no-id")
   })
 
   it("returns 'github-error' when the GitHub call throws (e.g. transient 502)", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     const client = makeClient(async () => {
       throw new Error("github 502")
     })
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("github-error")
     expect(outcome.detail).toContain("github 502")
   })
 
   it("returns 'migrated' on the happy path and writes the new manifest with the ID set", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     const client = makeClient(async () => ({ default_branch: "main", id: 808247824 }))
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("migrated")
     expect(outcome.githubRepoId).toBe(808247824)
 
     // Phase 2 dual-write fires — both the legacy key AND the new
     // tenant key should now exist with the ID-populated payload.
-    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-manifest:sigilix/sigilix")).toBe(true)
     expect(store.has("repo-tenant:808247824")).toBe(true)
     const written = JSON.parse(store.get("repo-tenant:808247824")!)
     expect(written.githubRepoId).toBe(808247824)
@@ -124,7 +124,7 @@ describe("migrateOneRepo — outcome state machine", () => {
 
   it("returns 'kv-write-failed' when the manifest write throws", async () => {
     const { store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     // KV stub whose `put` throws — simulates a transient KV outage
     // during the migration write.
     const explodingKv = {
@@ -134,7 +134,7 @@ describe("migrateOneRepo — outcome state machine", () => {
     } as unknown as Env["OPENCLAW_STATE"]
     const env = { OPENCLAW_STATE: explodingKv } as unknown as Env
     const client = makeClient(async () => ({ default_branch: "main", id: 808247824 }))
-    const outcome = await migrateOneRepo(env, client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(env, client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("kv-write-failed")
     expect(outcome.detail).toContain("KV transient")
   })
@@ -148,7 +148,7 @@ describe("migrateOneRepo — outcome state machine", () => {
     // stored manifest between the initial read and the second read
     // inside migrateOneRepo.
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     let getCalls = 0
     const client = makeClient(async () => {
       // After the initial manifest read inside migrateOneRepo, but
@@ -157,7 +157,7 @@ describe("migrateOneRepo — outcome state machine", () => {
       getCalls += 1
       if (getCalls === 1) {
         store.set(
-          "repo-index-manifest:arc-and-anchor/sigilix",
+          "repo-index-manifest:sigilix/sigilix",
           JSON.stringify({
             ...SAMPLE_MANIFEST,
             headSha: "f".repeat(40),
@@ -168,7 +168,7 @@ describe("migrateOneRepo — outcome state machine", () => {
       }
       return { default_branch: "main", id: 808247824 }
     })
-    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(outcome.status).toBe("migrated")
 
     // The written manifest preserves the FRESHER headSha + runId
@@ -184,18 +184,18 @@ describe("migrateOneRepo — outcome state machine", () => {
 
   it("idempotent: re-running on a just-migrated repo returns 'already-migrated' without re-fetching from GitHub", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(SAMPLE_MANIFEST))
     let getCalls = 0
     const client = makeClient(async () => {
       getCalls += 1
       return { default_branch: "main", id: 808247824 }
     })
 
-    const first = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const first = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(first.status).toBe("migrated")
     expect(getCalls).toBe(1)
 
-    const second = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    const second = await migrateOneRepo(makeEnv(kv), client, "Sigilix", "sigilix")
     expect(second.status).toBe("already-migrated")
     // Second call must NOT have hit GitHub — saves API quota across
     // operator re-runs.

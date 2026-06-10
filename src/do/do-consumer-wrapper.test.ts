@@ -20,7 +20,7 @@ const SAMPLE_HEAD_SHA = "a".repeat(40)
 function makeJob(over: Partial<PrReviewJob> = {}): PrReviewJob {
   return {
     type: "pr-review",
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     headSha: SAMPLE_HEAD_SHA,
@@ -150,7 +150,7 @@ describe("runPrReviewWithDoCallback — legacy passthrough", () => {
 
 describe("runPrReviewWithDoCallback — happy path", () => {
   it("pickup 200 → run ensemble → /run-result success", async () => {
-    const { env, calls } = makeEnv({ expectedName: "Arc-and-Anchor/sigilix#7" })
+    const { env, calls } = makeEnv({ expectedName: "Sigilix/sigilix#7" })
     const runEnsemble = vi.fn(async () => {})
     await runPrReviewWithDoCallback(makeJob(), env, runEnsemble)
     expect(runEnsemble).toHaveBeenCalledOnce()
@@ -320,7 +320,7 @@ describe("runPrReviewWithDoCallback — DO instance scoping", () => {
   it("calls idFromName with `${owner}/${repo}#${prNumber}` shape", async () => {
     const { env, idFromName } = makeEnv()
     await runPrReviewWithDoCallback(makeJob(), env, async () => {})
-    expect(idFromName).toHaveBeenCalledWith("Arc-and-Anchor/sigilix#7")
+    expect(idFromName).toHaveBeenCalledWith("Sigilix/sigilix#7")
   })
 })
 

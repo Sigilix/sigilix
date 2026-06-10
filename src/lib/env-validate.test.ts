@@ -63,10 +63,10 @@ describe("validateEnv", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const env = makeEnv({
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-        ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
+        ARC: { owner: "Sigilix", repo: "rema-portal" },
       }),
       OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({
-        "Arc-and-Anchor/rema-portal": "12345",
+        "Sigilix/rema-portal": "12345",
       }),
     })
     expect(() => validateEnv(env, "strict")).not.toThrow()
@@ -77,25 +77,25 @@ describe("validateEnv", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const env = makeEnv({
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-        ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
-        RFD: { owner: "Arc-and-Anchor", repo: "rubberfit-desktop" },
+        ARC: { owner: "Sigilix", repo: "rema-portal" },
+        RFD: { owner: "Sigilix", repo: "rubberfit-desktop" },
       }),
       OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({
-        "Arc-and-Anchor/rema-portal": "12345",
+        "Sigilix/rema-portal": "12345",
       }),
     })
     // Thrown error must NOT include team / repo names (those reach the
     // public 500 response in strict mode) — full diagnostic stays in logs.
     expect(() => validateEnv(env, "strict")).toThrow("GitHub installation mapping validation failed")
     expect(error).toHaveBeenCalled()
-    expect(String(error.mock.calls[0]?.[0] ?? "")).toMatch(/RFD → Arc-and-Anchor\/rubberfit-desktop/)
+    expect(String(error.mock.calls[0]?.[0] ?? "")).toMatch(/RFD → Sigilix\/rubberfit-desktop/)
   })
 
   it("warns (does not throw) in warn mode when entries are missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const env = makeEnv({
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-        ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
+        ARC: { owner: "Sigilix", repo: "rema-portal" },
       }),
       OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({}),
     })
@@ -103,14 +103,14 @@ describe("validateEnv", () => {
     expect(warn).toHaveBeenCalledTimes(1)
     // warn-mode keeps full detail in the warning (only the strict-mode
     // throw is sanitized — the warn console output is server-side only).
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/ARC → Arc-and-Anchor\/rema-portal/)
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/ARC → Sigilix\/rema-portal/)
   })
 
   it("warns when team-repo present but install map missing entirely", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const env = makeEnv({
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-        ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
+        ARC: { owner: "Sigilix", repo: "rema-portal" },
       }),
       // OPENCLAW_GITHUB_INSTALLATION_MAP unset → resolveInstallation returns
       // no_installation, which we DO surface as a warning so operators see it.

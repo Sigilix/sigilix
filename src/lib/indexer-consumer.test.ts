@@ -156,7 +156,7 @@ afterEach(() => {
 function bootstrapJob(over: Partial<JobMessage & { type: "index-repo" }> = {}): JobMessage {
   return {
     type: "index-repo",
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     installationId: 99,
     reason: "install",
@@ -192,17 +192,17 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     )
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
-      expect(rec.namespace).toBe("arc-and-anchor/sigilix")
+      expect(rec.namespace).toBe("sigilix/sigilix")
     }
     expect(sent).toHaveLength(0) // no shard enqueued
     // manifest is written
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
       expect(parsed.v).toBe(1)
       expect(parsed.repo).toBe("sigilix")
-      expect(parsed.owner).toBe("Arc-and-Anchor")
+      expect(parsed.owner).toBe("Sigilix")
       expect(parsed.fileCount).toBe(2)
       expect(parsed.shardCount).toBe(1)
       expect(parsed.modelId).toBe(EMBEDDING_MODEL)
@@ -220,12 +220,12 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     await handleIndexRepoJob({ job: bootstrapJob({ branch: "dev", reason: "pull-request" }), env })
 
-    expect(mockGetBranch).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", "dev")
+    expect(mockGetBranch).toHaveBeenCalledWith("Sigilix", "sigilix", "dev")
     expect(sent).toHaveLength(0)
     // SIG-218: branch segment is now `h` + 16-hex sha256(branch) prefix.
     const encodedDev = await encodeBranchName("dev")
     const branchRepo = `sigilix/__branch__/${encodedDev}`
-    const branchNamespace = `arc-and-anchor/${branchRepo}`
+    const branchNamespace = `sigilix/${branchRepo}`
     const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
       (call) => call[0] as Array<{ namespace?: string }>,
     )
@@ -236,8 +236,8 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     expect(mockWriteFileGraph).not.toHaveBeenCalled()
     expect(mockCommitGraph).not.toHaveBeenCalled()
 
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", branchRepo))
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
+    const stored = kv.get(repoIndexManifestKey("Sigilix", branchRepo))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -262,7 +262,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     // Seed a fresh manifest first.
     const headSha = "a".repeat(40)
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha,
       runId: "0123456789abcdef",
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -272,7 +272,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: 2,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
@@ -285,7 +285,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const headSha = "a".repeat(40)
     const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
@@ -294,7 +294,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha,
       runId,
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -304,12 +304,12 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: CHUNKER_VERSION,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue(runId)
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
-    expect(mockDebugActiveGraphVersion).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix")
+    expect(mockDebugActiveGraphVersion).toHaveBeenCalledWith(env, "Sigilix", "sigilix")
     expect(mockGetRepoTree).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     expect(mockWriteFileGraph).not.toHaveBeenCalled()
@@ -325,7 +325,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const headSha = "a".repeat(40)
     const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
@@ -334,7 +334,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha,
       runId,
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -344,7 +344,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: CHUNKER_VERSION,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue(null)
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
@@ -352,7 +352,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(mockGetRepoTree).toHaveBeenCalled()
     expect(mockWriteFileGraph).toHaveBeenCalled()
     expect(mockVectorizeUpsert).toHaveBeenCalled()
-    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix", runId)
+    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Sigilix", "sigilix", runId)
   })
 
   it("re-indexes a fresh manifest when graph active version is stale", async () => {
@@ -364,7 +364,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const headSha = "a".repeat(40)
     const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
@@ -373,7 +373,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha,
       runId,
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -383,21 +383,21 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: CHUNKER_VERSION,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue("older-run")
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
     expect(mockGetRepoTree).toHaveBeenCalled()
     expect(mockWriteFileGraph).toHaveBeenCalled()
-    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix", runId)
+    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Sigilix", "sigilix", runId)
   })
 
   it("does not re-index a fresh manifest on transient graph active-version read failure", async () => {
     const headSha = "a".repeat(40)
     const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
@@ -406,7 +406,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha,
       runId,
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -416,7 +416,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: CHUNKER_VERSION,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockRejectedValue(new Error("DO transient"))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
@@ -436,7 +436,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
     const { env, kv } = makeEnv()
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha: "a".repeat(40),
       runId: "deadbeefdeadbeef",
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -446,7 +446,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: 1,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
@@ -475,7 +475,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
     // Seed the OLD-run manifest (old headSha, current model/dim/chunker).
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      v: 1, repo: "sigilix", owner: "Sigilix",
       headSha: "a".repeat(40),
       runId: "old-run",
       fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -485,23 +485,23 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: CHUNKER_VERSION,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
     // Seed the prior OLD-run vectors record — the piece the existing
     // re-index test omits. This is what drove the stale-skip pre-fix.
     const vectors: RepoIndexVectorsV1 = {
-      v: 1, owner: "Arc-and-Anchor", repo: "sigilix",
+      v: 1, owner: "Sigilix", repo: "sigilix",
       runId: "old-run",
-      byPath: { "src/index.ts": ["arc-and-anchor/sigilix#old-run#0"] },
+      byPath: { "src/index.ts": ["sigilix/sigilix#old-run#0"] },
     }
-    kv.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors))
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
     // Compute the runId the consumer derives for the new head.
     const { computeRunId } = await import("@/src/lib/indexer")
     const newRunId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha: newHeadSha,
       modelId: EMBEDDING_MODEL,
@@ -514,21 +514,21 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(mockVectorizeUpsert).toHaveBeenCalled()
 
     // A new manifest with the new runId lands.
-    const storedManifest = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
+    const storedManifest = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
     expect(storedManifest).toBeTruthy()
     const parsedManifest = JSON.parse(storedManifest as string) as RepoIndexManifestV1
     expect(parsedManifest.runId).toBe(newRunId)
     expect(parsedManifest.headSha).toBe(newHeadSha)
 
     // The active-run lease holds the new runId.
-    const storedLease = kv.get(activeRunKey("Arc-and-Anchor", "sigilix"))
+    const storedLease = kv.get(activeRunKey("Sigilix", "sigilix"))
     expect(storedLease).toBeTruthy()
     const parsedLease = JSON.parse(storedLease as string) as { runId: string }
     expect(parsedLease.runId).toBe(newRunId)
 
     // SIG-136 HIGH-1: the lease must be claimed BEFORE the (slow) embedding/upsert work.
     const putSpy = (env.OPENCLAW_STATE as unknown as { put: ReturnType<typeof vi.fn> }).put
-    const leaseKey = activeRunKey("Arc-and-Anchor", "sigilix")
+    const leaseKey = activeRunKey("Sigilix", "sigilix")
     const leaseCallIdx = putSpy.mock.calls.findIndex((args) => args[0] === leaseKey)
     expect(leaseCallIdx).toBeGreaterThanOrEqual(0)
     const leasePut = putSpy.mock.invocationCallOrder[leaseCallIdx]!
@@ -552,7 +552,7 @@ describe("handleIndexRepoJob — bootstrap with >MAX_FILES_PER_JOB enqueues next
 
     expect(mockGetFileContent).toHaveBeenCalledTimes(MAX_FILES_PER_JOB)
     // No manifest yet — chain not complete.
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
     // One shard enqueued.
     expect(sent).toHaveLength(1)
     const next = sent[0]!.message
@@ -582,7 +582,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     // Compute the actual runId the consumer expects.
     const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
@@ -590,7 +590,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     })
     const job: JobMessage = {
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "install",
@@ -614,7 +614,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     // Final shard processed the trailing 3 files.
     expect(mockGetFileContent).toHaveBeenCalledTimes(3)
     // Manifest written with cumulative totals.
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -633,7 +633,7 @@ describe("handleIndexRepoJob — config-drift refusal (Kimi v2 d.1)", () => {
   it("aborts a shard chain when the recomputed runId doesn't match the shard's runId", async () => {
     const job: JobMessage = {
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "install",
@@ -655,7 +655,7 @@ describe("handleIndexRepoJob — config-drift refusal (Kimi v2 d.1)", () => {
     expect(mockGetRepoTree).not.toHaveBeenCalled()
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 })
 
@@ -671,18 +671,18 @@ describe("handleIndexRepoJob — tree truncated refusal", () => {
 
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 })
 
 describe("handleIndexRepoJob — sensitive-repo gate (consumer-side)", () => {
   it("returns without touching anything when repo is in the sensitive denylist", async () => {
-    const { env, kv } = makeEnv({ sensitive: "arc-and-anchor/sigilix" })
+    const { env, kv } = makeEnv({ sensitive: "sigilix/sigilix" })
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
     expect(mockGetRepository).not.toHaveBeenCalled()
     expect(mockGetRepoTree).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 })
 
@@ -692,7 +692,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetBranch).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 
   it("acks cleanly when getBranch returns null", async () => {
@@ -700,7 +700,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetRepoTree).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 
   it("acks cleanly when getRepoTree returns null", async () => {
@@ -708,7 +708,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetFileContent).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 })
 
@@ -724,7 +724,7 @@ describe("handleIndexRepoJob — empty repo (no indexable files)", () => {
 
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -780,7 +780,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     // before the ledger write failed (so no orphan is even possible here).
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     // Manifest must NOT have been written.
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })
 
   it("shard path: same invariant — no manifest write + no next-shard enqueue on vectors-write failure", async () => {
@@ -820,7 +820,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     const { computeRunId } = await import("@/src/lib/indexer")
     const headSha = "a".repeat(40)
     const runId = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha,
       // CodeRabbit phase-end fix: use the imported constant so a
@@ -831,7 +831,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     })
     const shardJob: JobMessage = {
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "install",
@@ -854,7 +854,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     // No manifest, no next-shard enqueue (final shard would have
     // written the manifest; non-final would have enqueued).
-    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
     expect(sent).toHaveLength(0)
   })
 })
@@ -879,7 +879,7 @@ describe("handleIndexRepoJob — scoped-rules write yields to a newer run", () =
     })
 
     const { env, kv } = makeEnv()
-    const owner = "Arc-and-Anchor"
+    const owner = "Sigilix"
     const repo = "sigilix"
 
     // Hook the rule-file content fetch: when the indexer pulls

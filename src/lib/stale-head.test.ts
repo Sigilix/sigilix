@@ -76,7 +76,7 @@ function makeEnv(opts: { credentials?: boolean } = {}): Env {
 }
 
 const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 237,
   installationId: 42,
@@ -132,7 +132,7 @@ describe("handleStaleHead — sticky comment (exhausted retry budget)", () => {
     expect(mockUpdateIssueComment).not.toHaveBeenCalled()
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
     const [owner, repo, prNumber, body] = mockCreateIssueComment.mock.calls[0]!
-    expect(owner).toBe("Arc-and-Anchor")
+    expect(owner).toBe("Sigilix")
     expect(repo).toBe("sigilix")
     expect(prNumber).toBe(237)
     expect(body).toContain(STALE_HEAD_MARKER)
@@ -215,7 +215,7 @@ describe("handleStaleHead — sticky comment (exhausted retry budget)", () => {
       expect(events[0]).toMatchObject({
         event: "pr-review-stale-head",
         guard_source: "ensemble-after-review",
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         pr_number: 237,
         installation_id: 42,
@@ -247,7 +247,7 @@ describe("handleStaleHead — ARC-251 auto-requeue (depth < MAX_STALE_HEAD_REQUE
 
     const [, enqArgs] = mockEnqueuePrReviewJob.mock.calls[0]!
     expect(enqArgs).toMatchObject({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       headSha: baseArgs.currentHeadSha,

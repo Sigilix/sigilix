@@ -19,7 +19,7 @@ import {
   TEST_FILE_CONTENT_CHAR_CAP,
 } from "@/src/lib/testing-evidence-pack"
 
-const CTX = { owner: "Arc-and-Anchor", repo: "sigilix", prNumber: 124116 }
+const CTX = { owner: "Sigilix", repo: "sigilix", prNumber: 124116 }
 const CONFIG = {
   enabled: true,
   severityThreshold: "warning" as const,

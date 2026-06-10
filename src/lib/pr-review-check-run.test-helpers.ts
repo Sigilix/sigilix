@@ -23,7 +23,7 @@ export function makeEnv(opts: { credentials?: boolean } = {}): Env {
 }
 
 export const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   headSha: "a".repeat(40),
   installationId: 99,

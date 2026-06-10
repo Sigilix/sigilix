@@ -47,8 +47,8 @@ describe("handleReviewStatusRoute — happy path", () => {
       },
       history: [],
     }
-    const env = makeEnv({ response: found, expectedName: "Arc-and-Anchor/sigilix#7" })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const env = makeEnv({ response: found, expectedName: "Sigilix/sigilix#7" })
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(200)
     const body = (await res.json()) as StatusResponse
     expect(body).toEqual(found)
@@ -58,7 +58,7 @@ describe("handleReviewStatusRoute — happy path", () => {
 describe("handleReviewStatusRoute — 404 paths", () => {
   it("404 when DO returns kind=no-state", async () => {
     const env = makeEnv({ response: { kind: "no-state" } })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(404)
   })
 })
@@ -72,7 +72,7 @@ describe("handleReviewStatusRoute — input validation (400)", () => {
 
   it("400 on empty repo", async () => {
     const env = makeEnv({ response: { kind: "no-state" } })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "", 7)
     expect(res.status).toBe(400)
   })
 
@@ -86,25 +86,25 @@ describe("handleReviewStatusRoute — input validation (400)", () => {
     const env = makeEnv({ response: { kind: "no-state" } })
     // Caller passes URL-decoded path segments; if a real route
     // handler decoded `%2F` and the result contains a slash, reject.
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "a/b", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "a/b", 7)
     expect(res.status).toBe(400)
   })
 
   it("400 on non-positive prNumber (0)", async () => {
     const env = makeEnv({ response: { kind: "no-state" } })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 0)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 0)
     expect(res.status).toBe(400)
   })
 
   it("400 on negative prNumber", async () => {
     const env = makeEnv({ response: { kind: "no-state" } })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", -3)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", -3)
     expect(res.status).toBe(400)
   })
 
   it("400 on non-integer prNumber", async () => {
     const env = makeEnv({ response: { kind: "no-state" } })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 1.5)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 1.5)
     expect(res.status).toBe(400)
   })
 })
@@ -112,7 +112,7 @@ describe("handleReviewStatusRoute — input validation (400)", () => {
 describe("handleReviewStatusRoute — DO transport failure", () => {
   it("503 when DO fetch throws", async () => {
     const env = makeEnv({ response: "throw" })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
@@ -127,7 +127,7 @@ describe("handleReviewStatusRoute — DO transport failure", () => {
         get: () => stub,
       },
     } as unknown as Env
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 })
@@ -136,9 +136,9 @@ describe("handleReviewStatusRoute — DO instance ID", () => {
   it("instance ID is `${owner}/${repo}#${prNumber}`", async () => {
     const env = makeEnv({
       response: { kind: "no-state" },
-      expectedName: "Arc-and-Anchor/sigilix#42",
+      expectedName: "Sigilix/sigilix#42",
     })
-    await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 42)
+    await handleReviewStatusRoute(env, "Sigilix", "sigilix", 42)
   })
 })
 
@@ -162,13 +162,13 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
 
   it("503 when DO returns kind=found without current", async () => {
     const env = makeMalformedEnv({ kind: "found", history: [] })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
   it("503 when DO returns kind=found with malformed current", async () => {
     const env = makeMalformedEnv({ kind: "found", current: "not-an-object", history: [] })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
@@ -177,19 +177,19 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
       kind: "found",
       current: { runId: "r", headSha: "a".repeat(40), state: "queued", attempts: 1, startedAt: "x" },
     })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
   it("503 when DO returns kind=garbage", async () => {
     const env = makeMalformedEnv({ kind: "garbage" })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
   it("503 when DO returns null", async () => {
     const env = makeMalformedEnv(null)
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
@@ -203,7 +203,7 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
       },
       history: [],
     })
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
   })
 
@@ -217,7 +217,7 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
       },
     } as unknown as Env
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
     const body = await res.text()
     expect(body).not.toContain("internal-secret-leak")
@@ -246,7 +246,7 @@ describe("handleReviewStatusRoute — state shapes", () => {
           history: [],
         },
       })
-      const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+      const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
       expect(res.status).toBe(200)
       const body = (await res.json()) as StatusResponse
       if (body.kind !== "found") throw new Error("expected found")

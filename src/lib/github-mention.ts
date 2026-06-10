@@ -1,4 +1,4 @@
-// GitHub @-mention reply pipeline. When Arc is @-mentioned on a PR
+// GitHub @-mention reply pipeline. When Sigilix is @-mentioned on a PR
 // thread (top-level conversation comment OR an inline review comment),
 // this handler fetches the PR + the surrounding thread, runs codebase
 // retrieval, asks Ollama for a greptile-style verification reply, and
@@ -188,7 +188,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   }
 
   // Eye-emoji "ack". Posts a 👀 reaction on the source comment so the
-  // asker knows Arc saw the message before the LLM call returns
+  // asker knows Sigilix saw the message before the LLM call returns
   // (Ollama Turbo is 30-90s typical). Best-effort — if the reaction
   // call fails for any reason we still proceed with the actual reply.
   // Fires NOW so the user sees it within ~1s of webhook delivery,
@@ -780,7 +780,7 @@ export function parseGithubMentionResponse(text: string): GithubMentionVerdict |
 
 /**
  * Wrap the model's answer with a dedupe marker so subsequent runs can
- * detect Arc's own replies in a thread (e.g. for follow-up @-mentions
+ * detect Sigilix's own replies in a thread (e.g. for follow-up @-mentions
  * the bot left in a previous turn). The marker is invisible on
  * GitHub — HTML comments don't render.
  */

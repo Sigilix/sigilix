@@ -471,10 +471,10 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     // fence), so this fell into final_answer_did_not_parse and the loop
     // wasted a single-shot fallback that itself produced the wrong reply.
     const realProsePlusFence = [
-      "No mention of \"Todd Bowles\" found in either the `arc-and-anchor-website` or `rubberfit` repos. The `arc-and-anchor-website` search returned zero results, and the `rubberfit` search returned only unrelated code chunks with low relevance scores.",
+      "No mention of \"Todd Bowles\" found in either the `sigilix-website` or `rubberfit` repos. The `sigilix-website` search returned zero results, and the `rubberfit` search returned only unrelated code chunks with low relevance scores.",
       "",
       "```json",
-      "{\"answer\": \"No mention of Todd Bowles found anywhere in the arc-and-anchor-website repo (or the other indexed repos).\", \"confidence\": 4, \"abstain\": false}",
+      "{\"answer\": \"No mention of Todd Bowles found anywhere in the sigilix-website repo (or the other indexed repos).\", \"confidence\": 4, \"abstain\": false}",
       "```",
     ].join("\n")
     mockChat.mockResolvedValueOnce({

@@ -53,7 +53,7 @@ afterEach(() => {
 })
 
 const perfCtx = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 1,
   headSha: "a".repeat(40),

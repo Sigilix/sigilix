@@ -77,7 +77,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 }
 
 const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 42,
   headSha: "a".repeat(40),
@@ -156,7 +156,7 @@ describe("handlePrLabels — config gating", () => {
 
     expect(mockGenerate).toHaveBeenCalledTimes(1)
     expect(mockListRepositoryLabels).toHaveBeenCalledTimes(1)
-    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 42, ["area:security"])
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Sigilix", "sigilix", 42, ["area:security"])
   })
 
   it("no-ops when labels.enabled is false", async () => {
@@ -248,10 +248,10 @@ describe("handlePrLabels — happy path", () => {
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     expect(mockAddLabelsToIssue).toHaveBeenCalledTimes(1)
-    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 42, ["area:security"])
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Sigilix", "sigilix", 42, ["area:security"])
     expect(mockRemoveLabelFromIssue).not.toHaveBeenCalled()
     // KV record persists the applied set for future runs.
-    const kvKey = `sigilix-applied-labels:arc-and-anchor/sigilix#42`
+    const kvKey = `sigilix-applied-labels:sigilix/sigilix#42`
     expect(JSON.parse(store.get(kvKey)!)).toEqual(["area:security"])
   })
 
@@ -269,7 +269,7 @@ describe("handlePrLabels — happy path", () => {
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     expect(mockAddLabelsToIssue).toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, ["area:security"], // fictional-label dropped
+      "Sigilix", "sigilix", 42, ["area:security"], // fictional-label dropped
     )
   })
 
@@ -289,7 +289,7 @@ describe("handlePrLabels — happy path", () => {
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     expect(mockAddLabelsToIssue).toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, ["area:security"],
+      "Sigilix", "sigilix", 42, ["area:security"],
     )
   })
 
@@ -310,7 +310,7 @@ describe("handlePrLabels — happy path", () => {
     const { kv, store } = makeKvStub()
     // Seed the prior applied record.
     store.set(
-      "sigilix-applied-labels:arc-and-anchor/sigilix#42",
+      "sigilix-applied-labels:sigilix/sigilix#42",
       JSON.stringify(["area:security", "breaking-change"]),
     )
 
@@ -320,10 +320,10 @@ describe("handlePrLabels — happy path", () => {
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
     expect(mockRemoveLabelFromIssue).toHaveBeenCalledTimes(1)
     expect(mockRemoveLabelFromIssue).toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, "breaking-change",
+      "Sigilix", "sigilix", 42, "breaking-change",
     )
     // KV updated.
-    expect(JSON.parse(store.get("sigilix-applied-labels:arc-and-anchor/sigilix#42")!))
+    expect(JSON.parse(store.get("sigilix-applied-labels:sigilix/sigilix#42")!))
       .toEqual(["area:security"])
   })
 
@@ -369,7 +369,7 @@ describe("handlePrLabels — happy path", () => {
 
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"event":"pr-labels-custom-label-denied"'))
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"label":"wontfix"'))
-    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 42, ["area:security"])
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Sigilix", "sigilix", 42, ["area:security"])
   })
 })
 
@@ -560,7 +560,7 @@ describe("handlePrLabels — error paths", () => {
     mockGenerate.mockResolvedValue('{"labels":["x"]}')
 
     const { kv, store } = makeKvStub()
-    store.set("sigilix-applied-labels:arc-and-anchor/sigilix#42", "not json")
+    store.set("sigilix-applied-labels:sigilix/sigilix#42", "not json")
 
     await expect(handlePrLabels({ ...baseArgs, env: makeEnv(kv) })).resolves.toBeUndefined()
     // Treats the corrupt record as empty — label is added, no removes attempted.

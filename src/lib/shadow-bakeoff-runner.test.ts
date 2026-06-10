@@ -14,7 +14,7 @@ vi.mock("@/src/shared/adapters/model/ollama-chat", () => ({
 import { chat } from "@/src/shared/adapters/model"
 
 const CTX: EnsembleRunCtx = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 99,
   headSha: "deadbeefcafebabe1234567890abcdef12345678",

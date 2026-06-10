@@ -24,7 +24,7 @@ export function checkQuorum(
   mode: "shadow" | "post",
   dispatchedSpecialists?: SpecialistRole[],
 ): boolean {
-  // Arc PR #35 catch: when the router dispatches fewer than 4
+  // Sigilix PR #35 catch: when the router dispatches fewer than 4
   // specialists (e.g., CSS-only → ["performance"]), the original
   // `succeeded.length < 2` rule always failed because there were
   // never 2 to begin with. Make quorum proportional to what the

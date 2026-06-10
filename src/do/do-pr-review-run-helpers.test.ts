@@ -20,7 +20,7 @@ const NOW_ISO = "2026-05-07T06:00:00.000Z"
 function makeState(over: Partial<RunState> = {}): RunState {
   return {
     schemaVersion: 1,
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     runId: "11111111-1111-4111-8111-111111111111",
@@ -52,7 +52,7 @@ describe("isSupersededByNewSha", () => {
 
 describe("decideEnqueueAction", () => {
   const incoming = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     headSha: "h".repeat(40),

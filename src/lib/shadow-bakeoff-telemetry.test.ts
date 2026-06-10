@@ -16,7 +16,7 @@ import {
 } from "@/src/lib/shadow-bakeoff-telemetry"
 
 const CTX: EnsembleRunCtx = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 99,
   headSha: "feedface00000000000000000000000000000000",
@@ -53,7 +53,7 @@ describe("emitShadowAttempt", () => {
     emitShadowAttempt(CTX, info)
     const event = lastLogged()
     expect(event["event"]).toBe("shadow-model-attempt-completed")
-    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["owner"]).toBe("Sigilix")
     expect(event["headSha"]).toBe("feedfac")
     expect(event["role"]).toBe("synth")
     expect(event["attemptKind"]).toBe("primary")
@@ -123,7 +123,7 @@ describe("emitShadowCutShort", () => {
     expect(event["role"]).toBe("synth")
     expect(event["elapsedAtCutMs"]).toBe(5_000)
     expect(event["reason"]).toBe("grace_deadline")
-    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["owner"]).toBe("Sigilix")
     expect(event["repo"]).toBe("sigilix")
     expect(event["prNumber"]).toBe(99)
     expect(event["headSha"]).toBe("feedfac")
@@ -146,7 +146,7 @@ describe("emitShadowRunFailed", () => {
     expect(event["event"]).toBe("shadow-run-failed")
     expect(event["role"]).toBe("synth")
     expect(event["message"]).toBe("TypeError: cannot read 'foo' of undefined")
-    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["owner"]).toBe("Sigilix")
     expect(event["repo"]).toBe("sigilix")
     expect(event["prNumber"]).toBe(99)
     // headSha truncated to 7 chars (correlation-field invariant).

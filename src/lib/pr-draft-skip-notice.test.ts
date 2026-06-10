@@ -52,7 +52,7 @@ function makeClient(comments: Array<{ id: number; body: string }> = []) {
 }
 
 const base = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 7,
   headSha: "a".repeat(40),

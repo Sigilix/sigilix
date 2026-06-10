@@ -40,8 +40,8 @@ function makeEnv(over: Partial<Env> = {}, sendImpl?: (msg: unknown) => Promise<v
 
 describe("parseFullName", () => {
   it("accepts canonical owner/repo", () => {
-    expect(parseFullName({ full_name: "Arc-and-Anchor/sigilix" })).toEqual({
-      owner: "Arc-and-Anchor",
+    expect(parseFullName({ full_name: "Sigilix/sigilix" })).toEqual({
+      owner: "Sigilix",
       repo: "sigilix",
     })
   })
@@ -85,8 +85,8 @@ describe("isIndexerEnabled", () => {
 
 describe("enqueueIndexJobsForRepos", () => {
   const baseRepos = [
-    { name: "repo-a", full_name: "Arc-and-Anchor/repo-a" },
-    { name: "repo-b", full_name: "Arc-and-Anchor/repo-b" },
+    { name: "repo-a", full_name: "Sigilix/repo-a" },
+    { name: "repo-b", full_name: "Sigilix/repo-b" },
   ]
 
   beforeEach(() => {
@@ -112,7 +112,7 @@ describe("enqueueIndexJobsForRepos", () => {
     expect(sent).toHaveLength(2)
     expect(sent[0]).toEqual({
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "repo-a",
       installationId: 99,
       reason: "install",
@@ -192,11 +192,11 @@ describe("enqueueIndexJobsForRepos", () => {
       env,
       installationId: 1,
       repositories: [
-        { full_name: "Arc-and-Anchor/repo-a" },
+        { full_name: "Sigilix/repo-a" },
         { full_name: "no-slash" },
         { full_name: "a/b/c" },
         { name: "repo-d" }, // missing full_name
-        { full_name: "Arc-and-Anchor/repo-e" },
+        { full_name: "Sigilix/repo-e" },
       ],
       reason: "install",
     })
@@ -211,7 +211,7 @@ describe("enqueueIndexJobsForRepos", () => {
 
   it("skips sensitive repos and counts them separately", async () => {
     const { env, sent } = makeEnv({
-      OPENCLAW_SENSITIVE_REPOS: "arc-and-anchor/repo-b",
+      OPENCLAW_SENSITIVE_REPOS: "sigilix/repo-b",
     })
     const result = await enqueueIndexJobsForRepos({
       env,

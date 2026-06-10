@@ -262,7 +262,7 @@ const LINKED_ISSUE_KEYWORDS = ["close", "closes", "closed", "fix", "fixes", "fix
  * Regex matching a single linked-issue reference:
  *   `Closes #42`
  *   `Fixes SIG-101`
- *   `resolved Arc-and-Anchor/sigilix#7` (full-qualified is acceptable)
+ *   `resolved Sigilix/sigilix#7` (full-qualified is acceptable)
  *
  * The leading word boundary `\b` prevents false-positives like
  * `disclose` matching `close`.

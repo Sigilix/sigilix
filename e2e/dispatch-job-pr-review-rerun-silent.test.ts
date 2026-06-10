@@ -74,7 +74,7 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -94,7 +94,7 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     const { env, sent } = makeEnv()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -110,7 +110,7 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     const { env, sent } = makeEnv()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -127,7 +127,7 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     const { env, sent } = makeEnv()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -186,7 +186,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -199,7 +199,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     expect(doCalls).toHaveLength(1)
     expect(doCalls[0]?.url).toContain("/enqueue")
     expect(doCalls[0]?.body).toMatchObject({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       headSha: "a".repeat(40),
@@ -219,7 +219,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     })
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -242,7 +242,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -269,11 +269,11 @@ describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
     const { env, sent, kv } = makeEnv()
     // Pre-seed both pause and ignore flags. Slash-command re-run
     // should still go through.
-    kv.set("pr-paused:Arc-and-Anchor/sigilix#237", String(Date.now()))
-    kv.set("pr-ignored:Arc-and-Anchor/sigilix#237", String(Date.now()))
+    kv.set("pr-paused:Sigilix/sigilix#237", String(Date.now()))
+    kv.set("pr-ignored:Sigilix/sigilix#237", String(Date.now()))
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,
@@ -289,7 +289,7 @@ describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
     // Reach into the env's KV (makeEnvWithDo's KV always returns
     // null) and replace it with a stub that returns a pause flag.
     const kv = new Map<string, string>([
-      ["pr-paused:Arc-and-Anchor/sigilix#237", String(Date.now())],
+      ["pr-paused:Sigilix/sigilix#237", String(Date.now())],
     ])
     ;(env as { OPENCLAW_STATE: KVNamespace }).OPENCLAW_STATE = {
       get: async (k: string) => kv.get(k) ?? null,
@@ -298,7 +298,7 @@ describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
     } as unknown as KVNamespace
     const job: JobMessage = {
       type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 237,
       installationId: 99,

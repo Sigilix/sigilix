@@ -11,6 +11,12 @@ Same bar as everything else here: we sell AI code review, so we hold our own str
 > an AI model, the engineer running you). A change that breaks a rule below is wrong even if the
 > tests pass — every rule here is machine-enforced, so a violation is a red build, not a style
 > opinion. Don't argue with the gate; fix the structure.
+>
+> **The one rule to internalize before anything else: put new code in the layer it belongs to, and
+> never reach outward.** Pure logic goes in `domain`; orchestration in `app` (through ports, not
+> adapters); IO in `adapters`; output in `render`. An import may only point inward (§1). When you
+> are unsure where something goes, that uncertainty is the signal to stop and read §1 and
+> [`ENGINEERING.md`](./ENGINEERING.md) §3 — not to reach across a boundary to make it work.
 
 ---
 

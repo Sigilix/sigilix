@@ -6,12 +6,12 @@
 // tally — lives in the pure modules and is unit-tested in
 // `tests/compare-reviewers.test.ts`.
 //
-//   npm run compare-reviewers -- collect --repo OWNER/REPO --pr 123
+//   npm run evals -- collect --repo OWNER/REPO --pr 123
 //   # …fill in the `## Labels` table in the generated worksheet…
-//   npm run compare-reviewers -- label   --repo OWNER/REPO --pr 123
-//   npm run compare-reviewers -- summary [--out compare-reviewers/REPORT.md]
+//   npm run evals -- label   --repo OWNER/REPO --pr 123
+//   npm run evals -- summary [--out evals/REPORT.md]
 //
-// See compare-reviewers/README.md for the full workflow.
+// See evals/README.md for the full workflow.
 
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
@@ -163,13 +163,13 @@ async function cmdSummary(opts: { out?: string; dataDir: string }): Promise<void
 
 // ─── entry ───────────────────────────────────────────────────────
 
-const USAGE = `compare-reviewers — reviewer head-to-head
+const USAGE = `evals — reviewer head-to-head
 
   collect  --repo OWNER/REPO --pr N    fetch tool findings + write a worksheet
   label    --repo OWNER/REPO --pr N    parse the filled worksheet into the JSON
   summary  [--out path.md]             aggregate all data/*.json into a report
 
-  --data-dir <path>   override the data directory (default: compare-reviewers/data)
+  --data-dir <path>   override the data directory (default: evals/data)
 
   COMPARE_REVIEWERS_GREPTILE_LOGINS=login1,login2 overrides Greptile app logins`
 

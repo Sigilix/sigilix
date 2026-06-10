@@ -1,4 +1,4 @@
-// SIG-70/SIG-326 — compare-reviewers tool tests.
+// SIG-70/SIG-326 — evals (reviewer-comparison) tool tests.
 //
 // The `gh` fetch (`github.ts`) needs the network and isn't unit-tested; the
 // load-bearing logic is pure and covered here: CLI env parsing, normalization,
@@ -8,12 +8,12 @@
 // labels → report) that fails if any stage regresses.
 
 import { describe, expect, it } from "vitest"
-import { greptileLoginsFromEnv } from "../compare-reviewers/env"
-import { DEFAULT_GREPTILE_BOTS, normalizeFindings, summarizeBody, type RawComment } from "../compare-reviewers/normalize"
-import { buildWorksheet, parseWorksheet } from "../compare-reviewers/worksheet"
-import { formatSummaryMarkdown, summarize } from "../compare-reviewers/summary"
-import { comparisonBasename, mergeComparison, parseTarget } from "../compare-reviewers/io"
-import type { ComparisonFile, LabeledItem } from "../compare-reviewers/types"
+import { greptileLoginsFromEnv } from "../evals/env"
+import { DEFAULT_GREPTILE_BOTS, normalizeFindings, summarizeBody, type RawComment } from "../evals/normalize"
+import { buildWorksheet, parseWorksheet } from "../evals/worksheet"
+import { formatSummaryMarkdown, summarize } from "../evals/summary"
+import { comparisonBasename, mergeComparison, parseTarget } from "../evals/io"
+import type { ComparisonFile, LabeledItem } from "../evals/types"
 
 const SIG = "sigilix[bot]"
 const CR = "coderabbitai[bot]"

@@ -1,4 +1,4 @@
-# compare-reviewers — reviewer head-to-head (SIG-70/SIG-326)
+# evals — reviewer head-to-head (SIG-70/SIG-326)
 
 A small offline CLI for measuring Sigilix, CodeRabbit, and Greptile on shared
 PRs, so reviewer-quality claims rest on labeled data instead of vibes.
@@ -10,7 +10,7 @@ It does three things:
 3. **summary** — aggregate every labeled PR into a markdown decision report.
 
 Nothing here touches the Worker or production — it only reads GitHub through the
-`gh` CLI and writes files under `compare-reviewers/data/`.
+`gh` CLI and writes files under `evals/data/`.
 
 A finding is a **top-level inline review comment** from each tool. For Sigilix,
 only comments carrying its finding marker count as findings (overviews and
@@ -29,7 +29,7 @@ inflate finding counts.
 
 ```bash
 # 1. Collect a PR's findings (writes data/{owner}-{repo}-{pr}.json + .worksheet.md)
-npm run compare-reviewers -- collect --repo Sigilix/sigilix --pr 365
+npm run evals -- collect --repo Sigilix/sigilix --pr 365
 #   shorthand: --repo Sigilix/sigilix#365
 
 # 2. Open data/Sigilix-sigilix-365.worksheet.md and fill in the "## Labels" table.
@@ -38,12 +38,12 @@ npm run compare-reviewers -- collect --repo Sigilix/sigilix --pr 365
 #    every compared tool missed.
 
 # 3. Fold your labels back into the JSON (validates first; refuses to write on error)
-npm run compare-reviewers -- label --repo Sigilix/sigilix --pr 365
+npm run evals -- label --repo Sigilix/sigilix --pr 365
 
 # …repeat collect+label for ~30 PRs…
 
 # 4. Generate the report across everything collected so far
-npm run compare-reviewers -- summary --out compare-reviewers/REPORT.md
+npm run evals -- summary --out evals/REPORT.md
 ```
 
 ### Outcome labels

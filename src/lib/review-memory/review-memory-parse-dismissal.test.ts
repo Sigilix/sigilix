@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   parseDismissalSignal,
   parseReviewFeedbackSignal,
-} from "@/lib/review-memory/parse-dismissal"
+} from "@/src/lib/review-memory/parse-dismissal"
 
 describe("parseDismissalSignal — keyword set triggers", () => {
   it.each([

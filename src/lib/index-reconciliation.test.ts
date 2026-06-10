@@ -4,35 +4,35 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest"
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   listAppInstallationIds: vi.fn(),
   listInstallationRepoFullNames: vi.fn(),
 }))
-vi.mock("@/lib/index-producer", async () => {
+vi.mock("@/src/lib/index-producer", async () => {
   // Keep the real `parseFullName` — it's pure, no IO, and reconcile delegates
   // to it so its "missing manifest" decision matches what the producer
   // actually accepts on enqueue.
-  const actual = await vi.importActual<typeof import("@/lib/index-producer")>(
-    "@/lib/index-producer",
+  const actual = await vi.importActual<typeof import("@/src/lib/index-producer")>(
+    "@/src/lib/index-producer",
   )
   return { ...actual, enqueueIndexJobsForRepos: vi.fn() }
 })
-vi.mock("@/lib/repo-index-manifest", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/repo-index-manifest")>(
-    "@/lib/repo-index-manifest",
+vi.mock("@/src/lib/repo-index-manifest", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/repo-index-manifest")>(
+    "@/src/lib/repo-index-manifest",
   )
   return { ...actual, readRepoIndexManifest: vi.fn() }
 })
-vi.mock("@/lib/repo-graph-client", () => ({
+vi.mock("@/src/lib/repo-graph-client", () => ({
   debugActiveGraphVersion: vi.fn(),
 }))
 
-import { runIndexReconciliation } from "@/lib/index-reconciliation"
-import { listAppInstallationIds, listInstallationRepoFullNames } from "@/shared/adapters/github/github-app"
-import { enqueueIndexJobsForRepos } from "@/lib/index-producer"
-import { readRepoIndexManifest } from "@/lib/repo-index-manifest"
-import { debugActiveGraphVersion } from "@/lib/repo-graph-client"
-import type { Env } from "@/shared/types/env"
+import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import { listAppInstallationIds, listInstallationRepoFullNames } from "@/src/shared/adapters/github/github-app"
+import { enqueueIndexJobsForRepos } from "@/src/lib/index-producer"
+import { readRepoIndexManifest } from "@/src/lib/repo-index-manifest"
+import { debugActiveGraphVersion } from "@/src/lib/repo-graph-client"
+import type { Env } from "@/src/shared/types/env"
 
 const mockListInstalls = vi.mocked(listAppInstallationIds)
 const mockListRepos = vi.mocked(listInstallationRepoFullNames)

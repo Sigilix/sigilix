@@ -28,12 +28,12 @@ const mockListPullRequestFiles = vi.fn(async () => [])
 // in the create branch with the final rescan returning null.
 const mockListIssueCommentsPage = vi.fn(async () => [])
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -52,15 +52,15 @@ vi.mock("@/shared/adapters/github", async () => {
 // SIG-212: adapt legacy string-returning mockGenerate to the new
 // `{ text, usage }` return shape — existing `mockResolvedValue("...")`
 // calls continue to work unchanged.
-vi.mock("@/shared/adapters/model/ollama", () => ({
+vi.mock("@/src/shared/adapters/model/ollama", () => ({
   generate: async (args: unknown) => {
     const result = await mockGenerate(args)
     return typeof result === "string" ? { text: result, usage: {} } : result
   },
 }))
 
-import { handlePrOverview } from "@/lib/triage-pr-overview"
-import type { Env } from "@/shared/types/env"
+import { handlePrOverview } from "@/src/lib/triage-pr-overview"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()

@@ -21,24 +21,24 @@
 // the shared `leaseAllows` + `TreeEntry` from `indexer-internals.ts`. It
 // does NOT value-import the core `indexer.ts`.
 
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import { GitHubClient } from "@/shared/adapters/github"
-import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/shared/adapters/model"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import {
   writeRepoIndexManifest,
   type RepoIndexManifestV1,
-} from "@/lib/repo-index-manifest"
+} from "@/src/lib/repo-index-manifest"
 import {
   computeMerge,
   readRepoIndexVectors,
   writeRepoIndexVectors,
-} from "@/lib/repo-index-vectors"
-import { readActiveRunId } from "@/lib/repo-index-active-run"
-import { CHUNK_LINES, CHUNK_OVERLAP } from "@/lib/chunk-core"
-import { walkScopedRuleFiles } from "@/lib/scoped-rules"
-import { writeScopedRulesManifest } from "@/lib/scoped-rules-kv"
-import { type TreeEntry, leaseAllows } from "@/lib/indexer-internals"
+} from "@/src/lib/repo-index-vectors"
+import { readActiveRunId } from "@/src/lib/repo-index-active-run"
+import { CHUNK_LINES, CHUNK_OVERLAP } from "@/src/lib/chunk-core"
+import { walkScopedRuleFiles } from "@/src/lib/scoped-rules"
+import { writeScopedRulesManifest } from "@/src/lib/scoped-rules-kv"
+import { type TreeEntry, leaseAllows } from "@/src/lib/indexer-internals"
 
 type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
 

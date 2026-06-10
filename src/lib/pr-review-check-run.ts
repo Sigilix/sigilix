@@ -12,11 +12,11 @@
 // underlying review pipeline. The check is an indicator ON TOP OF
 // the real review — the review must always go through.
 
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import type { CheckRunAnnotation } from "../shared/types/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { runnerEvidenceBadgeImg } from "./badge-assets"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 // SIG-216 (founder sign-off 2026-05-25): Sigilix originally followed
 // Greptile's pattern of NOT posting Check annotations. GitHub renders

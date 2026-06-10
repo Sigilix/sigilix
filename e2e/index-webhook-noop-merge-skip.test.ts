@@ -9,7 +9,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { computeDiffHash } from "../src/lib/noop-merge-detect"
+import { computeDiffHash } from "@/src/lib/noop-merge-detect"
 
 // ─── Module mocks ─────────────────────────────────────────────────────
 
@@ -21,17 +21,17 @@ const mockGetInstallationToken = vi.fn(async () => "fake-token")
 const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true as const }))
 const mockGetPullRequestDiff = vi.fn(async () => CURRENT_DIFF)
 
-vi.mock("../src/lib/pr-overview-stub", () => ({
+vi.mock("@/src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
 }))
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (a: unknown) => mockGetInstallationToken(a),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>(
-    "../src/shared/adapters/github",
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>(
+    "@/src/shared/adapters/github",
   )
   return {
     ...actual,
@@ -46,9 +46,9 @@ vi.mock("../src/shared/adapters/github", async () => {
   }
 })
 
-vi.mock("../src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/sigilix-config")>(
-    "../src/lib/sigilix-config",
+vi.mock("@/src/lib/sigilix-config", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
+    "@/src/lib/sigilix-config",
   )
   return {
     ...actual,
@@ -56,7 +56,7 @@ vi.mock("../src/lib/sigilix-config", async () => {
   }
 })
 
-vi.mock("../src/do/webhook-enqueue", () => ({
+vi.mock("@/src/do/webhook-enqueue", () => ({
   enqueuePrReviewJob: (env: unknown, args: unknown) => mockEnqueuePrReviewJob(env, args),
 }))
 
@@ -213,7 +213,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
       },
       { reviewManifestEnabled: "on" },
     )
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -242,7 +242,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
       },
       { reviewManifestEnabled: "on" },
     )
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -259,7 +259,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
         hashedAt: 1_700_000_000_000,
       }),
     })
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -271,7 +271,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
     // Empty KV — first review on the PR. No prior hash to compare
     // against, so we MUST dispatch.
     const { env } = makeEnv()
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -292,7 +292,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
       }),
     })
     mockGetPullRequestDiff.mockRejectedValueOnce(new Error("github 503"))
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -327,7 +327,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
       err.name = "AbortError"
       throw err
     })
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -344,7 +344,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
         hashedAt: 1_700_000_000_000,
       }),
     })
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const openedPayload = { ...synchronizePayload(), action: "opened" } as Record<string, unknown>
     const res = await postSynchronizeWebhook(worker, env, openedPayload)
@@ -366,7 +366,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
       }),
     })
     env.OPENCLAW_NOOP_MERGE_SKIP_ENABLED = "off"
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
@@ -396,7 +396,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
         hashedAt: 1_700_000_000_000,
       }),
     })
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     await postSynchronizeWebhook(worker, env)
 

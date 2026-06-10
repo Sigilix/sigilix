@@ -7,7 +7,7 @@
 // produce a second reply. KV is the fast path; the comment-body marker
 // scan is the fallback for cold-cache scenarios.
 
-import { generate } from "../shared/adapters/model"
+import { generate } from "@/src/shared/adapters/model"
 import { LinearClient, buildLinearAuth } from "./linear"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import {
@@ -18,21 +18,21 @@ import {
 } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
-import { MENTION_REPLY_SCHEMA } from "../shared/domain/schemas"
-import type { Env } from "../shared/types/env"
-import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
+import { MENTION_REPLY_SCHEMA } from "@/src/shared/domain/schemas"
+import type { Env } from "@/src/shared/types/env"
+import { MENTION_REPLY_PROMPT } from "@/src/prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
 import {
   listIndexedRepos,
   listTeamRepoMappings,
   parseTeamGithubRepo,
-} from "../shared/adapters/github/github-installation"
+} from "@/src/shared/adapters/github/github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
-import { escapeXmlAttribute, escapeXmlText } from "../shared/util/xml-escape"
+import { escapeXmlAttribute, escapeXmlText } from "@/src/shared/util/xml-escape"
 import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
-import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
+import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"

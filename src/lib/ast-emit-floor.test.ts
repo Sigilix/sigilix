@@ -10,8 +10,8 @@ import {
   parseAstEmitFloorMode,
   type AstEmitCandidate,
   type FloorProvenanceFinding,
-} from "@/lib/degraded-finding-floor"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+} from "@/src/lib/degraded-finding-floor"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 function f(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

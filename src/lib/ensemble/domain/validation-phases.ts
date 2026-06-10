@@ -8,14 +8,14 @@
 //
 // Leaf discipline (SIG-318): never VALUE-import the core (`./validation`).
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import { type LineSpan } from "@/features/ast-rules"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { type LineSpan } from "@/src/features/ast-rules"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import {
   buildSourceFindingSecurityEvidenceById,
   buildSourceFindingRationaleById,
 } from "./validation-internals"
-import type { SigilixProfile } from "../../sigilix-config"
+import type { SigilixProfile } from "@/src/lib/sigilix-config"
 import {
   MAX_ADVISORY_NITS,
   type ValidateForSubmissionArgs,

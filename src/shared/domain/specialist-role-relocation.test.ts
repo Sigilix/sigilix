@@ -3,8 +3,8 @@
 // reverted (the shared module wouldn't resolve) or if ensemble-router stops
 // re-exporting the same binding (which would silently fork the role set).
 import { describe, it, expect } from "vitest"
-import { ALL_SPECIALISTS } from "@/shared/domain/specialist-role"
-import { ALL_SPECIALISTS as ROUTER_ALL_SPECIALISTS } from "@/lib/ensemble-router"
+import { ALL_SPECIALISTS } from "@/src/shared/domain/specialist-role"
+import { ALL_SPECIALISTS as ROUTER_ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
 
 describe("SpecialistRole relocation (SIG-382)", () => {
   it("lives in shared/domain with the canonical role set", () => {

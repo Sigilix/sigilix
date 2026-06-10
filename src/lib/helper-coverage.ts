@@ -6,7 +6,7 @@
 // (fail closed — never suppresses a finding). See the design doc for the
 // tri-state contract (all = every substantive added line delegates).
 
-import { parseSource, walkAst, type SourceExt, type AstCache, type AstNode } from "@/features/ast-rules"
+import { parseSource, walkAst, type SourceExt, type AstCache, type AstNode } from "@/src/features/ast-rules"
 import type { TestingSiblingMapping } from "./testing-evidence-pack"
 
 const CODE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const

@@ -6,7 +6,7 @@
 // contract so Phase 1 (SIG-225) can rely on it.
 
 import { describe, it, expect } from "vitest"
-import { parseSigilixConfig } from "@/lib/sigilix-config"
+import { parseSigilixConfig } from "@/src/lib/sigilix-config"
 
 describe("parseSigilixConfig — dispatcher", () => {
   it("parses a fully populated dispatcher block", () => {

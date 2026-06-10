@@ -7,8 +7,8 @@
 // self-refuting-finding FP class (PR #12 `sinceMs`) returns.
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS } from "@/prompts/pr-review-specialists"
-import logicExamples from "@/prompts/logic-examples.json"
+import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
+import logicExamples from "@/src/prompts/logic-examples.json"
 
 describe("logic specialist prompt — SIG-308 refute-first contract", () => {
   const prompt = SPECIALIST_PROMPTS.logic

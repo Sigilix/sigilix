@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   runPerfBudgetsCheck,
   renderPerfBudgetsForPrompt,
-} from "@/shared/domain/perf-budgets"
+} from "@/src/shared/domain/perf-budgets"
 
 const baseConfig = {
   p50LatencyBudgetMs: 50,

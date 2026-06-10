@@ -2,9 +2,9 @@
 // Signs fixture tokens with a real generated RSA keypair (no network).
 
 import { describe, expect, it } from "vitest"
-import { verifyGitHubOidcToken } from "@/lib/runner-oidc/verify"
-import { validateRunnerProvenance } from "@/lib/runner-oidc/provenance"
-import type { GitHubOidcClaims, Jwk } from "@/lib/runner-oidc/types"
+import { verifyGitHubOidcToken } from "@/src/lib/runner-oidc/verify"
+import { validateRunnerProvenance } from "@/src/lib/runner-oidc/provenance"
+import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
 
 const ISS = "https://token.actions.githubusercontent.com"
 const AUD = "https://sigilix.example/runner-ingest"

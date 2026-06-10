@@ -17,7 +17,7 @@
 //    null when the line isn't reviewable (e.g., line is in a
 //    deleted file's old side).
 
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 export type ChangedLines = Map<string, Set<number>>
 

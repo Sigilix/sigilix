@@ -16,28 +16,28 @@
 // Dependency rule: every dependency imports from its canonical NON-god-file home.
 // It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
-import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "../../../retrieval"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "@/src/lib/retrieval"
 import {
   multiCorpusEnabled,
   retrieveMultiCorpus,
   formatMultiCorpusForPrompt,
   type MultiCorpusResult,
-} from "../../../multi-corpus"
-import { indexNamespace } from "../../../repo-index-manifest"
+} from "@/src/lib/multi-corpus"
+import { indexNamespace } from "@/src/lib/repo-index-manifest"
 import {
   buildPerfRetrievalQuery,
   extractChangedFunctionNames,
   shouldRunPerfRetrieval,
   resolvePerfSnapshot,
-} from "../../../perf-retrieval"
+} from "@/src/lib/perf-retrieval"
 import {
   extractChangedSymbols,
   buildSymbolRetrievalQuery,
   computeChunkOverlap,
   shouldRunSymbolRetrieval,
-} from "../../../symbol-retrieval"
+} from "@/src/lib/symbol-retrieval"
 import {
   shouldRunBranchAwareRetrieval,
   prepareBranchSet,
@@ -45,25 +45,25 @@ import {
   mergeBranchAware,
   buildBranchRetrievalEvent,
   type BranchVector,
-} from "../../../branch-retrieval"
-import { dynamicReviewEvidenceEnabled } from "../../../review-evidence-pack"
-import { embedText } from "@/shared/adapters/model"
-import { buildChangedLines } from "@/features/ast-rules"
-import { mapWithConcurrency } from "@/shared/util/bounded-concurrency"
-import { withComposedTimeout } from "../../../agent-loop"
-import { resolveAstRulesConfig, type SigilixConfig } from "../../../sigilix-config"
-import { runDepVulnScan } from "@/features/dep-vulns"
-import { createAstCache, type AstCache } from "@/features/ast-rules"
-import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
-import { createRetrievalCache } from "../../../retrieval-cache"
-import { type RouterDecision } from "../../../ensemble-router"
-import type { EnsembleConfig } from "../../domain/config"
-import { RETRIEVAL_PREFLIGHT_TIMEOUT_MS } from "../../domain/budget"
+} from "@/src/lib/branch-retrieval"
+import { dynamicReviewEvidenceEnabled } from "@/src/lib/review-evidence-pack"
+import { embedText } from "@/src/shared/adapters/model"
+import { buildChangedLines } from "@/src/features/ast-rules"
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
+import { withComposedTimeout } from "@/src/lib/agent-loop"
+import { resolveAstRulesConfig, type SigilixConfig } from "@/src/lib/sigilix-config"
+import { runDepVulnScan } from "@/src/features/dep-vulns"
+import { createAstCache, type AstCache } from "@/src/features/ast-rules"
+import { renderDepVulnFindingsForPrompt } from "@/src/features/dep-vulns"
+import { createRetrievalCache } from "@/src/lib/retrieval-cache"
+import { type RouterDecision } from "@/src/lib/ensemble-router"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import { RETRIEVAL_PREFLIGHT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import {
   type EnsembleRunCtx,
   emitPhaseCompleted,
-} from "../../../ensemble-perf-telemetry"
-import { TOP_K_BRANCH } from "../../domain/retrieval-constants"
+} from "@/src/lib/ensemble-perf-telemetry"
+import { TOP_K_BRANCH } from "@/src/lib/ensemble/domain/retrieval-constants"
 
 type AstRulesConfig = ReturnType<typeof resolveAstRulesConfig>
 type DepVulnFindings = Exclude<Awaited<ReturnType<typeof runDepVulnScan>>, { skipped: true }>["findings"]
@@ -75,7 +75,7 @@ type RetrievalCache = ReturnType<typeof createRetrievalCache>
  */
 export interface GatherEvidenceTelemetry {
   depVulnScan?:
-    | { skipped: true; reason: import("@/features/dep-vulns").ScanSkipReason; findingsCount: number }
+    | { skipped: true; reason: import("@/src/features/dep-vulns").ScanSkipReason; findingsCount: number }
     | {
         skipped: false
         findingsCount: number

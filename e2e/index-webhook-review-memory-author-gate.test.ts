@@ -6,7 +6,7 @@
 // GitHub/config/KV I/O chain.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const {
   mockCaptureTopLevelReviewFeedback,
@@ -20,12 +20,12 @@ const {
   mockLoadSigilixConfig: vi.fn(() => ({ reviewMemory: { enabled: true } })),
 }))
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -34,9 +34,9 @@ vi.mock("../src/shared/adapters/github", async () => {
   }
 })
 
-vi.mock("../src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/sigilix-config")>(
-    "../src/lib/sigilix-config",
+vi.mock("@/src/lib/sigilix-config", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
+    "@/src/lib/sigilix-config",
   )
   return {
     ...actual,
@@ -44,9 +44,9 @@ vi.mock("../src/lib/sigilix-config", async () => {
   }
 })
 
-vi.mock("../src/lib/review-memory/capture", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/review-memory/capture")>(
-    "../src/lib/review-memory/capture",
+vi.mock("@/src/lib/review-memory/capture", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/review-memory/capture")>(
+    "@/src/lib/review-memory/capture",
   )
   return {
     ...actual,
@@ -121,7 +121,7 @@ async function postIssueCommentWebhook(
 ): Promise<Response> {
   const body = JSON.stringify(payload)
   const sig = await signBody(body)
-  const worker = (await import("../src/index")).default
+  const worker = (await import("@/src/index")).default
   return worker.fetch(
     new Request("https://example.com/github/webhook", {
       method: "POST",

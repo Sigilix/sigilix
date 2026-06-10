@@ -36,8 +36,8 @@
 // (off | shadow | enforce, default off in code / shadow in wrangler) at the
 // call site. This module is pure and mode-agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import { parseSource, type SourceExt, type AstCache } from "@/features/ast-rules"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { parseSource, type SourceExt, type AstCache } from "@/src/features/ast-rules"
 import { extractCitedIdentifiers } from "./validate-window-blindness"
 
 export type LogicClaimRefutationMode = "off" | "shadow" | "enforce"

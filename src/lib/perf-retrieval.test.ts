@@ -13,7 +13,7 @@ import {
   resolvePerfSnapshot,
   selectRetrievalSnapshotForRole,
   PERF_RETRIEVAL_KEYWORDS,
-} from "@/lib/perf-retrieval"
+} from "@/src/lib/perf-retrieval"
 
 describe("extractChangedFunctionNames", () => {
   it("extracts a plain function declaration on an added line", () => {

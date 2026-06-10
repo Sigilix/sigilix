@@ -8,8 +8,8 @@ import {
   CHECK_ANNOTATION_TITLE_LIMIT,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "@/lib/triage-pr-review"
-import { baseFinding } from "@/lib/triage-pr-review.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import { baseFinding } from "@/src/lib/triage-pr-review.test-helpers"
 
 describe("buildReviewSubmission", () => {
   const verdict: PrReviewVerdict = {

@@ -10,7 +10,7 @@ import {
   buildReviewSubmission,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "@/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review"
 
 describe("wrapInlineHtmlTags", () => {
   it("returns the input unchanged when there are no angle brackets", () => {

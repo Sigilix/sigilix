@@ -47,15 +47,15 @@
 //   (zero behavior change); only `enforce` demotes. This module is pure and
 //   mode-agnostic — the orchestrator decides what to do with the verdict.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { SecurityFact } from "@/lib/security-evidence-manifest"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
 import {
   deriveSecurityBucket,
   EVIDENCE_LINE_TOLERANCE,
   type SecurityBucket,
 } from "./validate-security-finding"
-import { containsCredentialToken } from "@/lib/secret-scan"
-import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "@/shared/domain/validate-injection-taint"
+import { containsCredentialToken } from "@/src/lib/secret-scan"
+import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "@/src/shared/domain/validate-injection-taint"
 
 /**
  * Validator mode. `off` (default): the gate doesn't run. `shadow`:

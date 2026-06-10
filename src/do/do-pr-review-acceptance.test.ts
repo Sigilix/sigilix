@@ -12,14 +12,14 @@
 // Cloudflare's setAlarm runtime.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { PrReviewRunDO } from "@/do/pr-review-run"
-import { enqueuePrReviewJob } from "@/do/webhook-enqueue"
-import { runPrReviewWithDoCallback } from "@/do/consumer-wrapper"
-import { handleReviewStatusRoute } from "@/do/status-route"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import type { RunState, StatusResponse } from "@/do/types"
-import { GitHubHttpError } from "@/shared/adapters/github"
+import { PrReviewRunDO } from "@/src/do/pr-review-run"
+import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
+import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
+import { handleReviewStatusRoute } from "@/src/do/status-route"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import type { RunState, StatusResponse } from "@/src/do/types"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
 
 const SAMPLE_HEAD_SHA = "a".repeat(40)
 const SAMPLE_BASE_SHA = "b".repeat(40)

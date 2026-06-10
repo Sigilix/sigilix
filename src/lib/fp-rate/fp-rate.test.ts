@@ -5,24 +5,24 @@
 // target check, synth aggregate), windowing, and CSV rendering.
 
 import { describe, expect, it } from "vitest"
-import { computeFid } from "@/lib/review-memory/marker"
+import { computeFid } from "@/src/lib/review-memory/marker"
 import {
   attributeDismissals,
   buildFindingIndex,
   dedupeDismissals,
   type AttributionResult,
-} from "@/lib/fp-rate/attribute"
-import { computeFpRates } from "@/lib/fp-rate/compute"
-import { formatCsv, FP_RATE_CSV_HEADER } from "@/lib/fp-rate/format"
-import { filterReviewsToWindow } from "@/lib/fp-rate/window"
-import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview, REVERSE_TS_BASE } from "@/lib/fp-rate/ingest"
-import { bucketForReason } from "@/lib/fp-rate/types"
+} from "@/src/lib/fp-rate/attribute"
+import { computeFpRates } from "@/src/lib/fp-rate/compute"
+import { formatCsv, FP_RATE_CSV_HEADER } from "@/src/lib/fp-rate/format"
+import { filterReviewsToWindow } from "@/src/lib/fp-rate/window"
+import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview, REVERSE_TS_BASE } from "@/src/lib/fp-rate/ingest"
+import { bucketForReason } from "@/src/lib/fp-rate/types"
 import type {
   FpRateDismissal,
   FpRateReview,
   RawSynthFinding,
   SpecialistRole,
-} from "@/lib/fp-rate/types"
+} from "@/src/lib/fp-rate/types"
 
 const DAY = 24 * 60 * 60 * 1000
 

@@ -7,9 +7,9 @@ import {
   retrieveBranchChunks,
   shouldRunBranchAwareRetrieval,
   type BranchVector,
-} from "@/lib/branch-retrieval"
-import type { RetrievedChunk } from "@/lib/retrieval"
-import { embedText } from "@/shared/adapters/model"
+} from "@/src/lib/branch-retrieval"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
+import { embedText } from "@/src/shared/adapters/model"
 
 function rc(path: string, a: number, b: number, score: number, content = "x"): RetrievedChunk {
   return { path, lineStart: a, lineEnd: b, content, score }

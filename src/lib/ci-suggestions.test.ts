@@ -1,8 +1,8 @@
 // SIG-333: CI-triage inline suggestion anchoring + rendering (pure helpers).
 
 import { describe, expect, it } from "vitest"
-import { parseDiffToReviewablePositions } from "@/shared/util/diff-positions"
-import type { CiTriagePatch } from "@/lib/triage-ci"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
+import type { CiTriagePatch } from "@/src/lib/triage-ci"
 import {
   parseCiSuggestionsMode,
   partitionCiPatches,
@@ -14,9 +14,9 @@ import {
   submitCiSuggestionReview,
   CI_SUGGESTION_MARKER,
   type CiSuggestionClient,
-} from "@/lib/ci-suggestions"
-import { GitHubHttpError } from "@/shared/adapters/github"
-import type { SubmitReviewBody } from "@/shared/types/github"
+} from "@/src/lib/ci-suggestions"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 // A small unified diff: line 2 is added; lines 1 and 3 are context. All
 // three are RIGHT-reviewable in the new file.

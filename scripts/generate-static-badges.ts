@@ -24,7 +24,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { ALL_BADGE_NAMES, BADGE_ASSET_VERSION, getBadgeSvg } from "@/lib/badge-assets"
+import { ALL_BADGE_NAMES, BADGE_ASSET_VERSION, getBadgeSvg } from "@/src/lib/badge-assets"
 
 // CR catch (PR #192): sourced from `BADGE_SVGS` at runtime via the
 // `ALL_BADGE_NAMES` export so this script cannot silently drift if a

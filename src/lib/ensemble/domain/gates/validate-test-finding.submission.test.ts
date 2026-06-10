@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { finding, pack } from "@/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { finding, pack } from "@/src/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
 
 // ── Integration with validateForSubmission ──────────────────────
 

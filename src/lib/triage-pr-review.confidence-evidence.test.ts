@@ -7,10 +7,10 @@ import {
   type PrReviewFinding,
   type PrReviewVerdict,
   extensionToFenceLang,
-} from "@/lib/triage-pr-review"
-import { badgeAssetUrl } from "@/lib/badge-assets"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding } from "@/lib/triage-pr-review.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import { badgeAssetUrl } from "@/src/lib/badge-assets"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding } from "@/src/lib/triage-pr-review.test-helpers"
 
 describe("resolveFindingConfidence (SIG-101)", () => {
   const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({

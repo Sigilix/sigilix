@@ -7,7 +7,7 @@
 // file and mock state does not cross files, so each sibling declares
 // them inline.
 
-import type { Env } from "@/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 export function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true

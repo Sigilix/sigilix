@@ -14,8 +14,8 @@
 // New head SHA → new marker → new comment (correctly).
 // Same head SHA → same marker → idempotent.
 
-import type { GitHubClient } from "../shared/adapters/github"
-import type { Env } from "../shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 const RAW_SNIPPET_MAX = 500
 const KV_TTL_SECONDS = 24 * 60 * 60 // 1 day

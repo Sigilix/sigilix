@@ -26,12 +26,12 @@ const {
   mockListOpenPullRequests: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async getRepository(owner: string, repo: string): Promise<unknown> {
       return mockGetRepository(owner, repo)
@@ -46,11 +46,11 @@ vi.mock("@/shared/adapters/github", async () => {
 import {
   maybeEnqueuePullRequestBranchIndexJobs,
   maybeEnqueuePushIndexJob,
-} from "@/lib/index-producer"
-import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/lib/repo-index-manifest"
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/shared/adapters/model"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+} from "@/src/lib/index-producer"
+import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

@@ -3,9 +3,9 @@
 // usage-vs-mention gate removes those from the inline surface without hurting
 // real command/XSS recall.
 
-import { buildAddedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
-import { evaluateSecurityUsage } from "../src/lib/validate-security-usage"
-import type { PrReviewFinding } from "../src/lib/triage-pr-review"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
+import { evaluateSecurityUsage } from "@/src/lib/validate-security-usage"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export type SecurityOverfireClass =
   | "command-mention"

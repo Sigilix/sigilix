@@ -14,9 +14,9 @@
 // Phase 5 cleanup will delete the legacy key after a 7-day safety
 // window. Phase 4 flips reads to the new key.
 
-import type { Env } from "../shared/types/env"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken, listInstallationRepoFullNames } from "../shared/adapters/github/github-app"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken, listInstallationRepoFullNames } from "@/src/shared/adapters/github/github-app"
 import { parseFullName } from "./index-producer"
 import {
   readRepoIndexManifest,

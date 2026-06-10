@@ -19,31 +19,31 @@
 // NOT post inline comments — that's Task 9's `postAstInlineFindings`
 // gated by `astRules.autoInline`.
 
-import { parseSource, LARGE_FILE_BYTES, type SourceExt } from "@/features/ast-rules/domain/parser"
-import type { AstCache } from "@/features/ast-rules/domain/parse-cache"
-import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
+import { parseSource, LARGE_FILE_BYTES, type SourceExt } from "@/src/features/ast-rules/domain/parser"
+import type { AstCache } from "@/src/features/ast-rules/domain/parse-cache"
+import { walkAst, type AstNode } from "@/src/features/ast-rules/domain/walker"
 import {
   buildChangedLines,
   nodeOverlapsChanged,
   findReviewPosition,
   type ChangedLines,
-} from "@/features/ast-rules/domain/diff-filter"
-import { astFindingId } from "@/features/ast-rules/domain/finding-id"
+} from "@/src/features/ast-rules/domain/diff-filter"
+import { astFindingId } from "@/src/features/ast-rules/domain/finding-id"
 import {
   getEnabledRules,
   ruleEnabledByConfig,
   type ResolvedAstRulesConfig,
-} from "@/features/ast-rules/domain/rule-registry"
-import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "@/features/ast-rules/domain/scan-dynamic-html-sink"
+} from "@/src/features/ast-rules/domain/rule-registry"
+import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "@/src/features/ast-rules/domain/scan-dynamic-html-sink"
 import {
   buildGlobalUnionMap,
   scanSqlEnumDrift,
   ENUM_LITERAL_DRIFT_RULE_ID,
-} from "@/features/ast-rules/domain/scan-enum-literal-drift"
-import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "@/features/ast-rules/domain/scan-cents-as-dollars"
-import { scanFractionalCentsMath, FLOAT_CENTS_RULE_ID } from "@/features/ast-rules/domain/scan-float-cents"
+} from "@/src/features/ast-rules/domain/scan-enum-literal-drift"
+import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "@/src/features/ast-rules/domain/scan-cents-as-dollars"
+import { scanFractionalCentsMath, FLOAT_CENTS_RULE_ID } from "@/src/features/ast-rules/domain/scan-float-cents"
 
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
 // reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't

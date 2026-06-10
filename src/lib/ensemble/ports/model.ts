@@ -13,6 +13,6 @@ export type {
   ChatToolDef,
   ToolCall,
   LlmUsage,
-} from "@/shared/ports/model"
+} from "@/src/shared/ports/model"
 
-export type { EmbeddingPort, AiBinding } from "@/shared/ports/embedding"
+export type { EmbeddingPort, AiBinding } from "@/src/shared/ports/embedding"

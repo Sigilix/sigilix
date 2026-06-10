@@ -23,7 +23,7 @@ import {
   isBotAuthoredComment,
   BOT_AUTHORED_KV_PREFIX,
   BOT_AUTHORED_TTL_SECONDS,
-} from "@/lib/bot-authored-comments"
+} from "@/src/lib/bot-authored-comments"
 
 interface KvStub {
   kv: KVNamespace

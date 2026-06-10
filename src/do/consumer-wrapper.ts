@@ -21,8 +21,8 @@
 // / pickup-transport failures throw, so Cloudflare Queue redelivers
 // the message back to a fresh /pickup attempt.
 
-import type { Env } from "../shared/types/env"
-import type { JobMessage } from "../shared/types/job"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 import { classifyEnsembleError, classifyEnsembleStage } from "./classify-error"
 import type { RunResultRequest, RunResultStatus } from "./types"
 

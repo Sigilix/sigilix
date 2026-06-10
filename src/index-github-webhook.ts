@@ -6,40 +6,40 @@
 // src/index-internals.ts (a leaf->leaf edge, acyclic); it imports nothing
 // from the entry module.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
-import { getInstallationToken } from "@/shared/adapters/github/github-app"
-import { verifyGitHubWebhook } from "@/shared/adapters/github/github-webhook-verify"
-import { SIGILIX_BOT_LOGIN } from "@/lib/dismiss-prior-reviews"
-import { readReviewManifest } from "@/lib/review-manifest"
-import { PROMPT_VERSION } from "@/prompts/pr-review"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { verifyGitHubWebhook } from "@/src/shared/adapters/github/github-webhook-verify"
+import { SIGILIX_BOT_LOGIN } from "@/src/lib/dismiss-prior-reviews"
+import { readReviewManifest } from "@/src/lib/review-manifest"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import {
   hasExplicitTopLevelReviewFeedbackSignal,
   hasStaleDismissedReviewFeedbackSignal,
-} from "@/lib/review-memory/capture"
-import { isPrOverviewEnabled, loadSigilixConfig } from "@/lib/sigilix-config"
+} from "@/src/lib/review-memory/capture"
+import { isPrOverviewEnabled, loadSigilixConfig } from "@/src/lib/sigilix-config"
 import {
   postDraftPrSkipNotice,
   supersedeDraftPrSkipNotice,
-} from "@/lib/pr-draft-skip-notice"
-import { enqueuePrReviewJob } from "@/do/webhook-enqueue"
+} from "@/src/lib/pr-draft-skip-notice"
+import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import {
   computeDiffHash,
   readPriorReviewDiffHash,
-} from "@/lib/noop-merge-detect"
+} from "@/src/lib/noop-merge-detect"
 import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
   maybeEnqueuePullRequestBranchIndexJobs,
   maybeEnqueuePushIndexJob,
   type IndexJobReason,
-} from "@/lib/index-producer"
-import { multiCorpusEnabled } from "@/lib/multi-corpus"
-import { postPrOverviewStubIfNeeded } from "@/lib/pr-overview-stub"
+} from "@/src/lib/index-producer"
+import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
+import { postPrOverviewStubIfNeeded } from "@/src/lib/pr-overview-stub"
 import {
   handleInstallReposRemoved,
   handleInstallationDeleted,
-} from "@/lib/index-delete"
+} from "@/src/lib/index-delete"
 import {
   type GitHubWebhookPayload,
   decidePullRequestJobs,
@@ -47,7 +47,7 @@ import {
   dispatchReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
-} from "@/index-internals"
+} from "@/src/index-internals"
 
 export async function handleGitHubWebhook(
   request: Request,

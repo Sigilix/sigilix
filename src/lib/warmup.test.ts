@@ -22,8 +22,8 @@ const {
   mockListOpenPullRequests: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async listIssueComments(...args: unknown[]): Promise<unknown> {
       return mockListIssueComments(...args)
@@ -39,10 +39,10 @@ import {
   enqueueWarmupRerunsForIndex,
   LEGACY_WARMUP_MARKER,
   WARMUP_CALLOUT_MARKER,
-} from "@/lib/warmup"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+} from "@/src/lib/warmup"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

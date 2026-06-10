@@ -3,8 +3,8 @@
 // network calls are integration-tested manually after deploy.
 
 import { describe, expect, it } from "vitest"
-import { teamKeyToNamespace } from "@/lib/retrieval"
-import { formatChunksForPrompt } from "@/lib/retrieval"
+import { teamKeyToNamespace } from "@/src/lib/retrieval"
+import { formatChunksForPrompt } from "@/src/lib/retrieval"
 
 describe("teamKeyToNamespace", () => {
   it("returns the default when team key is null", () => {

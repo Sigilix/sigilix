@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { parseSensitiveRepos, isRepoSensitive } from "@/lib/repo-policy"
+import { parseSensitiveRepos, isRepoSensitive } from "@/src/lib/repo-policy"
 
 describe("parseSensitiveRepos", () => {
   it("returns empty set for undefined", () => {

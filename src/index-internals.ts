@@ -7,30 +7,30 @@
 // importing the entry module. Declarations are relocated VERBATIM from the
 // pre-split src/index.ts (modulo the added `export` keyword + imports).
 
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import { GitHubClient } from "@/shared/adapters/github"
-import { getInstallationToken } from "@/shared/adapters/github/github-app"
-import { type GhMentionSurface } from "@/lib/github-mention"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { type GhMentionSurface } from "@/src/lib/github-mention"
 import {
   bodyMentionsBot,
   getMentionTriggers,
   isArcGithubLogin,
   stripQuotesAndCode,
-} from "@/lib/mention"
+} from "@/src/lib/mention"
 import {
   parseSlashCommand,
   renderSlashCommandAck,
   isAuthorAllowedForSlashCommand,
-} from "@/lib/slash-commands"
-import { shouldQueueReviewThreadReply } from "@/lib/review-thread-reply"
-import { postSlashCommandEyesAck } from "@/lib/slash-command-eyes-ack"
-import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/lib/sigilix-config"
+} from "@/src/lib/slash-commands"
+import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
+import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
+import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
 import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
   captureTopLevelReviewFeedback,
-} from "@/lib/review-memory/capture"
+} from "@/src/lib/review-memory/capture"
 
 /**
  * Pure decision: given a `pull_request` webhook action + draft flag,

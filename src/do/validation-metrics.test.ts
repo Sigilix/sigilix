@@ -5,9 +5,9 @@
 // stub; public methods called directly (no HTTP fetch).
 
 import { describe, expect, it } from "vitest"
-import { ValidationMetricsDO } from "@/do/validation-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { ValidationMetricsDO } from "@/src/do/validation-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDoInstance() {
   const sqlStorage = new NodeSqliteStorage()

@@ -9,7 +9,7 @@ import {
   MIN_CLAIM_CONFIDENCE,
   MAX_CLAIMS_PER_FINDING,
   type ClaimExtractionFinding,
-} from "@/lib/review-memory/claim-extractor"
+} from "@/src/lib/review-memory/claim-extractor"
 
 const finding = (headline: string): ClaimExtractionFinding => ({
   headline,

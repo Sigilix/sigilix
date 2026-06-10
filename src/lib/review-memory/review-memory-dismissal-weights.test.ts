@@ -7,8 +7,8 @@ import {
   DISMISSAL_SOFTENING_WEIGHTS,
   weightForReason,
   weightedSignalCount,
-} from "@/lib/review-memory/dismissal-weights"
-import { ALL_DISMISS_REASONS } from "@/lib/dismiss-reasons"
+} from "@/src/lib/review-memory/dismissal-weights"
+import { ALL_DISMISS_REASONS } from "@/src/lib/dismiss-reasons"
 
 describe("DISMISSAL_SOFTENING_WEIGHTS table", () => {
   it("pins the only above-1.0 reason to too-minor at 1.5x (spec-locked)", () => {

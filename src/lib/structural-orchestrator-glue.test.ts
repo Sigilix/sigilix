@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest"
 import {
   isDelegationShapedLine,
   isStructurallyOrchestratorGlue,
-} from "@/lib/helper-coverage"
+} from "@/src/lib/helper-coverage"
 
 const linesOf = (...texts: string[]) =>
   new Map(texts.map((t, i) => [i + 1, t]))

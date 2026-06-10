@@ -8,7 +8,7 @@ import {
   RECALL_LOGIC_DEGRADED_ALARM_STREAK,
   RECALL_SYNTH_ZERO_FINDING_ALARM_STREAK,
   type RecallReviewOutcome,
-} from "@/lib/recall-alarm"
+} from "@/src/lib/recall-alarm"
 
 function o(prNumber: number, over: Partial<RecallReviewOutcome> = {}): RecallReviewOutcome {
   return { prNumber, logicMissing: false, synthFindingCount: 3, ...over }

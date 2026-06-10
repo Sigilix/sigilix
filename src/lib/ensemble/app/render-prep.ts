@@ -20,76 +20,76 @@
 // the model-provider adapter for the claim classifier). It never imports the
 // orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import type { DeltaBadgeCounts } from "../render/review-body"
-import { parseDiffToReviewablePositions } from "../../diff-positions"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
+import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
 import {
   loadWithdrawals,
   filterWithdrawnFindings,
   filterWithdrawnFindingsDetailed,
   computeContentFingerprint,
-} from "../../review-withdrawal-store"
-import { recordRepeatFpMetrics, type RepeatFpEvent } from "../../validation-metrics-client"
+} from "@/src/lib/review-withdrawal-store"
+import { recordRepeatFpMetrics, type RepeatFpEvent } from "@/src/lib/validation-metrics-client"
 import {
   assessApprovalReadiness,
   buildApprovalReadinessSummary,
-} from "../../approval-readiness"
-import { isSoftenActive, softenScoreWithFloor } from "../../review-memory/soften-gate"
+} from "@/src/lib/approval-readiness"
+import { isSoftenActive, softenScoreWithFloor } from "@/src/lib/review-memory/soften-gate"
 import {
   readCalibrationParams,
   shouldKeepSoften,
   decideWarmSoftenSurvival,
   type WarmSoftenCandidate,
   type WarmSoftenDecision,
-} from "../../review-memory/calibration"
-import { resolveReviewMemoryConfig, type SigilixConfig } from "../../sigilix-config"
+} from "@/src/lib/review-memory/calibration"
+import { resolveReviewMemoryConfig, type SigilixConfig } from "@/src/lib/sigilix-config"
 import {
   categoryFromRoleHint,
   computeFid,
   computePathSha256,
-} from "../../review-memory/marker"
+} from "@/src/lib/review-memory/marker"
 import {
   extractClaims,
   CLAIM_EXTRACTION_SCHEMA,
   type ClaimExtractionFinding,
-} from "../../review-memory/claim-extractor"
+} from "@/src/lib/review-memory/claim-extractor"
 import {
   shadowMatchReviewMemoryClaims,
   type ShadowMatchFinding,
-} from "../../review-memory/shadow-match"
+} from "@/src/lib/review-memory/shadow-match"
 import type {
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,
-} from "../../review-memory/types"
-import type { ReviewMemoryFinding } from "../../review-memory/types"
-import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/features/precision-profile"
-import { readReviewManifest, type ReviewManifestFinding } from "../../review-manifest"
-import { type RouterDecision } from "../../ensemble-router"
+} from "@/src/lib/review-memory/types"
+import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
+import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/src/features/precision-profile"
+import { readReviewManifest, type ReviewManifestFinding } from "@/src/lib/review-manifest"
+import { type RouterDecision } from "@/src/lib/ensemble-router"
 import {
   chooseReviewEvent,
   resolveReviewEventOverride,
   severityTier,
   LOW_CONFIDENCE_COMMENT_THRESHOLD,
-} from "../domain/verdict"
+} from "@/src/lib/ensemble/domain/verdict"
 import {
   annotateWithConsensus,
   computeFindingKey,
   computeFindingDelta,
-} from "../domain/findings"
+} from "@/src/lib/ensemble/domain/findings"
 import {
   collectApprovalReadinessSourceFindings,
   type ApprovalReadinessSourceVerdict,
-} from "../domain/synth"
-import type { SynthesizerProvenance, ValidatedOutput, CollectedVerdict } from "../domain/validation"
-import type { EnsembleConfig } from "../domain/config"
+} from "@/src/lib/ensemble/domain/synth"
+import type { SynthesizerProvenance, ValidatedOutput, CollectedVerdict } from "@/src/lib/ensemble/domain/validation"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   CLAIM_EXTRACTOR_CONFIG,
   CLAIM_EXTRACTOR_TIMEOUT_MS,
   runWithRetryAndFallback,
-} from "../adapters/model-provider"
+} from "@/src/lib/ensemble/adapters/model-provider"
 import { prepareVerification } from "./verification-prep"
 
 type SynthesizerProvenanceFindings = SynthesizerProvenance["findings"]

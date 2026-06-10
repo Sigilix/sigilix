@@ -22,22 +22,22 @@ const mockLoadSigilixConfig = vi.fn()
 const mockGetInstallationToken = vi.fn(async () => "fake-token")
 const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true as const }))
 
-vi.mock("../src/lib/pr-overview-stub", () => ({
+vi.mock("@/src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
 }))
 
-vi.mock("../src/lib/pr-draft-skip-notice", () => ({
+vi.mock("@/src/lib/pr-draft-skip-notice", () => ({
   postDraftPrSkipNotice: (a: unknown) => mockPostDraftSkipNotice(a),
   supersedeDraftPrSkipNotice: (a: unknown) => mockSupersedeDraftSkipNotice(a),
 }))
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (a: unknown) => mockGetInstallationToken(a),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>(
-    "../src/shared/adapters/github",
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>(
+    "@/src/shared/adapters/github",
   )
   return {
     ...actual,
@@ -45,9 +45,9 @@ vi.mock("../src/shared/adapters/github", async () => {
   }
 })
 
-vi.mock("../src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/sigilix-config")>(
-    "../src/lib/sigilix-config",
+vi.mock("@/src/lib/sigilix-config", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
+    "@/src/lib/sigilix-config",
   )
   return {
     ...actual,
@@ -55,7 +55,7 @@ vi.mock("../src/lib/sigilix-config", async () => {
   }
 })
 
-vi.mock("../src/do/webhook-enqueue", () => ({
+vi.mock("@/src/do/webhook-enqueue", () => ({
   enqueuePrReviewJob: (env: unknown, args: unknown) => mockEnqueuePrReviewJob(env, args),
 }))
 
@@ -180,7 +180,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     // still fires independently per founder direction.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: true } })
     const { env, sentJobs } = makeEnv()
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postWebhook(worker, env)
 
@@ -203,7 +203,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     // customer doesn't get a stub either — same expectation as before.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const res = await postWebhook(worker, env)
 
@@ -221,7 +221,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     // `overview.enabled`, NOT from `decision.overview`.
     mockLoadSigilixConfig.mockResolvedValue({ overview: { enabled: true } })
     const { env, sentJobs } = makeEnv()
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     // Send a draft-PR payload (decidePullRequestJobs returns
     // `{ overview: false, review: false }` for drafts).
@@ -257,7 +257,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
 
   it("posts a draft-skip notice when a PR is converted back to draft", async () => {
     const { env, sentJobs } = makeEnv()
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const body = JSON.stringify({
       ...makeWebhookPayload(),
@@ -294,7 +294,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: true } })
     const { env, sentJobs } = makeEnv()
     env.OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES = "on"
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const body = JSON.stringify({
       ...makeWebhookPayload(),
@@ -343,7 +343,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     env.OPENCLAW_INDEXER_ENABLED = "on"
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
     const waitUntilPromises: Promise<unknown>[] = []
 
     const res = await postWebhookPayload(worker, env, makeWebhookPayload(), waitUntilPromises)
@@ -361,7 +361,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     mockLoadSigilixConfig.mockResolvedValue({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     env.OPENCLAW_INDEXER_ENABLED = "on"
-    const worker = (await import("../src/index")).default
+    const worker = (await import("@/src/index")).default
 
     const missingHeadRepoWaits: Promise<unknown>[] = []
     await postWebhookPayload(

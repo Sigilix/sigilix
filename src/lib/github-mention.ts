@@ -10,22 +10,22 @@
 // Idempotency: KV-keyed on the source comment ID with a 30-day TTL so
 // re-deliveries of the same Comment.create event don't double-reply.
 
-import { generate } from "../shared/adapters/model"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import type { IssueComment, ReviewComment } from "../shared/types/github"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
-import { GITHUB_MENTION_SCHEMA } from "../shared/domain/schemas"
-import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"
+import { generate } from "@/src/shared/adapters/model"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import type { IssueComment, ReviewComment } from "@/src/shared/types/github"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import { GITHUB_MENTION_SCHEMA } from "@/src/shared/domain/schemas"
+import { GITHUB_MENTION_PROMPT } from "@/src/prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"
 import { arcInThreadAbove, bodyMentionsBot, getMentionTriggers, stripMentionFromBody } from "./mention"
 import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
-import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
+import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
-import { recordOutcome } from "@/features/precision-profile"
+import { recordOutcome } from "@/src/features/precision-profile"
 import {
   parseFindingCategory,
   parseFindingFingerprint,
@@ -34,7 +34,7 @@ import {
 export { parseFindingCategory } from "./pr-finding-markers"
 import { type DismissReason } from "./dismiss-reasons"
 import { recordDismissalMetric } from "./validation-metrics-client"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 // Symbols the handler below calls directly from the relocated dismiss leaf.
 import {
   DISMISS_DEDUPE_KIND,

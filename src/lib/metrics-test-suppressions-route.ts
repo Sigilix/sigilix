@@ -15,7 +15,7 @@
 // No new storage — reuses the global ValidationMetricsDO and the same
 // bearer token as the other /metrics/* reads.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryValidationMetrics } from "./validation-metrics-client"
 import { parseTestsValidatorMode } from "./validate-test-finding"

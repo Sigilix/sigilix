@@ -39,7 +39,7 @@
 // Uninstall delete is GDPR/SOC 2 retention compliance; turning off the
 // indexer to save cost must not turn off deletion.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import {
   parseRepoIndexManifest,
   repoIndexManifestKey,

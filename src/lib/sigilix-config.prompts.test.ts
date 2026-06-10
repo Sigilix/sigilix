@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest"
 import {
   buildSpecialistInitialMessage,
   buildSynthesizerInitialMessage,
-} from "@/prompts/pr-review-specialists"
+} from "@/src/prompts/pr-review-specialists"
 
 describe("buildSpecialistInitialMessage — sigilix.json guidance injection", () => {
   const baseCtx = {

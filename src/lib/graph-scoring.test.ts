@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { edgeWeight, hopDecay, hybridScore, normalizeVectorScores, LAMBDA } from "@/lib/graph-scoring"
+import { edgeWeight, hopDecay, hybridScore, normalizeVectorScores, LAMBDA } from "@/src/lib/graph-scoring"
 
 describe("graph-scoring", () => {
   it("edge + hop weights match the spec table", () => {

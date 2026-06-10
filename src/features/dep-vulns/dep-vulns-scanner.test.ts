@@ -1,10 +1,10 @@
 // ARC-186 — scanner orchestrator + render tests.
 
 import { describe, it, expect, vi } from "vitest"
-import { runDepVulnScan, type DepVulnFinding } from "@/features/dep-vulns"
-import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { runDepVulnScan, type DepVulnFinding } from "@/src/features/dep-vulns"
+import { renderDepVulnFindingsForPrompt } from "@/src/features/dep-vulns"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 function fakeClient(getFileContent: GitHubClient["getFileContent"]): GitHubClient {
   return { getFileContent } as unknown as GitHubClient

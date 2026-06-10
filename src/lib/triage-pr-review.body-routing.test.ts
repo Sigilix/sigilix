@@ -6,9 +6,9 @@ import {
   previewFallbackSubmissionEvent,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding } from "@/lib/triage-pr-review.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding } from "@/src/lib/triage-pr-review.test-helpers"
 
 describe("buildReviewSubmission — SIG-222 testing findings are non-blocking and inline-only", () => {
   const testingFinding: PrReviewFinding = {

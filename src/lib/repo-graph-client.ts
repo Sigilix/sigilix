@@ -5,14 +5,14 @@
 // the GDPR delete path (T8).  No runtime unit tests — tsc validates
 // types; T7/T8 exercise the wrappers end-to-end.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
 import type {
   RepoGraphDO,
   UpsertFileGraphArgs,
   GraphContextNode,
   GraphContextExpansion,
-} from "../do/repo-graph"
+} from "@/src/do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
 // Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,

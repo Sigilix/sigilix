@@ -73,6 +73,18 @@ export default tseslint.config(
       // files that read better whole than split get 1,500 via the
       // explicit allowlist override block below — nothing else does.
       "max-lines": ["error", { max: 1000, skipBlankLines: false, skipComments: false }],
+      // Cross-tree imports use the `@/` root alias — COMPLIANCE.md §3. A
+      // `../` specifier that climbs out of the current directory is banned:
+      // it hides the real dependency and breaks when files move. Same-dir
+      // `./sibling` is fine. (TS-aware variant so `import type ... from "../"`
+      // is caught too under verbatimModuleSyntax.)
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": ["error", {
+        patterns: [{
+          regex: "^\\.\\./",
+          message: "Climbing imports are banned — use the `@/` root alias (e.g. `@/src/...`). See COMPLIANCE.md §3.",
+        }],
+      }],
     },
   },
   {

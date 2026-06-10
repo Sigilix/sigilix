@@ -6,14 +6,14 @@
 // board surface, no `lib/projects.mjs`, no codebase retrieval (deferred to
 // the PR-side worker which still has access to repo checkouts).
 
-import { generate } from "../shared/adapters/model"
+import { generate } from "@/src/shared/adapters/model"
 import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
-import { getMarker, setMarker } from "../shared/util/dedupe"
+import { getMarker, setMarker } from "@/src/shared/util/dedupe"
 import { markBotAuthoredComment } from "./bot-authored-comments"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
-import { ISSUE_TRIAGE_SCHEMA } from "../shared/domain/schemas"
-import type { Env } from "../shared/types/env"
-import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
+import { ISSUE_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
+import type { Env } from "@/src/shared/types/env"
+import { ISSUE_TRIAGE_PROMPT } from "@/src/prompts/issue-triage"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3

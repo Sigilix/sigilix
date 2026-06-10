@@ -6,57 +6,57 @@
 // `export` keyword + imports). The switch statement is untouched; it
 // imports nothing from the entry module.
 
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import { GitHubClient } from "@/shared/adapters/github"
-import { getInstallationToken } from "@/shared/adapters/github/github-app"
-import { triageIssue } from "@/lib/triage"
-import { handleMention } from "@/lib/mention-reply"
-import { renderSlashCommandAck, type SlashCommand } from "@/lib/slash-commands"
-import { handlePrOverview } from "@/lib/triage-pr-overview"
-import { handlePrLabels } from "@/lib/triage-pr-labels"
-import { handleCiTriage } from "@/lib/triage-ci"
-import { handlePrImprove } from "@/lib/triage-pr-improve"
-import { handlePrDescribe } from "@/lib/triage-pr-describe"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { triageIssue } from "@/src/lib/triage"
+import { handleMention } from "@/src/lib/mention-reply"
+import { renderSlashCommandAck, type SlashCommand } from "@/src/lib/slash-commands"
+import { handlePrOverview } from "@/src/lib/triage-pr-overview"
+import { handlePrLabels } from "@/src/lib/triage-pr-labels"
+import { handleCiTriage } from "@/src/lib/triage-ci"
+import { handlePrImprove } from "@/src/lib/triage-pr-improve"
+import { handlePrDescribe } from "@/src/lib/triage-pr-describe"
 import {
   handlePrPause,
   handlePrResume,
   handlePrIgnore,
   handlePrResolveThreads,
   handlePrCancel,
-} from "@/lib/pr-lifecycle-commands"
-import { handlePrStaleMark } from "@/lib/triage-pr-stale-mark"
-import { handlePrReviewEnsemble } from "@/lib/triage-pr-review-ensemble"
-import { parseEnsembleConfig } from "@/lib/ensemble/config"
-import { recordValidationMetrics } from "@/lib/validation-metrics-client"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import { recordGraphMetrics } from "@/lib/graph-metrics-client"
-import type { GraphRetrievalSample } from "@/do/graph-metrics"
-import { recordGraphExpansionMetrics } from "@/lib/graph-expansion-metrics-client"
-import type { GraphExpansionSample } from "@/do/graph-expansion-metrics"
-import { isRepoSensitive } from "@/lib/repo-policy"
-import { handleGithubMention } from "@/lib/github-mention"
-import { runPrReviewWithDoCallback } from "@/do/consumer-wrapper"
-import { enqueuePrReviewJob } from "@/do/webhook-enqueue"
+} from "@/src/lib/pr-lifecycle-commands"
+import { handlePrStaleMark } from "@/src/lib/triage-pr-stale-mark"
+import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
+import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
+import { recordValidationMetrics } from "@/src/lib/validation-metrics-client"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import { recordGraphMetrics } from "@/src/lib/graph-metrics-client"
+import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
+import { recordGraphExpansionMetrics } from "@/src/lib/graph-expansion-metrics-client"
+import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
+import { isRepoSensitive } from "@/src/lib/repo-policy"
+import { handleGithubMention } from "@/src/lib/github-mention"
+import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
+import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import {
   handleIndexRepoJob,
-} from "@/lib/indexer"
+} from "@/src/lib/indexer"
 import {
   handleCorpusPrUpsert,
   handleCorpusPrBackfill,
   handleCorpusIssueUpsert,
-} from "@/lib/multi-corpus-jobs"
+} from "@/src/lib/multi-corpus-jobs"
 import {
   attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
   parseReviewOutputSurface,
   type SigilixCheckConclusion,
-} from "@/lib/pr-review-check-run"
+} from "@/src/lib/pr-review-check-run"
 import {
   deleteRepoIndex,
-} from "@/lib/index-delete"
-import { branchStateRepo } from "@/lib/index-branch"
+} from "@/src/lib/index-delete"
+import { branchStateRepo } from "@/src/lib/index-branch"
 
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.

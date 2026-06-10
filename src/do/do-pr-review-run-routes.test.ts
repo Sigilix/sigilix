@@ -6,15 +6,15 @@
 // telemetry hooks.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { PrReviewRunDO } from "@/do/pr-review-run"
-import type { Env } from "@/shared/types/env"
+import { PrReviewRunDO } from "@/src/do/pr-review-run"
+import type { Env } from "@/src/shared/types/env"
 import type {
   EnqueueRequest,
   PickupRequest,
   RunResultRequest,
   RunState,
   StatusResponse,
-} from "@/do/types"
+} from "@/src/do/types"
 
 // ─── DO storage + state stub ──────────────────────────────────
 

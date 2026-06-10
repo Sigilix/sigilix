@@ -3,8 +3,8 @@
 // callers (tests) fall back to parsing env. This pins both paths — it fails if the
 // handler ever reverts to parsing env unconditionally (ignoring the injected config).
 import { describe, it, expect } from "vitest"
-import { resolveEnsembleConfig } from "@/lib/triage-pr-review-ensemble"
-import { parseEnsembleConfig } from "@/lib/ensemble/config"
+import { resolveEnsembleConfig } from "@/src/lib/triage-pr-review-ensemble"
+import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 
 type ResolveArgs = Parameters<typeof resolveEnsembleConfig>[0]
 const asEnv = (e: Record<string, string>) => e as unknown as ResolveArgs["env"]

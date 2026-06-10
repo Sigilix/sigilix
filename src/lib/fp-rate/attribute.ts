@@ -9,8 +9,8 @@
 // fallback (signals carry no path anyway). Unmatched dismissals are bucketed,
 // never silently dropped and never mis-attributed.
 
-import { computeFid } from "../review-memory/marker"
-import { ALL_SPECIALISTS, type SpecialistRole } from "../ensemble-router"
+import { computeFid } from "@/src/lib/review-memory/marker"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/lib/ensemble-router"
 import {
   bucketForReason,
   type DismissBucket,

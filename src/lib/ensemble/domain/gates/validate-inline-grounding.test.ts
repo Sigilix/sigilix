@@ -12,11 +12,11 @@ import {
   hasResolvableBacktickedToken,
   parseInlineGroundingValidatorMode,
   type InlineGroundingEvidence,
-} from "@/lib/ensemble/domain/gates/validate-inline-grounding"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/ensemble/domain/gates/validate-inline-grounding"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const PATH = "src/lib/orders.ts"
 

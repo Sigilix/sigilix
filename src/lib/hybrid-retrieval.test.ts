@@ -3,9 +3,9 @@
 // Workers AI are stubbed; the lexical leg uses the in-memory D1/FTS5 shim.
 
 import { describe, it, expect, beforeEach } from "vitest"
-import { retrieveChunks, fuseRetrieval, type RetrievedChunk, type RetrievalEnv } from "@/lib/retrieval"
-import { upsertLexicalChunks, _resetSchemaMemoForTests, type LexicalMatch } from "@/lib/lexical-index"
-import { makeD1, FTS5_AVAILABLE } from "@/test-shims/d1-sqlite-shim"
+import { retrieveChunks, fuseRetrieval, type RetrievedChunk, type RetrievalEnv } from "@/src/lib/retrieval"
+import { upsertLexicalChunks, _resetSchemaMemoForTests, type LexicalMatch } from "@/src/lib/lexical-index"
+import { makeD1, FTS5_AVAILABLE } from "@/src/test-shims/d1-sqlite-shim"
 
 const EMBED_DIMS = 768
 

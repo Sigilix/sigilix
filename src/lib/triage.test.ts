@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatIssueTriageComment, issueTriagePriorityBadge } from "@/lib/triage"
+import { formatIssueTriageComment, issueTriagePriorityBadge } from "@/src/lib/triage"
 
 describe("issue triage comment formatting (SIG-204)", () => {
   it("renders the Linear priority inline instead of a block image or estimate tag", () => {

@@ -14,8 +14,8 @@ import {
   submitMergedOnApprove,
   type MergeApproveSubmitClient,
   type MergeGuardClient,
-} from "@/lib/merge-guard"
-import type { SubmitReviewBody } from "@/shared/types/github"
+} from "@/src/lib/merge-guard"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 const BASE = {
   owner: "Arc-and-Anchor",

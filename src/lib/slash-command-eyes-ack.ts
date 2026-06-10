@@ -14,10 +14,10 @@
 // so the slash-command path returns 202 immediately while the
 // reaction POST happens in the background.
 
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import type { GhMentionSurface } from "./github-mention"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 export interface SlashCommandEyesAckArgs {
   env: Env

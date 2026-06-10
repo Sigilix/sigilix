@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { compileGlob, pathMatchesAny, shouldReview } from "@/shared/util/path-glob"
+import { compileGlob, pathMatchesAny, shouldReview } from "@/src/shared/util/path-glob"
 
 describe("compileGlob — globstar segment boundaries", () => {
   it("`src/<gs>/foo.ts` matches src/foo.ts AND nested but NOT partial", () => {

@@ -7,8 +7,8 @@
 // job (commit `5bba8d6`).
 
 import { describe, expect, it } from "vitest"
-import { resolveMentionQuestion } from "@/lib/mention-reply"
-import { getMentionTriggers } from "@/lib/mention"
+import { resolveMentionQuestion } from "@/src/lib/mention-reply"
+import { getMentionTriggers } from "@/src/lib/mention"
 
 // Use the production default triggers so the test reflects the real
 // `bodyMentionsBot` matcher. Treating triggers as a black box: any

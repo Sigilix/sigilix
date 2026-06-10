@@ -4,7 +4,7 @@
 // read the graph signal without Cloudflare Worker log access — the read the
 // SIG-138 `post` flip depends on. Reuses the SIG-119 metrics bearer token.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryGraphMetrics } from "./graph-metrics-client"
 

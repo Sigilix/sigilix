@@ -14,7 +14,7 @@ import {
   SHADOW_GRACE_EXPIRED,
   SHADOW_RUN_FAILED,
   SHADOW_FINALIZE_GRACE_MS,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 
 describe("raceWithShadowGrace", () => {
   it("resolves to the underlying promise value when it settles before the deadline", async () => {

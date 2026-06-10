@@ -2,7 +2,7 @@
 // AST security floors (Sigilix #350: the gating logic was previously untested).
 
 import { describe, it, expect } from "vitest"
-import { applyAstScanGate } from "@/lib/triage-pr-review-ensemble"
+import { applyAstScanGate } from "@/src/lib/triage-pr-review-ensemble"
 
 type F = { ruleId: string; astFindingId: string; path: string; line: number }
 

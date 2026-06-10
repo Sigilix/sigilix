@@ -3,7 +3,7 @@
 // generic pagination + bounded-concurrency fetch live in ONE place rather than
 // being copied per route.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 export const KV_LIST_PAGE = 1000
 /** Concurrency cap for the per-key KV gets (wall-clock; doesn't change the total). */

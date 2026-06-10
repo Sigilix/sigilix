@@ -1,7 +1,7 @@
 // SIG-119 — bearer-token auth for the /metrics/validation endpoint.
 
 import { describe, expect, it } from "vitest"
-import { requireBearerToken } from "@/lib/auth-bearer"
+import { requireBearerToken } from "@/src/lib/auth-bearer"
 
 const TOKEN = "s3cr3t-metrics-token"
 const reqWith = (auth?: string) =>

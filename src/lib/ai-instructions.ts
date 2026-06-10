@@ -18,8 +18,8 @@
 //
 // Fail-open: a missing file / fetch error yields no guidance (review unchanged).
 
-import type { GitHubClient } from "../shared/adapters/github"
-import { pathMatchesAny } from "../shared/util/path-glob"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import { pathMatchesAny } from "@/src/shared/util/path-glob"
 
 /**
  * Priority order — the FIRST non-empty file found at the repo head wins (no

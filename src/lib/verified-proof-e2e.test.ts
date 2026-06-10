@@ -17,9 +17,9 @@ import {
   formatFindingComment,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "@/lib/triage-pr-review"
-import { buildReceiptIndex, verifyFindingAgainstReceipt } from "@/lib/verification/verify-finding-receipt"
-import { annotateFindingTrust } from "@/lib/ensemble/domain/gates/trust-ledger-thread"
+} from "@/src/lib/triage-pr-review"
+import { buildReceiptIndex, verifyFindingAgainstReceipt } from "@/src/lib/verification/verify-finding-receipt"
+import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 
 // A genuine receipt-join-eligible finding: sev>=4 security, a resolvable
 // evidenceId (`tool:ruleId:hash:line`), with a path+line the receipt scan hit.

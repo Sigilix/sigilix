@@ -46,20 +46,20 @@ const {
   mockCreateIssueComment: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>("@/shared/adapters/model/ollama-chat")
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
   }
 })
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async getPullRequest(...args: unknown[]): Promise<unknown> { return mockGetPullRequest(...args) }
     async getPullRequestDiff(...args: unknown[]): Promise<unknown> { return mockGetPullRequestDiff(...args) }
@@ -78,7 +78,7 @@ import {
   runSynthesizer,
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   type TokenUsageByModel,
   computeReviewCost,
@@ -86,10 +86,10 @@ import {
   pricingForModel,
   SLO_TARGETS,
   DEFAULT_TIER,
-} from "@/lib/ensemble-slo-telemetry"
-import type { EnsembleRunCtx } from "@/lib/ensemble-perf-telemetry"
-import { ALL_SPECIALISTS } from "@/lib/ensemble-router"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/ensemble-slo-telemetry"
+import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── shared helpers ─────────────────────────────────────────────────
 

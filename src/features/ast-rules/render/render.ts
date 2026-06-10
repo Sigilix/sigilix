@@ -12,7 +12,7 @@
 //     role_hint) supersession matching (spec §5.5). Embedded in the
 //     synth prompt as a fenced code block.
 
-import type { AstFinding } from "@/features/ast-rules/domain/types"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 // CR catch on PR #67: prompt-block fields are line-delimited; an
 // `evidence` or `message` value containing a literal newline would

@@ -7,7 +7,7 @@ import {
   parseCiTriageResponse,
   parseConfidence,
   renderCiTriageComment,
-} from "@/lib/triage-ci"
+} from "@/src/lib/triage-ci"
 
 describe("extractMentionedFiles", () => {
   it("returns the empty list on empty input", () => {

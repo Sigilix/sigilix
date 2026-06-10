@@ -6,7 +6,7 @@
 // per-reason counter surface) but flow through dedicated record/query
 // helpers so callers don't have to know about the synthetic-gate encoding.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   ValidationMetricsDO,
   RecordBatchArgs,
@@ -14,8 +14,8 @@ import type {
   DismissalMetricsQuery,
   RecordRepeatFpArgs,
   RepeatFpMetricsQuery,
-} from "../do/validation-metrics"
-export type { RepeatFpEvent } from "../do/validation-metrics"
+} from "@/src/do/validation-metrics"
+export type { RepeatFpEvent } from "@/src/do/validation-metrics"
 import type { DismissReason } from "./dismiss-reasons"
 
 // All validator telemetry funnels into ONE DO instance — write volume is one

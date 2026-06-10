@@ -13,9 +13,9 @@ import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
-} from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding, baseVerdict } from "@/lib/triage-pr-review-ensemble.test-helpers"
+} from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("isPermanentFailure", () => {
   // CR PR #37 catch — permanent failures should fast-fail; transient

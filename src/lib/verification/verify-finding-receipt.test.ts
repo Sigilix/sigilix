@@ -14,9 +14,9 @@ import {
   verifyFindingAgainstReceipt,
   type ReceiptScanResult,
   type SarifPathNormalizer,
-} from "@/lib/verification/verify-finding-receipt"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { SarifRun } from "@/features/sarif-evidence"
+} from "@/src/lib/verification/verify-finding-receipt"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { SarifRun } from "@/src/features/sarif-evidence"
 
 // A stub normalizer: an inline uri → lowercased path; else resolve `index`
 // AGAINST the forwarded `artifacts` table (so the test genuinely fails if the

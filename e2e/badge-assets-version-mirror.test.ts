@@ -26,7 +26,7 @@ import {
   ALL_BADGE_NAMES,
   BADGE_ASSET_VERSION,
   getBadgeSvg,
-} from "../src/lib/badge-assets"
+} from "@/src/lib/badge-assets"
 
 const REPO_ROOT = (() => {
   // tests/ live at the repo root → __dirname here is `<root>/tests`.

@@ -19,7 +19,7 @@
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/*": ["./*"] }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/test-shims/**/*.ts"]

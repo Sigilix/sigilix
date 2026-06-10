@@ -16,10 +16,10 @@
 // (the synth domain, the model-provider adapter, the shadow-bakeoff + review-
 // memory + prompt + config leaves). It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { RouterDecision } from "../../ensemble-router"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { RouterDecision } from "@/src/lib/ensemble-router"
 import {
   type SigilixConfig,
   resolveCommandConfig,
@@ -27,53 +27,53 @@ import {
   resolveReviewMemoryConfig,
   resolveAstRulesConfig,
   resolvePathInstructionsForChangedPaths,
-} from "../../sigilix-config"
+} from "@/src/lib/sigilix-config"
 import {
   SYNTHESIZER_PROMPT,
   buildSynthesizerInitialMessage,
   renderSpecialistVerdictsForSynth,
-} from "../../../prompts/pr-review-specialists"
-import { renderAstFindingsAsJsonForSynth, runAstRules } from "@/features/ast-rules"
-import { renderSarifFindingsAsJsonForSynth, type SarifFinding } from "@/features/sarif-evidence"
-import { runSarifEvidence } from "@/features/sarif-evidence"
-import { withComposedTimeout } from "../../agent-loop"
-import { runReviewMemoryLookup } from "../../review-memory/lookup"
-import { renderReviewMemoryForPrompt } from "../../review-memory/render"
-import type { ReviewMemoryFinding, ReviewMemorySkipReason } from "../../review-memory/types"
+} from "@/src/prompts/pr-review-specialists"
+import { renderAstFindingsAsJsonForSynth, runAstRules } from "@/src/features/ast-rules"
+import { renderSarifFindingsAsJsonForSynth, type SarifFinding } from "@/src/features/sarif-evidence"
+import { runSarifEvidence } from "@/src/features/sarif-evidence"
+import { withComposedTimeout } from "@/src/lib/agent-loop"
+import { runReviewMemoryLookup } from "@/src/lib/review-memory/lookup"
+import { renderReviewMemoryForPrompt } from "@/src/lib/review-memory/render"
+import type { ReviewMemoryFinding, ReviewMemorySkipReason } from "@/src/lib/review-memory/types"
 import {
   type EnsembleRunCtx,
   type SynthSummary,
   emitPhaseCompleted,
   emitSynthSummary,
   narrowSynthRetryOutcome,
-} from "../../ensemble-perf-telemetry"
-import { type SkipNoticeReason } from "../../review-comment-fallback"
+} from "@/src/lib/ensemble-perf-telemetry"
+import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import {
   parseShadowEnabledRoles,
   resolveShadowConfig,
-} from "../../shadow-bakeoff-config"
-import { runShadowSynth } from "../../shadow-bakeoff-runner"
-import { composeSignals } from "../domain/shadow-grace"
+} from "@/src/lib/shadow-bakeoff-config"
+import { runShadowSynth } from "@/src/lib/shadow-bakeoff-runner"
+import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import {
   SYNTHESIZER_CONFIG,
   SYNTHESIZER_MODEL,
   runSynthesizer,
-} from "../adapters/model-provider"
-import type { ModelConfig } from "../domain/model-policy"
+} from "@/src/lib/ensemble/adapters/model-provider"
+import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
 import {
   SYNTHESIZER_TIMEOUT_MS,
   SYNTHESIZER_RETRY_TIMEOUT_MS,
-} from "../domain/budget"
-import type { CollectedVerdict, SynthesizerProvenance } from "../domain/validation"
-import type { PrReviewVerdictWithIds } from "../domain/findings"
-import type { EnsembleConfig } from "../domain/config"
+} from "@/src/lib/ensemble/domain/budget"
+import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import type { PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   buildSynthRetryMessage,
   buildAstFindingsSynthBlock,
   classifySynthOutcome,
   isSynthBypassEligible,
   type SynthAttemptOutcome,
-} from "../domain/synth"
+} from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>

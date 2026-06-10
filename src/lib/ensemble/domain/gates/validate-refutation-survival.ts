@@ -33,7 +33,7 @@
 // (off | shadow | enforce, default off in code / shadow in wrangler) at the call
 // site. This module is mode-agnostic; the orchestrator acts on the verdict.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 
 /**
  * Validator mode. `off` (default in code): the gate doesn't run. `shadow`:

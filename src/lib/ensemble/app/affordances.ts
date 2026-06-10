@@ -16,10 +16,10 @@
 // god-file re-exports the exported members so existing importers (tests) are
 // unaffected.
 
-import type { Env } from "@/shared/types/env"
-import type { ReviewEvent } from "../domain/verdict"
-import type { ReviewSuggestionEmission } from "../render/finding-comment"
-import { buildPrUrl, preparePrReviewCounter } from "../../pr-review-counter"
+import type { Env } from "@/src/shared/types/env"
+import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
+import type { ReviewSuggestionEmission } from "@/src/lib/ensemble/render/finding-comment"
+import { buildPrUrl, preparePrReviewCounter } from "@/src/lib/pr-review-counter"
 
 export interface SubmissionAffordance {
   reviewCounter?: number

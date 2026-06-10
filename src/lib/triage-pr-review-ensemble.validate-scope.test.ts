@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   validateForSubmission,
   type SynthesizerProvenance,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   buildReviewSubmissionWithMetadata,
   type PrReviewVerdict,
   type PrReviewFinding,
-} from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding, baseVerdict } from "@/lib/triage-pr-review-ensemble.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("validateForSubmission — SIG-216 scope normalization (file → line when anchorable)", () => {
   const reviewable: ReviewableMap = new Map([

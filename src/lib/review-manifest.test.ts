@@ -13,8 +13,8 @@ import {
   renderStaleBlock,
   applyStaleBlock,
   type ReviewManifestV1,
-} from "@/lib/review-manifest"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/review-manifest"
+import type { Env } from "@/src/shared/types/env"
 
 // Minimal KV stub — only the get/put surface we exercise. Cast through
 // `unknown` to avoid pulling in the full Workers types. Mirrors the

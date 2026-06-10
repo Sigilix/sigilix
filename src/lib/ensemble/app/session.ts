@@ -27,14 +27,14 @@
 // (`incrementDailyBudget` / `writeTelemetry`, the relocated KV writes). It never
 // imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { CheckRunAnnotation } from "@/shared/types/github"
-import type { ReviewEvent } from "../domain/verdict"
-import type { RetrievalCacheStats } from "../../retrieval-cache"
-import type { createRetrievalCache } from "../../retrieval-cache"
-import type { TokenUsageByModel } from "../../ensemble-slo-telemetry"
-import { emitReviewSlo } from "../../ensemble-slo-telemetry"
-import { incrementDailyBudget, writeTelemetry } from "../adapters/persistence"
+import type { Env } from "@/src/shared/types/env"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
+import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
+import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
+import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
+import { emitReviewSlo } from "@/src/lib/ensemble-slo-telemetry"
+import { incrementDailyBudget, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 
 // ARC-250: `stale_head` is split out from `skipped` so the dispatcher
 // can short-circuit the Phase 3 fallback. Falling through to Phase 3

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   type EnsembleRunCtx,
-} from "@/lib/ensemble-perf-telemetry"
+} from "@/src/lib/ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
   MODEL_PRICING,
@@ -20,7 +20,7 @@ import {
   resolveSloTarget,
   evaluateReviewSlo,
   emitReviewSlo,
-} from "@/lib/ensemble-slo-telemetry"
+} from "@/src/lib/ensemble-slo-telemetry"
 
 const CTX: EnsembleRunCtx = {
   owner: "Sigilix",

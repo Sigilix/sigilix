@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { extractPullRequestRefs } from "@/lib/github-pr-refs"
+import { extractPullRequestRefs } from "@/src/lib/github-pr-refs"
 
 const noInfer = () => null
 const arcInfer = () => ({ owner: "Arc-and-Anchor", repo: "rema-portal" })

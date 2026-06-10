@@ -13,7 +13,7 @@
 import type { ClassifiedDiffFile } from "./diff-file-classify"
 import type { SpecialistRole } from "./ensemble-router"
 import type { DispatcherSafetyNetPattern } from "./sigilix-config"
-import { compileGlob } from "../shared/util/path-glob"
+import { compileGlob } from "@/src/shared/util/path-glob"
 
 // ─── Path / content pattern helpers ──────────────────────────────────
 

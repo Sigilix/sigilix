@@ -16,7 +16,7 @@ import {
   deriveVerdictLabel,
   type MultiCorpusEnv,
   type MultiCorpusResult,
-} from "@/lib/multi-corpus"
+} from "@/src/lib/multi-corpus"
 
 describe("multiCorpusEnabled", () => {
   it("is on only for flag === 'on'", () => {

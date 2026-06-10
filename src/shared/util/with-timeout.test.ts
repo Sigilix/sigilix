@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { withTimeout } from "@/shared/util/with-timeout"
+import { withTimeout } from "@/src/shared/util/with-timeout"
 
 describe("withTimeout", () => {
   it("resolves before timeout and returns the value", async () => {

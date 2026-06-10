@@ -2,7 +2,7 @@
 // sibling suites. Not a `*.test.ts` file, so vitest does not treat it as
 // a suite (the vitest `include` glob is `src/**/*.test.ts`).
 
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

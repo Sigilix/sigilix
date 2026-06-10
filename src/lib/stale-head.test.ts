@@ -31,12 +31,12 @@ const {
   mockEnqueuePrReviewJob: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async listIssueComments(...args: unknown[]): Promise<unknown> {
       return mockListIssueComments(...args)
@@ -54,7 +54,7 @@ vi.mock("@/shared/adapters/github", async () => {
   }
 })
 
-vi.mock("@/do/webhook-enqueue", () => ({
+vi.mock("@/src/do/webhook-enqueue", () => ({
   enqueuePrReviewJob: (...args: unknown[]) => mockEnqueuePrReviewJob(...args),
 }))
 
@@ -63,8 +63,8 @@ import {
   renderStaleHeadComment,
   STALE_HEAD_MARKER,
   MAX_STALE_HEAD_REQUEUES,
-} from "@/lib/stale-head"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/stale-head"
+import type { Env } from "@/src/shared/types/env"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true

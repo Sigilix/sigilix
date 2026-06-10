@@ -20,7 +20,7 @@ import { WARMUP_CALLOUT_MARKER } from "./warmup"
 import {
   renderPreMergeGatesSection,
   type GateResult,
-} from "../shared/domain/pre-merge-gates"
+} from "@/src/shared/domain/pre-merge-gates"
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 import type { PrOverviewReviewContext, PrOverviewVerdict } from "./triage-pr-overview"
 

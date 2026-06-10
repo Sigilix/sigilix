@@ -7,13 +7,13 @@
 // caveat as review-memory's `appendSignal`); the EMA + MIN_OBSERVATIONS gate
 // absorbs the occasional lost fold.
 
-import type { Env } from "@/shared/types/env"
-import { emptyProfile, foldOutcomeIntoProfile } from "@/features/precision-profile/domain/ema"
+import type { Env } from "@/src/shared/types/env"
+import { emptyProfile, foldOutcomeIntoProfile } from "@/src/features/precision-profile/domain/ema"
 import {
   PRECISION_PROFILE_SCHEMA_VERSION,
   type OutcomeEvent,
   type PrecisionProfile,
-} from "@/features/precision-profile/domain/types"
+} from "@/src/features/precision-profile/domain/types"
 
 const TTL_SECONDS = 90 * 24 * 60 * 60 // 90 days
 

@@ -2,10 +2,10 @@
 // the mode surface, and the expansion metrics shape.
 
 import { describe, expect, it } from "vitest"
-import { handleGraphExpansionMetricsRoute } from "@/lib/metrics-graph-expansion-route"
-import { GraphExpansionMetricsDO, type GraphExpansionSample } from "@/do/graph-expansion-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleGraphExpansionMetricsRoute } from "@/src/lib/metrics-graph-expansion-route"
+import { GraphExpansionMetricsDO, type GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"
 

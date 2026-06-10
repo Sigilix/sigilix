@@ -4,7 +4,7 @@
 // specialist judges whether the multiplier is really fractional.
 
 import { describe, it, expect } from "vitest"
-import { scanFractionalCentsMath as scan } from "@/features/ast-rules/domain/scan-float-cents"
+import { scanFractionalCentsMath as scan } from "@/src/features/ast-rules/domain/scan-float-cents"
 
 describe("scanFractionalCentsMath — FLAGS the bug", () => {
   it("flags `amountCents * (1 - rate)` (pr/10 D12)", () => {

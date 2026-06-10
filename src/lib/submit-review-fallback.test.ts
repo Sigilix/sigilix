@@ -24,10 +24,10 @@ import {
   buildFallbackBody,
   buildFallbackSubmission,
   buildReviewSubmission,
-} from "@/lib/triage-pr-review"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewVerdict, PrReviewFinding } from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/triage-pr-review"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",

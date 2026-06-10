@@ -9,8 +9,8 @@ import {
   renderPreMergeGatesSection,
   runPreMergeGates,
   type ResolvedPreMergeGatesConfig,
-} from "@/shared/domain/pre-merge-gates"
-import { resolvePreMergeGatesConfig } from "@/lib/sigilix-config"
+} from "@/src/shared/domain/pre-merge-gates"
+import { resolvePreMergeGatesConfig } from "@/src/lib/sigilix-config"
 
 describe("evaluateTitleFormatGate", () => {
   const cfg = DEFAULT_PRE_MERGE_GATES_CONFIG.titleFormat

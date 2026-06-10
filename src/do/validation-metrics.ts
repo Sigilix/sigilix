@@ -13,18 +13,18 @@
 // INSERT … ON CONFLICT increments so concurrent reviews never lose a count.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import {
   ALL_DISMISS_REASONS,
   type DismissReason,
   isDismissReason,
-} from "../lib/dismiss-reasons"
+} from "@/src/lib/dismiss-reasons"
 // SIG-363: `ValidationRejectionEvent` moved to the ensemble domain leaf so the
 // sink ports + orchestrator reference it without importing this DO. Re-exported
 // here so existing importers (the dispatcher, the god-file) are unchanged. The
 // move also lifts the `FindingCategory` reference (the type's `category` field)
 // onto the leaf, killing this DO's documented `../lib/triage-pr-review` coupling.
-import type { ValidationRejectionEvent } from "../lib/ensemble/domain/metric-events"
+import type { ValidationRejectionEvent } from "@/src/lib/ensemble/domain/metric-events"
 export type { ValidationRejectionEvent }
 
 // Retention: keep 35 days of daily buckets so the endpoint can serve up to a

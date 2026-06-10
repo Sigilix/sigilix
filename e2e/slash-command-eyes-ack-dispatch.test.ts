@@ -10,12 +10,12 @@ import { describe, it, expect, vi } from "vitest"
 const { eyesAckDispatchMock } = vi.hoisted(() => ({
   eyesAckDispatchMock: vi.fn(async () => {}),
 }))
-vi.mock("../src/lib/slash-command-eyes-ack", () => ({
+vi.mock("@/src/lib/slash-command-eyes-ack", () => ({
   postSlashCommandEyesAck: eyesAckDispatchMock,
 }))
 
-import { queueGithubMention } from "../src/index"
-import type { Env } from "../src/shared/types/env"
+import { queueGithubMention } from "@/src/index"
+import type { Env } from "@/src/shared/types/env"
 
 interface FakePayloadOpts {
   body?: string

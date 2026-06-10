@@ -16,12 +16,12 @@ const mockUpdateReviewBody = vi.fn()
 const mockGetIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -35,10 +35,10 @@ vi.mock("@/shared/adapters/github", async () => {
   }
 })
 
-import { handlePrStaleMark } from "@/lib/triage-pr-stale-mark"
-import { writeReviewManifest, type ReviewManifestV1 } from "@/lib/review-manifest"
-import { GitHubHttpError } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { handlePrStaleMark } from "@/src/lib/triage-pr-stale-mark"
+import { writeReviewManifest, type ReviewManifestV1 } from "@/src/lib/review-manifest"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()

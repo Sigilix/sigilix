@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { formatFindingComment } from "@/lib/triage-pr-review"
-import { parseDiffToReviewablePositions } from "@/shared/util/diff-positions"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import { formatFindingComment } from "@/src/lib/triage-pr-review"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 const reviewable = parseDiffToReviewablePositions(
   "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,0 +1,2 @@\n+const x = 1\n+const y = 2\n",

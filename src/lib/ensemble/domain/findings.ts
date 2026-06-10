@@ -13,8 +13,8 @@
 // type; that type stays in the orchestrator (it relocates to the domain in the
 // PR 3 type-consolidation). Here we depend only on the entity data types.
 
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 
 /** A verdict whose findings carry stable `${role}-${i}` ids (post-assign). */
 export interface PrReviewVerdictWithIds extends PrReviewVerdict {

@@ -8,7 +8,7 @@
 // /status). Task 6 lands the alarm() handler.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   EnqueueRequest, EnqueueResponse, HeartbeatRequest, ResolvedDoConfig,
   RunRecord, RunResultRequest, RunState, StatusResponse,
@@ -17,7 +17,7 @@ import { resolveDoConfig } from "./config"
 import {
   attachExistingCheckRun, closeOrphanedInProgressChecksByHeadSha,
   completeCheckRun, startInProgressCheckRun,
-} from "../lib/pr-review-check-run"
+} from "@/src/lib/pr-review-check-run"
 // SIG-376 (SIG-318 Tier-1 5/8): the DO's pure internals — IO-free
 // module-level helpers + the spec §4.5/§4.6/§4.10 decision functions — were
 // lifted into the `./pr-review-run-internals` leaf so this file stays under

@@ -40,14 +40,14 @@
 // slice upserts to the same IDs — Vectorize replaces in place. Safe
 // against queue retries + bootstrap-side double-fanout.
 
-import type { Env } from "../shared/types/env"
-import type { JobMessage } from "../shared/types/job"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
-} from "../shared/adapters/model"
+} from "@/src/shared/adapters/model"
 import {
   isManifestFresh,
   readRepoIndexManifest,
@@ -62,7 +62,7 @@ import { resolveIndexTarget } from "./index-branch"
 // pipeline, and the persistence + enqueue cluster were lifted into sibling
 // leaf modules. Core imports back the symbols its consumer handlers call,
 // and re-exports the previously-public ones so importers + tests resolve
-// them unchanged via "@/lib/indexer".
+// them unchanged via "@/src/lib/indexer".
 import {
   MAX_FILES_PER_JOB,
   effectiveChunkerVersion,
@@ -70,14 +70,14 @@ import {
   computeRunId,
   walkIndexableFiles,
   leaseAllows,
-} from "@/lib/indexer-internals"
-import { processSlice } from "@/lib/indexer-slice"
+} from "@/src/lib/indexer-internals"
+import { processSlice } from "@/src/lib/indexer-slice"
 import {
   enqueueNextShard,
   persistManifest,
   persistVectorIds,
   persistScopedRulesManifest,
-} from "@/lib/indexer-persist"
+} from "@/src/lib/indexer-persist"
 
 // SIG-131: re-export the chunking primitives so existing consumers that
 // import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
@@ -86,7 +86,7 @@ export { chunkFile, splitOversizedWindow } from "./chunk-core"
 export type { Chunk } from "./chunk-core"
 
 // SIG-376: re-export the previously-public symbols moved into the leaf
-// modules so every importer + test that reads them from "@/lib/indexer"
+// modules so every importer + test that reads them from "@/src/lib/indexer"
 // keeps resolving unchanged. Private moved symbols (`leaseAllows`,
 // `processSlice`, the persist helpers, `sha256HexPrefix`, `pathHitsSkipDir`,
 // the constants/types only used internally) are NOT re-exported.
@@ -99,9 +99,9 @@ export {
   walkIndexableFiles,
   chunkId,
   shouldSkipForLength,
-} from "@/lib/indexer-internals"
-export type { TreeEntry, IndexableFile } from "@/lib/indexer-internals"
-export type { ProcessSliceResult } from "@/lib/indexer-slice"
+} from "@/src/lib/indexer-internals"
+export type { TreeEntry, IndexableFile } from "@/src/lib/indexer-internals"
+export type { ProcessSliceResult } from "@/src/lib/indexer-slice"
 
 export { graphIndexEnabled } from "./graph-flags"
 

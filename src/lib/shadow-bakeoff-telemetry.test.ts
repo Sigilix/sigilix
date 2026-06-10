@@ -1,7 +1,7 @@
 // tests/shadow-bakeoff-telemetry.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { EnsembleRunCtx } from "@/lib/ensemble-perf-telemetry"
+import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import {
   buildShadowVerdictComparison,
   emitShadowAttempt,
@@ -13,7 +13,7 @@ import {
   type ShadowAttemptEvent,
   type ShadowOutcomeForComparison,
   type ShadowVerdictComparison,
-} from "@/lib/shadow-bakeoff-telemetry"
+} from "@/src/lib/shadow-bakeoff-telemetry"
 
 const CTX: EnsembleRunCtx = {
   owner: "Arc-and-Anchor",

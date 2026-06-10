@@ -2,10 +2,10 @@
 // response shape (counts + mode + repoPresence).
 
 import { describe, expect, it } from "vitest"
-import { handleRunnerEvidenceMetricsRoute } from "@/lib/metrics-runner-evidence-route"
-import { RunnerEvidenceMetricsDO } from "@/do/runner-evidence-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
+import { RunnerEvidenceMetricsDO } from "@/src/do/runner-evidence-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"
 

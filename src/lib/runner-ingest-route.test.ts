@@ -3,12 +3,12 @@
 // served via a stubbed global fetch). Mocks: the receipt DO + the KV binding.
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { handleRunnerIngestRoute } from "@/lib/runner-ingest-route"
-import { __resetJwksCacheForTests } from "@/lib/runner-oidc/jwks-cache"
-import { RunnerReceiptDO } from "@/do/runner-receipt"
-import type { GitHubOidcClaims, Jwk } from "@/lib/runner-oidc/types"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
+import { __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
+import { RunnerReceiptDO } from "@/src/do/runner-receipt"
+import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const ISS = "https://token.actions.githubusercontent.com"
 const AUD = "sigilix-runner-ingest"

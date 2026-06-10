@@ -7,12 +7,12 @@
 // lib/pr-overview.mjs. No filesystem, no gh CLI — everything goes
 // through the GitHubClient.
 
-import { generate } from "../shared/adapters/model"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { GitHubClient } from "../shared/adapters/github"
-import type { PrChangedFile, PrCommit, PullRequestMeta } from "../shared/types/github"
-import { PR_OVERVIEW_SCHEMA } from "../shared/domain/schemas"
-import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
+import { generate } from "@/src/shared/adapters/model"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { PrChangedFile, PrCommit, PullRequestMeta } from "@/src/shared/types/github"
+import { PR_OVERVIEW_SCHEMA } from "@/src/shared/domain/schemas"
+import { PR_OVERVIEW_PROMPT } from "@/src/prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
 import {
@@ -24,12 +24,12 @@ import {
 import {
   runPreMergeGates,
   type GateResult,
-} from "../shared/domain/pre-merge-gates"
+} from "@/src/shared/domain/pre-merge-gates"
 import {
   batchReadFileCache,
   batchWriteFileCache,
 } from "./pr-overview-file-cache"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 // SIG-376 (SIG-318 Tier-1 6/8): the pure parse/transform, render, and
 // comment-scan clusters were lifted into three sibling leaves to keep this
 // file under the 1,000-line budget. The core imports what `handlePrOverview`

@@ -13,8 +13,8 @@ import {
   buildPausedKey,
   buildIgnoredKey,
   PR_PAUSE_TTL_SECONDS,
-} from "@/lib/pr-lifecycle-commands"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/pr-lifecycle-commands"
+import type { Env } from "@/src/shared/types/env"
 
 // Test PKCS#8 RSA-2048 key — same one used in tests/github-app.test.ts.
 // Round-trip-only; not a real credential.

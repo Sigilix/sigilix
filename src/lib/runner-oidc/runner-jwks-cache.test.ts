@@ -2,8 +2,8 @@
 // throttled force-refetch (rotation safety without a DoS lever), failure retry.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { makeCachedFetchJwks, forcedRefetchAvailable, __resetJwksCacheForTests } from "@/lib/runner-oidc/jwks-cache"
-import type { Jwk } from "@/lib/runner-oidc/types"
+import { makeCachedFetchJwks, forcedRefetchAvailable, __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
+import type { Jwk } from "@/src/lib/runner-oidc/types"
 
 const JWK: Jwk = { kid: "k1", kty: "RSA", n: "n", e: "AQAB", alg: "RS256", use: "sig" }
 // Realistic epoch ms so the cooldown math (now - lastForcedRefetch) behaves as in

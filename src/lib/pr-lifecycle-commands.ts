@@ -24,9 +24,9 @@
 // GraphQL error logs structured telemetry and returns. The customer
 // can always retry the slash command.
 
-import type { Env } from "../shared/types/env"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { renderSlashCommandAck, type SlashCommand } from "./slash-commands"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
 

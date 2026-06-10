@@ -14,7 +14,7 @@
 // the body, and either returns 200 with the JSON or 404 when DO
 // reports `{ kind: "no-state" }`. On DO transport failure → 503.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type { RunStateLifecycle, StatusResponse } from "./types"
 
 const VALID_STATES: ReadonlySet<RunStateLifecycle> = new Set([

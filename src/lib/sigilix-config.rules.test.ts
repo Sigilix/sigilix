@@ -12,7 +12,7 @@ import {
   resolveSarifEvidenceConfig,
   resolveCoverageConfig,
   type SigilixConfig,
-} from "@/lib/sigilix-config"
+} from "@/src/lib/sigilix-config"
 
 describe("parseSigilixConfig — astRules (ARC-181)", () => {
   it("captures astRules.enabled: false", () => {

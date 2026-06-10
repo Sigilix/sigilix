@@ -14,12 +14,12 @@
 //   - run the provenance gate BEFORE the (heavier) SARIF parse, so a merely-
 //     authenticated-but-unauthorized caller never reaches the parse.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { verifyGitHubOidcToken } from "./runner-oidc/verify"
 import { validateRunnerProvenance } from "./runner-oidc/provenance"
 import type { GitHubOidcClaims } from "./runner-oidc/types"
 import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-cache"
-import { parseSarif } from "@/features/sarif-evidence"
+import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES

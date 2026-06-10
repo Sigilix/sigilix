@@ -8,9 +8,9 @@
 // and read the printed table.
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "@/features/ast-rules/domain/parser"
-import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
-import type { AstRule, AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
+import { parseSource } from "@/src/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/src/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "@/src/features/ast-rules/domain/types"
 import { FLOOR_EVALS } from "./floor-eval-corpus"
 
 const SAMPLE_PATH = "src/routes/handler.ts" // a real request path (NOT a skipped test path)

@@ -13,9 +13,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockChat = vi.fn()
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>(
-    "@/shared/adapters/model/ollama-chat",
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
   )
   return {
     ...actual,
@@ -30,9 +30,9 @@ import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   type AttemptCallbackInfo,
-} from "@/lib/triage-pr-review-ensemble"
-import { parsePrReviewResponse } from "@/lib/triage-pr-review"
-import { ALL_SPECIALISTS } from "@/lib/ensemble-router"
+} from "@/src/lib/triage-pr-review-ensemble"
+import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
+import { ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
 
 beforeEach(() => {
   mockChat.mockReset()
@@ -355,7 +355,7 @@ describe("runWithRetryAndFallback — Phase 4a.4 budget invariant", () => {
     // "tighten cap to N" change can't silently re-break the fallback
     // having time to fire.
     const { SPECIALIST_TIMEOUT_MS, PER_ATTEMPT_TIMEOUT_MS } =
-      await import("@/lib/triage-pr-review-ensemble")
+      await import("@/src/lib/triage-pr-review-ensemble")
     // Worst case: retries=1 means 2 primary attempts + 1 fallback = 3
     // attempts at the cap, plus ~1s retry backoff. Must fit in the
     // specialist budget.

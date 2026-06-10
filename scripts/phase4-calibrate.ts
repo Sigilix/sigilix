@@ -34,8 +34,8 @@ import {
   computeClaimCalibration,
   type CalibrationShadowRecord,
   type CalibrationDismissal,
-} from "@/lib/review-memory/calibration-fit"
-import { CALIBRATION_PARAMS_KV_KEY } from "@/lib/review-memory/calibration"
+} from "@/src/lib/review-memory/calibration-fit"
+import { CALIBRATION_PARAMS_KV_KEY } from "@/src/lib/review-memory/calibration"
 
 const KV_NAMESPACE_ID = "df689379ea6240f7808997a75ceaed7e"
 const SHADOW_PREFIX = "review-memory-claim-shadow:"

@@ -14,12 +14,12 @@ const mockUpdatePullRequestBody = vi.fn(async () => undefined)
 const mockGenerate = vi.fn()
 const mockLoadSigilixConfig = vi.fn()
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -35,22 +35,22 @@ vi.mock("@/shared/adapters/github", async () => {
 // `generate()` return). After SIG-212 the helper returns `{ text,
 // usage }`. The wrapper adapts string-returning mocks so existing
 // `mockResolvedValue("...")` calls still work.
-vi.mock("@/shared/adapters/model/ollama", () => ({
+vi.mock("@/src/shared/adapters/model/ollama", () => ({
   generate: async (args: unknown) => {
     const result = await mockGenerate(args)
     return typeof result === "string" ? { text: result, usage: {} } : result
   },
 }))
 
-vi.mock("@/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/sigilix-config")>("@/lib/sigilix-config")
+vi.mock("@/src/lib/sigilix-config", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
     loadSigilixConfig: (...args: unknown[]) => mockLoadSigilixConfig(...args),
   }
 })
 
-import { GitHubHttpError } from "@/shared/adapters/github"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
 import {
   renderDescribeComment,
   renderDisabledComment,
@@ -62,9 +62,9 @@ import {
   buildPrompt,
   truncateForGitHub,
   handlePrDescribe,
-} from "@/lib/triage-pr-describe"
-import type { Env } from "@/shared/types/env"
-import { makeKvStub, makeEnv } from "@/lib/triage-pr-describe.test-helpers"
+} from "@/src/lib/triage-pr-describe"
+import type { Env } from "@/src/shared/types/env"
+import { makeKvStub, makeEnv } from "@/src/lib/triage-pr-describe.test-helpers"
 
 beforeEach(() => {
   // mockClear (not mockReset) — preserves the implementation set by

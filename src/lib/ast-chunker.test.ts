@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { chunkFileAst, jsTsExtOf } from "@/lib/ast-chunker"
-import type { Chunk } from "@/lib/chunk-core"
+import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
+import type { Chunk } from "@/src/lib/chunk-core"
 
 // Coverage invariant: every NON-blank line covered by exactly one chunk, no
 // overlap, no whitespace-only chunk (embedder throws on blank).

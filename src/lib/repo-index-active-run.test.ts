@@ -4,7 +4,7 @@ import {
   writeActiveRun,
   readActiveRunId,
   shouldFinalize,
-} from "@/lib/repo-index-active-run"
+} from "@/src/lib/repo-index-active-run"
 
 function kvMock(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial))

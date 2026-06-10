@@ -9,8 +9,8 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import {
   captureTopLevelReviewFeedback,
   hasExplicitTopLevelReviewFeedbackSignal,
-} from "@/lib/review-memory/capture"
-import type { GitHubClient } from "@/shared/adapters/github"
+} from "@/src/lib/review-memory/capture"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import {
   makeKvStub,
   makeEnv,
@@ -21,7 +21,7 @@ import {
   VALID_FINGERPRINT_2,
   PRECISION_FINDING_MARKERS,
   SECOND_PRECISION_FINDING_MARKERS,
-} from "@/lib/review-memory/review-memory-capture.test-helpers"
+} from "@/src/lib/review-memory/review-memory-capture.test-helpers"
 
 describe("captureTopLevelReviewFeedback — explicit verified source", () => {
   let consoleSpy: ReturnType<typeof vi.spyOn>

@@ -6,11 +6,11 @@ import {
   resolveClaimShadowMode,
   SHADOW_DISTINCT_PR_FLOOR,
   type ShadowMatchFinding,
-} from "@/lib/review-memory/shadow-match"
+} from "@/src/lib/review-memory/shadow-match"
 import type {
   ReviewMemoryFinding,
   ReviewMemoryShadowClaim,
-} from "@/lib/review-memory/types"
+} from "@/src/lib/review-memory/types"
 
 function shadowClaim(
   over: Partial<ReviewMemoryShadowClaim> & { type: ReviewMemoryShadowClaim["type"] },

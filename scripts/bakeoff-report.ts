@@ -33,8 +33,8 @@ import {
   buildDecisionReport,
   renderDecisionReportMarkdown,
   type ShadowEvent,
-} from "@/lib/bakeoff-report"
-import { unwrapLogpushEnvelope } from "@/lib/bakeoff-logpush-unwrap"
+} from "@/src/lib/bakeoff-report"
+import { unwrapLogpushEnvelope } from "@/src/lib/bakeoff-logpush-unwrap"
 
 const KNOWN_EVENTS = new Set([
   "shadow-verdict-comparison",

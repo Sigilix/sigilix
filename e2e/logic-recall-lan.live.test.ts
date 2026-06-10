@@ -16,9 +16,9 @@ import {
   type CaseResult,
   type ScoredFinding,
 } from "./logic-recall-corpus"
-import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
-import { parsePrReviewResponse } from "../src/lib/triage-pr-review"
-import { PR_REVIEW_SCHEMA } from "../src/shared/domain/schemas"
+import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
+import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 
 // The endpoint being set IS the enable signal (no hard-coded host in the repo).
 const URL = process.env.LOGIC_RECALL_OLLAMA_URL

@@ -5,7 +5,7 @@
 // contract (Sigilix review HIGH) + the https-only + byte-cap guards.
 
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { GitHubClient } from "@/shared/adapters/github"
+import { GitHubClient } from "@/src/shared/adapters/github"
 
 afterEach(() => {
   vi.restoreAllMocks()

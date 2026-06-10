@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest"
 import {
   applyDescribeToBody,
   describeMarkers,
-} from "@/lib/describe-apply"
+} from "@/src/lib/describe-apply"
 
 describe("describeMarkers", () => {
   it("returns the start + end marker strings for each mode", () => {

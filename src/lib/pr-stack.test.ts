@@ -12,7 +12,7 @@ import {
   computeFileOverlap,
   type OpenPrInput,
   type CurrentPrInput,
-} from "@/lib/pr-stack"
+} from "@/src/lib/pr-stack"
 
 const REPO = "Arc-and-Anchor/sigilix"
 

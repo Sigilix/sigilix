@@ -15,19 +15,19 @@
 // Dependency rule: imports the floor installers laterally from the
 // `degraded-finding-floor` leaf + domain/shared types; never the orchestrator.
 
-import { runAstRules } from "@/features/ast-rules"
-import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { SynthesizerProvenance } from "../domain/validation"
-import type { PrReviewVerdictWithIds } from "../domain/findings"
-import type { CollectedVerdict } from "../domain/validation"
-import type { EnsembleConfig } from "../domain/config"
+import { runAstRules } from "@/src/features/ast-rules"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import type { PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
+import type { CollectedVerdict } from "@/src/lib/ensemble/domain/validation"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   applyDegradedCoverageFindingFloor,
   applySynthSourceFindingFloor,
   recoverTruncatedSynthFindings,
   injectUnmatchedAstEmits,
-} from "../../degraded-finding-floor"
+} from "@/src/lib/degraded-finding-floor"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 /** The synth-input verdicts produced by `buildSynthInputVerdicts(succeeded)`. */

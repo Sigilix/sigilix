@@ -30,8 +30,8 @@ Adopt clean architecture across the repository, enforced by CI.
 2. **Barrel-only cross-feature imports.** A feature is consumed through its `index.ts` barrel —
    that file is its public surface. Internal layer paths are private to the feature.
 
-3. **`@/` imports, never `../` across trees.** `@/*` → `src/*`, honored by tsc, vitest, and the
-   wrangler build.
+3. **`@/` imports, never `../` across trees.** `@/*` → repo root (root-anchored: `@/src/...`,
+   `@/scripts/...`), honored by tsc, vitest, and the wrangler build.
 
 4. **A two-tier file-size budget, for readability.** ≤1,000 lines for every file; ≤1,500 for an
    explicitly allowlisted single-cohesive-module file (one class = one module) where splitting

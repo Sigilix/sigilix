@@ -5,9 +5,9 @@
 // the DO owns queue dispatch with runId populated.
 
 import { describe, it, expect, vi } from "vitest"
-import { enqueuePrReviewJob } from "@/do/webhook-enqueue"
-import type { Env } from "@/shared/types/env"
-import type { EnqueueRequest } from "@/do/types"
+import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
+import type { Env } from "@/src/shared/types/env"
+import type { EnqueueRequest } from "@/src/do/types"
 
 interface DoCall {
   url: string

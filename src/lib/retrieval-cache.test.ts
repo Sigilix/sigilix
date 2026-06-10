@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { createRetrievalCache, _testOnlyCacheKey } from "@/lib/retrieval-cache"
-import type { RetrievedChunk } from "@/lib/retrieval"
+import { createRetrievalCache, _testOnlyCacheKey } from "@/src/lib/retrieval-cache"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
 
 const fakeChunk = (path: string): RetrievedChunk => ({
   path,

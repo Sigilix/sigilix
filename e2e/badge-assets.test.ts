@@ -10,10 +10,10 @@ import {
   PUBLIC_BADGE_BASE_URL,
   BADGE_ASSET_VERSION,
   runnerEvidenceBadgeImg,
-} from "../src/lib/badge-assets"
-import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
-import worker from "../src/index"
-import type { Env } from "../src/shared/types/env"
+} from "@/src/lib/badge-assets"
+import { BADGE_GLYPH_PATHS } from "@/src/lib/badge-glyph-paths"
+import worker from "@/src/index"
+import type { Env } from "@/src/shared/types/env"
 
 function ctx(): ExecutionContext {
   return {

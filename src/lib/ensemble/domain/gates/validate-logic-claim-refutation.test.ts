@@ -5,18 +5,18 @@
 // tests pin both the refutations AND the recall-safety counter-cases.
 
 import { describe, expect, it } from "vitest"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import {
   evaluateLogicClaimRefutation,
   parseLogicClaimRefutationMode,
   LOGIC_CLAIM_REFUTATION_MIN_SEVERITY,
-} from "@/lib/ensemble/domain/gates/validate-logic-claim-refutation"
-import { createAstCache } from "@/features/ast-rules/domain/parse-cache"
-import { LARGE_FILE_BYTES } from "@/features/ast-rules/domain/parser"
+} from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation"
+import { createAstCache } from "@/src/features/ast-rules/domain/parse-cache"
+import { LARGE_FILE_BYTES } from "@/src/features/ast-rules/domain/parser"
 import {
   finding,
   ctx,
-} from "@/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
+} from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
 
 describe("parseLogicClaimRefutationMode", () => {
   it("defaults to off; parses shadow/enforce case-insensitively", () => {

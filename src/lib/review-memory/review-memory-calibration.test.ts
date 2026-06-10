@@ -15,7 +15,7 @@ import {
   type ClaimCalibrationParams,
   type WarmSoftenCandidate,
   type CalibrationBlob,
-} from "@/lib/review-memory/calibration"
+} from "@/src/lib/review-memory/calibration"
 
 const usable: ClaimCalibrationParams = {
   lowerBound: 0.85,

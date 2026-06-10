@@ -4,7 +4,7 @@ import {
   listTeamRepoMappings,
   parseTeamGithubRepo,
   resolveInstallation,
-} from "@/shared/adapters/github/github-installation"
+} from "@/src/shared/adapters/github/github-installation"
 
 describe("resolveInstallation", () => {
   it("prefers exact owner/repo over owner-only fallback", () => {

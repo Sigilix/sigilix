@@ -15,7 +15,7 @@
 // query layer) so the consumer can iterate the full set without null
 // handling.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryDismissalMetrics } from "./validation-metrics-client"
 

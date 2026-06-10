@@ -14,7 +14,7 @@
 //
 // Spec: docs/superpowers/specs/2026-05-11-arc-182-stack-aware-review-design.md
 
-import type { StackContext, FileOverlap } from "../lib/pr-stack"
+import type { StackContext, FileOverlap } from "@/src/lib/pr-stack"
 
 /**
  * ARC-182 (code-review I6 + PR #72 CR major): sanitize any

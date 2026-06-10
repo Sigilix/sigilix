@@ -2,8 +2,8 @@
 // Equivalent danger to eval — the body string is parsed and run at
 // runtime. Refactor to a literal function or an explicit allowlist.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 

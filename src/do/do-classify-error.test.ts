@@ -4,8 +4,8 @@ import { describe, it, expect } from "vitest"
 import {
   classifyEnsembleError,
   classifyEnsembleStage,
-} from "@/do/classify-error"
-import { GitHubHttpError } from "@/shared/adapters/github"
+} from "@/src/do/classify-error"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
 
 describe("classifyEnsembleError — TRANSIENT triggers", () => {
   it("HTTP 500 from GitHub → transient", () => {

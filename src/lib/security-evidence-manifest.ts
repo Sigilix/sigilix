@@ -26,9 +26,9 @@
 //   treat a finding that cites none of them.
 
 import type { SecretHit } from "./secret-scan"
-import type { DepVulnFinding } from "@/features/dep-vulns"
-import type { SarifFinding } from "@/features/sarif-evidence"
-import { DYNAMIC_HTML_SINK_RULE_ID, type AstFinding } from "@/features/ast-rules"
+import type { DepVulnFinding } from "@/src/features/dep-vulns"
+import type { SarifFinding } from "@/src/features/sarif-evidence"
+import { DYNAMIC_HTML_SINK_RULE_ID, type AstFinding } from "@/src/features/ast-rules"
 
 /**
  * One deterministic security fact, keyed by its `evidenceId`. The

@@ -10,12 +10,12 @@ import {
   SYNTH_RETRY_FINALIZE_RESERVE_MS,
   graphExpansionMode,
   resolveDynamicEvidencePromptBlock,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   buildSpecialistInitialMessage,
   buildSynthesizerInitialMessage,
-} from "@/prompts/pr-review-specialists"
-import type { Env } from "@/shared/types/env"
+} from "@/src/prompts/pr-review-specialists"
+import type { Env } from "@/src/shared/types/env"
 
 describe("resolveDynamicEvidencePromptBlock", () => {
   const filesByPath = new Map([

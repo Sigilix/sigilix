@@ -9,7 +9,7 @@
 // Moved verbatim from triage-pr-review-ensemble.ts and re-exported there, so
 // existing importers (tests) are unaffected.
 
-import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist-role"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { CollectedVerdict } from "./validation"
 
 /**

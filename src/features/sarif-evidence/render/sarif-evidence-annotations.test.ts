@@ -2,8 +2,8 @@
 // annotations, independent of whether the LLM review emits a matching finding.
 
 import { describe, expect, it } from "vitest"
-import { buildSarifCheckAnnotations } from "@/features/sarif-evidence/render/annotations"
-import type { SarifFinding } from "@/features/sarif-evidence/domain/types"
+import { buildSarifCheckAnnotations } from "@/src/features/sarif-evidence/render/annotations"
+import type { SarifFinding } from "@/src/features/sarif-evidence/domain/types"
 
 const F = (overrides: Partial<SarifFinding> = {}): SarifFinding => ({
   ruleId: "R1",

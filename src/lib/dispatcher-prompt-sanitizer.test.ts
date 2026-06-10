@@ -14,7 +14,7 @@ import {
   buildSanitizedMetadataBlock,
   sanitizeDispatcherMetadata,
   wrapInPrMetadata,
-} from "@/lib/dispatcher-prompt-sanitizer"
+} from "@/src/lib/dispatcher-prompt-sanitizer"
 
 describe("sanitizeDispatcherMetadata — neutral content passes through", () => {
   it("returns a normal commit message unchanged (no triggers, no role tokens)", () => {

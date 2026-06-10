@@ -18,12 +18,12 @@ import {
   evaluateSecurityGrounding,
   parseSecurityGroundingValidatorMode,
   type SecurityGroundingContext,
-} from "@/lib/ensemble/domain/gates/validate-security-grounding"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { SecurityFact } from "@/lib/security-evidence-manifest"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/ensemble/domain/gates/validate-security-grounding"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const PATH = "src/lib/auth.ts"
 

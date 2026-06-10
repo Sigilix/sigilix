@@ -11,7 +11,7 @@
 // leaf — not the god-file shim — so the render layer (finding-format → review-body)
 // can value-import this module's emitters without a `render → trust-ledger-render →
 // triage-pr-review → render` cycle.
-import type { PrReviewFinding, FindingTrust } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding, FindingTrust } from "@/src/shared/domain/pr-review-finding"
 import type { ReviewBadgeAssetName } from "./badge-assets"
 
 /** Inject the ensemble's `badgeImg` so this module needs no value import from

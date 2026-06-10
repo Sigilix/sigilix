@@ -9,10 +9,10 @@
 // field-for-field on the port and are mutually-assignable with the lib types, so
 // the forwarded results satisfy the port with no cast. Dormant seam — PR 12 wires it.
 
-import type { Env } from "@/shared/types/env"
-import type { RetrievalPort } from "../ports/retrieval"
-import { retrieveChunks } from "../../retrieval"
-import { retrieveMultiCorpus } from "../../multi-corpus"
+import type { Env } from "@/src/shared/types/env"
+import type { RetrievalPort } from "@/src/lib/ensemble/ports/retrieval"
+import { retrieveChunks } from "@/src/lib/retrieval"
+import { retrieveMultiCorpus } from "@/src/lib/multi-corpus"
 
 export function makeRetrievalAdapter(env: Env): RetrievalPort {
   return {

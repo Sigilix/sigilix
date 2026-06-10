@@ -5,8 +5,8 @@ import {
   hasInlineControlFlow,
   isSubstantiveAddedLine,
   resolveImportToRepoPath,
-} from "@/lib/helper-coverage"
-import type { TestingSiblingMapping } from "@/lib/testing-evidence-pack"
+} from "@/src/lib/helper-coverage"
+import type { TestingSiblingMapping } from "@/src/lib/testing-evidence-pack"
 
 describe("resolveImportToRepoPath", () => {
   const tested = new Set(["src/lib/branch-retrieval.ts", "src/lib/foo.ts", "src/lib/widget/index.ts"])

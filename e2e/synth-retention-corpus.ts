@@ -9,10 +9,10 @@ import type {
   FindingCategory,
   PrReviewFinding,
   PrReviewVerdict,
-} from "../src/lib/triage-pr-review"
-import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
-import type { SpecialistRole } from "../src/lib/ensemble-router"
-import { applySynthSourceFindingFloor } from "../src/lib/degraded-finding-floor"
+} from "@/src/lib/triage-pr-review"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { SpecialistRole } from "@/src/lib/ensemble-router"
+import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
 
 export interface SynthSourceFinding extends PrReviewFinding {
   id: string

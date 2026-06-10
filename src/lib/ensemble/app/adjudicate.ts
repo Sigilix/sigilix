@@ -10,30 +10,30 @@
 // `../../triage-pr-review-ensemble`. The block has no `await`, so the function
 // is synchronous.
 
-import { durableObjectClassSpans, buildAddedLineTextByLine, type AstCache } from "@/features/ast-rules"
-import { runAstRules } from "@/features/ast-rules"
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import { computeTestToSourceAddedRatio } from "../../test-ratio-damper"
-import { buildSecurityFactManifest } from "../../security-evidence-manifest"
-import type { TestingEvidencePack } from "../../testing-evidence-pack"
-import { isFindingEvidenceVisible, type SigilixConfig } from "../../sigilix-config"
-import { captureGolden } from "../../ensemble-golden-capture"
-import { buildChangedLineTextByPath } from "../domain/gates/validate-logic-finding"
+import { durableObjectClassSpans, buildAddedLineTextByLine, type AstCache } from "@/src/features/ast-rules"
+import { runAstRules } from "@/src/features/ast-rules"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import { computeTestToSourceAddedRatio } from "@/src/lib/test-ratio-damper"
+import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
+import { isFindingEvidenceVisible, type SigilixConfig } from "@/src/lib/sigilix-config"
+import { captureGolden } from "@/src/lib/ensemble-golden-capture"
+import { buildChangedLineTextByPath } from "@/src/lib/ensemble/domain/gates/validate-logic-finding"
 import {
   clampTrivialSyncIoSeverity,
   clampIntentionalLiveEvalSerialLoopSeverity,
-} from "../domain/gates/validate-perf-finding"
-import { computeConsensusRanking, clampAstEmitScores } from "../domain/findings"
+} from "@/src/lib/ensemble/domain/gates/validate-perf-finding"
+import { computeConsensusRanking, clampAstEmitScores } from "@/src/lib/ensemble/domain/findings"
 import {
   validateForSubmission as validateForSubmissionDomain,
   type ValidateForSubmissionArgs,
   type ValidatedOutput,
   type SynthesizerProvenance,
   type CollectedVerdict,
-} from "../domain/validation"
-import type { EnsembleConfig } from "../domain/config"
+} from "@/src/lib/ensemble/domain/validation"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>

@@ -8,8 +8,8 @@
 // absent / already-terminal run is a clean 200 no-op.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import type { RunState } from "@/do/types"
-import type { Env } from "@/shared/types/env"
+import type { RunState } from "@/src/do/types"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── Mock the GitHub check-run primitives BEFORE importing the DO ──
 
@@ -18,7 +18,7 @@ const attachSpy = vi.fn()
 const completeSpy = vi.fn()
 const closeOrphanSpy = vi.fn()
 
-vi.mock("@/lib/pr-review-check-run", () => ({
+vi.mock("@/src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: (...args: unknown[]) => startSpy(...args),
   attachExistingCheckRun: (...args: unknown[]) => attachSpy(...args),
   completeCheckRun: (...args: unknown[]) => completeSpy(...args),
@@ -26,7 +26,7 @@ vi.mock("@/lib/pr-review-check-run", () => ({
   CHECK_RUN_NAME: "Sigilix",
 }))
 
-import { PrReviewRunDO } from "@/do/pr-review-run"
+import { PrReviewRunDO } from "@/src/do/pr-review-run"
 
 // ─── DO storage stub ─────────────────────────────────────────
 

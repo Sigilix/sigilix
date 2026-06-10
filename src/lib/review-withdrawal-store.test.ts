@@ -13,8 +13,8 @@ import {
   writeWithdrawal,
   loadWithdrawals,
   type WithdrawalRecord,
-} from "@/lib/review-withdrawal-store"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/review-withdrawal-store"
+import type { Env } from "@/src/shared/types/env"
 
 // ── KV stub ───────────────────────────────────────────────────────
 

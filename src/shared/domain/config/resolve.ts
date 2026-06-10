@@ -3,13 +3,13 @@
 // `src/lib/sigilix-config.ts` re-exports everything here for the existing
 // importers. See docs/superpowers/plans/2026-06-09-sig-382-config-split.md.
 
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { ResolvedPerfBudgets } from "@/shared/domain/perf-budgets"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { ResolvedPerfBudgets } from "@/src/shared/domain/perf-budgets"
 import {
   DEFAULT_PRE_MERGE_GATES_CONFIG,
   type ResolvedPreMergeGatesConfig,
-} from "@/shared/domain/pre-merge-gates"
-import { pathMatchesAny } from "@/shared/util/path-glob"
+} from "@/src/shared/domain/pre-merge-gates"
+import { pathMatchesAny } from "@/src/shared/util/path-glob"
 import {
   SPECIALIST_ROLES,
   type MatchedSigilixPathInstruction,

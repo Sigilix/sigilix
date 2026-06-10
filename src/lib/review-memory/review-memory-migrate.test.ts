@@ -4,13 +4,13 @@
 // dry-run + idempotent re-run.
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
-import { migrateOneRepoReviewMemory } from "@/lib/review-memory/migrate"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { migrateOneRepoReviewMemory } from "@/src/lib/review-memory/migrate"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,
-} from "@/lib/review-memory/types"
+} from "@/src/lib/review-memory/types"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]

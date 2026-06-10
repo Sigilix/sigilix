@@ -37,38 +37,38 @@
 // leaves (overview / stale-head / dismiss / fallback / counter / noop-merge / SLO
 // + perf telemetry). It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { CheckRunAnnotation } from "@/shared/types/github"
-import type { PullRequestMeta } from "@/shared/types/github"
-import { GitHubClient, GitHubHttpError } from "@/shared/adapters/github"
-import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/shared/domain/pr-review-finding"
-import type { ReviewManifestFinding } from "../../review-manifest"
-import { severityTier, type ReviewEvent, type ReviewEventOverride } from "../domain/verdict"
-import type { EnsembleConfig } from "../domain/config"
-import type { StackContext } from "../../pr-stack"
-import { isPrOverviewEnabled, type SigilixConfig } from "../../sigilix-config"
+import type { Env } from "@/src/shared/types/env"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import type { PullRequestMeta } from "@/src/shared/types/github"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
+import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
+import { severityTier, type ReviewEvent, type ReviewEventOverride } from "@/src/lib/ensemble/domain/verdict"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import type { StackContext } from "@/src/lib/pr-stack"
+import { isPrOverviewEnabled, type SigilixConfig } from "@/src/lib/sigilix-config"
 import {
   handlePrOverview,
   type PrOverviewArgs,
   type PrOverviewReviewContext,
-} from "../../triage-pr-overview"
-import { handleStaleHead } from "../../stale-head"
-import { dismissPriorSigilixReviews } from "../../dismiss-prior-reviews"
-import { postReviewCommentFallback } from "../../review-comment-fallback"
-import { buildFallbackSubmission } from "../render/fallback"
-import { previewFallbackSubmissionEvent } from "../render/submission"
-import type { DeltaBadgeCounts } from "../render/review-body"
-import { selectPrimarySubmitAnnotations } from "../../pr-review-check-run"
-import { writeLastReviewedSha } from "../../incremental-review"
-import { recordReviewedDiffHash } from "../../noop-merge-detect"
-import type { createRetrievalCache } from "../../retrieval-cache"
-import { writeReviewManifestForEnsemble } from "../adapters/persistence"
-import { verifyReviewPersisted } from "../adapters/review-sink"
-import { ORCHESTRATOR_TIMEOUT_MS } from "../domain/budget"
+} from "@/src/lib/triage-pr-overview"
+import { handleStaleHead } from "@/src/lib/stale-head"
+import { dismissPriorSigilixReviews } from "@/src/lib/dismiss-prior-reviews"
+import { postReviewCommentFallback } from "@/src/lib/review-comment-fallback"
+import { buildFallbackSubmission } from "@/src/lib/ensemble/render/fallback"
+import { previewFallbackSubmissionEvent } from "@/src/lib/ensemble/render/submission"
+import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
+import { selectPrimarySubmitAnnotations } from "@/src/lib/pr-review-check-run"
+import { writeLastReviewedSha } from "@/src/lib/incremental-review"
+import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
+import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
+import { writeReviewManifestForEnsemble } from "@/src/lib/ensemble/adapters/persistence"
+import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
+import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import {
   emitPhaseCompleted,
   type EnsembleRunCtx,
-} from "../../ensemble-perf-telemetry"
+} from "@/src/lib/ensemble-perf-telemetry"
 import {
   withSubmissionAffordance,
   buildSuggestionEmissionLogEvents,

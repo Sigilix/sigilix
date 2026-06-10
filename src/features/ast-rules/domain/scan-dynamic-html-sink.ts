@@ -28,7 +28,7 @@
 // + raw interpolation; skip constants, bare identifiers, and all calls; use a
 // line-scan, not a walker/JSX change (broader blast radius, not needed)."
 
-import { HTML_WRITE_SINK_EXTRACTORS } from "@/shared/domain/validate-injection-taint"
+import { HTML_WRITE_SINK_EXTRACTORS } from "@/src/shared/domain/validate-injection-taint"
 import type { AstRuleHit } from "./types"
 
 export const DYNAMIC_HTML_SINK_RULE_ID = "no-dangerous-html-dynamic"

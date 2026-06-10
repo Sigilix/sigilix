@@ -3,10 +3,10 @@
 // FP-safety set (constant targets, validated destinations, non-redirect sinks).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "@/features/ast-rules/domain/parser"
-import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
-import { noOpenRedirect } from "@/features/ast-rules/domain/rules/no-open-redirect"
-import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
+import { parseSource } from "@/src/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/src/features/ast-rules/domain/walker"
+import { noOpenRedirect } from "@/src/features/ast-rules/domain/rules/no-open-redirect"
+import type { AstRuleHit, AstRuleVisitResult } from "@/src/features/ast-rules/domain/types"
 
 function runRule(source: string, path = "src/routes/x.ts"): AstRuleHit[] {
   const r = parseSource(source, ".ts")

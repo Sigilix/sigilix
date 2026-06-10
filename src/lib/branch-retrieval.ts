@@ -9,7 +9,7 @@
 // Model: branch state = main index (unchanged files) ∪ changed-file head
 // content (overrides). No new GitHub fetches, no Vectorize writes.
 
-import { embedTexts } from "../shared/adapters/model"
+import { embedTexts } from "@/src/shared/adapters/model"
 import { chunkFile, type Chunk } from "./indexer"
 import type { RetrievedChunk } from "./retrieval"
 

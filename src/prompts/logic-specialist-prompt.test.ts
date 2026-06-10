@@ -3,7 +3,7 @@
 // cross-tier field-name drift), and that both are phrased FP-safe (grounded).
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS } from "@/prompts/pr-review-specialists"
+import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
 
 describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => {
   const logic = SPECIALIST_PROMPTS.logic

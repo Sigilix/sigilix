@@ -24,10 +24,10 @@ import { fetchPullRequestContext } from "./github-pr-context"
 import { encodeBranchName, parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { withTimeout } from "../shared/util/with-timeout"
-import type { Env } from "../shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { withTimeout } from "@/src/shared/util/with-timeout"
+import type { Env } from "@/src/shared/types/env"
 
 const READ_FILE_MAX_LINES = 200
 const READ_FILE_LOOP_BUDGET_BYTES = 50_000

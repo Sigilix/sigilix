@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest"
 import {
   shouldQueueReviewThreadReply,
   type ReviewReplySkipReason,
-} from "@/lib/review-thread-reply"
+} from "@/src/lib/review-thread-reply"
 
 function expectSkip(args: Parameters<typeof shouldQueueReviewThreadReply>[0], reason: ReviewReplySkipReason) {
   const out = shouldQueueReviewThreadReply(args)

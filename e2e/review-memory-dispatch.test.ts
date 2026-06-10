@@ -1,8 +1,8 @@
 // SIG-185 — webhook dispatch wrappers for review-memory feedback capture.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/shared/types/env"
-import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
+import type { Env } from "@/src/shared/types/env"
+import type { ResolvedReviewMemoryConfig } from "@/src/lib/review-memory/types"
 
 const {
   mockCaptureDismissedReviewFeedback,
@@ -39,21 +39,21 @@ const {
   }
 })
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: mockGitHubClient,
   }
 })
 
-vi.mock("../src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/sigilix-config")>(
-    "../src/lib/sigilix-config",
+vi.mock("@/src/lib/sigilix-config", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
+    "@/src/lib/sigilix-config",
   )
   return {
     ...actual,
@@ -62,9 +62,9 @@ vi.mock("../src/lib/sigilix-config", async () => {
   }
 })
 
-vi.mock("../src/lib/review-memory/capture", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/review-memory/capture")>(
-    "../src/lib/review-memory/capture",
+vi.mock("@/src/lib/review-memory/capture", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/review-memory/capture")>(
+    "@/src/lib/review-memory/capture",
   )
   return {
     ...actual,
@@ -78,7 +78,7 @@ vi.mock("../src/lib/review-memory/capture", async () => {
 import {
   dispatchDismissedReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
-} from "../src/index"
+} from "@/src/index"
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {

@@ -23,7 +23,7 @@
 // side-effect-free so it's trivially testable; the ensemble calls it and emits
 // telemetry.
 
-import type { PrReviewFinding } from "../triage-pr-review"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export type VerificationVerdict = "confirmed" | "refuted" | "inconclusive" | "no-check"
 

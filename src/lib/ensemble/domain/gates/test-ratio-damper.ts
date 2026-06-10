@@ -18,8 +18,8 @@
 //   damper is applied only to `category: "testing"` findings the gate
 //   already KEPT, so it never interacts with the specificity drop logic.
 
-import { classifyKind } from "@/lib/diff-file-classify"
-import { isSubstantiveAddedLine } from "@/lib/helper-coverage"
+import { classifyKind } from "@/src/lib/diff-file-classify"
+import { isSubstantiveAddedLine } from "@/src/lib/helper-coverage"
 
 /**
  * Ratio above which the damper fires. Founder-defined per epic SIG-166

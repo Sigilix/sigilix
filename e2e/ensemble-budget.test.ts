@@ -23,11 +23,11 @@ import {
   SYNTH_RETRY_FINALIZE_RESERVE_MS,
   CF_QUEUE_CONSUMER_CEILING_MS,
   SHADOW_FINALIZE_GRACE_MS,
-} from "../src/lib/ensemble/domain/budget"
+} from "@/src/lib/ensemble/domain/budget"
 // Importing the god-file proves the module-load assertion still fires through
 // the re-export chain (a violated real budget would crash this import) and lets
 // us check the re-exported surface below.
-import * as ensemble from "../src/lib/triage-pr-review-ensemble"
+import * as ensemble from "@/src/lib/triage-pr-review-ensemble"
 
 // The real production budget, imported from the same constants the runtime
 // guard uses (ARC-288: never hardcode a duplicate that can drift).

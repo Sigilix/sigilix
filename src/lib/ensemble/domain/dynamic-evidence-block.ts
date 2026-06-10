@@ -8,7 +8,7 @@
 // direction) and is re-exported from the god-file to preserve the public surface.
 // Never imports the orchestrator.
 
-import type { RetrievedChunk } from "../../retrieval"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
 import {
   buildDynamicReviewEvidencePack,
   dynamicReviewEvidenceMode,
@@ -16,11 +16,11 @@ import {
   type DynamicReviewEvidenceEnv,
   type DynamicReviewEvidenceMode,
   type DynamicReviewEvidencePack,
-} from "../../review-evidence-pack"
-import { type ChangedLines } from "@/features/ast-rules"
-import { type AstCache } from "@/features/ast-rules"
-import type { TestingEvidencePack } from "../../testing-evidence-pack"
-import type { GraphContextNode } from "@/do/repo-graph"
+} from "@/src/lib/review-evidence-pack"
+import { type ChangedLines } from "@/src/features/ast-rules"
+import { type AstCache } from "@/src/features/ast-rules"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
+import type { GraphContextNode } from "@/src/do/repo-graph"
 
 export interface ResolveDynamicEvidencePromptBlockArgs {
   env: DynamicReviewEvidenceEnv

@@ -11,8 +11,8 @@ import {
   renderInlineFallbackBody,
   renderUnpostedImproveSuggestions,
   type PrImproveSuggestion,
-} from "@/lib/triage-pr-improve"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/triage-pr-improve"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 describe("hasSuggestionBlock", () => {
   it("recognizes a basic suggestion block", () => {

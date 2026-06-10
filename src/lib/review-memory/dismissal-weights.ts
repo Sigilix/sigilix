@@ -25,7 +25,7 @@
 // the score adjustment, so a typo'd dismissal never accidentally hard-drops
 // a finding it merely meant to nudge.
 
-import type { DismissReason } from "../dismiss-reasons"
+import type { DismissReason } from "@/src/lib/dismiss-reasons"
 
 /**
  * Per-reason softening weight. Document the choices alongside the numbers:

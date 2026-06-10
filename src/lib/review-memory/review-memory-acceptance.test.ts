@@ -11,16 +11,16 @@
 // wire together with the capture pipeline against real KV state.
 
 import { describe, expect, it, vi } from "vitest"
-import { captureReviewFeedback } from "@/lib/review-memory/capture"
-import { runReviewMemoryLookup } from "@/lib/review-memory/lookup"
-import { renderReviewMemoryForPrompt } from "@/lib/review-memory/render"
+import { captureReviewFeedback } from "@/src/lib/review-memory/capture"
+import { runReviewMemoryLookup } from "@/src/lib/review-memory/lookup"
+import { renderReviewMemoryForPrompt } from "@/src/lib/review-memory/render"
 import {
   buildSigilixMarker,
   computePathSha256,
-} from "@/lib/review-memory/marker"
-import type { Env } from "@/shared/types/env"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { ResolvedReviewMemoryConfig } from "@/lib/review-memory/types"
+} from "@/src/lib/review-memory/marker"
+import type { Env } from "@/src/shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { ResolvedReviewMemoryConfig } from "@/src/lib/review-memory/types"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]

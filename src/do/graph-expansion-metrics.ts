@@ -14,7 +14,7 @@
 // posted review.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const RETENTION_DAYS = 35
 const DAY_MS = 86_400_000
@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS expansion_hist_by_day ON daily_expansion_hist(day);
 // graph-expansion sink + orchestrator reference it without importing this DO.
 // Re-exported here so existing importers (incl. `hasFiniteMetrics` below) are
 // unchanged.
-import type { GraphExpansionSample } from "../lib/ensemble/domain/metric-events"
+import type { GraphExpansionSample } from "@/src/lib/ensemble/domain/metric-events"
 export type { GraphExpansionSample }
 
 export interface RecordExpansionSampleArgs {

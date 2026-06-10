@@ -3,8 +3,8 @@
 // is reverted (the shared leaf wouldn't resolve) or if triage-pr-review stops
 // re-exporting the same binding (which would silently fork the category set).
 import { describe, it, expect } from "vitest"
-import { FINDING_CATEGORIES } from "@/shared/domain/finding-category"
-import { FINDING_CATEGORIES as REVIEW_FINDING_CATEGORIES } from "@/lib/triage-pr-review"
+import { FINDING_CATEGORIES } from "@/src/shared/domain/finding-category"
+import { FINDING_CATEGORIES as REVIEW_FINDING_CATEGORIES } from "@/src/lib/triage-pr-review"
 
 describe("FindingCategory relocation (SIG-383)", () => {
   it("lives in shared/domain with the canonical category set", () => {

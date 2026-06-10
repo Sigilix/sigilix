@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { decideSpecialists, ALL_SPECIALISTS } from "@/lib/ensemble-router"
+import { decideSpecialists, ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
 
 const offEnv = { OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "off" } as const
 const onEnv = { OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "on" } as const

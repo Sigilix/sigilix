@@ -5,13 +5,13 @@
 // generic method names, Map.get false-routes, nested-function sync I/O).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "@/features/ast-rules/domain/parser"
-import { walkAst } from "@/features/ast-rules/domain/walker"
-import type { AstRule, AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
-import { noSpreadAccumulatorInLoop } from "@/features/ast-rules/domain/rules/no-spread-accumulator-in-loop"
-import { noAllocationInLoop } from "@/features/ast-rules/domain/rules/no-allocation-in-loop"
-import { noNPlusOneCallInLoop } from "@/features/ast-rules/domain/rules/no-n-plus-one-call-in-loop"
-import { noSyncIoInRequestPath } from "@/features/ast-rules/domain/rules/no-sync-io-in-request-path"
+import { parseSource } from "@/src/features/ast-rules/domain/parser"
+import { walkAst } from "@/src/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "@/src/features/ast-rules/domain/types"
+import { noSpreadAccumulatorInLoop } from "@/src/features/ast-rules/domain/rules/no-spread-accumulator-in-loop"
+import { noAllocationInLoop } from "@/src/features/ast-rules/domain/rules/no-allocation-in-loop"
+import { noNPlusOneCallInLoop } from "@/src/features/ast-rules/domain/rules/no-n-plus-one-call-in-loop"
+import { noSyncIoInRequestPath } from "@/src/features/ast-rules/domain/rules/no-sync-io-in-request-path"
 
 function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
   if (!hit) return

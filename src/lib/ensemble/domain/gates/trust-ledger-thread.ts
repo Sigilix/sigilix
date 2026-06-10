@@ -5,7 +5,7 @@
 // (trust-ledger-render.ts) reads the result. Runtime-only — never parsed from
 // model JSON.
 
-import type { PrReviewFinding, FindingTrust, FindingTrustTier } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding, FindingTrust, FindingTrustTier } from "@/src/shared/domain/pr-review-finding"
 
 /** PR2 flag (`OPENCLAW_TRUST_LEDGER`). `off` = attach metadata in-memory but
  *  record no telemetry + render nothing. `shadow` = attach + record the tier

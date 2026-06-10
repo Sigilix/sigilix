@@ -15,12 +15,12 @@ import {
   parseLogicValidatorMode,
   buildChangedLineTextByPath,
   type LogicEvidence,
-} from "@/lib/ensemble/domain/gates/validate-logic-finding"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/ensemble/domain/gates/validate-logic-finding"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const PATH = "src/lib/scan.ts"
 

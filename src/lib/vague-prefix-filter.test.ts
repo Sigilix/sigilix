@@ -12,8 +12,8 @@ import {
   hasVaguePrefix,
   validateForSubmission,
   VAGUE_PREFIXES,
-} from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 function finding(
   overrides: Partial<PrReviewFinding> = {},
@@ -134,8 +134,8 @@ describe("hasVaguePrefix", () => {
 
 // ── Integration with validateForSubmission ────────────────────
 
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 function makeReviewable(): ReviewableMap {
   // All lines on the right side; deriveSide will return "RIGHT" for

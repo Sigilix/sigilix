@@ -5,7 +5,7 @@ import {
   ownersForPath,
   parseCodeowners,
   suggestedReviewersFromCodeowners,
-} from "@/lib/codeowners"
+} from "@/src/lib/codeowners"
 
 describe("CODEOWNERS parsing and owner resolution", () => {
   it("uses last-match-wins precedence and supports empty-owner overrides", () => {

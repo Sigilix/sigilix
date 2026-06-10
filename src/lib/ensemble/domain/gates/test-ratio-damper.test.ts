@@ -5,7 +5,7 @@ import {
   computeTestToSourceAddedRatio,
   dampTestingScoreForRatio,
   TEST_RATIO_DAMPER_THRESHOLD,
-} from "@/lib/ensemble/domain/gates/test-ratio-damper"
+} from "@/src/lib/ensemble/domain/gates/test-ratio-damper"
 
 function diffMap(
   byPath: Record<string, string[]>,

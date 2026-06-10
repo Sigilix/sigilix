@@ -3,7 +3,7 @@
 // table drifts, every triage starts writing wrong values to Linear.
 
 import { describe, expect, it } from "vitest"
-import { estimateToPoints, severityToPriority } from "@/lib/linear"
+import { estimateToPoints, severityToPriority } from "@/src/lib/linear"
 
 describe("severityToPriority", () => {
   it.each([

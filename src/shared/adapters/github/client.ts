@@ -35,7 +35,7 @@ import type {
   WorkflowArtifact,
   WorkflowJob,
   WorkflowRun,
-} from "../../types/github"
+} from "@/src/shared/types/github"
 import { atobUtf8 } from "./github-client-encoding"
 import type {
   ContentsResponse,

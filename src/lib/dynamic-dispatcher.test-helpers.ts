@@ -7,9 +7,9 @@
 // file and mock state does not cross files, so the LLM-orchestration
 // sibling declares them inline.
 
-import type { ClassifiedDiffFile } from "@/lib/diff-file-classify"
-import type { SigilixConfig } from "@/lib/sigilix-config"
-import type { Env } from "@/shared/types/env"
+import type { ClassifiedDiffFile } from "@/src/lib/diff-file-classify"
+import type { SigilixConfig } from "@/src/lib/sigilix-config"
+import type { Env } from "@/src/shared/types/env"
 
 export const EMPTY_CONFIG: SigilixConfig = {}
 

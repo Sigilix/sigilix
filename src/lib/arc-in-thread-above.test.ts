@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { arcInThreadAbove } from "@/lib/mention"
+import { arcInThreadAbove } from "@/src/lib/mention"
 
 interface TestComment {
   id: number

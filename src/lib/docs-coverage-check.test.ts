@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
-} from "@/lib/docs-coverage-check"
-import { resolveDocsReviewConfig } from "@/lib/sigilix-config"
+} from "@/src/lib/docs-coverage-check"
+import { resolveDocsReviewConfig } from "@/src/lib/sigilix-config"
 
 const baseConfig = {
   enabled: true,

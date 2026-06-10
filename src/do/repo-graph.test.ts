@@ -10,9 +10,9 @@
 // directly (no HTTP fetch).
 
 import { describe, expect, it } from "vitest"
-import { RepoGraphDO, resolveRelative } from "@/do/repo-graph"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { RepoGraphDO, resolveRelative } from "@/src/do/repo-graph"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 // ─── DO storage stub ─────────────────────────────────────────────
 //

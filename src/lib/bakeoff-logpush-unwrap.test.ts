@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { unwrapLogpushEnvelope } from "@/lib/bakeoff-logpush-unwrap"
+import { unwrapLogpushEnvelope } from "@/src/lib/bakeoff-logpush-unwrap"
 
 describe("unwrapLogpushEnvelope", () => {
   it("passes through a flat event object unchanged", () => {

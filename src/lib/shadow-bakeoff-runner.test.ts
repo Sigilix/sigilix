@@ -1,17 +1,17 @@
 // tests/shadow-bakeoff-runner.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { EnsembleRunCtx } from "@/lib/ensemble-perf-telemetry"
-import { runShadowSpecialist, runShadowSynth } from "@/lib/shadow-bakeoff-runner"
+import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { runShadowSpecialist, runShadowSynth } from "@/src/lib/shadow-bakeoff-runner"
 
 // Mock `chat` so we don't make real HTTP calls. The runner ultimately
 // calls runWithRetryAndFallback → attemptChat → chat. We control the
 // last hop.
-vi.mock("@/shared/adapters/model/ollama-chat", () => ({
+vi.mock("@/src/shared/adapters/model/ollama-chat", () => ({
   chat: vi.fn(),
 }))
 
-import { chat } from "@/shared/adapters/model"
+import { chat } from "@/src/shared/adapters/model"
 
 const CTX: EnsembleRunCtx = {
   owner: "Arc-and-Anchor",

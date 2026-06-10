@@ -32,7 +32,7 @@
 // type shims) so every existing importer of `./triage-pr-review` resolves
 // unchanged. The public surface is byte-for-byte the same as before the move.
 
-import { parseFirstJsonObject } from "../shared/util/json-extract"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import {
   normalizeReviewFindingScope,
   normalizeFindingDetail,
@@ -46,8 +46,8 @@ import {
 import type { ReviewEvent, ReviewEventOverride } from "./ensemble/domain/verdict"
 export type { ReviewEvent, ReviewEventOverride }
 
-import { FINDING_CATEGORIES } from "@/shared/domain/finding-category"
-import type { FindingCategory } from "@/shared/domain/finding-category"
+import { FINDING_CATEGORIES } from "@/src/shared/domain/finding-category"
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
 
 // SIG-318: `FindingCategory` + `FINDING_CATEGORIES` moved to a shared/domain leaf
 // so features can reference the finding-category vocabulary without importing
@@ -60,7 +60,7 @@ import {
   STACK_ORIGINS,
   REVIEW_FINDING_SCOPES,
   hasStructuredFix,
-} from "@/shared/domain/pr-review-finding"
+} from "@/src/shared/domain/pr-review-finding"
 import type {
   StackOrigin,
   ReviewFindingScope,
@@ -72,7 +72,7 @@ import type {
   ClearedLogicCandidate,
   PrReviewVerdict,
   CoverageRoles,
-} from "@/shared/domain/pr-review-finding"
+} from "@/src/shared/domain/pr-review-finding"
 
 // SIG-384: the PrReviewFinding type cluster (finding/verdict/trust vocabulary)
 // moved to a shared/domain leaf so domain/feature code can reference it without
@@ -387,7 +387,7 @@ export type {
 // (@/shared/util/anchor-lines) so domain/feature code can reference it without
 // importing this god-file (which would invert the dependency rule). Re-exported
 // here so the existing importers of this module are unchanged.
-import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
+import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
 export { isSubstantiveAnchorLine }
 
 // SIG-365 (PR 13): the RENDER layer lives in `ensemble/render/`. Every render

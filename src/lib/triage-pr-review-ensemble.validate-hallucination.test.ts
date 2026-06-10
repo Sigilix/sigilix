@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest"
 import {
   validateForSubmission,
   type SynthesizerProvenance,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   type PrReviewFinding,
-} from "@/lib/triage-pr-review"
-import { applySynthSourceFindingFloor } from "@/lib/degraded-finding-floor"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding, baseVerdict } from "@/lib/triage-pr-review-ensemble.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("validateForSubmission — hallucination guard + line validity + score-1 handling", () => {
   const reviewable: ReviewableMap = new Map([

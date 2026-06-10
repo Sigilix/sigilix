@@ -12,16 +12,16 @@ import { describe, it, expect, vi } from "vitest"
 import {
   evaluateSecurityFinding,
   deriveSecurityBucket,
-} from "@/lib/ensemble/domain/gates/validate-security-finding"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/ensemble/domain/gates/validate-security-finding"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import {
   finding,
   fact,
   manifestOf,
-} from "@/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
+} from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
 
 function makeReviewable(path = "src/db.ts"): ReviewableMap {
   return new Map([

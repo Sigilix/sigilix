@@ -9,7 +9,7 @@
 import type {
   GraphContextNode,
   GraphContextExpansion,
-} from "@/shared/domain/graph-context"
+} from "@/src/shared/domain/graph-context"
 
 export interface GraphPort {
   /**

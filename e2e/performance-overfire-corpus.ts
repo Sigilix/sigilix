@@ -4,15 +4,15 @@
 // regressions from common overfire shapes. The live harness replays these diffs
 // through the real performance specialist and reports raw vs post-gate metrics.
 
-import { buildAddedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
 import {
   clampIntentionalLiveEvalSerialLoopSeverity,
   clampTrivialSyncIoSeverity,
   evaluatePerfFinding,
   type PerfEvidence,
-} from "../src/lib/validate-perf-finding"
-import { buildChangedLineTextByPath } from "../src/lib/validate-logic-finding"
-import type { PrReviewFinding } from "../src/lib/triage-pr-review"
+} from "@/src/lib/validate-perf-finding"
+import { buildChangedLineTextByPath } from "@/src/lib/validate-logic-finding"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export type PerformanceOverfireClass =
   | "serial-eval-loop"

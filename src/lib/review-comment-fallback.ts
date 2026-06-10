@@ -35,8 +35,8 @@
 // Pure helpers are exported for unit tests; the async helper is
 // exercised through the ensemble's integration path.
 
-import type { GitHubClient } from "../shared/adapters/github"
-import type { Env } from "../shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 /** The marker every Sigilix review body starts with. Same marker the
  *  formal-review path uses (see `formatReviewBody` in

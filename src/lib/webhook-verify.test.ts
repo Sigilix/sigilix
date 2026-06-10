@@ -4,7 +4,7 @@
 // crypto.subtle API the Worker uses, so the production code path is exercised.
 
 import { describe, expect, it } from "vitest"
-import { verifyLinearWebhook } from "@/lib/webhook-verify"
+import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
 
 const SECRET = "test-secret-do-not-use-in-prod"
 const encoder = new TextEncoder()

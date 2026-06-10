@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { runSecretScan, renderSecretHitsForPrompt, containsCredentialToken, secretAllowlistReason } from "@/lib/secret-scan"
+import { runSecretScan, renderSecretHitsForPrompt, containsCredentialToken, secretAllowlistReason } from "@/src/lib/secret-scan"
 
 const mkDiff = (path: string, addedLines: string[]) => {
   const lines = [

@@ -25,7 +25,7 @@
 // `code` is left intact — prose around it is still scannable.
 
 import type { ReviewMemorySignal } from "./types"
-import { type DismissReason, parseDismissReason } from "../dismiss-reasons"
+import { type DismissReason, parseDismissReason } from "@/src/lib/dismiss-reasons"
 
 /**
  * The parsed result. `dismissReason` (SIG-114 PR 4) is attached ONLY when the

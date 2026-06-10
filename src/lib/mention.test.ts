@@ -11,7 +11,7 @@ import {
   isLikelyBotAuthor,
   stripMentionFromBody,
   stripQuotesAndCode,
-} from "@/lib/mention"
+} from "@/src/lib/mention"
 
 // Test triggers match the production default after 2026-05-06 — sigilix
 // only. The previous DEFAULT_TRIGGERS included legacy `arc` and

@@ -11,9 +11,9 @@
 //   - stale runId (state.runId !== alarmTargetRunId) → no-op + telemetry
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { PrReviewRunDO } from "@/do/pr-review-run"
-import type { Env } from "@/shared/types/env"
-import type { RunState } from "@/do/types"
+import { PrReviewRunDO } from "@/src/do/pr-review-run"
+import type { Env } from "@/src/shared/types/env"
+import type { RunState } from "@/src/do/types"
 
 interface FakeAlarmState { alarmAt: number | null }
 

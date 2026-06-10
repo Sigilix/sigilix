@@ -35,9 +35,9 @@
 // `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` (off | shadow | enforce, default off)
 // at the call site. This module is pure and mode-agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { deriveSecurityBucket, type SecurityBucket } from "./validate-security-finding"
-import { blank } from "@/features/ast-rules"
+import { blank } from "@/src/features/ast-rules"
 
 export type SecurityUsageValidatorMode = "off" | "shadow" | "enforce"
 

@@ -7,8 +7,8 @@ import {
   renderSlashCommandAck,
   renderHelpBody,
   isAuthorAllowedForSlashCommand,
-} from "@/lib/slash-commands"
-import { stripQuotesAndCode } from "@/lib/mention"
+} from "@/src/lib/slash-commands"
+import { stripQuotesAndCode } from "@/src/lib/mention"
 
 describe("parseSlashCommand", () => {
   it("returns null for empty / non-string input", () => {

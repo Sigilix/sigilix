@@ -14,7 +14,7 @@ import {
   type ShadowEvent,
   type ShadowRunFailedEvent,
   type ShadowVerdictComparisonEvent,
-} from "@/lib/bakeoff-report"
+} from "@/src/lib/bakeoff-report"
 
 // ─── Statistics primitives ─────────────────────────────────────────
 

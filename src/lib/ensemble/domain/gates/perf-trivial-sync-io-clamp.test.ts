@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest"
 import {
   clampIntentionalLiveEvalSerialLoopSeverity,
   clampTrivialSyncIoSeverity,
-} from "@/lib/ensemble/domain/gates/validate-perf-finding"
+} from "@/src/lib/ensemble/domain/gates/validate-perf-finding"
 
 const lines = (path: string, entries: [number, string][]) =>
   new Map([[path, new Map(entries)]])

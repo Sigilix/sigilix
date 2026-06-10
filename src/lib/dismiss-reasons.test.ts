@@ -15,7 +15,7 @@ import {
   isDismissReason,
   parseDismissReason,
   type DismissReason,
-} from "@/lib/dismiss-reasons"
+} from "@/src/lib/dismiss-reasons"
 
 describe("isDismissReason", () => {
   it.each<DismissReason>([

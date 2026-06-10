@@ -8,11 +8,11 @@
 // `triage-pr-review-ensemble-dispatcher-shadow.test.ts`.
 
 import { describe, expect, it } from "vitest"
-import { computeRuleLayer } from "@/lib/dynamic-dispatcher"
+import { computeRuleLayer } from "@/src/lib/dynamic-dispatcher"
 import {
   EMPTY_CONFIG,
   classifiedFor,
-} from "@/lib/dynamic-dispatcher.test-helpers"
+} from "@/src/lib/dynamic-dispatcher.test-helpers"
 
 // ─── Pure rule layer ──────────────────────────────────────────────────
 

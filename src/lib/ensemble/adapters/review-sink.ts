@@ -8,9 +8,9 @@
 // `REVIEW_LIST_PAGE_CAP` were private in the god-file and are EXPORTED here
 // (permitted delta — the god-file imports them back; public surface unchanged).
 
-import { GitHubClient } from "@/shared/adapters/github"
-import { getInstallationToken } from "@/shared/adapters/github/github-app"
-import type { Env } from "@/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import type { Env } from "@/src/shared/types/env"
 
 /** Single-page cap on `listPullRequestReviews`. Reviews are returned
  *  in ASC (oldest-first) submission order, so a freshly-posted review

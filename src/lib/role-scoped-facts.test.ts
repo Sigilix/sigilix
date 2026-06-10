@@ -3,8 +3,8 @@
 // isolation) relies on. Flagged for coverage by the Sigilix bot review.
 
 import { describe, it, expect } from "vitest"
-import { buildFactsByRole } from "@/lib/role-scoped-facts"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
+import { buildFactsByRole } from "@/src/lib/role-scoped-facts"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 function ast(overrides: Partial<AstFinding> = {}): AstFinding {
   return {

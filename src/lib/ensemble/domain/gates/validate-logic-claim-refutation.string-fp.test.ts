@@ -6,11 +6,11 @@
 // + `ctx` fixtures via validate-logic-claim-refutation.test-helpers.ts.
 
 import { describe, expect, it } from "vitest"
-import { evaluateLogicClaimRefutation } from "@/lib/ensemble/domain/gates/validate-logic-claim-refutation"
+import { evaluateLogicClaimRefutation } from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation"
 import {
   finding,
   ctx,
-} from "@/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
+} from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
 
 describe("string FP refutations", () => {
   const FILTER = `export function filterRows(rows, req) {

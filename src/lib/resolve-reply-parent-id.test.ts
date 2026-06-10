@@ -12,7 +12,7 @@
 // the full mock stack.
 
 import { describe, expect, it } from "vitest"
-import { resolveReplyParentId } from "@/lib/mention-reply"
+import { resolveReplyParentId } from "@/src/lib/mention-reply"
 
 describe("resolveReplyParentId — handleMention threading plumbing (SIG-225)", () => {
   it("returns the parent id when the source comment is a thread reply", () => {

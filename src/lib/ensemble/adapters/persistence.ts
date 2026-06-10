@@ -14,20 +14,20 @@
 // TTL stay BYTE-IDENTICAL (contract-tested in fp-rate / metrics-fp-rate-route /
 // metrics-graph-expansion-ab).
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
 import {
   computeFileListHash,
   writeReviewManifest,
   type ReviewManifestFinding,
   type ReviewManifestV1,
-} from "@/lib/review-manifest"
-import { PROMPT_VERSION } from "@/prompts/pr-review"
-import { TELEMETRY_TTL_DAYS } from "@/lib/fp-rate/attribute"
+} from "@/src/lib/review-manifest"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
+import { TELEMETRY_TTL_DAYS } from "@/src/lib/fp-rate/attribute"
 import type {
   EnsemblePersistencePort,
   EnsembleTelemetrySummary,
-} from "../ports/persistence"
+} from "@/src/lib/ensemble/ports/persistence"
 
 /**
  * Best-effort write of the review-provenance manifest from the

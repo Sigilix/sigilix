@@ -26,8 +26,8 @@ import type {
   PrReviewVerdict,
   PrReviewFinding,
   EvidenceRecord,
-} from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
+} from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { PrReviewVerdictWithIds } from "./findings"
 import {
   initializeValidationState,

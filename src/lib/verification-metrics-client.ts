@@ -1,12 +1,12 @@
 // SIG-285 PR 2: thin typed wrappers for the single global VerificationMetricsDO.
 // Callers own the non-fatal try/catch (telemetry must never break a review).
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   VerificationMetricsDO,
   RecordVerificationArgs,
   VerificationMetricsQuery,
-} from "../do/verification-metrics"
+} from "@/src/do/verification-metrics"
 
 const GLOBAL_INSTANCE = "global"
 

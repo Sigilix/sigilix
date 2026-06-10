@@ -30,9 +30,9 @@
 //   mode-agnostic; the orchestrator decides what to do with the
 //   verdict.
 
-import type { PrReviewFinding, ScanFactDismissal } from "@/shared/domain/pr-review-finding"
-import type { SecurityFact } from "@/lib/security-evidence-manifest"
-import { containsCredentialToken } from "@/lib/secret-scan"
+import type { PrReviewFinding, ScanFactDismissal } from "@/src/shared/domain/pr-review-finding"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
+import { containsCredentialToken } from "@/src/lib/secret-scan"
 
 /**
  * Validator mode. `shadow` (default): emit telemetry counting what

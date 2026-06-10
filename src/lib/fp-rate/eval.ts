@@ -11,7 +11,7 @@
 // (re-measures only when the corpus grows / is re-labeled), and a small N
 // gives wide Wilson intervals. Pure (no IO); the script reads the files.
 
-import { wilsonInterval } from "../bakeoff-report"
+import { wilsonInterval } from "@/src/lib/bakeoff-report"
 
 export type EvalLabel = "TP" | "FP" | "borderline"
 

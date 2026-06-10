@@ -30,41 +30,41 @@
 // stays under the 1k-line cap) and import-typed here — kept out of `app/session.ts`,
 // which stays generic over the telemetry type (its whole reason for the `Tel` param).
 
-import type { CheckRunAnnotation } from "@/shared/types/github"
-import { postReviewSkipNotice, type SkipNoticeReason } from "../../review-comment-fallback"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import { postReviewSkipNotice, type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import {
   type SpecialistRole,
-} from "../../ensemble-router"
+} from "@/src/lib/ensemble-router"
 import {
   createRetrievalCache,
-} from "../../retrieval-cache"
+} from "@/src/lib/retrieval-cache"
 import {
   passesLabelGate,
-} from "../../sigilix-config"
-import { createAstCache, type AstCache } from "@/features/ast-rules"
-import { handleStaleHead } from "../../stale-head"
-import { checkIsPrMerged, submitMergedOnApprove } from "../../merge-guard"
+} from "@/src/lib/sigilix-config"
+import { createAstCache, type AstCache } from "@/src/features/ast-rules"
+import { handleStaleHead } from "@/src/lib/stale-head"
+import { checkIsPrMerged, submitMergedOnApprove } from "@/src/lib/merge-guard"
 import {
   type EnsembleRunCtx,
-} from "../../ensemble-perf-telemetry"
+} from "@/src/lib/ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
   makeTokenRecorder,
-} from "../../ensemble-slo-telemetry"
+} from "@/src/lib/ensemble-slo-telemetry"
 import {
   type ShadowRunResult,
-} from "../../shadow-bakeoff-runner"
+} from "@/src/lib/shadow-bakeoff-runner"
 import {
   ORCHESTRATOR_TIMEOUT_MS,
   SHADOW_FINALIZE_GRACE_MS,
-} from "../domain/budget"
-import { parseEnsembleConfig } from "../config"
-import type { EnsembleConfig } from "../domain/config"
+} from "@/src/lib/ensemble/domain/budget"
+import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   validateForSubmission as validateForSubmissionDomain,
   type ValidateForSubmissionArgs,
   type ValidatedOutput,
-} from "../domain/validation"
+} from "@/src/lib/ensemble/domain/validation"
 import { adjudicateFindings } from "./adjudicate"
 import {
   settleShadowBakeoff,
@@ -87,7 +87,7 @@ import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./o
 import {
   buildClient,
   verifyReviewPersisted,
-} from "../adapters/review-sink"
+} from "@/src/lib/ensemble/adapters/review-sink"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 

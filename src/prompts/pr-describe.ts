@@ -17,7 +17,7 @@
 // sanitizer is a follow-up that should leverage ARC-187's secret
 // scanner.
 
-import type { DescribeMode } from "../lib/slash-commands"
+import type { DescribeMode } from "@/src/lib/slash-commands"
 
 const SHARED_ENVELOPE = `## What you'll receive
 

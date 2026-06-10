@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest"
 import {
   parseMinSpecialistsEarlyExitMode,
   decideEarlyExitAction,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 
 describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
   describe("happy path — recognized values", () => {

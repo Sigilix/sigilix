@@ -121,7 +121,7 @@ export interface ReviewMemorySignal {
    * weights signals via `weightForReason(dismissReason)`; absent or
    * unknown → weight 1.0 (existing behavior, no surprise softening).
    */
-  dismissReason?: import("../dismiss-reasons").DismissReason
+  dismissReason?: import("@/src/lib/dismiss-reasons").DismissReason
   /**
    * SIG-114 PR 3: the dismissed finding's severity tier, copied from the
    * parent comment's marker (`sev:` segment) at capture time. Lets the

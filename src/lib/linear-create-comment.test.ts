@@ -12,7 +12,7 @@
 // suite pins the contract that fixes that.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { LinearClient } from "@/lib/linear"
+import { LinearClient } from "@/src/lib/linear"
 
 interface CapturedRequest {
   body: { query: string; variables: { input: Record<string, unknown> } }

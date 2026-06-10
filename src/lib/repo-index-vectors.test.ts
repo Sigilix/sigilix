@@ -13,8 +13,8 @@ import {
   writeRepoIndexVectors,
   appendVectorCoverage,
   type RepoIndexVectorsV1,
-} from "@/lib/repo-index-vectors"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/repo-index-vectors"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]
@@ -105,7 +105,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     // stored ID. Without this preservation, the next dual-write
     // would no-op (no ID present → branch-gate skip) and the
     // canonical record at `repo-tenant:{id}` would go stale.
-    const { computeMerge } = await import("@/lib/repo-index-vectors")
+    const { computeMerge } = await import("@/src/lib/repo-index-vectors")
     const existing = {
       kind: "ok" as const,
       vectors: {
@@ -138,7 +138,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     // if a repo were re-keyed by GitHub support, the incoming
     // wins). Sanity check that the merge respects the most-recent
     // signal.
-    const { computeMerge } = await import("@/lib/repo-index-vectors")
+    const { computeMerge } = await import("@/src/lib/repo-index-vectors")
     const existing = {
       kind: "ok" as const,
       vectors: {
@@ -171,7 +171,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
     // The merge effectively drops the field, the next dual-write
     // skips, and Phase 3 migration is the path to re-stamp the
     // correct ID.
-    const { computeMerge } = await import("@/lib/repo-index-vectors")
+    const { computeMerge } = await import("@/src/lib/repo-index-vectors")
     const corrupt = {
       kind: "ok" as const,
       vectors: {

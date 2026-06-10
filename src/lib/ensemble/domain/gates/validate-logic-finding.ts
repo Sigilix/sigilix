@@ -36,8 +36,8 @@
 //   — NEVER dropped. This module is pure and mode-agnostic; the
 //   orchestrator decides what to do with the verdict.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { AstFinding } from "@/features/ast-rules"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { AstFinding } from "@/src/features/ast-rules"
 
 /**
  * Validator mode. `shadow` (default): emit telemetry counting what

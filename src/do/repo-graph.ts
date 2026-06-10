@@ -15,7 +15,7 @@
 // so those slot in as additional public methods.
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 // SIG-376 (Tier-1 2/8): the DO's pure internals — its structured-log
 // emitter, the lazy SQLite schema, the relative-import resolver, and the
 // bounding constants — were lifted into a leaf module so this file stays
@@ -54,7 +54,7 @@ import type {
   GraphCallerRow,
   GraphImportRow,
   GraphContextExpansion,
-} from "../shared/domain/graph-context"
+} from "@/src/shared/domain/graph-context"
 export type {
   GraphContextNode,
   GraphDefinitionRow,

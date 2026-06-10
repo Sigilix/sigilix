@@ -5,9 +5,9 @@ import {
   computeChunkOverlap,
   shouldRunSymbolRetrieval,
   mergeLogicSnapshot,
-} from "@/lib/symbol-retrieval"
-import { buildChangedLines } from "@/features/ast-rules/domain/diff-filter"
-import type { RetrievedChunk } from "@/lib/retrieval"
+} from "@/src/lib/symbol-retrieval"
+import { buildChangedLines } from "@/src/features/ast-rules/domain/diff-filter"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
 
 function chunk(path: string, a: number, b: number): RetrievedChunk {
   return { path, lineStart: a, lineEnd: b, content: "x", score: 0.5 }

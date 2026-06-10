@@ -14,7 +14,7 @@
 // to burn one extra retry than terminal-fail a fixable thing per
 // plan v2 Task 3).
 
-import { GitHubHttpError } from "../shared/adapters/github"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
 
 export type EnsembleErrorClass = "transient" | "terminal"
 

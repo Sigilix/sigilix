@@ -4,8 +4,8 @@
 // existing JS/TS path — fails here.
 
 import { describe, expect, it } from "vitest"
-import { extractPythonFileGraph } from "@/lib/graph-extract-python"
-import { extractFileGraph } from "@/lib/graph-extract"
+import { extractPythonFileGraph } from "@/src/lib/graph-extract-python"
+import { extractFileGraph } from "@/src/lib/graph-extract"
 
 const names = (src: string) =>
   extractPythonFileGraph("m.py", src).symbols.map((s) => `${s.kind}:${s.name}:${s.exported}`)

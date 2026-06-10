@@ -5,9 +5,9 @@
 // Kimi MINOR #4: SARIF level mapping.
 
 import { describe, it, expect } from "vitest"
-import { runSarifEvidence, type ResolvedSarifConfig } from "@/features/sarif-evidence/app/runner"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { runSarifEvidence, type ResolvedSarifConfig } from "@/src/features/sarif-evidence/app/runner"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }
 const PATH = ".sigilix/trivy.sarif.json"

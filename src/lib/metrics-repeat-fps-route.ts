@@ -16,7 +16,7 @@
 // Every `RepeatFpEventKind` is always present in `byReason` (defaults to 0 in
 // the DO query layer); `bySpecialist` lists only specialists seen in-window.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryRepeatFpMetrics } from "./validation-metrics-client"
 

@@ -18,13 +18,13 @@
 // (incl. the relocated graph-context-format + ast-scan-gate domains). It never
 // imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { CheckRunAnnotation } from "@/shared/types/github"
-import type { RetrievedChunk } from "../../../retrieval"
-import { extractChangedSymbols } from "../../../symbol-retrieval"
-import { buildChangedLines } from "@/features/ast-rules"
-import { withComposedTimeout } from "../../../agent-loop"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
+import { extractChangedSymbols } from "@/src/lib/symbol-retrieval"
+import { buildChangedLines } from "@/src/features/ast-rules"
+import { withComposedTimeout } from "@/src/lib/agent-loop"
 import {
   resolveAstRulesConfig,
   resolveDocsReviewConfig,
@@ -32,17 +32,17 @@ import {
   resolvePerfBudgetsConfig,
   resolveSarifEvidenceConfig,
   type SigilixConfig,
-} from "../../../sigilix-config"
-import { runAstRules, type AstCache } from "@/features/ast-rules"
+} from "@/src/lib/sigilix-config"
+import { runAstRules, type AstCache } from "@/src/features/ast-rules"
 import {
   runDocsCoverageCheck,
   type DocsCoverageHit,
-} from "../../../docs-coverage-check"
+} from "@/src/lib/docs-coverage-check"
 import {
   runPerfBudgetsCheck,
   type PerfBudgetsHit,
-} from "@/shared/domain/perf-budgets"
-import { ingestCoverage } from "../../../coverage-ingest"
+} from "@/src/shared/domain/perf-budgets"
+import { ingestCoverage } from "@/src/lib/coverage-ingest"
 import {
   runSarifEvidence,
   type SarifFinding,
@@ -50,36 +50,36 @@ import {
   normalizeSarifPath,
   renderSarifFindingsForPrompt,
   buildSarifCheckAnnotations,
-} from "@/features/sarif-evidence"
-import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "../../../runner-evidence/lookup"
-import { recordRunnerEvidenceMetric } from "../../../runner-evidence-metrics-client"
+} from "@/src/features/sarif-evidence"
+import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "@/src/lib/runner-evidence/lookup"
+import { recordRunnerEvidenceMetric } from "@/src/lib/runner-evidence-metrics-client"
 import {
   buildReceiptIndex,
   extractReceiptScanResults,
   type ReceiptScanResult,
-} from "../../../verification/verify-finding-receipt"
-import { graphContextFor, blastRadiusByNamesFor } from "../../../repo-graph-client"
-import { contextExpansionForChangedSymbolsFor } from "../../../repo-graph-client"
+} from "@/src/lib/verification/verify-finding-receipt"
+import { graphContextFor, blastRadiusByNamesFor } from "@/src/lib/repo-graph-client"
+import { contextExpansionForChangedSymbolsFor } from "@/src/lib/repo-graph-client"
 import {
   buildGraphContextExpansion,
   renderGraphExpansionForPrompt,
   netNewCrossFileBodies,
-} from "../../../graph-context-expansion"
-import type { GraphRetrievalSample } from "@/do/graph-metrics"
-import type { GraphExpansionSample } from "@/do/graph-expansion-metrics"
-import { graphExpansionMode, injectArm } from "../../../graph-expansion-mode"
-import type { GraphContextNode } from "@/do/repo-graph"
-import { edgeWeight, hopDecay } from "../../../graph-scoring"
-import { withTimeout } from "@/shared/util/with-timeout"
-import { GRAPH_EXPANSION_TIMEOUT_MS } from "../../domain/budget"
-import type { EnsembleConfig } from "../../domain/config"
+} from "@/src/lib/graph-context-expansion"
+import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
+import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
+import { graphExpansionMode, injectArm } from "@/src/lib/graph-expansion-mode"
+import type { GraphContextNode } from "@/src/do/repo-graph"
+import { edgeWeight, hopDecay } from "@/src/lib/graph-scoring"
+import { withTimeout } from "@/src/shared/util/with-timeout"
+import { GRAPH_EXPANSION_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   GRAPH_BLAST_PROMPT_CAP,
   formatGraphContext,
   formatGraphBlastContext,
   graphOverlapStats,
-} from "../../domain/graph-context-format"
-import { applyAstScanGate } from "../../domain/ast-scan-gate"
+} from "@/src/lib/ensemble/domain/graph-context-format"
+import { applyAstScanGate } from "@/src/lib/ensemble/domain/ast-scan-gate"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 type AstRulesConfig = ReturnType<typeof resolveAstRulesConfig>
@@ -106,7 +106,7 @@ export interface GatherGraphTelemetry {
       }
     | { scanned: false; skipReason?: string; findingsCount: number }
   sarifEvidence?:
-    | { skipped: true; reason: import("@/features/sarif-evidence").ScanSkipReason; findingsCount: number }
+    | { skipped: true; reason: import("@/src/features/sarif-evidence").ScanSkipReason; findingsCount: number }
     | { skipped: false; findingsCount: number; truncatedCount: number; durationMs: number }
 }
 

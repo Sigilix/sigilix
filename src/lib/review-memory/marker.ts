@@ -38,7 +38,7 @@ import {
   ALL_REVIEW_MEMORY_CLAIM_TYPES,
   ALL_REVIEW_MEMORY_SEVERITIES,
 } from "./types"
-import type { SpecialistRole } from "../ensemble-router"
+import type { SpecialistRole } from "@/src/lib/ensemble-router"
 
 const FID_HEX_WIDTH = 16
 const PATH_HEX_WIDTH = 12

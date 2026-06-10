@@ -8,8 +8,8 @@
 // (next PR). `observedMeetsTarget` therefore reports whether the observed
 // (lower-bound) rate clears the target — never dressed up as a guarantee.
 
-import { wilsonInterval } from "../bakeoff-report"
-import { ALL_SPECIALISTS, type SpecialistRole } from "../ensemble-router"
+import { wilsonInterval } from "@/src/lib/bakeoff-report"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/lib/ensemble-router"
 import type { AttributionResult } from "./attribute"
 
 export const DEFAULT_MIN_N = 30

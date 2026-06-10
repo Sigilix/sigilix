@@ -17,7 +17,7 @@ import {
   measureLogicPrompt,
   parseLogicPromptBudgetMode,
   trimLogicPrompt,
-} from "@/lib/logic-prompt-budget"
+} from "@/src/lib/logic-prompt-budget"
 
 describe("parseLogicPromptBudgetMode — env flag parser", () => {
   describe("happy path — recognized values", () => {

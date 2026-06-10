@@ -13,7 +13,7 @@ import {
   resolveCommandConfig,
   KNOWN_MODELS,
   type SigilixConfig,
-} from "@/lib/sigilix-config"
+} from "@/src/lib/sigilix-config"
 
 describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
   it("parses overview.enabled === true", () => {

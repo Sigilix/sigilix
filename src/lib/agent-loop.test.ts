@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockChat = vi.fn()
 
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>(
-    "@/shared/adapters/model/ollama-chat",
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
   )
   return {
     ...actual,
@@ -25,10 +25,10 @@ import {
   type AgentLoopTelemetryRecordInput,
   type AgentLoopTelemetrySink,
   type LoopTelemetryState,
-} from "@/lib/agent-loop"
-import type { AgentTool } from "@/lib/agent-tools"
-import { ChatDisabledError } from "@/shared/adapters/model/ollama-chat"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/agent-loop"
+import type { AgentTool } from "@/src/lib/agent-tools"
+import { ChatDisabledError } from "@/src/shared/adapters/model/ollama-chat"
+import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   mockChat.mockReset()

@@ -7,7 +7,7 @@ import {
   scoreCase,
   type PerformanceScoredFinding,
 } from "./performance-overfire-corpus"
-import { buildChangedLineTextByPath } from "../src/lib/validate-logic-finding"
+import { buildChangedLineTextByPath } from "@/src/lib/validate-logic-finding"
 
 const nPlusOneCase = PERFORMANCE_OVERFIRE_CASES.find((c) => c.id === "real-n-plus-one-request")!
 const safeLoopCase = PERFORMANCE_OVERFIRE_CASES.find((c) => c.id === "safe-tiny-fixed-loop")!

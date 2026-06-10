@@ -15,8 +15,8 @@ import {
   repoTenantKey,
   writeRepoIndexManifest,
   type RepoIndexManifestV1,
-} from "@/lib/repo-index-manifest"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/repo-index-manifest"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): {
   kv: Env["OPENCLAW_STATE"]

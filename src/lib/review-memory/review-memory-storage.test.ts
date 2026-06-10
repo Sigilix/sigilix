@@ -8,13 +8,13 @@ import {
   appendSignal,
   pruneStaleSignals,
   unionRecords,
-} from "@/lib/review-memory/storage"
+} from "@/src/lib/review-memory/storage"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,
   ReviewMemoryStorageScope,
-} from "@/lib/review-memory/types"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/review-memory/types"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── KV stub matching the existing project convention ─────────
 

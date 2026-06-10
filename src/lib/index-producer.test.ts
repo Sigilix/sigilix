@@ -15,9 +15,9 @@ import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
   parseFullName,
-} from "@/lib/index-producer"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+} from "@/src/lib/index-producer"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeEnv(over: Partial<Env> = {}, sendImpl?: (msg: unknown) => Promise<void> | void): {
   env: Env

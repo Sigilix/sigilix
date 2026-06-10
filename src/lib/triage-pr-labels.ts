@@ -18,14 +18,14 @@
 // are an additive UX signal, not load-bearing — a missed labelling
 // run doesn't break the review pipeline.
 
-import { generate } from "../shared/adapters/model"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { generate } from "@/src/shared/adapters/model"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { isPrLabelsEnabled, loadSigilixConfig } from "./sigilix-config"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
-import { PR_LABEL_SCHEMA } from "../shared/domain/schemas"
-import { PR_LABEL_PROMPT } from "../prompts/pr-labels"
-import type { Env } from "../shared/types/env"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import { PR_LABEL_SCHEMA } from "@/src/shared/domain/schemas"
+import { PR_LABEL_PROMPT } from "@/src/prompts/pr-labels"
+import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS_PER_RUN = 5

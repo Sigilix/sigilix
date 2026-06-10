@@ -5,8 +5,8 @@
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
-} from "@/lib/triage-pr-review"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/triage-pr-review"
+import type { Env } from "@/src/shared/types/env"
 
 export const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",

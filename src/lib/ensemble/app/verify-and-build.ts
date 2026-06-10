@@ -29,48 +29,48 @@
 // affordance preparation (`prepareSubmissionAffordance`) comes from the relocated
 // `./affordances` app module. It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import type { CheckRunAnnotation } from "@/shared/types/github"
-import type { PullRequestMeta } from "@/shared/types/github"
-import type { TokenUsageByModel } from "../../ensemble-slo-telemetry"
-import { getProposedChangeScopeMismatch } from "../render/finding-format"
-import { buildBodyOnlyCheckAnnotations } from "../render/finding-comment"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import type { CheckRunAnnotation } from "@/src/shared/types/github"
+import type { PullRequestMeta } from "@/src/shared/types/github"
+import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
+import { getProposedChangeScopeMismatch } from "@/src/lib/ensemble/render/finding-format"
+import { buildBodyOnlyCheckAnnotations } from "@/src/lib/ensemble/render/finding-comment"
 import {
   buildReviewSubmissionWithMetadata,
   previewReviewSubmissionEvent,
-} from "../render/submission"
-import type { DeltaBadgeCounts } from "../render/review-body"
-import { evidencePieceCountForTelemetry } from "../domain/validation"
-import { readGateMode, readGateThreshold } from "../../gate-config"
-import { computeShadowGateDivergence } from "../domain/verdict"
-import { applyOutputSurfaceToSubmission } from "../../pr-review-check-run"
-import { captureGolden } from "../../ensemble-golden-capture"
+} from "@/src/lib/ensemble/render/submission"
+import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
+import { evidencePieceCountForTelemetry } from "@/src/lib/ensemble/domain/validation"
+import { readGateMode, readGateThreshold } from "@/src/lib/gate-config"
+import { computeShadowGateDivergence } from "@/src/lib/ensemble/domain/verdict"
+import { applyOutputSurfaceToSubmission } from "@/src/lib/pr-review-check-run"
+import { captureGolden } from "@/src/lib/ensemble-golden-capture"
 import {
   verifyFinding,
   findingKey,
   selectRefutedInlineDemotions,
   applyRefutedDemotion,
   planReanchor,
-} from "../../verification/verify-finding"
+} from "@/src/lib/verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   type ReceiptScanResult,
-} from "../../verification/verify-finding-receipt"
-import { recordVerificationMetricsBounded } from "../../verification-metrics-client"
-import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "@/do/verification-metrics"
-import { annotateFindingTrust } from "../domain/gates/trust-ledger-thread"
-import { assessApprovalReadiness } from "../../approval-readiness"
-import { chooseReviewEvent, resolveReviewEventOverride, type ReviewEvent } from "../domain/verdict"
-import { parseDiffToReviewablePositions } from "../../diff-positions"
-import { buildAddedLineTextByLine } from "@/features/ast-rules"
-import { readVerificationMode } from "../../verification/mode"
-import type { ReceiptJoinMode } from "../../verification/verify-finding-receipt"
-import type { EnsembleConfig } from "../domain/config"
-import type { StackContext } from "../../pr-stack"
-import type { SynthesizerProvenance } from "../domain/validation"
+} from "@/src/lib/verification/verify-finding-receipt"
+import { recordVerificationMetricsBounded } from "@/src/lib/verification-metrics-client"
+import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "@/src/do/verification-metrics"
+import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
+import { assessApprovalReadiness } from "@/src/lib/approval-readiness"
+import { chooseReviewEvent, resolveReviewEventOverride, type ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
+import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules"
+import { readVerificationMode } from "@/src/lib/verification/mode"
+import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import type { StackContext } from "@/src/lib/pr-stack"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import {
   prepareSubmissionAffordance,
   type SubmissionAffordance,

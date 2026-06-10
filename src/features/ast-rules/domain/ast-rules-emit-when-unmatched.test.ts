@@ -3,12 +3,12 @@
 // off) is told to emit an unmatched flagged entry.
 
 import { describe, it, expect } from "vitest"
-import { ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
-import { renderAstFindingsAsJsonForSynth } from "@/features/ast-rules/render/render"
-import { buildAstFindingsSynthBlock, clampAstEmitScores, validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
-import type { PrReviewVerdict, PrReviewFinding } from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+import { ALL_RULES } from "@/src/features/ast-rules/domain/rule-registry"
+import { renderAstFindingsAsJsonForSynth } from "@/src/features/ast-rules/render/render"
+import { buildAstFindingsSynthBlock, clampAstEmitScores, validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const EMIT_RULES = new Set([
   "no-exec-shell-interpolation",

@@ -24,54 +24,54 @@
 // Dependency rule: every dependency imports from its canonical NON-god-file home.
 // It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { PullRequestMeta, ListOpenPullsItem } from "@/shared/types/github"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { PullRequestMeta, ListOpenPullsItem } from "@/src/shared/types/github"
 import {
   loadSigilixConfig,
   resolvePathInstructionsForChangedPaths,
   resolveCostControlsConfig,
   type SigilixConfig,
-} from "../../../sigilix-config"
+} from "@/src/lib/sigilix-config"
 import {
   buildAiInstructionGuidance,
   filterAiInstructionsForChangedPaths,
   loadAiInstructions,
   shouldIngestAiInstructions,
-} from "../../../ai-instructions"
+} from "@/src/lib/ai-instructions"
 import {
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
-} from "../../../scoped-rules"
-import { loadCompiledScopedRulesManifest } from "../../../scoped-rules-kv"
+} from "@/src/lib/scoped-rules"
+import { loadCompiledScopedRulesManifest } from "@/src/lib/scoped-rules-kv"
 import {
   splitDiffByFile,
   packFilesIntoBatches,
   batchToDiff,
   estimateTokens,
-} from "../../../diff-packing"
-import { classifyDiffFiles } from "../../../diff-file-classify"
-import { shouldReview } from "@/shared/util/path-glob"
+} from "@/src/lib/diff-packing"
+import { classifyDiffFiles } from "@/src/lib/diff-file-classify"
+import { shouldReview } from "@/src/shared/util/path-glob"
 import {
   runDeterministicChecks,
   type DeterministicCheckHit,
-} from "@/shared/domain/deterministic-checks"
+} from "@/src/shared/domain/deterministic-checks"
 import {
   runSecretScan,
   type SecretHit,
-} from "../../../secret-scan"
+} from "@/src/lib/secret-scan"
 import {
   readLastReviewedSha,
   selectDiff,
-} from "../../../incremental-review"
+} from "@/src/lib/incremental-review"
 import {
   decideSpecialists,
   type RouterDecision,
-} from "../../../ensemble-router"
-import { decideSpecialistsDynamic } from "../../../dynamic-dispatcher"
-import type { EnsembleConfig } from "../../domain/config"
-import { parseDiffToReviewablePositions } from "../../../diff-positions"
-import { countLines } from "../../domain/diff-stats"
+} from "@/src/lib/ensemble-router"
+import { decideSpecialistsDynamic } from "@/src/lib/dynamic-dispatcher"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
+import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChangedPaths>
@@ -207,7 +207,7 @@ export interface PackAndRouteTelemetry {
   }
   routerDecision: RouterDecision | null
   legacyRouterDecision?: RouterDecision
-  dispatcherDecision?: import("../../../dynamic-dispatcher").DispatcherDecision
+  dispatcherDecision?: import("@/src/lib/dynamic-dispatcher").DispatcherDecision
 }
 
 export interface PackAndRouteArgs {

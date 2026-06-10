@@ -75,7 +75,7 @@ then import from `shared/`. Never create a `features/* → lib/god-file` edge to
 
 A feature is imported only through its barrel `index.ts`. That file **is** the feature's public
 surface — the set of symbols other code is allowed to depend on. Reaching past it into an
-internal layer path (`@/features/foo/domain/internal-thing`) from outside the feature is a
+internal layer path (`@/src/features/foo/domain/internal-thing`) from outside the feature is a
 violation.
 
 The one exception: a feature's **own** unit tests may import its internal layer paths directly
@@ -87,12 +87,14 @@ the encoding helpers, which are internal.
 
 ## 3. Imports use `@/`, never `../` across trees
 
-`@/*` resolves to `src/*` (configured once in `tsconfig`, honored by vitest and the wrangler
-build). Author **every** cross-directory import as `@/...`:
+`@/*` resolves to the **repo root** (configured once in `tsconfig`, honored by vitest and the
+wrangler build). The alias is root-anchored, so one `@/` reaches the whole tree and the path shows
+the exact file: `@/src/...` for code, `@/scripts/...` for tooling, `@/e2e/...` for cross-cutting
+tests. Author **every** cross-directory import as `@/...`:
 
 ```ts
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import { GitHubClient } from "@/shared/adapters/github"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { GitHubClient } from "@/src/shared/adapters/github"
 ```
 
 A `./sibling` import inside the same directory is fine. A `../` that climbs out of the current

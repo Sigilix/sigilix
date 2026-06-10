@@ -8,9 +8,9 @@ import {
   bucketIndex,
   BUCKET_LOWERS,
   type GraphExpansionSample,
-} from "@/do/graph-expansion-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+} from "@/src/do/graph-expansion-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDo(): { do_: GraphExpansionMetricsDO; getAlarm: () => number | null } {
   const sqlStorage = new NodeSqliteStorage()

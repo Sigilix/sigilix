@@ -11,12 +11,12 @@ import {
   applyRefutedDemotion,
   planReanchor,
   applyReanchors,
-} from "@/lib/verification/verify-finding"
+} from "@/src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
-import { buildAddedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
-import { readVerificationMode, readReanchorEnabled } from "@/lib/verification/mode"
-import type { Env } from "@/shared/types/env"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
+import { readVerificationMode, readReanchorEnabled } from "@/src/lib/verification/mode"
+import type { Env } from "@/src/shared/types/env"
 
 // New side: line 9 = context, line 10 = the injection, line 11 = a safe line.
 const DIFF = `diff --git a/src/db.ts b/src/db.ts

@@ -1,6 +1,6 @@
 // SIG-280 PR B: soften-gate pure helper tests.
 import { describe, it, expect } from "vitest"
-import { isSoftenActive, softenScoreWithFloor } from "@/lib/review-memory/soften-gate"
+import { isSoftenActive, softenScoreWithFloor } from "@/src/lib/review-memory/soften-gate"
 
 describe("isSoftenActive", () => {
   it("is true ONLY for mode 'soften' AND per-repo claimSoftening true", () => {

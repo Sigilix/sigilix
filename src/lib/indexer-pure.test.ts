@@ -25,7 +25,7 @@ import {
   splitOversizedWindow,
   walkIndexableFiles,
   type TreeEntry,
-} from "@/lib/indexer"
+} from "@/src/lib/indexer"
 
 describe("CHUNKER_VERSION constant", () => {
   it("is pinned at 2 — bump invalidates the index (SIG-133 split-not-drop)", () => {

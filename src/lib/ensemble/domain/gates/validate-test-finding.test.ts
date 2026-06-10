@@ -13,9 +13,9 @@ import { describe, it, expect } from "vitest"
 import {
   evaluateTestFinding,
   parseTestsValidatorMode,
-} from "@/lib/ensemble/domain/gates/validate-test-finding"
-import type { HelperCoverage } from "@/lib/helper-coverage"
-import { finding, pack } from "@/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
+} from "@/src/lib/ensemble/domain/gates/validate-test-finding"
+import type { HelperCoverage } from "@/src/lib/helper-coverage"
+import { finding, pack } from "@/src/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
 
 describe("parseTestsValidatorMode", () => {
   it("defaults to shadow for unset / unknown values", () => {

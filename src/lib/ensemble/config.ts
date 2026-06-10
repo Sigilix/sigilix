@@ -22,13 +22,13 @@ import { parseAbsenceClaimValidatorMode } from "./domain/gates/validate-absence-
 import { parseWindowBlindnessValidatorMode } from "./domain/gates/validate-window-blindness"
 import { parseSecurityGroundingValidatorMode } from "./domain/gates/validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "./domain/gates/validate-security-usage"
-import { parseReceiptJoinMode } from "../verification/verify-finding-receipt"
-import { parseLogicPromptBudgetMode } from "../logic-prompt-budget"
-import { parseAstEmitFloorMode } from "../degraded-finding-floor"
+import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
+import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
+import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
 import { parseTrustLedgerMode } from "./domain/gates/trust-ledger-thread"
-import { resolveClaimShadowMode } from "../review-memory/shadow-match"
-import { resolvePrecisionMode } from "@/features/precision-profile"
-import { parseReviewOutputSurface } from "../pr-review-check-run"
+import { resolveClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
+import { resolvePrecisionMode } from "@/src/features/precision-profile"
+import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import {
@@ -36,7 +36,7 @@ import {
   parseGraphRetrievalMode,
 } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
-import type { Env } from "@/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.

@@ -1,5 +1,5 @@
 // the logic specialist prompt — hand-tuned; see SIG-388
-import logicExamples from "../logic-examples.json"
+import logicExamples from "@/src/prompts/logic-examples.json"
 import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**

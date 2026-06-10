@@ -8,7 +8,7 @@
 // typechecked); we preserve that exact runtime object — no fields added
 // or removed — and assert the type so consumers are unchanged.
 
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export const baseFinding = {
   path: "src/lib/foo.ts",

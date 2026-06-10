@@ -5,13 +5,13 @@
 // repo-scoped, so no cross-repo atomicity is needed. The caller owns the
 // try/catch (a DO failure must surface a clean 5xx, never crash the route).
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   RunnerReceiptDO,
   ClaimReceiptArgs,
   ClaimReceiptResult,
   RunnerReceiptRow,
-} from "../do/runner-receipt"
+} from "@/src/do/runner-receipt"
 
 function receiptStub(env: Env, repositoryId: string): DurableObjectStub<RunnerReceiptDO> {
   const ns = env.RUNNER_RECEIPT_DO as unknown as DurableObjectNamespace<RunnerReceiptDO>

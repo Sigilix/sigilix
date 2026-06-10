@@ -11,7 +11,7 @@
 // it type-only here is faithful; when the manifest types are lifted to a leaf
 // (`domain/` or `@/shared/types`), this port should import from there instead.
 
-import type { ReviewManifestFinding } from "@/lib/review-manifest"
+import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
 
 /**
  * The telemetry record `finalize` persists for the FP-rate ruler + SLO surface.

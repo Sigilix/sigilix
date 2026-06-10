@@ -10,8 +10,8 @@ import {
   parseShadowEnabledRoles,
   resolveShadowConfig,
   type ShadowRole,
-} from "@/lib/shadow-bakeoff-config"
-import { SPECIALIST_CONFIGS, SYNTHESIZER_CONFIG } from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/shadow-bakeoff-config"
+import { SPECIALIST_CONFIGS, SYNTHESIZER_CONFIG } from "@/src/lib/triage-pr-review-ensemble"
 
 describe("SHADOW_BAKEOFF_LINEUP", () => {
   it("defines a candidate ModelConfig for every shadowable role", () => {

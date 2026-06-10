@@ -9,10 +9,10 @@
 // github-error, kv-write-failed).
 
 import { describe, expect, it } from "vitest"
-import { migrateOneRepo } from "@/lib/index-migrate-to-repo-id"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
-import type { RepoIndexManifestV1 } from "@/lib/repo-index-manifest"
+import { migrateOneRepo } from "@/src/lib/index-migrate-to-repo-id"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import type { RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()

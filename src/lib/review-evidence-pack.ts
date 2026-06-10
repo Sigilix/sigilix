@@ -6,11 +6,11 @@
 // whether a bug exists, but it sees the concrete context needed to write a
 // Greptile-style actionable inline comment when one is real.
 
-import { nodeOverlapsChanged, type ChangedLines, type AstCache } from "@/features/ast-rules"
+import { nodeOverlapsChanged, type ChangedLines, type AstCache } from "@/src/features/ast-rules"
 import { extractFileGraph, type GraphSymbol } from "./graph-extract"
 import type { RetrievedChunk } from "./retrieval"
 import type { TestingEvidencePack } from "./testing-evidence-pack"
-import type { GraphContextNode } from "../do/repo-graph"
+import type { GraphContextNode } from "@/src/do/repo-graph"
 
 export type DynamicReviewEvidenceMode = "off" | "shadow" | "post"
 

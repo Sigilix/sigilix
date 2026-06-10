@@ -2,7 +2,7 @@
 // `class … extends DurableObject` line spans (not raw-text regex).
 
 import { describe, expect, it } from "vitest"
-import { durableObjectClassSpans, lineInDurableObjectClass } from "@/features/ast-rules/domain/durable-object-spans"
+import { durableObjectClassSpans, lineInDurableObjectClass } from "@/src/features/ast-rules/domain/durable-object-spans"
 
 const m = (path: string, src: string) => new Map([[path, src]])
 

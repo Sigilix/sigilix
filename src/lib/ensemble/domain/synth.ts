@@ -20,12 +20,12 @@
 // env-taking `isSynthBypassEnabled` / `isSynthBypassEligible` wrappers the shim
 // re-exports (for the existing unit tests) live there too.
 
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { SynthesizerProvenance } from "./validation"
 import type { PrReviewVerdictWithIds } from "./findings"
-import { filterWithdrawnFindings, type WithdrawalRecord } from "../../review-withdrawal-store"
-import type { ApprovalReadinessSourceFinding } from "../../approval-readiness"
+import { filterWithdrawnFindings, type WithdrawalRecord } from "@/src/lib/review-withdrawal-store"
+import type { ApprovalReadinessSourceFinding } from "@/src/lib/approval-readiness"
 
 // SIG-318: the per-specialist verdict token cap, relocated with the synth-input
 // builder it bounds.

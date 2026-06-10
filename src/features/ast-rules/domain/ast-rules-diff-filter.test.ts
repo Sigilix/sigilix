@@ -12,9 +12,9 @@ import {
   buildDeletedLineTextByLine,
   nodeOverlapsChanged,
   findReviewPosition,
-} from "@/features/ast-rules/domain/diff-filter"
-import { astFindingId, pathHash7 } from "@/features/ast-rules/domain/finding-id"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/features/ast-rules/domain/diff-filter"
+import { astFindingId, pathHash7 } from "@/src/features/ast-rules/domain/finding-id"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const DIFF_ADD_BLOCK = `diff --git a/src/foo.ts b/src/foo.ts
 --- a/src/foo.ts

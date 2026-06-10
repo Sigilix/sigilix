@@ -11,7 +11,7 @@ import {
   type EvalFinding,
   type EvalLabel,
   type EvalLabelRow,
-} from "@/lib/fp-rate/eval"
+} from "@/src/lib/fp-rate/eval"
 
 function f(findingId: string, category: string): EvalFinding {
   return { findingId, category }

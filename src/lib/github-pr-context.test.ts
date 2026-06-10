@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { GitHubHttpError } from "@/shared/adapters/github"
-import type { PullRequestMeta, PrChangedFile } from "@/shared/types/github"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
+import type { PullRequestMeta, PrChangedFile } from "@/src/shared/types/github"
 
 const mockMethods = {
   getPullRequest: vi.fn(),
@@ -8,12 +8,12 @@ const mockMethods = {
   listPullRequestFiles: vi.fn(),
 }
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: vi.fn(async () => "test-token"),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -24,8 +24,8 @@ vi.mock("@/shared/adapters/github", async () => {
   }
 })
 
-import { fetchPullRequestContext } from "@/lib/github-pr-context"
-import type { Env } from "@/shared/types/env"
+import { fetchPullRequestContext } from "@/src/lib/github-pr-context"
+import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   mockMethods.getPullRequest.mockReset()

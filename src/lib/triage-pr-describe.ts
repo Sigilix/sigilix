@@ -21,11 +21,11 @@
 import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
 import { applyDescribeToBody } from "./describe-apply"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
-import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
-import { generate } from "../shared/adapters/model"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import { PR_DESCRIBE_PROMPTS } from "@/src/prompts/pr-describe"
+import { generate } from "@/src/shared/adapters/model"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
 import {
   loadSigilixConfig,
   loadSigilixConfigRaw,
@@ -34,8 +34,8 @@ import {
 } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
-import { PR_DESCRIBE_SCHEMA } from "../shared/domain/schemas"
-import type { Env } from "../shared/types/env"
+import { PR_DESCRIBE_SCHEMA } from "@/src/shared/domain/schemas"
+import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 

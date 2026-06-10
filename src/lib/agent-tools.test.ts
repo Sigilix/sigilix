@@ -7,17 +7,17 @@ const mockFetchPullRequestContext = vi.fn()
 const mockGetInstallationToken = vi.fn(async () => "test-token")
 const mockGetFileContent = vi.fn()
 
-vi.mock("@/lib/retrieval", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/retrieval")>("@/lib/retrieval")
+vi.mock("@/src/lib/retrieval", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/retrieval")>("@/src/lib/retrieval")
   return {
     ...actual,
     retrieveChunks: (args: unknown) => mockRetrieveChunks(args),
   }
 })
 
-vi.mock("@/lib/github-pr-context", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/github-pr-context")>(
-    "@/lib/github-pr-context"
+vi.mock("@/src/lib/github-pr-context", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/github-pr-context")>(
+    "@/src/lib/github-pr-context"
   )
   return {
     ...actual,
@@ -25,12 +25,12 @@ vi.mock("@/lib/github-pr-context", async () => {
   }
 })
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -39,10 +39,10 @@ vi.mock("@/shared/adapters/github", async () => {
   }
 })
 
-import { createAgentTools, type AgentToolsContext } from "@/lib/agent-tools"
-import { GitHubClient } from "@/shared/adapters/github"
-import { encodeBranchName } from "@/lib/index-branch"
-import type { Env } from "@/shared/types/env"
+import { createAgentTools, type AgentToolsContext } from "@/src/lib/agent-tools"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { encodeBranchName } from "@/src/lib/index-branch"
+import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   mockRetrieveChunks.mockReset()

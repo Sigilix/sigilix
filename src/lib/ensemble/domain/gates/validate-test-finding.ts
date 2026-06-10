@@ -37,8 +37,8 @@
 //   aggregator instruments the would-drop rate; the bake-off harness is
 //   NOT built here.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 /**
  * Validator mode. `shadow` (default): emit telemetry counting what

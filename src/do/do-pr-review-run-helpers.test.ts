@@ -12,8 +12,8 @@ import {
   nextBackoffMs,
   decideRunResultAction,
   pruneHistoryRecords,
-} from "@/do/pr-review-run"
-import type { RunRecord, RunState } from "@/do/types"
+} from "@/src/do/pr-review-run"
+import type { RunRecord, RunState } from "@/src/do/types"
 
 const NOW_ISO = "2026-05-07T06:00:00.000Z"
 

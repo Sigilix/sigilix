@@ -23,10 +23,10 @@
 // producer-side skip-gate based on manifest TTL didn't actually force
 // re-indexing, just permitted it after expiry.)
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import { isRepoSensitive } from "./repo-policy"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { GitHubClient } from "@/src/shared/adapters/github"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { isTrackedLongLivedBranch } from "./index-branch"
 

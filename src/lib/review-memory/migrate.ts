@@ -27,13 +27,13 @@
 // window. PR B explicitly does NOT delete legacy keys — they stay
 // intact until Phase 5 confirms zero canary regressions.
 
-import type { Env } from "../../shared/types/env"
-import { GitHubClient } from "../../shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
 import {
   getInstallationToken,
   listInstallationRepoFullNames,
-} from "../../shared/adapters/github/github-app"
-import { parseFullName } from "../index-producer"
+} from "@/src/shared/adapters/github/github-app"
+import { parseFullName } from "@/src/lib/index-producer"
 import { buildRepoIdKey, unionRecords } from "./storage"
 import type {
   ReviewMemoryCategory,

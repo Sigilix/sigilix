@@ -5,10 +5,10 @@ import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
   hasStaleDismissedReviewFeedbackSignal,
-} from "@/lib/review-memory/capture"
-import { buildKey } from "@/lib/review-memory/storage"
-import type { GitHubClient } from "@/shared/adapters/github"
-import { computePathSha256, hydrateClaimIds } from "@/lib/review-memory/marker"
+} from "@/src/lib/review-memory/capture"
+import { buildKey } from "@/src/lib/review-memory/storage"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import { computePathSha256, hydrateClaimIds } from "@/src/lib/review-memory/marker"
 import {
   makeKvStub,
   makeEnv,
@@ -19,14 +19,14 @@ import {
   VALID_FINGERPRINT_2,
   PRECISION_FINDING_MARKERS,
   SECOND_PRECISION_FINDING_MARKERS,
-} from "@/lib/review-memory/review-memory-capture.test-helpers"
+} from "@/src/lib/review-memory/review-memory-capture.test-helpers"
 
 // SIG-276: wrap the real marker module so `hydrateClaimIds` defaults to the
 // real implementation (all other tests are unaffected) but can be forced to
 // reject for the hydrate-failure path test below.
-vi.mock("@/lib/review-memory/marker", async (importOriginal) => {
+vi.mock("@/src/lib/review-memory/marker", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/lib/review-memory/marker")>()
+    await importOriginal<typeof import("@/src/lib/review-memory/marker")>()
   return { ...actual, hydrateClaimIds: vi.fn(actual.hydrateClaimIds) }
 })
 

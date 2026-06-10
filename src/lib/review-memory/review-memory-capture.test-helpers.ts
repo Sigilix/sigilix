@@ -2,14 +2,14 @@
 // Not a `*.test.ts` file, so vitest does not treat it as a suite (the
 // vitest `include` glob is `src/**/*.test.ts`).
 //
-// NB: the per-file `vi.mock("@/lib/review-memory/marker", …)` factory is
+// NB: the per-file `vi.mock("@/src/lib/review-memory/marker", …)` factory is
 // NOT here — vitest hoists `vi.mock` per file, so a sibling that needs to
 // override `hydrateClaimIds` declares it inline.
 
 import { vi } from "vitest"
-import type { Env } from "@/shared/types/env"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { ResolvedReviewMemoryConfig } from "@/lib/review-memory/types"
+import type { Env } from "@/src/shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { ResolvedReviewMemoryConfig } from "@/src/lib/review-memory/types"
 
 export interface KvStub {
   kv: Env["OPENCLAW_STATE"]

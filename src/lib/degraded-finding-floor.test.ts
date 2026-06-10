@@ -12,8 +12,8 @@ import {
   SYNTH_SOURCE_FLOOR_MIN_SCORE,
   type FloorProvenanceFinding,
   type DegradedFloorSpecialist,
-} from "@/lib/degraded-finding-floor"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+} from "@/src/lib/degraded-finding-floor"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 function finding(id: string, score: number, over: Partial<PrReviewFinding> = {}): PrReviewFinding & { id: string } {
   return {
@@ -634,7 +634,7 @@ describe("applySynthSourceFindingFloor", () => {
 })
 
 // ─── SIG-317 — synth verdict-truncation recovery ──────────────────────────
-import { recoverTruncatedSynthFindings } from "@/lib/degraded-finding-floor"
+import { recoverTruncatedSynthFindings } from "@/src/lib/degraded-finding-floor"
 
 function srcMap(...fs: Array<PrReviewFinding & { id: string }>): Map<string, PrReviewFinding & { id: string }> {
   return new Map(fs.map((f) => [f.id, f]))

@@ -19,7 +19,7 @@
 // is DEMOTED to the body, not dropped (FN-safe: a residual real finding stays
 // visible), which is why this ships always-on rather than shadow-first.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 
 /** Race / concurrent-access language — the over-fire signal. */
 const RACE_CLAIM_REGEX =

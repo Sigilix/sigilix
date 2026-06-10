@@ -13,8 +13,8 @@
 import { generate } from "./ollama"
 import { chat } from "./ollama-chat"
 import { embedText, embedTexts, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "./embeddings"
-import type { ModelProviderPort } from "../../ports/model"
-import type { EmbeddingPort } from "../../ports/embedding"
+import type { ModelProviderPort } from "@/src/shared/ports/model"
+import type { EmbeddingPort } from "@/src/shared/ports/embedding"
 
 export { generate, chat, embedText, embedTexts, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS }
 

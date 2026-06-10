@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { extractFileGraph } from "@/lib/graph-extract"
+import { extractFileGraph } from "@/src/lib/graph-extract"
 
 describe("extractFileGraph — symbols", () => {
   it("captures function/class/method/exported-var with kind, loc, and exported flag", () => {

@@ -7,8 +7,8 @@ import {
   handleGitHubAuthKickoff,
   handleLogout,
   safeRedirectAfter,
-} from "@/lib/auth-oauth-github"
-import { base64urlEncode } from "@/lib/auth-session"
+} from "@/src/lib/auth-oauth-github"
+import { base64urlEncode } from "@/src/lib/auth-session"
 
 interface FakeKV {
   get: ReturnType<typeof vi.fn>

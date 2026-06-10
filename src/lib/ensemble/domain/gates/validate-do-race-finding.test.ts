@@ -1,8 +1,8 @@
 // SIG-307 — DurableObject intra-instance race-condition FP detector.
 
 import { describe, expect, it } from "vitest"
-import { findingClaimsIntraInstanceRace } from "@/lib/ensemble/domain/gates/validate-do-race-finding"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import { findingClaimsIntraInstanceRace } from "@/src/lib/ensemble/domain/gates/validate-do-race-finding"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

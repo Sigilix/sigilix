@@ -19,9 +19,9 @@
 // `repo-index-active-run` accessors. It does NOT value-import the core
 // `indexer.ts`.
 
-import type { Env } from "@/shared/types/env"
-import type { Chunk } from "@/lib/chunk-core"
-import { readActiveRunId, shouldFinalize } from "@/lib/repo-index-active-run"
+import type { Env } from "@/src/shared/types/env"
+import type { Chunk } from "@/src/lib/chunk-core"
+import { readActiveRunId, shouldFinalize } from "@/src/lib/repo-index-active-run"
 
 // ---------------------------------------------------------------------
 // Constants

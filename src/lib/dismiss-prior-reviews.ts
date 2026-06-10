@@ -19,7 +19,7 @@
 // comment into their own review body; the login check guarantees we
 // only ever count our own App's reviews.
 
-import { GitHubClient } from "../shared/adapters/github"
+import { GitHubClient } from "@/src/shared/adapters/github"
 
 /** The marker every Sigilix review body starts with — see
  *  `buildReviewSubmission` / `buildFallbackSubmission` in
@@ -37,7 +37,7 @@ export const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
 // SIG-361 (PR 9): `SIGILIX_BOT_LOGIN` moved verbatim to a pure shared/domain
 // leaf so the verdict domain can reference it without importing this IO module.
 // Re-exported here so every existing importer of this module is unchanged.
-import { SIGILIX_BOT_LOGIN } from "@/shared/domain/sigilix-identity"
+import { SIGILIX_BOT_LOGIN } from "@/src/shared/domain/sigilix-identity"
 export { SIGILIX_BOT_LOGIN }
 
 /** States we treat as actionable for the stale-detector. Same set as

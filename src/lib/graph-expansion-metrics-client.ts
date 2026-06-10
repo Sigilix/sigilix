@@ -1,12 +1,12 @@
 // SIG-286 PR2.5: thin typed wrappers for the single global GraphExpansionMetricsDO.
 // Callers own the non-fatal try/catch (telemetry must never break a review).
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   GraphExpansionMetricsDO,
   RecordExpansionSampleArgs,
   GraphExpansionMetricsQuery,
-} from "../do/graph-expansion-metrics"
+} from "@/src/do/graph-expansion-metrics"
 
 const GLOBAL_INSTANCE = "global"
 

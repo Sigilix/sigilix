@@ -15,7 +15,7 @@
 
 import type { ClassifiedDiffFile } from "./diff-file-classify"
 import type { DiffSignals, SpecialistRole } from "./ensemble-router"
-import { chat } from "../shared/adapters/model"
+import { chat } from "@/src/shared/adapters/model"
 import {
   buildSanitizedMetadataBlock,
   type SanitizedMetadata,

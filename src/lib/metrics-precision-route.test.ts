@@ -1,9 +1,9 @@
 // SIG-147 — GET /metrics/precision route: auth, repo param, FP-reduction shape.
 
 import { describe, expect, it } from "vitest"
-import { handlePrecisionMetricsRoute } from "@/lib/metrics-precision-route"
-import { recordOutcome } from "@/features/precision-profile"
-import type { Env } from "@/shared/types/env"
+import { handlePrecisionMetricsRoute } from "@/src/lib/metrics-precision-route"
+import { recordOutcome } from "@/src/features/precision-profile"
+import type { Env } from "@/src/shared/types/env"
 
 const TOKEN = "metrics-token"
 

@@ -18,7 +18,7 @@ import type {
   ValidationRejectionEvent,
   GraphRetrievalSample,
   GraphExpansionSample,
-} from "@/lib/ensemble/domain/metric-events"
+} from "@/src/lib/ensemble/domain/metric-events"
 
 // COUPLING NOTE (reported): the verification + runner-evidence record args live
 // in the `@/do/*` DOs. After SIG-363 repointed `FindingTrustTier` onto the
@@ -27,8 +27,8 @@ import type {
 // `RecordRunnerEvidenceArgs` is primitive-only — so importing them type-only here
 // is faithful. When these args are lifted to a domain leaf, the imports move with
 // them; the port shapes stay the same.
-import type { RecordVerificationArgs } from "@/do/verification-metrics"
-import type { RecordRunnerEvidenceArgs } from "@/do/runner-evidence-metrics"
+import type { RecordVerificationArgs } from "@/src/do/verification-metrics"
+import type { RecordRunnerEvidenceArgs } from "@/src/do/runner-evidence-metrics"
 
 /** Buffer for validator-gate rejection + dismissal-reason events (SIG-119). */
 export interface ValidationMetricsSink {

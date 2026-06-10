@@ -10,7 +10,7 @@
 // single-comment + overview poster is `createIssueComment`; the threaded
 // per-comment reply is `replyToReviewComment`.
 
-import type { SubmitReviewBody } from "@/shared/types/github"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 export interface ReviewSinkPort {
   /** Submit ONE PR review (body + inline `comments` + APPROVE/COMMENT/REQUEST_CHANGES). */

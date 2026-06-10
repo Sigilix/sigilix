@@ -28,8 +28,8 @@
 //
 // Best-effort: never throws; all KV / GH errors logged-and-swallowed.
 
-import type { Env } from "../../shared/types/env"
-import type { GitHubClient } from "../../shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import type {
   ResolvedReviewMemoryConfig,
   ReviewMemoryClaim,
@@ -41,19 +41,19 @@ import {
   extractSigilixMarker,
   hydrateClaimIds,
 } from "./marker"
-import { isArcGithubLogin } from "../mention"
+import { isArcGithubLogin } from "@/src/lib/mention"
 import {
   parseReviewFeedbackSignal,
   type ParsedReviewFeedback,
 } from "./parse-dismissal"
 import { appendSignal } from "./storage"
-import { recordOutcome } from "@/features/precision-profile"
-import { recordDismissalMetric } from "../validation-metrics-client"
-import type { FindingOutcome } from "@/features/precision-profile"
+import { recordOutcome } from "@/src/features/precision-profile"
+import { recordDismissalMetric } from "@/src/lib/validation-metrics-client"
+import type { FindingOutcome } from "@/src/features/precision-profile"
 import {
   parseFindingOutcomeMarkers,
-} from "../pr-finding-markers"
-import type { DismissReason } from "../dismiss-reasons"
+} from "@/src/lib/pr-finding-markers"
+import type { DismissReason } from "@/src/lib/dismiss-reasons"
 
 const SEEN_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60
 

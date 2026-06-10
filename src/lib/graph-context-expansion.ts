@@ -22,7 +22,7 @@ import type {
   GraphDefinitionRow,
   GraphCallerRow,
   GraphImportRow,
-} from "../do/repo-graph"
+} from "@/src/do/repo-graph"
 
 /** Default byte cap on the simulated rendered payload. */
 const DEFAULT_MAX_BYTES = 50_000

@@ -23,7 +23,7 @@
 // SIG-380 / SIG-318: the keyspace token comes from a pure shared/domain leaf so
 // this adapter imports INWARD only (`shared/*`) — never from `lib` — and shares
 // one definition with `src/lib/index-branch.ts` (no inline drift hazard).
-import { BRANCH_STATE_SEGMENT } from "../../domain/index-keys"
+import { BRANCH_STATE_SEGMENT } from "@/src/shared/domain/index-keys"
 
 export type InstallationLookup =
   | { ok: true; installationId: number }

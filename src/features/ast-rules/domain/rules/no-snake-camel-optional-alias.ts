@@ -19,8 +19,8 @@
 // P0/P1 false positive. The advice ("use one casing consistently") holds either
 // way.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 

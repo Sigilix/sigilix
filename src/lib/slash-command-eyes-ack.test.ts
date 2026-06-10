@@ -16,11 +16,11 @@ const { getInstallationTokenMock, addReactionToIssueCommentMock, addReactionToRe
   addReactionToIssueCommentMock: vi.fn(async () => {}),
   addReactionToReviewCommentMock: vi.fn(async () => {}),
 }))
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: getInstallationTokenMock,
 }))
-vi.mock("@/shared/adapters/github", async (importActual) => {
-  const actual = await importActual<typeof import("@/shared/adapters/github")>()
+vi.mock("@/src/shared/adapters/github", async (importActual) => {
+  const actual = await importActual<typeof import("@/src/shared/adapters/github")>()
   class FakeClient {
     addReactionToIssueComment = addReactionToIssueCommentMock
     addReactionToReviewComment = addReactionToReviewCommentMock
@@ -32,8 +32,8 @@ vi.mock("@/shared/adapters/github", async (importActual) => {
   }
 })
 
-import { postSlashCommandEyesAck } from "@/lib/slash-command-eyes-ack"
-import type { Env } from "@/shared/types/env"
+import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
+import type { Env } from "@/src/shared/types/env"
 
 function makeEnv(): Env {
   return {

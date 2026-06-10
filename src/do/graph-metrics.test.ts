@@ -3,9 +3,9 @@
 // as RepoGraphDO / ValidationMetricsDO.
 
 import { describe, expect, it } from "vitest"
-import { GraphMetricsDO, type GraphRetrievalSample } from "@/do/graph-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { GraphMetricsDO, type GraphRetrievalSample } from "@/src/do/graph-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDoInstance() {
   const sqlStorage = new NodeSqliteStorage()

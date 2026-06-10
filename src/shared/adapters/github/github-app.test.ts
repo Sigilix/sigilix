@@ -12,7 +12,7 @@
 // covered by GitHub itself rejecting invalid JWTs at token-exchange time.
 
 import { describe, expect, it, vi, afterEach } from "vitest"
-import { signGitHubAppJwt, resolveRepoInstallationId, listAppInstallationIds, listInstallationRepoFullNames } from "@/shared/adapters/github/github-app"
+import { signGitHubAppJwt, resolveRepoInstallationId, listAppInstallationIds, listInstallationRepoFullNames } from "@/src/shared/adapters/github/github-app"
 
 // PKCS#8 RSA-2048 private key — generated with:
 //   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \

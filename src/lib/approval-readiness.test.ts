@@ -3,8 +3,8 @@ import {
   assessApprovalReadiness,
   buildApprovalReadinessSummary,
   type ApprovalReadinessSourceFinding,
-} from "@/lib/approval-readiness"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+} from "@/src/lib/approval-readiness"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 const sourceFinding: PrReviewFinding = {
   path: "src/lib/triage-pr-improve.ts",

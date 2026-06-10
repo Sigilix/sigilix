@@ -4,8 +4,8 @@ import { describe, it, expect } from "vitest"
 import {
   renderAstFindingsForPrompt,
   renderAstFindingsAsJsonForSynth,
-} from "@/features/ast-rules/render/render"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
+} from "@/src/features/ast-rules/render/render"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 const F1: AstFinding = {
   ruleId: "no-eval-call",

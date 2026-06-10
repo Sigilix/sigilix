@@ -11,7 +11,7 @@ import {
   truncateHashHex,
   categoryFromRoleHint,
   markerSeverityFromScore,
-} from "@/lib/review-memory/marker"
+} from "@/src/lib/review-memory/marker"
 
 describe("buildSigilixMarker — determinism + sensitivity", () => {
   it("emits the same marker for the same inputs", async () => {

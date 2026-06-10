@@ -25,10 +25,10 @@
 // auto-recover without ever reaching the sticky comment. Until that
 // commit lands, every guard hit posts/updates the sticky.
 
-import type { Env } from "../shared/types/env"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { enqueuePrReviewJob } from "../do/webhook-enqueue"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 
 export const STALE_HEAD_MARKER = "<!-- sigilix:stale-head-skipped -->"
 

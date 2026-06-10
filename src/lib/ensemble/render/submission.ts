@@ -20,20 +20,20 @@ import type {
   CheckRunAnnotation,
   SubmitReviewBody,
   SubmitReviewComment,
-} from "@/shared/types/github"
+} from "@/src/shared/types/github"
 import {
   deriveSide,
   type ReviewableMap,
-} from "../../diff-positions"
-import { type StackContext } from "../../pr-stack"
-import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
-import { hasStructuredFix, isDeletionSuggestion } from "@/shared/domain/pr-review-finding"
-import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/shared/domain/pr-review-finding"
+} from "@/src/lib/diff-positions"
+import { type StackContext } from "@/src/lib/pr-stack"
+import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
+import { hasStructuredFix, isDeletionSuggestion } from "@/src/shared/domain/pr-review-finding"
+import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
 import {
   chooseRenderedEventWithOverride,
   type ReviewEvent,
   type ReviewEventOverride,
-} from "../domain/verdict"
+} from "@/src/lib/ensemble/domain/verdict"
 import {
   sanitizeVerdictForGitHub,
   sanitizeFindingsForGitHub,

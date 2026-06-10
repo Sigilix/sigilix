@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { escapeXmlAttribute, escapeXmlText } from "@/shared/util/xml-escape"
+import { escapeXmlAttribute, escapeXmlText } from "@/src/shared/util/xml-escape"
 
 describe("escapeXmlText", () => {
   it("escapes literal closing tags so </pr_context> is inert", () => {

@@ -11,9 +11,9 @@ import {
   severityBadgeForScore,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "@/lib/triage-pr-review"
-import { badgeAssetUrl, BADGE_ASSET_VERSION, PUBLIC_BADGE_BASE_URL } from "@/lib/badge-assets"
-import { baseFinding } from "@/lib/triage-pr-review.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import { badgeAssetUrl, BADGE_ASSET_VERSION, PUBLIC_BADGE_BASE_URL } from "@/src/lib/badge-assets"
+import { baseFinding } from "@/src/lib/triage-pr-review.test-helpers"
 
 describe("pickAnchorLineForward (SIG-159 PR1)", () => {
   const lines = new Map<number, string>([

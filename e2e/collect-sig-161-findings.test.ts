@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest"
 import {
   parseFinding,
   splitConcatenatedJsonArrays,
-} from "../scripts/collect-sig-161-findings"
+} from "@/scripts/collect-sig-161-findings"
 import {
   formatFindingComment,
   type PrReviewFinding,
-} from "../src/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review"
 
 const baseComment = {
   id: 123456,

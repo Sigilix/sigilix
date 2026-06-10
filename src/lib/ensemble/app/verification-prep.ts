@@ -14,34 +14,34 @@
 // home (the review-memory leaves, the verification leaves, the verdict domain).
 // It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import { buildAddedLineTextByLine } from "@/features/ast-rules"
-import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
-import { readVerificationMode, readReanchorEnabled } from "../../verification/mode"
-import { applyReanchors } from "../../verification/verify-finding"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules"
+import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
+import { readVerificationMode, readReanchorEnabled } from "@/src/lib/verification/mode"
+import { applyReanchors } from "@/src/lib/verification/verify-finding"
 import {
   buildSigilixMarker,
   categoryFromRoleHint,
   computeFid,
   computePathSha256,
   markerSeverityFromScore,
-} from "../../review-memory/marker"
+} from "@/src/lib/review-memory/marker"
 import {
   extractClaims,
   type ClaimExtractionFinding,
-} from "../../review-memory/claim-extractor"
+} from "@/src/lib/review-memory/claim-extractor"
 import {
   shadowMatchReviewMemoryClaims,
   type ShadowMatchFinding,
-} from "../../review-memory/shadow-match"
+} from "@/src/lib/review-memory/shadow-match"
 import type {
   ReviewMemoryClaimMarkerData,
-} from "../../review-memory/types"
-import type { ReviewMemoryFinding } from "../../review-memory/types"
-import { severityTier } from "../domain/verdict"
-import type { SynthesizerProvenance } from "../domain/validation"
+} from "@/src/lib/review-memory/types"
+import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
+import { severityTier } from "@/src/lib/ensemble/domain/verdict"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 
 type SynthesizerProvenanceFindings = SynthesizerProvenance["findings"]
 /**

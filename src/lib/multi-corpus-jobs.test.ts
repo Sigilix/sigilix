@@ -3,9 +3,9 @@
 // method.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { handleCorpusPrUpsert } from "@/lib/multi-corpus-jobs"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { handleCorpusPrUpsert } from "@/src/lib/multi-corpus-jobs"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 const EMBED_DIMS = 768
 const fakeVec = () => Array(EMBED_DIMS).fill(0.1)

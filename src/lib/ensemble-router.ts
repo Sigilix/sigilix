@@ -32,9 +32,9 @@
 //   eliminating a future PR cycle. Phase 4b becomes a flag-flip, not
 //   a code change.
 
-import type { Env } from "../shared/types/env"
-import { ALL_SPECIALISTS } from "../shared/domain/specialist-role"
-import type { SpecialistRole } from "../shared/domain/specialist-role"
+import type { Env } from "@/src/shared/types/env"
+import { ALL_SPECIALISTS } from "@/src/shared/domain/specialist-role"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 
 // SIG-382: `SpecialistRole` + `ALL_SPECIALISTS` moved to a shared/domain leaf so
 // pure shared code (config-domain) can use the role type without importing this

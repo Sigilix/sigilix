@@ -21,7 +21,7 @@
 //   4. AbortSignal threads through to the underlying fetch call.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { LinearClient } from "@/lib/linear"
+import { LinearClient } from "@/src/lib/linear"
 
 interface CapturedRequest {
   url: string

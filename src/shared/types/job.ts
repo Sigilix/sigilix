@@ -226,7 +226,7 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
-      mode: import("../../lib/slash-commands").DescribeMode
+      mode: import("@/src/lib/slash-commands").DescribeMode
       apply: boolean
     }
   // ARC-184: review provenance + stale markers. Enqueued from the
@@ -241,7 +241,7 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
-      manifestSnapshot: import("../../lib/review-manifest").ReviewManifestV1
+      manifestSnapshot: import("@/src/lib/review-manifest").ReviewManifestV1
       newHeadSha: string
       newBaseSha: string
       // Pinned at enqueue time so a concurrent prompt deploy between
@@ -263,7 +263,7 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
-      surface: import("../../lib/github-mention").GhMentionSurface
+      surface: import("@/src/lib/github-mention").GhMentionSurface
       commentId: number
       threadRootId?: number
     }

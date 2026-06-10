@@ -23,23 +23,23 @@
 // leaves, the @/shared + @/do + @/features homes, and the inline
 // `import("../../dynamic-dispatcher")`). It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole, RouterDecision } from "../../ensemble-router"
-import type { RetrievalCacheStats } from "../../retrieval-cache"
-import type { DeterministicCheckHit } from "@/shared/domain/deterministic-checks"
-import type { DiffMode } from "../../incremental-review"
-import type { ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
-import type { ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
-import type { ReviewMemorySkipReason } from "../../review-memory/types"
-import type { TokenUsageByModel } from "../../ensemble-slo-telemetry"
-import type { PrReviewVerdictWithIds } from "../domain/findings"
-import type { SynthesizerProvenance } from "../domain/validation"
-import type { SynthAttemptOutcome } from "../domain/synth"
-import type { EnsembleConfig } from "../domain/config"
-import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import type { GraphRetrievalSample } from "@/do/graph-metrics"
-import type { GraphExpansionSample } from "@/do/graph-expansion-metrics"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole, RouterDecision } from "@/src/lib/ensemble-router"
+import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
+import type { DeterministicCheckHit } from "@/src/shared/domain/deterministic-checks"
+import type { DiffMode } from "@/src/lib/incremental-review"
+import type { ScanSkipReason as DepVulnSkipReason } from "@/src/features/dep-vulns"
+import type { ScanSkipReason as SarifSkipReason } from "@/src/features/sarif-evidence"
+import type { ReviewMemorySkipReason } from "@/src/lib/review-memory/types"
+import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
+import type { PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import type { SynthAttemptOutcome } from "@/src/lib/ensemble/domain/synth"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
+import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
 // SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>`
 // binding moved here from the orchestrator to land that file at <=1k lines. This is
 // `EnsembleTelemetry`'s natural co-location (the binding is one of its two named
@@ -138,7 +138,7 @@ export interface EnsembleTelemetry {
    * and LLM, false-negative rates on protected roles. Phase 2/3
    * graduation criteria depend on these aggregates.
    */
-  dispatcherDecision?: import("../../dynamic-dispatcher").DispatcherDecision
+  dispatcherDecision?: import("@/src/lib/dynamic-dispatcher").DispatcherDecision
   /**
    * ARC-277: populated when 1 ≤ specialist-success-count < dispatched-count.
    * Records which roles came back and which didn't so post-rollout

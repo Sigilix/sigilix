@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   parseSigilixConfigDetailed,
   resolveReviewMemoryConfig,
-} from "@/lib/sigilix-config"
+} from "@/src/lib/sigilix-config"
 
 function parse(json: string) {
   const r = parseSigilixConfigDetailed(json)

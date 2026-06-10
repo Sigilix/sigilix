@@ -1,5 +1,5 @@
 import { indexNamespace } from "./repo-index-manifest"
-import { BRANCH_STATE_SEGMENT } from "../shared/domain/index-keys"
+import { BRANCH_STATE_SEGMENT } from "@/src/shared/domain/index-keys"
 
 // Re-exported so existing importers of this module keep their surface; the
 // canonical definition now lives in `shared/domain/index-keys` — a pure leaf

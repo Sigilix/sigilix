@@ -6,7 +6,7 @@
 // here — vitest hoists `vi.mock` per file and mock state does not cross
 // files, so each sibling declares them inline.
 
-import type { Env } from "@/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 export interface KvStub {
   kv: Env["OPENCLAW_STATE"]

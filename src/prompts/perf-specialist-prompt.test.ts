@@ -3,10 +3,10 @@
 // depends on end-to-end.
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "@/prompts/pr-review-specialists"
-import { PR_REVIEW_SCHEMA } from "@/shared/domain/schemas"
-import { PROMPT_VERSION } from "@/prompts/pr-review"
-import perfExamples from "@/prompts/perf-examples.json"
+import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
+import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
+import perfExamples from "@/src/prompts/perf-examples.json"
 
 describe("perf-examples.json", () => {
   it("is versioned", () => {

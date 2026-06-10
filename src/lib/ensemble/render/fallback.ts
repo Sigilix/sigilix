@@ -15,13 +15,13 @@
 // module. The bodies are byte-identical to their HEAD form in triage-pr-review.ts;
 // only the import paths and the wrapper are new.
 
-import type { SubmitReviewBody } from "@/shared/types/github"
-import { type StackContext } from "../../pr-stack"
-import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/shared/domain/pr-review-finding"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
+import { type StackContext } from "@/src/lib/pr-stack"
+import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
 import {
   chooseRenderedEventWithOverride,
   type ReviewEventOverride,
-} from "../domain/verdict"
+} from "@/src/lib/ensemble/domain/verdict"
 import {
   sanitizeVerdictForGitHub,
   sanitizeFindingsForGitHub,

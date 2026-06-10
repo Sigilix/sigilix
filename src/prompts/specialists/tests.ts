@@ -1,5 +1,5 @@
 // the tests specialist prompt — hand-tuned; see SIG-388
-import testsExamples from "../tests-examples.json"
+import testsExamples from "@/src/prompts/tests-examples.json"
 import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**

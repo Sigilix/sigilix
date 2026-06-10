@@ -17,12 +17,12 @@
 // so the builders here only declare the NON-callback args; the callback arg
 // NAMES the case wires are listed in `callbacks`.
 
-import type { validateForSubmission } from "../../src/lib/triage-pr-review-ensemble"
-import type { SynthesizerProvenance } from "../../src/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "../../src/lib/triage-pr-review"
-import type { SecurityFact } from "../../src/lib/security-evidence-manifest"
-import type { TestingEvidencePack } from "../../src/lib/testing-evidence-pack"
-import type { ReviewableMap } from "../../src/lib/diff-positions"
+import type { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
+import type { ReviewableMap } from "@/src/lib/diff-positions"
 
 /** The full vFS args object, minus the `on*Dropped` callbacks the test wraps. */
 export type ValidateArgs = Omit<

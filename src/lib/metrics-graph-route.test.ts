@@ -1,10 +1,10 @@
 // SIG-152 — GET /metrics/graph route: auth, window parsing, response shape.
 
 import { describe, expect, it } from "vitest"
-import { handleGraphMetricsRoute } from "@/lib/metrics-graph-route"
-import { GraphMetricsDO } from "@/do/graph-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleGraphMetricsRoute } from "@/src/lib/metrics-graph-route"
+import { GraphMetricsDO } from "@/src/do/graph-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"
 

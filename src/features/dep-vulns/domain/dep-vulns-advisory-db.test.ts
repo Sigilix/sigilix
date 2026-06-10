@@ -1,7 +1,7 @@
 // ARC-186 — bundled advisory DB schema + loader tests.
 
 import { describe, it, expect } from "vitest"
-import { loadAdvisoryDb } from "@/features/dep-vulns/domain/advisory-db"
+import { loadAdvisoryDb } from "@/src/features/dep-vulns/domain/advisory-db"
 
 describe("loadAdvisoryDb", () => {
   const db = loadAdvisoryDb()

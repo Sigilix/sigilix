@@ -6,11 +6,11 @@
 // pickup-5xx, where the throw lets Cloudflare redeliver.
 
 import { describe, it, expect, vi } from "vitest"
-import { runPrReviewWithDoCallback } from "@/do/consumer-wrapper"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import type { PickupResponse, RunResultRequest } from "@/do/types"
-import { GitHubHttpError } from "@/shared/adapters/github"
+import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import type { PickupResponse, RunResultRequest } from "@/src/do/types"
+import { GitHubHttpError } from "@/src/shared/adapters/github"
 
 type PrReviewJob = Extract<JobMessage, { type: "pr-review" }>
 

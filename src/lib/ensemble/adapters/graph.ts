@@ -10,13 +10,13 @@
 // `(env, owner, repo)` (not just `env`) because the RepoGraph DO is per-tenant and
 // each RPC is scoped to one `(owner, repo)`. Dormant seam — PR 12 wires it.
 
-import type { Env } from "@/shared/types/env"
-import type { GraphPort } from "../ports/graph"
+import type { Env } from "@/src/shared/types/env"
+import type { GraphPort } from "@/src/lib/ensemble/ports/graph"
 import {
   graphContextFor,
   blastRadiusByNamesFor,
   contextExpansionForChangedSymbolsFor,
-} from "../../repo-graph-client"
+} from "@/src/lib/repo-graph-client"
 
 export function makeGraphAdapter(env: Env, owner: string, repo: string): GraphPort {
   return {

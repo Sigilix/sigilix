@@ -8,12 +8,12 @@ import { describe, it, expect } from "vitest"
 import {
   buildSecurityFactManifest,
   type SecurityFactManifest,
-} from "@/lib/security-evidence-manifest"
-import type { SecretHit } from "@/lib/secret-scan"
-import type { DepVulnFinding } from "@/features/dep-vulns"
-import type { SarifFinding } from "@/features/sarif-evidence"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
-import { DYNAMIC_HTML_SINK_RULE_ID } from "@/features/ast-rules/domain/scan-dynamic-html-sink"
+} from "@/src/lib/security-evidence-manifest"
+import type { SecretHit } from "@/src/lib/secret-scan"
+import type { DepVulnFinding } from "@/src/features/dep-vulns"
+import type { SarifFinding } from "@/src/features/sarif-evidence"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
+import { DYNAMIC_HTML_SINK_RULE_ID } from "@/src/features/ast-rules/domain/scan-dynamic-html-sink"
 
 function secretHit(overrides: Partial<SecretHit> = {}): SecretHit {
   return {

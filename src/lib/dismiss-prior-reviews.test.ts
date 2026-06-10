@@ -23,8 +23,8 @@ const { mockListPullRequestReviews, mockDismissReview } = vi.hoisted(() => ({
   mockDismissReview: vi.fn(async () => undefined),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async listPullRequestReviews(...args: unknown[]): Promise<unknown> {
       return mockListPullRequestReviews(...args)
@@ -40,8 +40,8 @@ import {
   dismissPriorSigilixReviews,
   SIGILIX_REVIEW_BODY_MARKER,
   LEGACY_REVIEW_BODY_MARKER,
-} from "@/lib/dismiss-prior-reviews"
-import { GitHubClient } from "@/shared/adapters/github"
+} from "@/src/lib/dismiss-prior-reviews"
+import { GitHubClient } from "@/src/shared/adapters/github"
 
 let logSpy: ReturnType<typeof vi.spyOn>
 let warnSpy: ReturnType<typeof vi.spyOn>

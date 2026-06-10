@@ -7,8 +7,8 @@
 // the bare Identifier `eval`. Member-access calls like `obj.eval(x)`
 // or string-literal occurrences in code are NOT flagged.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 

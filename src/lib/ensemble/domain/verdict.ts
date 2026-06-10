@@ -16,8 +16,8 @@
 // move. `severityTier` was private in the ensemble; it becomes an exported
 // domain function here (additive — not added to the ensemble's public surface).
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import { SIGILIX_BOT_LOGIN } from "@/shared/domain/sigilix-identity"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { SIGILIX_BOT_LOGIN } from "@/src/shared/domain/sigilix-identity"
 
 /**
  * SIG-161 PR 4a: widened from the legacy two-state `"APPROVE" |

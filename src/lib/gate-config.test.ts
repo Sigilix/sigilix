@@ -5,7 +5,7 @@
 // is missing — PR 4a ships with KV empty; PR 4c populates both.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "@/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import {
   DEFAULT_GATE_THRESHOLD,
   GATE_MODEL_KV_KEY,
@@ -15,7 +15,7 @@ import {
   readGateModel,
   readGateThreshold,
   __resetGateConfigCacheForTests,
-} from "@/lib/gate-config"
+} from "@/src/lib/gate-config"
 
 beforeEach(() => {
   __resetGateConfigCacheForTests()

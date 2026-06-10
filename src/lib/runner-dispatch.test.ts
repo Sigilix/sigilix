@@ -6,7 +6,7 @@ import {
   dispatchRunnerCheck,
   parseRunnerDispatchMode,
   type RunnerCheckSpec,
-} from "@/lib/runner-dispatch"
+} from "@/src/lib/runner-dispatch"
 
 const check: RunnerCheckSpec = { findingId: "logic-3", path: "src/a.ts", line: 12, kind: "ast-grep", spec: "$X == $X" }
 

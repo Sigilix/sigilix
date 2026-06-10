@@ -10,8 +10,8 @@
 // primitive-only, no env / network) — the same lateral the sibling domain gates
 // already take.
 
-import type { FindingCategory } from "@/shared/domain/finding-category"
-import type { DismissReason } from "@/lib/dismiss-reasons"
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
+import type { DismissReason } from "@/src/lib/dismiss-reasons"
 
 /**
  * One validator-gate rejection (the shape the ensemble collects + forwards).

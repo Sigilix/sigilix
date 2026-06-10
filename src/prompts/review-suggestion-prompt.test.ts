@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "@/prompts/pr-review-specialists"
-import { PR_IMPROVE_PROMPT } from "@/prompts/pr-improve"
-import { PROMPT_VERSION, PR_REVIEW_PROMPT } from "@/prompts/pr-review"
+import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
+import { PR_IMPROVE_PROMPT } from "@/src/prompts/pr-improve"
+import { PROMPT_VERSION, PR_REVIEW_PROMPT } from "@/src/prompts/pr-review"
 
 describe("SIG-125 suggestion prompt wiring", () => {
   it("output schema documents suggestedReplacement", () => {

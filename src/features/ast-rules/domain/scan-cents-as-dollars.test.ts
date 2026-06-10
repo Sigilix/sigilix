@@ -4,7 +4,7 @@
 // marker — the template tests pin that down.
 
 import { describe, it, expect } from "vitest"
-import { scanCentsRenderedAsDollars as scan } from "@/features/ast-rules/domain/scan-cents-as-dollars"
+import { scanCentsRenderedAsDollars as scan } from "@/src/features/ast-rules/domain/scan-cents-as-dollars"
 
 describe("scanCentsRenderedAsDollars — FLAGS the bug", () => {
   it("flags the pr/11 D9 case: ${sub.monthlyCents} in JSX", () => {

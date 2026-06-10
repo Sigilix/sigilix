@@ -14,7 +14,7 @@
 // readers — it does NOT import the core `index-delete.ts`, so there is no
 // cycle.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import {
   legacyRepoIndexManifestKey,
   parseRepoIndexManifest,

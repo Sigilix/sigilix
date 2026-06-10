@@ -12,14 +12,14 @@ import {
   renderCoverageGapBlock,
   ingestCoverage,
   type CoverageGap,
-} from "@/lib/coverage-ingest"
+} from "@/src/lib/coverage-ingest"
 import {
   evaluateTestFinding,
   parseCoverageGapRef,
-} from "@/lib/ensemble/domain/gates/validate-test-finding"
-import { evaluateTestingFindingCitation } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
+} from "@/src/lib/ensemble/domain/gates/validate-test-finding"
+import { evaluateTestingFindingCitation } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 // ─── parseLcov ──────────────────────────────────────────────────────
 

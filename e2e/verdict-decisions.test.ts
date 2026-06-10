@@ -18,11 +18,11 @@ import {
   severityLabelForScore,
   type AuthoredItem,
   type PrReviewFinding,
-} from "../src/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review"
 import {
   resolveReviewEventOverride,
   LOW_CONFIDENCE_COMMENT_THRESHOLD,
-} from "../src/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import { severityTierForScore } from "./_golden/validation-matrix-cases"
 
 const baseFinding: PrReviewFinding = {

@@ -14,8 +14,8 @@ const { mockChat } = vi.hoisted(() => ({
   mockChat: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>("@/shared/adapters/model/ollama-chat")
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -26,14 +26,14 @@ import {
   decideSpecialistsDynamic,
   DISPATCHER_LLM_MODEL,
   DISPATCHER_LLM_TIMEOUT_MS,
-} from "@/lib/dynamic-dispatcher"
+} from "@/src/lib/dynamic-dispatcher"
 import {
   EMPTY_CONFIG,
   type DispatcherEnv,
   envOff,
   envShadow,
   classifiedFor,
-} from "@/lib/dynamic-dispatcher.test-helpers"
+} from "@/src/lib/dynamic-dispatcher.test-helpers"
 
 beforeEach(() => {
   mockChat.mockReset()

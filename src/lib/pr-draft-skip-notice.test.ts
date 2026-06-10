@@ -4,9 +4,9 @@ import {
   renderDraftSkipNotice,
   renderDraftSkipSupersededNotice,
   supersedeDraftPrSkipNotice,
-} from "@/lib/pr-draft-skip-notice"
-import type { Env } from "@/shared/types/env"
-import type { GitHubClient } from "@/shared/adapters/github"
+} from "@/src/lib/pr-draft-skip-notice"
+import type { Env } from "@/src/shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 
 function makeEnv(): { env: Env; kv: Map<string, string> } {
   const kv = new Map<string, string>()

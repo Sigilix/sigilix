@@ -9,7 +9,7 @@
 // renamed from "rema-portal" on 2026-05-03). For unmapped team keys, we
 // query the lowercased team key as the namespace.
 
-import { embedText } from "../shared/adapters/model"
+import { embedText } from "@/src/shared/adapters/model"
 import {
   hybridRetrievalEnabled,
   queryLexical,

@@ -32,7 +32,7 @@ import {
   resolveCommandConfig,
   loadSigilixConfig,
   loadSigilixConfigRaw,
-} from "@/lib/sigilix-config"
+} from "@/src/lib/sigilix-config"
 
 describe("sigilix-config shim export parity (SIG-382)", () => {
   it("re-exports every public value symbol", () => {

@@ -28,7 +28,7 @@
 // an `undefined` object property / array hole) so an optional field present-
 // as-undefined round-trips identically.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 /** Tag markers for the non-JSON-native shapes the encoder emits. */
 const T_MAP = "Map"

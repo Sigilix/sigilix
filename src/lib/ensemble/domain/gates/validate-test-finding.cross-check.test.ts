@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { evaluateTestFinding } from "@/lib/ensemble/domain/gates/validate-test-finding"
-import { finding, pack } from "@/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
+import { evaluateTestFinding } from "@/src/lib/ensemble/domain/gates/validate-test-finding"
+import { finding, pack } from "@/src/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
 
 // ── SIG-347 (SIG-166 AC #2): sibling-test identifier cross-check ──
 //

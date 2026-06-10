@@ -1,10 +1,10 @@
 // SIG-119 — GET /metrics/validation route: auth, window parsing, response shape.
 
 import { describe, expect, it } from "vitest"
-import { handleValidationMetricsRoute } from "@/lib/metrics-validation-route"
-import { ValidationMetricsDO } from "@/do/validation-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
+import { ValidationMetricsDO } from "@/src/do/validation-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"
 

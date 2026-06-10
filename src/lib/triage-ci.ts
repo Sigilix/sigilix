@@ -10,15 +10,15 @@
 // no shell — so we use the Actions REST API: list jobs, fetch each
 // failed job's plain-text log, concat them.
 
-import { generate } from "../shared/adapters/model"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import type { WorkflowJob } from "../shared/types/github"
+import { generate } from "@/src/shared/adapters/model"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import type { WorkflowJob } from "@/src/shared/types/github"
 import { retrieveChunks } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
-import { CI_TRIAGE_SCHEMA } from "../shared/domain/schemas"
-import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import { CI_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
+import { CI_TRIAGE_PROMPT } from "@/src/prompts/ci-triage"
 import { parseDiffToReviewablePositions } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
 import {
@@ -26,7 +26,7 @@ import {
   planCiSuggestions,
   submitCiSuggestionReview,
 } from "./ci-suggestions"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const CI_MARKER = "<!-- sigilix:ci-triage -->"

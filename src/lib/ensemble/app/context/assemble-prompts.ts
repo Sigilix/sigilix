@@ -17,28 +17,28 @@
 // (incl. the relocated dynamic-evidence-block domain). It never imports the
 // orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { PullRequestMeta, ListOpenPullsItem } from "@/shared/types/github"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import type { RetrievedChunk } from "../../../retrieval"
-import { selectRetrievalSnapshotForRole } from "../../../perf-retrieval"
-import { mergeLogicSnapshot } from "../../../symbol-retrieval"
-import { buildChangedLines, buildAddedLineTextByLine, buildDeletedLineTextByLine } from "@/features/ast-rules"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { PullRequestMeta, ListOpenPullsItem } from "@/src/shared/types/github"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { RetrievedChunk } from "@/src/lib/retrieval"
+import { selectRetrievalSnapshotForRole } from "@/src/lib/perf-retrieval"
+import { mergeLogicSnapshot } from "@/src/lib/symbol-retrieval"
+import { buildChangedLines, buildAddedLineTextByLine, buildDeletedLineTextByLine } from "@/src/features/ast-rules"
 import {
   renderPathInstructionsForPrompt,
   resolvePathInstructionsForChangedPaths,
   resolveAstRulesConfig,
   type SigilixConfig,
-} from "../../../sigilix-config"
-import { renderHitsForPrompt, type DeterministicCheckHit } from "@/shared/domain/deterministic-checks"
-import { renderSecretHitsForPrompt, type SecretHit } from "../../../secret-scan"
-import { renderDocsCoverageForPrompt, type DocsCoverageHit } from "../../../docs-coverage-check"
-import { renderPerfBudgetsForPrompt, type PerfBudgetsHit } from "@/shared/domain/perf-budgets"
-import { renderCoverageGapBlock, type ingestCoverage } from "../../../coverage-ingest"
-import { buildSecurityFactManifest } from "../../../security-evidence-manifest"
-import { buildChangedLineTextByPath } from "../../../validate-logic-finding"
-import { buildFactsByRole } from "../../../role-scoped-facts"
+} from "@/src/lib/sigilix-config"
+import { renderHitsForPrompt, type DeterministicCheckHit } from "@/src/shared/domain/deterministic-checks"
+import { renderSecretHitsForPrompt, type SecretHit } from "@/src/lib/secret-scan"
+import { renderDocsCoverageForPrompt, type DocsCoverageHit } from "@/src/lib/docs-coverage-check"
+import { renderPerfBudgetsForPrompt, type PerfBudgetsHit } from "@/src/shared/domain/perf-budgets"
+import { renderCoverageGapBlock, type ingestCoverage } from "@/src/lib/coverage-ingest"
+import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
+import { buildChangedLineTextByPath } from "@/src/lib/validate-logic-finding"
+import { buildFactsByRole } from "@/src/lib/role-scoped-facts"
 import {
   analyzeHelperBypass,
   renderAsymmetryHints,
@@ -48,20 +48,20 @@ import {
   postAstInlineFindings,
   runAstRules,
   type AstCache,
-} from "@/features/ast-rules"
-import { runDepVulnScan } from "@/features/dep-vulns"
-import { type SarifFinding } from "@/features/sarif-evidence"
+} from "@/src/features/ast-rules"
+import { runDepVulnScan } from "@/src/features/dep-vulns"
+import { type SarifFinding } from "@/src/features/sarif-evidence"
 import {
   detectStack,
   computeFileOverlap,
   type FileOverlap,
   type StackContext,
-} from "../../../pr-stack"
-import { renderStackPromptBlock } from "../../../../prompts/pr-stack-prompt"
+} from "@/src/lib/pr-stack"
+import { renderStackPromptBlock } from "@/src/prompts/pr-stack-prompt"
 import {
   classifyDiffFiles,
   renderDiffFileClassificationBlock,
-} from "../../../diff-file-classify"
+} from "@/src/lib/diff-file-classify"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
@@ -72,11 +72,11 @@ import {
   renderTestingEvidenceBlock,
   type TestingEvidencePack,
   type InspectedTestFileFetchResult,
-} from "../../../testing-evidence-pack"
-import { detectHelperCoverage } from "../../../helper-coverage"
-import { buildSpecialistInitialMessage } from "../../../../prompts/pr-review-specialists"
-import { resolveDynamicEvidencePromptBlock } from "../../domain/dynamic-evidence-block"
-import type { GraphContextNode } from "@/do/repo-graph"
+} from "@/src/lib/testing-evidence-pack"
+import { detectHelperCoverage } from "@/src/lib/helper-coverage"
+import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
+import type { GraphContextNode } from "@/src/do/repo-graph"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
 type AstResult = Awaited<ReturnType<typeof runAstRules>>

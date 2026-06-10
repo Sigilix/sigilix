@@ -23,7 +23,7 @@
 // of "#N" + "#N+1". We don't gate any behavior on counter
 // uniqueness, so the simpler read-write pattern is fine here.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 export function buildReviewCounterKey(
   owner: string,

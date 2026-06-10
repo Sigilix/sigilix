@@ -10,7 +10,7 @@
 // them. Long inputs are silently truncated by the model — the indexer
 // must guarantee shape, not this caller.
 
-import type { AiBinding } from "../../ports/embedding"
+import type { AiBinding } from "@/src/shared/ports/embedding"
 
 export const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 export const EMBEDDING_DIMENSIONS = 768

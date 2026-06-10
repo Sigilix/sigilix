@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { RepoGraphDO, MAX_BLAST_IDS } from "@/do/repo-graph"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { RepoGraphDO, MAX_BLAST_IDS } from "@/src/do/repo-graph"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 // ─── DO storage stub ─────────────────────────────────────────────
 //

@@ -1,5 +1,5 @@
 // the performance specialist prompt — hand-tuned; see SIG-388
-import perfExamples from "../perf-examples.json"
+import perfExamples from "@/src/prompts/perf-examples.json"
 import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**

@@ -4,16 +4,16 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 
 // Mock the App-JWT installation resolver so the route can be tested without a
 // real RSA key / GitHub API call.
-vi.mock("@/shared/adapters/github/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
-vi.mock("@/lib/index-backfill", () => ({ runIndexBackfill: vi.fn() }))
-vi.mock("@/lib/index-reconciliation", () => ({ runIndexReconciliation: vi.fn() }))
+vi.mock("@/src/shared/adapters/github/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
+vi.mock("@/src/lib/index-backfill", () => ({ runIndexBackfill: vi.fn() }))
+vi.mock("@/src/lib/index-reconciliation", () => ({ runIndexReconciliation: vi.fn() }))
 
-import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "@/lib/admin-index-route"
-import { resolveRepoInstallationId } from "@/shared/adapters/github/github-app"
-import { runIndexBackfill } from "@/lib/index-backfill"
-import { runIndexReconciliation } from "@/lib/index-reconciliation"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "@/src/lib/admin-index-route"
+import { resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
+import { runIndexBackfill } from "@/src/lib/index-backfill"
+import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 const mockResolve = vi.mocked(resolveRepoInstallationId)
 const TOKEN = "admin-token"

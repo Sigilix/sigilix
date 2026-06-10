@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseFirstJsonObject } from "@/shared/util/json-extract"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 
 describe("parseFirstJsonObject quote repair", () => {
   it("repairs unescaped object-key text inside a value string", () => {

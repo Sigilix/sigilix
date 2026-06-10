@@ -6,8 +6,8 @@ const { mockCreateIssueComment } = vi.hoisted(() => ({
   mockCreateIssueComment: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async createIssueComment(...args: unknown[]): Promise<unknown> {
       return mockCreateIssueComment(...args)
@@ -19,9 +19,9 @@ vi.mock("@/shared/adapters/github", async () => {
 import {
   postReviewCommentFallback,
   renderReviewCommentFallback,
-} from "@/lib/review-comment-fallback"
-import { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/review-comment-fallback"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 let logSpy: ReturnType<typeof vi.spyOn>
 let warnSpy: ReturnType<typeof vi.spyOn>
@@ -391,7 +391,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
 import {
   postReviewSkipNotice,
   renderReviewSkipNotice,
-} from "@/lib/review-comment-fallback"
+} from "@/src/lib/review-comment-fallback"
 
 describe("renderReviewSkipNotice", () => {
   it("renders the skip-notice header with reason + sha + retry hint", () => {

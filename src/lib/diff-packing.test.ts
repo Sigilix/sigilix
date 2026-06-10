@@ -8,7 +8,7 @@ import {
   packFilesIntoBatches,
   batchToDiff,
   DEFAULT_MAX_DIFF_TOKENS_PER_CALL,
-} from "@/lib/diff-packing"
+} from "@/src/lib/diff-packing"
 
 describe("estimateTokens", () => {
   it("uses the chars/4 heuristic", () => {

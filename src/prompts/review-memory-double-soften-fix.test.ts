@@ -19,8 +19,8 @@
 // stale on deploy).
 
 import { describe, it, expect } from "vitest"
-import { SYNTHESIZER_PROMPT } from "@/prompts/pr-review-specialists"
-import { PROMPT_VERSION } from "@/prompts/pr-review"
+import { SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 
 describe("SIG-280 prereq: double-soften fix (renderer-only soften)", () => {
   it("the synth prompt no longer instructs the model to downgrade the score itself", () => {

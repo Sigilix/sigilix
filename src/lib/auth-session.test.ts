@@ -18,7 +18,7 @@ import {
   setSessionCookie,
   setStateCookie,
   touchSession,
-} from "@/lib/auth-session"
+} from "@/src/lib/auth-session"
 
 interface FakeKV {
   get: ReturnType<typeof vi.fn>

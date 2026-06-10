@@ -27,41 +27,41 @@ import {
   recallOutcomeFromTelemetry,
   type RecallReviewOutcome,
   type RawReviewTelemetry,
-} from "@/lib/recall-alarm"
-import { handleValidationMetricsRoute } from "@/lib/metrics-validation-route"
-import { handleTestSuppressionsMetricsRoute } from "@/lib/metrics-test-suppressions-route"
-import { handleRunnerEvidenceMetricsRoute } from "@/lib/metrics-runner-evidence-route"
-import { handleVerificationMetricsRoute } from "@/lib/metrics-verification-route"
-import { handleDismissalMetricsRoute } from "@/lib/metrics-dismissals-route"
-import { handlePrecisionMetricsRoute } from "@/lib/metrics-precision-route"
-import { handleRepeatFpsMetricsRoute } from "@/lib/metrics-repeat-fps-route"
-import { handleGraphMetricsRoute } from "@/lib/metrics-graph-route"
-import { handleGraphExpansionMetricsRoute } from "@/lib/metrics-graph-expansion-route"
-import { handleGraphExpansionAbMetricsRoute } from "@/lib/metrics-graph-expansion-ab-route"
-import { handleFpRateMetricsRoute } from "@/lib/metrics-fp-rate-route"
-import { handleRunnerIngestRoute } from "@/lib/runner-ingest-route"
+} from "@/src/lib/recall-alarm"
+import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
+import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
+import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
+import { handleVerificationMetricsRoute } from "@/src/lib/metrics-verification-route"
+import { handleDismissalMetricsRoute } from "@/src/lib/metrics-dismissals-route"
+import { handlePrecisionMetricsRoute } from "@/src/lib/metrics-precision-route"
+import { handleRepeatFpsMetricsRoute } from "@/src/lib/metrics-repeat-fps-route"
+import { handleGraphMetricsRoute } from "@/src/lib/metrics-graph-route"
+import { handleGraphExpansionMetricsRoute } from "@/src/lib/metrics-graph-expansion-route"
+import { handleGraphExpansionAbMetricsRoute } from "@/src/lib/metrics-graph-expansion-ab-route"
+import { handleFpRateMetricsRoute } from "@/src/lib/metrics-fp-rate-route"
+import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
 import {
   handleAdminIndexRoute,
   handleAdminBackfillRoute,
   handleAdminReconcileRoute,
   handleAdminMigrateToRepoIdRoute,
   handleAdminMigrateReviewMemoryToRepoIdRoute,
-} from "@/lib/admin-index-route"
-import { runIndexReconciliation } from "@/lib/index-reconciliation"
-import { handleReviewStatusRoute } from "@/do/status-route"
+} from "@/src/lib/admin-index-route"
+import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import { handleReviewStatusRoute } from "@/src/do/status-route"
 import {
   handleGitHubAuthCallback,
   handleGitHubAuthKickoff,
   handleLogout,
-} from "@/lib/auth-oauth-github"
-import { requireSession } from "@/lib/auth-middleware"
-import { renderWelcomePage } from "@/lib/auth-welcome"
-import { readCookie, SESSION_COOKIE_NAME } from "@/lib/auth-session"
-import { handleBadgeAssetRoute } from "@/lib/badge-assets"
-import { parseValidateMode, validateEnv } from "@/lib/env-validate"
-import { isIndexerEnabled } from "@/lib/index-producer"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+} from "@/src/lib/auth-oauth-github"
+import { requireSession } from "@/src/lib/auth-middleware"
+import { renderWelcomePage } from "@/src/lib/auth-welcome"
+import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
+import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
+import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
+import { isIndexerEnabled } from "@/src/lib/index-producer"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 // SIG-318 / SIG-376 (Tier-1 8/8): entry-module decomposition. The webhook
 // handlers + the queue dispatcher + the shared mention/capture layer were
@@ -71,20 +71,20 @@ import type { JobMessage } from "@/shared/types/job"
 // here), and the Durable Object class re-exports (wrangler resolves DO
 // class names against the entry module). Every previously-public symbol is
 // re-exported below so no importer or test path changes.
-import { handleGitHubWebhook } from "@/index-github-webhook"
-import { handleLinearWebhook, handleManualTrigger } from "@/index-webhooks"
-import { dispatchJob } from "@/index-dispatch"
+import { handleGitHubWebhook } from "@/src/index-github-webhook"
+import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
+import { dispatchJob } from "@/src/index-dispatch"
 
 // Re-export the relocated public symbols so the entry module's export
 // surface is byte-for-byte unchanged for every importer + test pin.
-export { dispatchJob } from "@/index-dispatch"
-export { prMetaIsClosedOrMerged } from "@/index-dispatch"
+export { dispatchJob } from "@/src/index-dispatch"
+export { prMetaIsClosedOrMerged } from "@/src/index-dispatch"
 export {
   decidePullRequestJobs,
   queueGithubMention,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
-} from "@/index-internals"
+} from "@/src/index-internals"
 
 // Validation cache — Cloudflare Workers can't read `env` at module top
 // level (it's per-request), so validation runs once per env signature

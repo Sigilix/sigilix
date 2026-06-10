@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest"
 import {
   commentHasSigilixAncestor,
   type LinearThreadComment,
-} from "@/lib/linear-thread-ancestor"
+} from "@/src/lib/linear-thread-ancestor"
 
 const sigilix = (id: string, parentId: string | null = null): LinearThreadComment => ({
   id,

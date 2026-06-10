@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest"
-import { parseValidateMode, validateEnv } from "@/lib/env-validate"
-import type { Env } from "@/shared/types/env"
+import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
+import type { Env } from "@/src/shared/types/env"
 
 afterEach(() => {
   vi.restoreAllMocks()

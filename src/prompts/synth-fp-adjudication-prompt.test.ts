@@ -6,8 +6,8 @@
 // recall for a cleaner FP rate.
 
 import { describe, expect, it } from "vitest"
-import { PROMPT_VERSION } from "@/prompts/pr-review"
-import { SYNTHESIZER_PROMPT } from "@/prompts/pr-review-specialists"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
+import { SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
 
 describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
   it("requires explicit quoted contradiction before dropping a high-severity source finding", () => {

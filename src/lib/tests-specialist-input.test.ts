@@ -21,9 +21,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockChat = vi.fn()
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>(
-    "@/shared/adapters/model/ollama-chat",
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
   )
   return {
     ...actual,
@@ -34,15 +34,15 @@ vi.mock("@/shared/adapters/model/ollama-chat", async () => {
 import {
   runSpecialist,
   SPECIALIST_CONFIGS,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   SPECIALIST_PROMPTS,
   buildSpecialistInitialMessage,
-} from "@/prompts/pr-review-specialists"
+} from "@/src/prompts/pr-review-specialists"
 import {
   classifyDiffFiles,
   renderDiffFileClassificationBlock,
-} from "@/lib/diff-file-classify"
+} from "@/src/lib/diff-file-classify"
 
 beforeEach(() => {
   mockChat.mockReset()

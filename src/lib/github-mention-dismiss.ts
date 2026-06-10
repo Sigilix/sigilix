@@ -15,7 +15,7 @@
 // dismiss-prior-reviews + the GitHubClient type — it does NOT import the
 // core `github-mention.ts`, so there is no cycle.
 
-import type { GitHubClient } from "../shared/adapters/github"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import { isAuthorAllowedForSlashCommand } from "./slash-commands"
 import {
   LEGACY_REVIEW_BODY_MARKER,

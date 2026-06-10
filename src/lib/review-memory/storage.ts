@@ -39,7 +39,7 @@ import type {
   ReviewMemorySignal,
   ReviewMemoryStorageScope,
 } from "./types"
-import type { Env } from "../../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const TTL_DAYS = 90
 const RETENTION_HARD_DAYS = 180

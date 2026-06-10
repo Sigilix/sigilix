@@ -10,14 +10,14 @@ import {
   buildGraphContextExpansion,
   MAX_CROSS_FILE_FETCHES,
   renderGraphExpansionForPrompt,
-} from "@/lib/graph-context-expansion"
-import type { EnrichedGraphContext, GraphBodySnippet } from "@/lib/graph-context-expansion"
+} from "@/src/lib/graph-context-expansion"
+import type { EnrichedGraphContext, GraphBodySnippet } from "@/src/lib/graph-context-expansion"
 import type {
   GraphContextExpansion,
   GraphDefinitionRow,
   GraphCallerRow,
   GraphImportRow,
-} from "@/do/repo-graph"
+} from "@/src/do/repo-graph"
 
 function expansion(over: Partial<GraphContextExpansion> = {}): GraphContextExpansion {
   return {

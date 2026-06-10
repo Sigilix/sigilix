@@ -18,11 +18,11 @@ import {
   type CaseResult,
   type ScoredFinding,
 } from "./logic-recall-corpus"
-import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "../src/lib/triage-pr-review-ensemble"
-import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
-import { evaluateLogicClaimRefutation, parseLogicClaimRefutationMode } from "../src/lib/validate-logic-claim-refutation"
-import type { PrReviewFinding } from "../src/lib/triage-pr-review"
+import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
+import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import { evaluateLogicClaimRefutation, parseLogicClaimRefutationMode } from "@/src/lib/validate-logic-claim-refutation"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000

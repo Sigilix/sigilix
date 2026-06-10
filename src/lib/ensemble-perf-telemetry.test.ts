@@ -18,7 +18,7 @@ import {
   emitDoReviewRunTiming,
   computeSpecialistFanoutSummary,
   narrowSynthRetryOutcome,
-} from "@/lib/ensemble-perf-telemetry"
+} from "@/src/lib/ensemble-perf-telemetry"
 
 const CTX: EnsembleRunCtx = {
   owner: "Arc-and-Anchor",

@@ -40,7 +40,7 @@ import {
   findExistingTestSiblingForSource,
   type ClassifiedDiffFile,
 } from "./diff-file-classify"
-import { normalizeConcurrencyLimit } from "../shared/util/bounded-concurrency"
+import { normalizeConcurrencyLimit } from "@/src/shared/util/bounded-concurrency"
 import { isSubstantiveAddedLine } from "./helper-coverage"
 import type { HelperCoverage } from "./helper-coverage"
 

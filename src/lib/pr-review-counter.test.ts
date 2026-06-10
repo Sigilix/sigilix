@@ -13,8 +13,8 @@ import {
   buildReviewCounterKey,
   buildPrUrl,
   preparePrReviewCounter,
-} from "@/lib/pr-review-counter"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/pr-review-counter"
+import type { Env } from "@/src/shared/types/env"
 
 interface MockKv {
   store: Map<string, string>

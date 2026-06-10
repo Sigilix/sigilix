@@ -16,7 +16,7 @@
 //             MethodDefinition / VariableDeclaration and check Set membership.
 // This is O(2n) on AST nodes but both passes are cheap and O(n) memory.
 
-import { parseSource, walkAst, type SourceExt, type AstCache, type AstNode } from "@/features/ast-rules"
+import { parseSource, walkAst, type SourceExt, type AstCache, type AstNode } from "@/src/features/ast-rules"
 // SIG-146: shared contract moved to graph-extract-types.ts so language
 // extractor modules can depend on it without a cycle. Re-exported here so
 // existing importers of these names from "./graph-extract" keep working.

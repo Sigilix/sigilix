@@ -28,8 +28,8 @@
 //   the call site. In shadow the verdict is only counted/telemetered —
 //   NEVER dropped. This module is pure and mode-agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { AstFinding } from "@/features/ast-rules"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { AstFinding } from "@/src/features/ast-rules"
 import { buildChangedLineTextByPath } from "./validate-logic-finding"
 
 export { buildChangedLineTextByPath }

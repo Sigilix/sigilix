@@ -4,17 +4,17 @@
 // Relocated VERBATIM from the pre-split src/index.ts (modulo the added
 // `export` keyword + imports). Imports nothing from the entry module.
 
-import type { Env } from "@/shared/types/env"
-import { verifyLinearWebhook } from "@/lib/webhook-verify"
-import { LinearClient, buildLinearAuth } from "@/lib/linear"
-import { commentHasSigilixAncestor } from "@/lib/linear-thread-ancestor"
-import { isBotAuthoredComment } from "@/lib/bot-authored-comments"
+import type { Env } from "@/src/shared/types/env"
+import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
+import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
+import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
+import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import {
   bodyMentionsBot,
   getMentionTriggers,
   isBotHandle,
-} from "@/lib/mention"
-import { multiCorpusEnabled } from "@/lib/multi-corpus"
+} from "@/src/lib/mention"
+import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 
 export interface LinearWebhookPayload {
   action: "create" | "update" | "remove"

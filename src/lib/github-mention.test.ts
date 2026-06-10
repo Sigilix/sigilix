@@ -27,12 +27,12 @@ const {
   replyToReviewCommentMock: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: getInstallationTokenMock,
 }))
 
-vi.mock("@/shared/adapters/github", async (importActual) => {
-  const actual = await importActual<typeof import("@/shared/adapters/github")>()
+vi.mock("@/src/shared/adapters/github", async (importActual) => {
+  const actual = await importActual<typeof import("@/src/shared/adapters/github")>()
   class FakeGitHubClient {
     listIssueComments = listIssueCommentsMock
     listPullRequestReviewComments = listPullRequestReviewCommentsMock
@@ -65,12 +65,12 @@ import {
   releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
   serializeReviewDismissInProgressRecord,
-} from "@/lib/github-mention"
+} from "@/src/lib/github-mention"
 import {
   LEGACY_REVIEW_BODY_MARKER,
   SIGILIX_REVIEW_BODY_MARKER,
-} from "@/lib/dismiss-prior-reviews"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/dismiss-prior-reviews"
+import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   getInstallationTokenMock.mockReset()

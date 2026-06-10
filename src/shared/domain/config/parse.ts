@@ -3,8 +3,8 @@
 // `src/lib/sigilix-config.ts` re-exports everything here for the existing
 // importers. See docs/superpowers/plans/2026-06-09-sig-382-config-split.md.
 
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import { parseDeterministicChecks } from "@/shared/domain/deterministic-checks"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import { parseDeterministicChecks } from "@/src/shared/domain/deterministic-checks"
 import {
   KNOWN_MODELS,
   SPECIALIST_ROLES,

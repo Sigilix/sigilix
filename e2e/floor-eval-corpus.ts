@@ -18,17 +18,17 @@
 // containing SQL keywords, `_.render`, …); the vuln set includes a known FN the
 // open-redirect floor currently MISSES so the ruler surfaces it.
 
-import type { AstRule } from "@/features/ast-rules/domain/types"
-import { noUnauthorizedObjectLookup } from "@/features/ast-rules/domain/rules/no-unauthorized-object-lookup"
-import { noInsecureRandomToken } from "@/features/ast-rules/domain/rules/no-insecure-random-token"
-import { noOpenRedirect } from "@/features/ast-rules/domain/rules/no-open-redirect"
-import { noSsrf } from "@/features/ast-rules/domain/rules/no-ssrf"
-import { noPathTraversal } from "@/features/ast-rules/domain/rules/no-path-traversal"
-import { noSqlInjection } from "@/features/ast-rules/domain/rules/no-sql-injection"
-import { noSsti } from "@/features/ast-rules/domain/rules/no-ssti"
-import { noNosqlInjection } from "@/features/ast-rules/domain/rules/no-nosql-injection"
-import { noPrototypePollution } from "@/features/ast-rules/domain/rules/no-prototype-pollution"
-import { noXxe } from "@/features/ast-rules/domain/rules/no-xxe"
+import type { AstRule } from "@/src/features/ast-rules/domain/types"
+import { noUnauthorizedObjectLookup } from "@/src/features/ast-rules/domain/rules/no-unauthorized-object-lookup"
+import { noInsecureRandomToken } from "@/src/features/ast-rules/domain/rules/no-insecure-random-token"
+import { noOpenRedirect } from "@/src/features/ast-rules/domain/rules/no-open-redirect"
+import { noSsrf } from "@/src/features/ast-rules/domain/rules/no-ssrf"
+import { noPathTraversal } from "@/src/features/ast-rules/domain/rules/no-path-traversal"
+import { noSqlInjection } from "@/src/features/ast-rules/domain/rules/no-sql-injection"
+import { noSsti } from "@/src/features/ast-rules/domain/rules/no-ssti"
+import { noNosqlInjection } from "@/src/features/ast-rules/domain/rules/no-nosql-injection"
+import { noPrototypePollution } from "@/src/features/ast-rules/domain/rules/no-prototype-pollution"
+import { noXxe } from "@/src/features/ast-rules/domain/rules/no-xxe"
 
 export interface FloorEval {
   id: string

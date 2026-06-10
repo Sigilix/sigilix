@@ -6,12 +6,12 @@ import {
   computeFindingDelta,
   computeFindingKey,
   type SynthesizerProvenance,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
-} from "@/lib/triage-pr-review"
-import { baseFinding, baseVerdict } from "@/lib/triage-pr-review-ensemble.test-helpers"
+} from "@/src/lib/triage-pr-review"
+import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("computeConsensusRanking", () => {
   const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({

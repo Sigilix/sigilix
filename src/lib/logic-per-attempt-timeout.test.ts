@@ -15,7 +15,7 @@ import {
   SPECIALIST_CONFIGS,
   SPECIALIST_TIMEOUT_MS,
   PER_ATTEMPT_TIMEOUT_MS,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 
 const TESTS_SPECIALIST_MIN_HEADROOM_MS = 50_000
 

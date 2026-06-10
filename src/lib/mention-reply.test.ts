@@ -19,9 +19,9 @@ import {
   renderPrUnavailable,
   resolveLinearAgentRepoScope,
   type LinkedPrFailure,
-} from "@/lib/mention-reply"
-import type { PrContext } from "@/lib/github-pr-context"
-import { encodeBranchName } from "@/lib/index-branch"
+} from "@/src/lib/mention-reply"
+import type { PrContext } from "@/src/lib/github-pr-context"
+import { encodeBranchName } from "@/src/lib/index-branch"
 
 function basePr(overrides: Partial<PrContext> = {}): PrContext {
   return {

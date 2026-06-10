@@ -27,7 +27,7 @@ import type {
   ToolCall,
   ChatArgs,
   ChatResult,
-} from "../../ports/model"
+} from "@/src/shared/ports/model"
 
 const OLLAMA_TURBO_URL = "https://ollama.com/api/chat"
 

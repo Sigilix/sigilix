@@ -5,7 +5,7 @@ import {
   parseFindingFingerprint,
   parseFindingOutcomeMarkers,
   parseFindingSeverity,
-} from "@/lib/pr-finding-markers"
+} from "@/src/lib/pr-finding-markers"
 
 const FINGERPRINT_A = "a".repeat(64)
 const FINGERPRINT_B = "b".repeat(64)

@@ -13,11 +13,11 @@ import {
   outcomeTargets,
   prunePatterns,
   MAX_PATTERNS,
-} from "@/features/precision-profile/domain/ema"
-import { applyPrecisionProfile } from "@/features/precision-profile/domain/apply"
-import { loadPrecisionProfile, recordOutcome } from "@/features/precision-profile/adapters/store"
-import type { OutcomeEvent, PatternStat, PrecisionProfile } from "@/features/precision-profile/domain/types"
-import type { Env } from "@/shared/types/env"
+} from "@/src/features/precision-profile/domain/ema"
+import { applyPrecisionProfile } from "@/src/features/precision-profile/domain/apply"
+import { loadPrecisionProfile, recordOutcome } from "@/src/features/precision-profile/adapters/store"
+import type { OutcomeEvent, PatternStat, PrecisionProfile } from "@/src/features/precision-profile/domain/types"
+import type { Env } from "@/src/shared/types/env"
 
 const TS = "2026-06-04T00:00:00.000Z"
 const ev = (outcome: OutcomeEvent["outcome"], patternHash = "p1", category: OutcomeEvent["category"] = "logic"): OutcomeEvent =>

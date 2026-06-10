@@ -15,8 +15,8 @@ import {
   readFileCache,
   writeFileCache,
   type CachedFileRow,
-} from "@/lib/pr-overview-file-cache"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/pr-overview-file-cache"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()

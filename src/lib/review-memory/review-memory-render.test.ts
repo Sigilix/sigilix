@@ -1,8 +1,8 @@
 // ARC-189 — Render tests (Task 6).
 
 import { describe, expect, it } from "vitest"
-import { renderReviewMemoryForPrompt } from "@/lib/review-memory/render"
-import type { ReviewMemoryFinding } from "@/lib/review-memory/types"
+import { renderReviewMemoryForPrompt } from "@/src/lib/review-memory/render"
+import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
 function f(over: Partial<ReviewMemoryFinding> = {}): ReviewMemoryFinding {
   return {

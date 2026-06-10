@@ -3,7 +3,7 @@ import {
   ChatDisabledError,
   chat,
   isChatDisabledError,
-} from "@/shared/adapters/model/ollama-chat"
+} from "@/src/shared/adapters/model/ollama-chat"
 
 const FAKE_API_KEY = "test-key"
 const FAKE_MODEL = "glm-5.1:cloud"

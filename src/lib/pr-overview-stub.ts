@@ -78,9 +78,9 @@
 // resets its body to the review-in-progress placeholder, and rewrites
 // the KV flag.
 
-import type { Env } from "../shared/types/env"
-import { GitHubClient } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import {
   OVERVIEW_MARKER,
   LEGACY_OVERVIEW_MARKER,

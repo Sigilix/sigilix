@@ -28,7 +28,7 @@ import { computePathSha256 } from "./marker"
 import { resolveClaimShadowMode } from "./shadow-match"
 import { readMemory } from "./storage"
 import { weightedSignalCount } from "./dismissal-weights"
-import type { Env } from "../../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const PATH_RECENCY_DAYS = 30
 

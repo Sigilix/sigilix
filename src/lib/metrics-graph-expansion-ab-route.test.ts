@@ -2,9 +2,9 @@
 // per-arm aggregation over a stubbed KV binding.
 
 import { describe, expect, it } from "vitest"
-import { handleGraphExpansionAbMetricsRoute } from "@/lib/metrics-graph-expansion-ab-route"
-import { REVERSE_TS_BASE } from "@/lib/fp-rate/ingest"
-import type { Env } from "@/shared/types/env"
+import { handleGraphExpansionAbMetricsRoute } from "@/src/lib/metrics-graph-expansion-ab-route"
+import { REVERSE_TS_BASE } from "@/src/lib/fp-rate/ingest"
+import type { Env } from "@/src/shared/types/env"
 
 const TOKEN = "metrics-token"
 const DAY = 86_400_000

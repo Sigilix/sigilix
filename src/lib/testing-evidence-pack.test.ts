@@ -1,7 +1,7 @@
 // SIG-113: testing-specialist evidence-pack unit tests.
 
 import { describe, it, expect } from "vitest"
-import { buildDeletedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
+import { buildDeletedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
@@ -17,7 +17,7 @@ import {
   TEST_FILE_CONTENT_TOTAL_CHAR_CAP,
   type InspectedTestFileFetchResult,
   type TestingEvidencePack,
-} from "@/lib/testing-evidence-pack"
+} from "@/src/lib/testing-evidence-pack"
 
 describe("buildTestingEvidencePack", () => {
   it("returns empty arrays when the diff has no source AND no test files", () => {

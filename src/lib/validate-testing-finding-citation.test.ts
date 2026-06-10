@@ -12,11 +12,11 @@ import { describe, it, expect, vi } from "vitest"
 import {
   evaluateTestingFindingCitation,
   validateForSubmission,
-} from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

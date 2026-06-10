@@ -11,7 +11,7 @@ import {
   SHIP_F1_RELATIVE_LIFT,
   type ArmFinding,
   type GroundTruthItem,
-} from "@/lib/retrieval-ab/eval"
+} from "@/src/lib/retrieval-ab/eval"
 
 describe("parsing", () => {
   it("parses arm findings and drops malformed / bad-arm lines", () => {

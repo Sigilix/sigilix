@@ -1,8 +1,8 @@
 // ARC-188 — taxonomy resolver tests.
 
 import { describe, it, expect } from "vitest"
-import { resolveTaxonomy } from "@/features/sarif-evidence/domain/taxonomy"
-import type { SarifResult, SarifRule, SarifTaxa } from "@/features/sarif-evidence/domain/types"
+import { resolveTaxonomy } from "@/src/features/sarif-evidence/domain/taxonomy"
+import type { SarifResult, SarifRule, SarifTaxa } from "@/src/features/sarif-evidence/domain/types"
 
 const emptyResult: SarifResult = { message: { text: "x" } }
 

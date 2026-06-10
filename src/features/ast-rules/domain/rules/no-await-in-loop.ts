@@ -11,8 +11,8 @@
 // post-order without ancestor info, the rule does its own targeted
 // pre-pass over the file's AST.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const LOOP_TYPES: ReadonlySet<string> = new Set([

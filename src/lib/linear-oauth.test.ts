@@ -5,7 +5,7 @@
 // silently swallowed in prod.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { getAppActorToken } from "@/lib/linear-oauth"
+import { getAppActorToken } from "@/src/lib/linear-oauth"
 
 interface FakeKV {
   get: ReturnType<typeof vi.fn>

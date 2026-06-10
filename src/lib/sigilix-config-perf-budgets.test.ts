@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest"
 import {
   parseSigilixConfig,
   resolvePerfBudgetsConfig,
-} from "@/lib/sigilix-config"
+} from "@/src/lib/sigilix-config"
 
 describe("parseSigilixConfig — perfBudgets", () => {
   it("parses a fully populated perfBudgets block", () => {

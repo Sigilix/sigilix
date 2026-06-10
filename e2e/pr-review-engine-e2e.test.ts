@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest"
-import { runAstRules } from "@/features/ast-rules/app/runner"
-import type { ReviewableMap } from "../src/lib/diff-positions"
+import { runAstRules } from "@/src/features/ast-rules/app/runner"
+import type { ReviewableMap } from "@/src/lib/diff-positions"
 import {
   assessApprovalReadiness,
   buildApprovalReadinessSummary,
-} from "../src/lib/approval-readiness"
+} from "@/src/lib/approval-readiness"
 import {
   buildReviewSubmission,
   chooseReviewEvent,
   type PrReviewFinding,
   type PrReviewVerdict,
-} from "../src/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
   mergeInspectedTestFileContents,
   renderTestingEvidenceBlock,
   TEST_FILE_CONTENT_CHAR_CAP,
-} from "../src/lib/testing-evidence-pack"
+} from "@/src/lib/testing-evidence-pack"
 
 const CTX = { owner: "Arc-and-Anchor", repo: "sigilix", prNumber: 124116 }
 const CONFIG = {

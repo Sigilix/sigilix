@@ -4,13 +4,13 @@
 // functions for the existing importers.
 // See docs/superpowers/plans/2026-06-09-sig-382-config-split.md.
 
-import type { GitHubClient } from "@/shared/adapters/github"
-import { parseSigilixConfig } from "@/shared/domain/config/parse"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import { parseSigilixConfig } from "@/src/shared/domain/config/parse"
 import {
   EMPTY_CONFIG,
   SIGILIX_CONFIG_PATH,
   type SigilixConfig,
-} from "@/shared/domain/config/types"
+} from "@/src/shared/domain/config/types"
 
 /**
  * Fetch and parse the per-repo `sigilix.json` config at the given ref.

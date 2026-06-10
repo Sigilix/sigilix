@@ -11,8 +11,8 @@
 // Spec: docs/superpowers/specs/2026-05-06-arc-184-review-provenance-stale-markers-design.md
 // Plan: docs/superpowers/plans/2026-05-06-arc-184-review-provenance.md
 
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import {
   readReviewManifest,
   computeFileListHash,
@@ -22,7 +22,7 @@ import {
   type ReviewManifestV1,
   type StaleReason,
 } from "./review-manifest"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── ARC-189 Task 11: PROMPT_VERSION stale suppression ────────
 

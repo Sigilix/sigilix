@@ -4,9 +4,9 @@
 // load-bearing behavior under test.
 
 import { describe, expect, it, vi } from "vitest"
-import { recordVerificationMetricsBounded } from "@/lib/verification-metrics-client"
-import type { Env } from "@/shared/types/env"
-import type { RecordVerificationArgs } from "@/do/verification-metrics"
+import { recordVerificationMetricsBounded } from "@/src/lib/verification-metrics-client"
+import type { Env } from "@/src/shared/types/env"
+import type { RecordVerificationArgs } from "@/src/do/verification-metrics"
 
 const ITEMS: RecordVerificationArgs[] = [
   { verdict: "refuted", category: "security" },

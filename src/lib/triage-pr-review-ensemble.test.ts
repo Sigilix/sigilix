@@ -20,17 +20,17 @@ import {
   truncateVerdictToTokens,
   prepareSubmissionAffordance,
   buildSuggestionEmissionLogEvents,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   buildReviewSubmissionWithMetadata,
-} from "@/lib/triage-pr-review"
+} from "@/src/lib/triage-pr-review"
 import {
   buildTestingEvidencePack,
   filterTestingEvidenceForSuppressedMissingCoverage,
   renderTestingEvidenceBlock,
-} from "@/lib/testing-evidence-pack"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import { baseFinding, baseVerdict, makeCounterEnv } from "@/lib/triage-pr-review-ensemble.test-helpers"
+} from "@/src/lib/testing-evidence-pack"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import { baseFinding, baseVerdict, makeCounterEnv } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("SIG-222 testing evidence policy integration", () => {
   it("suppresses repo-known/comment-only missing-sibling rows and keeps remaining testing findings P3 inline COMMENT", () => {

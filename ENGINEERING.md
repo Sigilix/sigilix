@@ -234,7 +234,8 @@ the rest is how we keep the code consistent.
 ### Imports
 
 - **`@/` for everything cross-directory**, `./sibling` within a directory, never `../` across
-  trees (enforced). `@/*` → `src/*`.
+  trees (enforced). `@/*` → repo root, so imports are root-anchored and show the exact file:
+  `@/src/...` for code, `@/scripts/...` for tooling, `@/e2e/...` for cross-cutting tests.
 - **`import type` for types** — `verbatimModuleSyntax` is on, so value and type imports are
   explicit. A port or a types-only module is imported with `import type`.
 - **Order:** `shared/types` → `shared/domain` → `shared/ports` → `shared/adapters` → feature
@@ -299,7 +300,7 @@ npm run test       # vitest run
 ```
 
 - **TypeScript:** strict, plus `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`,
-  `noImplicitOverride`. `@/*` → `src/*`.
+  `noImplicitOverride`. `@/*` → repo root (imports are root-anchored: `@/src/...`).
 - **ESLint:** flat config, safety rules (`no-unused-vars`, `eqeqeq` smart, `prefer-const`,
   `no-var`), plus the structural gates from COMPLIANCE.md (`max-lines` two-tier,
   `no-restricted-imports` for `../`, `--max-warnings 0`).

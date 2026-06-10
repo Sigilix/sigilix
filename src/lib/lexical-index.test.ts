@@ -1,7 +1,7 @@
 // SIG-45 — lexical (BM25 / FTS5) retrieval backend unit tests.
 
 import { describe, it, expect, beforeEach } from "vitest"
-import { makeD1, FTS5_AVAILABLE } from "@/test-shims/d1-sqlite-shim"
+import { makeD1, FTS5_AVAILABLE } from "@/src/test-shims/d1-sqlite-shim"
 import {
   hybridRetrievalEnabled,
   buildFtsQuery,
@@ -12,7 +12,7 @@ import {
   _resetSchemaMemoForTests,
   type LexicalChunk,
   type RankedItem,
-} from "@/lib/lexical-index"
+} from "@/src/lib/lexical-index"
 
 beforeEach(() => {
   _resetSchemaMemoForTests()

@@ -10,8 +10,8 @@
 // Leaf discipline (SIG-318): never VALUE-import the core (`./validation`); the
 // shared phase-state types come type-only from `./validation-args`.
 
-import type { PrReviewFinding, ReviewFindingScope } from "@/shared/domain/pr-review-finding"
-import { deriveSide } from "@/shared/util/diff-positions"
+import type { PrReviewFinding, ReviewFindingScope } from "@/src/shared/domain/pr-review-finding"
+import { deriveSide } from "@/src/shared/util/diff-positions"
 import {
   backfillSecurityEvidenceFromSources,
   backfillIndependentAssessmentFromSources,
@@ -40,7 +40,7 @@ import { evaluateSecurityGrounding } from "./gates/validate-security-grounding"
 import { evaluateSecurityUsage } from "./gates/validate-security-usage"
 import { annotateFindingTrust } from "./gates/trust-ledger-thread"
 import { dampTestingScoreForRatio, TEST_RATIO_DAMPER_THRESHOLD } from "./gates/test-ratio-damper"
-import { lineInDurableObjectClass } from "@/features/ast-rules"
+import { lineInDurableObjectClass } from "@/src/features/ast-rules"
 import {
   hasVaguePrefix,
   evaluateTestingFindingCitation,

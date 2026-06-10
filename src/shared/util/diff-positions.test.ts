@@ -6,7 +6,7 @@ import {
   parseDiffToReviewablePositions,
   isPositionReviewable,
   deriveSide,
-} from "@/shared/util/diff-positions"
+} from "@/src/shared/util/diff-positions"
 
 describe("parseDiffToReviewablePositions", () => {
   it("parses a simple added-line hunk", () => {
@@ -253,7 +253,7 @@ describe("deriveSide", () => {
   })
 })
 
-import { isContiguousRightRange } from "@/shared/util/diff-positions"
+import { isContiguousRightRange } from "@/src/shared/util/diff-positions"
 
 describe("isContiguousRightRange (moved from improve, SIG-125)", () => {
   it("true when every line in the range is RIGHT-reviewable", () => {

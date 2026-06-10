@@ -9,21 +9,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   deleteRepoIndex,
   handleInstallationDeleted,
-} from "@/lib/index-delete"
+} from "@/src/lib/index-delete"
 import {
   legacyRepoIndexManifestKey,
   repoIndexManifestKey,
-} from "@/lib/repo-index-manifest"
+} from "@/src/lib/repo-index-manifest"
 import {
   legacyRepoIndexVectorsKey,
   repoIndexVectorsKey,
-} from "@/lib/repo-index-vectors"
+} from "@/src/lib/repo-index-vectors"
 import {
   makeKvStub,
   makeEnv,
   manifest,
   vectors,
-} from "@/lib/index-delete.test-helpers"
+} from "@/src/lib/index-delete.test-helpers"
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => undefined)

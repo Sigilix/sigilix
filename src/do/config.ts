@@ -9,7 +9,7 @@
 // DO class which imports this file; without `import type` we'd have a
 // load-order hazard.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type { ResolvedDoConfig } from "./types"
 
 /** Spec §4.9 — locked defaults. */

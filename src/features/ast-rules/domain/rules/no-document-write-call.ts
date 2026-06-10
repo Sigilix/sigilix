@@ -2,8 +2,8 @@
 // `document.writeln(...)`. document.write is an HTML-injection vector
 // when called after page load and is universally discouraged.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const TARGET_METHODS: ReadonlySet<string> = new Set(["write", "writeln"])

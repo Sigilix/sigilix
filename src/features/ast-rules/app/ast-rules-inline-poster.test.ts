@@ -4,11 +4,11 @@
 // Kimi MINOR #6: `ast-rules-inline-posted` telemetry assertion.
 
 import { describe, it, expect, vi } from "vitest"
-import { postAstInlineFindings } from "@/features/ast-rules/app/inline-poster"
-import { resolveAstRulesConfig } from "@/lib/sigilix-config"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { SubmitReviewBody } from "@/shared/types/github"
-import type { AstFinding } from "@/features/ast-rules/domain/types"
+import { postAstInlineFindings } from "@/src/features/ast-rules/app/inline-poster"
+import { resolveAstRulesConfig } from "@/src/lib/sigilix-config"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
+import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }
 

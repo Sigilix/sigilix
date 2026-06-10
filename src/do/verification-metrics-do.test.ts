@@ -2,9 +2,9 @@
 // as the other metrics DOs (real in-memory node:sqlite).
 
 import { describe, expect, it } from "vitest"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/do/verification-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/src/do/verification-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDo(): { do_: VerificationMetricsDO; getAlarm: () => number | null } {
   const sqlStorage = new NodeSqliteStorage()

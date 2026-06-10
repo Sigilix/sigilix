@@ -9,7 +9,7 @@ import {
   isTrackedLongLivedBranch,
   parseTrackedBranches,
   resolveIndexTarget,
-} from "@/lib/index-branch"
+} from "@/src/lib/index-branch"
 
 describe("index branch helpers", () => {
   it("encodes branch names into a bounded 17-char hash segment", async () => {

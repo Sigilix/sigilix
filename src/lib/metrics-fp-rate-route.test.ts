@@ -3,10 +3,10 @@
 // unit-tested in fp-rate.test.ts; this exercises the KV-read + JSON wiring.)
 
 import { describe, expect, it } from "vitest"
-import { handleFpRateMetricsRoute } from "@/lib/metrics-fp-rate-route"
-import { computeFid } from "@/lib/review-memory/marker"
-import { REVERSE_TS_BASE } from "@/lib/fp-rate/ingest"
-import type { Env } from "@/shared/types/env"
+import { handleFpRateMetricsRoute } from "@/src/lib/metrics-fp-rate-route"
+import { computeFid } from "@/src/lib/review-memory/marker"
+import { REVERSE_TS_BASE } from "@/src/lib/fp-rate/ingest"
+import type { Env } from "@/src/shared/types/env"
 
 const TOKEN = "metrics-token"
 const DAY = 86_400_000

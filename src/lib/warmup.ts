@@ -28,9 +28,9 @@
 // All operations remain best-effort: a KV/GitHub blip can't take
 // down the review pipeline. Telemetry events flow regardless.
 
-import type { Env } from "../shared/types/env"
-import type { JobMessage } from "../shared/types/job"
-import { GitHubClient } from "../shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import { GitHubClient } from "@/src/shared/adapters/github"
 
 /**
  * Marker for the LEGACY standalone warmup sticky. Kept exported so

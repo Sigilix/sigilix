@@ -1,9 +1,9 @@
 // ARC-190 Task 4 — public status route tests.
 
 import { describe, it, expect, vi } from "vitest"
-import { handleReviewStatusRoute } from "@/do/status-route"
-import type { Env } from "@/shared/types/env"
-import type { StatusResponse } from "@/do/types"
+import { handleReviewStatusRoute } from "@/src/do/status-route"
+import type { Env } from "@/src/shared/types/env"
+import type { StatusResponse } from "@/src/do/types"
 
 interface DoStubArgs {
   response: StatusResponse | "throw"

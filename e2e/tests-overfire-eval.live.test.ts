@@ -18,15 +18,15 @@ import {
   type TestsOverfireCase,
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
-import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
-import { buildAddedLineTextByLine, buildDeletedLineTextByLine } from "@/features/ast-rules/domain/diff-filter"
-import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS } from "../src/lib/triage-pr-review-ensemble"
-import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
+import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
+import { buildAddedLineTextByLine, buildDeletedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
+import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import {
   mergeTestingFocusHints,
   renderTestingEvidenceBlock,
   type InspectedTestFileFetchResult,
-} from "../src/lib/testing-evidence-pack"
+} from "@/src/lib/testing-evidence-pack"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 // The production tests specialist can spend 110s each on primary, retry, and

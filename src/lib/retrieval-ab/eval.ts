@@ -23,7 +23,7 @@
 // Unmatched findings are false positives; unmatched ground-truth items are
 // false negatives.
 
-import { wilsonInterval } from "../bakeoff-report"
+import { wilsonInterval } from "@/src/lib/bakeoff-report"
 
 export type Arm = "vector" | "hybrid"
 

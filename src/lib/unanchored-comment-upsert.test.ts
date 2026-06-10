@@ -16,15 +16,15 @@ import {
   buildSigilixUnanchoredMarker,
   findFingerprintInCommentBody,
   extractSigilixMarker,
-} from "@/lib/review-memory/marker"
+} from "@/src/lib/review-memory/marker"
 import {
   renderUnanchoredCommentBody,
   upsertUnanchoredComment,
   type UnanchoredUpsertFinding,
-} from "@/lib/unanchored-comment-upsert"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
-import type { WithdrawalRecord } from "@/lib/review-withdrawal-store"
+} from "@/src/lib/unanchored-comment-upsert"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
+import type { WithdrawalRecord } from "@/src/lib/review-withdrawal-store"
 
 // ─── Fixtures + stubs ──────────────────────────────────────────────
 

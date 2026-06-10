@@ -13,8 +13,8 @@ import {
   computeClaimCalibration,
   type CalibrationShadowRecord,
   type CalibrationDismissal,
-} from "@/lib/review-memory/calibration-fit"
-import { CLAIM_SOFTEN_LOWER_BOUND, shouldKeepSoften } from "@/lib/review-memory/calibration"
+} from "@/src/lib/review-memory/calibration-fit"
+import { CLAIM_SOFTEN_LOWER_BOUND, shouldKeepSoften } from "@/src/lib/review-memory/calibration"
 
 const DAY = 24 * 60 * 60 * 1000
 

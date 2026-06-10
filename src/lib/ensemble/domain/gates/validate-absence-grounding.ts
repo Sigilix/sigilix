@@ -33,8 +33,8 @@
 //   change); only `enforce` demotes. This module is pure and mode-
 //   agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 /**
  * Validator mode. `off` (default): the gate doesn't run. `shadow`:

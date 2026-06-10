@@ -14,9 +14,9 @@
 import type {
   PrReviewVerdict,
   PrReviewFinding,
-} from "@/shared/domain/pr-review-finding"
-import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist-role"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/shared/domain/pr-review-finding"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import type {
   buildSourceFindingSecurityEvidenceById,
   buildSourceFindingRationaleById,
@@ -73,10 +73,10 @@ import type {
   SecurityUsageValidatorMode,
   SecurityUsageDropReason,
 } from "./gates/validate-security-usage"
-import type { TestingEvidencePack } from "../../testing-evidence-pack"
-import type { SecurityFact } from "../../security-evidence-manifest"
-import type { SigilixProfile } from "../../sigilix-config"
-import type { LineSpan, AstCache } from "@/features/ast-rules"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
+import type { SigilixProfile } from "@/src/lib/sigilix-config"
+import type { LineSpan, AstCache } from "@/src/features/ast-rules"
 import type { CollectedVerdict, SynthesizerProvenance } from "./validation"
 
 export const MAX_ADVISORY_NITS = 5

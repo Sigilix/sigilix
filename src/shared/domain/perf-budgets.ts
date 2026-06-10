@@ -26,7 +26,7 @@
 // Pure module: no I/O, no async. Caller resolves config first via
 // `resolvePerfBudgetsConfig` and hands in the changed paths.
 
-import { compileGlob } from "../util/path-glob"
+import { compileGlob } from "@/src/shared/util/path-glob"
 
 export interface ResolvedPerfBudgets {
   p50LatencyBudgetMs: number | null

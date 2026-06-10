@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest"
 import {
   evaluatePromptVersionSuppression,
   filterReasonsForSuppression,
-} from "@/lib/triage-pr-stale-mark"
-import type { Env } from "@/shared/types/env"
-import type { StaleReason } from "@/lib/review-manifest"
+} from "@/src/lib/triage-pr-stale-mark"
+import type { Env } from "@/src/shared/types/env"
+import type { StaleReason } from "@/src/lib/review-manifest"
 
 function envWith(over: Partial<Env> = {}): Env {
   return {

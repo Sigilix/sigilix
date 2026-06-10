@@ -14,9 +14,9 @@ import {
   commitGraph,
   debugActiveGraphVersion,
   deleteGraph,
-} from "@/lib/repo-graph-client"
-import { indexNamespace } from "@/lib/repo-index-manifest"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/repo-graph-client"
+import { indexNamespace } from "@/src/lib/repo-index-manifest"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── Minimal DO stub ─────────────────────────────────────────────────────────
 //

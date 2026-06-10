@@ -6,8 +6,8 @@ import {
   formatAiAgentPromptBlock,
   isCommentAnchorable,
   type PrReviewFinding,
-} from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
+} from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 describe("isCommentAnchorable (SIG-164 PR 5)", () => {
   // GitHub PR comment endpoints (`start_line` + `line`) must both be

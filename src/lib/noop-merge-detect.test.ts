@@ -7,8 +7,8 @@ import {
   readPriorReviewDiffHash,
   recordReviewedDiffHash,
   writePriorReviewDiffHash,
-} from "@/lib/noop-merge-detect"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/noop-merge-detect"
+import type { Env } from "@/src/shared/types/env"
 
 function fakeKV(initial: Record<string, string> = {}) {
   const store = { ...initial }

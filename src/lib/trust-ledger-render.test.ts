@@ -9,9 +9,9 @@ import {
   renderTrustSummary,
   renderOutsideDiffDropdown,
   renderPrLevelSection,
-} from "@/lib/trust-ledger-render"
-import type { FindingTrust } from "@/lib/triage-pr-review"
-import type { ReviewBadgeAssetName } from "@/lib/badge-assets"
+} from "@/src/lib/trust-ledger-render"
+import type { FindingTrust } from "@/src/lib/triage-pr-review"
+import type { ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 
 // stub: return the asset name so we can assert WHICH glyph a tier maps to.
 const badge = (n: ReviewBadgeAssetName): string => `<${n}>`

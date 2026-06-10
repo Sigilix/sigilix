@@ -17,12 +17,12 @@ import {
   isAbsenceClaim,
   parseAbsenceClaimValidatorMode,
   type AbsenceGroundingContext,
-} from "@/lib/ensemble/domain/gates/validate-absence-grounding"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding, FindingCategory } from "@/lib/triage-pr-review"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
+} from "@/src/lib/ensemble/domain/gates/validate-absence-grounding"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding, FindingCategory } from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 const PATH = "src/lib/orders.ts"
 

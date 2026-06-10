@@ -9,7 +9,7 @@ import type {
   ListOpenPullsItem,
   PrChangedFile,
   PullRequestMeta,
-} from "@/shared/types/github"
+} from "@/src/shared/types/github"
 
 export interface GitHubPort {
   /** PR metadata (title, body, head sha, author, labels, merge_commit_sha…). */

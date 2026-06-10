@@ -5,9 +5,9 @@
 // modes, and KV warm-up on GH-side hit.
 
 import { describe, it, expect, vi } from "vitest"
-import { postConfigErrorComment } from "@/lib/sigilix-config-error-comment"
-import type { GitHubClient } from "@/shared/adapters/github"
-import type { Env } from "@/shared/types/env"
+import { postConfigErrorComment } from "@/src/lib/sigilix-config-error-comment"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 function fakeKV(initial: Record<string, string> = {}) {
   const store = { ...initial }

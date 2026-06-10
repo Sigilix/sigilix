@@ -21,8 +21,8 @@ import { describe, it, expect } from "vitest"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { encode } from "../src/lib/ensemble-golden-capture"
-import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
+import { encode } from "@/src/lib/ensemble-golden-capture"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import { MATRIX_CASES, type CallbackArg, type ValidateArgs } from "./_golden/validation-matrix-cases"
 
 const FIXTURES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "_golden", "validation-matrix")

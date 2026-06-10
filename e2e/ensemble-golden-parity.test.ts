@@ -21,9 +21,9 @@ import { describe, it, expect } from "vitest"
 import { readFileSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { decode, encode, type EnsembleGoldenFixture } from "../src/lib/ensemble-golden-capture"
-import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
-import { buildReviewSubmissionWithMetadata } from "../src/lib/triage-pr-review"
+import { decode, encode, type EnsembleGoldenFixture } from "@/src/lib/ensemble-golden-capture"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import { buildReviewSubmissionWithMetadata } from "@/src/lib/triage-pr-review"
 
 const FIXTURES_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),

@@ -26,12 +26,12 @@ const {
   mockCompleteCheckRun: vi.fn(async () => undefined),
 }))
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async getPullRequest(...args: unknown[]): Promise<unknown> {
       return mockGetPullRequest(...args)
@@ -40,18 +40,18 @@ vi.mock("../src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-vi.mock("../src/lib/triage-pr-review-ensemble", async () => {
+vi.mock("@/src/lib/triage-pr-review-ensemble", async () => {
   const actual =
-    await vi.importActual<typeof import("../src/lib/triage-pr-review-ensemble")>(
-      "../src/lib/triage-pr-review-ensemble",
+    await vi.importActual<typeof import("@/src/lib/triage-pr-review-ensemble")>(
+      "@/src/lib/triage-pr-review-ensemble",
     )
   return { ...actual, handlePrReviewEnsemble: (...args: unknown[]) => mockEnsemble(...args) }
 })
 
-vi.mock("../src/lib/pr-review-check-run", async () => {
+vi.mock("@/src/lib/pr-review-check-run", async () => {
   const actual =
-    await vi.importActual<typeof import("../src/lib/pr-review-check-run")>(
-      "../src/lib/pr-review-check-run",
+    await vi.importActual<typeof import("@/src/lib/pr-review-check-run")>(
+      "@/src/lib/pr-review-check-run",
     )
   return {
     ...actual,
@@ -60,9 +60,9 @@ vi.mock("../src/lib/pr-review-check-run", async () => {
   }
 })
 
-import { dispatchJob, prMetaIsClosedOrMerged } from "../src/index"
-import type { Env } from "../src/shared/types/env"
-import type { JobMessage } from "../src/shared/types/job"
+import { dispatchJob, prMetaIsClosedOrMerged } from "@/src/index"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeEnv(): Env {
   const store = new Map<string, string>()

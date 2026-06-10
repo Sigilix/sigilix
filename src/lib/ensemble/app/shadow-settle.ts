@@ -11,23 +11,23 @@
 // god-file home (domain/shadow-grace, the shadow-bakeoff-* lib siblings, the
 // model-provider adapter). It never imports the orchestrator god-file.
 
-import type { SpecialistRole } from "../../ensemble-router"
-import type { ShadowRunResult } from "../../shadow-bakeoff-runner"
-import type { EnsembleRunCtx } from "../../ensemble-perf-telemetry"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/lib/ensemble-router"
+import type { ShadowRunResult } from "@/src/lib/shadow-bakeoff-runner"
+import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import {
   buildShadowVerdictComparison,
   emitShadowCutShort,
   emitShadowRunFailed,
   emitShadowVerdictComparison,
   type FindingForOverlap,
-} from "../../shadow-bakeoff-telemetry"
-import { SPECIALIST_CONFIGS, SYNTHESIZER_CONFIG } from "../../ensemble/adapters/model-provider"
+} from "@/src/lib/shadow-bakeoff-telemetry"
+import { SPECIALIST_CONFIGS, SYNTHESIZER_CONFIG } from "@/src/lib/ensemble/adapters/model-provider"
 import {
   SHADOW_GRACE_EXPIRED,
   isShadowRunFailed,
   raceWithShadowGrace,
-} from "../domain/shadow-grace"
+} from "@/src/lib/ensemble/domain/shadow-grace"
 
 /**
  * Prod-side snapshot of a specialist (or the synth) outcome, captured by the

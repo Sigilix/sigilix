@@ -10,12 +10,12 @@
 // Per-error mapping distinguishes timeout from HTTP failures so the
 // model isn't told a 403 was a timeout.
 
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import { resolveInstallation } from "../shared/adapters/github/github-installation"
-import type { PullRequestMeta, PrChangedFile } from "../shared/types/github"
-import { withTimeout } from "../shared/util/with-timeout"
-import type { Env } from "../shared/types/env"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import type { PullRequestMeta, PrChangedFile } from "@/src/shared/types/github"
+import { withTimeout } from "@/src/shared/util/with-timeout"
+import type { Env } from "@/src/shared/types/env"
 
 const TIMEOUT_MS = 5_000
 const BODY_MAX_CHARS = 2_000

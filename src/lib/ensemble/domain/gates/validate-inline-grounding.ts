@@ -30,8 +30,8 @@
 //   counted/telemetered — never acted on. This module is pure and
 //   mode-agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
-import { hasStructuredFix } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { hasStructuredFix } from "@/src/shared/domain/pr-review-finding"
 import { backtickedTokens } from "./validate-logic-finding"
 
 /**

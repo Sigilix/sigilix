@@ -16,13 +16,13 @@
 //   - Sensitive-repo gate IS enforced (we never send code to LLMs
 //     for repos on the OPENCLAW_SENSITIVE_REPOS denylist)
 
-import { generate } from "../shared/adapters/model"
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
-import { getInstallationToken } from "../shared/adapters/github/github-app"
-import type { SubmitReviewBody, SubmitReviewComment } from "../shared/types/github"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
-import { PR_IMPROVE_SCHEMA } from "../shared/domain/schemas"
-import { PR_IMPROVE_PROMPT } from "../prompts/pr-improve"
+import { generate } from "@/src/shared/adapters/model"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import type { SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import { PR_IMPROVE_SCHEMA } from "@/src/shared/domain/schemas"
+import { PR_IMPROVE_PROMPT } from "@/src/prompts/pr-improve"
 import {
   parseDiffToReviewablePositions,
   deriveSide,
@@ -38,7 +38,7 @@ import {
   EMPTY_CONFIG,
 } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 

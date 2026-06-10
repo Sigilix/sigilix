@@ -33,8 +33,8 @@
 // authz with no in-body principal reference is the known residual FP source,
 // which is why SIG-314 ships shadow-first and is P2-capped.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([

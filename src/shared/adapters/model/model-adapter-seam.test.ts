@@ -2,11 +2,11 @@
 // Exercises the real wiring through its public surface — fails if the refactor
 // is reverted (the barrel/ports would not exist) or if the seam regresses.
 import { describe, it, expect } from "vitest"
-import * as barrel from "@/shared/adapters/model"
-import { modelProvider, embeddingProvider, generate, chat } from "@/shared/adapters/model"
-import { ChatDisabledError, isChatDisabledError } from "@/shared/adapters/model/ollama-chat"
-import type { ModelProviderPort } from "@/shared/ports/model"
-import type { EmbeddingPort } from "@/shared/ports/embedding"
+import * as barrel from "@/src/shared/adapters/model"
+import { modelProvider, embeddingProvider, generate, chat } from "@/src/shared/adapters/model"
+import { ChatDisabledError, isChatDisabledError } from "@/src/shared/adapters/model/ollama-chat"
+import type { ModelProviderPort } from "@/src/shared/ports/model"
+import type { EmbeddingPort } from "@/src/shared/ports/embedding"
 
 describe("model adapter seam (SIG-381)", () => {
   it("the barrel exposes the provider-agnostic call surface", () => {

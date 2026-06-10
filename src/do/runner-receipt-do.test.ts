@@ -3,9 +3,9 @@
 // Same harness as the ValidationMetricsDO tests (real in-memory node:sqlite).
 
 import { describe, expect, it } from "vitest"
-import { RunnerReceiptDO } from "@/do/runner-receipt"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { RunnerReceiptDO } from "@/src/do/runner-receipt"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDo(): RunnerReceiptDO {
   const sqlStorage = new NodeSqliteStorage()

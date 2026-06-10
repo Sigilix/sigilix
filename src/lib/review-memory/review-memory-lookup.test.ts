@@ -6,16 +6,16 @@ import {
   isMemoryActive,
   selectTopMemories,
   aggregateShadowClaims,
-} from "@/lib/review-memory/lookup"
-import { buildKey } from "@/lib/review-memory/storage"
-import { computePathSha256 } from "@/lib/review-memory/marker"
+} from "@/src/lib/review-memory/lookup"
+import { buildKey } from "@/src/lib/review-memory/storage"
+import { computePathSha256 } from "@/src/lib/review-memory/marker"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,
   ResolvedReviewMemoryConfig,
   ReviewMemoryFinding,
-} from "@/lib/review-memory/types"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/review-memory/types"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── KV stub matching existing convention ───────────────────
 

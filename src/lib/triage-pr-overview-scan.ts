@@ -15,7 +15,7 @@
 // Leaf module: imports the `GitHubClient` type + the legacy-warmup marker
 // from `./warmup`. It does NOT value-import the core `triage-pr-overview.ts`.
 
-import { GitHubClient } from "../shared/adapters/github"
+import { GitHubClient } from "@/src/shared/adapters/github"
 import { LEGACY_WARMUP_MARKER } from "./warmup"
 
 // SIG-84: exported so the stub-post helper (`pr-overview-stub.ts`) can

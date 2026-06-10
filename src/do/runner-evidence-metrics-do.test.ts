@@ -3,9 +3,9 @@
 // node:sqlite); public methods called directly.
 
 import { describe, expect, it } from "vitest"
-import { RunnerEvidenceMetricsDO } from "@/do/runner-evidence-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { RunnerEvidenceMetricsDO } from "@/src/do/runner-evidence-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 function makeDoInstance(): { do_: RunnerEvidenceMetricsDO; getAlarm: () => number | null } {
   const sqlStorage = new NodeSqliteStorage()

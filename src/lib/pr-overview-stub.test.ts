@@ -22,12 +22,12 @@ const mockListIssueCommentsPage = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
@@ -51,8 +51,8 @@ import {
   stubFlagKey,
   stubInflightKey,
   waitForPrOverviewStub,
-} from "@/lib/pr-overview-stub"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/pr-overview-stub"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()

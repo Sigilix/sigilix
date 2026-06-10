@@ -15,7 +15,7 @@
 //   4. Back-compat: no signal supplied still works as before.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { generate } from "@/shared/adapters/model/ollama"
+import { generate } from "@/src/shared/adapters/model/ollama"
 
 const FAKE_API_KEY = "test-key"
 const FAKE_MODEL = "glm-5.1:cloud"

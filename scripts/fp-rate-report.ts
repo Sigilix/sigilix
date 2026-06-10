@@ -16,12 +16,12 @@
 // fit one repo per run. Design: .claude/handoff/sig-114-fp-rate-design.md
 
 import { writeFileSync } from "node:fs"
-import { attributeDismissals, dedupeDismissals } from "@/lib/fp-rate/attribute"
-import { computeFpRates } from "@/lib/fp-rate/compute"
-import { formatCsv, formatMarkdown } from "@/lib/fp-rate/format"
-import { filterReviewsToWindow } from "@/lib/fp-rate/window"
-import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview } from "@/lib/fp-rate/ingest"
-import type { FpRateDismissal, FpRateReview } from "@/lib/fp-rate/types"
+import { attributeDismissals, dedupeDismissals } from "@/src/lib/fp-rate/attribute"
+import { computeFpRates } from "@/src/lib/fp-rate/compute"
+import { formatCsv, formatMarkdown } from "@/src/lib/fp-rate/format"
+import { filterReviewsToWindow } from "@/src/lib/fp-rate/window"
+import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview } from "@/src/lib/fp-rate/ingest"
+import type { FpRateDismissal, FpRateReview } from "@/src/lib/fp-rate/types"
 
 const KV_NAMESPACE_ID = "df689379ea6240f7808997a75ceaed7e"
 const CF_API_BASE = "https://api.cloudflare.com/client/v4"

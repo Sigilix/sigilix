@@ -16,13 +16,13 @@ import { describe, expect, it } from "vitest"
 import {
   buildSpecialistInitialMessage,
   SPECIALIST_PROMPTS,
-} from "@/prompts/pr-review-specialists"
+} from "@/src/prompts/pr-review-specialists"
 import {
   buildScopedRulesManifest,
   compileScopedRulesManifest,
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
-} from "@/lib/scoped-rules"
+} from "@/src/lib/scoped-rules"
 
 function buildPromptWithScopedRules(args: {
   scopedRulesBlock?: string

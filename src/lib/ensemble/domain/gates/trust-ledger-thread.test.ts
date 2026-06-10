@@ -9,8 +9,8 @@ import {
   mergeFindingTrust,
   annotateFindingTrust,
   countTrustTiers,
-} from "@/lib/ensemble/domain/gates/trust-ledger-thread"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+} from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 // minimal finding stub — only the fields the helpers touch.
 const f = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>

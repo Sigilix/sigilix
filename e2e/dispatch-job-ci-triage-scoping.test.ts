@@ -17,13 +17,13 @@ import { describe, it, expect, vi } from "vitest"
 const { handleCiTriageMock } = vi.hoisted(() => ({
   handleCiTriageMock: vi.fn(async () => {}),
 }))
-vi.mock("../src/lib/triage-ci", () => ({
+vi.mock("@/src/lib/triage-ci", () => ({
   handleCiTriage: handleCiTriageMock,
 }))
 
-import { dispatchJob } from "../src/index"
-import type { Env } from "../src/shared/types/env"
-import type { JobMessage } from "../src/shared/types/job"
+import { dispatchJob } from "@/src/index"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeEnvWithDoSpy() {
   const idFromName = vi.fn(() => ({}) as DurableObjectId)

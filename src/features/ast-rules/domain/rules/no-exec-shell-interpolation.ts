@@ -34,8 +34,8 @@
 // higher-order wrappers the v1 rule never reliably handled anyway — every real
 // `child_process.exec` via an explicit supported import still emits.
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const TARGET_FNS: ReadonlySet<string> = new Set(["exec", "execSync"])

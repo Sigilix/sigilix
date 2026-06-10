@@ -24,14 +24,14 @@ import {
   runSynthesizer,
   SYNTHESIZER_CONFIG,
   SYNTHESIZER_TIMEOUT_MS,
-} from "../src/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   SYNTHESIZER_PROMPT,
   buildSynthesizerInitialMessage,
   renderSpecialistVerdictsForSynth,
-} from "../src/prompts/pr-review-specialists"
-import type { PrReviewVerdict } from "../src/lib/triage-pr-review"
-import type { EnsembleRunCtx } from "../src/lib/ensemble-perf-telemetry"
+} from "@/src/prompts/pr-review-specialists"
+import type { PrReviewVerdict } from "@/src/lib/triage-pr-review"
+import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = SYNTHESIZER_TIMEOUT_MS + 30_000

@@ -4,7 +4,7 @@
 // telemetry + review-memory shapes is unit-tested (against fixtures taken
 // from live prod records), not buried in the script.
 
-import { ALL_SPECIALISTS } from "../ensemble-router"
+import { ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
 import type { FpRateDismissal, FpRateReview, RawSynthFinding, SpecialistRole } from "./types"
 
 export const REVERSE_TS_BASE = 9_999_999_999_999

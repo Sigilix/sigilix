@@ -5,8 +5,8 @@
 // redundant there. The dangerous case is the non-shell APIs being
 // explicitly opted into shell mode.)
 
-import type { AstRule, AstRuleHit, RuleContext } from "@/features/ast-rules/domain/types"
-import type { AstNode } from "@/features/ast-rules/domain/walker"
+import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
+import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const TARGET_FNS: ReadonlySet<string> = new Set([

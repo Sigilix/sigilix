@@ -12,7 +12,7 @@
 // dismissals) is SIG-185; this core is fed today by the existing dismissal +
 // decay (stale) signals and exposes `recordOutcome` for SIG-185 to extend.
 
-import type { FindingCategory } from "@/shared/domain/finding-category"
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
 
 /** The implicit outcome of a posted finding. */
 export type FindingOutcome = "accepted" | "dismissed" | "stale"

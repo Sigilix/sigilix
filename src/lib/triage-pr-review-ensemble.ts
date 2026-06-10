@@ -29,7 +29,7 @@ export type { EnsembleHandlerArgs, EnsembleResult } from "./ensemble/app/orchest
 
 // ARC-283 Phase B1b: `ChatMessage` passthrough so the shadow runner can type its
 // `runWithRetryAndFallback` calls without reaching into ./ollama-chat.
-export type { ChatMessage } from "../shared/ports/model"
+export type { ChatMessage } from "@/src/shared/ports/model"
 
 // SIG-361 (PR 9): the verdict domain. `resolveReviewEventOverride` +
 // `LOW_CONFIDENCE_COMMENT_THRESHOLD` were exported at HEAD (tests import from here).

@@ -20,51 +20,51 @@
 // Dependency rule: every dependency imports from its canonical NON-god-file home.
 // It never imports the orchestrator god-file.
 
-import type { Env } from "@/shared/types/env"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import { type RouterDecision } from "../../ensemble-router"
-import { type SigilixConfig, resolveAstRulesConfig, resolvePathInstructionsForChangedPaths } from "../../sigilix-config"
-import { buildSecurityFactManifest } from "../../security-evidence-manifest"
-import { evaluateScanFactDismissal } from "../../validate-security-finding"
-import { buildClearedLogicCandidateTelemetry } from "../../triage-pr-review"
-import { applyLogicPromptBudget } from "../../logic-prompt-budget"
-import { withComposedTimeout } from "../../agent-loop"
-import { type SarifFinding, runSarifEvidence } from "@/features/sarif-evidence"
-import { runAstRules } from "@/features/ast-rules"
-import { SPECIALIST_PROMPTS } from "../../../prompts/pr-review-specialists"
+import type { Env } from "@/src/shared/types/env"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import { type RouterDecision } from "@/src/lib/ensemble-router"
+import { type SigilixConfig, resolveAstRulesConfig, resolvePathInstructionsForChangedPaths } from "@/src/lib/sigilix-config"
+import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
+import { evaluateScanFactDismissal } from "@/src/lib/validate-security-finding"
+import { buildClearedLogicCandidateTelemetry } from "@/src/lib/triage-pr-review"
+import { applyLogicPromptBudget } from "@/src/lib/logic-prompt-budget"
+import { withComposedTimeout } from "@/src/lib/agent-loop"
+import { type SarifFinding, runSarifEvidence } from "@/src/features/sarif-evidence"
+import { runAstRules } from "@/src/features/ast-rules"
+import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
 import {
   type EnsembleRunCtx,
   computeSpecialistFanoutSummary,
   emitPhaseCompleted,
   emitSpecialistFanoutSummary,
-} from "../../ensemble-perf-telemetry"
-import { type SkipNoticeReason } from "../../review-comment-fallback"
+} from "@/src/lib/ensemble-perf-telemetry"
+import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import {
   parseShadowEnabledRoles,
   resolveShadowConfig,
-} from "../../shadow-bakeoff-config"
-import { runShadowSpecialist } from "../../shadow-bakeoff-runner"
-import { type FindingForOverlap } from "../../shadow-bakeoff-telemetry"
-import { composeSignals } from "../domain/shadow-grace"
+} from "@/src/lib/shadow-bakeoff-config"
+import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
+import { type FindingForOverlap } from "@/src/lib/shadow-bakeoff-telemetry"
+import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import {
   SPECIALIST_CONFIGS,
   SPECIALIST_MODELS,
   runSpecialist,
   type SpecialistRunResult,
-} from "../adapters/model-provider"
+} from "@/src/lib/ensemble/adapters/model-provider"
 import {
   SPECIALIST_TIMEOUT_MS,
-} from "../domain/budget"
-import { decideEarlyExitAction, computeDegradedCoverage } from "../domain/policy"
-import { assignStableFindingIds, type PrReviewVerdictWithIds } from "../domain/findings"
-import type { CollectedVerdict, SynthesizerProvenance } from "../domain/validation"
-import type { EnsembleConfig } from "../domain/config"
-import { buildSynthInputVerdicts } from "../domain/synth"
+} from "@/src/lib/ensemble/domain/budget"
+import { decideEarlyExitAction, computeDegradedCoverage } from "@/src/lib/ensemble/domain/policy"
+import { assignStableFindingIds, type PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
+import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import { buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { applyRecallFloors } from "./recall-floors"
-import type { ReviewMemoryFinding } from "../../review-memory/types"
+import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
 type AstResult = Awaited<ReturnType<typeof runAstRules>>

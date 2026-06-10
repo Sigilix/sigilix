@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   extractSinkValueExpr,
   sinkValueIsProvablyConstant,
-} from "@/shared/domain/validate-injection-taint"
+} from "@/src/shared/domain/validate-injection-taint"
 
 const fileWith = (lines: string[]): Map<number, string> =>
   new Map(lines.map((t, i) => [i + 1, t]))

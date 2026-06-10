@@ -3,7 +3,7 @@
 // (mirrors tests/sigilix-config.test.ts).
 
 import { describe, it, expect } from "vitest"
-import type { GitHubClient } from "@/shared/adapters/github"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import {
   filterAiInstructionsForChangedPaths,
   buildAiInstructionGuidance,
@@ -15,7 +15,7 @@ import {
   shouldIngestAiInstructions,
   AI_INSTRUCTION_FILES,
   walkGithubInstructionFiles,
-} from "@/lib/ai-instructions"
+} from "@/src/lib/ai-instructions"
 
 /** A client whose getFileContent resolves from a fixed { path → content } map. */
 function clientFrom(

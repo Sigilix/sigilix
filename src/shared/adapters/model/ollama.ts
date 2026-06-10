@@ -16,7 +16,7 @@
 // Output is a single string (the model's full response text), same
 // as the non-streaming version, so callers don't have to change.
 
-import type { GenerateArgs, GenerateResult, LlmUsage } from "../../ports/model"
+import type { GenerateArgs, GenerateResult, LlmUsage } from "@/src/shared/ports/model"
 
 const OLLAMA_TURBO_URL = "https://ollama.com/api/generate"
 

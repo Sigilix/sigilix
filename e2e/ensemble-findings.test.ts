@@ -17,9 +17,9 @@ import {
   computeConsensusRanking,
   computeFindingKey,
   computeFindingDelta,
-} from "../src/lib/ensemble/domain/findings"
-import * as ensemble from "../src/lib/triage-pr-review-ensemble"
-import type { PrReviewVerdict } from "../src/lib/triage-pr-review"
+} from "@/src/lib/ensemble/domain/findings"
+import * as ensemble from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewVerdict } from "@/src/lib/triage-pr-review"
 
 describe("SIG-318 findings domain — standalone + decoupled from the orchestrator", () => {
   it("computeFindingKey is a stable 16-hex digest (pure; imported straight from the domain)", async () => {

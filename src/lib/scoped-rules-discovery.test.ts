@@ -32,13 +32,13 @@ import {
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
   walkScopedRuleFiles,
-} from "@/lib/scoped-rules"
+} from "@/src/lib/scoped-rules"
 import {
   loadCompiledScopedRulesManifest,
   readScopedRulesManifest,
   scopedRulesKey,
-} from "@/lib/scoped-rules-kv"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/scoped-rules-kv"
+import type { Env } from "@/src/shared/types/env"
 
 describe("parseRuleFrontmatter", () => {
   it("returns the body verbatim when no frontmatter is present", () => {
@@ -517,7 +517,7 @@ describe("renderScopedRulesForPrompt", () => {
   // the preamble byte count is included in the budget so the rendered
   // block stays under the cap including header bytes.
   it("caps the rendered block at MAX_RENDERED_SCOPED_RULES_BYTES (including preamble) and emits truncation telemetry; deepest rules are KEPT, shallowest are dropped", async () => {
-    const { MAX_RENDERED_SCOPED_RULES_BYTES } = await import("@/lib/scoped-rules")
+    const { MAX_RENDERED_SCOPED_RULES_BYTES } = await import("@/src/lib/scoped-rules")
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     // Build 6 per-directory rules of 4KB each = 24KB raw, well past
     // the 16KB cap. Use distinct dir paths so dedup doesn't collapse

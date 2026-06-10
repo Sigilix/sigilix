@@ -1,7 +1,7 @@
 // SIG-185 — integration coverage for review-memory dispatch wrappers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Env } from "../src/shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const VALID_MARKER =
   "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
@@ -51,12 +51,12 @@ const {
   mockListPullRequestReviews: vi.fn(async () => []),
 }))
 
-vi.mock("../src/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: mockGitHubClient,
@@ -66,7 +66,7 @@ vi.mock("../src/shared/adapters/github", async () => {
 import {
   dispatchDismissedReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
-} from "../src/index"
+} from "@/src/index"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]

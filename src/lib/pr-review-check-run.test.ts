@@ -22,12 +22,12 @@ const {
   mockListCheckRunsForRef: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async createCheckRun(...args: unknown[]): Promise<unknown> {
       return mockCreateCheckRun(...args)
@@ -48,8 +48,8 @@ import {
   closeOrphanedInProgressChecksByHeadSha,
   completeCheckRun,
   startInProgressCheckRun,
-} from "@/lib/pr-review-check-run"
-import { makeEnv, baseArgs } from "@/lib/pr-review-check-run.test-helpers"
+} from "@/src/lib/pr-review-check-run"
+import { makeEnv, baseArgs } from "@/src/lib/pr-review-check-run.test-helpers"
 
 beforeEach(() => {
   mockGetInstallationToken.mockClear()

@@ -6,7 +6,7 @@
 // blocker details) + footer always survive intact.
 
 import { describe, it, expect } from "vitest"
-import { capForGitHubPrioritized } from "@/lib/triage-pr-review"
+import { capForGitHubPrioritized } from "@/src/lib/triage-pr-review"
 
 const CAP = 65000
 const FOOTER = "<sub>Re-run · `abc1234`</sub>"

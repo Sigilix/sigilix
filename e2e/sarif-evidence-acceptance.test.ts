@@ -8,9 +8,9 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { runSarifEvidence, type ResolvedSarifConfig } from "@/features/sarif-evidence/app/runner"
-import type { GitHubClient } from "../src/shared/adapters/github"
-import type { Env } from "../src/shared/types/env"
+import { runSarifEvidence, type ResolvedSarifConfig } from "@/src/features/sarif-evidence/app/runner"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { Env } from "@/src/shared/types/env"
 
 const FIXTURE_DIR = join(__dirname, "fixtures", "sarif")
 const fixture = (name: string): string =>

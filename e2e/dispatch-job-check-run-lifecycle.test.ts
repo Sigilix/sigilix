@@ -36,13 +36,13 @@ const {
   isRepoSensitiveMock: vi.fn(() => false),
 }))
 
-vi.mock("../src/lib/triage-pr-review-ensemble", () => ({
+vi.mock("@/src/lib/triage-pr-review-ensemble", () => ({
   handlePrReviewEnsemble: handlePrReviewEnsembleMock,
 }))
-vi.mock("../src/lib/pr-review-check-run", async () => {
+vi.mock("@/src/lib/pr-review-check-run", async () => {
   // SIG-144: keep the real (pure) `parseReviewOutputSurface` the
   // dispatcher now calls; only the side-effecting helpers are mocked.
-  const actual = await vi.importActual<typeof import("../src/lib/pr-review-check-run")>("../src/lib/pr-review-check-run")
+  const actual = await vi.importActual<typeof import("@/src/lib/pr-review-check-run")>("@/src/lib/pr-review-check-run")
   return {
     ...actual,
     startInProgressCheckRun: startInProgressCheckRunMock,
@@ -50,14 +50,14 @@ vi.mock("../src/lib/pr-review-check-run", async () => {
     completeCheckRun: completeCheckRunMock,
   }
 })
-vi.mock("../src/lib/repo-policy", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/repo-policy")>("../src/lib/repo-policy")
+vi.mock("@/src/lib/repo-policy", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/repo-policy")>("@/src/lib/repo-policy")
   return { ...actual, isRepoSensitive: isRepoSensitiveMock }
 })
 
-import { dispatchJob } from "../src/index"
-import type { Env } from "../src/shared/types/env"
-import type { JobMessage } from "../src/shared/types/job"
+import { dispatchJob } from "@/src/index"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeEnv(): Env {
   return {

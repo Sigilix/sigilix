@@ -1,7 +1,7 @@
 // SIG-344 deterministic tests for the tests-overfire eval scorer.
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS } from "../src/prompts/pr-review-specialists"
+import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
 import {
   TESTS_OVERFIRE_CASES,
   applyCurrentTestGate,

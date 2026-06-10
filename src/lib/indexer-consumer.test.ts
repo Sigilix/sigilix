@@ -37,12 +37,12 @@ const {
   mockDebugActiveGraphVersion: vi.fn(async () => null),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async getRepository(owner: string, repo: string): Promise<unknown> {
       return mockGetRepository(owner, repo)
@@ -66,25 +66,25 @@ vi.mock("@/shared/adapters/github", async () => {
   }
 })
 
-vi.mock("@/lib/repo-graph-client", () => ({
+vi.mock("@/src/lib/repo-graph-client", () => ({
   writeFileGraph: (...args: unknown[]) => mockWriteFileGraph(...args),
   commitGraph: (...args: unknown[]) => mockCommitGraph(...args),
   debugActiveGraphVersion: (...args: unknown[]) => mockDebugActiveGraphVersion(...args),
 }))
 
-import { handleIndexRepoJob, MAX_FILES_PER_JOB } from "@/lib/indexer"
+import { handleIndexRepoJob, MAX_FILES_PER_JOB } from "@/src/lib/indexer"
 import {
   repoIndexManifestKey,
   type RepoIndexManifestV1,
-} from "@/lib/repo-index-manifest"
-import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/lib/repo-index-vectors"
-import { activeRunKey } from "@/lib/repo-index-active-run"
-import { scopedRulesKey } from "@/lib/scoped-rules-kv"
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/shared/adapters/model"
-import { CHUNKER_VERSION } from "@/lib/indexer"
-import { encodeBranchName } from "@/lib/index-branch"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
+} from "@/src/lib/repo-index-manifest"
+import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
+import { activeRunKey } from "@/src/lib/repo-index-active-run"
+import { scopedRulesKey } from "@/src/lib/scoped-rules-kv"
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
+import { CHUNKER_VERSION } from "@/src/lib/indexer"
+import { encodeBranchName } from "@/src/lib/index-branch"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 interface Sent {
   message: JobMessage
@@ -283,7 +283,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
   it("skips a fresh manifest only when graph active version also matches (SIG-155)", async () => {
     const headSha = "a".repeat(40)
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -323,7 +323,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     })
 
     const headSha = "a".repeat(40)
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -362,7 +362,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     })
 
     const headSha = "a".repeat(40)
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -395,7 +395,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
   it("does not re-index a fresh manifest on transient graph active-version read failure", async () => {
     const headSha = "a".repeat(40)
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -499,7 +499,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
     // Compute the runId the consumer derives for the new head.
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const newRunId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -580,7 +580,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     const headSha = "a".repeat(40)
     const treeSha = "b".repeat(40)
     // Compute the actual runId the consumer expects.
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",
       repo: "sigilix",
@@ -817,7 +817,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
       GITHUB_PRIVATE_KEY: "fake-key",
     } as unknown as Env
 
-    const { computeRunId } = await import("@/lib/indexer")
+    const { computeRunId } = await import("@/src/lib/indexer")
     const headSha = "a".repeat(40)
     const runId = await computeRunId({
       owner: "Arc-and-Anchor",

@@ -5,9 +5,9 @@ import {
   dynamicReviewEvidenceEnabled,
   dynamicReviewEvidenceMode,
   renderDynamicReviewEvidenceBlock,
-} from "@/lib/review-evidence-pack"
-import type { ChangedLines } from "@/features/ast-rules/domain/diff-filter"
-import type { TestingEvidencePack } from "@/lib/testing-evidence-pack"
+} from "@/src/lib/review-evidence-pack"
+import type { ChangedLines } from "@/src/features/ast-rules/domain/diff-filter"
+import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 describe("dynamicReviewEvidenceMode", () => {
   it("recognizes shadow and post modes only", () => {

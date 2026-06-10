@@ -8,11 +8,11 @@
 // the absolute max-review-duration cap via `watchdogDeadlineAt`.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { PrReviewRunDO } from "@/do/pr-review-run"
-import { runPrReviewWithDoCallback } from "@/do/consumer-wrapper"
-import type { Env } from "@/shared/types/env"
-import type { JobMessage } from "@/shared/types/job"
-import type { RunState } from "@/do/types"
+import { PrReviewRunDO } from "@/src/do/pr-review-run"
+import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
+import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import type { RunState } from "@/src/do/types"
 
 // ─── DO-side harness ─────────────────────────────────────────
 

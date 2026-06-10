@@ -10,7 +10,7 @@
 // `post` flip depends on).
 
 import { DurableObject } from "cloudflare:workers"
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 const RETENTION_DAYS = 35
 const MAX_LAST_SEEN = 100
@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS graph_last_seen_by_at ON last_seen_pr(last_seen_at);
 // SIG-363: `GraphRetrievalSample` moved to the ensemble domain leaf so the
 // graph-metrics sink + orchestrator reference it without importing this DO.
 // Re-exported here so existing importers are unchanged.
-import type { GraphRetrievalSample } from "../lib/ensemble/domain/metric-events"
+import type { GraphRetrievalSample } from "@/src/lib/ensemble/domain/metric-events"
 export type { GraphRetrievalSample }
 
 export interface RecordSampleArgs {

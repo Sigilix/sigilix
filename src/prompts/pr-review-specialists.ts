@@ -19,7 +19,7 @@
 //     genuinely sits in their lens (low if borderline, high if cleanly
 //     in their domain).
 
-import type { SpecialistRole } from "../lib/ensemble-router"
+import type { SpecialistRole } from "@/src/lib/ensemble-router"
 import { LOGIC_PROMPT } from "./specialists/logic"
 import { SECURITY_PROMPT } from "./specialists/security"
 import { PERFORMANCE_PROMPT } from "./specialists/performance"

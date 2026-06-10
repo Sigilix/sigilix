@@ -12,7 +12,7 @@
 // JSON-stable.
 
 import { describe, it, expect } from "vitest"
-import { encode, decode, type RecordingStub } from "@/lib/ensemble-golden-capture"
+import { encode, decode, type RecordingStub } from "@/src/lib/ensemble-golden-capture"
 
 /** The production path: encode → JSON text → parse → decode. */
 function roundTrip(value: unknown): unknown {

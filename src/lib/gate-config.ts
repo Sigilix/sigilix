@@ -16,7 +16,7 @@
 // Both reads have hardcoded fallbacks (1.0 / null) so a KV miss never
 // breaks production — the legacy verdict path still ships.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 /** KV keys — versioned so a schema change increments the suffix. */
 export const GATE_THRESHOLD_KV_KEY = "config:gate-threshold:v1"

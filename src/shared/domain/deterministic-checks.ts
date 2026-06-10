@@ -84,7 +84,7 @@ export function parseDeterministicChecks(raw: unknown): DeterministicCheck[] {
 // pathFilters and this module's per-rule `paths` share one proven
 // implementation (the segment-boundary fix from sigilix-bot's PR #52
 // review applies to both).
-import { pathMatchesAny } from "../util/path-glob"
+import { pathMatchesAny } from "@/src/shared/util/path-glob"
 
 /**
  * Run every check against added lines in the diff. Returns one hit

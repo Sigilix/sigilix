@@ -46,20 +46,20 @@ const {
   mockCreateIssueComment: vi.fn(),
 }))
 
-vi.mock("@/shared/adapters/github/github-app", () => ({
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/model/ollama-chat")>("@/shared/adapters/model/ollama-chat")
+vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
   }
 })
 
-vi.mock("@/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/shared/adapters/github")>("@/shared/adapters/github")
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
     async getPullRequest(...args: unknown[]): Promise<unknown> {
       return mockGetPullRequest(...args)
@@ -86,8 +86,8 @@ vi.mock("@/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import { handlePrReviewEnsemble } from "@/lib/triage-pr-review-ensemble"
-import type { Env } from "@/shared/types/env"
+import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
+import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): Env["OPENCLAW_STATE"] {
   const store = new Map<string, string>()

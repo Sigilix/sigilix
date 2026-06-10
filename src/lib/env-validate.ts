@@ -19,8 +19,8 @@
 // "true" or "error" should NOT silently promote a deploy to strict mode;
 // production sets the exact string "strict" explicitly.
 
-import { listTeamRepoMappings, resolveInstallation } from "../shared/adapters/github/github-installation"
-import type { Env } from "../shared/types/env"
+import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import type { Env } from "@/src/shared/types/env"
 
 export type ValidateMode = "strict" | "warn"
 

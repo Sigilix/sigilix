@@ -8,7 +8,7 @@ import {
   classifyHtmlSinkValue,
   scanDynamicHtmlSinks,
   DYNAMIC_HTML_SINK_RULE_ID,
-} from "@/features/ast-rules/domain/scan-dynamic-html-sink"
+} from "@/src/features/ast-rules/domain/scan-dynamic-html-sink"
 
 describe("classifyHtmlSinkValue — FLAG (untrusted dynamic)", () => {
   it("flags a member access with an HTML-ish terminal property (the recurring miss)", () => {

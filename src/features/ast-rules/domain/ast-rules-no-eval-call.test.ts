@@ -3,11 +3,11 @@
 // fixture from Task 1, moved here per Codex BLOCKING #1).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "@/features/ast-rules/domain/parser"
-import { walkAst } from "@/features/ast-rules/domain/walker"
-import { noEvalCall } from "@/features/ast-rules/domain/rules/no-eval-call"
-import { getEnabledRules, ALL_RULES } from "@/features/ast-rules/domain/rule-registry"
-import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
+import { parseSource } from "@/src/features/ast-rules/domain/parser"
+import { walkAst } from "@/src/features/ast-rules/domain/walker"
+import { noEvalCall } from "@/src/features/ast-rules/domain/rules/no-eval-call"
+import { getEnabledRules, ALL_RULES } from "@/src/features/ast-rules/domain/rule-registry"
+import type { AstRuleHit, AstRuleVisitResult } from "@/src/features/ast-rules/domain/types"
 
 function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
   if (!hit) return

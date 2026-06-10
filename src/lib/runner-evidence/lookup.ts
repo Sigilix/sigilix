@@ -16,8 +16,8 @@
 // inconsistent with the bound merge sha / repo, we DEMOTE to evidence-pending
 // rather than show inconsistent findings under a "verified" stamp.
 
-import type { Env } from "../../shared/types/env"
-import { queryRunnerReceiptByPull } from "../runner-receipt-client"
+import type { Env } from "@/src/shared/types/env"
+import { queryRunnerReceiptByPull } from "@/src/lib/runner-receipt-client"
 
 /**
  * Rollout posture for runner-evidence consumption (mirrors the graph/gate

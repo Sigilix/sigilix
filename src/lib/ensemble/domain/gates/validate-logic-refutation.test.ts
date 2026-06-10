@@ -4,12 +4,12 @@
 // severity floor, is kept. Mode parsing follows the off|shadow|enforce idiom.
 
 import { describe, expect, it } from "vitest"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import {
   evaluateLogicRefutation,
   parseLogicRefutationMode,
   LOGIC_REFUTATION_MIN_SEVERITY,
-} from "@/lib/ensemble/domain/gates/validate-logic-refutation"
+} from "@/src/lib/ensemble/domain/gates/validate-logic-refutation"
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {

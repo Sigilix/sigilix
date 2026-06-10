@@ -1,10 +1,10 @@
 // SIG-285 PR 2 — GET /metrics/verification route: auth, window parsing, shape.
 
 import { describe, expect, it } from "vitest"
-import { handleVerificationMetricsRoute } from "@/lib/metrics-verification-route"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/do/verification-metrics"
-import type { Env } from "@/shared/types/env"
-import { NodeSqliteStorage } from "@/test-shims/cloudflare-workers-shim"
+import { handleVerificationMetricsRoute } from "@/src/lib/metrics-verification-route"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/src/do/verification-metrics"
+import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 const TOKEN = "metrics-token"
 

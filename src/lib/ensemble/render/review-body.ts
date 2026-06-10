@@ -17,14 +17,14 @@
 // bodies are byte-identical to their HEAD form in triage-pr-review.ts; only the
 // import paths and the wrapper are new.
 
-import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/shared/domain/pr-review-finding"
-import { type StackContext } from "../../pr-stack"
-import { ALL_DISMISS_REASONS } from "../../dismiss-reasons"
+import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
+import { type StackContext } from "@/src/lib/pr-stack"
+import { ALL_DISMISS_REASONS } from "@/src/lib/dismiss-reasons"
 import {
   renderTrustSummary,
   renderOutsideDiffDropdown,
   renderPrLevelSection,
-} from "../../trust-ledger-render"
+} from "@/src/lib/trust-ledger-render"
 import {
   findingScope,
   stripAstMarkers,

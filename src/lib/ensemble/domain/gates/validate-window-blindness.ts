@@ -41,7 +41,7 @@
 //   `shadow` ⇒ counts/telemeters but keeps every finding inline (zero behavior
 //   change); only `enforce` demotes. This module is pure and mode-agnostic.
 
-import type { PrReviewFinding } from "@/shared/domain/pr-review-finding"
+import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 
 /**
  * Validator mode. `off` (default in code): the gate doesn't run. `shadow`:

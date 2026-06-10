@@ -6,9 +6,9 @@
 // The DO call is `await stub.fetch(...)`-ed (NOT `ctx.waitUntil`) so a
 // transport / non-OK failure bubbles up as a 503 to GitHub for redelivery.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "./types"
-import { buildPausedKey, buildIgnoredKey } from "../lib/pr-lifecycle-commands"
+import { buildPausedKey, buildIgnoredKey } from "@/src/lib/pr-lifecycle-commands"
 
 const DO_BASE_URL = "https://do.internal"
 

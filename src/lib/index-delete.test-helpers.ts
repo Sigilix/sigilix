@@ -4,12 +4,12 @@
 
 import {
   type RepoIndexManifestV1,
-} from "@/lib/repo-index-manifest"
+} from "@/src/lib/repo-index-manifest"
 import {
   type RepoIndexVectorsV1,
-} from "@/lib/repo-index-vectors"
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/shared/adapters/model"
-import type { Env } from "@/shared/types/env"
+} from "@/src/lib/repo-index-vectors"
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
+import type { Env } from "@/src/shared/types/env"
 
 export interface KvListPage {
   keys: Array<{ name: string }>

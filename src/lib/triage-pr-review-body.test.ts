@@ -20,8 +20,8 @@ import {
   type PrReviewFinding,
   type CoverageRoles,
   type DeltaBadgeCounts,
-} from "@/lib/triage-pr-review"
-import type { StackContext, StackPr } from "@/lib/pr-stack"
+} from "@/src/lib/triage-pr-review"
+import type { StackContext, StackPr } from "@/src/lib/pr-stack"
 
 const HEAD = "abcdef1234567890abcdef1234567890abcdef12"
 const NOW = 1747547318000 // 2025-05-18T05:48:38.000Z

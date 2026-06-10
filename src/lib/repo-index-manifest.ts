@@ -24,7 +24,7 @@
 // Any mismatch → re-index. TTL is just a backstop for stuck/abandoned
 // manifests — revalidation does the real freshness work.
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 
 // SIG-132 (2026-05-20) — multi-tenant isolation. The index namespace
 // (Vectorize namespace + the suffix of the manifest/vectors KV keys) is

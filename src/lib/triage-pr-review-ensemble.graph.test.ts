@@ -8,11 +8,11 @@ import {
   graphOverlapStats,
   GRAPH_RPC_TIMEOUT_MS,
   BLAST_RADIUS_RESOLUTION_READY,
-} from "@/lib/triage-pr-review-ensemble"
+} from "@/src/lib/triage-pr-review-ensemble"
 
 describe("graphRetrievalEnabled", () => {
   const makeEnv = (v: string | undefined) =>
-    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/index").Env)
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/src/index").Env)
 
   it("returns true for 'shadow'", () => {
     expect(graphRetrievalEnabled(makeEnv("shadow"))).toBe(true)
@@ -46,7 +46,7 @@ describe("graphRetrievalEnabled", () => {
 
 describe("graphRetrievalMode", () => {
   const makeEnv = (v: string | undefined) =>
-    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/index").Env)
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/src/index").Env)
 
   it("returns 'shadow' for 'shadow'", () => {
     expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")

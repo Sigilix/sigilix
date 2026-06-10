@@ -10,24 +10,24 @@
 // the `IndexableFile` type) — a one-directional leaf → leaf
 // edge (internals ← slice). It does NOT value-import the core `indexer.ts`.
 
-import type { Env } from "@/shared/types/env"
-import { GitHubClient, GitHubHttpError } from "@/shared/adapters/github"
-import { embedTexts } from "@/shared/adapters/model"
-import { appendVectorCoverage } from "@/lib/repo-index-vectors"
-import { upsertLexicalChunks, type LexicalChunk } from "@/lib/lexical-index"
-import { extractFileGraph } from "@/lib/graph-extract"
-import { writeFileGraph } from "@/lib/repo-graph-client"
-import { graphIndexEnabled } from "@/lib/graph-flags"
-import { type Chunk, chunkFile } from "@/lib/chunk-core"
-import { chunkFileAst, jsTsExtOf } from "@/lib/ast-chunker"
-import { isBranchStateRepo } from "@/lib/index-branch"
+import type { Env } from "@/src/shared/types/env"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
+import { embedTexts } from "@/src/shared/adapters/model"
+import { appendVectorCoverage } from "@/src/lib/repo-index-vectors"
+import { upsertLexicalChunks, type LexicalChunk } from "@/src/lib/lexical-index"
+import { extractFileGraph } from "@/src/lib/graph-extract"
+import { writeFileGraph } from "@/src/lib/repo-graph-client"
+import { graphIndexEnabled } from "@/src/lib/graph-flags"
+import { type Chunk, chunkFile } from "@/src/lib/chunk-core"
+import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
+import { isBranchStateRepo } from "@/src/lib/index-branch"
 import {
   type IndexableFile,
   chunkId,
   shouldSkipForLength,
   EMBED_BATCH,
   UPSERT_BATCH,
-} from "@/lib/indexer-internals"
+} from "@/src/lib/indexer-internals"
 
 interface ProcessSliceArgs {
   client: GitHubClient

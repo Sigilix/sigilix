@@ -4,7 +4,7 @@
 // test file is the source of truth for the gating intent.
 
 import { describe, expect, it } from "vitest"
-import { decidePullRequestJobs } from "../src/index"
+import { decidePullRequestJobs } from "@/src/index"
 
 describe("decidePullRequestJobs", () => {
   it("enqueues both overview and review on opened", () => {

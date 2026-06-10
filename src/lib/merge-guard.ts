@@ -15,7 +15,7 @@
 // story stay co-located + unit-testable.
 
 import { renderApproveBody } from "./triage-pr-review"
-import type { SubmitReviewBody } from "../shared/types/github"
+import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 /** Just the slice of `GitHubClient` this helper needs. Defined locally
  *  so tests can stub a 1-method object rather than constructing the

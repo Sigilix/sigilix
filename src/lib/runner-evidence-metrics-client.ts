@@ -3,12 +3,12 @@
 // RPCs. Callers own the non-fatal try/catch (telemetry must never break a
 // review or a request).
 
-import type { Env } from "../shared/types/env"
+import type { Env } from "@/src/shared/types/env"
 import type {
   RunnerEvidenceMetricsDO,
   RecordRunnerEvidenceArgs,
   RunnerEvidenceMetricsQuery,
-} from "../do/runner-evidence-metrics"
+} from "@/src/do/runner-evidence-metrics"
 
 // All runner-evidence telemetry funnels into ONE DO instance — one increment
 // per review, nowhere near a sharding threshold.

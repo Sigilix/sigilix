@@ -20,22 +20,22 @@ import {
   isContiguousRightRange,
   deriveSide,
   type ReviewableMap,
-} from "../../diff-positions"
-import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "../../badge-assets"
-import type { FindingCategory } from "@/shared/domain/finding-category"
+} from "@/src/lib/diff-positions"
+import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {
   REVIEW_FINDING_SCOPES,
   isDeletionSuggestion,
   isReplacementSuggestion,
   hasStructuredFix,
-} from "@/shared/domain/pr-review-finding"
+} from "@/src/shared/domain/pr-review-finding"
 import type {
   ReviewFindingScope,
   EvidenceRecord,
   PrReviewFinding,
   PrReviewVerdict,
-} from "@/shared/domain/pr-review-finding"
-import { severityLabelForScore } from "../domain/verdict"
+} from "@/src/shared/domain/pr-review-finding"
+import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"
 
 /**
  * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally

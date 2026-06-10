@@ -6,10 +6,10 @@
 // lodash, bare Mongoose with no signal, sanitized).
 
 import { describe, it, expect } from "vitest"
-import { parseSource } from "@/features/ast-rules/domain/parser"
-import { walkAst, type AstNode } from "@/features/ast-rules/domain/walker"
-import { noNosqlInjection } from "@/features/ast-rules/domain/rules/no-nosql-injection"
-import type { AstRuleHit, AstRuleVisitResult } from "@/features/ast-rules/domain/types"
+import { parseSource } from "@/src/features/ast-rules/domain/parser"
+import { walkAst, type AstNode } from "@/src/features/ast-rules/domain/walker"
+import { noNosqlInjection } from "@/src/features/ast-rules/domain/rules/no-nosql-injection"
+import type { AstRuleHit, AstRuleVisitResult } from "@/src/features/ast-rules/domain/types"
 
 function runRule(source: string, path = "src/routes/users.ts"): AstRuleHit[] {
   const r = parseSource(source, ".ts")

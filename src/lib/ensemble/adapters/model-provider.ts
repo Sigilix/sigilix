@@ -15,25 +15,25 @@
 // Tier-1). These point sideways/up and are deliberately left
 // as-is until a later PR pulls them to ports.
 
-import { chat } from "@/shared/adapters/model"
-import type { ChatMessage } from "@/shared/ports/model"
-import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "../domain/model-policy"
-import { PER_ATTEMPT_TIMEOUT_MS } from "../domain/budget"
-import type { SynthesizerProvenance } from "../domain/validation"
+import { chat } from "@/src/shared/adapters/model"
+import type { ChatMessage } from "@/src/shared/ports/model"
+import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "@/src/lib/ensemble/domain/model-policy"
+import { PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 // SIG-386 (PR1): the pure `isPermanentFailure` classifier moved to a sibling
 // leaf to land this adapter at <=1k lines. Re-exported below so the public
 // surface (and the importers + vi.mock paths pinned to this module) are
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
 import { isPermanentFailure } from "./model-provider-internals"
 export { isPermanentFailure } from "./model-provider-internals"
-import type { SpecialistRole } from "@/shared/domain/specialist-role"
-import { PR_REVIEW_SCHEMA } from "@/shared/domain/schemas"
-import { parseFirstJsonObject } from "@/shared/util/json-extract"
-import type { PrReviewVerdict } from "@/shared/domain/pr-review-finding"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 // ─── documented laterals (frozen in this pure-move PR; ADR / Tier-1 tracked) ──
-import { emitModelAttempt, type EnsembleRunCtx } from "../../ensemble-perf-telemetry"
-import { withComposedTimeout } from "../../agent-loop"
-import { parsePrReviewResponse } from "../../triage-pr-review"
+import { emitModelAttempt, type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { withComposedTimeout } from "@/src/lib/agent-loop"
+import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
 
 /**
  * Per-role model lineup with retry/fallback config (v3.1 LOCKED spec

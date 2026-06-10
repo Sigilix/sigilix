@@ -19,12 +19,12 @@ import {
   SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED,
   deriveSecurityBucket,
   parseSecurityValidatorMode,
-} from "@/lib/ensemble/domain/gates/validate-security-finding"
+} from "@/src/lib/ensemble/domain/gates/validate-security-finding"
 import {
   finding,
   fact,
   manifestOf,
-} from "@/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
+} from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
 
 describe("parseSecurityValidatorMode", () => {
   it("defaults to shadow for unset / unknown values", () => {

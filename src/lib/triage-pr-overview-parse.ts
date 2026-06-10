@@ -10,7 +10,7 @@
 // at runtime, so there is no cycle). It does NOT value-import the core
 // `triage-pr-overview.ts`.
 
-import { parseFirstJsonObject } from "../shared/util/json-extract"
+import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import type { PrOverviewVerdict } from "./triage-pr-overview"
 import type { CachedFileRow } from "./pr-overview-file-cache"
 

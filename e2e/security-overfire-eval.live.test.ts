@@ -17,9 +17,9 @@ import {
   type SecurityOverfireCase,
   type SecurityScoredFinding,
 } from "./security-overfire-corpus"
-import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "../src/lib/triage-pr-review-ensemble"
-import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
+import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
+import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000

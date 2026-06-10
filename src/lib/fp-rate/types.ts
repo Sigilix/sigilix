@@ -8,8 +8,8 @@
 //
 // Design + grounding: .claude/handoff/sig-114-fp-rate-design.md
 
-import type { SpecialistRole } from "../ensemble-router"
-import type { DismissReason } from "../dismiss-reasons"
+import type { SpecialistRole } from "@/src/lib/ensemble-router"
+import type { DismissReason } from "@/src/lib/dismiss-reasons"
 
 export type { SpecialistRole }
 

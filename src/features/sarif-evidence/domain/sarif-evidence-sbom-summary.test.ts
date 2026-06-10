@@ -1,8 +1,8 @@
 // ARC-188 — SBOM summary tests.
 
 import { describe, it, expect } from "vitest"
-import { buildSbomSummary } from "@/features/sarif-evidence/domain/sbom-summary"
-import type { SarifReport } from "@/features/sarif-evidence/domain/types"
+import { buildSbomSummary } from "@/src/features/sarif-evidence/domain/sbom-summary"
+import type { SarifReport } from "@/src/features/sarif-evidence/domain/types"
 
 const empty: SarifReport = { version: "2.1.0", runs: [] }
 

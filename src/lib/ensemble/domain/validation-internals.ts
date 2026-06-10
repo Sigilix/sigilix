@@ -16,10 +16,10 @@
 import type {
   PrReviewFinding,
   EvidenceRecord,
-} from "@/shared/domain/pr-review-finding"
-import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist-role"
-import { deriveSide, type ReviewableMap } from "@/shared/util/diff-positions"
-import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
+} from "@/src/shared/domain/pr-review-finding"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
+import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
 import type { CollectedVerdict, SynthesizerProvenance } from "./validation"
 
 export interface SourceFindingSecurityEvidence {

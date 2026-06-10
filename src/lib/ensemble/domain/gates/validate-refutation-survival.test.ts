@@ -14,13 +14,13 @@ import {
   evaluateRefutationSurvival,
   parseRefutationSurvivalMode,
   REFUTATION_SURVIVAL_MIN_SEVERITY,
-} from "@/lib/ensemble/domain/gates/validate-refutation-survival"
-import { validateForSubmission } from "@/lib/triage-pr-review-ensemble"
-import type { PrReviewFinding } from "@/lib/triage-pr-review"
-import type { SynthesizerProvenance } from "@/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/shared/util/diff-positions"
-import type { PerfEvidence } from "@/lib/ensemble/domain/gates/validate-perf-finding"
-import type { SecurityFact } from "@/lib/security-evidence-manifest"
+} from "@/src/lib/ensemble/domain/gates/validate-refutation-survival"
+import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
+import type { PerfEvidence } from "@/src/lib/ensemble/domain/gates/validate-perf-finding"
+import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
 
 // A self-originated security finding: a CWE claim with no manifest evidenceId.
 // Defaults to the SSRF hallucination shape (sev>=4, no independentAssessment).

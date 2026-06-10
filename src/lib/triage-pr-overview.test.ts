@@ -13,9 +13,9 @@ import {
   type PromptCtx,
   type PrOverviewReviewContext,
   type PrOverviewVerdict,
-} from "@/lib/triage-pr-overview"
-import type { CachedFileRow } from "@/lib/pr-overview-file-cache"
-import type { PrCommit, PullRequestMeta } from "@/shared/types/github"
+} from "@/src/lib/triage-pr-overview"
+import type { CachedFileRow } from "@/src/lib/pr-overview-file-cache"
+import type { PrCommit, PullRequestMeta } from "@/src/shared/types/github"
 
 describe("parseOverviewResponse", () => {
   const valid: PrOverviewVerdict = {
@@ -166,7 +166,7 @@ describe("formatOverviewComment", () => {
   // fan-out can still grep PRs that need post-indexing re-review)
   // but the customer-visible text is gone.
   it("emits the warmup callout marker (no visible text) when warmup is pending", async () => {
-    const { WARMUP_CALLOUT_MARKER } = await import("@/lib/warmup")
+    const { WARMUP_CALLOUT_MARKER } = await import("@/src/lib/warmup")
     const md = formatOverviewComment({ verdict, isFirstRun: true, warmup: "pending" })
     expect(md).toContain(WARMUP_CALLOUT_MARKER) // marker present (for rerun detection)
     expect(md).not.toContain("[!NOTE]") // no visible callout block

@@ -18,7 +18,7 @@ import {
   joinFindingsToLabels,
   parseFindingsJsonl,
   parseLabelCsv,
-} from "../src/lib/fp-rate/eval"
+} from "@/lib/fp-rate/eval"
 
 const LABEL_DIR = ".claude/research/sig-161-labeling"
 const DEFAULT_FINDINGS = `${LABEL_DIR}/findings-source.jsonl`

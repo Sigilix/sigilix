@@ -55,11 +55,9 @@ import {
 import { handleStaleHead } from "../../stale-head"
 import { dismissPriorSigilixReviews } from "../../dismiss-prior-reviews"
 import { postReviewCommentFallback } from "../../review-comment-fallback"
-import {
-  buildFallbackSubmission,
-  previewFallbackSubmissionEvent,
-  type DeltaBadgeCounts,
-} from "../../triage-pr-review"
+import { buildFallbackSubmission } from "../render/fallback"
+import { previewFallbackSubmissionEvent } from "../render/submission"
+import type { DeltaBadgeCounts } from "../render/review-body"
 import { selectPrimarySubmitAnnotations } from "../../pr-review-check-run"
 import { writeLastReviewedSha } from "../../incremental-review"
 import { recordReviewedDiffHash } from "../../noop-merge-detect"

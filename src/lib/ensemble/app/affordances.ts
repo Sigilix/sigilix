@@ -10,14 +10,15 @@
 // The bodies are byte-identical; ZERO behavior change.
 //
 // Dependency rule: this module imports only the lib leaves (pr-review-counter)
-// + the verdict domain (ReviewEvent) + a documented-lateral render type
-// (ReviewSuggestionEmission). It never imports the orchestrator god-file. The
+// + the verdict domain (ReviewEvent) + a render-layer type (ReviewSuggestionEmission,
+// from its canonical `../render/finding-comment` home — SIG-365 PR 13 removed the
+// former god-file lateral). It never imports the orchestrator god-file. The
 // god-file re-exports the exported members so existing importers (tests) are
 // unaffected.
 
 import type { Env } from "@/shared/types/env"
 import type { ReviewEvent } from "../domain/verdict"
-import type { ReviewSuggestionEmission } from "../../triage-pr-review"
+import type { ReviewSuggestionEmission } from "../render/finding-comment"
 import { buildPrUrl, preparePrReviewCounter } from "../../pr-review-counter"
 
 export interface SubmissionAffordance {

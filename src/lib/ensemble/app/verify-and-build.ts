@@ -19,13 +19,14 @@
 // caller by reference), so all three are passed in AND returned explicitly.
 //
 // Dependency rule: every dependency imports from its canonical NON-god-file home
-// (the verdict/gates domains, the verification leaves, the lib leaves). The two
-// render builders (`buildReviewSubmissionWithMetadata`,
+// (the verdict/gates domains, the verification leaves, the lib leaves). SIG-365
+// (PR 13): the render builders (`buildReviewSubmissionWithMetadata`,
 // `buildBodyOnlyCheckAnnotations`, `previewReviewSubmissionEvent`,
-// `getProposedChangeScopeMismatch`) + `evidencePieceCountForTelemetry` are
-// DOCUMENTED LATERALS to the `../../triage-pr-review` render leaf / the validation
-// domain (no NON-god-file home exists for the render builders yet); the affordance
-// preparation (`prepareSubmissionAffordance`) comes from the relocated
+// `getProposedChangeScopeMismatch`) now import from their canonical
+// `../render/{submission,finding-format}` home (the render layer), no longer the
+// god-file shim — the formerly-documented laterals are gone;
+// `evidencePieceCountForTelemetry` comes from the validation domain. The
+// affordance preparation (`prepareSubmissionAffordance`) comes from the relocated
 // `./affordances` app module. It never imports the orchestrator god-file.
 
 import type { Env } from "@/shared/types/env"
@@ -35,13 +36,13 @@ import type { ValidationRejectionEvent } from "@/do/validation-metrics"
 import type { CheckRunAnnotation } from "@/shared/types/github"
 import type { PullRequestMeta } from "@/shared/types/github"
 import type { TokenUsageByModel } from "../../ensemble-slo-telemetry"
+import { getProposedChangeScopeMismatch } from "../render/finding-format"
+import { buildBodyOnlyCheckAnnotations } from "../render/finding-comment"
 import {
-  buildBodyOnlyCheckAnnotations,
   buildReviewSubmissionWithMetadata,
-  getProposedChangeScopeMismatch,
   previewReviewSubmissionEvent,
-  type DeltaBadgeCounts,
-} from "../../triage-pr-review"
+} from "../render/submission"
+import type { DeltaBadgeCounts } from "../render/review-body"
 import { evidencePieceCountForTelemetry } from "../domain/validation"
 import { readGateMode, readGateThreshold } from "../../gate-config"
 import { computeShadowGateDivergence } from "../domain/verdict"

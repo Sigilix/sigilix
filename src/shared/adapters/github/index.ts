@@ -13,4 +13,5 @@
 // `src/shared/types/github.ts` (a leaf with no IO), preserving the split so a
 // module that only needs a `PullRequestMeta` shape never pulls in `fetch`.
 
-export { GitHubClient, GitHubHttpError } from "./client"
+export { GitHubClient } from "./client"
+export { GitHubHttpError } from "./github-errors"

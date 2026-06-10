@@ -15,9 +15,11 @@
 //
 // SIG-380 / P1a: the pure request/response DTO types live in
 // `src/shared/types/github.ts` now (a leaf with no IO); this adapter imports
-// the shapes it returns from there. The private wire-narrowing interfaces
-// (`Raw*`, `ContentsResponse`, `GraphQLReviewThreadsPage`) stay here —
-// they're implementation detail, not part of the public DTO surface.
+// the shapes it returns from there. SIG-387: the private wire-narrowing
+// interfaces (`Raw*`, `ContentsResponse`, `GraphQLReviewThreadsPage`) moved to
+// `./github-client-wire-shapes`, the `GitHubHttpError` type to `./github-errors`,
+// and `atobUtf8` to `./github-client-encoding` — implementation detail, not part
+// of the public DTO surface; imported back here.
 
 import type {
   CheckRunOutput,
@@ -34,6 +36,17 @@ import type {
   WorkflowJob,
   WorkflowRun,
 } from "../../types/github"
+import { atobUtf8 } from "./github-client-encoding"
+import type {
+  ContentsResponse,
+  GraphQLReviewThreadsPage,
+  RawCommit,
+  RawListOpenPullsItem,
+  RawPrFile,
+  RawWorkflowArtifact,
+  RawWorkflowRun,
+} from "./github-client-wire-shapes"
+import { GitHubHttpError } from "./github-errors"
 
 const GITHUB_API = "https://api.github.com"
 
@@ -1423,91 +1436,4 @@ export class GitHubClient {
     if (hasBody) h["content-type"] = "application/json"
     return h
   }
-}
-
-export class GitHubHttpError extends Error {
-  readonly status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.name = "GitHubHttpError"
-    this.status = status
-  }
-}
-
-/**
- * SIG-98 — GraphQL response shape for `listPullRequestReviewThreads`.
- * Kept internal — callers consume the flat array returned by the
- * client method instead of the nested GraphQL envelope.
- */
-interface GraphQLReviewThreadsPage {
-  repository?: {
-    pullRequest?: {
-      reviewThreads?: {
-        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
-        nodes?: Array<{
-          id: string
-          isResolved?: boolean
-          comments?: {
-            nodes?: Array<{ author?: { login?: string } | null }>
-          }
-        }>
-      }
-    }
-  }
-}
-
-interface RawListOpenPullsItem {
-  number?: number
-  title?: string
-  user?: { login?: string } | null
-  head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null } | null
-  base?: { ref?: string; sha?: string; repo?: { full_name?: string } | null } | null
-  updated_at?: string
-}
-
-interface RawPrFile {
-  filename?: string
-  status?: string
-  additions?: number
-  deletions?: number
-  patch?: string
-}
-
-interface RawCommit {
-  sha: string
-  commit?: { message?: string }
-}
-
-interface ContentsResponse {
-  type?: string
-  encoding?: string
-  content?: string
-  size?: number
-}
-
-interface RawWorkflowRun {
-  id?: number
-  head_sha?: string
-  status?: string
-  conclusion?: string | null
-  created_at?: string
-}
-
-interface RawWorkflowArtifact {
-  id?: number
-  name?: string
-  size_in_bytes?: number
-  expired?: boolean
-}
-
-/**
- * UTF-8-safe atob. The plain `atob` returns a binary string; if the file
- * has multi-byte chars, naive String.fromCharCode loses bytes. Decode via
- * Uint8Array + TextDecoder so the model sees the source verbatim.
- */
-function atobUtf8(b64: string): string {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return new TextDecoder("utf-8").decode(bytes)
 }

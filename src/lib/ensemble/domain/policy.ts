@@ -10,6 +10,44 @@
 // existing importers (tests) are unaffected.
 
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/shared/domain/specialist-role"
+import type { CollectedVerdict } from "./validation"
+
+/**
+ * SIG-235 quorum check. Decides whether the synth may run given the specialist
+ * verdicts that succeeded. PURE — moved verbatim from the orchestrator god-file
+ * (SIG-318 PR 12h); the policy domain is its natural home alongside the other
+ * fan-out decisions. Re-exported through the `triage-pr-review-ensemble` shim so
+ * existing importers (the orchestrator + tests) are unaffected.
+ */
+export function checkQuorum(
+  succeeded: CollectedVerdict[],
+  mode: "shadow" | "post",
+  dispatchedSpecialists?: SpecialistRole[],
+): boolean {
+  // Arc PR #35 catch: when the router dispatches fewer than 4
+  // specialists (e.g., CSS-only → ["performance"]), the original
+  // `succeeded.length < 2` rule always failed because there were
+  // never 2 to begin with. Make quorum proportional to what the
+  // router actually requested.
+  //
+  // Rule:
+  //   - Need min(2, dispatched.length) successes (so single-dispatch
+  //     PRs need just that 1 to succeed; multi-dispatch needs ≥2).
+  //   - In post mode, ALSO require ≥1 of {logic, security} to have
+  //     succeeded — but only if the router actually dispatched them.
+  //     If the router intentionally excluded both (rare; would only
+  //     happen for CSS-only → ["performance"] type cases), the post-
+  //     mode check is effectively just the count requirement.
+  const dispatched = dispatchedSpecialists ?? [...ALL_SPECIALISTS]
+  const dispatchedSet = new Set(dispatched)
+  const minSuccesses = Math.min(2, dispatched.length)
+  if (succeeded.length < minSuccesses) return false
+  if (mode === "shadow") return true
+  // post mode: enforce logic/security only if router dispatched them
+  const dispatchedLogicOrSec = dispatchedSet.has("logic") || dispatchedSet.has("security")
+  if (!dispatchedLogicOrSec) return true
+  return succeeded.some((v) => v.role === "logic" || v.role === "security")
+}
 
 /**
  * SIG-235 — min-specialists early exit mode parser. Returns one of:

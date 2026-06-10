@@ -1,13 +1,17 @@
 // SIG-318 (PR 12g-2): the SIG-138 / SIG-143 graph-context PURE helpers + their
 // constants. These format graph-expansion nodes + blast-radius paths into the
 // `[GRAPH CONTEXT]` prompt block, compute the SIG-86 vector-vs-graph overlap
-// stats, and read the OPENCLAW_GRAPH_RETRIEVAL env flag. They were exported (and
-// unit-tested) from `triage-pr-review-ensemble.ts`; with their only non-test
+// stats, and parse the OPENCLAW_GRAPH_RETRIEVAL flag value. They were exported
+// (and unit-tested) from `triage-pr-review-ensemble.ts`; with their only non-test
 // callers (the graph-expansion block) moving to ensemble/app/context/gather-graph,
 // they relocate to the domain (the inward dependency direction) and are re-exported
 // from the god-file to preserve its public surface. Never imports the orchestrator.
-
-import type { Env } from "@/shared/types/env"
+//
+// SIG-375 (SIG-318 env→Config): the two graph-retrieval helpers are now PURE
+// value-parsers taking the RAW flag string — they no longer read `env` (the
+// domain-purity fix). The edge (`../config.ts`) reads `env.OPENCLAW_GRAPH_RETRIEVAL`
+// once into `EnsembleConfig.flags`; the env-taking `graphRetrievalEnabled` /
+// `graphRetrievalMode` wrappers the shim re-exports live there too.
 
 // SIG-143: max blast-radius paths folded into the prompt graph-context block.
 // Mirrors the ≤4 cap on BFS graph-node additions — keeps the additive context
@@ -20,27 +24,28 @@ export const GRAPH_BLAST_PROMPT_CAP = 4
 // `post` is honored (no longer coerced to `shadow`).
 export const BLAST_RADIUS_RESOLUTION_READY = true
 
-/** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
-export function graphRetrievalEnabled(env: Env): boolean {
-  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+/** Returns true when the raw OPENCLAW_GRAPH_RETRIEVAL value is "shadow" or "post". */
+export function parseGraphRetrievalEnabled(raw: string | undefined): boolean {
+  const v = (raw ?? "").trim().toLowerCase()
   return v === "shadow" || v === "post"
 }
 
 /**
- * Returns the effective graph-retrieval mode: "off" | "shadow" | "post".
+ * Returns the effective graph-retrieval mode for the raw OPENCLAW_GRAPH_RETRIEVAL
+ * value: "off" | "shadow" | "post".
  *
  * While BLAST_RADIUS_RESOLUTION_READY is false, a raw value of "post" is
  * coerced to "shadow" — blast-radius resolution is inert (SIG-143) and the
  * graph-routed path is not ready for production. A config flip to "post"
  * will take effect only after the constant is flipped true.
  */
-export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
-  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
-  const raw = v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
-  if (raw === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
+export function parseGraphRetrievalMode(raw: string | undefined): "off" | "shadow" | "post" {
+  const v = (raw ?? "").trim().toLowerCase()
+  const mode = v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
+  if (mode === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
     return "shadow"
   }
-  return raw
+  return mode
 }
 
 /**

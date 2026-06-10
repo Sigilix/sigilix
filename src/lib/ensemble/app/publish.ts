@@ -130,6 +130,9 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
   deltaCounts: DeltaBadgeCounts | null
   filesDroppedFromReview: string[]
   currentFindingsForManifest: ReviewManifestFinding[]
+  /** SIG-375: the parsed `OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off"` kill-switch,
+   *  threaded from `EnsembleConfig.flags` so the manifest write no longer reads env. */
+  reviewManifestEnabled: EnsembleConfig["flags"]["reviewManifestEnabled"]
   reviewEventOverride: ReviewEventOverride | undefined
   trustLedgerMode: EnsembleConfig["flags"]["trustLedgerMode"]
   showEvidence: boolean
@@ -177,6 +180,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     deltaCounts,
     filesDroppedFromReview,
     currentFindingsForManifest,
+    reviewManifestEnabled,
     reviewEventOverride,
     trustLedgerMode,
     showEvidence,
@@ -514,7 +518,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
       // push's review can compute a new/still-open/likely-fixed
       // delta against this run.
       await writeReviewManifestForEnsemble({
-        env, client, owner, repo, prNumber,
+        env, client, enabled: reviewManifestEnabled, owner, repo, prNumber,
         headSha,
         baseSha: meta.base?.sha ?? "",
         modelId: "ensemble-synth",
@@ -791,7 +795,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
       // review (just anchorless body). ARC-271: same per-finding
       // snapshot as the primary path.
       await writeReviewManifestForEnsemble({
-        env, client, owner, repo, prNumber,
+        env, client, enabled: reviewManifestEnabled, owner, repo, prNumber,
         headSha,
         baseSha: meta.base?.sha ?? "",
         modelId: "ensemble-synth",

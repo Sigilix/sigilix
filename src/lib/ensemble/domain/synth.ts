@@ -9,12 +9,17 @@
 // fields named in `SynthOutcomeInput`, so the adapter output + the existing
 // test object literals both satisfy the widened supertype).
 //
-// Dependency rule: this module imports only domain/shared leaves (no env reads
-// beyond the pure `Env` flag-string reads, no network, no IO). The god-file
-// re-exports every symbol below so existing importers (tests + siblings) are
-// unaffected.
+// Dependency rule: this module imports only domain/shared leaves (no env reads,
+// no network, no IO). The god-file re-exports every symbol below so existing
+// importers (tests + siblings) are unaffected.
+//
+// SIG-375 (SIG-318 env→Config): the synth-bypass gate no longer reads `env` —
+// `parseSynthBypassEnabled` takes the RAW flag string and `isSynthBypassEligible`
+// takes the parsed boolean (the domain-purity fix). The edge (`../config.ts`)
+// reads `env.OPENCLAW_SYNTH_BYPASS_ENABLED` once into `EnsembleConfig.flags`; the
+// env-taking `isSynthBypassEnabled` / `isSynthBypassEligible` wrappers the shim
+// re-exports (for the existing unit tests) live there too.
 
-import type { Env } from "@/shared/types/env"
 import type { SpecialistRole } from "@/shared/domain/specialist-role"
 import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
 import type { SynthesizerProvenance } from "./validation"
@@ -157,14 +162,14 @@ export function truncateVerdictToTokens(
 }
 
 /**
- * SIG-228 Phase 3c: returns true when `OPENCLAW_SYNTH_BYPASS_ENABLED` is
- * `"on"`. Default-off keeps the always-synth legacy behavior in dev/test
- * and in any production environment where the flag was never flipped.
+ * SIG-228 Phase 3c: returns true when the raw `OPENCLAW_SYNTH_BYPASS_ENABLED`
+ * value is `"on"`. Default-off keeps the always-synth legacy behavior in
+ * dev/test and in any production environment where the flag was never flipped.
  * Production wrangler.toml ships this `"on"` so the bypass fires for
  * single-specialist no-major reviews (the dispatcher's hot path).
  */
-export function isSynthBypassEnabled(env: Env): boolean {
-  return (env.OPENCLAW_SYNTH_BYPASS_ENABLED ?? "").trim().toLowerCase() === "on"
+export function parseSynthBypassEnabled(raw: string | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase() === "on"
 }
 
 /**
@@ -172,7 +177,8 @@ export function isSynthBypassEnabled(env: Env): boolean {
  * can pin the gate without spinning up the full ensemble. Returns true
  * iff ALL of:
  *
- *   1. `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`.
+ *   1. The synth-bypass flag is on (`enabled` — SIG-375: the parsed
+ *      `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`, threaded in via Config).
  *   2. The DISPATCHER decided to fan out to exactly 1 specialist
  *      (`dispatchedCount === 1`). The hot path is "router narrowed
  *      to 1 on purpose" — NOT "router fanned out to N, only 1 came
@@ -192,11 +198,11 @@ export function isSynthBypassEnabled(env: Env): boolean {
  * verbatim — keep these in sync.
  */
 export function isSynthBypassEligible(
-  env: Env,
+  enabled: boolean,
   dispatchedCount: number,
   candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
 ): boolean {
-  if (!isSynthBypassEnabled(env)) return false
+  if (!enabled) return false
   if (dispatchedCount !== 1) return false
   if (candidates.length !== 1) return false
   const sole = candidates[0]

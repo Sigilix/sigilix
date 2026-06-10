@@ -733,6 +733,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
       succeeded,
       degradedCoverage,
       synthInputVerdicts,
+      synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
     })
     if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }
 

@@ -66,6 +66,7 @@ import {
 } from "../domain/budget"
 import type { CollectedVerdict, SynthesizerProvenance } from "../domain/validation"
 import type { PrReviewVerdictWithIds } from "../domain/findings"
+import type { EnsembleConfig } from "../domain/config"
 import {
   buildSynthRetryMessage,
   buildAstFindingsSynthBlock,
@@ -149,6 +150,9 @@ export interface SynthesizeArgs<R> {
   degradedCoverage: { rolesReturned: SpecialistRole[]; rolesMissing: SpecialistRole[] } | null
   /** Hoisted out of the orchestrator so both the bypass + synth branches read the same truncated verdicts. */
   synthInputVerdicts: SynthInputVerdict[]
+  /** SIG-375: the parsed `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"` flag, threaded
+   *  from `EnsembleConfig.flags` so the bypass gate no longer reads env. */
+  synthBypassEnabled: EnsembleConfig["flags"]["synthBypassEnabled"]
 }
 
 export type SynthesizePhaseResult<R> =
@@ -189,11 +193,12 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     succeeded,
     degradedCoverage,
     synthInputVerdicts,
+    synthBypassEnabled,
   } = a
     const synthBypassEligible =
       !shadowEnabledRoles.has("synth") &&
       isSynthBypassEligible(
-        env,
+        synthBypassEnabled,
         router.specialists.length,
         succeeded,
       )

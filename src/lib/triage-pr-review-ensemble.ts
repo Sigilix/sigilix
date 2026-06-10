@@ -84,29 +84,17 @@ import {
   type ChangedLines,
 } from "@/features/ast-rules"
 import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
-import {
-  loadWithdrawals,
-  filterWithdrawnFindings,
-  filterWithdrawnFindingsDetailed,
-  computeContentFingerprint,
-  type WithdrawalRecord,
-} from "./review-withdrawal-store"
-import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
+// SIG-318 (PR 12d): the review-withdrawal store helpers (loadWithdrawals,
+// filterWithdrawnFindings[Detailed], computeContentFingerprint, WithdrawalRecord)
+// and the repeat-FP metrics client (recordRepeatFpMetrics, RepeatFpEvent) followed
+// the render-prep phase into ensemble/app/render-prep — no longer imported here.
 import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
 import type { CheckRunAnnotation } from "../shared/types/github"
-import { applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
+import { selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import {
   type PrReviewVerdict,
-  type PrReviewFinding,
-  type CoverageRoles,
-  type DeltaBadgeCounts,
-  buildBodyOnlyCheckAnnotations,
   buildFallbackSubmission,
-  buildReviewSubmissionWithMetadata,
-  getProposedChangeScopeMismatch,
   previewFallbackSubmissionEvent,
-  previewReviewSubmissionEvent,
-  type ReviewSuggestionEmission,
 } from "./triage-pr-review"
 // SIG-361 (PR 9): the verdict domain. The moved names import directly from the
 // leaf (the inward direction per the dependency rule); `severityTier` is
@@ -115,24 +103,16 @@ import {
 // at HEAD (tests import the latter from this path), so both are re-exported to
 // preserve this module's public surface.
 import {
-  chooseReviewEvent,
-  computeShadowGateDivergence,
   severityTier,
   LOW_CONFIDENCE_COMMENT_THRESHOLD,
   resolveReviewEventOverride,
   type ReviewEvent,
 } from "./ensemble/domain/verdict"
 export { LOW_CONFIDENCE_COMMENT_THRESHOLD, resolveReviewEventOverride }
-// SIG-360: `isSubstantiveAnchorLine` relocated to a shared/util leaf so the
-// validation domain can reference it without importing this god-file's sibling.
-import { isSubstantiveAnchorLine } from "@/shared/util/anchor-lines"
-import {
-  assessApprovalReadiness,
-  buildApprovalReadinessSummary,
-  type ApprovalReadinessSourceFinding,
-} from "./approval-readiness"
-import { readGateMode, readGateThreshold } from "./gate-config"
-import { buildPrUrl, preparePrReviewCounter } from "./pr-review-counter"
+// SIG-318 (PR 12d): `isSubstantiveAnchorLine` (the re-anchor gate's substantive-
+// line predicate) and the approval-readiness helpers (`assessApprovalReadiness`,
+// `buildApprovalReadinessSummary`, `ApprovalReadinessSourceFinding`) followed the
+// render-prep / verification-prep phases into ensemble/app — no longer imported here.
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
@@ -245,10 +225,9 @@ import {
   type DiffMode,
 } from "./incremental-review"
 import { recordReviewedDiffHash } from "./noop-merge-detect"
-import {
-  readReviewManifest,
-  type ReviewManifestFinding,
-} from "./review-manifest"
+// SIG-318 (PR 12d): the review-manifest reader (`readReviewManifest`) +
+// `ReviewManifestFinding` followed the render-prep delta-badge snapshot into
+// ensemble/app/render-prep — no longer imported here.
 import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
 import { runAstRules } from "@/features/ast-rules"
@@ -261,56 +240,34 @@ import { postAstInlineFindings } from "@/features/ast-rules"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
-import { readVerificationMode, readReanchorEnabled } from "./verification/mode"
-import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion, planReanchor, applyReanchors } from "./verification/verify-finding"
+// SIG-318 (PR 12d): the verification-mode readers (`readVerificationMode`,
+// `readReanchorEnabled`) + `applyReanchors` followed the verification/marker
+// pre-compute into ensemble/app/verification-prep — no longer imported here.
 import {
-  verifyFindingAgainstReceipt,
   buildReceiptIndex,
   extractReceiptScanResults,
   type ReceiptScanResult,
 } from "./verification/verify-finding-receipt"
 import { parseSarif } from "@/features/sarif-evidence"
 import { normalizeSarifPath } from "@/features/sarif-evidence"
-import { recordVerificationMetricsBounded } from "./verification-metrics-client"
-import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
-import { annotateFindingTrust } from "./trust-ledger-thread"
 import {
   renderSarifFindingsForPrompt,
 } from "@/features/sarif-evidence"
 import { buildSarifCheckAnnotations } from "@/features/sarif-evidence"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
-import {
-  buildSigilixMarker,
-  categoryFromRoleHint,
-  computeFid,
-  computePathSha256,
-  markerSeverityFromScore,
-} from "./review-memory/marker"
-import {
-  extractClaims,
-  CLAIM_EXTRACTION_SCHEMA,
-  type ClaimExtractionFinding,
-} from "./review-memory/claim-extractor"
-import {
-  shadowMatchReviewMemoryClaims,
-  type ShadowMatchFinding,
-} from "./review-memory/shadow-match"
-import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import {
-  readCalibrationParams,
-  shouldKeepSoften,
-  decideWarmSoftenSurvival,
-  type WarmSoftenCandidate,
-  type WarmSoftenDecision,
-} from "./review-memory/calibration"
-import { resolveReviewMemoryConfig } from "./sigilix-config"
-// SIG-147: per-repo precision-profile feedback loop (suppress repeatedly-dismissed
-// patterns, record outcome signal). Shadow-gated; recall-safe.
-import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/features/precision-profile"
+// SIG-318 (PR 12d): the review-memory render-path helpers — the marker builders
+// (`buildSigilixMarker`/`categoryFromRoleHint`/`computeFid`/`computePathSha256`/
+// `markerSeverityFromScore`), the claim extractor (`extractClaims`/
+// `CLAIM_EXTRACTION_SCHEMA`/`ClaimExtractionFinding`), the shadow-match
+// (`shadowMatchReviewMemoryClaims`/`ShadowMatchFinding`), the soften gate
+// (`isSoftenActive`/`softenScoreWithFloor`), the calibration cluster
+// (`readCalibrationParams`/`shouldKeepSoften`/`decideWarmSoftenSurvival`/
+// `WarmSoftenCandidate`/`WarmSoftenDecision`), `resolveReviewMemoryConfig`, the
+// precision-profile loop (`loadPrecisionProfile`/`recordOutcome`/
+// `applyPrecisionProfile`), and the claim-marker/type aliases — all followed the
+// render-prep / verification-prep phases into ensemble/app — no longer imported here.
 import type {
-  ReviewMemoryClaimMarkerData,
-  ReviewMemoryClaimType,
   ReviewMemorySkipReason,
 } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
@@ -333,9 +290,6 @@ import {
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../shared/types/env"
-// SIG-318 (PR 0b): golden-output safety harness capture hook. Flag-gated
-// (OPENCLAW_GOLDEN_CAPTURE), off by default → byte-identical behavior.
-import { captureGolden } from "./ensemble-golden-capture"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 // SIG-286 — graph-context body expansion (shadow-only in PR1).
@@ -434,7 +388,6 @@ export type { MinSpecialistsEarlyExitMode, EarlyExitAction } from "./ensemble/do
 // / SynthesizerProvenance are re-exported so existing importers (tests) are unaffected.
 import {
   validateForSubmission as validateForSubmissionDomain,
-  evidencePieceCountForTelemetry,
   type ValidateForSubmissionArgs,
   type ValidatedOutput,
   type SynthesizerProvenance,
@@ -462,12 +415,16 @@ import {
 // builder + verdict truncation, the synth-attempt outcome classifier + retry
 // message, and the synth-bypass eligibility predicates) moved to the synth
 // domain. Value-imported for internal use + re-exported below so existing
-// importers (tests + siblings) are unaffected. `ApprovalReadinessSourceVerdict`
-// is re-exported too (the god-file's `collectApprovalReadinessSourceFindings`
-// reads it). `SynthAttemptOutcome` is type-imported for the `EnsembleTelemetry`
+// importers (tests + siblings) are unaffected. SIG-318 (PR 12d):
+// `collectApprovalReadinessSourceFindings` (the render-prep app phase's pure
+// source-finding flattener) followed it into the synth domain — re-exported
+// below to keep this module's public surface. `ApprovalReadinessSourceVerdict`
+// is re-exported too (that flattener + the render-prep phase read it).
+// `SynthAttemptOutcome` is type-imported for the `EnsembleTelemetry`
 // `synthRetry.outcome` union (import-back).
 import {
   buildSynthInputVerdicts,
+  collectApprovalReadinessSourceFindings,
   classifySynthOutcome,
   buildSynthRetryMessage,
   truncateVerdictToTokens,
@@ -479,6 +436,7 @@ import {
 } from "./ensemble/domain/synth"
 export {
   buildSynthInputVerdicts,
+  collectApprovalReadinessSourceFindings,
   classifySynthOutcome,
   buildSynthRetryMessage,
   truncateVerdictToTokens,
@@ -491,6 +449,17 @@ export type { ApprovalReadinessSourceVerdict, SynthAttemptOutcome }
 // SIG-235 quorum collector, collectSpecialistVerdicts, the coverage gate, the
 // synth-bypass / synthesizer path + the recall floors) moved to the app layer.
 import { runSpecialistsAndSynthesize } from "./ensemble/app/specialists"
+// SIG-318 (PR 12d): the RENDER-PREP phase (review-memory soften + warm veto, the
+// renderable-set assembly + the fragile parallel-array bookkeeping, the cross-push
+// delta-badge snapshot, the coverage roster, and the verification/marker pre-
+// compute) moved to the app layer (render-prep delegates the verification/marker
+// tail to ensemble/app/verification-prep so neither file exceeds 1k lines).
+import { prepareRender } from "./ensemble/app/render-prep"
+// SIG-318 (PR 12e): the VERIFY-AND-BUILD phase (the detached gate-shadow IIFE, the
+// SIG-285 verification + refuted-demote + receipt-join, the Trust Ledger v0 baseline
+// annotation, and the submission build through buildReviewSubmissionWithMetadata +
+// applyOutputSurfaceToSubmission) moved to the app layer.
+import { verifyAndBuildSubmission } from "./ensemble/app/verify-and-build"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -720,7 +689,9 @@ export type { ShadowRunFailedOutcome }
 //   - `SPECIALIST_CONFIGS`/`SYNTHESIZER_CONFIG` were exported here → imported
 //     (the orchestrator + finalize telemetry read them) AND re-exported.
 //   - `CLAIM_EXTRACTOR_CONFIG`/`CLAIM_EXTRACTOR_TIMEOUT_MS` were private here →
-//     import-back only. SIG-318 (PR 12c): `SYNTHESIZER_MODEL`/`SPECIALIST_MODELS`
+//     SIG-318 (PR 12d): followed the render-prep claim-classifier closure into
+//     ensemble/app/render-prep — no longer imported here.
+//     SIG-318 (PR 12c): `SYNTHESIZER_MODEL`/`SPECIALIST_MODELS`
 //     followed the specialists+synth seam into ensemble/app — no longer imported
 //     here (the model-provider adapter still owns them; the app reads them direct).
 import type { ModelConfig } from "./ensemble/domain/model-policy"
@@ -728,8 +699,6 @@ export type { ModelConfig }
 import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
-  CLAIM_EXTRACTOR_CONFIG,
-  CLAIM_EXTRACTOR_TIMEOUT_MS,
 } from "./ensemble/adapters/model-provider"
 export { SPECIALIST_CONFIGS, SYNTHESIZER_CONFIG }
 
@@ -791,76 +760,29 @@ export interface EnsembleHandlerArgs {
   repoId?: number
 }
 
-export interface SubmissionAffordance {
-  reviewCounter?: number
-  retriggerUrl?: string
-  persistReviewCounter: () => Promise<void>
+// SIG-318 (PR 12e): the submission-affordance cluster (`SubmissionAffordance`,
+// `withSubmissionAffordance`, `SuggestionEmissionLogContext`/`...Event` +
+// `buildSuggestionEmissionLogEvents`, `prepareSubmissionAffordance`) moved to
+// ensemble/app/affordances — the verify-and-build phase and the orchestrator's
+// later submit/fallback section both call them. The exported members are
+// re-exported below (tests import `prepareSubmissionAffordance` +
+// `buildSuggestionEmissionLogEvents`); `withSubmissionAffordance` +
+// `buildSuggestionEmissionLogEvents` are imported-back for the orchestrator's
+// own fallback/submit section.
+import {
+  prepareSubmissionAffordance,
+  withSubmissionAffordance,
+  buildSuggestionEmissionLogEvents,
+} from "./ensemble/app/affordances"
+export {
+  prepareSubmissionAffordance,
+  buildSuggestionEmissionLogEvents,
 }
-
-function withSubmissionAffordance<T extends object>(
-  value: T,
-  affordance: SubmissionAffordance,
-): T & { reviewCounter?: number; retriggerUrl?: string } {
-  return {
-    ...value,
-    ...(affordance.reviewCounter !== undefined ? { reviewCounter: affordance.reviewCounter } : {}),
-    ...(affordance.retriggerUrl !== undefined ? { retriggerUrl: affordance.retriggerUrl } : {}),
-  }
-}
-
-export interface SuggestionEmissionLogContext {
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-  commentsSubmitted: boolean
-}
-
-export interface SuggestionEmissionLogEvent {
-  event: "pr-review-suggestion-emitted"
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-  path: string
-  line: number
-  startLine?: number
-}
-
-export function buildSuggestionEmissionLogEvents(
-  context: SuggestionEmissionLogContext,
-  suggestions: readonly ReviewSuggestionEmission[],
-): SuggestionEmissionLogEvent[] {
-  if (!context.commentsSubmitted) return []
-  return suggestions.map((suggestion) => ({
-    event: "pr-review-suggestion-emitted",
-    owner: context.owner,
-    repo: context.repo,
-    prNumber: context.prNumber,
-    headSha: context.headSha.slice(0, 7),
-    path: suggestion.path,
-    line: suggestion.line,
-    ...(suggestion.startLine !== undefined ? { startLine: suggestion.startLine } : {}),
-  }))
-}
-
-export async function prepareSubmissionAffordance(args: {
-  env: Env
-  owner: string
-  repo: string
-  prNumber: number
-  event: ReviewEvent
-}): Promise<SubmissionAffordance> {
-  if (args.event !== "REQUEST_CHANGES") {
-    return { persistReviewCounter: async () => undefined }
-  }
-  const counter = await preparePrReviewCounter(args.env, args.owner, args.repo, args.prNumber)
-  return {
-    reviewCounter: counter.value,
-    retriggerUrl: buildPrUrl(args.owner, args.repo, args.prNumber),
-    persistReviewCounter: counter.persist,
-  }
-}
+export type {
+  SubmissionAffordance,
+  SuggestionEmissionLogContext,
+  SuggestionEmissionLogEvent,
+} from "./ensemble/app/affordances"
 
 // ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
 // mode-routing layer were deleted. The dispatcher now performs an
@@ -3309,946 +3231,65 @@ export async function handlePrReviewEnsemble(
     // pre-submit dismiss + `submitReview`).
 
     // ─── Submit ────────────────────────────────────────────────
-    // GitHub validates every inline anchor and rejects the entire review
-    // on a single bad position (typical 422). When that happens the
-    // ensemble verdict is good but unsubmittable in its inline shape —
-    // Greptile's pr_review.ts handles this by re-posting the review
-    // anchorless with all findings rolled into the body. Same pattern
-    // here: catch any submit error and retry with `buildFallbackSubmission`.
-    // If the fallback ALSO fails, the outer try/catch records it as
-    // `internal_error` (same behaviour as before this change).
-    // Pass `unanchoredFindings` to the primary submission so any
-    // findings that failed line-validity are still rolled into the
-    // body (instead of being recovered ONLY when the inline submit
-    // fails). CR PR #38 catch — without this, GitHub's success path
-    // silently drops the unanchored set.
-    //
-    // ARC-189 Task 10b: apply review-memory soften BEFORE rendering.
-    // The synth's `provenance.softened[]` references specialist
-    // sourceFindingIds (e.g., "logic-3"); for each kept finding whose
-    // provenance.sourceFindingIds intersects the softened set, build
-    // a CLONE of the finding with `score = Math.max(1, score - 1)`.
-    // Original finding objects are NEVER mutated (Kimi MINOR on plan
-    // v2 — preserves immutability for downstream telemetry).
-    const softenedSet = new Set<string>()
-    if (synthOutput.provenance?.softened) {
-      for (const s of synthOutput.provenance.softened) {
-        if (typeof s.sourceFindingId === "string") {
-          softenedSet.add(s.sourceFindingId)
-        }
-      }
-    }
-    // SIG-280 PR B: soften is now CALIBRATED + opt-in. It only changes a
-    // score when `softenActive` (global flag === "soften" AND per-repo
-    // `claimSoftening` true). PR B ships the COLD regime: no calibration
-    // params exist yet (PR C produces them), so the veto cancels EVERY
-    // soften — we record what WOULD have softened (telemetry) then clear
-    // the set, so nothing is softened until the calibrated path lands and
-    // the founder enables it (believability-dominant: worst case is "no
-    // soften", never over-soften). When NOT active, the soften loop below
-    // simply doesn't decrement, turning off the pre-Phase-4 uncalibrated
-    // always-on soften.
-    const claimShadowMode = ensembleConfig.flags.reviewMemoryClaimShadowMode
-    // `reviewMemoryConfig` is scoped to the review-memory injection block
-    // above; re-resolve the per-repo bool here (pure + cheap) from the
-    // function-scoped sigilixConfig.
-    const softenActive = isSoftenActive(
-      claimShadowMode,
-      resolveReviewMemoryConfig(sigilixConfig).claimSoftening,
-    )
-    const claimsEnabled = ensembleConfig.flags.reviewMemoryClaims === "on"
-
-    // Reusable claim-extractor model closure. Shared by the SIG-280 PR C
-    // warm veto below and the Phase-2/3 extraction site further down, so
-    // the (paid) classifier runs at most ONCE per review even on the warm
-    // path (the warm pre-pass memoizes its output into
-    // `earlyClaimsPerFinding`).
-    const runClaimClassifier = async (
-      system: string,
-      user: string,
-    ): Promise<string | null> => {
-      if (!env.OLLAMA_API_KEY) return null
-      const res = await runWithRetryAndFallback<string>({
-        config: CLAIM_EXTRACTOR_CONFIG,
-        apiKey: env.OLLAMA_API_KEY,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        signal: orchCtrl.signal,
-        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-        format: CLAIM_EXTRACTION_SCHEMA as unknown as Record<string, unknown>,
-        parseAnswer: (content) => content,
-        parseFailureLabel: "claim_extractor_did_not_parse",
-        startedAt: Date.now(),
-        perAttemptTimeoutMs: CLAIM_EXTRACTOR_TIMEOUT_MS,
-      })
-      return res.verdict
-    }
-
-    // Withdrawals are loaded ONCE here (hoisted from the post-soften
-    // filter site below) so the warm veto and the main render path derive
-    // the SAME withdrawal-survivor index from one read — eliminating any
-    // chance the two diverge between back-to-back KV reads. Defense-in-
-    // depth wrap (CodeRabbit M1, PR #142): the store helper already
-    // returns [] on KV/parse failure, but a future sync throw would
-    // otherwise unwind the whole review path; withdrawal suppression is a
-    // nice-to-have and must never fail a review.
-    let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
-    try {
-      withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
-    } catch (err) {
-      console.warn(JSON.stringify({
-        event: "review-withdrawal-load-unexpected-throw",
-        owner, repo, prNumber,
-        error: err instanceof Error ? err.message : String(err),
-      }))
-    }
-
-    // SIG-280 PR C — the soften VETO. PR B shipped only the COLD regime
-    // (no calibration params → veto EVERY soften). PR C adds the WARM
-    // regime: when a calibration blob exists in KV with >=1 trustworthy
-    // claim type, each soften survives ONLY if the finding matched — at
-    // claim level, conditioned on the active memory's shadowClaims, i.e.
-    // exactly what the calibration corpus measured — a claim type whose
-    // 95% lower bound clears the threshold. The ENTIRE warm branch is
-    // gated on params existing; in prod they do not yet, so the cold
-    // veto-all runs byte-identically to PR B until calibration is fitted
-    // and the founder enables it. Believability-dominant: any ambiguity
-    // (no match, cold/thin type, low bound, missing params) → veto, and
-    // the P0/P1 floor in the soften clone below is the final guard.
-    let earlyClaimsPerFinding:
-      | ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]>
-      | null = null
-    // Survival is keyed by CONSENSUS-FINDING INDEX, never by sourceFindingId
-    // (Codex + CodeRabbit P1: one source id can map to multiple synthesized
-    // findings, so a source-id set would leak a survival onto a sibling).
-    // null on the soften-inactive path; an (empty in cold regime) Set when
-    // the veto pre-pass runs. The soften clone loop + approval-readiness key
-    // off this index set.
-    let survivingSoftenIndexSet: Set<number> | null = null
-    if (softenActive && softenedSet.size > 0) {
-      const calibrationBlob = claimsEnabled
-        ? await readCalibrationParams(env.OPENCLAW_STATE)
-        : null
-      const warmUsable =
-        calibrationBlob !== null &&
-        shadowMemoriesForPhase3.length > 0 &&
-        Object.values(calibrationBlob).some((p) => shouldKeepSoften(p))
-
-      // Per softened finding, the claim types it matched a memory on.
-      // WARM only — needs the model-backed claim extraction + the shadow
-      // match. Cold/off paths never compute this (→ empty → veto-all).
-      const matchedTypesByFid = new Map<string, Set<ReviewMemoryClaimType>>()
-      if (warmUsable) {
-        // Re-derive today's withdrawal-survivor index the SAME way the
-        // main render path does. `filterWithdrawnFindings` matches on
-        // path+line+body (score-independent), so an UNSOFTENED probe
-        // over the same `withdrawals` yields the identical keepIndex —
-        // and extracting claims over exactly that filtered batch keeps
-        // the veto's claim types on the same batch shape the corpus saw
-        // (Codex Option E: avoids batch-drift over-soften).
-        const probe = consensusVerdict.findings.map((f, i) =>
-          annotateWithConsensus(f, consensusByIndex[i] ?? 1),
-        )
-        const { kept: probeKept } = filterWithdrawnFindings(probe, withdrawals)
-        const probeKeptSet = new Set(probeKept)
-        const warmKeepIndex: number[] = []
-        for (let i = 0; i < probe.length; i++) {
-          if (probeKeptSet.has(probe[i]!)) warmKeepIndex.push(i)
-        }
-        const warmFiltered = warmKeepIndex.map((i) => consensusVerdict.findings[i]!)
-        const warmFilteredProvenance = warmKeepIndex.map((i) => consensusProvenance[i])
-
-        const warmClaims = await extractClaims({
-          findings: warmFiltered.map(
-            (f): ClaimExtractionFinding => ({
-              headline: f.headline,
-              body: f.body,
-              category: f.category,
-            }),
-          ),
-          runClassifier: runClaimClassifier,
-        })
-        earlyClaimsPerFinding = warmClaims
-
-        const warmShadowFids = await Promise.all(
-          warmFiltered.map((f) =>
-            computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),
-          ),
-        )
-        const warmShadowPathHashes = await Promise.all(
-          warmFiltered.map((f) => computePathSha256(f.path)),
-        )
-        const warmShadowFindings: ShadowMatchFinding[] = warmFiltered.map((f, j) => {
-          const sourceSpec = warmFilteredProvenance[j]?.sourceSpecialists?.[0]
-          return {
-            category: sourceSpec ? categoryFromRoleHint(sourceSpec) : null,
-            pathSha12: warmShadowPathHashes[j]?.slice(0, 12) ?? null,
-            fid: warmShadowFids[j] ?? "",
-            severityTier: severityTier(f.score),
-            claims: (warmClaims[j] ?? []).map((c) => ({
-              type: c.type,
-              extractorVersion: c.extractorVersion,
-            })),
-          }
-        })
-        const warmRows = shadowMatchReviewMemoryClaims({
-          memories: shadowMemoriesForPhase3,
-          findings: warmShadowFindings,
-        })
-        // Codex P1: the soften veto joins a candidate to its matched claim
-        // types BY fid. `computeFid` ignores body/category, so two distinct
-        // findings sharing (path, line, headline) collide on fid — one
-        // could then inherit the other's match and be softened though it
-        // matched nothing. Believability-dominant resolution: if a fid is
-        // ambiguous (more than one finding in this review carries it), we
-        // CANNOT safely attribute a match, so we drop it from the map →
-        // every candidate with that fid vetoes. Near-impossible after
-        // consensus dedup, but the cost of being wrong here is hiding a
-        // real finding, so we refuse to guess.
-        const fidCounts = new Map<string, number>()
-        for (const fid of warmShadowFids) {
-          fidCounts.set(fid, (fidCounts.get(fid) ?? 0) + 1)
-        }
-        for (const row of warmRows) {
-          if (!row.claimType) continue
-          if ((fidCounts.get(row.fid) ?? 0) > 1) continue // ambiguous fid → veto
-          let set = matchedTypesByFid.get(row.fid)
-          if (!set) {
-            set = new Set<ReviewMemoryClaimType>()
-            matchedTypesByFid.set(row.fid, set)
-          }
-          set.add(row.claimType)
-        }
-      }
-
-      // Build candidates — the softened findings, keyed by consensus index.
-      const candidates: WarmSoftenCandidate[] = []
-      for (let i = 0; i < consensusVerdict.findings.length; i++) {
-        const f = consensusVerdict.findings[i]!
-        const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
-        // Candidacy: the finding had at least one synth-softened source id.
-        if (!sourceIds.some((id) => softenedSet.has(id))) continue
-        const fid = await computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline })
-        candidates.push({
-          index: i,
-          fid,
-          matchedTypes: [...(matchedTypesByFid.get(fid) ?? [])],
-        })
-      }
-      const decisions: WarmSoftenDecision[] = warmUsable
-        ? decideWarmSoftenSurvival({ candidates, blob: calibrationBlob! })
-        : candidates.map((c) => ({
-            index: c.index,
-            fid: c.fid,
-            kept: false,
-            keepingTypes: [] as ReviewMemoryClaimType[],
-          }))
-
-      // Survival is carried forward BY INDEX (empty in the cold regime →
-      // veto-all, exactly as PR B). Keying by index — never by source id —
-      // prevents a kept finding from softening a sibling that shares a
-      // specialist source id (Codex + CodeRabbit P1).
-      survivingSoftenIndexSet = new Set<number>()
-      for (const d of decisions) {
-        if (d.kept) survivingSoftenIndexSet.add(d.index)
-        console.log(JSON.stringify({
-          event: "review-memory-claim-soften",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          fid: d.fid,
-          severityTier: severityTier(consensusVerdict.findings[d.index]!.score),
-          keepingTypes: d.keepingTypes,
-          vetoed: !d.kept,
-          paramsMissing: !warmUsable,
-        }))
-      }
-    }
-    let softenedCount = 0
-    // SIG-280 PR C: the SINGLE source of truth for "this finding's score was
-    // actually lowered in the rendered output" — populated below exactly where
-    // the soften clone is built. Approval-readiness reads this (intersected
-    // with the withdrawal-survivor `keepIndex`) instead of re-encoding the
-    // soften contract, so the two paths can never drift (CodeRabbit).
-    const actuallySoftenedIndexSet = new Set<number>()
-    // ARC-270: soften walks the CONSENSUS-RANKED arrays (verdict +
-    // provenance + consensusByIndex stay in lockstep). Body
-    // annotation happens here too, so renderable findings carry both
-    // the (possibly softened) score AND the consensus prefix.
-    //
-    // Caveat: the rendered Fix Plan (`renderFixPlan` in
-    // `triage-pr-review.ts`) and the anchorless 422-fallback's
-    // per-file rendering both apply their own sort (by location /
-    // by score within file). They override consensus ORDER, but the
-    // `_Flagged by N specialists._` body prefix still surfaces the
-    // signal — the badge stays, just the row position differs in
-    // those two surfaces.
-    // SIG-217: annotate each finding with its content fingerprint BEFORE
-    // render + withdrawal filtering. Computed from the RAW synth body (this
-    // runs before annotateWithConsensus prepends its "_Flagged by N_" line),
-    // so the value is stable across pushes regardless of the per-push blob
-    // hash that drives the model-emitted finding ID. The fingerprint then
-    // (a) flows into the rendered comment as a hidden marker, and (b) lets a
-    // later content-equivalent re-fire be recognized as already-dismissed.
-    // Mutates in place — runtime-only field, like `trust`. Best-effort: a hash
-    // failure leaves the finding without a fingerprint (Jaccard fallback).
-    try {
-      await Promise.all(
-        consensusVerdict.findings.map(async (f) => {
-          f.contentFingerprint = await computeContentFingerprint(f.category, f.path, f.body)
-        }),
-      )
-    } catch (err) {
-      console.warn(JSON.stringify({
-        event: "finding-fingerprint-annotate-failed",
-        owner, repo, prNumber,
-        error: err instanceof Error ? err.message : String(err),
-      }))
-    }
-    const renderableFindings = consensusVerdict.findings.map((f, i) => {
-      // SIG-280 PR C: soften iff this finding's INDEX survived the veto
-      // pre-pass (cold regime → empty set, so this never fires in prod yet).
-      // Index-keyed — see `survivingSoftenIndexSet`. `softenScoreWithFloor`
-      // keeps a P0/P1 (score >= 4) UNCHANGED — a blocker is never softened
-      // below its tier — and decrements P2/P3 by one (floored at 1).
-      //
-      // Codex P1 note: the floor reads the CONSENSUS finding's `f.score`,
-      // not the underlying specialist source score. That equals the true
-      // severity only because the synthesizer is required to emit findings
-      // at TRUE severity and never pre-downgrade (the SIG-284 renderer-only-
-      // soften contract, pinned by PROMPT_VERSION + the double-soften test).
-      // If a synth ever under-scored a true P0/P1 to <4 this floor wouldn't
-      // catch it — but that is a synth-correctness bug, out of scope here,
-      // and guarded by the prompt contract rather than this line.
-      const matched = softenActive && (survivingSoftenIndexSet?.has(i) ?? false)
-      let working = f
-      if (matched) {
-        const effectiveScore = softenScoreWithFloor(f.score)
-        if (effectiveScore !== f.score) {
-          softenedCount++
-          actuallySoftenedIndexSet.add(i)
-          working = { ...f, score: effectiveScore }
-        }
-      }
-      // Body annotation — only when consensus >= 2.
-      return annotateWithConsensus(working, consensusByIndex[i] ?? 1)
-    })
-    const renderableUnanchoredRaw = validated.unanchoredFindings  // unanchored never matches by INDEX (no parallel arrays)
-    // SIG-160 PR3: drop any finding the bot already conceded via mention-reply
-    // (`<!-- sigilix:gh-mention-reply -->` with verdict:"concede"). Filter
-    // applies to inline-anchored findings only — unanchored findings have
-    // no path+line to match a WithdrawalRecord against. Runs BEFORE the
-    // manifest snapshot + counter bump so a withdrawn finding never:
-    //   - lands in the persisted manifest (would corrupt next push's delta)
-    //   - triggers a REQUEST_CHANGES counter bump (would re-block the PR)
-    //   - reaches `buildReviewSubmission` (would post the inline comment).
-    //
-    // Index alignment (CodeRabbit M1 catch): `consensusVerdict.findings`,
-    // `consensusByIndex`, and `consensusProvenance` are parallel arrays
-    // — index `i` in each refers to the same finding. The filter must
-    // produce a `keepIndex` whose entries are valid indices into the
-    // original arrays, and downstream consumers (snapshot + marker
-    // computation) read through that index list so the filtered view
-    // stays aligned end-to-end.
-    //
-    // `withdrawals` is loaded once near the soften pre-pass above (SIG-280
-    // PR C hoisted it so the warm veto and this render path share one
-    // read); the defensive wrap + rationale live there.
-    const { kept: postWithdrawalFindings, suppressed: withdrawnDetailed, decayExpired: decayExpiredFindings } =
-      filterWithdrawnFindingsDetailed(renderableFindings, withdrawals)
-    const withdrawnFindings = withdrawnDetailed.map((s) => s.finding)
-    // SIG-217: emit repeat-FP telemetry. Two cases feed one batch:
-    //   - fingerprint re-fires still inside the decay window (suppressed) →
-    //     `repeat-fp-detected`, plus `severity-escalation-attempt` if the score
-    //     climbed above what it was when dismissed.
-    //   - decay-window lapses (SIG-217 Part B) — the finding was LET THROUGH
-    //     because the dismissal aged past the decay window → emit
-    //     `dismiss-decay-window-expired`.
-    // The finding's category is the per-specialist dimension (logic / security /
-    // performance / testing …). Awaited-but-non-fatal (the recordDismissalMetric
-    // pattern) — a telemetry failure must never affect the review.
-    const repeatFpEvents: RepeatFpEvent[] = []
-    for (const s of withdrawnDetailed) {
-      if (!s.viaFingerprint) continue
-      repeatFpEvents.push({ kind: "repeat-fp-detected", specialist: s.finding.category })
-      if (s.severityEscalated) {
-        repeatFpEvents.push({ kind: "severity-escalation-attempt", specialist: s.finding.category })
-      }
-    }
-    for (const s of decayExpiredFindings) {
-      repeatFpEvents.push({ kind: "dismiss-decay-window-expired", specialist: s.finding.category })
-    }
-    if (repeatFpEvents.length > 0) {
-      try {
-        await recordRepeatFpMetrics(env, { owner, repo, prNumber, headSha, events: repeatFpEvents })
-      } catch (err) {
-        console.log(JSON.stringify({
-          event: "repeat-fp-metrics-record-error",
-          owner, repo, prNumber,
-          error: err instanceof Error ? err.message : String(err),
-        }))
-      }
-    }
-    // SIG-147: per-repo precision profile — suppress repeatedly-dismissed
-    // PATTERNS (recall-safe: never a P0/P1) and record the `stale` outcome from
-    // decay-expired dismissals. Shadow by default (compute + telemeter, no
-    // output change); `enforce` filters. Best-effort — a profile failure must
-    // never affect the review. Boost is computed/surfaced but applied at the
-    // SIG-104 prompt gate (not yet built); see precision-profile/README.md.
-    // NOTE: `shadow` leaves the posted review byte-identical, but DOES still
-    // write `stale` outcomes to KV (building the corpus is the point of shadow);
-    // only `enforce` changes what's posted.
-    const precisionMode = ensembleConfig.flags.precisionProfileMode
-    let precisionKept = postWithdrawalFindings
-    if (precisionMode !== "off") {
-      // Key on the owner/repo slug — the SAME key the dismiss path
-      // (github-mention) records outcomes under, so the signal round-trips.
-      const precisionRepoKey = `${owner}/${repo}`
-      try {
-        const profile = await loadPrecisionProfile(env, precisionRepoKey)
-        const precision = applyPrecisionProfile(postWithdrawalFindings, profile, {
-          enforce: precisionMode === "enforce",
-        })
-        if (precision.suppressed.length > 0 || precision.boosted.length > 0) {
-          console.log(JSON.stringify({
-            event: "precision-profile-decision",
-            owner, repo, prNumber, mode: precisionMode,
-            // FP-reduction signal (ties SIG-114): each suppressed finding is an avoided FP.
-            suppressed: precision.suppressed.length,
-            boosted: precision.boosted.length,
-            suppressed_categories: precision.suppressed.map((s) => s.finding.category),
-            boosted_categories: precision.boosted.map((b) => b.finding.category),
-          }))
-        }
-        if (precisionMode === "enforce") precisionKept = precision.kept
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "precision-profile-apply-failed",
-          owner, repo, prNumber,
-          error: err instanceof Error ? err.message : String(err),
-        }))
-      }
-      // A decay-expired dismissal (SIG-217) relaxes its pattern back toward neutral.
-      for (const s of decayExpiredFindings) {
-        if (!s.finding.contentFingerprint) continue
-        try {
-          await recordOutcome(env, {
-            repoId: precisionRepoKey,
-            category: s.finding.category,
-            patternHash: s.finding.contentFingerprint,
-            outcome: "stale",
-          })
-        } catch { /* non-fatal */ }
-      }
-    }
-    // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
-    // body-only set. PR C's enforce mode can demote a LINE-scoped finding
-    // (which carries a real path+line) to the body; without this it would
-    // bypass withdrawal suppression and a previously-dismissed nit could
-    // reappear in the Review Body. Safe for pr/file-scope body findings
-    // too — findingMatchesWithdrawal requires path + line-proximity + body
-    // similarity, so an unrelated body finding cannot false-match. This
-    // also closes the pre-existing gap where SIG-141 line-1 / unanchorable
-    // demotions skipped withdrawal entirely.
-    const { kept: renderableUnanchored, suppressed: withdrawnUnanchored } =
-      filterWithdrawnFindings(renderableUnanchoredRaw, withdrawals)
-    const keptRefSet = new Set(precisionKept)
-    const keepIndex: number[] = []
-    for (let i = 0; i < renderableFindings.length; i++) {
-      if (keptRefSet.has(renderableFindings[i]!)) keepIndex.push(i)
-    }
-    if (withdrawnFindings.length > 0 || withdrawnUnanchored.length > 0) {
-      console.log(JSON.stringify({
-        event: "review-findings-suppressed-by-withdrawal",
-        owner, repo, prNumber,
-        suppressed: withdrawnFindings.length,
-        // SIG-281 PR C: body-only findings now also withdrawal-filtered.
-        suppressed_unanchored: withdrawnUnanchored.length,
-        withdrawals_active: withdrawals.length,
-        paths: [...withdrawnFindings, ...withdrawnUnanchored].map((f) => f.path),
-      }))
-    }
-    // Filtered parallel views for downstream consumers — snapshot and
-    // marker computation read through these so the manifest, counter,
-    // and inline-comment markers all see the same kept set the renderer
-    // does. Original `consensusVerdict` stays intact (it's the audit
-    // record of what the model produced before suppression).
-    const filteredConsensusFindings = keepIndex.map((i) => consensusVerdict.findings[i]!)
-    const filteredConsensusByIndex = keepIndex.map((i) => consensusByIndex[i] ?? 1)
-    const filteredConsensusProvenance = keepIndex.map((i) => consensusProvenance[i])
-    // CodeRabbit M2 (review on PR #142): the synthesizer wrote
-    // `consensusVerdict.summary` over the FULL finding set including
-    // findings we're about to suppress. Reusing it verbatim could
-    // surface conceded content (e.g. "two findings about test
-    // coverage") even though the renderer drops one of them. When any
-    // suppression happened, replace the summary with a neutral
-    // fallback the renderer can use unmodified.
-    //
-    // CodeRabbit M-new (follow-up review on PR #142): the "nothing
-    // remaining to block" branch must consider BOTH anchored kept +
-    // unanchored findings — `renderableUnanchored` is independent of
-    // the withdrawal filter (no path+line to match against). Without
-    // this, an all-anchored-withdrawn run with surviving unanchored
-    // findings would post REQUEST_CHANGES with a summary that says
-    // "nothing remaining." `chooseReviewEvent` reads the merged set
-    // for the verdict decision, so the summary must agree.
-    const hasRemainingFindings =
-      precisionKept.length + renderableUnanchored.length > 0
-    // SIG-281 PR C (Codex P2 follow-on): regenerate the summary when
-    // EITHER an inline OR a body finding was withdrawal-suppressed —
-    // otherwise a body-only withdrawal would remove the finding from the
-    // submission but leave the consensus summary still describing it.
-    const summaryAfterSuppression = (withdrawnFindings.length > 0 || withdrawnUnanchored.length > 0)
-      ? (!hasRemainingFindings
-          ? "All flagged findings were previously addressed via review-thread acknowledgments; nothing remaining to block."
-          : "Summary regenerated after suppressing findings previously acknowledged via review-thread replies.")
-      : consensusVerdict.summary
-    const renderableVerdict: PrReviewVerdict = {
-      ...consensusVerdict,
-      summary: summaryAfterSuppression,
-      findings: precisionKept,
-    }
-    if (softenedCount > 0) {
-      console.log(JSON.stringify({
-        event: "review-memory-softened-rendered",
-        owner, repo, prNumber, softenedCount,
-      }))
-    }
-
-    // SIG-205 — approval-readiness must run before the delta/manifest
-    // snapshot below. Its body-only blockers are customer-visible
-    // findings, so they need the same persistence and still-open/new
-    // tracking as normal unanchored findings.
-    const intendedEvent = chooseReviewEvent([
-      ...renderableVerdict.findings,
-      ...renderableUnanchored,
-    ])
-    const sourceFindingsForApproval = collectApprovalReadinessSourceFindings(
-      synthInputVerdicts,
-      withdrawals,
-    )
-    // SIG-280 PR C: which synth-softened source ids were ACTUALLY softened in
-    // the rendered output. Derived from finding INDICES, never a source-id set,
-    // because a source id can feed multiple synthesized findings.
-    //
-    // We reuse `actuallySoftenedIndexSet` — the SINGLE source of truth built in
-    // the renderableFindings map above where the score is actually changed —
-    // and intersect it with the withdrawal survivors (`keepIndex`). That makes
-    // "actually de-emphasized in the output" mean: the renderer lowered the
-    // score AND the finding survived withdrawal filtering. No re-encoding of the
-    // soften contract here, so approval can't drift from rendered output
-    // (CodeRabbit). A P0/P1 the floor left unchanged was never added to the set,
-    // so it correctly does NOT count.
-    // FAIL CLOSED: a source id de-emphasized in one finding but left at full
-    // severity in another (vetoed, withdrawn, or floor-no-op) is NOT counted as
-    // accounted — else approval-readiness could approve over a sibling finding
-    // still at full severity (undercount blockers).
-    const keptIndexSet = new Set(keepIndex)
-    const softenMembership = new Map<string, { survived: boolean; vetoed: boolean }>()
-    if (softenActive) {
-      for (let idx = 0; idx < consensusProvenance.length; idx++) {
-        const survived = actuallySoftenedIndexSet.has(idx) && keptIndexSet.has(idx)
-        for (const sourceFindingId of consensusProvenance[idx]?.sourceFindingIds ?? []) {
-          if (!softenedSet.has(sourceFindingId)) continue
-          const state = softenMembership.get(sourceFindingId) ?? { survived: false, vetoed: false }
-          if (survived) state.survived = true
-          else state.vetoed = true
-          softenMembership.set(sourceFindingId, state)
-        }
-      }
-    }
-    const approvalReadiness = assessApprovalReadiness({
+    // SIG-318 (PR 12d): the render-prep phase — review-memory soften + the
+    // SIG-280 warm veto + the renderable-set assembly (fingerprints, consensus
+    // annotation, withdrawal filtering, repeat-FP metrics, precision profile, the
+    // `keepIndex` parallel-array bookkeeping, approval-readiness, the review-event
+    // resolution, `submissionVerdict`), the cross-push delta-badge snapshot, the
+    // coverage roster, and the verification/marker pre-compute (delegated to
+    // ensemble/app/verification-prep) — moved to ensemble/app/render-prep. It
+    // imports each dependency from its canonical home (app → domain/leaf, never
+    // back into this orchestrator) and mutates `submissionVerdict`'s findings by
+    // reference only on the default-off re-anchor path; every value it returns
+    // flows downstream unchanged. The fragile parallel arrays (keepIndex, the
+    // filtered-consensus triple, markers) moved byte-identical with no reordering.
+    const {
+      submissionVerdict,
+      renderableUnanchoredForSubmission,
+      filteredConsensusByIndex,
+      filteredConsensusProvenance,
       intendedEvent,
-      sourceFindings: sourceFindingsForApproval,
-      // Pass only source ids that survived softening EVERYWHERE they appear —
-      // a source finding counts as "accounted" only when it was actually
-      // de-emphasized in the output, so approval-readiness never silently
-      // approves over a finding the calibrated veto kept at full severity.
-      // Empty in the cold regime; [] when soften is inactive entirely.
-      provenance: {
-        ...validated.provenance,
-        softened: softenActive
-          ? (validated.provenance.softened ?? []).filter((s) => {
-              if (typeof s.sourceFindingId !== "string") return false
-              const state = softenMembership.get(s.sourceFindingId)
-              return state !== undefined && state.survived && !state.vetoed
-            })
-          : [],
-      },
-    })
-    const renderableUnanchoredForSubmission = [
-      ...renderableUnanchored,
-      ...approvalReadiness.bodyOnlyFindings,
-    ]
-    const effectiveEvent = approvalReadiness.event
-    // SIG-287: a degraded-coverage or low-confidence review must NOT post a
-    // confident clean APPROVE — that is the fake-approve believability bug (the
-    // bot says "all clear" when its primary bug-finder, logic, didn't run).
-    // Downgrade an otherwise-APPROVE to a neutral COMMENT ("Sigilix looked, but
-    // this is not a full sign-off"). A real blocker still escalates to
-    // REQUEST_CHANGES (escalation wins); the COMMENT override can only weaken
-    // APPROVE→COMMENT, never hide a rendered blocker — see
-    // `chooseRenderedEventWithOverride`. Honors the founder's SIG-14 posture
-    // ("speak, don't be silent"): the bot still comments, it just stops
-    // rubber-stamping a review it couldn't actually complete.
-    const synthConfidence =
-      typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
-    // TODO(SIG-364): extract an isLowConfidence predicate into domain/verdict when the orchestrator is thinned — the comparison direction is policy.
-    const reviewIncomplete =
-      degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
-    // SIG-245: files dropped from review (diff-budget spill into a later batch,
-    // or individually too large) make a clean APPROVE dishonest — the bot never
-    // read part of the diff. Downgrade it to COMMENT (same mechanism as
-    // SIG-287) so the "files not reviewed" notice — which renders in the
-    // findings body, NOT the marker-only APPROVE body — actually surfaces.
-    // Kept SEPARATE from `reviewIncomplete` so the degraded/low-confidence
-    // summary-prefix wording is NOT applied to a files-dropped review (the
-    // notice is its own block under the headline).
-    const filesDroppedFromReview = [...new Set([...filesNotReviewed, ...droppedTooLarge])]
-    const reviewEventOverride = resolveReviewEventOverride({
-      hasApprovalBlocker: approvalReadiness.blockers.length > 0,
+      approvalReadiness,
+      effectiveEvent,
+      synthConfidence,
       reviewIncomplete,
-      filesDroppedCount: filesDroppedFromReview.length,
+      filesDroppedFromReview,
+      reviewEventOverride,
+      deltaCounts,
+      currentFindingsForManifest,
+      coverage,
+      verificationMode,
+      addedLineTextByLine,
+      findingMarkers: findingMarkersFromPrep,
+    } = await prepareRender({
+      env,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      sigilixConfig,
+      orchCtrl,
+      validationSink: args.validationSink,
+      router,
+      fullPrDiff,
+      reviewable,
+      filesNotReviewed,
+      droppedTooLarge,
+      succeeded,
+      degradedCoverage,
+      synthInputVerdicts,
+      synthOutput,
+      shadowMemoriesForPhase3,
+      validated,
+      consensusVerdict,
+      consensusProvenance,
+      consensusByIndex,
     })
-    if (reviewIncomplete) {
-      console.log(JSON.stringify({
-        event: "review-incomplete-downgrade",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        reason: degradedCoverage !== null ? "degraded_coverage" : "low_confidence",
-        rolesMissing: degradedCoverage?.rolesMissing ?? [],
-        synthConfidence,
-      }))
-    }
-    // Visible caveat so a downgraded review reads as honestly partial, never as
-    // a quiet clean approve (SIG-94 hid coverage on APPROVE; this re-surfaces it
-    // only when the review is actually incomplete).
-    const incompleteSummaryPrefix = reviewIncomplete
-      ? degradedCoverage !== null
-        ? `> ⚠️ **Partial review** — ${degradedCoverage.rolesMissing.join(", ")} specialist` +
-          `${degradedCoverage.rolesMissing.length === 1 ? "" : "s"} unavailable; this is **not** a full Sigilix sign-off.\n\n`
-        : `> ⚠️ **Low-confidence review** — posted as a comment, not a full approval.\n\n`
-      : ""
-    const submissionVerdict: PrReviewVerdict = {
-      ...renderableVerdict,
-      summary:
-        incompleteSummaryPrefix +
-        buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
-    }
-
-    // ARC-271 — finding delta vs the prior review.
-    //
-    // For each current finding compute a stable key and look it up
-    // in the prior manifest. The result is a {new, still-open,
-    // likely-fixed, carried-over} count surfaced in the review body.
-    //
-    // Best-effort: manifest read failures (KV outage, malformed
-    // record, never-written) degrade to "no delta" — the review
-    // body simply doesn't show the Δ line. The current findings
-    // are persisted on the success path regardless so subsequent
-    // pushes can compute deltas against them.
-    // CodeRabbit MAJOR catch on PR #83: the review body includes
-    // BOTH `consensusVerdict.findings` (inline-anchored) AND
-    // `validated.unanchoredFindings` (body-only). The manifest
-    // snapshot must capture both — otherwise a still-open unanchored
-    // finding silently disappears from the delta and re-appears as
-    // `new` on the next push. Unanchored findings never went through
-    // consensus ranking (they were filtered for failing line
-    // validity, not for consensus), so their consensus defaults to 1.
-    // SIG-160 PR3: snapshot the FILTERED set so withdrawn findings
-    // don't land in the persisted manifest — otherwise next push's
-    // delta would compare {prior: includes withdrawn} vs
-    // {current: excludes withdrawn} and report the withdrawn finding
-    // as `likely-fixed`. SIG-205 extends the body-only side with
-    // approval-readiness blockers, which are already derived from the
-    // withdrawal-filtered source findings above.
-    const snapshotInputs = [
-      ...filteredConsensusFindings.map((f, j) => ({ f, consensus: filteredConsensusByIndex[j] ?? 1 })),
-      ...renderableUnanchoredForSubmission.map((f) => ({ f, consensus: 1 })),
-    ]
-    const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
-      snapshotInputs.map(async ({ f, consensus }) => ({
-        key: await computeFindingKey(f.path, f.headline),
-        path: f.path,
-        headline: f.headline,
-        score: f.score,
-        consensus,
-      })),
-    )
-    const currentKeySet = new Set(currentFindingsForManifest.map((f) => f.key))
-    // ARC-281: pass the delta counts straight into the renderer
-    // (it draws the `**Δ:**` badge under the heading) instead of
-    // prepending a "**Δ since last review:** …" string into the
-    // summary. `null` = no prior manifest / no signal.
-    let deltaCounts: DeltaBadgeCounts | null = null
-    try {
-      const priorRead = await readReviewManifest(env, owner, repo, prNumber)
-      if (priorRead.kind === "ok" && priorRead.manifest.findings) {
-        // Codex spec warning: a finding's path NOT in the current PR's
-        // changed-file set means specialists never looked at it on
-        // this run (incremental review only sends changed-file
-        // diffs). Don't claim "fixed" in that case — classify as
-        // `carried-over` instead.
-        //
-        // `reviewable.keys()` is our changed-paths source of truth:
-        // it's parsed from the diff that the specialists actually
-        // saw, so every path with at least one reviewable position
-        // is a file we have fresh signal on. Pure-rename or empty
-        // diffs without reviewable positions correctly fall out
-        // (we had no signal on them).
-        const changedPaths = new Set(reviewable.keys())
-        const delta = computeFindingDelta(
-          currentKeySet,
-          priorRead.manifest.findings,
-          changedPaths,
-        )
-        // Promote to the renderer-facing shape. We still gate the
-        // observability log on the same "any signal" predicate as
-        // `renderDeltaBadge` so a no-change second review doesn't
-        // log a "+0 new" line.
-        const anySignal =
-          delta.newCount > 0 ||
-          delta.stillOpenCount > 0 ||
-          delta.likelyFixedCount > 0 ||
-          delta.carriedOverCount > 0
-        if (anySignal) {
-          deltaCounts = {
-            newCount: delta.newCount,
-            stillOpenCount: delta.stillOpenCount,
-            likelyFixedCount: delta.likelyFixedCount,
-            carriedOverCount: delta.carriedOverCount,
-          }
-          console.log(JSON.stringify({
-            event: "pr-review-delta-computed",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            ...delta,
-          }))
-        }
-      }
-    } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-review-delta-read-failed",
-        owner, repo, prNumber,
-        err: err instanceof Error ? err.message : String(err),
-      }))
-    }
-
-    // ARC-281: specialist coverage roster for the renderer. The
-    // `**Coverage:**` line uses the dispatched/succeeded split
-    // directly — `degradedCoverage` upstream already drove prompt
-    // logic; this is purely display.
-    const coverage: CoverageRoles = {
-      dispatched: router.specialists,
-      succeeded: succeeded.map((v) => v.role),
-    }
-
-    // ARC-189: pre-compute the per-finding sigilix marker BEFORE
-    // calling buildReviewSubmission so marker construction (async via
-    // crypto.subtle) doesn't force the whole renderer async. Markers
-    // align by index with `validated.verdict.findings` AND
-    // `validated.cleanFindingProvenance` — the same walk in
-    // validateForSubmission produced both. Findings with no source
-    // specialist (defensive, shouldn't happen post-hallucination
-    // guard) emit `null` and skip the marker.
-    //
-    // Marker severity uses the ORIGINAL (pre-soften) score so the
-    // marker reflects what synth actually emitted; the soften
-    // applies to the rendered finding body only.
-    // ARC-270: marker computation walks the consensus-ranked arrays
-    // so per-finding markers stay aligned with the rendered finding
-    // order. `consensusProvenance` and `consensusVerdict.findings`
-    // are in the new ranking; `findingMarkers[i]` lines up with
-    // `renderableFindings[i]`.
-    //
-    // SIG-160 PR3: walk the FILTERED parallel views so markers align
-    // with `postWithdrawalFindings` (== `renderableVerdict.findings`),
-    // not the original pre-suppression set. Otherwise `buildReviewSubmission`
-    // would index off-by-one when consulting `findingMarkers` for an inline
-    // comment whose `originalIndex` survived suppression.
-    //
-    // SIG-276 Phase 2: extract write-time claims over the SAME filtered/
-    // ranked findings, so `claimsPerFinding[j]` aligns with the marker
-    // walk below. Gated behind OPENCLAW_REVIEW_MEMORY_CLAIMS (default off)
-    // so the extra per-PR classifier round-trip is opt-in. Fail-open: a
-    // classifier blip yields no claims rather than blocking the merge path
-    // or rotating a marker. The id-less claim data rides the marker;
-    // capture (PR B) recomputes each id before storing it on a signal.
-    const claimT0 = Date.now()
-    // SIG-280 PR C: reuse the warm pre-pass's claim extraction when it
-    // ran — the (paid) classifier is invoked at most once per review. It
-    // was extracted over the SAME withdrawal-filtered batch (one shared
-    // `withdrawals` read + a score-independent filter), so it aligns with
-    // `filteredConsensusFindings`. The length guard is belt-and-suspenders:
-    // if that invariant is ever broken, fall back to a fresh extraction
-    // rather than misalign markers / the shadow corpus.
-    const claimsPerFinding: ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]> =
-      earlyClaimsPerFinding &&
-      earlyClaimsPerFinding.length === filteredConsensusFindings.length
-        ? earlyClaimsPerFinding
-        : claimsEnabled
-          ? await extractClaims({
-              findings: filteredConsensusFindings.map(
-                (f): ClaimExtractionFinding => ({
-                  headline: f.headline,
-                  body: f.body,
-                  category: f.category,
-                }),
-              ),
-              runClassifier: runClaimClassifier,
-            })
-          : filteredConsensusFindings.map(() => [])
-    if (claimsEnabled) {
-      const claimsEmitted = claimsPerFinding.reduce((s, cs) => s + cs.length, 0)
-      console.log(
-        JSON.stringify({
-          event: "review-memory-claim-extracted",
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          findingCount: filteredConsensusFindings.length,
-          claimsEmitted,
-          elapsedMs: Date.now() - claimT0,
-        }),
-      )
-    }
-
-    // SIG-285: build the added-line index + verification mode once here —
-    // HOISTED above BOTH the SIG-280 shadow-claim fid computation below AND the
-    // marker generation, so a re-anchored finding's line is updated BEFORE either
-    // reads it (the fid includes `line`). Both consts are reused by the
-    // verification block further down (no recompute).
-    const verificationMode = readVerificationMode(env)
-    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
-
-    // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
-    // AND OPENCLAW_VERIFICATION_REANCHOR=on (default OFF — inert), MOVE each
-    // refuted inline finding that has an UNAMBIGUOUS same-file target to the
-    // correct line, in place, keeping the marker source (filteredConsensusFindings)
-    // aligned. Runs BEFORE the shadow-claim fid + the markers (Codex #260: so the
-    // SIG-280 shadow fid and the posted marker both use the post-move line — no
-    // corpus-join divergence). A mis-anchored inline comment becomes a CORRECTLY-
-    // anchored one (the founder's inline-first direction) instead of a body row.
-    // Re-anchored findings are then no longer refuted at the verification block
-    // below, so PR4 only body-demotes the ambiguous/no-match remainder. Default
-    // OFF → byte-identical to PR1+PR4.
-    if (verificationMode === "enforce" && readReanchorEnabled(env)) {
-      const reanchored = applyReanchors(
-        submissionVerdict.findings,
-        filteredConsensusFindings,
-        addedLineTextByLine,
-        isSubstantiveAnchorLine,
-      )
-      for (const r of reanchored) {
-        console.log(JSON.stringify({
-          event: "verification-reanchor-applied",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          path: r.path, fromLine: r.fromLine, toLine: r.toLine,
-        }))
-        // dropped:false — a re-anchored finding is KEPT inline (MOVED to the
-        // correct line), NOT dropped/demoted. The `applied` reason distinguishes
-        // it from the shadow would-reanchor decisions (CodeRabbit #260).
-        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: false })
-      }
-    }
-
-    // SIG-276 Phase 3 (Site 2): SHADOW-ONLY claim-match telemetry. Match
-    // each incoming finding's write-time claim TYPES against the active
-    // memories' `shadowClaims` (populated by lookup Site 1) and emit ONE
-    // aggregated `review-memory-claim-shadow` event per review. This pass
-    // is OBSERVATION-ONLY — its output is block-scoped and consumed by
-    // NOTHING below (no markers, no soften, no submission). It changes no
-    // score and posts no comment; it only generates the corpus Phase 4
-    // calibrates on. Gated: requires the shadow flag AND real claims
-    // (claimsEnabled) AND a non-skipped lookup — otherwise a no-op.
-    if (
-      claimShadowMode !== "off" &&
-      claimsEnabled &&
-      shadowMemoriesForPhase3.length > 0
-    ) {
-      const shadowPathHashes = await Promise.all(
-        filteredConsensusFindings.map((f) => computePathSha256(f.path)),
-      )
-      // SIG-280: per-finding sha16 fid (same canonical form as the marker)
-      // becomes the OFFLINE join key linking this claim-matched finding to a
-      // later `review-memory-outcome` dismissal event. NOTE (SIG-285, Codex #260):
-      // the re-anchor mutation runs ABOVE this block, so `f.line` here is already
-      // the post-move line — this fid matches the posted marker fid even for a
-      // re-anchored finding (no SIG-280 corpus-join divergence).
-      const shadowFids = await Promise.all(
-        filteredConsensusFindings.map((f) =>
-          computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),
-        ),
-      )
-      const shadowFindings: ShadowMatchFinding[] = filteredConsensusFindings.map(
-        (f, j) => {
-          const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
-          return {
-            category: sourceSpec ? categoryFromRoleHint(sourceSpec) : null,
-            pathSha12: shadowPathHashes[j]?.slice(0, 12) ?? null,
-            fid: shadowFids[j] ?? "",
-            severityTier: severityTier(f.score),
-            claims: (claimsPerFinding[j] ?? []).map((c) => ({
-              type: c.type,
-              extractorVersion: c.extractorVersion,
-            })),
-          }
-        },
-      )
-      const shadowRows = shadowMatchReviewMemoryClaims({
-        memories: shadowMemoriesForPhase3,
-        findings: shadowFindings,
-      })
-      // Emit unconditionally (within the gate): a matchCount:0 event is a
-      // meaningful Phase-4 DENOMINATOR — "shadow ran with active memories but
-      // no finding's category overlapped" — so coverage is explicit rather
-      // than inferred from the absence of an event.
-      const shadowEvent = {
-        event: "review-memory-claim-shadow",
-        owner,
-        repo,
-        prNumber,
-        headSha: headSha.slice(0, 7),
-        matchCount: shadowRows.length,
-        matches: shadowRows,
-      }
-      console.log(JSON.stringify(shadowEvent))
-      // SIG-280 PR A: ALSO persist the rows to a durable KV record so the
-      // offline calibration fit (which reads KV, not console logs) can read
-      // the claim-matched set — the NEGATIVE-class denominator. Each row's
-      // `fid` joins to the dismissal signals already in KV (same computeFid),
-      // which are the POSITIVE labels. Best-effort: never throws (this is
-      // telemetry on the review path); enum/numeric/bool + sha16 fid only.
-      try {
-        const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
-        await env.OPENCLAW_STATE.put(
-          `review-memory-claim-shadow:${reverseTs}:${owner}/${repo}#${prNumber}:${headSha.slice(0, 7)}`,
-          JSON.stringify(shadowEvent),
-          { expirationTtl: 30 * 24 * 60 * 60 },
-        )
-      } catch {
-        // best-effort durable corpus write — losing one is acceptable; the
-        // console event still lands for live/Logpush observation.
-      }
-    }
-
     // `let` (was const): SIG-285 PR 4 filters this in lockstep with
     // submissionVerdict.findings when a refuted finding is demoted, to keep the
     // marker<->finding index alignment the builder relies on (SIG-127).
-    let findingMarkers: Array<string | null> = await Promise.all(
-      filteredConsensusFindings.map(async (f, j) => {
-        const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
-        if (!sourceSpec) return null
-        return await buildSigilixMarker({
-          ruleId: null,
-          path: f.path,
-          line: f.line,
-          headline: f.headline,
-          category: categoryFromRoleHint(sourceSpec),
-          severity: markerSeverityFromScore(f.score),
-          claims: claimsPerFinding[j] ?? [],
-        })
-      }),
-    )
+    let findingMarkers: Array<string | null> = findingMarkersFromPrep
 
     // ARC-286 / SIG-88 — merge-guard runs BEFORE we bump the
     // SIG-101 counter or render the body so a PR that merged mid-
@@ -4295,492 +3336,64 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
-    // SIG-101/SIG-205: approval-readiness blockers can still force a
-    // REQUEST_CHANGES review even though they render in the body. The
-    // review counter itself is bumped later, after the renderer chooses
-    // the final event from the rendered surface, so body-only findings
-    // BELOW the blocker floor (score < 4) do not advance the
-    // request-changes sequence. SIG-281 PR A: a body-only finding of
-    // score >= 4 now DOES escalate the rendered event to REQUEST_CHANGES
-    // (the believability floor) and therefore advances the sequence,
-    // even without an approval-readiness blocker.
-    if (approvalReadiness.blockers.length > 0) {
-      console.warn(JSON.stringify({
-        event: "pr-review-approval-readiness-blocked",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        legacy_event: intendedEvent,
-        effective_event: effectiveEvent,
-        blockers: approvalReadiness.blockers.slice(0, 5).map((b) => ({
-          sourceFindingId: b.sourceFindingId,
-          role: b.role,
-          path: b.path,
-          line: b.line,
-          score: b.score,
-          confidence: b.confidence,
-          headline: b.headline,
-        })),
-      }))
-    }
-
-    // SIG-161 PR 4b — shadow-mode telemetry. Off the critical path:
-    // the KV read + divergence compute + log write are dispatched as
-    // a detached promise so a slow KV cold-read or anything else CANNOT
-    // delay the customer-visible verdict submission below.
-    //
-    // CodeRabbit catch (PR #146 fix-up #2): the prior version `await`ed
-    // `readGateThreshold` inline, which added a KV read latency budget
-    // to every production review even though shadow is observation-
-    // only. Fire-and-forget here is acceptable because the work is
-    // small (single KV read + ~1ms compute + single console.log) and
-    // CF Workers' microtask queue drains before the isolate is killed.
-    // If shadow ever grows expensive enough to warrant `ctx.waitUntil`,
-    // plumb the ExecutionContext through `EnsembleHandlerArgs`.
-    //
-    // The pure-helper `computeShadowGateDivergence` lives in
-    // triage-pr-review.ts (unit-tested there); this call site just
-    // does the I/O — read env, read KV threshold, write the log.
-    // Wrapped in try/catch so a KV outage / compute failure CANNOT
-    // surface as an unhandled rejection.
-    const gateMode = readGateMode(env)
-    if (gateMode !== "off") {
-      // Snapshot the inputs at the (sync) call site so the detached
-      // task doesn't race with later mutation of `renderableVerdict`.
-      const snapshotRenderable: PrReviewFinding[] = [...submissionVerdict.findings]
-      const snapshotUnanchored: PrReviewFinding[] = [...renderableUnanchoredForSubmission]
-      const snapshotProvenance = [...filteredConsensusProvenance]
-      const snapshotLegacy = effectiveEvent
-      void (async () => {
-        try {
-          const threshold = await readGateThreshold(env)
-          const result = computeShadowGateDivergence({
-            renderable: snapshotRenderable,
-            unanchored: snapshotUnanchored,
-            provenance: snapshotProvenance,
-            threshold,
-            legacyEvent: snapshotLegacy,
-          })
-          if (result.divergence) {
-            console.log(
-              JSON.stringify({
-                event: "pr-review-gate-shadow-divergence",
-                owner,
-                repo,
-                prNumber,
-                headSha: headSha.slice(0, 7),
-                mode: gateMode,
-                ...result.divergence,
-              }),
-            )
-          }
-        } catch (err) {
-          console.log(
-            JSON.stringify({
-              event: "pr-review-gate-shadow-error",
-              owner,
-              repo,
-              prNumber,
-              headSha: headSha.slice(0, 7),
-              mode: gateMode,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          )
-        }
-      })()
-    }
-
-    // SIG-285 PR 1 (shadow): verification-by-execution, observe-only. For the
-    // findings we're about to submit, re-check that the code token each score>=4
-    // logic/security finding CITES actually appears at the line it points to
-    // (worker-native, line-anchored — no subprocess, no new perms). Emit the
-    // verdict (confirmed/refuted/inconclusive/no-check) keyed for a SIG-114
-    // outcome join (the refutable-FP fraction). SIG-285 PR 4: in `enforce`, a
-    // REFUTED score>=4 logic/security finding that is currently INLINE is a
-    // mis-anchored citation — DEMOTE it to the PR body (never drop; FN-cost >>
-    // FP-cost). The demote moves a mis-anchored INLINE comment to a body row; it
-    // does NOT unblock the merge (a score>=4 body finding still forces
-    // REQUEST_CHANGES via the SIG-281 body-only floor) — it changes the surface,
-    // not the gate. `shadow` observes-only (counts the would-demote). Off = no
-    // work. The move runs BEFORE buildReviewSubmissionWithMetadata so the event +
-    // marker alignment recompute over the post-demote split.
-    if (verificationMode !== "off") {
-      // Cover EVERY submitted score>=4 logic/security finding — inline AND the
-      // body-only (unanchored) ones — so the refutable-FP measurement isn't
-      // biased by which surface a finding landed on (CR).
-      const submittedFindings = [
-        ...submissionVerdict.findings,
-        ...renderableUnanchoredForSubmission,
-      ]
-      const verificationItems: RecordVerificationArgs[] = []
-      for (const finding of submittedFindings) {
-        if (finding.score < 4) continue
-        if (finding.category !== "logic" && finding.category !== "security") continue
-        const result = verifyFinding(finding, addedLineTextByLine)
-        console.log(JSON.stringify({
-          event: "verification-shadow",
-          gate: "verification",
-          mode: verificationMode,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding),
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-          verdict: result.verdict,
-          tokenCount: result.tokens.length,
-          ...(result.check ? { checkKind: result.check.kind, checkStatus: result.check.status } : {}),
-        }))
-        verificationItems.push({ verdict: result.verdict, category: finding.category })
-        // Trust Ledger: a CONFIRMED worker-token re-check (the cited token is
-        // present at the cited line) is a proof signal. Annotate in place — the
-        // finding object's identity is reused by selectRefutedInlineDemotions +
-        // the marker index below, so we must not swap it for a clone. Gated on the
-        // flag so `off` is a true no-op (no trust mutation at all).
-        if (trustLedgerMode !== "off" && result.verdict === "confirmed") {
-          annotateFindingTrust(finding, { signals: ["worker-token-confirmed"] })
-        }
-      }
-      // SIG-285 PR 2: persist the review's verdict distribution to
-      // VerificationMetricsDO (one batched RPC). Best-effort + bounded so a
-      // stalled DO can't eat orchestrator time, and a failure NEVER breaks the
-      // review (telemetry only). Read via GET /metrics/verification.
-      await recordVerificationMetricsBounded(
-        env, verificationItems, 1_500,
-        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-      )
-      // SIG-285 PR 4: the demote subset = the REFUTED inline findings (pure,
-      // unit-tested helper). Record the demote decision per finding on the shared
-      // validation corpus (gate `verification-refuted`, readable at
-      // /metrics/validation alongside the grounding gates) — `dropped` = actually
-      // demoted (enforce) vs would-demote (shadow), matching the gates' semantics.
-      const refutedInline = selectRefutedInlineDemotions(submissionVerdict.findings, addedLineTextByLine)
-      const demoting = verificationMode === "enforce"
-      for (const finding of refutedInline) {
-        console.log(JSON.stringify({
-          event: "pr-review-finding-rejected-validation",
-          gate: "verification-refuted",
-          mode: verificationMode,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          reason: "refuted-citation",
-          dropped: demoting,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: demoting })
-        // SIG-285 (inline-first, SHADOW measurement only — NO mutation in this
-        // PR): for each refuted finding, would it RE-ANCHOR to the correct added
-        // line (the inline-first fix) or only body-demote? Measures the
-        // would-reanchor rate (reanchor | ambiguous | no-match) at
-        // /metrics/validation (gate `verification-reanchor`) BEFORE the PR that
-        // actually mutates the line (which must run before marker generation).
-        const reanchor = planReanchor(finding, addedLineTextByLine)
-        console.log(JSON.stringify({
-          event: "verification-reanchor-shadow",
-          mode: verificationMode,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding), // parity with verification-shadow for the SIG-114 join
-          path: finding.path,
-          fromLine: finding.line,
-          decision: reanchor.kind,
-          ...(reanchor.kind === "reanchor" ? { toLine: reanchor.toLine } : {}),
-          ...(reanchor.kind === "ambiguous" ? { candidateLines: reanchor.candidateLines } : {}),
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: reanchor.kind, dropped: false })
-      }
-      // Enforce only: move the refuted findings from the inline set to the
-      // body-only set BEFORE buildReviewSubmissionWithMetadata. The builder
-      // re-derives the review event from the post-demote inline/body split, so a
-      // demoted finding stops being an inline comment — but it is NOT unblocked:
-      // it is still score>=4, and the SIG-281 body-only floor keeps a score>=4
-      // body finding at REQUEST_CHANGES. The demote changes the SURFACE (a
-      // mis-anchored inline thread becomes a body row), not the gate. Never
-      // hard-drops; stays fully visible. `applyRefutedDemotion` filters
-      // findingMarkers in lockstep so the marker<->finding alignment the builder
-      // indexes by (SIG-127) survives. Inline findings were already
-      // withdrawal-filtered, so the move can't re-introduce a dismissed finding.
-      if (demoting && refutedInline.length > 0) {
-        const { keptFindings, keptMarkers, demoted } = applyRefutedDemotion(
-          submissionVerdict.findings,
-          findingMarkers,
-          new Set<PrReviewFinding>(refutedInline),
-        )
-        submissionVerdict.findings = keptFindings
-        findingMarkers = keptMarkers
-        // Trust Ledger: these refuted findings are now body-routed because their
-        // inline citation was mis-anchored. Mark the surface + reason (the tier
-        // stays whatever stronger proof it carries — resolveTier never lowers it).
-        if (trustLedgerMode !== "off") {
-          for (const d of demoted) {
-            annotateFindingTrust(d, { surface: "body", demoteReason: "verification-refuted" })
-          }
-        }
-        renderableUnanchoredForSubmission.push(...demoted)
-      }
-    }
-
-    // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED runner
-    // receipt is present (receiptScanIndex built above), re-check each submitted
-    // score>=4 SECURITY finding with a resolvable evidenceId against HEAD's OWN
-    // scan — CONFIRMED if the same rule still fires at the cited path/line,
-    // INCONCLUSIVE otherwise (NEVER refuted; absence is over-determined). PR1 is
-    // TELEMETRY ONLY (event:verification-receiptjoin keyed findingKey for the
-    // SIG-114 join); it measures the refutable-eligible fraction that decides
-    // whether the demote path (PR4/5) is worth building vs receipts-as-trust.
-    // Independent of OPENCLAW_VERIFICATION_MODE; gated by the index being built.
-    if (receiptScanIndex !== null) {
-      const rjMode = receiptJoinMode
-      // SIG-285 v2 PR2: persist the verdict distribution to VerificationMetricsDO
-      // under RECEIPTJOIN_CATEGORY (a separate corpus from worker-token) so the
-      // refutable-eligible fraction is readable at GET /metrics/verification —
-      // the load-bearing measurement, not just live `wrangler tail`.
-      const receiptJoinItems: RecordVerificationArgs[] = []
-      for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
-        if (finding.score < 4 || finding.category !== "security") continue
-        const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)
-        if (result.verdict === "no-check") continue
-        console.log(JSON.stringify({
-          event: "verification-receiptjoin",
-          mode: rjMode,
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding),
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          verdict: result.verdict,
-          ...(result.check ? { checkStatus: result.check.status } : {}),
-        }))
-        receiptJoinItems.push({ verdict: result.verdict, category: RECEIPTJOIN_CATEGORY })
-        // Trust Ledger: a CONFIRMED receipt join (the same rule still fires in the
-        // VERIFIED runner receipt's HEAD scan) is the STRONGEST proof tier. In place
-        // (identity already preserved by this point — post-demote). Flag-gated.
-        if (trustLedgerMode !== "off" && result.verdict === "confirmed") {
-          annotateFindingTrust(finding, { signals: ["runner-confirmed"] })
-        }
-      }
-      // Best-effort + bounded (same as the worker-token block) — a stalled DO or
-      // a record failure NEVER breaks the review (measurement only).
-      await recordVerificationMetricsBounded(
-        env, receiptJoinItems, 1_500,
-        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-      )
-    }
-
-    // SIG Trust Ledger v0: give every final visible
-    // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
-    // runner-confirmed — were already set in place above), then record the per-tier
-    // distribution. The baseline is surface-aware + honest-conservative:
-    //   - INLINE findings passed validation AND anchored, so they have grounding →
-    //     grounded-model (or deterministic-grounded with a real manifest evidenceId,
-    //     the SIG-108 security-evidence path).
-    //   - BODY findings claim NO grounding by default → body-only-ungrounded (the
-    //     MODEL pill), lifted only by a real evidenceId or a proof signal above. We
-    //     under-claim rather than over-claim believability for body-routed findings.
-    // resolveTier keeps the stronger tier, so a baseline never lowers a proven
-    // finding. Distribution persists to VerificationMetricsDO under TRUSTLEDGER_CATEGORY
-    // (a SEPARATE corpus, read at GET /metrics/verification). Whole block is flag-gated,
-    // so `off` (default) is a true no-op; `on` lets the renderer surface these
-    // tiers as the Trust Summary and per-finding pills.
-    if (trustLedgerMode !== "off") {
-      const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
-        const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
-        return ev.length > 0 && ev !== "NONE"
-      }
-      for (const finding of submissionVerdict.findings) {
-        annotateFindingTrust(finding, {
-          signals: [hasManifestEvidence(finding) ? "deterministic-grounded" : "grounded-model"],
-          surface: "inline",
-        })
-      }
-      for (const finding of renderableUnanchoredForSubmission) {
-        annotateFindingTrust(finding, {
-          signals: [hasManifestEvidence(finding) ? "deterministic-grounded" : "body-only-ungrounded"],
-          surface: "body",
-        })
-      }
-      const trustItems: RecordVerificationArgs[] = [
-        ...submissionVerdict.findings,
-        ...renderableUnanchoredForSubmission,
-      ].map((finding) => ({
-        verdict: finding.trust?.tier ?? "body-only-ungrounded",
-        category: TRUSTLEDGER_CATEGORY,
-      }))
-      // Best-effort + bounded (same as the verification blocks) — a stalled DO or a
-      // record failure NEVER breaks the review (measurement only).
-      await recordVerificationMetricsBounded(
-        env, trustItems, 1_500,
-        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-      )
-    }
-
-    if (showEvidence) {
-      for (const [index, finding] of [
-        ...submissionVerdict.findings,
-        ...renderableUnanchoredForSubmission,
-      ].entries()) {
-        const record = finding.evidence
-        const evidencePieces = evidencePieceCountForTelemetry(record)
-        console.log(JSON.stringify({
-          event: "pr-review-evidence-emitted",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          index,
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          category: finding.category,
-          visible: true,
-          specialists_flagged: record?.specialistsThatFlagged.length ?? 0,
-          specialists_declined: record?.specialistsThatDeclined.length ?? 0,
-          deterministic_fact_ids: record?.deterministicFactIds.length ?? 0,
-          retrieval_chunk_ids: record?.retrievalChunkIds.length ?? 0,
-          related_prior_prs: record?.relatedPriorPRs.length ?? 0,
-          consensus_score: record?.consensusScore ?? 0,
-          synth_decision: record?.synthDecision ?? null,
-          structured_evidence_empty: evidencePieces === 0,
-        }))
-      }
-    }
-
-    for (const finding of submissionVerdict.findings) {
-      const mismatch = getProposedChangeScopeMismatch(finding)
-      if (mismatch === null) continue
-      console.log(JSON.stringify({
-        event: "pr-review-finding-anchor-scope-mismatch",
-        gate: "rendering",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        reason: "replacement_anchor_scope_mismatch",
-        dropped: false,
-        path: finding.path,
-        line: finding.line,
-        startLine: finding.startLine ?? null,
-        score: finding.score,
-        category: finding.category,
-        anchorLines: mismatch.anchorLines,
-        replacementLines: mismatch.replacementLines,
-        replacementToAnchorRatio: Number(mismatch.replacementToAnchorRatio.toFixed(3)),
-      }))
-    }
-
-    const primaryEvent = previewReviewSubmissionEvent({
-      verdict: submissionVerdict,
+    // SIG-318 (PR 12e): the VERIFY-AND-BUILD phase — the detached gate-shadow
+    // telemetry IIFE (fire-and-forget), the SIG-285 verification + refuted-demote
+    // (the only enforce-path mutation) + the v2 receipt-join + the Trust Ledger v0
+    // baseline annotation + the evidence/scope telemetry, then the submission build
+    // (affordance preparation, buildReviewSubmissionWithMetadata with its
+    // captureGolden(render) seam, and the output-surface strip) — moved verbatim to
+    // ensemble/app/verify-and-build. It imports each dependency from its canonical
+    // home (app → domain/leaf/render-leaf laterals, never back into this
+    // orchestrator) and mutates `submissionVerdict.findings`,
+    // `renderableUnanchoredForSubmission`, and `findingMarkers` in lockstep on the
+    // refuted-demote path; the first two are mutated by reference, the reassigned
+    // `findingMarkers` is returned explicitly and re-bound here.
+    const {
+      primaryEvent,
+      primaryAffordance,
+      prepareFallbackAffordance,
+      submissionBuild,
+      submission,
+      bodyOnlyAnnotations,
+      allFindingAnnotations,
+      checkAnnotationMeta,
+      reviewOutputSurface,
+      findingMarkers: findingMarkersAfterBuild,
+    } = await verifyAndBuildSubmission({
+      env,
+      owner,
+      repo,
+      prNumber,
       headSha,
-      unanchored: renderableUnanchoredForSubmission,
+      ensembleConfig,
+      validationSink: args.validationSink,
+      meta,
       reviewable,
       addedLineTextByLine,
-      ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-    })
-    const primaryAffordance = await prepareSubmissionAffordance({
-      env, owner, repo, prNumber, event: primaryEvent,
-    })
-    const prepareFallbackAffordance = async (event: ReviewEvent): Promise<SubmissionAffordance> =>
-      event === primaryEvent
-        ? primaryAffordance
-        : prepareSubmissionAffordance({ env, owner, repo, prNumber, event })
-
-    // SIG-318 (PR 0b): bind the render args so the golden-capture hook below
-    // records the EXACT object passed to buildReviewSubmissionWithMetadata (no
-    // behavior change — same object, same call). No-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on".
-    const submissionBuildArgs = {
-      verdict: submissionVerdict,
-      prAuthor: meta.user?.login ?? null,
-      headSha,
-      // SIG Trust Ledger v0: render the trust layer (Trust Summary + per-finding
-      // VERIFIED/GROUNDED/MODEL pills) only in `on` mode. off/shadow → byte-identical
-      // body. (The Summary's `suppressed` count is a PR3b follow-up.)
-      trustLedger: trustLedgerMode === "on",
-      showEvidence,
-      unanchored: renderableUnanchoredForSubmission,
-      findingMarkers,
-      ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-      // ARC-182 (code-review C1): thread stack so the renderer can
-      // append the `_(Stacked on #N)_` parenthetical to the summary
-      // (post-ARC-281 — used to be a multi-line "### Stack context"
-      // block). Without this the parenthetical only appears on the
-      // single-model path, which is now dead.
-      ...(stack.isStacked ? { stack } : {}),
-      // ARC-281: thread specialist coverage + delta counts through
-      // to the new renderer.
+      stack,
       coverage,
-      // SIG-245: files dropped from review (diff-budget spill into a later
-      // batch, or individually too large) → a visible "files not reviewed"
-      // notice in the body so a silently-dropped file is never invisible. The
-      // review is also downgraded APPROVE→COMMENT above so this notice renders
-      // even when batch[0] was clean (it would be discarded by the marker-only
-      // APPROVE body otherwise).
-      notReviewedFiles: filesDroppedFromReview,
-      delta: deltaCounts,
-      ...(primaryAffordance.reviewCounter !== undefined
-        ? { reviewCounter: primaryAffordance.reviewCounter }
-        : {}),
-      ...(primaryAffordance.retriggerUrl !== undefined
-        ? { retriggerUrl: primaryAffordance.retriggerUrl }
-        : {}),
-      // SIG-125: thread the diff's reviewable-position map so
-      // `formatFindingComment` can render committable ```suggestion
-      // blocks when a finding cleanly anchors (RIGHT + contiguous).
-      reviewable,
-      // SIG-127: per-file new-side-line → text map so findings the
-      // model anchored to a non-substantive structural line (a bare
-      // `}`, blank line) route to the summary body instead of an
-      // inline comment "on an empty line."
-      addedLineTextByLine,
-      // SIG-216 fix-up: thread the source-repo coordinates so the
-      // body-only finding anchors render as clickable Markdown links
-      // (`[path:line](https://github.com/...blob/<sha>/<path>#L<line>)`)
-      // in production. Pre-fix-up the clickable-link path was test-only
-      // because the ensemble didn't pass `linkContext`, so real PR
-      // reviews fell back to the back-compat inline-code anchor.
-      linkContext: { owner, repo, headSha },
-    } satisfies Parameters<typeof buildReviewSubmissionWithMetadata>[0]
-    const submissionBuild = buildReviewSubmissionWithMetadata(submissionBuildArgs)
-    // SIG-318 (PR 0b): golden-output capture seam #2 (render). No-op unless
-    // OPENCLAW_GOLDEN_CAPTURE === "on"; off/unset → byte-identical behavior.
-    // `trace` = the in-scope decision values at this seam (Kimi's ask): specialist
-    // coverage, degraded-coverage + downgrade signals, consensus ranking, finding
-    // delta, verdict-gate override, trust-ledger mode, and the token ledger. These
-    // are diagnostic context, NOT asserted by the parity test.
-    captureGolden(env, "render", {
-      input: submissionBuildArgs,
-      output: submissionBuild,
-      trace: {
-        coverage,
-        degradedCoverage,
-        reviewIncomplete,
-        synthConfidence,
-        approvalReadiness,
-        deltaCounts,
-        reviewEventOverride,
-        trustLedgerMode,
-        consensusByIndex: filteredConsensusByIndex,
-        tokenUsageByModel,
-      },
+      deltaCounts,
+      filesDroppedFromReview,
+      approvalReadiness,
+      effectiveEvent,
+      intendedEvent,
+      reviewEventOverride,
+      verificationMode,
+      receiptScanIndex,
+      receiptJoinMode,
+      trustLedgerMode,
+      showEvidence,
+      filteredConsensusByIndex,
+      filteredConsensusProvenance,
+      degradedCoverage,
+      reviewIncomplete,
+      synthConfidence,
+      tokenUsageByModel,
+      submissionVerdict,
+      renderableUnanchoredForSubmission,
+      findingMarkers,
     })
-    const submission = submissionBuild.submission
-    const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations
-    const allFindingAnnotations = buildBodyOnlyCheckAnnotations([
-      ...submissionVerdict.findings,
-      ...renderableUnanchoredForSubmission,
-    ])
-    const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
-      annotations.length > 0 ? { checkAnnotations: annotations } : {}
-
-    // SIG-144: when the configured surface is `annotations` (only), the
-    // findings are delivered as Check annotations (posted by the
-    // dispatcher's `completeCheckRun`), NOT as inline review comments.
-    // Strip the inline comments from the submission so the formal review
-    // still registers its verdict (APPROVE / REQUEST_CHANGES) + summary
-    // body, but doesn't double-post each finding as a review comment. The
-    // `both` and `comments` surfaces keep inline comments untouched.
-    const reviewOutputSurface = ensembleConfig.flags.reviewOutputSurface
-    const { suppressedComments } = applyOutputSurfaceToSubmission(submission, reviewOutputSurface)
-    if (suppressedComments > 0) {
-      console.log(JSON.stringify({
-        event: "pr-review-inline-comments-suppressed-for-annotations",
-        owner, repo, prNumber,
-        suppressed: suppressedComments,
-      }))
-    }
+    findingMarkers = findingMarkersAfterBuild
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
     // review submit so the two GitHub timeline entries land in the
     // same time window (CodeRabbit-style Walkthrough-then-Review).
@@ -5564,28 +4177,17 @@ export type {
   AttemptCallbackInfo,
   SynthesizerRunArgs,
 } from "./ensemble/adapters/model-provider"
-import {
-  runWithRetryAndFallback,
-} from "./ensemble/adapters/model-provider"
+// SIG-318 (PR 12d): the orchestrator's only direct `runWithRetryAndFallback` call
+// (the claim-extractor closure) moved into ensemble/app/render-prep, so the
+// import-back is gone — the symbol stays re-exported above for tests + the shadow
+// runner.
 
 // ─── verdict post-processing ──────────────────────────────────────────
 
-export function collectApprovalReadinessSourceFindings(
-  sourceVerdicts: ReadonlyArray<ApprovalReadinessSourceVerdict>,
-  withdrawals: ReadonlyArray<WithdrawalRecord>,
-): ApprovalReadinessSourceFinding[] {
-  return sourceVerdicts.flatMap((v) => {
-    const verdict = v.verdict
-    if (!verdict) return []
-    const { kept } = filterWithdrawnFindings(verdict.findings, withdrawals)
-    return kept.map((finding) => ({
-      role: v.role,
-      id: finding.id,
-      finding,
-      verdictConfidence: verdict.confidence,
-    }))
-  })
-}
+// SIG-318 (PR 12d): `collectApprovalReadinessSourceFindings` moved with the
+// render-prep phase to ensemble/domain/synth (it is a pure flattener the
+// render-prep app phase calls). Re-exported here so existing importers (tests)
+// are unaffected.
 
 // SIG-318 (PR 12c): `collectSpecialistVerdicts` (private) moved with the
 // specialists+synth seam to ensemble/app/specialists (its only caller was the

@@ -10,7 +10,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { parseReceiptJoinMode } from "./verification/verify-finding-receipt"
-import { parseTrustLedgerMode } from "./trust-ledger-thread"
+import { parseTrustLedgerMode } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 
 const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30

@@ -18,7 +18,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
 import { queryValidationMetrics } from "./validation-metrics-client"
-import { parseTestsValidatorMode } from "./validate-test-finding"
+import { parseTestsValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-test-finding"
 
 const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30

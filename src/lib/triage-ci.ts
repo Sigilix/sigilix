@@ -19,7 +19,7 @@ import { indexNamespace } from "./repo-index-manifest"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import { CI_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
 import { CI_TRIAGE_PROMPT } from "@/src/prompts/ci-triage"
-import { parseDiffToReviewablePositions } from "./diff-positions"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
 import {
   parseCiSuggestionsMode,

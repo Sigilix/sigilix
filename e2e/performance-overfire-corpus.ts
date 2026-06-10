@@ -10,8 +10,8 @@ import {
   clampTrivialSyncIoSeverity,
   evaluatePerfFinding,
   type PerfEvidence,
-} from "@/src/lib/validate-perf-finding"
-import { buildChangedLineTextByPath } from "@/src/lib/validate-logic-finding"
+} from "@/src/lib/ensemble/domain/gates/validate-perf-finding"
+import { buildChangedLineTextByPath } from "@/src/lib/ensemble/domain/gates/validate-logic-finding"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 export type PerformanceOverfireClass =

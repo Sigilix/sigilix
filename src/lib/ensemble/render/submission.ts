@@ -24,7 +24,7 @@ import type {
 import {
   deriveSide,
   type ReviewableMap,
-} from "@/src/lib/diff-positions"
+} from "@/src/shared/util/diff-positions"
 import { type StackContext } from "@/src/lib/pr-stack"
 import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
 import { hasStructuredFix, isDeletionSuggestion } from "@/src/shared/domain/pr-review-finding"

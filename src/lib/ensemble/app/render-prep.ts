@@ -25,7 +25,7 @@ import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shar
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
 import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
-import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import {
   loadWithdrawals,
   filterWithdrawnFindings,

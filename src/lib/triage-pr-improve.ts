@@ -28,8 +28,8 @@ import {
   deriveSide,
   isContiguousRightRange,
   type ReviewableMap,
-} from "./diff-positions"
-export { isContiguousRightRange } from "./diff-positions"
+} from "@/src/shared/util/diff-positions"
+export { isContiguousRightRange } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
 import {
   loadSigilixConfigRaw,

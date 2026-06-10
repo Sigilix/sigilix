@@ -6,7 +6,7 @@
 // current customer-visible surface after `evaluateTestFinding`, but it is not
 // the truth source.
 
-import { evaluateTestFinding } from "@/src/lib/validate-test-finding"
+import { evaluateTestFinding } from "@/src/lib/ensemble/domain/gates/validate-test-finding"
 import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 

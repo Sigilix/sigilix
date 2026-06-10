@@ -110,7 +110,7 @@ for (const key of shadowKeys) {
       .filter((m: unknown): m is { fid: string; claimType?: unknown } =>
         !!m && typeof (m as { fid?: unknown }).fid === "string",
       )
-      .map((m) => ({ fid: m.fid, claimType: (m.claimType ?? null) as CalibrationShadowRecord["rows"][number]["claimType"] })),
+      .map((m: { fid: string; claimType?: unknown }) => ({ fid: m.fid, claimType: (m.claimType ?? null) as CalibrationShadowRecord["rows"][number]["claimType"] })),
   })
 }
 console.log(`[calibrate] ${shadowRecords.length} shadow record(s) for ${args.repo}`)

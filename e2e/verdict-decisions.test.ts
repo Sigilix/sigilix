@@ -29,6 +29,7 @@ const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",
   line: 42,
   score: 3,
+  category: "logic",
   headline: "missing null guard on `user.profile`",
   body: "Wrap with `if (!user) return` before accessing `user.profile`.",
 }
@@ -272,7 +273,10 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
   })
 
   it("missing confidence defaults to 3", () => {
-    const missing = computeGateScore(f({ confidence: undefined, score: 3, category: "logic" }), {
+    // baseFinding carries no `confidence`, so this builds the "missing
+    // confidence" finding the same way the override `confidence: undefined`
+    // did — minus the exactOptionalPropertyTypes violation of writing it.
+    const missing = computeGateScore(f({ score: 3, category: "logic" }), {
       sourceSpecialists: ["logic"],
     })
     const explicit = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {

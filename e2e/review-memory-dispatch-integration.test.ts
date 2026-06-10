@@ -23,11 +23,11 @@ const {
   mockListPullRequestReviewComments,
   mockListPullRequestReviews,
 } = vi.hoisted(() => ({
-  mockGetFileContent: vi.fn(async () =>
+  mockGetFileContent: vi.fn(async (..._args: unknown[]) =>
     JSON.stringify({ reviewMemory: { captureOnly: true } }),
   ),
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
-  mockGetPullRequest: vi.fn(async () => ({
+  mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
+  mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({
     number: 7,
     title: "PR",
     body: "",
@@ -35,7 +35,7 @@ const {
     head: { sha: "head", ref: "branch" },
     base: { sha: "base", ref: "main" },
   })),
-  mockGetRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+  mockGetRepository: vi.fn(async (..._args: unknown[]) => ({ default_branch: "main", id: 555_000 })),
   mockGitHubClient: vi.fn(() => ({
     getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
     getPullRequest: (...args: unknown[]) => mockGetPullRequest(...args),
@@ -46,9 +46,13 @@ const {
     listPullRequestReviews: (...args: unknown[]) =>
       mockListPullRequestReviews(...args),
   })),
-  mockListIssueComments: vi.fn(async () => []),
-  mockListPullRequestReviewComments: vi.fn(async () => []),
-  mockListPullRequestReviews: vi.fn(async () => []),
+  mockListIssueComments: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>[]> => []),
+  mockListPullRequestReviewComments: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>[]> => [],
+  ),
+  mockListPullRequestReviews: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>[]> => [],
+  ),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({

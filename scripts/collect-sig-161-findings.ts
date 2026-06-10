@@ -261,31 +261,31 @@ function parseFinding(args: {
   }
 
   if (headingV2Match) {
-    row.category = headingV2Match[2]
-    row.headline = headingV2Match[1]
+    if (headingV2Match[2] !== undefined) row.category = headingV2Match[2]
+    if (headingV2Match[1] !== undefined) row.headline = headingV2Match[1]
     const confRaw = Number(headingV2Match[3])
     if (Number.isFinite(confRaw) && confRaw >= 1 && confRaw <= 5) {
       row.confidence = confRaw
     }
   } else if (headingMatch) {
-    row.category = headingMatch[1]
-    row.headline = headingMatch[2]
+    if (headingMatch[1] !== undefined) row.category = headingMatch[1]
+    if (headingMatch[2] !== undefined) row.headline = headingMatch[2]
     const confRaw = Number(headingMatch[3])
     if (Number.isFinite(confRaw) && confRaw >= 1 && confRaw <= 5) {
       row.confidence = confRaw
     }
   } else if (headingV3Match) {
-    row.headline = headingV3Match[1]
+    if (headingV3Match[1] !== undefined) row.headline = headingV3Match[1]
   }
 
   if (markerMatch) {
-    row.sigilixFid = markerMatch[1]
-    if (!row.category) row.category = markerMatch[2]
-    row.sigilixSev = markerMatch[3]
-    const sevScore = SEVERITY_TO_SCORE[markerMatch[3]!]
+    if (markerMatch[1] !== undefined) row.sigilixFid = markerMatch[1]
+    if (!row.category && markerMatch[2] !== undefined) row.category = markerMatch[2]
+    if (markerMatch[3] !== undefined) row.sigilixSev = markerMatch[3]
+    const sevScore = markerMatch[3] !== undefined ? SEVERITY_TO_SCORE[markerMatch[3]] : undefined
     if (sevScore !== undefined) row.score = sevScore
   }
-  if (!row.category && categoryMarkerMatch) {
+  if (!row.category && categoryMarkerMatch && categoryMarkerMatch[1] !== undefined) {
     row.category = categoryMarkerMatch[1]
   }
   if (row.score === undefined && severityMarkerMatch) {

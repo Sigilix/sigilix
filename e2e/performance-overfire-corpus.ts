@@ -108,9 +108,15 @@ export function applyPerfEvidenceGate(
     .filter((f) => evaluatePerfFinding(toPrReviewFinding(f), evidence).keep)
     .map((f) => ({ ...f }))
   const addedLineTextByLine = buildAddedLineTextByLine(c.diff)
-  clampTrivialSyncIoSeverity(kept, addedLineTextByLine)
-  clampIntentionalLiveEvalSerialLoopSeverity(kept, addedLineTextByLine)
-  return kept
+  // The clamps gate on `category === "performance"` and mutate `score` in
+  // place. A scored performance finding's category is always "performance"
+  // (mirrors `toPrReviewFinding`); supply it explicitly so the clamp input
+  // carries the required `category: string` field without changing behavior.
+  const clampable = kept.map((f) => ({ ...f, category: f.category ?? "performance" }))
+  clampTrivialSyncIoSeverity(clampable, addedLineTextByLine)
+  clampIntentionalLiveEvalSerialLoopSeverity(clampable, addedLineTextByLine)
+  // Propagate the clamped scores back onto the kept findings (same order).
+  return kept.map((f, i) => ({ ...f, score: clampable[i]!.score }))
 }
 
 export function scoreCase(

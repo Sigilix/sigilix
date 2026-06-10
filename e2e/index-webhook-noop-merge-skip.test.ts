@@ -15,11 +15,13 @@ import { computeDiffHash } from "@/src/lib/noop-merge-detect"
 
 const CURRENT_DIFF = "diff --git a/foo b/foo\n@@ -1 +1 @@\n-x\n+y\n"
 
-const mockPostStub = vi.fn(async () => ({ kind: "posted" as const, commentId: 999 }))
-const mockLoadSigilixConfig = vi.fn(async () => ({ overview: { enabled: true } }))
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
-const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true as const }))
-const mockGetPullRequestDiff = vi.fn(async () => CURRENT_DIFF)
+const mockPostStub = vi.fn(async (_a?: unknown) => ({ kind: "posted" as const, commentId: 999 }))
+const mockLoadSigilixConfig = vi.fn(async (..._a: unknown[]) => ({ overview: { enabled: true } }))
+const mockGetInstallationToken = vi.fn(async (_a?: unknown) => "fake-token")
+const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({ ok: true as const }))
+const mockGetPullRequestDiff = vi.fn(
+  async (_o?: string, _r?: string, _n?: number, _opts?: { signal?: AbortSignal }) => CURRENT_DIFF,
+)
 
 vi.mock("@/src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
@@ -109,7 +111,7 @@ function manifestKv(): { key: string; value: string } {
   }
 }
 
-function synchronizePayload(): unknown {
+function synchronizePayload(): Record<string, unknown> {
   return {
     action: "synchronize",
     installation: { id: 12345 },
@@ -161,7 +163,7 @@ function makeEnv(
 }
 
 async function postSynchronizeWebhook(
-  worker: { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> },
+  worker: { fetch: (req: Request, env: never, ctx: never) => Promise<Response> },
   env: unknown,
   payload: unknown = synchronizePayload(),
 ): Promise<Response> {

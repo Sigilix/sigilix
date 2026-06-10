@@ -12,11 +12,11 @@ import {
 } from "./types"
 
 /** base64url → bytes (JWT segments are base64url, no padding). */
-export function base64urlToBytes(s: string): Uint8Array {
+export function base64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, "+").replace(/_/g, "/")
   const padded = b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")
   const bin = atob(padded)
-  const out = new Uint8Array(bin.length)
+  const out = new Uint8Array(new ArrayBuffer(bin.length))
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
 }
@@ -82,7 +82,7 @@ export async function verifyGitHubOidcToken(token: string, opts: VerifyOpts): Pr
 
   let rawHeader: unknown
   let rawClaims: unknown
-  let sigBytes: Uint8Array
+  let sigBytes: Uint8Array<ArrayBuffer>
   try {
     rawHeader = JSON.parse(base64urlToString(headerB64))
     rawClaims = JSON.parse(base64urlToString(payloadB64))
@@ -128,7 +128,14 @@ export async function verifyGitHubOidcToken(token: string, opts: VerifyOpts): Pr
     return { ok: false, reason: "unknown-kid" }
   }
 
-  const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`)
+  const encoded = new TextEncoder().encode(`${headerB64}.${payloadB64}`)
+  // Copy into a freshly-allocated ArrayBuffer so the value is typed
+  // `Uint8Array<ArrayBuffer>` (a valid BufferSource) under both the Workers and
+  // Node lib type worlds; `TextEncoder.encode()` alone yields
+  // `Uint8Array<ArrayBufferLike>`, which the DOM/Workers `BufferSource` rejects.
+  // Type-level only — runtime bytes are identical.
+  const signingInput = new Uint8Array(new ArrayBuffer(encoded.length))
+  signingInput.set(encoded)
   const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, sigBytes, signingInput)
   if (!valid) return { ok: false, reason: "bad-signature" }
 

@@ -52,17 +52,17 @@ function rawFindingsFrom(result: Awaited<ReturnType<typeof runShadowSpecialist>>
       line: f.line,
       score: f.score,
     }
-    if ("category" in f && f.category !== undefined) scored.category = f.category
-    if ("headline" in f && f.headline !== undefined) scored.headline = f.headline
-    if ("body" in f && f.body !== undefined) scored.body = f.body
-    if ("testGap" in f && f.testGap !== undefined) scored.testGap = f.testGap
+    if ("category" in f && typeof f.category === "string") scored.category = f.category
+    if ("headline" in f && typeof f.headline === "string") scored.headline = f.headline
+    if ("body" in f && typeof f.body === "string") scored.body = f.body
+    if ("testGap" in f && typeof f.testGap === "string") scored.testGap = f.testGap
     if ("inspectedTestFiles" in f && Array.isArray(f.inspectedTestFiles)) {
       scored.inspectedTestFiles = f.inspectedTestFiles.filter((p): p is string => typeof p === "string")
     }
     if ("evidenceRefs" in f && Array.isArray(f.evidenceRefs)) {
       scored.evidenceRefs = f.evidenceRefs.filter((ref): ref is string => typeof ref === "string")
     }
-    if ("failureExample" in f && f.failureExample !== undefined) scored.failureExample = f.failureExample
+    if ("failureExample" in f && typeof f.failureExample === "string") scored.failureExample = f.failureExample
     return scored
   })
 }

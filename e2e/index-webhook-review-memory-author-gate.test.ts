@@ -14,10 +14,10 @@ const {
   mockGetPullRequest,
   mockLoadSigilixConfig,
 } = vi.hoisted(() => ({
-  mockCaptureTopLevelReviewFeedback: vi.fn(() => undefined),
-  mockGetInstallationToken: vi.fn(() => "test-token"),
-  mockGetPullRequest: vi.fn(() => ({ head: { sha: "c".repeat(40) } })),
-  mockLoadSigilixConfig: vi.fn(() => ({ reviewMemory: { enabled: true } })),
+  mockCaptureTopLevelReviewFeedback: vi.fn((..._args: unknown[]) => undefined),
+  mockGetInstallationToken: vi.fn((_args?: unknown) => "test-token"),
+  mockGetPullRequest: vi.fn((..._args: unknown[]) => ({ head: { sha: "c".repeat(40) } })),
+  mockLoadSigilixConfig: vi.fn((..._args: unknown[]) => ({ reviewMemory: { enabled: true } })),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({

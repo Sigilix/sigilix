@@ -34,10 +34,10 @@ export function base64urlEncode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
-export function base64urlDecode(s: string): Uint8Array {
+export function base64urlDecode(s: string): Uint8Array<ArrayBuffer> {
   const padded = s.replace(/-/g, "+").replace(/_/g, "/") + "==".slice((s.length + 2) % 4)
   const binary = atob(padded)
-  const out = new Uint8Array(binary.length)
+  const out = new Uint8Array(new ArrayBuffer(binary.length))
   for (let i = 0; i < binary.length; i++) {
     out[i] = binary.charCodeAt(i)
   }
@@ -60,8 +60,21 @@ async function importAesKey(keyB64url: string): Promise<CryptoKey> {
   )
 }
 
-function aadFor(sessionId: string): Uint8Array {
-  return new TextEncoder().encode(`${SESSION_KV_PREFIX}${sessionId}`)
+// Encode a UTF-8 string into an ArrayBuffer-backed Uint8Array. We copy into a
+// freshly-allocated ArrayBuffer so the result is typed `Uint8Array<ArrayBuffer>`
+// (a valid BufferSource) under both the Workers and Node lib type worlds —
+// `TextEncoder.encode()` alone yields `Uint8Array<ArrayBufferLike>` which the
+// DOM/Workers `BufferSource = ArrayBufferView<ArrayBuffer> | ArrayBuffer`
+// rejects. This is a type-level concern only; runtime bytes are identical.
+function encodeUtf8(s: string): Uint8Array<ArrayBuffer> {
+  const bytes = new TextEncoder().encode(s)
+  const out = new Uint8Array(new ArrayBuffer(bytes.length))
+  out.set(bytes)
+  return out
+}
+
+function aadFor(sessionId: string): Uint8Array<ArrayBuffer> {
+  return encodeUtf8(`${SESSION_KV_PREFIX}${sessionId}`)
 }
 
 export async function encryptAccessToken(
@@ -70,11 +83,11 @@ export async function encryptAccessToken(
   keyB64url: string,
 ): Promise<{ ciphertext: string; iv: string }> {
   const key = await importAesKey(keyB64url)
-  const iv = crypto.getRandomValues(new Uint8Array(12)) // 96-bit per NIST SP 800-38D
+  const iv = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(12))) // 96-bit per NIST SP 800-38D
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: aadFor(sessionId) },
     key,
-    new TextEncoder().encode(plaintext),
+    encodeUtf8(plaintext),
   )
   return {
     ciphertext: base64urlEncode(new Uint8Array(ct)),

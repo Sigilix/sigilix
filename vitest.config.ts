@@ -44,7 +44,7 @@ export default defineConfig({
     },
   ],
   test: {
-    include: ["src/**/*.test.ts", "evals/**/*.test.ts", "tests/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "evals/**/*.test.ts", "e2e/**/*.test.ts"],
     environment: "node",
   },
   resolve: {

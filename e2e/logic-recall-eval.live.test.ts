@@ -21,7 +21,7 @@ import {
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
 import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
-import { evaluateLogicClaimRefutation, parseLogicClaimRefutationMode } from "@/src/lib/validate-logic-claim-refutation"
+import { evaluateLogicClaimRefutation, parseLogicClaimRefutationMode } from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 const API_KEY = process.env.OLLAMA_API_KEY

@@ -70,7 +70,7 @@ import {
 } from "@/src/lib/ensemble-router"
 import { decideSpecialistsDynamic } from "@/src/lib/dynamic-dispatcher"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
-import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>

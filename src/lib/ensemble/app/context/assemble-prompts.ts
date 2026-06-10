@@ -37,7 +37,7 @@ import { renderDocsCoverageForPrompt, type DocsCoverageHit } from "@/src/lib/doc
 import { renderPerfBudgetsForPrompt, type PerfBudgetsHit } from "@/src/shared/domain/perf-budgets"
 import { renderCoverageGapBlock, type ingestCoverage } from "@/src/lib/coverage-ingest"
 import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
-import { buildChangedLineTextByPath } from "@/src/lib/validate-logic-finding"
+import { buildChangedLineTextByPath } from "@/src/lib/ensemble/domain/gates/validate-logic-finding"
 import { buildFactsByRole } from "@/src/lib/role-scoped-facts"
 import {
   analyzeHelperBypass,

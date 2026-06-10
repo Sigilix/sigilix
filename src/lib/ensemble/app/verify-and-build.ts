@@ -64,7 +64,7 @@ import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs
 import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 import { assessApprovalReadiness } from "@/src/lib/approval-readiness"
 import { chooseReviewEvent, resolveReviewEventOverride, type ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
-import { parseDiffToReviewablePositions } from "@/src/lib/diff-positions"
+import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { buildAddedLineTextByLine } from "@/src/features/ast-rules"
 import { readVerificationMode } from "@/src/lib/verification/mode"
 import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"

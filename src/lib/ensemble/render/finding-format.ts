@@ -20,7 +20,7 @@ import {
   isContiguousRightRange,
   deriveSide,
   type ReviewableMap,
-} from "@/src/lib/diff-positions"
+} from "@/src/shared/util/diff-positions"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {

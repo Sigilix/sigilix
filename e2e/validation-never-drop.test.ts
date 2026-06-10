@@ -41,7 +41,7 @@ import { describe, it, expect } from "vitest"
 import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
-import type { ReviewableMap } from "@/src/lib/diff-positions"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import { MATRIX_CASES, severityTierForScore } from "./_golden/validation-matrix-cases"
 
 type ValidatedOut = ReturnType<typeof validateForSubmission>

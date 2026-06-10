@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs"
 import { describe, it, expect } from "vitest"
 import { runAstRules } from "@/src/features/ast-rules/app/runner"
-import type { ReviewableMap } from "@/src/lib/diff-positions"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1 }
 
@@ -73,9 +73,9 @@ describe("runAstRules — skip paths", () => {
   })
 
   it("keeps enum-drift scanning bounded when another file seeds a union map", async () => {
-    const sourcePath = "src/lib/validate-logic-claim-refutation.ts"
+    const sourcePath = "src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts"
     const unionPath = "src/types.ts"
-    const source = readFileSync(new URL("../src/lib/validate-logic-claim-refutation.ts", import.meta.url), "utf8")
+    const source = readFileSync(new URL("../src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts", import.meta.url), "utf8")
     const unionSource = `export interface Charge { status: "pending" | "settled" | "failed" }\n`
     const r = await runAstRules({
       diff: diffAddingLineAt(1, sourcePath, "// touched")

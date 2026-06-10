@@ -18,9 +18,9 @@
 // paths and the wrapper are new.
 
 import type { CheckRunAnnotation, SubmitReviewComment } from "@/src/shared/types/github"
-import { type ReviewableMap } from "@/src/lib/diff-positions"
+import { type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { trustPill, trustSubTag } from "@/src/lib/trust-ledger-render"
-import { remediationForFinding } from "@/src/lib/validate-security-finding"
+import { remediationForFinding } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
 import { isDeletionSuggestion, isReplacementSuggestion } from "@/src/shared/domain/pr-review-finding"
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"

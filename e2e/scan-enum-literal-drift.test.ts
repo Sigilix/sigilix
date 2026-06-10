@@ -256,7 +256,7 @@ describe("scanSqlEnumDrift", () => {
 
   it("does not backtrack on non-SQL source when an unrelated changed file seeds unions", () => {
     const source = readFileSync(
-      new URL("../src/lib/validate-logic-claim-refutation.ts", import.meta.url),
+      new URL("../src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts", import.meta.url),
       "utf8",
     )
     const unions = buildGlobalUnionMap([PR10_TYPES])

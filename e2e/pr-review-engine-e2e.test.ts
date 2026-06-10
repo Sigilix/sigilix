@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { runAstRules } from "@/src/features/ast-rules/app/runner"
-import type { ReviewableMap } from "@/src/lib/diff-positions"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import {
   assessApprovalReadiness,
   buildApprovalReadinessSummary,

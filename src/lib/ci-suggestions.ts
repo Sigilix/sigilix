@@ -11,7 +11,7 @@
 // silently dropped. Pure — no I/O; the orchestrator in `triage-ci.ts`
 // performs the GitHub calls and the mode/sensitive gating.
 
-import { deriveSide, type ReviewableMap } from "./diff-positions"
+import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { GitHubHttpError } from "@/src/shared/adapters/github"
 import type { SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
 import type { CiTriagePatch } from "./triage-ci"

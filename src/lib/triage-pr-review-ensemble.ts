@@ -37,58 +37,20 @@ import type { ChatMessage } from "../shared/ports/model"
 // type its `runWithRetryAndFallback` calls without reaching past
 // this module into ./ollama-chat.
 export type { ChatMessage }
-import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
-import {
-  multiCorpusEnabled,
-  retrieveMultiCorpus,
-  formatMultiCorpusForPrompt,
-  type MultiCorpusResult,
-} from "./multi-corpus"
-import { indexNamespace } from "./repo-index-manifest"
-import {
-  buildPerfRetrievalQuery,
-  extractChangedFunctionNames,
-  shouldRunPerfRetrieval,
-  resolvePerfSnapshot,
-  selectRetrievalSnapshotForRole,
-} from "./perf-retrieval"
-import {
-  extractChangedSymbols,
-  buildSymbolRetrievalQuery,
-  computeChunkOverlap,
-  shouldRunSymbolRetrieval,
-  mergeLogicSnapshot,
-} from "./symbol-retrieval"
-import {
-  shouldRunBranchAwareRetrieval,
-  prepareBranchSet,
-  retrieveBranchChunks,
-  mergeBranchAware,
-  buildBranchRetrievalEvent,
-  type BranchVector,
-} from "./branch-retrieval"
-import {
-  buildDynamicReviewEvidencePack,
-  dynamicReviewEvidenceEnabled,
-  dynamicReviewEvidenceMode,
-  renderDynamicReviewEvidenceBlock,
-  type DynamicReviewEvidenceEnv,
-  type DynamicReviewEvidenceMode,
-  type DynamicReviewEvidencePack,
-} from "./review-evidence-pack"
-import { embedText } from "../shared/adapters/model"
-import {
-  buildAddedLineTextByLine,
-  buildChangedLines,
-  buildDeletedLineTextByLine,
-  type ChangedLines,
-} from "@/features/ast-rules"
-import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
+// SIG-318 (PR 12g-2/g-3): the retrieval/perf/symbol helpers, the multi-corpus
+// cluster, `indexNamespace`, the branch-retrieval cluster, the review-evidence-pack
+// cluster (`buildDynamicReviewEvidencePack`/`dynamicReviewEvidenceMode`/
+// `renderDynamicReviewEvidenceBlock`/the Dynamic* types — followed the dynamic-
+// evidence-block domain), the `@/features/ast-rules` line builders (`buildChangedLines`/
+// `buildAddedLineTextByLine`/`buildDeletedLineTextByLine`/`ChangedLines`), `embedText`,
+// `mapWithConcurrency`, and the `RetrievedChunk` type all followed the gather-
+// evidence / assemble-prompts seams into ensemble/app/context — no longer here.
 // SIG-318 (PR 12d): the review-withdrawal store helpers (loadWithdrawals,
 // filterWithdrawnFindings[Detailed], computeContentFingerprint, WithdrawalRecord)
 // and the repeat-FP metrics client (recordRepeatFpMetrics, RepeatFpEvent) followed
 // the render-prep phase into ensemble/app/render-prep — no longer imported here.
-import { GitHubClient } from "../shared/adapters/github"
+// SIG-318 (PR 12g-3): `GitHubClient` (the testing-evidence repo-tree cast) followed
+// the assemble-prompts seam — no longer imported here.
 import type { CheckRunAnnotation } from "../shared/types/github"
 import {
   type PrReviewVerdict,
@@ -108,111 +70,65 @@ export { LOW_CONFIDENCE_COMMENT_THRESHOLD, resolveReviewEventOverride }
 // line predicate) and the approval-readiness helpers (`assessApprovalReadiness`,
 // `buildApprovalReadinessSummary`, `ApprovalReadinessSourceFinding`) followed the
 // render-prep / verification-prep phases into ensemble/app — no longer imported here.
-import {
-  buildTestingEvidencePack,
-  fetchTestFileContentsWithBudget,
-  filterTestingEvidenceForSuppressedMissingCoverage,
-  mergeInspectedTestFileContents,
-  mergeHelperCoverage,
-  mergeTestingFocusHints,
-  renderTestingEvidenceBlock,
-  type TestingEvidencePack,
-  type InspectedTestFileFetchResult,
-} from "./testing-evidence-pack"
-import { detectHelperCoverage } from "./helper-coverage"
-import {
-  buildSecurityFactManifest,
-} from "./security-evidence-manifest"
-import {
-  buildChangedLineTextByPath,
-} from "./validate-logic-finding"
+// SIG-318 (PR 12g-3): the testing-evidence-pack cluster (`buildTestingEvidencePack`/
+// the fetch/merge/render helpers + the `TestingEvidencePack`/`InspectedTestFileFetchResult`
+// types), `detectHelperCoverage`, `buildSecurityFactManifest`, and
+// `buildChangedLineTextByPath` followed the assemble-prompts seam into ensemble/app/
+// context — no longer imported here.
 import { postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
-  decideSpecialists,
   ALL_SPECIALISTS,
   type SpecialistRole,
   type RouterDecision,
 } from "./ensemble-router"
-import { decideSpecialistsDynamic } from "./dynamic-dispatcher"
+// SIG-318 (PR 12g-1): `decideSpecialists` (the legacy router) + `decideSpecialistsDynamic`
+// (the dynamic dispatcher) followed the fetch-and-pack seam into ensemble/app/context —
+// no longer imported here.
 import {
   createRetrievalCache,
   type RetrievalCacheStats,
 } from "./retrieval-cache"
+// SIG-318 (PR 12g-1): `parseDiffToReviewablePositions` (the reviewable-position map
+// builder) followed the fetch-and-pack seam into ensemble/app/context — no longer
+// imported here.
+// SIG-318 (PR 12g-3): `buildSpecialistInitialMessage` (the per-role message builder),
+// the pr-stack detection cluster (`detectStack`/`computeFileOverlap`/`FileOverlap`/
+// `StackContext`), and `renderStackPromptBlock` followed the assemble-prompts seam
+// into ensemble/app/context — no longer imported here.
+// SIG-318 (PR 12g-1): `ListOpenPullsItem` followed the open-PRs fetch into
+// ensemble/app/context/fetch-and-pack — no longer imported here.
+// SIG-318 (PR 12g-2): `withComposedTimeout` (the retrieval/branch/symbol/graph
+// timeout wrapper) followed the gather-evidence/gather-graph seams into
+// ensemble/app/context — no longer imported here.
 import {
-  parseDiffToReviewablePositions,
-} from "./diff-positions"
-import {
-  buildSpecialistInitialMessage,
-} from "../prompts/pr-review-specialists"
-import {
-  detectStack,
-  computeFileOverlap,
-  type FileOverlap,
-  type StackContext,
-} from "./pr-stack"
-import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
-import type { ListOpenPullsItem } from "../shared/types/github"
-import { withComposedTimeout } from "./agent-loop"
-import {
-  loadSigilixConfig,
   passesLabelGate,
-  renderPathInstructionsForPrompt,
-  resolvePathInstructionsForChangedPaths,
-  resolveCostControlsConfig,
-  resolveDocsReviewConfig,
-  resolveAstRulesConfig,
-  resolveCoverageConfig,
-  resolvePerfBudgetsConfig,
 } from "./sigilix-config"
-import {
-  buildAiInstructionGuidance,
-  filterAiInstructionsForChangedPaths,
-  loadAiInstructions,
-  shouldIngestAiInstructions,
-} from "./ai-instructions"
-import {
-  renderScopedRulesForPrompt,
-  resolveScopedRulesForChangedPaths,
-} from "./scoped-rules"
-import { loadCompiledScopedRulesManifest } from "./scoped-rules-kv"
-import {
-  runPerfBudgetsCheck,
-  renderPerfBudgetsForPrompt,
-  type PerfBudgetsHit,
-} from "../shared/domain/perf-budgets"
-import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
+// SIG-318 (PR 12g-1): `loadSigilixConfig` + `resolvePathInstructionsForChangedPaths`
+// + `resolveCostControlsConfig` (the label-gate INPUT; the gate DECISION stays
+// orchestral via `passesLabelGate`), the AI-instruction helpers, the scoped-rules
+// resolver cluster, and the diff-packing helpers followed the fetch-and-pack seam
+// into ensemble/app/context — no longer imported here.
+// SIG-318 (PR 12g-2): the docs/ast/coverage/perf-budgets config resolvers followed
+// the gather-evidence/gather-graph seams into ensemble/app/context — no longer here.
+// SIG-318 (PR 12g-3): the prompt-block renderers (`renderPerfBudgetsForPrompt`,
+// `renderCoverageGapBlock`, `renderDocsCoverageForPrompt`, `renderHitsForPrompt`,
+// `renderSecretHitsForPrompt`) + `classifyDiffFiles`/`renderDiffFileClassificationBlock`
+// followed the assemble-prompts seam into ensemble/app/context — no longer here.
 // SIG-318 (PR 12f): the inline PR-overview seam (`handlePrOverview` +
 // `PrOverviewArgs`/`PrOverviewReviewContext`) moved with the publish phase to
 // ensemble/app/publish — the inline-overview render was its only caller here.
+// SIG-318 (PR 12g-2): `runPerfBudgetsCheck` + `PerfBudgetsHit`, `ingestCoverage`,
+// and `runDocsCoverageCheck` + `DocsCoverageHit` followed the gather-graph seam.
 import {
-  runDocsCoverageCheck,
-  renderDocsCoverageForPrompt,
-  type DocsCoverageHit,
-} from "./docs-coverage-check"
-import {
-  splitDiffByFile,
-  packFilesIntoBatches,
-  batchToDiff,
-  estimateTokens,
-} from "./diff-packing"
-import {
-  classifyDiffFiles,
-  renderDiffFileClassificationBlock,
-} from "./diff-file-classify"
-import { shouldReview } from "../shared/util/path-glob"
-import {
-  runDeterministicChecks,
-  renderHitsForPrompt,
   type DeterministicCheckHit,
 } from "../shared/domain/deterministic-checks"
+// SIG-318 (PR 12g-1): the diff-packing helpers (`splitDiffByFile`/
+// `packFilesIntoBatches`/`batchToDiff`/`estimateTokens`), `shouldReview` (the path-
+// filter glob), `runDeterministicChecks`, `runSecretScan` + `SecretHit`, and the
+// incremental-review reader (`readLastReviewedSha`/`selectDiff`) followed the fetch-
+// and-pack seam into ensemble/app/context — no longer imported here (the
+// `DeterministicCheckHit` type stays for the telemetry interface below).
 import {
-  runSecretScan,
-  renderSecretHitsForPrompt,
-  type SecretHit,
-} from "./secret-scan"
-import {
-  readLastReviewedSha,
-  selectDiff,
   type DiffMode,
 } from "./incremental-review"
 // SIG-318 (PR 12f): `writeLastReviewedSha` + `recordReviewedDiffHash` (the
@@ -222,33 +138,27 @@ import {
 // SIG-318 (PR 12d): the review-manifest reader (`readReviewManifest`) +
 // `ReviewManifestFinding` followed the render-prep delta-badge snapshot into
 // ensemble/app/render-prep — no longer imported here.
-import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
-import { runAstRules } from "@/features/ast-rules"
+import { type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
 import { createAstCache, type AstCache } from "@/features/ast-rules"
-import { analyzeHelperBypass, renderAsymmetryHints } from "@/features/ast-rules"
-import { analyzeToctouRace, renderToctouHints } from "@/features/ast-rules"
-import { renderAstFindingsAsJsonForSynth } from "@/features/ast-rules"
-import { buildFactsByRole } from "./role-scoped-facts"
-import { postAstInlineFindings } from "@/features/ast-rules"
-import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
-import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
-import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
+// SIG-318 (PR 12g-3): the AST asymmetry/toctou analyzers + renderers
+// (`analyzeHelperBypass`/`renderAsymmetryHints`/`analyzeToctouRace`/`renderToctouHints`),
+// `renderAstFindingsAsJsonForSynth`, `buildFactsByRole`, and `postAstInlineFindings`
+// (the auto-inline poster) followed the assemble-prompts seam into ensemble/app/
+// context — no longer imported here (`createAstCache`/`AstCache` stay for the
+// `validateForSubmission` public wrapper below).
+import { type ScanSkipReason as SarifSkipReason } from "@/features/sarif-evidence"
 // SIG-318 (PR 12d): the verification-mode readers (`readVerificationMode`,
 // `readReanchorEnabled`) + `applyReanchors` followed the verification/marker
 // pre-compute into ensemble/app/verification-prep — no longer imported here.
-import {
-  buildReceiptIndex,
-  extractReceiptScanResults,
-  type ReceiptScanResult,
-} from "./verification/verify-finding-receipt"
-import { parseSarif } from "@/features/sarif-evidence"
-import { normalizeSarifPath } from "@/features/sarif-evidence"
-import {
-  renderSarifFindingsForPrompt,
-} from "@/features/sarif-evidence"
-import { buildSarifCheckAnnotations } from "@/features/sarif-evidence"
-import { resolveSarifEvidenceConfig } from "./sigilix-config"
-import { renderDepVulnFindingsForPrompt } from "@/features/dep-vulns"
+// SIG-318 (PR 12g-2): `runDepVulnScan` + `renderDepVulnFindingsForPrompt`,
+// `runAstRules`, the SARIF cluster (`runSarifEvidence`/`parseSarif`/
+// `normalizeSarifPath`/`renderSarifFindingsForPrompt`/`buildSarifCheckAnnotations`/
+// `resolveSarifEvidenceConfig`), the runner-evidence lookup + metric, and the
+// receipt-index builders (`buildReceiptIndex`/`extractReceiptScanResults`) followed
+// the gather-evidence/gather-graph seams into ensemble/app/context, taking the
+// `ReceiptScanResult` type (the verify-and-build receipt-join arg) with them via
+// the gather-graph `receiptScanIndex` return — only the `DepVulnSkipReason`/
+// `SarifSkipReason` telemetry types stay imported here.
 // SIG-318 (PR 12d): the review-memory render-path helpers — the marker builders
 // (`buildSigilixMarker`/`categoryFromRoleHint`/`computeFid`/`computePathSha256`/
 // `markerSeverityFromScore`), the claim extractor (`extractClaims`/
@@ -267,7 +177,6 @@ import { handleStaleHead } from "./stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "./merge-guard"
 import {
   type EnsembleRunCtx,
-  emitPhaseCompleted,
 } from "./ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
@@ -282,22 +191,19 @@ import {
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../shared/types/env"
-// SIG-138 Phase 2 — graph expansion.
-import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
-// SIG-286 — graph-context body expansion (shadow-only in PR1).
-import { contextExpansionForChangedSymbolsFor } from "./repo-graph-client"
-import {
-  buildGraphContextExpansion,
-  renderGraphExpansionForPrompt,
-  netNewCrossFileBodies,
-} from "./graph-context-expansion"
+// SIG-318 (PR 12g-2): the graph-expansion DO clients (`graphContextFor`/
+// `blastRadiusByNamesFor`/`contextExpansionForChangedSymbolsFor`), the context-
+// expansion builders (`buildGraphContextExpansion`/`renderGraphExpansionForPrompt`/
+// `netNewCrossFileBodies`), `injectArm`, and the graph-scoring helpers (`edgeWeight`/
+// `hopDecay`) + `withTimeout` followed the gather-graph seam into ensemble/app/
+// context — only the `GraphRetrievalSample`/`GraphExpansionSample` sink types, the
+// the `graphExpansionMode` re-export stay here. SIG-318 (PR 12g-3): the
+// `GraphContextNode` type followed the assemble-prompts seam (via the dynamic-
+// evidence-block domain) — no longer imported here.
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
-import { graphExpansionMode, injectArm } from "./graph-expansion-mode"
-import type { GraphContextNode } from "../do/repo-graph"
-import { edgeWeight, hopDecay } from "./graph-scoring"
-import { withTimeout } from "../shared/util/with-timeout"
+import { graphExpansionMode } from "./graph-expansion-mode"
 // SIG-318: the ensemble timeout schedule + its load-time budget invariants now
 // live in the domain layer (src/lib/ensemble/domain/budget.ts). Value-imported
 // (NOT type-only) so budget.ts's module-load assertion fires whenever this
@@ -441,6 +347,25 @@ export type { ApprovalReadinessSourceVerdict, SynthAttemptOutcome }
 // SIG-235 quorum collector, collectSpecialistVerdicts, the coverage gate, the
 // synth-bypass / synthesizer path + the recall floors) moved to the app layer.
 import { runSpecialistsAndSynthesize } from "./ensemble/app/specialists"
+// SIG-318 (PR 12g-1): the FETCH-AND-PACK seam (diff + open-PRs fetch, incremental
+// select, sigilix.json + AI-instructions load, split/filter/pack + truncation,
+// path-instructions + scoped rules, the reviewable map, deterministic checks +
+// secret scan, the legacy router + dynamic dispatcher) moved to the app layer. The
+// two orchestral gates (label gate, router-empty skip) stay god-file-side.
+import { fetchDiffAndConfig, packAndRoute } from "./ensemble/app/context/fetch-and-pack"
+// SIG-318 (PR 12g-2): the GATHER-EVIDENCE seam (pre-flight + perf + multi-corpus
+// retrieval, dep-vuln scan, AST-source fetch + parse-once cache, branch vectors +
+// the per-pass merge closure, symbol retrieval) and the GATHER-GRAPH seam (SIG-138
+// graph expansion + blast radius, SIG-286 context expansion, AST rules + scan
+// gates, SARIF + runner-evidence + receipt-index, docs/perf/coverage checks) moved
+// to the app layer (split at the retrieval/graph boundary to keep each file ≤1k).
+import { gatherRetrievalEvidence } from "./ensemble/app/context/gather-evidence"
+import { gatherGraphEvidence } from "./ensemble/app/context/gather-graph"
+// SIG-318 (PR 12g-3): the ASSEMBLE-PROMPTS seam (prompt fact-blocks + security
+// manifest + asymmetry/toctou + factsByRole + the maybePostAstAutoInline + stack
+// detection + testing-evidence pack + dynamic evidence + the messageForRole closure)
+// moved to the app layer. It returns the two closures + the values downstream needs.
+import { assembleSpecialistPrompts } from "./ensemble/app/context/assemble-prompts"
 // SIG-318 (PR 12d): the RENDER-PREP phase (review-memory soften + warm veto, the
 // renderable-set assembly + the fragile parallel-array bookkeeping, the cross-push
 // delta-badge snapshot, the coverage roster, and the verification/marker pre-
@@ -470,63 +395,24 @@ export type { ReviewMeta }
 
 // SIG-361 (PR 9): `LOW_CONFIDENCE_COMMENT_THRESHOLD` moved to the verdict domain
 // (imported + re-exported above).
-// SIG-129: branch chunks to consider per pass before merge dedup/re-rank.
-// Matches retrieval.ts TOP_K (6) so a pass can be fully branch-sourced.
-const TOP_K_BRANCH = 6
-// SIG-143: max blast-radius paths folded into the prompt graph-context block.
-// Mirrors the ≤4 cap on BFS graph-node additions — keeps the additive context
-// from crowding out the primary vector-hit retrieval.
-const GRAPH_BLAST_PROMPT_CAP = 4
-export interface ResolveDynamicEvidencePromptBlockArgs {
-  env: DynamicReviewEvidenceEnv
-  filesByPath: ReadonlyMap<string, string>
-  changedLines: ChangedLines
-  reviewablePaths: readonly string[]
-  retrievalChunks: readonly RetrievedChunk[]
-  graphNodes: readonly GraphContextNode[]
-  blastCallerPaths: readonly string[]
-  blastDependentPaths: readonly string[]
-  testingEvidence: TestingEvidencePack | undefined
-  /** SIG-336: shared per-review parse-once cache (the evidence pack parses each
-   *  changed file via extractFileGraph — reuse the runner's AST). */
-  astCache?: AstCache
-}
-
-export interface ResolvedDynamicEvidencePromptBlock {
-  mode: DynamicReviewEvidenceMode
-  pack: DynamicReviewEvidencePack | null
-  rendered: string
-  promptBlock: string
-}
-
-export function resolveDynamicEvidencePromptBlock(
-  args: ResolveDynamicEvidencePromptBlockArgs,
-): ResolvedDynamicEvidencePromptBlock {
-  const mode = dynamicReviewEvidenceMode(args.env)
-  if (mode === "off") {
-    return { mode, pack: null, rendered: "", promptBlock: "" }
-  }
-
-  const pack = buildDynamicReviewEvidencePack({
-    filesByPath: args.filesByPath,
-    changedLines: args.changedLines,
-    reviewablePaths: args.reviewablePaths,
-    retrievalChunks: args.retrievalChunks,
-    graphNodes: args.graphNodes,
-    blastCallerPaths: args.blastCallerPaths,
-    blastDependentPaths: args.blastDependentPaths,
-    ...(args.testingEvidence !== undefined ? { testingEvidence: args.testingEvidence } : {}),
-    ...(args.astCache !== undefined ? { astCache: args.astCache } : {}),
-  })
-  const rendered = renderDynamicReviewEvidenceBlock(pack)
-
-  return {
-    mode,
-    pack,
-    rendered,
-    promptBlock: mode === "post" ? rendered : "",
-  }
-}
+// SIG-318 (PR 12g-2): `TOP_K_BRANCH` (private) moved to ensemble/domain/retrieval-
+// constants (its only caller, the `branchAwareMerge` closure, followed the gather-
+// evidence seam into ensemble/app/context). `GRAPH_BLAST_PROMPT_CAP` +
+// `BLAST_RADIUS_RESOLUTION_READY` + the graph-context-format pure helpers moved to
+// ensemble/domain/graph-context-format (re-exported below to preserve the surface).
+// SIG-318 (PR 12g-3): `resolveDynamicEvidencePromptBlock` (the dynamic-review-
+// evidence prompt-block resolver) + its `ResolveDynamicEvidencePromptBlockArgs` /
+// `ResolvedDynamicEvidencePromptBlock` types moved to ensemble/domain/dynamic-
+// evidence-block — their only non-test caller (the prompt-assembly block) followed
+// the assemble-prompts seam into ensemble/app/context. They were exported (and unit-
+// tested) here → re-exported from the domain so existing importers are unaffected.
+export {
+  resolveDynamicEvidencePromptBlock,
+} from "./ensemble/domain/dynamic-evidence-block"
+export type {
+  ResolveDynamicEvidencePromptBlockArgs,
+  ResolvedDynamicEvidencePromptBlock,
+} from "./ensemble/domain/dynamic-evidence-block"
 
 // ─── SIG-216 fix-up: inline-overview budgeting ───────────────────────────
 //
@@ -557,106 +443,26 @@ export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
 // only place the inline-overview budget math runs. The two EXPORTED thresholds
 // above stay here to preserve the module's public surface.
 
-// ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
-//
-// Exported for unit-testing (no DO/network access — pure env-flag reads
-// and string formatting). All three follow the env-flag conventions used
-// by OPENCLAW_SYMBOL_RETRIEVAL / OPENCLAW_BRANCH_AWARE_RETRIEVAL.
-
-// SIG-143: blast-radius name resolution is implemented — the graph block calls
-// `blastRadiusByNamesFor` with the PR's changed symbol names, which the DO
-// resolves to symbol_ids in the active version. With resolution live, a raw
-// `post` is honored (no longer coerced to `shadow`).
-export const BLAST_RADIUS_RESOLUTION_READY = true
-
-/** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
-export function graphRetrievalEnabled(env: Env): boolean {
-  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
-  return v === "shadow" || v === "post"
-}
-
-/**
- * Returns the effective graph-retrieval mode: "off" | "shadow" | "post".
- *
- * While BLAST_RADIUS_RESOLUTION_READY is false, a raw value of "post" is
- * coerced to "shadow" — blast-radius resolution is inert (SIG-143) and the
- * graph-routed path is not ready for production. A config flip to "post"
- * will take effect only after the constant is flipped true.
- */
-export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
-  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
-  const raw = v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
-  if (raw === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
-    return "shadow"
-  }
-  return raw
-}
+// SIG-318 (PR 12g-2): the SIG-138 / SIG-143 graph-context PURE helpers
+// (`BLAST_RADIUS_RESOLUTION_READY`, `graphRetrievalEnabled`, `graphRetrievalMode`,
+// `formatGraphContext`, `formatGraphBlastContext`, `graphOverlapStats`) moved to
+// ensemble/domain/graph-context-format — their only non-test callers (the graph-
+// expansion block) followed the gather-graph seam into ensemble/app/context. They
+// were exported (and unit-tested) here → re-exported from the domain so existing
+// importers (the triage-pr-review-ensemble test) are unaffected.
+export {
+  BLAST_RADIUS_RESOLUTION_READY,
+  graphRetrievalEnabled,
+  graphRetrievalMode,
+  formatGraphContext,
+  formatGraphBlastContext,
+  graphOverlapStats,
+} from "./ensemble/domain/graph-context-format"
 
 // SIG-286: graphExpansionMode moved to ./graph-expansion-mode (a light module
 // the metrics route can import without pulling this ensemble). Re-exported here
 // so existing importers keep working.
 export { graphExpansionMode }
-
-/**
- * Render graph-expansion nodes as the `[GRAPH CONTEXT]` content string.
- * Each line is `<path> (hopN, <edgeKind>)`. Empty array → empty string.
- */
-export function formatGraphContext(
-  nodes: { path: string; hop: number; edgeKind: string }[],
-): string {
-  return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
-}
-
-/**
- * Render blast-radius file paths (callers + import dependents of the changed
- * symbols) as additional `[GRAPH CONTEXT]` lines for folding into the prompt
- * alongside the BFS-neighbor lines (SIG-143). Each line is
- * `<path> (blast, caller|importer)`.
- *
- * Paths in `exclude` (vector-hit seeds + BFS graph nodes) are skipped so the
- * block never repeats context already present, a path that is both a caller
- * and a dependent appears once (caller wins), and the result is capped at
- * `cap` lines for prompt-size safety. Callers are listed before importers;
- * within each group, input order is preserved. Empty input → empty string.
- */
-export function formatGraphBlastContext(args: {
-  callerPaths: string[]
-  dependentPaths: string[]
-  exclude: ReadonlySet<string>
-  cap: number
-}): string {
-  const seen = new Set(args.exclude)
-  const lines: string[] = []
-  const add = (path: string, role: string): void => {
-    if (lines.length >= args.cap || seen.has(path)) return
-    seen.add(path)
-    lines.push(`${path} (blast, ${role})`)
-  }
-  for (const p of args.callerPaths) add(p, "caller")
-  for (const p of args.dependentPaths) add(p, "importer")
-  return lines.join("\n")
-}
-
-/**
- * Compute overlap statistics between vector-hit seed paths and
- * graph-expanded node paths for the SIG-86 bake-off.
- *
- * - `jaccard`: |intersection| / |union|. 0 when both sets are empty.
- * - `addedCount`: paths in graph that were NOT in vector hits (net-new context).
- */
-export function graphOverlapStats(a: {
-  vectorPaths: string[]
-  graphPaths: string[]
-}): { jaccard: number; addedCount: number } {
-  const v = new Set(a.vectorPaths)
-  const g = new Set(a.graphPaths)
-  const inter = [...g].filter((p) => v.has(p)).length
-  const union = new Set([...a.vectorPaths, ...a.graphPaths]).size
-  return {
-    jaccard: union === 0 ? 0 : inter / union,
-    addedCount: [...g].filter((p) => !v.has(p)).length,
-  }
-}
 
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -794,29 +600,12 @@ export type {
 // SIG-361 (PR 9): `resolveReviewEventOverride` moved to the verdict domain
 // (imported + re-exported above).
 
-/**
- * Shadow-first gate for a deterministic AST security floor. In `post` mode the
- * rule's findings flow through untouched; in any other mode (`off`/`shadow`) they
- * are STRIPPED from the submission (and their `perFinding` provenance dropped),
- * and the stripped anchors are returned so the caller can emit a `shadow`
- * measurement log. Extracted so the off/shadow/post contract is unit-testable
- * (a regression that drops `post` findings or mis-strips is caught). Mirrors the
- * inline IDOR / weak-random / open-redirect / SSRF gates.
- */
-export function applyAstScanGate<
-  F extends { ruleId: string; astFindingId: string; path: string; line: number },
->(
-  astResult: { findings: F[]; perFinding: { delete(key: string): void } },
-  ruleId: string,
-  mode: string,
-): Array<{ path: string; line: number }> {
-  if (mode === "post") return []
-  const emits = astResult.findings.filter((f) => f.ruleId === ruleId)
-  if (emits.length === 0) return []
-  astResult.findings = astResult.findings.filter((f) => f.ruleId !== ruleId)
-  for (const f of emits) astResult.perFinding.delete(f.astFindingId)
-  return emits.map((f) => ({ path: f.path, line: f.line }))
-}
+// SIG-318 (PR 12g-2): `applyAstScanGate` (the shadow-first AST-scan-gate pure
+// helper) moved to ensemble/domain/ast-scan-gate — its only non-test callers (the
+// AST scan-gate stanzas) followed the gather-graph seam into ensemble/app/context.
+// It was exported (and unit-tested via tests/ast-scan-gate.test.ts) here → re-
+// exported from the domain so existing importers are unaffected.
+export { applyAstScanGate } from "./ensemble/domain/ast-scan-gate"
 
 // ─── orchestrator ──────────────────────────────────────────────────────
 
@@ -1073,60 +862,17 @@ export async function handlePrReviewEnsemble(
       // a noop-merge skip would help with anyway.
     }
 
-    // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
-    // detection needs the open-PR list to find downstack/upstack peers;
-    // running the fetch here (after the stale-head guard, in parallel
-    // with the diff) avoids an extra serial round-trip. Best-effort
-    // with `.catch` → empty list = no-stack review (degraded but
-    // correct).
-    const [fullPrDiff, openPrsForStack] = await Promise.all([
-      client.getPullRequestDiff(owner, repo, prNumber),
-      client.listOpenPullRequests(owner, repo).catch((err) => {
-        console.warn(
-          JSON.stringify({
-            event: "pr-stack-open-prs-fetch-failed",
-            owner, repo, prNumber,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        )
-        return [] as ListOpenPullsItem[]
-      }),
-    ])
-
-    // ARC-194 / SIG-10: read prior-review marker for telemetry only.
-    // The diff fed to specialists + synth is always the cumulative
-    // full PR diff (PR.base.sha..headSha) — SIG-10 removed the
-    // incremental compare-diff path because on multi-commit PRs the
-    // push-delta diff produced false-positive "undefined export"-class
-    // findings against symbols introduced in an earlier commit. See
-    // `selectDiff` in incremental-review.ts for the full rationale.
-    // The compareDiff fetch is gone too: its result is no longer
-    // consumed, so spending the round-trip would be pure waste.
-    const lastReviewed = await readLastReviewedSha(env, owner, repo, prNumber)
-    const diffSelection = selectDiff({
-      fullDiff: fullPrDiff,
-      compareDiff: null,
-      previousSha: lastReviewed?.reviewedSha ?? null,
-      currentHeadSha: headSha,
+    // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the SIG-10 incremental-
+    // select marker read, the per-repo sigilix.json load, the AI-instruction-
+    // ingest decision flag, and `resolveCostControlsConfig` (the label-gate INPUT)
+    // moved to ensemble/app/context/fetch-and-pack. The label-gate DECISION below
+    // stays orchestral. It mutates `telemetry.incrementalReview` by reference.
+    // `sigilixConfig` is a `let` — `packAndRoute` reassigns it on the AI-ingest path.
+    const fetched = await fetchDiffAndConfig({
+      env, client, owner, repo, prNumber, headSha, ensembleConfig, telemetry,
     })
-    telemetry.incrementalReview = {
-      mode: diffSelection.mode,
-      ...(diffSelection.previousSha ? { previousSha: diffSelection.previousSha } : {}),
-      ...(diffSelection.reason ? { reason: diffSelection.reason } : {}),
-    }
-    const fullDiff = diffSelection.diff
-
-    // ARC-174: per-repo `sigilix.json` config. Read at the PR head SHA
-    // so the guidance reflects whatever the PR author committed (lets
-    // them iterate on the rules in the same PR). Always resolves —
-    // missing or malformed config falls back to EMPTY_CONFIG. Loaded
-    // BEFORE the diff split so ARC-176 pathFilters can drop files
-    // before packing decides what to send to specialists.
-    let sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
-    const shouldLoadAiInstructions = shouldIngestAiInstructions(
-      sigilixConfig.guidance,
-      ensembleConfig.flags.ingestAiInstructions,
-    )
+    const { fullPrDiff, openPrsForStack, fullDiff, shouldLoadAiInstructions, costControls } = fetched
+    let sigilixConfig = fetched.sigilixConfig
 
     // ARC-273: label gate. When the operator configures
     // `costControls.runOnLabels`, pr-review only fires on PRs
@@ -1134,7 +880,6 @@ export async function handlePrReviewEnsemble(
     // gating (current behavior). Returns `skipped` so the
     // dispatcher-owned Check Run completes as `neutral` rather
     // than misclassifying as a failed review.
-    const costControls = resolveCostControlsConfig(sigilixConfig)
     if (costControls.runOnLabels.length > 0) {
       const labelNames = (meta.labels ?? [])
         .map((l) => l.name)
@@ -1163,305 +908,35 @@ export async function handlePrReviewEnsemble(
       }
     }
 
-    // ARC-192 + ARC-176: hunk-level diff packing with config-aware
-    // filtering. Split the diff by file, drop files matched by
-    // `sigilixConfig.pathFilters` (lockfiles, generated content, etc.
-    // that shouldn't burn token budget), pack the remainder greedily
-    // into batches under the per-call token cap. v1 reviews only the
-    // FIRST batch; files in subsequent batches are recorded in
-    // telemetry as `filesNotReviewed`. Files larger than the cap
-    // individually are dropped via `filesDroppedTooLarge`. Multi-batch
-    // with parallel specialist calls + verdict merge is the v2
-    // enhancement; v1 ships the bound + telemetry.
-    const splitFiles = splitDiffByFile(fullDiff)
-    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
-    // back to its own AI-instruction files as ADVISORY review guidance — parity
-    // with CodeRabbit/Greptile-style context ingestion, without requiring a
-    // sigilix.json. sigilix.json always takes precedence
-    // (`shouldLoadAiInstructions`). GitHub `.github/instructions/**` files may
-    // carry `applyTo:` path scopes, so binding happens against the full selected
-    // diff's changed-file set (not the post-packing reviewed batch) for stable
-    // per-PR semantics.
-    if (shouldLoadAiInstructions) {
-      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
-      const applicableAiInstructions = aiInstructions
-        ? filterAiInstructionsForChangedPaths(aiInstructions, splitFiles.map((f) => f.path))
-        : null
-      if (applicableAiInstructions) {
-        sigilixConfig = {
-          ...sigilixConfig,
-          guidance: buildAiInstructionGuidance(applicableAiInstructions),
-        }
-        console.log(JSON.stringify({
-          event: "pr-review-ai-instructions-ingested",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          source_count: applicableAiInstructions.chunks.length,
-          sources: applicableAiInstructions.chunks.map((chunk) => chunk.source),
-          scoped_source_count: applicableAiInstructions.chunks.filter((chunk) =>
-            chunk.applyTo !== undefined && chunk.applyTo.length > 0
-          ).length,
-        }))
-      }
-    }
-    const filterPatterns = sigilixConfig.pathFilters ?? []
-    const filesAfterFilter = filterPatterns.length === 0
-      ? splitFiles
-      : splitFiles.filter((f) => shouldReview(f.path, filterPatterns))
-    const filesDroppedByFilter = filterPatterns.length === 0
-      ? []
-      : splitFiles.filter((f) => !shouldReview(f.path, filterPatterns)).map((f) => f.path)
-    const { batches, droppedTooLarge } = packFilesIntoBatches(filesAfterFilter)
-    const reviewedFiles = batches[0] ?? []
-    const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
-    const baseDiff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
-      ? fullDiff
-      : batchToDiff(reviewedFiles)
-    const matchedPathInstructions = resolvePathInstructionsForChangedPaths(
-      sigilixConfig,
-      reviewedFiles.map((f) => f.path),
-    )
-    if (matchedPathInstructions.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-review-path-instructions-matched",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        instruction_count: matchedPathInstructions.length,
-        matched_file_count: new Set(matchedPathInstructions.flatMap((i) => i.matchedPaths)).size,
-      }))
-    }
-    // SIG-172: load the per-repo scoped-rules manifest (SIGILIX.md +
-    // .sigilix/rules/*.md, persisted at index time) and pick the
-    // rules that apply to this PR's changed files. Closest-ancestor
-    // walk + glob matching. Cached compiled matchers are reused
-    // across roles in this run (one matcher build per PR, not per
-    // changed file).
-    const scopedRulesManifest = await loadCompiledScopedRulesManifest(env, owner, repo)
-    const scopedRuleSelection = resolveScopedRulesForChangedPaths(
-      scopedRulesManifest,
-      reviewedFiles.map((f) => f.path),
-    )
-    const scopedRulesBlock = renderScopedRulesForPrompt(scopedRuleSelection)
-    if (scopedRulesBlock.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-review-scoped-rules-matched",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        per_directory_rules: scopedRuleSelection.perDirectoryRules.length,
-        glob_rules: scopedRuleSelection.globRules.length,
-      }))
-    }
-    // ARC-273: hard cap on the diff string passed to specialists.
-    // `packFilesIntoBatches` already bounds total-file budget; this
-    // is a belt-and-suspenders char-level cap for pathological cases
-    // (one enormous file, or operator-narrowed budget). Truncates
-    // from the END so the diff header + leading hunks survive. A
-    // trailing sentinel notes the truncation so the model knows it
-    // didn't see everything.
-    //
-    // code-reviewer M1 catch: `slice(0, negative)` would silently
-    // produce an empty string if the operator set `maxPatchLength`
-    // below the sentinel length. `MAX_PATCH_LENGTH_MIN = 1_000`
-    // makes that impossible today, but the relationship is implicit
-    // — `Math.max(0, …)` codifies the invariant defensively.
-    const PATCH_TRUNCATION_NOTE = "\n\n[…diff truncated to costControls.maxPatchLength…]"
-    const wasTruncated = baseDiff.length > costControls.maxPatchLength
-    const diff = wasTruncated
-      ? baseDiff.slice(0, Math.max(0, costControls.maxPatchLength - PATCH_TRUNCATION_NOTE.length)) +
-        PATCH_TRUNCATION_NOTE
-      : baseDiff
-    if (wasTruncated) {
-      console.log(JSON.stringify({
-        event: "pr-review-diff-truncated",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        original_chars: baseDiff.length,
-        max_patch_length: costControls.maxPatchLength,
-        final_chars: diff.length,
-      }))
-    }
-
-    telemetry.diffPacking = {
-      diffTokensEstimated: estimateTokens(fullDiff),
-      totalFiles: splitFiles.length,
-      batchCount: batches.length,
-      filesReviewed: reviewedFiles.map((f) => f.path),
-      filesDroppedTooLarge: droppedTooLarge,
+    // SIG-318 (PR 12g-1): the hunk-level split/filter/pack + char-level
+    // truncation, the AI-instructions ingest (which reassigns `sigilixConfig`),
+    // the path-instructions + scoped-rules resolution, the `reviewable` map, the
+    // deterministic-checks + secret-scan, the legacy router, and the SIG-226/
+    // SIG-224 dynamic-dispatcher block (which mutates `router`) moved to
+    // ensemble/app/context/fetch-and-pack. It mutates `telemetry` (diffPacking /
+    // deterministicChecks / secretScan / router writes) by reference; the final
+    // (post-dispatcher) router flows out for the orchestral router-empty gate below.
+    const packed = await packAndRoute({
+      env, client, owner, repo, prNumber, headSha, ensembleConfig, orchCtrl, meta,
+      fullDiff, sigilixConfig, shouldLoadAiInstructions, costControls, telemetry,
+    })
+    sigilixConfig = packed.sigilixConfig
+    const {
+      splitFiles,
+      filesAfterFilter,
+      reviewedFiles,
       filesNotReviewed,
-      ...(filesDroppedByFilter.length > 0 ? { filesDroppedByFilter } : {}),
-      // ARC-273 (code-reviewer M2 catch): when the char-level cap
-      // truncated the post-packing diff, surface the post-truncation
-      // size so operators can correlate "diff packing said X files
-      // reviewed" with "model actually saw Y chars."
-      ...(wasTruncated ? { diffTruncatedToChars: diff.length } : {}),
-    }
-
-    const reviewable = parseDiffToReviewablePositions(diff)
-    const filePaths = [...reviewable.keys()]
-
-    // ARC-193: deterministic regex checks run BEFORE specialist fanout.
-    // Hits become structured findings prepended to specialist prompts
-    // as authoritative facts (LLM still weighs context). Cheap +
-    // deterministic — closes the well-known LLM miss-rate gap on flat
-    // patterns (TODO markers, console.log, hardcoded API-key shapes).
-    const deterministicRunResult = runDeterministicChecks(
+      droppedTooLarge,
+      matchedPathInstructions,
+      scopedRulesBlock,
+      wasTruncated,
       diff,
-      sigilixConfig.deterministicChecks ?? [],
-    )
-    const deterministicHits: DeterministicCheckHit[] = deterministicRunResult.hits
-    if (deterministicHits.length > 0 || deterministicRunResult.compiledRegexFailures.length > 0) {
-      telemetry.deterministicChecks = {
-        hits: deterministicHits,
-        compiledRegexFailures: deterministicRunResult.compiledRegexFailures,
-      }
-    }
-
-    // ARC-187: secret scan. Built-in baseline rule set (AWS, GitHub,
-    // Slack, Stripe, OpenAI, Anthropic keys + private-key PEM headers
-    // + a generic high-entropy safety net). Hits are redacted before
-    // anything reaches logs / prompts / telemetry — raw secrets never
-    // leave the runner. Always-on; no config knob in v1 because secret
-    // detection is baseline behavior, not opt-in.
-    const secretHits: SecretHit[] = runSecretScan(diff)
-    if (secretHits.length > 0) {
-      telemetry.secretScan = {
-        hitCount: secretHits.length,
-        // Telemetry stores fingerprints (path:line:redacted) — never
-        // the raw values. Lets post-hoc analysis dedupe across runs
-        // without exposing the secret to KV reads.
-        fingerprints: secretHits.map((h) => h.fingerprint),
-      }
-    }
-
-    // ─── Router decision ───────────────────────────────────────
-    const totalLinesChanged = countLines(diff)
-    // CR PR #35 catch: pass diffText so the router can content-aware
-    // check markdown fenced code blocks before taking the docs-only
-    // shortcut.
-    let router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
-    telemetry.routerDecision = router
-
-    // ─── SIG-226 / SIG-224 Phase 1 — dispatcher (shadow + enforce_rules) ─
-    // Default mode = "off" → the whole block is a no-op (single env
-    // string compare).
-    //
-    // Modes:
-    //   "shadow"        — dispatcher computes picks + LLM call, but the
-    //                     legacy router still drives fan-out. Pure data
-    //                     collection for SIG-227b / SIG-228 graduation.
-    //   "enforce_rules" — SIG-227a. Dispatcher runs the RULE LAYER only
-    //                     (no LLM call, 0s overhead) and its picks
-    //                     REPLACE `router.specialists` for fan-out.
-    //                     Activates the new safe-skip rules
-    //                     (lockfile-only, .d.ts-only, test-files-only)
-    //                     that the legacy router doesn't have.
-    //   "enforce"       — Phase 2/3 (SIG-227b / SIG-228). Dispatcher
-    //                     runs rules + LLM and the picks drive fan-out.
-    //                     Logged but not yet honored in Phase 1 / 227a.
-    //
-    // Dispatcher is wrapped in try/catch so a defense-in-depth throw
-    // can't poison the legacy review pipeline (CR M3 fix from PR #183).
-    const dispatcherMode = ensembleConfig.flags.dynamicDispatcherMode
-    if (
-      dispatcherMode === "shadow"
-      || dispatcherMode === "enforce"
-      || dispatcherMode === "enforce_rules"
-    ) {
-      try {
-        const dispatcherClassified = classifyDiffFiles(filePaths)
-        const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
-        const dispatcherDecision = await decideSpecialistsDynamic({
-          signals: { paths: filePaths, totalLinesChanged, diffText: diff },
-          classified: dispatcherClassified,
-          commitMessage: dispatcherCommitMessage,
-          // SIG-230: thread separated title/body through so the LLM
-          // prompt sees them inside the `<pr_metadata>` envelope. The
-          // sanitizer + envelope are the two-layer defense against
-          // prompt-injection in PR titles/bodies.
-          prTitle: meta.title,
-          prBody: meta.body ?? "",
-          repoConfig: sigilixConfig,
-          env,
-          signal: orchCtrl.signal,
-        })
-        telemetry.dispatcherDecision = dispatcherDecision
-        console.log(JSON.stringify({
-          event: "dispatcher-shadow-decision",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: dispatcherMode,
-          routerSpecialists: router.specialists,
-          dispatcherSpecialists: dispatcherDecision.specialists,
-          perRole: dispatcherDecision.perRole,
-          layerVotes: dispatcherDecision.layerVotes,
-          reasoning: dispatcherDecision.reasoning,
-          elapsedMs: dispatcherDecision.elapsedMs,
-        }))
-        if (dispatcherMode === "enforce_rules") {
-          // SIG-227a: rules-only enforcement. Replace the legacy
-          // router's picks with the dispatcher's.
-          //
-          // Safe-skip COVERAGE is a strict superset: the dispatcher
-          // adds lockfile-only, .d.ts-only, and test-files-only on
-          // top of the legacy router's docs-only-no-fences and CSS-
-          // only. So for PRs that hit a safe-skip case, the dispatcher
-          // matches OR shrinks the fan-out vs the legacy router.
-          //
-          // END-TO-END behavior on shape+force collisions differs.
-          // Example: a docs-only PR that ALSO touches an auth path
-          // (e.g. `auth-spec.md`). Legacy router: `forced.size > 0`
-          // → docs shortcut is SKIPPED → all 4 specialists run.
-          // Dispatcher: docs safe-skip fires → security force adds
-          // security back → fan-out = `{security}` only. This is
-          // intentionally more aggressive — a markdown change to an
-          // auth spec doesn't need logic/perf/tests review — but it
-          // IS a behavior change reviewers will see in shadow
-          // telemetry.
-          //
-          // CodeRabbit M1 fix: preserve the legacy router decision
-          // on `telemetry.legacyRouterDecision` so `/metrics/validation`
-          // can compute the "would-have-fanned-out vs actually-fanned-
-          // out" delta. The console.log captures both sides too.
-          telemetry.legacyRouterDecision = router
-          router = {
-            specialists: dispatcherDecision.specialists,
-            reason: `dispatcher_enforce_rules:${dispatcherDecision.reasoning.slice(0, 200)}`,
-            routerEnabled: true,
-          }
-          telemetry.routerDecision = router
-        }
-        if (dispatcherMode === "enforce") {
-          // SIG-227b: NON-PROTECTED enforcement. Apply the dispatcher's full
-          // decision (rule layer + LLM-decided ambiguous middle) for fan-out.
-          // reconcile() PROTECTS security + logic — an ambiguous protected role
-          // ALWAYS runs; only ambiguous `tests`/`performance` are LLM-skippable
-          // — and a disabled/errored/aborted LLM fails CLOSED to "run all
-          // ambiguous" (makeDisabledDecision returns ALL_SPECIALISTS). So this
-          // can only ever SHRINK the fan-out for the two low-stakes roles,
-          // never drop security/logic. (Protected-role LLM-skipping needs a
-          // confidence floor + high-trust = SIG-228, deliberately NOT here.)
-          // Mirrors the enforce_rules swap above; the difference is upstream —
-          // mode=enforce ran the LLM classifier, so the decision is narrower.
-          telemetry.legacyRouterDecision = router
-          router = {
-            specialists: dispatcherDecision.specialists,
-            // Defensive `?? ""` so a malformed decision can never throw the
-            // `.slice` into the outer catch (Kimi sign-off, SIG-227b).
-            reason: `dispatcher_enforce:${(dispatcherDecision.reasoning ?? "").slice(0, 200)}`,
-            routerEnabled: true,
-          }
-          telemetry.routerDecision = router
-          console.log(JSON.stringify({
-            event: "dispatcher-enforce-applied",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            legacySpecialists: telemetry.legacyRouterDecision.specialists,
-            enforcedSpecialists: router.specialists,
-          }))
-        }
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "dispatcher-shadow-error",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-          note: "dispatcher threw unexpectedly; legacy router still drives fan-out",
-        }))
-      }
-    }
+      reviewable,
+      filePaths,
+      deterministicHits,
+      secretHits,
+      router,
+    } = packed
 
     if (router.specialists.length === 0) {
       // Router said "no specialists apply to this PR" — e.g. docs-only
@@ -1495,1613 +970,97 @@ export async function handlePrReviewEnsemble(
       })
     }
 
-    // ─── Pre-flight retrieval snapshot ─────────────────────────
-    cache = createRetrievalCache({
-      maxCalls: ensembleConfig.tunables.maxRetrieveCallsPerPr,
+    // ─── SIG-318 (PR 12g-2): the GATHER-EVIDENCE seam ─────────
+    // The pre-flight + perf + multi-corpus retrieval, the dep-vuln scan, the AST-
+    // source fetch + shared parse-once cache, the branch-vector build + per-pass
+    // `branchAwareMerge` closure, and the symbol retrieval moved to ensemble/app/
+    // context/gather-evidence. It mutates `telemetry` (dep-vuln) by reference and
+    // returns the retrieval cache so the orchestrator's `let cache` (the finally-
+    // cleanup reads its stats) is reassigned — the 12a pre-try-let pattern.
+    const evidence = await gatherRetrievalEvidence({
+      env, client, owner, repo, prNumber, headSha, ensembleConfig, perfCtx, orchCtrl,
+      meta, sigilixConfig, router, diff, filePaths, telemetry,
     })
-    const namespace = indexNamespace(owner, repo)
-    const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
-    // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
-    // retrieval can't silently consume the synth budget. Failure here
-    // is non-fatal (per v3.1 §8) — specialists fall back to empty
-    // snapshot and may still use their role-specific context blocks.
-    // Capture cache locally so the lambda below sees a non-null narrowing.
-    const preflightCache = cache
-    let preflightChunks: Awaited<ReturnType<typeof preflightCache.cachedRetrieve>>["chunks"] = null
-    // SIG-110: perf-keyword retrieval. Kicked off HERE so it runs
-    // CONCURRENTLY with the preflight below — both share the ≤15s cap +
-    // orchCtrl.signal, so the perf query adds no critical-path wall-clock
-    // (the orchestrator has only ~10s of static slack). Fires only when
-    // the performance specialist is in the lineup AND the retrieve budget
-    // has room for preflight + perf plus shared retrieval headroom
-    // (`budgetRemaining() > 2` reads full budget here since the
-    // cache consumes only after its internal cacheKey await — so this
-    // means maxCalls >= 3, the default). The query seeds perf anti-pattern
-    // vocabulary + changed function names so Vectorize lands on
-    // perf-relevant code (single namespace → bias is via query terms, not
-    // a separate index). Best-effort: never rejects, falls back to the
-    // shared snapshot.
-    const wantPerfRetrieval = shouldRunPerfRetrieval(
-      router.specialists,
-      preflightCache.budgetRemaining(),
-    )
-    let perfQuery = ""
-    let perfChunks: RetrievedChunk[] | null = null
-    let perfRetrievalPromise: Promise<RetrievedChunk[] | null> | null = null
-    if (wantPerfRetrieval) {
-      perfQuery = buildPerfRetrievalQuery(
-        preflightQuery,
-        extractChangedFunctionNames(diff),
-      )
-      perfRetrievalPromise = withComposedTimeout(
-        () => preflightCache.cachedRetrieve({
-          caller: "specialist:performance",
-          query: perfQuery,
-          namespace,
-          fetcher: () => retrieveChunks({ text: perfQuery, teamKey: namespace, env }),
-        }),
-        RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-        orchCtrl.signal,
-      ).then((r) => r.chunks).catch(() => null)
-    }
-    // SIG-44: multi-corpus retrieval (prior merged PRs + Linear issues).
-    // Kicked off HERE so its embed+query runs CONCURRENTLY with the
-    // preflight/perf retrieval above. Best-effort: never rejects (the
-    // function soft-fails per leg, and we add a defensive .catch). Flag-gated
-    // (default off); the result is appended to the shared snapshot AFTER the
-    // branch-aware merge block below so the merge can't clobber it.
-    const wantMultiCorpus = multiCorpusEnabled(env)
-    const multiCorpusPromise: Promise<MultiCorpusResult> | null = wantMultiCorpus
-      ? retrieveMultiCorpus(env, owner, repo, preflightQuery, { prNumber, headSha })
-          .catch(() => ({ pr: [], issue: [] }))
-      : null
-    // ARC-284: phase-completed event always emits (even on the catch
-    // path) so a 15s pre-flight cap-hit shows up in the trace.
-    const preflightStartMs = Date.now()
-    try {
-      const preflight = await withComposedTimeout(
-        () => preflightCache.cachedRetrieve({
-          caller: "preflight",
-          query: preflightQuery,
-          namespace,
-          fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env }),
-        }),
-        RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-        orchCtrl.signal,
-      )
-      preflightChunks = preflight.chunks
-    } catch (err) {
-      // If the orchestrator's outer signal aborted, propagate — that's a
-      // genuine internal_error, not a pre-flight timeout.
-      if (orchCtrl.signal.aborted) throw err
-      // Pre-flight-only timeout / error. The cache itself wraps the
-      // fetcher in its own try/catch so its log will eventually capture
-      // the fetcher's outcome (success/error) once the background call
-      // settles — we just stop awaiting it and proceed with an empty
-      // snapshot. Total wall-clock vs. the cache log's elapsedMs lets
-      // post-hoc analysis distinguish "we gave up at 15s" from "fetcher
-      // threw a hard error".
-      preflightChunks = null
-    } finally {
-      emitPhaseCompleted(perfCtx, "preflight_retrieval", preflightStartMs)
-    }
-    let retrievalSnapshot = preflightChunks
-      ? formatChunksForPrompt(preflightChunks) ?? ""
-      : ""
-    // SIG-110: resolve the perf-specific snapshot. Awaited AFTER the
-    // preflight (both already ran concurrently), so this adds no extra
-    // wall-clock. The inner promise never rejects (`.catch(() => null)`
-    // above); empty / skipped perf retrieval falls back to the shared
-    // snapshot so the performance specialist is never worse off than the
-    // other roles. NOTE: this is the one intentional exception to the
-    // "all specialists see the same retrieval snapshot" invariant — only
-    // the performance role gets a perf-biased view.
-    // (On the orchCtrl-abort path the preflight `await` above re-throws
-    // before we reach here, so `perfRetrievalPromise` is intentionally
-    // abandoned — it carries `.catch(() => null)` and shares
-    // orchCtrl.signal, so it aborts cleanly with no unhandled rejection.)
-    let perfRetrievalSnapshot = retrievalSnapshot
-    if (perfRetrievalPromise) {
-      perfChunks = await perfRetrievalPromise
-      const formattedPerf = perfChunks ? formatChunksForPrompt(perfChunks) ?? "" : ""
-      const perfRetrievalUsed = formattedPerf.length > 0
-      perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
-      // Bake-off signal: did the perf-biased snapshot actually differ
-      // from the shared one, or did we fall back? (SIG-110 → SIG-86.)
-      console.log(JSON.stringify({
-        event: "pr-review-perf-retrieval",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        used: perfRetrievalUsed,
-      }))
-    }
-
-    // ─── ARC-186: dependency-vulnerability scan ────────────────
-    // Runs after secret-scan + deterministic-checks but BEFORE the
-    // specialist fanout. Findings are pre-LLM facts injected alongside
-    // the other deterministic blocks.
-    const depVulnEnabled = sigilixConfig.depVulnScan?.enabled !== false
-    const baseShaForDepVuln = meta.base?.sha ?? ""
-    const depVulnResult = await runDepVulnScan({
-      env,
-      client,
-      owner, repo, prNumber,
-      headSha,
-      baseSha: baseShaForDepVuln,
-      enabled: depVulnEnabled,
-    })
-    const depVulnFindings = depVulnResult.skipped ? [] : depVulnResult.findings
-    const depVulnBlock = renderDepVulnFindingsForPrompt(depVulnFindings)
-    telemetry.depVulnScan = depVulnResult.skipped
-      ? { skipped: true, reason: depVulnResult.reason, findingsCount: 0 }
-      : {
-          skipped: false,
-          findingsCount: depVulnResult.findings.length,
-          depsScanned: depVulnResult.depsScanned,
-          manifestsScanned: depVulnResult.manifestsScanned,
-        }
-
-    // ─── ARC-181: AST rule-pack scan ────────────────────────────
-    // Pre-LLM AST scan over pathFiltered JS/TS files.
-    const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
-    const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
-    // SIG-121: decide symbol retrieval up front — it also needs JS/TS sources
-    // for AST symbol extraction, so the fetch below must run when EITHER AST
-    // rules or symbol retrieval may run. Otherwise disabling `astRules` in
-    // sigilix.json would silently starve symbol retrieval even with
-    // OPENCLAW_SYMBOL_RETRIEVAL=on. Budget is read here, before the fetch; no
-    // retrieval consumes between here and the block below, so the value is
-    // identical to reading it at the block.
-    const wantSymbolRetrieval = shouldRunSymbolRetrieval(
-      ensembleConfig.flags.symbolRetrieval,
-      router.specialists,
-      preflightCache.budgetRemaining(),
-    )
-    const wantBranchAware =
-      (ensembleConfig.flags.branchAwareRetrieval ?? "").trim().toLowerCase() === "on"
-    const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
-    // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
-    // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
-    const asymmetryMode = ensembleConfig.flags.asymmetryHints
-    const toctouMode = ensembleConfig.flags.toctouHints
-    // Cross-cutting over-fire Option B: the window-blindness gate reads the full
-    // file from `astFilesByPath` to find a guard the model never saw. It must
-    // trigger the fetch itself (CodeRabbit #329) — else, if every OTHER
-    // AST/symbol feature is off, the map stays empty and the gate silently
-    // fail-opens (keeps) on every finding, i.e. becomes a no-op.
-    const wantWindowBlindness =
-      ensembleConfig.validatorModes.windowBlindnessValidatorMode !== "off"
-    // SIG-328: the logic-claim refutation gate also needs the full-file source
-    // map for its AST proof — trigger the fetch so it can't silently no-op (and
-    // mis-read as "0 would-drops") if the other AST features are ever flipped off.
-    const wantLogicClaimRefutation =
-      ensembleConfig.validatorModes.logicClaimRefutationMode !== "off"
-    const astFilesByPath = new Map<string, string>()
-    if (
-      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness || wantLogicClaimRefutation) &&
-      jsTsPaths.length > 0
-    ) {
-      const fetchResults = await mapWithConcurrency(
-        jsTsPaths,
-        5,
-        async (p) => {
-          const src = await client.getFileContent(owner, repo, p, headSha)
-          return { p, src }
-        },
-      )
-      for (const r of fetchResults) {
-        if (r.status === "fulfilled" && typeof r.value.src === "string") {
-          astFilesByPath.set(r.value.p, r.value.src)
-        }
-      }
-    }
-
-    // SIG-336: one parse-once AST cache for the whole review. Every acorn
-    // consumer below (runAstRules, durableObjectClassSpans, detectHelperCoverage,
-    // the graph expansion, and the logic-claim refutation gate) shares it, so a
-    // given file is parsed at most once per review instead of once per subsystem
-    // (and once per finding). The shared 500KB guard rides along.
-    const astCache = createAstCache()
-
-    // SIG-129: build the branch retrieval set ONCE (best-effort), reused
-    // across the preflight / perf / symbol merges. Empty set ⇒ every merge
-    // is a no-op ⇒ identical to today's main-only behavior.
-    let branchVectors: BranchVector[] = []
-    let branchSetElapsedMs = 0
-    if (shouldRunBranchAwareRetrieval(ensembleConfig.flags.branchAwareRetrieval, astFilesByPath)) {
-      const startMs = Date.now()
-      try {
-        branchVectors = await withComposedTimeout(
-          () => prepareBranchSet(env.AI, astFilesByPath),
-          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-          orchCtrl.signal,
-        )
-      } catch (err) {
-        // Genuine orchestrator cancellation propagates; a slow/stuck embed
-        // degrades to main-only retrieval (empty branch set).
-        if (orchCtrl.signal.aborted) throw err
-        branchVectors = []
-      }
-      branchSetElapsedMs = Date.now() - startMs
-    }
-    // SIG-129 tombstone set: every changed JS/TS file is stale on `main`, so
-    // its main-index chunks must be dropped from each merge regardless of
-    // whether a branch chunk for it surfaced in the retrieved top-K.
-    const changedPaths: ReadonlySet<string> = new Set(jsTsPaths)
-
-    // Branch-aware merge for one pass: embed the pass's query (single text,
-    // best-effort) and overlay branch chunks on the main chunks. Returns the
-    // main chunks unchanged when branch-aware is off / the set is empty / the
-    // query embed fails. Records the per-pass head-override count (stale main
-    // chunks removed by the changed-path tombstone) for shadow telemetry.
-    const branchMergeStats = { preflight: 0, perf: 0, symbol: 0 }
-    const branchAwareMerge = async (
-      mainChunks: RetrievedChunk[] | null,
-      queryText: string,
-      pass: keyof typeof branchMergeStats,
-    ): Promise<RetrievedChunk[] | null> => {
-      if (branchVectors.length === 0 || !mainChunks) return mainChunks
-      let qVec: number[]
-      // Cap the query embed input (chars) so a pathological query can't blow
-      // the embedder's context — mirrors retrieval.ts's 4k query slice.
-      try {
-        qVec = await withComposedTimeout(
-          () => embedText(env.AI, queryText.slice(0, 4_000)),
-          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-          orchCtrl.signal,
-        )
-      } catch (err) {
-        // Genuine orchestrator cancellation must propagate (matches the
-        // preflight/symbol passes); any other embed failure/timeout degrades
-        // to main-only retrieval.
-        if (orchCtrl.signal.aborted) throw err
-        return mainChunks
-      }
-      const branchChunks = retrieveBranchChunks(qVec, branchVectors, TOP_K_BRANCH)
-      branchMergeStats[pass] = mainChunks.filter((c) => changedPaths.has(c.path)).length
-      return mergeBranchAware(mainChunks, branchChunks, changedPaths)
-    }
-
-    // Re-merge the SHARED preflight snapshot (seen by every specialist) and
-    // the perf snapshot now that branchVectors exists. No-op when the set is
-    // empty. The symbol pass merges itself in its own block below.
-    let sharedChunksForOverlap: RetrievedChunk[] = preflightChunks ?? []
-    if (branchVectors.length > 0) {
-      const preflightMerged = await branchAwareMerge(preflightChunks, preflightQuery, "preflight")
-      sharedChunksForOverlap = preflightMerged ?? []
-      retrievalSnapshot = preflightMerged ? formatChunksForPrompt(preflightMerged) ?? "" : ""
-
-      if (perfChunks) {
-        const perfMerged = await branchAwareMerge(perfChunks, perfQuery, "perf")
-        const formattedPerf = perfMerged ? formatChunksForPrompt(perfMerged) ?? "" : ""
-        perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
-      } else {
-        perfRetrievalSnapshot = retrievalSnapshot
-      }
-    }
-
-    // SIG-44: append the multi-corpus (prior PRs + Linear issues) section to
-    // the shared + perf snapshots. Done HERE — after the branch-aware merge's
-    // reassignments — so it can't be overwritten. Awaited now; it ran
-    // concurrently with preflight so this adds no critical-path wall-clock.
-    // The logic role inherits this via its shared snapshot; the SIG-236 logic
-    // prompt budget still trims if needed (formatMultiCorpusForPrompt is
-    // already bounded to ~6K chars).
-    if (multiCorpusPromise) {
-      const mc = await multiCorpusPromise
-      const block = formatMultiCorpusForPrompt(mc) ?? ""
-      if (block.length > 0) {
-        const section = `[PRIOR PRS & ISSUES]\n${block}`
-        retrievalSnapshot = retrievalSnapshot ? `${retrievalSnapshot}\n\n${section}` : section
-        perfRetrievalSnapshot = perfRetrievalSnapshot
-          ? `${perfRetrievalSnapshot}\n\n${section}`
-          : section
-      }
-    }
-
-    // SIG-121: symbol-based retrieval for the LOGIC specialist (flag-gated,
-    // best-effort). Fires HERE — after astFilesByPath is built (it needs the
-    // file SOURCES for AST symbol extraction) and before the specialist
-    // fanout. Unlike SIG-110's perf retrieval (concurrent with preflight),
-    // this can't run at preflight time because the sources don't exist yet.
-    // Budget-aware, ≤15s cap, non-fatal (empty snapshot on failure; rethrow
-    // only on orchCtrl abort). AUGMENTS — never replaces — the logic role's
-    // shared snapshot via mergeLogicSnapshot below.
-    //
-    // BUDGET NOTE: the gate (shouldRunSymbolRetrieval) requires
-    // budgetRemaining() > 1 — checked HERE, after preflight (and perf, if
-    // any) have already consumed. At the default maxCalls=3: a logic-only PR
-    // leaves budgetRemaining()=2 → symbol fires (1 reserved for synth); a PR
-    // that ALSO ran a perf pass leaves 1 → symbol defers (perf + symbol are
-    // mutually exclusive at the default budget). Raise
-    // OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR (≥4) to run both — relevant
-    // when enabling this flag for the SIG-86 bake-off.
-    let logicSymbolSnapshot = ""
-    let symbolOverlap: ReturnType<typeof computeChunkOverlap> | null = null
-    let symbolRetrievalElapsedMs = 0
-    let symbolQueryCount = 0
-    let symbolInjected = false
-    if (wantSymbolRetrieval) {
-      const changedLines = buildChangedLines(diff)
-      const symbols = extractChangedSymbols(astFilesByPath, changedLines)
-      symbolQueryCount = symbols.length
-      const symbolQuery = buildSymbolRetrievalQuery(symbols)
-      if (symbolQuery.length > 0) {
-        const startMs = Date.now()
-        let symbolChunks: RetrievedChunk[] | null = null
-        try {
-          const r = await withComposedTimeout(
-            () =>
-              preflightCache.cachedRetrieve({
-                caller: "specialist:logic-symbol",
-                query: symbolQuery,
-                namespace,
-                fetcher: () => retrieveChunks({ text: symbolQuery, teamKey: namespace, env }),
-              }),
-            RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-            orchCtrl.signal,
-          )
-          symbolChunks = await branchAwareMerge(r.chunks, symbolQuery, "symbol")
-        } catch (err) {
-          if (orchCtrl.signal.aborted) throw err
-          symbolChunks = null
-        }
-        symbolRetrievalElapsedMs = Date.now() - startMs
-        const formatted = symbolChunks ? formatChunksForPrompt(symbolChunks) ?? "" : ""
-        if (formatted.length > 0) {
-          logicSymbolSnapshot = formatted
-          symbolInjected = true
-        }
-        symbolOverlap = computeChunkOverlap(sharedChunksForOverlap, symbolChunks ?? [])
-      }
-      // Bake-off signal (SIG-121 → SIG-86): how different is the
-      // symbol-derived snapshot from the shared one?
-      console.log(JSON.stringify({
-        event: "pr-review-symbol-retrieval",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        query_symbol_count: symbolQueryCount,
-        injected: symbolInjected,
-        elapsed_ms: symbolRetrievalElapsedMs,
-        budget_remaining: preflightCache.budgetRemaining(),
-        shared_chunks: symbolOverlap?.sharedCount ?? 0,
-        symbol_chunks: symbolOverlap?.symbolCount ?? 0,
-        intersection: symbolOverlap?.intersectionCount ?? 0,
-        jaccard: symbolOverlap?.jaccard ?? 0,
-      }))
-    }
-
-    // SIG-129 → SIG-86 bake-off signal. Flag-off ⇒ branchVectors empty ⇒
-    // logs zeros and nothing changed in the snapshots.
-    if (wantBranchAware) {
-      console.log(JSON.stringify(buildBranchRetrievalEvent({
-        owner, repo, prNumber, headSha,
-        branchChunkCount: branchVectors.length,
-        embedElapsedMs: branchSetElapsedMs,
-        headOverride: branchMergeStats,
-      })))
-    }
-
-    // ─── SIG-138 Phase 2: graph-expansion retrieval ────────────────────
-    //
-    // Gated by OPENCLAW_GRAPH_RETRIEVAL=shadow|post. Off ⇒ no DO calls,
-    // no behavior change. Any error in this block is caught and logged;
-    // the review always proceeds unaffected (graph is additive context).
-    //
-    // shadow: compute everything for telemetry; do NOT attach graphContext
-    //   to posted prompts.
-    // post:   attach graphContext to logic + tests specialists + synth.
-    //
-    // SIG-143: blast radius is driven by the PR's changed symbol NAMES
-    // (extractChangedSymbols), which the DO resolves to symbol_ids in the
-    // active graph version (blastRadiusByNames). Names are extracted here
-    // independently of the symbol-retrieval block above (that block is gated
-    // on a separate budget flag and may not run). Both helpers are pure.
-    let graphContextString = ""
-    let graphNodePaths: string[] = []
-    let graphContextNodesForEvidence: GraphContextNode[] = []
-    // M2: keep caller + import-dependent counts separate for telemetry;
-    // graph-context injection can use a combined set.
-    let graphBlastCallerPaths: string[] = []
-    let graphBlastDependentPaths: string[] = []
-    // SIG-143: blast paths folded into the prompt graph-context block (post mode).
-    let graphBlastContextString = ""
-    if (graphRetrievalEnabled(env)) {
-      const graphRpcBudgetMs = ensembleConfig.tunables.graphRpcTimeoutMs
-      try {
-        // Seed from deduplicated chunk paths of the merged hit set.
-        const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
-        // Wrap in withTimeout so a slow DO RPC cannot consume orchestrator wall
-        // time.  AbortSignal is unused by the DO stub but required by the helper
-        // signature.  On timeout the helper aborts and rejects; the outer catch
-        // below handles it and skips graph context gracefully.
-        const { nodes } = await withTimeout(
-          (_signal) => graphContextFor(env, owner, repo, {
-            seedPaths,
-            maxFiles: 8,
-            maxSymbolsPerHit: 12,
-            maxEdgesPerSymbol: 6,
-          }),
-          graphRpcBudgetMs,
-        )
-        // Cap graph-only additions to ≤4 nodes per spec.
-        // Sort: hop asc, then edge weight desc (higher weight = stronger edge).
-        const cappedNodes = nodes
-          .slice()
-          .sort((a, b) => {
-            const hopDiff = a.hop - b.hop
-            if (hopDiff !== 0) return hopDiff
-            return edgeWeight(b.edgeKind) * hopDecay(b.hop) -
-                   edgeWeight(a.edgeKind) * hopDecay(a.hop)
-          })
-          .slice(0, 4)
-        graphContextString = formatGraphContext(cappedNodes)
-        graphNodePaths = cappedNodes.map((n) => n.path)
-        graphContextNodesForEvidence = cappedNodes
-
-        // Blast radius (SIG-143): resolve the PR's changed symbol names in the
-        // active graph version → caller + import-dependent files. Names come
-        // from the diff via the same pure helpers the symbol-retrieval block
-        // uses; resolution is scoped to the changed JS/TS files (astFilesByPath
-        // keys) as a name-collision guard. Empty input fast-paths inside the DO.
-        const changedGraphNames = extractChangedSymbols(astFilesByPath, buildChangedLines(diff))
-        const changedGraphPaths = [...astFilesByPath.keys()]
-        // Isolated try: a blast RPC timeout/error must NOT discard the graph
-        // context already built above from graphContextFor (the outer catch
-        // clears it). Blast radius is additive on top of the BFS neighbors.
-        try {
-          const blast = await withTimeout(
-            (_signal) => blastRadiusByNamesFor(env, owner, repo, {
-              changedNames: changedGraphNames,
-              changedPaths: changedGraphPaths,
-            }),
-            graphRpcBudgetMs,
-          )
-          // M2: preserve caller vs import-dependent distinction for telemetry.
-          graphBlastCallerPaths = [...new Set(blast.callerPaths)]
-          graphBlastDependentPaths = [...new Set(blast.importDependents)]
-          // SIG-143: fold blast paths into the graph context that reaches the
-          // specialists (AC), excluding paths already covered by vector-hit
-          // seeds or BFS neighbors. Capped for prompt size.
-          graphBlastContextString = formatGraphBlastContext({
-            callerPaths: graphBlastCallerPaths,
-            dependentPaths: graphBlastDependentPaths,
-            exclude: new Set([...seedPaths, ...graphNodePaths]),
-            cap: GRAPH_BLAST_PROMPT_CAP,
-          })
-        } catch (blastErr) {
-          console.log(JSON.stringify({
-            event: "pr-review-graph-blast-error",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            error: blastErr instanceof Error ? blastErr.message : String(blastErr),
-          }))
-          graphBlastCallerPaths = []
-          graphBlastDependentPaths = []
-          graphBlastContextString = ""
-        }
-
-        // Bake-off telemetry: emit in both shadow and post so the SIG-86
-        // analysis always has coverage data. Failure is non-fatal.
-        const vectorSeedPaths = seedPaths
-        const { jaccard, addedCount } = graphOverlapStats({
-          vectorPaths: vectorSeedPaths,
-          graphPaths: graphNodePaths,
-        })
-        // hop_distribution: count capped nodes per hop level.
-        const hopDist: Record<string, number> = {}
-        for (const n of cappedNodes) {
-          const key = String(n.hop)
-          hopDist[key] = (hopDist[key] ?? 0) + 1
-        }
-        // edge_type_distribution: count capped nodes per edgeKind.
-        const edgeTypeDist: Record<string, number> = {}
-        for (const n of cappedNodes) {
-          edgeTypeDist[n.edgeKind] = (edgeTypeDist[n.edgeKind] ?? 0) + 1
-        }
-        console.log(JSON.stringify({
-          event: "pr-review-graph-retrieval",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: graphRetrievalMode(env),
-          jaccard,
-          added_count: addedCount,
-          node_count: nodes.length,
-          capped_node_count: cappedNodes.length,
-          blast_caller_count: graphBlastCallerPaths.length,
-          blast_dependent_count: graphBlastDependentPaths.length,
-          hop_distribution: hopDist,
-          edge_type_distribution: edgeTypeDist,
-        }))
-        // SIG-152: push the same sample to the dispatcher's sink so it lands in
-        // GraphMetricsDO (curl-able via /metrics/graph). Telemetry-only — fires
-        // in both shadow and post, matching the log event above.
-        args.graphMetricsSink?.push({
-          mode: graphRetrievalMode(env),
-          jaccard,
-          addedCount,
-          nodeCount: nodes.length,
-          cappedNodeCount: cappedNodes.length,
-          blastCallerCount: graphBlastCallerPaths.length,
-          blastDependentCount: graphBlastDependentPaths.length,
-        })
-      } catch (err) {
-        // Non-fatal: graph expansion is additive. Log for observability.
-        console.log(JSON.stringify({
-          event: "pr-review-graph-retrieval-error",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          error: err instanceof Error ? err.message : String(err),
-        }))
-        graphContextString = ""
-        graphNodePaths = []
-        graphContextNodesForEvidence = []
-        graphBlastCallerPaths = []
-        graphBlastDependentPaths = []
-        graphBlastContextString = ""
-      }
-    }
-    // In post mode, inject graph context into logic+tests specialists
-    // and synthesizer: BFS neighbors (graphContextString) plus the folded
-    // blast-radius paths (graphBlastContextString). In shadow mode, the
-    // variables are computed but not attached to prompts (bake-off telemetry
-    // fires in both modes).
-    // `let`: SIG-286 may APPEND a targeted cross-file expansion block below (in
-    // OPENCLAW_GRAPH_EXPANSION=post mode) once `enriched` is computed.
-    let graphCtxForPrompt = graphRetrievalMode(env) === "post"
-      ? [graphContextString, graphBlastContextString].filter((s) => s.length > 0).join("\n")
-      : ""
-    // ──────────────────────────────────────────────────────────────────
-
-    // ─── SIG-286: graph-context body expansion ─────────────────────────
-    //
-    // Gated by OPENCLAW_GRAPH_EXPANSION=shadow|post. Off ⇒ no DO call, no
-    // telemetry, zero behavior change. Both modes COMPUTE the enriched
-    // changed-symbol context (definition / caller / import-dependent bodies)
-    // and emit the `graph-expansion-shadow` event. In `post` (PR1 targeted
-    // inject) the net-new cross-file bodies are ALSO appended to
-    // graphCtxForPrompt below; in `shadow` the result is measured-not-injected,
-    // so graphCtxForPrompt stays the SIG-138-only graph block.
-    //
-    // Soft-fail: bounded by withComposedTimeout(orchCtrl.signal) + a catch that
-    // emits `graph-expansion-shadow-error` and continues. It must NEVER block,
-    // slow, or break the review.
-    const graphExpMode = graphExpansionMode(env)
-    if (graphExpMode !== "off") {
-      try {
-        // CodeRabbit: measure the WHOLE PR, not the prompt batch. astFilesByPath
-        // is the full changed JS/TS set, but `diff` is truncated to maxPatchLength
-        // — detect changed lines from `fullDiff` so we don't skip symbols past the
-        // truncation (which would bias the shadow data low on large PRs).
-        const changedExpNames = extractChangedSymbols(astFilesByPath, buildChangedLines(fullDiff))
-        const changedExpPaths = [...astFilesByPath.keys()]
-        const enriched = await withComposedTimeout(
-          async (signal) => {
-            const expansion = await contextExpansionForChangedSymbolsFor(env, owner, repo, {
-              changedNames: changedExpNames,
-              changedPaths: changedExpPaths,
-            })
-            return buildGraphContextExpansion({
-              expansion,
-              filesByPath: astFilesByPath,
-              // SIG-286 PR2: bounded cross-file fetcher (≤6 distinct files,
-              // concurrency 4, ALL inside the 3s soft-fail GRAPH_EXPANSION cap).
-              // Reuses the in-scope GitHub client; getFileContent returns null on
-              // 404/dir/>1MB and the pre-fetch wraps each call soft-fail so a
-              // fetch error never blocks or breaks the (shadow, non-injected)
-              // measurement. Turns the PR1 `missing` rows into real `github`
-              // bodies → the CONTROL-vs-TREATMENT numbers that decide PR3.
-              // Threads the composed-timeout `signal` so an in-flight cross-file
-              // fetch CANCELS the moment the 3s expansion cap (or the
-              // orchestrator) aborts — the batch is abort-aware mid-wave, not
-              // just between waves (Sigilix + CodeRabbit).
-              fetchFileContent: (path) => client.getFileContent(owner, repo, path, headSha, { signal }),
-              signal,
-            })
-          },
-          GRAPH_EXPANSION_TIMEOUT_MS,
-          orchCtrl.signal,
-        )
-        console.log(JSON.stringify({
-          event: "graph-expansion-shadow",
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          mode: graphExpMode,
-          // Surface diff truncation so analysis can exclude PRs where the changed
-          // set may still be partial (large PRs) for a clean opportunity measurement.
-          diffTruncated: wasTruncated,
-          graphAvailable: enriched.graphAvailable,
-          callerBodies: enriched.callerBodies.length,
-          dependentBodies: enriched.dependentBodies.length,
-          defBodies: enriched.definitionBodies.length,
-          totalTokens: enriched.totalTokens,
-          cappedAt: enriched.cappedAt,
-          elapsedMs: enriched.elapsedMs,
-          bodiesSource: enriched.bodiesSource,
-          dropped: enriched.dropped,
-          // SIG-286 PR2: CONTROL (no-fetch) vs TREATMENT (with cross-file fetch).
-          // controlTokens = filesByPath-only; totalTokens above = treatment;
-          // netNewTokens = the cross-file context gain the PR3 inject decision
-          // keys off (GO ≈ median ≥ 800 + cross-file callers on >40% of reviews;
-          // KILL < 500 or no cross-file caller context). `fetch` is the cost.
-          controlTokens: enriched.control.tokens,
-          netNewTokens: enriched.netNewTokens,
-          fetch: enriched.fetch,
-        }))
-        // SIG-286 PR2.5: push the same sample to the dispatcher's sink so it
-        // lands in GraphExpansionMetricsDO (curl-able via /metrics/graph-expansion,
-        // the readable netNewTokens median the PR3 GO/KILL decision keys off).
-        // Telemetry-only — fires in shadow and post, matching the log event.
-        args.graphExpansionMetricsSink?.push({
-          mode: graphExpMode,
-          graphAvailable: enriched.graphAvailable,
-          netNewTokens: enriched.netNewTokens,
-          controlTokens: enriched.control.tokens,
-          totalTokens: enriched.totalTokens,
-          fetchEnabled: enriched.fetch.enabled,
-          fetchFiles: enriched.fetch.files,
-          fetchBytes: enriched.fetch.bytes,
-          fetchElapsedMs: enriched.fetch.elapsedMs,
-          budgetExhausted: enriched.fetch.budgetExhausted,
-        })
-        // SIG-286 PR1: in `post` mode, APPEND the targeted inject — net-new
-        // cross-file definition/caller bodies — to the graph block reaching
-        // logic+tests+synth. The render is "" for the ~73% of reviews with no
-        // net-new cross-file context (the blanket-inject KILL set), so they
-        // append nothing. `shadow` skips this ⇒ measured-but-not-injected, the
-        // current prod behavior; only `post` injects.
-        if (graphExpMode === "post") {
-          const expansionBlock = renderGraphExpansionForPrompt(enriched)
-          // SIG-286 PR2: A/B among reviews that WOULD inject. TREATMENT gets the
-          // cross-file inject; CONTROL computes the identical context but does
-          // NOT inject. Both arms record `graphExpansionAb` on the telemetry (it
-          // rides into ensemble-review-telemetry alongside `synthesizer.verdict`),
-          // so a per-arm finding-rate comparison (group by arm, count
-          // `synthesizer.verdict.findings`) can read whether the inject catches
-          // MORE real findings — the only honest FN measure, since the inject's
-          // findings land on the diff (informed by cross-file context), not on
-          // the snippets. Non-inject reviews (empty render) sit out the experiment.
-          if (expansionBlock.length > 0) {
-            const arm = injectArm(headSha)
-            telemetry.graphExpansionAb = { arm }
-            if (arm === "treatment") {
-              graphCtxForPrompt = [graphCtxForPrompt, expansionBlock]
-                .filter((s) => s.length > 0)
-                .join("\n\n")
-              // Observable so the inject is verifiable. Counts are the ACTUALLY-
-              // injected net-new bodies (same selector as the render), not the
-              // enriched totals (CodeRabbit #277).
-              console.log(JSON.stringify({
-                event: "graph-expansion-injected",
-                owner, repo, prNumber, headSha: headSha.slice(0, 7),
-                bytes: expansionBlock.length,
-                bodiesInjected: netNewCrossFileBodies(enriched).length,
-                netNewTokens: enriched.netNewTokens,
-              }))
-            }
-          }
-        }
-      } catch (err) {
-        // Genuine orchestrator cancellation propagates; any other failure is
-        // soft — log and continue, never block the review.
-        if (orchCtrl.signal.aborted) throw err
-        console.log(JSON.stringify({
-          event: "graph-expansion-shadow-error",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: graphExpMode,
-          error: err instanceof Error ? err.message : String(err),
-        }))
-      }
-    }
-    // ──────────────────────────────────────────────────────────────────
-
-    const astResult = await runAstRules({
-      diff,
-      filesByPath: astFilesByPath,
-      reviewable,
-      config: astRulesConfig,
-      ctx: { owner, repo, prNumber },
+    cache = evidence.cache
+    const {
+      retrievalSnapshot,
+      perfRetrievalSnapshot,
+      logicSymbolSnapshot,
+      sharedChunksForOverlap,
+      astFilesByPath,
       astCache,
-    })
-
-    // SIG-314: shadow-first gating for the deterministic IDOR/BOLA floor
-    // (no-unauthorized-object-lookup). The rule lives in ALL_RULES so it always
-    // RUNS (the runner logs `ast-rules-finding` per hit for FP measurement), but
-    // its emits reach the synth — and post — ONLY in `post` mode. `off` (the
-    // default) strips them silently; `shadow` strips-but-logs a rollup so we can
-    // read the firing + false-positive rate on dogfood + the e2e fixtures before
-    // promoting. The rule is structurally P2-capped (clampAstEmitScores), so the
-    // residual risk we're measuring is middleware-only-authz false positives,
-    // never a P0/P1.
-    // SIG-318 (PR 5a): env-derived settings come from the typed EnsembleConfig
-    // resolved once at the top of the handler (parsed at the Worker edge and
-    // injected via args; see resolveEnsembleConfig). The scanner gates below read
-    // ensembleConfig.astScanModes.* — no inline env.OPENCLAW_* reads.
-    const authzIdorMode = ensembleConfig.astScanModes.authzIdor
-    if (authzIdorMode !== "post") {
-      const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")
-      if (authzEmits.length > 0) {
-        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-unauthorized-object-lookup")
-        // CodeRabbit #302: keep perFinding aligned — the auto-inline poster reads
-        // it by astFindingId, so a stale entry would mis-anchor another comment.
-        for (const f of authzEmits) astResult.perFinding.delete(f.astFindingId)
-        if (authzIdorMode === "shadow") {
-          console.log(JSON.stringify({
-            event: "authz-idor-shadow",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            count: authzEmits.length,
-            anchors: authzEmits.map((f) => `${f.path}:${f.line}`),
-          }))
-        }
-      }
-    }
-    // Shadow-first gating for the deterministic weak-randomness floor
-    // (no-insecure-random-token, CWE-338) — same off/shadow/post contract as the
-    // IDOR floor above. The rule always RUNS (logged per hit for FP measurement);
-    // its emits reach synth/post ONLY in `post`. `off` (default) strips silently;
-    // `shadow` strips-but-logs a rollup so we can read the firing + FP rate on
-    // dogfood before promoting. Structurally P2-capped (clampAstEmitScores).
-    const weakRandomMode = ensembleConfig.astScanModes.weakRandom
-    if (weakRandomMode !== "post") {
-      const weakRandomEmits = astResult.findings.filter((f) => f.ruleId === "no-insecure-random-token")
-      if (weakRandomEmits.length > 0) {
-        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-insecure-random-token")
-        // Keep perFinding aligned (the auto-inline poster reads it by astFindingId).
-        for (const f of weakRandomEmits) astResult.perFinding.delete(f.astFindingId)
-        if (weakRandomMode === "shadow") {
-          console.log(JSON.stringify({
-            event: "weak-random-token-shadow",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            count: weakRandomEmits.length,
-            anchors: weakRandomEmits.map((f) => `${f.path}:${f.line}`),
-          }))
-        }
-      }
-    }
-    // Shadow-first gating for the deterministic open-redirect floor
-    // (no-open-redirect, CWE-601) — same off/shadow/post contract. Default off;
-    // shadow strips-but-logs the firing + FP rate on dogfood before promoting.
-    const openRedirectMode = ensembleConfig.astScanModes.openRedirect
-    if (openRedirectMode !== "post") {
-      const openRedirectEmits = astResult.findings.filter((f) => f.ruleId === "no-open-redirect")
-      if (openRedirectEmits.length > 0) {
-        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-open-redirect")
-        for (const f of openRedirectEmits) astResult.perFinding.delete(f.astFindingId)
-        if (openRedirectMode === "shadow") {
-          console.log(JSON.stringify({
-            event: "open-redirect-shadow",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            count: openRedirectEmits.length,
-            anchors: openRedirectEmits.map((f) => `${f.path}:${f.line}`),
-          }))
-        }
-      }
-    }
-    // Shadow-first gating for the deterministic SSRF floor (no-ssrf, CWE-918) —
-    // same off/shadow/post contract. Default off; shadow strips-but-logs the
-    // firing + FP rate on dogfood before promoting.
-    const ssrfMode = ensembleConfig.astScanModes.ssrf
-    if (ssrfMode !== "post") {
-      const ssrfEmits = astResult.findings.filter((f) => f.ruleId === "no-ssrf")
-      if (ssrfEmits.length > 0) {
-        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-ssrf")
-        for (const f of ssrfEmits) astResult.perFinding.delete(f.astFindingId)
-        if (ssrfMode === "shadow") {
-          console.log(JSON.stringify({
-            event: "ssrf-shadow",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            count: ssrfEmits.length,
-            anchors: ssrfEmits.map((f) => `${f.path}:${f.line}`),
-          }))
-        }
-      }
-    }
-    // Shadow-first gating for the deterministic path-traversal floor
-    // (no-path-traversal, CWE-22) — same off/shadow/post contract.
-    const pathTraversalMode = ensembleConfig.astScanModes.pathTraversal
-    const pathTraversalStripped = applyAstScanGate(astResult, "no-path-traversal", pathTraversalMode)
-    if (pathTraversalMode === "shadow" && pathTraversalStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "path-traversal-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: pathTraversalStripped.length,
-        anchors: pathTraversalStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-    // Shadow-first gating for the deterministic SQL-injection floor
-    // (no-sql-injection, CWE-89) — same off/shadow/post contract.
-    const sqlInjectionMode = ensembleConfig.astScanModes.sqlInjection
-    const sqlInjectionStripped = applyAstScanGate(astResult, "no-sql-injection", sqlInjectionMode)
-    if (sqlInjectionMode === "shadow" && sqlInjectionStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "sql-injection-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: sqlInjectionStripped.length,
-        anchors: sqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-    // Shadow-first gating for the deterministic SSTI floor (no-ssti, CWE-1336).
-    const sstiMode = ensembleConfig.astScanModes.ssti
-    const sstiStripped = applyAstScanGate(astResult, "no-ssti", sstiMode)
-    if (sstiMode === "shadow" && sstiStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "ssti-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: sstiStripped.length,
-        anchors: sstiStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-    // Shadow-first gating for the deterministic NoSQL-injection floor
-    // (no-nosql-injection, CWE-943) — same off/shadow/post contract.
-    const nosqlInjectionMode = ensembleConfig.astScanModes.nosqlInjection
-    const nosqlInjectionStripped = applyAstScanGate(astResult, "no-nosql-injection", nosqlInjectionMode)
-    if (nosqlInjectionMode === "shadow" && nosqlInjectionStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "nosql-injection-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: nosqlInjectionStripped.length,
-        anchors: nosqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-    // Shadow-first gating for the deterministic prototype-pollution floor
-    // (no-prototype-pollution, CWE-1321) — same off/shadow/post contract.
-    const protoPollutionMode = ensembleConfig.astScanModes.protoPollution
-    const protoPollutionStripped = applyAstScanGate(astResult, "no-prototype-pollution", protoPollutionMode)
-    if (protoPollutionMode === "shadow" && protoPollutionStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "proto-pollution-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: protoPollutionStripped.length,
-        anchors: protoPollutionStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-    // Shadow-first gating for the deterministic XXE floor
-    // (no-xxe, CWE-611) — same off/shadow/post contract.
-    const xxeMode = ensembleConfig.astScanModes.xxe
-    const xxeStripped = applyAstScanGate(astResult, "no-xxe", xxeMode)
-    if (xxeMode === "shadow" && xxeStripped.length > 0) {
-      console.log(JSON.stringify({
-        event: "xxe-shadow",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        count: xxeStripped.length,
-        anchors: xxeStripped.map((a) => `${a.path}:${a.line}`),
-      }))
-    }
-
-    // SIG-108: AST findings are split by roleHint inside buildFactsByRole
-    // (below) so each block reaches only its own specialist.
-    telemetry.astRules = astResult.telemetry.scanned
-      ? {
-          scanned: true,
-          filesScanned: astResult.telemetry.filesScanned,
-          filesSkippedLarge: astResult.telemetry.filesSkippedLarge,
-          filesParseFailed: astResult.telemetry.filesParseFailed,
-          findingsCount: astResult.findings.length,
-          durationMs: astResult.telemetry.durationMs,
-        }
-      : {
-          scanned: false,
-          ...(astResult.telemetry.skipReason ? { skipReason: astResult.telemetry.skipReason } : {}),
-          findingsCount: 0,
-        }
-
-    // ─── ARC-188: SARIF evidence channel ──────────────────────
-    // Reads `.sigilix/trivy.sarif.json` (or configured path) at PR
-    // head; emits Trivy / Kubescape / generic SARIF v2.1.0 findings
-    // as authoritative facts alongside the other deterministic
-    // blocks. SBOM (when present) goes to the synth prompt only.
-    const sarifConfig = resolveSarifEvidenceConfig(sigilixConfig)
-
-    // SIG-184 PR 3: runner-evidence consumption (flag-gated; off by default →
-    // fully inert). In shadow/post we look up the VERIFIED receipt by the SIGNED
-    // join `(repoId, prNumber)` and BIND it to the PR's current merge commit
-    // (`meta.merge_commit_sha` == the OIDC-signed sha) — the forge-proof key. In
-    // `post` we feed the receipt's SARIF to the SAME pipeline via `rawOverride`.
-    const runnerMode = readRunnerEvidenceMode(env)
-    // SIG-285 v2 PR1: receipt-join shares the SAME verified-receipt lookup as
-    // runner-evidence, so the lookup must fire when EITHER feature is on —
-    // otherwise enabling OPENCLAW_RECEIPTJOIN_MODE alone (with runner-evidence
-    // off) would silently no-op (CodeRabbit). The runner-evidence-specific
-    // outputs (the trust-pill badge + the adoption metric) stay gated on
-    // `runnerMode` below; only the shared lookup is decoupled.
-    const receiptJoinMode = ensembleConfig.flags.receiptJoinMode
-    let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
-    // SIG-285 v2 PR1: the verified receipt's UN-FILTERED HEAD-scan index, built
-    // below + joined to findings after submission (receipt-join verification).
-    // null = no receipt-join (mode off, or no verified receipt for this commit).
-    let receiptScanIndex: Map<string, ReceiptScanResult[]> | null = null
-    if ((runnerMode !== "off" || receiptJoinMode !== "off") && args.repoId !== undefined) {
-      const mergeSha = meta.merge_commit_sha
-      runnerEvidence = mergeSha
-        ? await lookupRunnerEvidence(env, String(args.repoId), prNumber, mergeSha)
-        : { state: "evidence-pending", reason: "merge-sha-unavailable" } // GitHub still computing the merge
-      console.log(JSON.stringify({
-        event: "runner-evidence-consume",
-        owner, repo, prNumber,
-        mode: runnerMode,
-        receiptJoinMode,
-        state: runnerEvidence.state,
-        ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
-      }))
-    } else if (receiptJoinMode !== "off" && args.repoId === undefined) {
-      // Receipt-join is on but this entry path has no repoId, so the receipt
-      // lookup was skipped → telemeter so these reviews are distinguishable from
-      // "feature off" / "no verified receipt" in the rollout denominator (CodeRabbit).
-      console.warn(JSON.stringify({ event: "receiptjoin-skipped-no-repoid", owner, repo, prNumber }))
-    }
-    // SIG-184: record the trust state for the check-run badge. Only in `post`
-    // mode — that's when the receipt actually backs the review (verified →
-    // receipt SARIF via rawOverride below; pending → runner configured but not
-    // verified for this commit). In `shadow` the review uses the repo-pull SARIF
-    // regardless, so a "verified" pill would overclaim; render no badge there.
-    if (runnerMode === "post") {
-      runnerEvidenceBadge =
-        runnerEvidence.state === "verified" ? "verified"
-        : runnerEvidence.state === "evidence-pending" ? "evidence-pending"
-        : undefined
-    }
-    // SIG-184 PR 5b: presence telemetry — one increment per review in shadow/
-    // post (a repoId-less review records `runner-absent`, so it still lands in
-    // the adoption denominator). Best-effort: a failure must NEVER break the
-    // review, and the DO RPC is bounded by a race-timeout (queue-consumer
-    // ctx.waitUntil doesn't extend lifetime, and a signal-less RPC won't honor
-    // an AbortSignal, so race is the correct bound). Read via GET
-    // /metrics/runner-evidence.
-    if (runnerMode !== "off") {
-      let metricTimer: ReturnType<typeof setTimeout> | undefined
-      try {
-        await Promise.race([
-          recordRunnerEvidenceMetric(env, {
-            owner, repo, prNumber,
-            state: runnerEvidence.state,
-            ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
-          }),
-          new Promise<never>((_, reject) => {
-            metricTimer = setTimeout(() => reject(new Error("metric-record-timeout")), 1_500)
-          }),
-        ])
-      } catch (err) {
-        console.warn(JSON.stringify({ event: "runner-evidence-metric-record-failed", owner, repo, prNumber, error: String(err) }))
-      } finally {
-        if (metricTimer !== undefined) clearTimeout(metricTimer)
-      }
-    }
-    const sarifResult = await runSarifEvidence({
-      env, client, owner, repo, prNumber, headSha,
-      diff, config: sarifConfig,
-      // `post` + verified → scan the receipt's SARIF; else the repo-pull path.
-      ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
-    })
-    const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
-    deterministicCheckAnnotations = buildSarifCheckAnnotations(sarifFindings)
-    // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
-    // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif
-    // results — deliberately NOT `sarifResult.findings`, which runSarifEvidence
-    // already diff/severity-filtered (a filtered-out result would read as a false
-    // absence). Best-effort + bounded: any parse error leaves the index null
-    // (→ the join no-ops) and never breaks the review.
-    if (receiptJoinMode !== "off" && runnerEvidence.state === "verified") {
-      try {
-        const parsed = parseSarif(runnerEvidence.sarif)
-        if (!parsed.ok) {
-          // parseSarif reports malformed/unsupported receipts via {ok:false}
-          // (it does NOT throw); telemeter so a bad receipt is distinguishable
-          // from "no verified receipt" / "empty index" during rollout (CodeRabbit).
-          console.warn(JSON.stringify({ event: "receiptjoin-index-build-skipped", owner, repo, prNumber, reason: parsed.reason }))
-        } else {
-          // Pure, unit-tested extraction (mirrors runner.ts path resolution).
-          receiptScanIndex = buildReceiptIndex(
-            extractReceiptScanResults(parsed.report.runs, normalizeSarifPath),
-          )
-        }
-      } catch (err) {
-        console.warn(JSON.stringify({ event: "receiptjoin-index-build-failed", owner, repo, prNumber, error: String(err) }))
-      }
-    }
-    const sarifBlock = renderSarifFindingsForPrompt(sarifFindings)
-    telemetry.sarifEvidence = sarifResult.skipped
-      ? { skipped: true, reason: sarifResult.reason, findingsCount: 0 }
-      : {
-          skipped: false,
-          findingsCount: sarifResult.findings.length,
-          truncatedCount: sarifResult.telemetry.truncatedCount,
-          durationMs: sarifResult.telemetry.durationMs,
-        }
-
-    // ARC-272: docs-coverage check. Zero-LLM, pure: takes the
-    // PR's changed-file list + operator config and returns a hit
-    // when architecture-impacting paths were touched without a
-    // matching docs update. Runs BEFORE the prompt is built so the
-    // hit becomes part of the authoritative-fact block fed to the
-    // specialists + synth.
-    //
-    // `splitFiles` is the pre-`pathFilters` changed-file set — we
-    // want every file the PR touched, not the post-filter subset
-    // (the filter drops noise like lockfiles, but docs-coverage
-    // wants to see architectural changes regardless of whether
-    // they're reviewed).
-    const docsReviewConfig = resolveDocsReviewConfig(sigilixConfig)
-    const docsCoverageHit: DocsCoverageHit | null = runDocsCoverageCheck(
-      splitFiles.map((f) => f.path),
-      docsReviewConfig,
-    )
-    if (docsCoverageHit !== null) {
-      console.log(JSON.stringify({
-        event: "pr-review-docs-coverage-hit",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        architecture_files: docsCoverageHit.architectureFiles,
-        doc_paths: [...docsCoverageHit.docPaths],
-      }))
-    }
-
-    // ─── SIG-110: perf-budgets hot-path check ──────────────────
-    // Opt-in (no-op until the operator declares `perfBudgets.hotPaths`).
-    // Matched against the REVIEWABLE file set (post path-filter) so the
-    // resulting `performance`-scoped fact only ever names files that are
-    // actually in this review — a hot-path fact for a file absent from
-    // the prompt diff would invite an inline finding that later fails
-    // line validation. The hit primes the perf specialist; it does NOT
-    // add a verdict finding here.
-    const perfBudgetsConfig = resolvePerfBudgetsConfig(sigilixConfig)
-    const perfBudgetsHit: PerfBudgetsHit | null = runPerfBudgetsCheck(
-      filePaths,
-      perfBudgetsConfig,
-    )
-    if (perfBudgetsHit !== null) {
-      console.log(JSON.stringify({
-        event: "pr-review-perf-budgets-hit",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        hot_path_files: perfBudgetsHit.hotPathFiles,
-        matched_hot_paths: perfBudgetsHit.matchedHotPaths,
-      }))
-    }
-
-    // ─── SIG-118: coverage-diff ingestion ──────────────────────
-    // GATED OFF by default (`coverage.source: "off"`) — production is
-    // unaffected until an operator opts in. When enabled, fetch the LCOV
-    // coverage artifact from the head SHA's CI run, parse uncovered
-    // lines, intersect with the PR's added lines, and feed the resulting
-    // coverage-gap facts to the tests specialist. Best-effort + non-
-    // fatal: `ingestCoverage` returns null on ANY failure (never throws),
-    // so a coverage failure can never break a review. AWAITED here (not
-    // in the allSettled block) because the tests fact block depends on
-    // the result. Uses `diff` (the post-truncation prompt diff) for the
-    // added-line set so a gap is only reported on a line the specialist
-    // can actually see.
-    const coverageConfig = resolveCoverageConfig(sigilixConfig)
-    const coverageResult = coverageConfig.source !== "off"
-      ? await ingestCoverage({ client, owner, repo, headSha, diff, config: coverageConfig })
-      : null
-    // Real coverage-gap set keyed `"<path>:<line>"` for the citation
-    // gates. Empty when ingestion is off / yielded no gaps.
-    const coverageGapSet = new Set<string>()
-    for (const gap of coverageResult?.coverageGaps ?? []) {
-      for (const ln of gap.lines) coverageGapSet.add(`${gap.path}:${ln}`)
-    }
-    {
-      const gapsCount = coverageResult?.coverageGaps.reduce((n, g) => n + g.lines.length, 0) ?? 0
-      console.log(JSON.stringify({
-        event: "coverage-ingest",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        source: coverageConfig.source,
-        runId: coverageResult?.meta.runId ?? null,
-        artifactName: coverageConfig.source !== "off" ? coverageConfig.artifactName : null,
-        gaps_count: gapsCount,
-        skipped_reason: coverageConfig.source === "off"
-          ? "disabled-config"
-          : coverageResult === null
-            ? "no-coverage"
-            : null,
-      }))
-    }
-
-    // ─── Fan out specialists ────────────────────────────────────
-    const deterministicBlock = renderHitsForPrompt(deterministicHits)
-    const secretScanBlock = renderSecretHitsForPrompt(secretHits)
-    const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
-    const perfBudgetBlock = renderPerfBudgetsForPrompt(perfBudgetsHit)
-    const coverageGapBlock = renderCoverageGapBlock(coverageResult?.coverageGaps ?? [])
-    // SIG-108: security fact manifest — assigns each deterministic
-    // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
-    // hash:line`). The render() block is folded into the security role's
-    // facts (below) so the security specialist sees the citable ids; the
-    // manifest Map is threaded to validateForSubmission so the citation
-    // gate can cross-check each cited id against the real fact's path/line.
-    const securityManifest = await buildSecurityFactManifest({
-      secretHits,
+      astRulesConfig,
       depVulnFindings,
-      // M3 (review): scope SARIF to roleHint==="security" so the security
-      // manifest never carries a logic/perf SARIF fact. All current SARIF
-      // rules are security-domain, so this is a no-op today, but it makes
-      // the contract explicit + matches how the AST findings are split.
-      sarifFindings: sarifFindings.filter((f) => f.roleHint === "security"),
-      astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
-    })
-    // SIG-108: route deterministic facts to their owning specialist — no
-    // cross-domain leak. Pure + unit-tested in role-scoped-facts.test.ts.
-    // The SIG-91 diff-classification + ARC-182 stack blocks stay shared.
-    // SIG-317 Part 4b: cross-function asymmetry hints for the LOGIC specialist —
-    // a deterministic FACT (a mutator of table T that bypasses the aggregation
-    // helper over T used elsewhere = a likely over-credit/over-refund) surfaced
-    // for the model to judge, NOT a posted finding. Gated `off` (shadow) by
-    // default: unlike a pure detector this NUDGES the specialist, so it carries
-    // an induced-FP risk and ships shadow-first → measure → flip. `on` injects.
-    // `asymmetryMode` is read above (it also gates the changed-files corpus load).
-    let asymmetryBlock = ""
-    if (asymmetryMode !== "off") {
-      const asymmetryHints = analyzeHelperBypass(astFilesByPath)
-      if (asymmetryHints.length > 0) {
-        console.log(JSON.stringify({
-          event: "pr-review-asymmetry-hints",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: asymmetryMode,
-          count: asymmetryHints.length,
-          hints: asymmetryHints.map((h) => ({ fn: h.fn, helper: h.helper })),
-        }))
-        if (asymmetryMode === "on") asymmetryBlock = renderAsymmetryHints(asymmetryHints)
-      }
-    }
-    // SIG-317 Part 4b-v2: TOCTOU / check-then-act race hints for the LOGIC
-    // specialist — a deterministic FACT (a SELECT-of-C-then-separate-relative-
-    // UPDATE-of-C with no atomic guard = a likely race) surfaced for the model to
-    // judge, NOT a posted finding. Same shadow-first ladder as the asymmetry
-    // injector: `shadow` logs the count, `on` injects.
-    let toctouBlock = ""
-    if (toctouMode !== "off") {
-      const toctouHints = analyzeToctouRace(astFilesByPath)
-      if (toctouHints.length > 0) {
-        console.log(JSON.stringify({
-          event: "pr-review-toctou-hints",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: toctouMode,
-          count: toctouHints.length,
-          hints: toctouHints.map((h) => ({ fn: h.fn, table: h.table, column: h.column })),
-        }))
-        if (toctouMode === "on") toctouBlock = renderToctouHints(toctouHints)
-      }
-    }
-    const factsByRole = buildFactsByRole({
-      secretScanBlock,
       depVulnBlock,
+      namespace,
+      asymmetryMode,
+      toctouMode,
+    } = evidence
+
+    // ─── SIG-318 (PR 12g-2): the GATHER-GRAPH seam ────────────
+    // It mutates `telemetry` (graphExpansionAb / astRules / sarifEvidence) by
+    // reference and returns `runnerEvidenceBadge` + `deterministicCheckAnnotations`
+    // so the orchestrator's two pre-try `let`s (read by the posted finalize meta)
+    // are reassigned. The graph-context-format + ast-scan-gate pure helpers
+    // relocated to the domain (re-exported below to preserve the public surface).
+    const graphEvidence = await gatherGraphEvidence({
+      env, client, owner, repo, prNumber, headSha,
+      ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+      ensembleConfig, meta, sigilixConfig, diff, fullDiff, wasTruncated, reviewable,
+      filePaths, splitFiles, sharedChunksForOverlap, astFilesByPath, astCache,
+      astRulesConfig, orchCtrl,
+      ...(args.graphMetricsSink !== undefined ? { graphMetricsSink: args.graphMetricsSink } : {}),
+      ...(args.graphExpansionMetricsSink !== undefined ? { graphExpansionMetricsSink: args.graphExpansionMetricsSink } : {}),
+      telemetry,
+    })
+    runnerEvidenceBadge = graphEvidence.runnerEvidenceBadge
+    deterministicCheckAnnotations = graphEvidence.deterministicCheckAnnotations
+    const {
+      graphContextNodesForEvidence,
+      graphBlastCallerPaths,
+      graphBlastDependentPaths,
+      graphCtxForPrompt,
+      astResult,
+      sarifFindings,
+      sarifResult,
       sarifBlock,
-      deterministicBlock,
-      docsCoverageBlock,
-      coverageGapBlock,
-      securityManifestBlock: securityManifest.render(),
-      perfBudgetBlock,
-      astFindings: astResult.findings,
-      asymmetryBlock,
-      toctouBlock,
-    })
-    void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
+      receiptScanIndex,
+      docsCoverageHit,
+      perfBudgetsHit,
+      coverageResult,
+      coverageGapSet,
+      receiptJoinMode,
+    } = graphEvidence
 
-    // ARC-181 Task 9: auto-inline poster — gated behind
-    // `astRules.autoInline === true` AND mode === "post". Default-
-    // false v1 cautious rollout; flips after 2 weeks of FP telemetry
-    // shows < 5% rate.
-    //
-    // Posting is DEFERRED until the ensemble's own review submits
-    // successfully (CR catch on PR #67) so an aborted run — stale
-    // head SHA, synth_timeout, specialist failure-cascade — doesn't
-    // leave orphan AST comments on a PR whose ensemble review never
-    // landed. The closure captures everything we need; the two
-    // submission-success paths below invoke it.
-    const maybePostAstAutoInline = async (): Promise<void> => {
-      if (mode !== "post") return
-      if (!astRulesConfig.autoInline) return
-      if (astResult.findings.length === 0) return
-      try {
-        await postAstInlineFindings({
-          client,
-          owner, repo, prNumber, headSha,
-          findings: astResult.findings,
-          perFindingPositions: astResult.perFinding,
-        })
-      } catch {
-        // Swallowed — the poster's own try/catch already does this;
-        // belt-and-suspenders so a poster bug never blocks the
-        // ensemble's finalize.
-      }
-    }
-    // ARC-182: compute stack context just before specialist fanout.
-    // Stack detection is pure + cheap; the only async work is the
-    // optional parent-files fetch when isStacked && parent. Render
-    // a single stackBlock string and pass to BOTH specialist and
-    // synth messages so they see the same context.
-    const repoFullName = `${owner}/${repo}`
-    const stack: StackContext = detectStack({
-      currentPr: {
-        number: prNumber,
-        title: meta.title ?? "",
-        headRef: meta.head?.ref ?? "",
-        baseRef: meta.base?.ref ?? "",
-        headRepo: repoFullName,
-        baseRepo: repoFullName,
-        author: meta.user?.login ?? null,
-      },
-      openPrs: openPrsForStack,
+    // ─── SIG-318 (PR 12g-3): the ASSEMBLE-PROMPTS seam ────────
+    // The prompt fact-blocks + `buildSecurityFactManifest` + the SIG-317 asymmetry/
+    // toctou hint blocks + `factsByRole` + the `maybePostAstAutoInline` deferred-
+    // poster closure + stack detection + the testing-evidence pack (incl. the bounded
+    // cross-file fetch + repo-tree fallback) + the dynamic evidence block + the
+    // `messageForRole` closure moved to ensemble/app/context/assemble-prompts. The
+    // two closures are RETURNED (they hide their captures); every other value the
+    // downstream phases consume flows out unchanged.
+    const prompts = await assembleSpecialistPrompts({
+      env, client, owner, repo, prNumber, headSha, mode, orchCtrlSignal: orchCtrl.signal,
+      meta, sigilixConfig, diff, fullDiff, fullPrDiff, filePaths, splitFiles,
+      filesAfterFilter, reviewedFiles, matchedPathInstructions, scopedRulesBlock,
+      openPrsForStack, deterministicHits, secretHits, depVulnFindings, depVulnBlock,
+      retrievalSnapshot, perfRetrievalSnapshot, logicSymbolSnapshot, sharedChunksForOverlap,
+      astFilesByPath, astCache, astRulesConfig, asymmetryMode, toctouMode, namespace,
+      astResult, sarifFindings, sarifBlock, docsCoverageHit, perfBudgetsHit, coverageResult,
+      graphCtxForPrompt, graphContextNodesForEvidence, graphBlastCallerPaths,
+      graphBlastDependentPaths,
     })
-    let stackOverlap: FileOverlap | undefined
-    if (stack.isStacked && stack.parent) {
-      const [currentFilesList, parentFilesList] = await Promise.all([
-        // Reuse the diff-derived file list for the current PR — it's
-        // already in memory (splitFiles) and the parent files fetch
-        // is the only extra request.
-        Promise.resolve(splitFiles.map((f) => ({ filename: f.path }))),
-        client
-          .listPullRequestFiles(owner, repo, stack.parent.number, { maxFiles: 100 })
-          .catch(() => []),
-      ])
-      stackOverlap = computeFileOverlap({
-        currentFiles: currentFilesList.map((f) => f.filename),
-        parentFiles: parentFilesList.map((f) => f.filename),
-      })
-    }
-    const stackBlock = stack.isStacked ? renderStackPromptBlock(stack, stackOverlap) : ""
-
-    console.log(JSON.stringify({
-      event: "pr-stack-context",
-      owner, repo, prNumber,
-      mode,
-      isStacked: stack.isStacked,
-      position: stack.position,
-      depth: stack.depth,
-      parentPrNumber: stack.parent?.number ?? null,
-      childCount: stack.children.length,
-      openPrCount: openPrsForStack.length,
-      openPrsTruncated: openPrsForStack.length >= 200,
-      cycleDetected: stack.cycleDetected,
-      stackWalkCapped: stack.stackWalkCapped,
-      hasUpstackFork: stack.hasUpstackFork,
-      overlapShared: stackOverlap?.sharedCount ?? null,
-      overlapCurrentOnly: stackOverlap?.currentOnlyCount ?? null,
-    }))
-
-    // SIG-91: classify the diff's file list (source / test / docs /
-    // config / other) and resolve source ↔ test sibling pairs. The
-    // tests specialist was firing false-positive "module ships without
-    // tests" findings on PRs that DO add sibling tests (PRs #98, #100,
-    // #104) because the prompt biased it to look for "no test files
-    // changed" without grounding it on what's actually in the diff.
-    // We render the classification as an authoritative block injected
-    // before the diff so the model can't miss the pairing.
-    //
-    // Source list = the files that survived path filtering + batch
-    // packing — i.e., the exact set the specialists actually see in
-    // [DIFF]. Reporting classification on files dropped from [DIFF]
-    // would mislead the model about what's available.
-    const classifiedDiffFiles = classifyDiffFiles(reviewedFiles.map((f) => f.path))
-    const diffFileClassificationBlock = renderDiffFileClassificationBlock(classifiedDiffFiles)
-
-    // SIG-113: build the testing-evidence pack from the FULL diff
-    // inventory (splitFiles, not reviewedFiles). Pre-SIG-113, the
-    // classification block above used `reviewedFiles` only — the
-    // first packed-diff batch — which produced 8 testing-completeness
-    // false positives across PR #110 + PR #111 when test files lived
-    // in later batches or were modified-not-added. The new pack uses
-    // `splitFiles`, embeds the FULL CONTENT of added/modified test
-    // files (subject to caps), and feeds the validator the
-    // `inspectedTestFiles` list so the post-LLM citation gate can
-    // drop unevidenced findings.
-    //
-    // Three-step build:
-    //   1. Pure pack (deterministic, no I/O)
-    //   2. Async fetch of test-file content via client.getFileContent
-    //      (mirrors the AST source fetch pattern at line ~1227)
-    //   3. Cap-application + merge → final pack with inspectedTestFiles
-    // code-reviewer M1 catch (pre-PR): build from `filesAfterFilter`
-    // (post-pathFilter, pre-batch) — NOT `splitFiles` (pre-filter).
-    // Using `splitFiles` would re-surface operator-excluded files
-    // (generated/, vendor/, etc.) in the evidence pack, inviting
-    // missing-tests findings on paths the operator chose not to
-    // review + wasting getFileContent fetches on them. The pack's
-    // JSDoc contract says "post-filter, pre-batch" — this aligns the
-    // call site with it. `filesAfterFilter` ⊇ `reviewedFiles` (the
-    // batcher subsets it), so `testFilesNotInPromptDiff` still
-    // correctly captures batch-dropped (not filter-dropped) tests.
-    const testingEvidencePackInitial: TestingEvidencePack = buildTestingEvidencePack({
-      splitFilePaths: filesAfterFilter.map((f) => f.path),
-      reviewedFilePaths: reviewedFiles.map((f) => f.path),
-    })
-    const changedLineTextByPath = buildChangedLineTextByPath(fullPrDiff)
-    const missingSiblingSources = testingEvidencePackInitial.siblingMappings
-      .filter((m) => m.test === null)
-      .map((m) => m.source)
-    let repoPathsForTestingEvidence: string[] | undefined
-    if (missingSiblingSources.length > 0) {
-      let repoTreeStatus:
-        | "ok"
-        | "unavailable"
-        | "missing-head-ref"
-        | "branch-missing"
-        | "head-ref-mismatch"
-        | "tree-missing"
-        | "tree-truncated"
-        | "fetch-failed" = "unavailable"
-      let repoTreePathsCount = 0
-      const treeCapableClient = client as GitHubClient & {
-        getBranch?: GitHubClient["getBranch"]
-        getRepoTree?: GitHubClient["getRepoTree"]
-      }
-      const headRef = meta.head?.ref ?? ""
-      if (
-        typeof treeCapableClient.getBranch === "function" &&
-        typeof treeCapableClient.getRepoTree === "function"
-      ) {
-        if (headRef.length === 0) {
-          repoTreeStatus = "missing-head-ref"
-        } else {
-          try {
-            const branch = await treeCapableClient.getBranch(owner, repo, headRef, {
-              signal: orchCtrl.signal,
-            })
-            if (branch === null) {
-              repoTreeStatus = "branch-missing"
-            } else if (branch.headSha !== headSha) {
-              repoTreeStatus = "head-ref-mismatch"
-            } else {
-              const tree = await treeCapableClient.getRepoTree(owner, repo, branch.treeSha, {
-                signal: orchCtrl.signal,
-              })
-              if (tree === null) {
-                repoTreeStatus = "tree-missing"
-              } else if (tree.truncated) {
-                repoTreeStatus = "tree-truncated"
-              } else {
-                repoPathsForTestingEvidence = tree.tree.flatMap((entry) =>
-                  entry.type === "blob" && typeof entry.path === "string" && entry.path.length > 0
-                    ? [entry.path]
-                    : [],
-                )
-                repoTreePathsCount = repoPathsForTestingEvidence.length
-                repoTreeStatus = "ok"
-              }
-            }
-          } catch (err) {
-            if (orchCtrl.signal.aborted) {
-              console.warn(JSON.stringify({
-                event: "tests-evidence-repo-tree-aborted",
-                owner, repo, prNumber, headSha: headSha.slice(0, 7),
-                error: err instanceof Error ? err.message : String(err),
-              }))
-              throw err
-            }
-            repoTreeStatus = "fetch-failed"
-            console.warn(JSON.stringify({
-              event: "tests-evidence-repo-tree-fetch-failed",
-              owner, repo, prNumber, headSha: headSha.slice(0, 7),
-              error: err instanceof Error ? err.message : String(err),
-            }))
-          }
-        }
-      }
-      console.log(JSON.stringify({
-        event: "tests-evidence-repo-tree-status",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        status: repoTreeStatus,
-        missingSiblingSources_count: missingSiblingSources.length,
-        repoTreePaths_count: repoTreePathsCount,
-      }))
-    }
-    const testingEvidenceSuppression = filterTestingEvidenceForSuppressedMissingCoverage(
-      testingEvidencePackInitial,
-      {
-        changedLineTextByPath,
-        ...(repoPathsForTestingEvidence !== undefined ? { repoPaths: repoPathsForTestingEvidence } : {}),
-      },
-    )
-    for (const suppression of testingEvidenceSuppression.suppressions) {
-      if (suppression.reason === "repo-sibling-exists") {
-        console.log(JSON.stringify({
-          event: "tests-finding-suppressed-repo-sibling-exists",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          source: suppression.source,
-          test: suppression.test ?? null,
-        }))
-      } else {
-        console.log(JSON.stringify({
-          event: "tests-finding-suppressed-comment-only-source",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          source: suppression.source,
-        }))
-      }
-    }
-    const testingEvidencePackFiltered = testingEvidenceSuppression.pack
-    let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
-      contentByPath: {},
-      failedPaths: [],
-      budgetOmittedPaths: [],
-      truncatedPaths: [],
-      totalChars: 0,
-    }
-    let testingEvidenceFetchedCount = 0
-    let testingEvidenceSkippedForBudgetCount = 0
-    if (testingEvidencePackFiltered.testFilesChanged.length > 0) {
-      const fetched = await fetchTestFileContentsWithBudget({
-        paths: testingEvidencePackFiltered.testFilesChanged,
-        fetchContent: async (p) => {
-          const src = await client.getFileContent(owner, repo, p, headSha)
-          if (typeof src !== "string") throw new Error("content unavailable")
-          return src
-        },
-        concurrency: 5,
-      })
-      testingEvidenceFetchResult = fetched
-      testingEvidenceFetchedCount = fetched.fetchedCount
-      testingEvidenceSkippedForBudgetCount = fetched.skippedForBudgetCount
-    }
-    const testingEvidencePack = mergeInspectedTestFileContents(
-      testingEvidencePackFiltered,
-      testingEvidenceFetchResult,
-    )
-    const testingEvidencePackWithFocus = mergeTestingFocusHints(
-      testingEvidencePack,
-      buildAddedLineTextByLine(fullPrDiff),
-      buildDeletedLineTextByLine(fullPrDiff),
-    )
-    // SIG-128: credit orchestrator glue whose changed logic delegates to
-    // same-PR tested helpers. Uses `fullDiff` (the COMPLETE per-file patch)
-    // for added-line text — NOT the truncated/first-batch `diff` — and the
-    // already-fetched changed JS/TS head content (`astFilesByPath`). A source
-    // missing from either input fails closed to "none" (never suppresses).
-    // SIG-128 observability: when `astFilesByPath` is empty (e.g. all retrieval
-    // flags off so no head content was fetched), every source fails closed to
-    // "none" and this credits nothing — a future flag change must not silently
-    // disable this path.
-    const helperCoverage = detectHelperCoverage({
-      filesByPath: astFilesByPath,
-      addedLineTextByPath: buildAddedLineTextByLine(fullDiff),
-      siblingMappings: testingEvidencePackFiltered.siblingMappings,
-      testContentByPath: testingEvidenceFetchResult.contentByPath,
-      astCache,
-    })
-    const testingEvidencePackWithCoverage = mergeHelperCoverage(
-      testingEvidencePackWithFocus,
-      helperCoverage.coverageBySource,
-    )
-    const testingEvidenceBlock = renderTestingEvidenceBlock(
+    const {
+      securityManifest,
+      maybePostAstAutoInline,
+      stack,
+      stackBlock,
+      changedLineTextByPath,
       testingEvidencePackWithCoverage,
-      testingEvidenceFetchResult,
-    )
-
-    // SIG-91 + SIG-113 telemetry — lets us verify post-deploy that
-    // sibling pairs + the new evidence pack are being built from the
-    // full diff inventory (not just the first batch).
-    {
-      const sourceFilesInDiff: string[] = []
-      const testFilesInDiff: string[] = []
-      const siblingMappingsDetected: Array<{ source: string; test: string }> = []
-      for (const c of classifiedDiffFiles) {
-        if (c.kind === "source") sourceFilesInDiff.push(c.path)
-        if (c.kind === "test") testFilesInDiff.push(c.path)
-        if (c.kind === "source" && c.testsSibling) {
-          siblingMappingsDetected.push({ source: c.path, test: c.testsSibling })
-        }
-      }
-      console.log(JSON.stringify({
-        event: "tests-specialist-input-files",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        sourceFilesInDiff,
-        testFilesInDiff,
-        siblingMappingsDetected,
-      }))
-      // SIG-113: separate event for the new evidence pack so we can
-      // monitor coverage of the full-inventory inspection independent
-      // of the SIG-91 first-batch classification.
-      console.log(JSON.stringify({
-        event: "pr-review-testing-evidence-built",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        sourceFilesChanged_count: testingEvidencePackWithCoverage.sourceFilesChanged.length,
-        testFilesChanged_count: testingEvidencePackWithCoverage.testFilesChanged.length,
-        testFilesInPromptDiff_count: testingEvidencePackWithCoverage.testFilesInPromptDiff.length,
-        testFilesNotInPromptDiff_count: testingEvidencePackWithCoverage.testFilesNotInPromptDiff.length,
-        inspectedTestFiles_count: testingEvidencePackWithCoverage.inspectedTestFiles.length,
-        testingFocusHints_count: testingEvidencePackWithCoverage.testingFocusHints?.length ?? 0,
-        contentTotalChars: testingEvidenceFetchResult.totalChars,
-        truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
-        failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,
-        fetchedPaths_count: testingEvidenceFetchedCount,
-        skippedForBudgetPaths_count: testingEvidenceSkippedForBudgetCount,
-      }))
-    }
-
-    // Dynamic review evidence (Greptile-style grounding): small cards around
-    // changed symbols/regions that bundle local code, graph/retrieval
-    // neighbors, and test context. Shadow mode computes coverage telemetry
-    // only; post mode injects the cards into specialist + synth prompts.
-    const dynamicEvidence = resolveDynamicEvidencePromptBlock({
-      env,
-      filesByPath: astFilesByPath,
-      astCache,
-      changedLines: buildChangedLines(diff),
-      reviewablePaths: filePaths,
-      retrievalChunks: sharedChunksForOverlap,
-      graphNodes: graphContextNodesForEvidence,
-      blastCallerPaths: graphBlastCallerPaths,
-      blastDependentPaths: graphBlastDependentPaths,
-      testingEvidence: testingEvidencePackWithCoverage,
-    })
-    const dynamicEvidenceBlockForPrompt = dynamicEvidence.promptBlock
-    if (dynamicEvidence.pack !== null) {
-      const dynamicEvidencePack = dynamicEvidence.pack
-      const cardsWithGraph = dynamicEvidencePack.cards.filter((c) => c.graphRelations.length > 0).length
-      const cardsWithRetrieval = dynamicEvidencePack.cards.filter((c) => c.retrievalRefs.length > 0).length
-      const cardsWithTesting = dynamicEvidencePack.cards.filter((c) =>
-        c.testingContext.siblingRefs.length > 0 ||
-        c.testingContext.inspectedTestFiles.length > 0 ||
-        c.testingContext.helperCoverageRefs.length > 0
-      ).length
-      console.log(JSON.stringify({
-        event: "pr-review-dynamic-evidence",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        mode: dynamicEvidence.mode,
-        files_scanned: dynamicEvidencePack.filesScanned,
-        changed_files_with_sources: dynamicEvidencePack.changedFilesWithSources,
-        cards: dynamicEvidencePack.cards.length,
-        cards_with_graph: cardsWithGraph,
-        cards_with_retrieval: cardsWithRetrieval,
-        cards_with_testing: cardsWithTesting,
-        rendered_chars: dynamicEvidence.rendered.length,
-      }))
-    }
-
-    // SIG-108: build one message per role, injecting only that role's
-    // scoped facts block (no cross-domain leak). The tests specialist
-    // additionally gets the SIG-113 testing-evidence block (which
-    // REPLACES the shared classification block); every other role gets
-    // the shared SIG-91 classification block. guidance/profile/stack
-    // remain shared. Messages are cached per role since each fan-out
-    // path may request the same role's message more than once.
-    const specialistMessageCache = new Map<SpecialistRole, string>()
-    const messageForRole = (role: SpecialistRole): string => {
-      const cached = specialistMessageCache.get(role)
-      if (cached !== undefined) return cached
-      const roleFacts = factsByRole[role]
-      const message = buildSpecialistInitialMessage({
-        prNumber,
-        title: meta.title,
-        body: meta.body ?? "",
-        diff,
-        // SIG-110: the performance role gets the perf-biased snapshot.
-        // SIG-121: the logic role AUGMENTS the shared snapshot with the
-        // symbol-derived block (empty when the flag is off, in which case
-        // mergeLogicSnapshot returns the shared snapshot unchanged). Every
-        // other role gets the shared preflight snapshot.
-        retrievalSnapshot:
-          role === "performance"
-            ? selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot)
-            : role === "logic"
-              ? mergeLogicSnapshot(retrievalSnapshot, logicSymbolSnapshot)
-              : retrievalSnapshot,
-        namespace,
-        ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-        ...(matchedPathInstructions.length > 0
-          ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions, role) }
-          : {}),
-        // SIG-172: directory-scoped + glob-scoped rules. Same block
-        // for every role (no per-role splitting in v1) — the rules
-        // are written by the repo owner with all four lenses in mind.
-        ...(scopedRulesBlock.length > 0
-          ? { scopedRulesBlock }
-          : {}),
-        ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-        ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),
-        ...(stackBlock.length > 0 ? { stackBlock } : {}),
-        ...(role === "tests" && testingEvidenceBlock.length > 0
-          ? { testingEvidenceBlock }
-          : diffFileClassificationBlock.length > 0
-            ? { diffFileClassificationBlock }
-            : {}),
-        // SIG-138 Phase 2: logic + tests specialists see graph neighbors
-        // (post mode only; empty string when off or shadow).
-        ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
-          ? { graphContext: graphCtxForPrompt }
-          : {}),
-        ...(dynamicEvidenceBlockForPrompt.length > 0
-          ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt }
-          : {}),
-      })
-      specialistMessageCache.set(role, message)
-      return message
-    }
+      dynamicEvidenceBlockForPrompt,
+      messageForRole,
+    } = prompts
 
     // ─── SIG-318 (PR 12c): the SPECIALISTS+SYNTH seam ─────────
     // The shadow + prod specialist fan-out, the SIG-235 quorum collector,
@@ -3503,14 +1462,10 @@ export { MAX_CALLS_PER_ENSEMBLE_RUN } from "./ensemble/adapters/model-provider"
 // SIG-363 (PR 11): `incrementDailyBudget` moved to ensemble/adapters/persistence
 // (it was private here → imported-back, not re-exported).
 
-function countLines(diff: string): number {
-  let n = 0
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) n++
-    else if (line.startsWith("-") && !line.startsWith("---")) n++
-  }
-  return n
-}
+// SIG-318 (PR 12g-1): `countLines` (the diff added/removed line counter the legacy
+// router decision fed) moved to ensemble/domain/diff-stats — its only caller (the
+// router-decision call) followed the fetch-and-pack seam into ensemble/app/context.
+// It was god-file-private → relocated without re-export (surface unchanged).
 
 // SIG-361 (PR 9): `severityTier` moved to the verdict domain (imported above;
 // import-back only, NOT re-exported — it was private here).

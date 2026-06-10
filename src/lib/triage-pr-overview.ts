@@ -11,11 +11,9 @@ import { generate } from "../shared/adapters/model"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { GitHubClient } from "../shared/adapters/github"
 import type { PrChangedFile, PrCommit, PullRequestMeta } from "../shared/types/github"
-import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_OVERVIEW_SCHEMA } from "../shared/domain/schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
-import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
 import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
 import {
   CODEOWNERS_PATHS,
@@ -25,26 +23,57 @@ import {
 } from "./codeowners"
 import {
   runPreMergeGates,
-  renderPreMergeGatesSection,
   type GateResult,
 } from "../shared/domain/pre-merge-gates"
 import {
   batchReadFileCache,
   batchWriteFileCache,
-  type CachedFileRow,
 } from "./pr-overview-file-cache"
 import type { Env } from "../shared/types/env"
+// SIG-376 (SIG-318 Tier-1 6/8): the pure parse/transform, render, and
+// comment-scan clusters were lifted into three sibling leaves to keep this
+// file under the 1,000-line budget. The core imports what `handlePrOverview`
+// / `buildPrompt` call and re-exports every previously-exported symbol that
+// moved so importers + tests stay unchanged.
+import {
+  mergeCachedAndFreshRows,
+  parseOverviewResponse,
+  scopedDiffFromMisses,
+} from "./triage-pr-overview-parse"
+import {
+  formatOverviewComment,
+  renderReviewContextBlock,
+  truncate,
+} from "./triage-pr-overview-format"
+import {
+  deleteLegacyWarmupSticky,
+  findExistingOverviewComment,
+  scanComments,
+} from "./triage-pr-overview-scan"
+
+// SIG-376: re-export every symbol relocated into the leaves so external
+// importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
+// the unit tests continue to resolve them from `./triage-pr-overview`
+// unchanged. `findExistingOverviewComment` is re-exported here (locally,
+// not via `export … from`) because the core body also calls it.
+export {
+  mergeCachedAndFreshRows,
+  parseOverviewResponse,
+  scopedDiffFromMisses,
+} from "./triage-pr-overview-parse"
+export {
+  formatOverviewComment,
+  renderReviewContextBlock,
+} from "./triage-pr-overview-format"
+export {
+  findExistingOverviewCommentId,
+  LEGACY_OVERVIEW_MARKER,
+  MAX_COMMENT_SCAN_PAGES,
+  OVERVIEW_MARKER,
+} from "./triage-pr-overview-scan"
+export { findExistingOverviewComment }
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-// SIG-84: exported so the stub-post helper (`pr-overview-stub.ts`) can
-// reuse the SAME marker the handler greps for — preventing the stub +
-// handler from diverging on what makes a comment "the sticky".
-export const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
-// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
-// markers so the existing-comment lookup finds legacy stickies and
-// edits them in place instead of creating duplicates. Drop the legacy
-// half once all pre-2026-05-18 PRs close.
-export const LEGACY_OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
 
 const LIMITS = {
   prDiff: 28_000,
@@ -829,564 +858,6 @@ export function buildPrompt(ctx: PromptCtx): string {
     "Return only the JSON object. No prose, no Markdown fence, no array.",
   )
   return sections.join("\n")
-}
-
-/**
- * SIG-216: render the review-time context for the prompt. Compact —
- * one line per dimension so the model can scan it without spending
- * tokens. Severity / category orderings are deterministic so prompt
- * diffs stay stable.
- */
-export function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
-  const sevEntries = Object.entries(ctx.severityBreakdown)
-    .filter(([, n]) => typeof n === "number" && n > 0)
-    .sort(([a], [b]) => a.localeCompare(b))
-  const catEntries = Object.entries(ctx.categoryBreakdown)
-    .filter(([, n]) => typeof n === "number" && n > 0)
-    .sort(([a], [b]) => a.localeCompare(b))
-  const sevLine = sevEntries.length > 0
-    ? sevEntries.map(([k, n]) => `${k}=${n}`).join(", ")
-    : "(none)"
-  const catLine = catEntries.length > 0
-    ? catEntries.map(([k, n]) => `${k}=${n}`).join(", ")
-    : "(none)"
-  return [
-    `Verdict: ${ctx.verdict}`,
-    `Findings: ${ctx.findingsCount}`,
-    `By severity: ${sevLine}`,
-    `By category: ${catLine}`,
-  ].join("\n")
-}
-
-function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {
-  if (typeof value !== "string") return ""
-  if (value.length <= max) return value
-  return value.slice(0, max - marker.length) + marker
-}
-
-/**
- * Parse the model's overview response into a typed verdict. Tolerates:
- *   1. Clean JSON object
- *   2. JSON wrapped in a ```json ... ``` fence
- *   3. JSON embedded in surrounding prose ("Here's the overview: { ... }")
- *
- * Returns null when the output contains no valid JSON object that has
- * the required shape, so callers can fail loudly rather than post junk.
- */
-export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
-  const obj = parseFirstJsonObject(text)
-  if (!obj) return null
-
-  const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
-  if (!summary) return null
-
-  const confidence = Number(obj.confidence)
-  if (!Number.isFinite(confidence) || confidence < 1 || confidence > 5) return null
-
-  // ARC-263: keep all per-file rows (was capped at 5 here). The
-  // schema's `maxItems: 20` is the bound; the renderer truncates to
-  // top-5 by score for display.
-  const files = Array.isArray(obj.files)
-    ? obj.files
-        .filter(
-          (f): f is Record<string, unknown> =>
-            !!f && typeof f === "object" && !Array.isArray(f) && typeof (f as { path?: unknown }).path === "string"
-        )
-        .filter((f) => (f.path as string).trim().length > 0)
-        .slice(0, 20)
-        .map((f) => ({
-          path: (f.path as string).trim(),
-          score: Number.isFinite(Number(f.score))
-            ? Math.max(1, Math.min(5, Math.round(Number(f.score))))
-            : 3,
-          overview: typeof f.overview === "string" ? f.overview.trim() : "",
-          nextStep: typeof f.nextStep === "string" ? f.nextStep.trim() : "",
-        }))
-    : []
-
-  const bullets = Array.isArray(obj.bullets)
-    ? obj.bullets
-        .filter((b): b is string => typeof b === "string" && b.trim().length > 0)
-        .map((b) => b.trim())
-    : []
-
-  const confidenceReason =
-    typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
-
-  // SIG-99: optional polish fields. Each is independently clamped /
-  // filtered; nothing fails the parse if any is malformed. Absent
-  // fields stay undefined → renderer skips the section.
-  const verdict: PrOverviewVerdict = {
-    summary,
-    files,
-    confidence: Math.round(confidence),
-    confidenceReason,
-    bullets,
-  }
-  const effortRaw = Number(obj.reviewEffort)
-  if (Number.isFinite(effortRaw) && effortRaw >= 1 && effortRaw <= 5) {
-    verdict.reviewEffort = Math.round(effortRaw)
-  }
-  if (Array.isArray(obj.suggestedLabels)) {
-    const labels = obj.suggestedLabels
-      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-      .map((s) => s.trim())
-      // code-reviewer HIGH/MEDIUM catch (pre-PR): label strings are
-      // rendered inline as `` `${label}` `` with no escape. A label
-      // containing a backtick / newline / pipe would break out of the
-      // inline-code span and inject raw markdown. Drop anything with
-      // markdown metacharacters.
-      .filter((s) => !/[`\n\r|]/u.test(s))
-      .slice(0, 3)
-    if (labels.length > 0) verdict.suggestedLabels = labels
-  }
-  if (Array.isArray(obj.suggestedReviewers)) {
-    const reviewers = obj.suggestedReviewers
-      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-      // Strip a leading `@` if the model adds one — the renderer
-      // adds it back uniformly.
-      .map((s) => s.trim().replace(/^@/, ""))
-      .filter((s) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(s))
-      .slice(0, 2)
-    if (reviewers.length > 0) verdict.suggestedReviewers = reviewers
-  }
-  if (Array.isArray(obj.relatedPrUrls)) {
-    const urls = obj.relatedPrUrls
-      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-      .map((s) => s.trim())
-      // code-reviewer MEDIUM catch (pre-PR): tighten path-character
-      // class to URL-legal characters only AND anchor with `$`. The
-      // previous `[^\s)]+` allowed backticks, brackets, and quotes,
-      // letting the model smuggle markdown-meta characters into the
-      // rendered list. The new pattern accepts only the GitHub PR
-      // URL alphabet (owner/repo charset is conservative + `pull/N`
-      // is digits + optional `?query` / `#fragment` tail).
-      .filter((s) => /^https:\/\/github\.com\/[A-Za-z0-9_.\-/]+\/pull\/\d+(?:[#?][^\s)`'"]*)?$/.test(s))
-      .slice(0, 3)
-    if (urls.length > 0) verdict.relatedPrUrls = urls
-  }
-  if (typeof obj.mermaidDiagram === "string") {
-    const m = obj.mermaidDiagram.trim()
-    // Defensive: only accept blocks that LOOK like Mermaid (start with
-    // a known diagram-kind keyword). Prevents the model from injecting
-    // arbitrary markdown that would render outside a code fence.
-    //
-    // code-reviewer HIGH catch (pre-PR): the prefix-keyword guard
-    // alone isn't enough. A payload like
-    //   "sequenceDiagram\n```\n# pwned"
-    // passes the prefix check but the embedded triple-backtick closes
-    // the renderer's mermaid fence early, letting the trailing prose
-    // render as top-level markdown. Reject any value containing
-    // triple-backtick so the fence stays intact.
-    if (
-      m.length > 0 &&
-      /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m) &&
-      !m.includes("```")
-    ) {
-      verdict.mermaidDiagram = m
-    }
-  }
-  return verdict
-}
-
-/**
- * ARC-263: build a scoped unified diff string from the cache-miss
- * subset of changed files. Each file with a `patch` field renders as
- * a standard `diff --git a/<path> b/<path>\n<patch>` block. Files
- * without a patch (binary / >500KB per GitHub) are listed in a
- * trailing note so the model knows they changed but has no diff to
- * inspect (no row is emitted for them).
- *
- * If `misses` is empty (defensive — caller should have early-returned)
- * OR every miss has no patch, returns the original full diff as a
- * fallback so the review still runs. Exposed for unit tests.
- */
-export function scopedDiffFromMisses(
-  misses: ReadonlyArray<{ filename: string; patch?: string; status?: string }>,
-  fallbackDiff: string,
-): string {
-  // CodeRabbit MAJOR catch on PR #81: all-hit case. When `misses` is
-  // empty, every file's row came from cache — we should NOT feed the
-  // full PR diff to the model (defeats the cost-saving purpose). The
-  // model still needs SOME diff context for the cumulative
-  // `summary`/`confidence`/`bullets`, but those are PR-level fields
-  // and a short placeholder is enough — the model has commit
-  // messages + PR title/body from the rest of the prompt.
-  if (misses.length === 0) {
-    return "[All file rows were served from the walkthrough cache; no fresh per-file patches needed.]"
-  }
-  const withPatch = misses.filter(
-    (f): f is { filename: string; patch: string; status?: string } =>
-      typeof f.patch === "string" && f.patch.length > 0,
-  )
-  if (withPatch.length === 0) {
-    // code-reviewer L3 catch (commit 1): every miss is binary /
-    // >500KB / patch missing. Fall back to the full diff — review
-    // still runs but the cache's cost-saving purpose is defeated for
-    // this run. Distinct from the misses.length === 0 path above:
-    // here the misses are REAL changes that simply don't have a
-    // textual diff, so we need the full context.
-    console.log(JSON.stringify({
-      event: "pr-overview-scoped-diff-fellback-to-full",
-      miss_count: misses.length,
-      reason: "no-patches-available",
-    }))
-    return fallbackDiff
-  }
-  const blocks = withPatch.map(
-    (f) => `diff --git a/${f.filename} b/${f.filename}\n${f.patch}`,
-  )
-  const noPatch = misses.filter((f) => typeof f.patch !== "string" || f.patch.length === 0)
-  let scoped = blocks.join("\n")
-  if (noPatch.length > 0) {
-    scoped += `\n\n[Files changed but no patch available (binary or >500KB):]\n${noPatch.map((f) => `- ${f.filename}${f.status ? ` (${f.status})` : ""}`).join("\n")}`
-  }
-  return scoped
-}
-
-/**
- * ARC-263: merge cached per-file rows with the Ollama-fresh rows in
- * a verdict. Fresh rows win on path collision (the model just looked
- * at this file's current patch, so its judgment supersedes any
- * stale-by-chance cache hit). Total rows are truncated to top-5 by
- * score for display — the comment table stays concise even when the
- * PR has 20 changed files. Exposed for unit tests.
- */
-export function mergeCachedAndFreshRows(
-  verdict: PrOverviewVerdict,
-  cachedRows: ReadonlyMap<string, CachedFileRow>,
-): PrOverviewVerdict {
-  const freshPaths = new Set(verdict.files.map((f) => f.path))
-  const merged: PrOverviewVerdict["files"] = [...verdict.files]
-  for (const row of cachedRows.values()) {
-    if (!freshPaths.has(row.path)) merged.push(row)
-  }
-  merged.sort((a, b) => b.score - a.score)
-  return { ...verdict, files: merged.slice(0, 5) }
-}
-
-interface FormatArgs {
-  verdict: PrOverviewVerdict
-  isFirstRun: boolean
-  /** ARC-258 follow-up: `"pending"` renders a "warming up" callout
-   *  block at the top of the overview when the indexer hasn't
-   *  produced a manifest yet. `"none"` (default) omits the callout. */
-  warmup?: "pending" | "none"
-  /**
-   * SIG-100: deterministic pre-merge gate results. Rendered as a
-   * "Quality gates" checklist near the top of the body (just after
-   * the effort badge). Empty array / missing → no section.
-   */
-  gateResults?: readonly GateResult[]
-}
-
-/**
- * Render the verdict into the markdown body posted on GitHub. The marker
- * on line 1 is what `findExistingOverviewComment` greps for to decide
- * between POST-new and PATCH-in-place.
- */
-export function formatOverviewComment({
-  verdict,
-  isFirstRun,
-  warmup = "none",
-  gateResults = [],
-}: FormatArgs): string {
-  const lines: string[] = [OVERVIEW_MARKER, ""]
-  lines.push("## Sigilix Overview")
-  lines.push("")
-
-  // ARC-258 follow-up + founder pivot (2026-05-17): warmup state is
-  // tracked in the overview body but NOT rendered as customer-visible
-  // text. Originally we surfaced a "> [!NOTE]" callout explaining the
-  // diff-only first review, but the founder pulled the message — it
-  // wasn't worth the visual noise on every cold-install PR. The
-  // marker stays so `enqueueWarmupRerunsForIndex` can still grep PRs
-  // that need the post-indexing rerun; the rerun itself is what
-  // delivers the upgraded review, which is signal enough on its own.
-  if (warmup === "pending") {
-    lines.push(WARMUP_CALLOUT_MARKER)
-    lines.push("")
-  }
-
-  // SIG-99: review-effort badge under the heading. Independent of
-  // confidence — see PrOverviewVerdict.reviewEffort docs. Rendered as
-  // a single bold-prefixed line so it picks up GitHub's normal weight
-  // hierarchy without competing with the `### Summary` heading.
-  if (typeof verdict.reviewEffort === "number") {
-    lines.push(`**Effort:** ${verdict.reviewEffort}/5 ${effortLabel(verdict.reviewEffort)}`)
-    lines.push("")
-  }
-
-  // SIG-100: pre-merge quality gates section. Placed BEFORE the
-  // summary so a reviewer sees blocking-or-actionable gate results
-  // first. Renders as a checklist with ✅ / ❌ / ⚠️ / ℹ️ glyphs per
-  // gate severity. Skipped entirely when no gates ran.
-  const gatesSection = renderPreMergeGatesSection(gateResults)
-  if (gatesSection !== null) {
-    lines.push(gatesSection)
-    lines.push("")
-  }
-
-  lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
-  lines.push("")
-  lines.push(verdict.summary)
-
-  if (verdict.files.length > 0) {
-    lines.push("")
-    lines.push("### Important files")
-    lines.push("")
-    lines.push("| File | Score | Notes | Next step |")
-    lines.push("| --- | :---: | --- | --- |")
-    for (const f of verdict.files) {
-      // Model output is interpolated into a markdown table — a literal
-      // `|` in `overview` or `nextStep` would split the cell and corrupt
-      // the table. Escape with `\|` per CommonMark.
-      lines.push(
-        `| \`${f.path}\` | ${f.score}/5 | ${escapeTableCell(f.overview) || "—"} | ${escapeTableCell(f.nextStep) || "—"} |`
-      )
-    }
-  }
-
-  // SIG-99: Mermaid sequence diagram. Placed AFTER the file table so
-  // a reviewer scans (summary → files → flow); GitHub renders fenced
-  // ```mermaid blocks natively.
-  if (verdict.mermaidDiagram) {
-    lines.push("")
-    lines.push("### Sequence diagram")
-    lines.push("")
-    lines.push("```mermaid")
-    lines.push(verdict.mermaidDiagram)
-    lines.push("```")
-  }
-
-  lines.push("")
-  lines.push(`### Confidence: ${verdict.confidence}/5`)
-  if (verdict.confidenceReason) {
-    lines.push("")
-    lines.push(verdict.confidenceReason)
-  }
-
-  if (verdict.bullets.length > 0) {
-    lines.push("")
-    for (const b of verdict.bullets) {
-      lines.push(`- ${b}`)
-    }
-  }
-
-  // SIG-99: footer trio (labels / reviewers / related). All optional;
-  // rendered as compact one-liners so they don't compete with the
-  // file table or summary. Placed at the bottom so a reviewer who's
-  // already digested the body sees the metadata last (matches
-  // CodeRabbit's information order).
-  if (verdict.suggestedLabels && verdict.suggestedLabels.length > 0) {
-    lines.push("")
-    lines.push(`**Suggested labels:** ${verdict.suggestedLabels.map((l) => `\`${l}\``).join(" ")}`)
-  }
-  if (verdict.suggestedReviewers && verdict.suggestedReviewers.length > 0) {
-    lines.push("")
-    lines.push(`**Suggested reviewers:** ${verdict.suggestedReviewers.map((u) => `@${u}`).join(", ")}`)
-  }
-  if (verdict.relatedPrUrls && verdict.relatedPrUrls.length > 0) {
-    lines.push("")
-    lines.push("**Related context:**")
-    for (const url of verdict.relatedPrUrls) {
-      lines.push(`- ${url}`)
-    }
-  }
-
-  return lines.join("\n")
-}
-
-/**
- * SIG-99: human-readable label for a review-effort score. Mirrors the
- * anchor in the prompt's `## Field guidelines` section. Pure.
- */
-function effortLabel(effort: number): string {
-  switch (effort) {
-    case 1: return "_(trivial)_"
-    case 2: return "_(small)_"
-    case 3: return "_(medium)_"
-    case 4: return "_(large)_"
-    case 5: return "_(needs deep review)_"
-    default: return ""
-  }
-}
-
-function escapeTableCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, " ")
-}
-
-/**
- * Single pass over PR comments looking for BOTH the overview sticky
- * (so we can decide POST-vs-PATCH) AND the legacy standalone warmup
- * sticky (so we can delete it after writing the overview).
- *
- * Returning both ids in one call means the overview helper doesn't
- * need a separate `listIssueComments` round trip for migration
- * cleanup — keeps the ARC-231 race-test call-count invariants intact
- * and saves one GitHub API call per PR review on repos still
- * carrying pre-unification stickies.
- */
-async function scanComments(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<{ overviewId: number | null; legacyWarmupId: number | null }> {
-  const items = await client.listIssueComments(owner, repo, prNumber)
-  let overviewId: number | null = null
-  let legacyWarmupId: number | null = null
-  for (const c of items) {
-    if (typeof c.body !== "string") continue
-    // SIG-85: bilingual matcher — pick up both `<!-- sigilix:pr-overview -->`
-    // and the legacy `<!-- openclaw:pr-overview -->` stickies. Without
-    // this, a PR that received its overview pre-rebrand gets a brand
-    // new (duplicate) overview comment instead of an in-place edit.
-    if (
-      overviewId === null &&
-      (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER))
-    ) {
-      overviewId = c.id
-    }
-    if (legacyWarmupId === null && c.body.includes(LEGACY_WARMUP_MARKER)) {
-      legacyWarmupId = c.id
-    }
-    if (overviewId !== null && legacyWarmupId !== null) break
-  }
-  return { overviewId, legacyWarmupId }
-}
-
-/**
- * SIG-91 follow-up: hard cap on pages scanned by
- * `findExistingOverviewCommentId`. 5 pages × 100 comments = 500
- * comments — far above the ~50-comment ceiling on a typical Sigilix
- * self-PR. Beyond this cap we emit `pr-overview-comment-scan-capped`
- * and treat the PR as "no existing comment found" (the stub create
- * path runs). Constant exported for tests.
- */
-export const MAX_COMMENT_SCAN_PAGES = 5
-
-/**
- * SIG-84: smaller marker-scan used by the stub-post fallback when the
- * KV `pr-overview-stub-posted` flag is missing (delivery retry,
- * cross-region KV propagation delay). Returns the overview comment id
- * if any exists on the PR — bilingual matcher covers both the
- * current `sigilix:pr-overview` marker and the legacy
- * `openclaw:pr-overview` marker.
- *
- * Exposed (and named distinctly from the private `scanComments`) so
- * the stub helper doesn't depend on the full warmup-id tuple it
- * doesn't need; keeps the call sites focused.
- *
- * SIG-91 follow-up: paginates a page at a time, SHORT-CIRCUITS on
- * the first bilingual marker hit (sticky comment is typically near
- * the top of the PR — posted on first webhook), and CAPS the scan at
- * `MAX_COMMENT_SCAN_PAGES` pages. Prevents pathological scan cost on
- * busy PRs without losing correctness on the realistic case.
- */
-export async function findExistingOverviewCommentId(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<number | null> {
-  for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
-    const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
-    // SIG-216 CR fix-up: terminate on the empty page rather than
-    // `items.length < per_page`. The `< 100` check coupled this loop
-    // to `listIssueCommentsPage`'s per_page=100 default — changing
-    // that constant (e.g. tuning for rate limits) would silently
-    // break pagination here. Empty-page termination is the only
-    // universally safe signal; the cost is at most one extra
-    // empty-page fetch when the comment count is an exact multiple
-    // of per_page, which is bounded by MAX_COMMENT_SCAN_PAGES anyway.
-    if (items.length === 0) return null
-    for (const c of items) {
-      if (typeof c.body !== "string") continue
-      // Bilingual matcher — matches both `<!-- sigilix:pr-overview -->`
-      // and the legacy `<!-- openclaw:pr-overview -->` from before
-      // the SIG-85 rebrand. First hit wins (short-circuit).
-      if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
-        return c.id
-      }
-    }
-  }
-  // Hard cap hit — pathological PR with >500 comments and no marker
-  // in the first 500. Treat as "not found" so the stub create path
-  // runs; subsequent webhooks for the SAME head will hit the KV fast
-  // path and skip this scan entirely.
-  console.warn(JSON.stringify({
-    event: "pr-overview-comment-scan-capped",
-    owner, repo, prNumber,
-    max_pages: MAX_COMMENT_SCAN_PAGES,
-  }))
-  return null
-}
-
-/**
- * SIG-96: richer variant of `findExistingOverviewCommentId` that returns
- * the comment BODY alongside the id. The stub-helper uses the body to
- * decide whether the sticky already carries a completed summary (do
- * NOT clobber with `_Reviewing…_`) or is itself a stub from an earlier
- * push (idempotent re-write is fine).
- *
- * Same bilingual matcher + same `MAX_COMMENT_SCAN_PAGES` cap as
- * `findExistingOverviewCommentId`. Short-circuits on the first marker
- * hit; the body field is whatever GitHub returned for that comment.
- */
-export async function findExistingOverviewComment(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<{ id: number; body: string } | null> {
-  for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
-    const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
-    // SIG-216 CR fix-up: same empty-page termination as
-    // `findExistingOverviewCommentId` — decouples from per_page=100.
-    if (items.length === 0) return null
-    for (const c of items) {
-      if (typeof c.body !== "string") continue
-      if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
-        return { id: c.id, body: c.body }
-      }
-    }
-  }
-  console.warn(JSON.stringify({
-    event: "pr-overview-comment-scan-capped",
-    owner, repo, prNumber,
-    max_pages: MAX_COMMENT_SCAN_PAGES,
-    helper: "findExistingOverviewComment",
-  }))
-  return null
-}
-
-/**
- * ARC-258 follow-up: delete the legacy standalone warmup sticky by
- * id. Caller resolved the id from `scanComments`. Best-effort: a
- * 404 (someone else deleted it first) or 403 (App missing perms)
- * logs + returns; never throws.
- */
-async function deleteLegacyWarmupSticky(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  commentId: number,
-): Promise<void> {
-  try {
-    await client.deleteIssueComment(owner, repo, commentId)
-    console.log(JSON.stringify({
-      event: "pr-overview-legacy-warmup-deleted",
-      owner, repo, prNumber, comment_id: commentId,
-    }))
-  } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-legacy-warmup-delete-failed",
-      owner, repo, prNumber, comment_id: commentId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-  }
 }
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {

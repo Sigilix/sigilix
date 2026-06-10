@@ -13,9 +13,9 @@ const {
   mockCreateIssueComment,
   mockGetPullRequest,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
-  mockCreateIssueComment: vi.fn(async () => undefined),
-  mockGetPullRequest: vi.fn(async () => ({
+  mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
+  mockCreateIssueComment: vi.fn(async (..._args: unknown[]) => undefined),
+  mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({
     head: { sha: "a".repeat(40) },
     base: { sha: "b".repeat(40) },
   })),

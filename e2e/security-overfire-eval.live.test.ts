@@ -40,12 +40,12 @@ function rawFindingsFrom(result: Awaited<ReturnType<typeof runShadowSpecialist>>
       line: f.line,
       score: f.score,
     }
-    if ("category" in f && f.category !== undefined) scored.category = f.category
-    if ("headline" in f && f.headline !== undefined) scored.headline = f.headline
-    if ("body" in f && f.body !== undefined) scored.body = f.body
-    if ("cweId" in f && f.cweId !== undefined) scored.cweId = f.cweId
-    if ("evidenceId" in f && f.evidenceId !== undefined) scored.evidenceId = f.evidenceId
-    if ("independentAssessment" in f && f.independentAssessment !== undefined) {
+    if ("category" in f && typeof f.category === "string") scored.category = f.category
+    if ("headline" in f && typeof f.headline === "string") scored.headline = f.headline
+    if ("body" in f && typeof f.body === "string") scored.body = f.body
+    if ("cweId" in f && typeof f.cweId === "string") scored.cweId = f.cweId
+    if ("evidenceId" in f && typeof f.evidenceId === "string") scored.evidenceId = f.evidenceId
+    if ("independentAssessment" in f && typeof f.independentAssessment === "string") {
       scored.independentAssessment = f.independentAssessment
     }
     return scored

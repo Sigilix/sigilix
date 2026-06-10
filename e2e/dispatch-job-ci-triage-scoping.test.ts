@@ -15,7 +15,7 @@
 import { describe, it, expect, vi } from "vitest"
 
 const { handleCiTriageMock } = vi.hoisted(() => ({
-  handleCiTriageMock: vi.fn(async () => {}),
+  handleCiTriageMock: vi.fn(async (..._args: unknown[]) => {}),
 }))
 vi.mock("@/src/lib/triage-ci", () => ({
   handleCiTriage: handleCiTriageMock,

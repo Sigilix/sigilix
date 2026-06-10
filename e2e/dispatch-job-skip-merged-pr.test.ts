@@ -14,16 +14,25 @@ const {
   mockAttachCheckRun,
   mockCompleteCheckRun,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
-  mockGetPullRequest: vi.fn(async () => ({
-    head: { sha: "a".repeat(40) },
-    base: { sha: "b".repeat(40) },
-    state: "open",
-    merged_at: null,
-  })),
-  mockEnsemble: vi.fn(async () => undefined),
-  mockAttachCheckRun: vi.fn(async () => ({ checkRunId: 1 })),
-  mockCompleteCheckRun: vi.fn(async () => undefined),
+  mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
+  mockGetPullRequest: vi.fn(
+    async (
+      ..._args: unknown[]
+    ): Promise<{
+      head: { sha: string }
+      base: { sha: string }
+      state: string
+      merged_at: string | null
+    }> => ({
+      head: { sha: "a".repeat(40) },
+      base: { sha: "b".repeat(40) },
+      state: "open",
+      merged_at: null,
+    }),
+  ),
+  mockEnsemble: vi.fn(async (..._args: unknown[]) => undefined),
+  mockAttachCheckRun: vi.fn(async (_args?: unknown) => ({ checkRunId: 1 })),
+  mockCompleteCheckRun: vi.fn(async (_args?: unknown) => undefined),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
@@ -184,7 +193,7 @@ describe("dispatchJob pr-review — skip when the PR is no longer open", () => {
 
   it("FAILS OPEN (reviews) when GitHub App creds are missing — never wrongly skips", async () => {
     const env = makeEnv()
-    ;(env as { GITHUB_APP_ID?: string }).GITHUB_APP_ID = undefined
+    delete (env as { GITHUB_APP_ID?: string }).GITHUB_APP_ID
     await dispatchJob(prReviewJob(), env).catch(() => undefined)
     expect(mockGetPullRequest).not.toHaveBeenCalled() // short-circuits before any fetch
     expect(mockEnsemble).toHaveBeenCalledTimes(1)

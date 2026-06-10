@@ -15,12 +15,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // ─── Module mocks (kept above the dynamic import below) ─────────────
 
-const mockPostStub = vi.fn(async () => ({ kind: "posted" as const, commentId: 999 }))
-const mockPostDraftSkipNotice = vi.fn(async () => ({ kind: "posted" as const, commentId: 1000 }))
-const mockSupersedeDraftSkipNotice = vi.fn(async () => ({ kind: "not-found" as const }))
+const mockPostStub = vi.fn(async (_a?: unknown) => ({ kind: "posted" as const, commentId: 999 }))
+const mockPostDraftSkipNotice = vi.fn(
+  async (_a?: unknown) => ({ kind: "posted" as const, commentId: 1000 }),
+)
+const mockSupersedeDraftSkipNotice = vi.fn(async (_a?: unknown) => ({ kind: "not-found" as const }))
 const mockLoadSigilixConfig = vi.fn()
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
-const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true as const }))
+const mockGetInstallationToken = vi.fn(async (_a?: unknown) => "fake-token")
+const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({ ok: true as const }))
 
 vi.mock("@/src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
@@ -124,14 +126,14 @@ function makeEnv(): {
 }
 
 async function postWebhook(
-  worker: { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> },
+  worker: { fetch: (req: Request, env: never, ctx: never) => Promise<Response> },
   env: unknown,
 ): Promise<Response> {
   return postWebhookPayload(worker, env, makeWebhookPayload())
 }
 
 async function postWebhookPayload(
-  worker: { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> },
+  worker: { fetch: (req: Request, env: never, ctx: never) => Promise<Response> },
   env: unknown,
   payload: unknown,
   waitUntilPromises: Promise<unknown>[] = [],
@@ -152,7 +154,7 @@ async function postWebhookPayload(
     waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
     passThroughOnException: () => {},
   }
-  const res = await worker.fetch(req, env, ctx)
+  const res = await worker.fetch(req, env as never, ctx as never)
   await Promise.all(waitUntilPromises)
   return res
 }

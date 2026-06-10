@@ -44,7 +44,7 @@ describe("ARC-188 acceptance — Trivy IaC fixture", () => {
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.length).toBe(1)
-    const f = r.findings[0]
+    const f = r.findings[0]!
     expect(f.ruleId).toBe("AVD-KSV-0017")
     expect(f.category).toBe("iac")
     expect(f.roleHint).toBe("security")
@@ -98,7 +98,7 @@ describe("ARC-188 acceptance — Kubescape Rego metadata fixture", () => {
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.length).toBe(1)
-    const f = r.findings[0]
+    const f = r.findings[0]!
     expect(f.ruleId).toBe("C-0001")
     expect(f.toolName).toBe("Kubescape")
     // Taxonomy resolved via result.taxa[].toolComponent.guid →

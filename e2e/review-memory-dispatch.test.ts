@@ -24,17 +24,17 @@ const {
     claimSoftening: false,
   }
   return {
-    mockCaptureDismissedReviewFeedback: vi.fn(async () => undefined),
-    mockCaptureTopLevelReviewFeedback: vi.fn(async () => undefined),
-    mockGetInstallationToken: vi.fn(async () => "test-token"),
-    mockGetPullRequest: vi.fn(async () => ({ head: { sha: "c".repeat(40) } })),
+    mockCaptureDismissedReviewFeedback: vi.fn(async (..._args: unknown[]) => undefined),
+    mockCaptureTopLevelReviewFeedback: vi.fn(async (..._args: unknown[]) => undefined),
+    mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
+    mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({ head: { sha: "c".repeat(40) } })),
     mockGitHubClient: vi.fn((args: { token: string }) => ({
       token: args.token,
       getPullRequest: (...getPullRequestArgs: unknown[]) =>
         mockGetPullRequest(...getPullRequestArgs),
     })),
-    mockLoadSigilixConfig: vi.fn(async () => ({ reviewMemory: { enabled: true } })),
-    mockResolveReviewMemoryConfig: vi.fn(() => resolvedReviewMemoryConfig),
+    mockLoadSigilixConfig: vi.fn(async (..._args: unknown[]) => ({ reviewMemory: { enabled: true } })),
+    mockResolveReviewMemoryConfig: vi.fn((_config?: unknown) => resolvedReviewMemoryConfig),
     resolvedReviewMemoryConfig,
   }
 })
@@ -80,7 +80,7 @@ import {
   dispatchTopLevelReviewMemoryCapture,
 } from "@/src/index"
 
-function makeEnv(overrides: Partial<Env> = {}): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
   return {
     OPENCLAW_REVIEW_MEMORY_CAPTURE: "on",
     GITHUB_APP_ID: "12345",

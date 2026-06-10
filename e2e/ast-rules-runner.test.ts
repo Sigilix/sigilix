@@ -122,7 +122,7 @@ describe("runAstRules — pathFilters compatibility (Codex MAJOR #4)", () => {
     // Only src/bar.js gets a finding — dist/foo.js is invisible to
     // the runner.
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].path).toBe("src/bar.js")
+    expect(r.findings[0]!.path).toBe("src/bar.js")
   })
 
   it("when ALL paths are filtered out, no scan happens", async () => {
@@ -148,8 +148,8 @@ describe("runAstRules — finding emission", () => {
       ctx: CTX,
     })
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].ruleId).toBe("no-eval-call")
-    expect(r.findings[0].astFindingId).toMatch(/^ast\/no-eval-call\/[0-9a-f]{7}\/1$/)
+    expect(r.findings[0]!.ruleId).toBe("no-eval-call")
+    expect(r.findings[0]!.astFindingId).toMatch(/^ast\/no-eval-call\/[0-9a-f]{7}\/1$/)
   })
 
   it("does NOT emit when eval is on a line outside the changed set", async () => {
@@ -174,7 +174,7 @@ describe("runAstRules — finding emission", () => {
       ctx: CTX,
     })
     expect(r.findings.length).toBe(1)
-    expect(r.perFinding.get(r.findings[0].astFindingId)).toBeNull()
+    expect(r.perFinding.get(r.findings[0]!.astFindingId)).toBeNull()
   })
 
   it("disabledRules excludes a rule entirely", async () => {
@@ -214,7 +214,7 @@ describe("runAstRules — finding emission", () => {
       ctx: CTX,
     })
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].path).toBe("src/b.js")
+    expect(r.findings[0]!.path).toBe("src/b.js")
     expect(r.telemetry.filesParseFailed).toBe(1)
   })
 
@@ -228,8 +228,8 @@ describe("runAstRules — finding emission", () => {
       ctx: CTX,
     })
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].evidence).not.toContain(longStr)
-    expect(r.findings[0].evidence).toContain("<redacted-literal>")
+    expect(r.findings[0]!.evidence).not.toContain(longStr)
+    expect(r.findings[0]!.evidence).toContain("<redacted-literal>")
   })
 
   it.each([
@@ -311,6 +311,6 @@ describe("runAstRules — finding emission", () => {
 
     const findings = r.findings.filter((f) => f.ruleId === ruleId)
     expect(findings).toHaveLength(1)
-    expect(findings[0].line).toBe(changedLine)
+    expect(findings[0]!.line).toBe(changedLine)
   })
 })

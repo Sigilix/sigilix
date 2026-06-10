@@ -88,13 +88,10 @@ import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
 // filterWithdrawnFindings[Detailed], computeContentFingerprint, WithdrawalRecord)
 // and the repeat-FP metrics client (recordRepeatFpMetrics, RepeatFpEvent) followed
 // the render-prep phase into ensemble/app/render-prep — no longer imported here.
-import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { GitHubClient } from "../shared/adapters/github"
 import type { CheckRunAnnotation } from "../shared/types/github"
-import { selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import {
   type PrReviewVerdict,
-  buildFallbackSubmission,
-  previewFallbackSubmissionEvent,
 } from "./triage-pr-review"
 // SIG-361 (PR 9): the verdict domain. The moved names import directly from the
 // leaf (the inward direction per the dependency rule); `severityTier` is
@@ -103,10 +100,8 @@ import {
 // at HEAD (tests import the latter from this path), so both are re-exported to
 // preserve this module's public surface.
 import {
-  severityTier,
   LOW_CONFIDENCE_COMMENT_THRESHOLD,
   resolveReviewEventOverride,
-  type ReviewEvent,
 } from "./ensemble/domain/verdict"
 export { LOW_CONFIDENCE_COMMENT_THRESHOLD, resolveReviewEventOverride }
 // SIG-318 (PR 12d): `isSubstantiveAnchorLine` (the re-anchor gate's substantive-
@@ -131,7 +126,7 @@ import {
 import {
   buildChangedLineTextByPath,
 } from "./validate-logic-finding"
-import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
+import { postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
   ALL_SPECIALISTS,
@@ -159,7 +154,6 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "../shared/types/github"
 import { withComposedTimeout } from "./agent-loop"
 import {
-  isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
   renderPathInstructionsForPrompt,
@@ -187,11 +181,9 @@ import {
   type PerfBudgetsHit,
 } from "../shared/domain/perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
-import {
-  handlePrOverview,
-  type PrOverviewArgs,
-  type PrOverviewReviewContext,
-} from "./triage-pr-overview"
+// SIG-318 (PR 12f): the inline PR-overview seam (`handlePrOverview` +
+// `PrOverviewArgs`/`PrOverviewReviewContext`) moved with the publish phase to
+// ensemble/app/publish — the inline-overview render was its only caller here.
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -220,15 +212,16 @@ import {
 } from "./secret-scan"
 import {
   readLastReviewedSha,
-  writeLastReviewedSha,
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
-import { recordReviewedDiffHash } from "./noop-merge-detect"
+// SIG-318 (PR 12f): `writeLastReviewedSha` + `recordReviewedDiffHash` (the
+// post-submit lastReviewedSha + noop-merge diff-hash writes) and
+// `dismissPriorSigilixReviews` (the pre-submit stale-detection emit) moved with
+// the publish phase to ensemble/app/publish — all three were submit-path-only.
 // SIG-318 (PR 12d): the review-manifest reader (`readReviewManifest`) +
 // `ReviewManifestFinding` followed the render-prep delta-badge snapshot into
 // ensemble/app/render-prep — no longer imported here.
-import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "@/features/dep-vulns"
 import { runAstRules } from "@/features/ast-rules"
 import { createAstCache, type AstCache } from "@/features/ast-rules"
@@ -278,7 +271,6 @@ import {
 } from "./ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
-  emitReviewSlo,
   makeTokenRecorder,
 } from "./ensemble-slo-telemetry"
 // ARC-283 Phase B1b — shadow-mode bake-off harness. SIG-318 (PR 12c): the
@@ -460,6 +452,19 @@ import { prepareRender } from "./ensemble/app/render-prep"
 // annotation, and the submission build through buildReviewSubmissionWithMetadata +
 // applyOutputSurfaceToSubmission) moved to the app layer.
 import { verifyAndBuildSubmission } from "./ensemble/app/verify-and-build"
+// SIG-318 (PR 12f): the PUBLISH phase (inline overview + post-overview stale-head
+// guard, pre-submit dismiss, the submit + 4-level fallback ladder, post-submit
+// persistence) moved to the app layer. The SESSION module owns `finalize` (the
+// finalize choke point) + the review-result contract (`EnsembleResult` /
+// `ReviewMeta` / the status union); `EnsembleResult` is bound to the concrete
+// `EnsembleTelemetry` below + `ReviewMeta` re-exported, preserving the surface.
+import { publishReviewSubmission } from "./ensemble/app/publish"
+import {
+  finalize,
+  type EnsembleResult as EnsembleResultBase,
+  type ReviewMeta,
+} from "./ensemble/app/session"
+export type { ReviewMeta }
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -546,11 +551,11 @@ export const INLINE_OVERVIEW_MIN_BUDGET_MS = 30_000
 // SPECIALIST_TIMEOUT_MS attempt.
 export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
 
-// Reserved tail for the post-overview stale-head re-check (~1s),
-// `submitReview` GitHub roundtrip (~3-10s typical, allow headroom for
-// 422 + fallback), and the `dismissPriorSigilixReviews` call ahead of
-// it. Subtracted from the wall-clock budget the inline overview gets.
-const INLINE_OVERVIEW_SUBMIT_RESERVE_MS = 30_000
+// SIG-318 (PR 12f): the private `INLINE_OVERVIEW_SUBMIT_RESERVE_MS` (the reserved
+// tail subtracted from the inline-overview budget for the submit + stale-head
+// re-check) moved with the publish phase to ensemble/app/publish, which is now the
+// only place the inline-overview budget math runs. The two EXPORTED thresholds
+// above stay here to preserve the module's public surface.
 
 // ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
 //
@@ -763,21 +768,16 @@ export interface EnsembleHandlerArgs {
 // SIG-318 (PR 12e): the submission-affordance cluster (`SubmissionAffordance`,
 // `withSubmissionAffordance`, `SuggestionEmissionLogContext`/`...Event` +
 // `buildSuggestionEmissionLogEvents`, `prepareSubmissionAffordance`) moved to
-// ensemble/app/affordances — the verify-and-build phase and the orchestrator's
-// later submit/fallback section both call them. The exported members are
-// re-exported below (tests import `prepareSubmissionAffordance` +
-// `buildSuggestionEmissionLogEvents`); `withSubmissionAffordance` +
-// `buildSuggestionEmissionLogEvents` are imported-back for the orchestrator's
-// own fallback/submit section.
-import {
-  prepareSubmissionAffordance,
-  withSubmissionAffordance,
-  buildSuggestionEmissionLogEvents,
-} from "./ensemble/app/affordances"
+// ensemble/app/affordances — the verify-and-build phase and the (12f) publish
+// phase both call them. The exported members are re-exported below (tests import
+// `prepareSubmissionAffordance` + `buildSuggestionEmissionLogEvents`).
+// SIG-318 (PR 12f): `withSubmissionAffordance`'s remaining import-back consumer
+// (the orchestrator's submit/fallback ladder) moved to ensemble/app/publish, so
+// it is no longer imported-back here.
 export {
   prepareSubmissionAffordance,
   buildSuggestionEmissionLogEvents,
-}
+} from "./ensemble/app/affordances"
 export type {
   SubmissionAffordance,
   SuggestionEmissionLogContext,
@@ -3394,651 +3394,59 @@ export async function handlePrReviewEnsemble(
       findingMarkers,
     })
     findingMarkers = findingMarkersAfterBuild
-    // ─── SIG-216: post the overview comment IMMEDIATELY before the
-    // review submit so the two GitHub timeline entries land in the
-    // same time window (CodeRabbit-style Walkthrough-then-Review).
-    // The overview is informed by the review's verdict — we pass
-    // findingsCount + severity + category breakdown + the chosen
-    // event so the model can summarize "what reviewer concluded"
-    // instead of running blind. Gated on `overview.enabled` per the
-    // same `sigilixConfig` the ensemble loaded earlier; opted-out
-    // customers skip the inline render.
-    //
-    // Awaited (not `ctx.waitUntil`) so the overview comment is
-    // GUARANTEED on the PR timeline before `submitReview` fires.
-    // `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
-    // lock inside `handlePrOverview` so a sibling queued run (legacy
-    // warmup refresh, etc.) on this SHA can't block us — but does
-    // NOT bypass the in-handler stale-head guards (those still fire
-    // on this path, catching head moves that landed during the
-    // review's own Ollama window). SIG-216 fix-up swap from
-    // `force: true` (which historically bypassed both).
-    //
-    // Budgeting (SIG-216 fix-up): the overview runs against the
-    // REMAINING review budget so a stalled overview can't push the
-    // handler past ORCHESTRATOR_TIMEOUT_MS (the wall the orchestrator
-    // itself aborts on). Capped at INLINE_OVERVIEW_MAX_BUDGET_MS even
-    // on a budget surplus so the overview never eats more than its
-    // fair share. When remaining budget falls under
-    // INLINE_OVERVIEW_MIN_BUDGET_MS we skip the inline render entirely
-    // — the overview can fire on the next push.
-    //
-    // Retry policy (SIG-216 fix-up): single retry on transient
-    // failures (timeouts / 502 / 503 / 504 / fetch-failed /
-    // budget-exceeded). Pre-SIG-216 the queue consumer gave
-    // MAX_RETRIES=3 on Ollama transients; the inline path had zero.
-    // One retry only — bounded by the same Promise.race budget so
-    // we can't blow the wall-clock even on a double attempt.
-    //
-    // Best-effort: even after the single retry, a failure here
-    // NEVER blocks the review submit. The customer still gets the
-    // review even if the overview comment fails to land.
-    if (isPrOverviewEnabled(sigilixConfig)) {
-      const overviewStartMs = Date.now()
-      const overviewReviewContext: PrOverviewReviewContext = {
-        findingsCount:
-          submissionVerdict.findings.length + renderableUnanchoredForSubmission.length,
-        severityBreakdown: countBySeverity([
-          ...submissionVerdict.findings,
-          ...renderableUnanchoredForSubmission,
-        ]),
-        categoryBreakdown: countByCategory([
-          ...submissionVerdict.findings,
-          ...renderableUnanchoredForSubmission,
-        ]),
-        verdict: primaryEvent,
-      }
-      // Reserve INLINE_OVERVIEW_SUBMIT_RESERVE_MS for the submitReview
-      // GitHub roundtrip + the post-overview stale-head re-check that
-      // follows; the overview itself gets whatever's left up to
-      // INLINE_OVERVIEW_MAX_BUDGET_MS.
-      //
-      // SIG-216 fix-up (CR catch): budget against ORCHESTRATOR_TIMEOUT_MS,
-      // not CF_QUEUE_CONSUMER_CEILING_MS. The orchestrator's own
-      // wall-clock is the actual bound on this handler — the platform
-      // ceiling is wider (CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
-      // is the grace pad reserved for finalize/cleanup). Using the
-      // wider ceiling could push the overview past the orchestrator's
-      // own abort and burn the grace pad too.
-      const elapsedMs = Date.now() - startMs
-      const remainingBudgetMs = Math.max(
-        0,
-        ORCHESTRATOR_TIMEOUT_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
-      )
-      const overviewBudgetMs = Math.min(remainingBudgetMs, INLINE_OVERVIEW_MAX_BUDGET_MS)
-      if (overviewBudgetMs < INLINE_OVERVIEW_MIN_BUDGET_MS) {
-        console.log(JSON.stringify({
-          event: "pr-review-inline-overview-skipped-budget",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          remaining_budget_ms: remainingBudgetMs,
-          threshold_ms: INLINE_OVERVIEW_MIN_BUDGET_MS,
-        }))
-      } else {
-        try {
-          await runInlineOverviewWithRetry({
-            owner, repo, prNumber, headSha, installationId, env,
-            skipDedupe: true,
-            reviewContext: overviewReviewContext,
-          }, overviewBudgetMs)
-          // SIG-149: time-to-first-overview = handler entry → overview
-          // posted (first customer-visible content). Measured from
-          // `startMs`, NOT `overviewStartMs` (that's the overview's own
-          // generation time, already logged as `elapsed_ms`). Set only on
-          // the success path so `finalize()` reports it as "no data" when
-          // the overview was skipped/failed rather than a misleading 0.
-          telemetry.timeToFirstOverviewMs = Date.now() - startMs
-          console.log(JSON.stringify({
-            event: "pr-review-inline-overview-posted",
-            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-            elapsed_ms: Date.now() - overviewStartMs,
-            budget_ms: overviewBudgetMs,
-            findings_count: overviewReviewContext.findingsCount,
-            verdict: overviewReviewContext.verdict,
-          }))
-        } catch (err) {
-          console.error(JSON.stringify({
-            event: "pr-review-inline-overview-failed",
-            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-            elapsed_ms: Date.now() - overviewStartMs,
-            budget_ms: overviewBudgetMs,
-            err: err instanceof Error ? err.message : String(err),
-          }))
-        }
-      }
-
-      // SIG-216 fix-up: re-check the PR head AFTER the inline overview.
-      // Belt-and-braces with the in-overview guards: the overview's own
-      // pre-Ollama + pre-write guards (which now fire on the inline
-      // path since we use `skipDedupe`, not `force`) catch head moves
-      // BEFORE / DURING the overview's Ollama call; this re-check
-      // catches moves landing AFTER the overview returns, before the
-      // review submit. Both layers are intentional — different windows.
-      // Fail-closed on lookup error — matches the existing guard pattern.
-      try {
-        const metaPostOverview = await client.getPullRequest(owner, repo, prNumber)
-        if (metaPostOverview.head?.sha && metaPostOverview.head.sha !== headSha) {
-          telemetry.fellBackReason = "stale_head_after_inline_overview"
-          console.log(JSON.stringify({
-            event: "pr-review-stale-head-after-inline-overview",
-            owner, repo, prNumber,
-            queued_head_sha: headSha.slice(0, 7),
-            current_head_sha: metaPostOverview.head.sha.slice(0, 7),
-          }))
-          await handleStaleHead({
-            env, owner, repo, prNumber, installationId,
-            queuedHeadSha: headSha,
-            currentHeadSha: metaPostOverview.head.sha,
-            baseSha: metaPostOverview.base?.sha ?? null,
-            depth: staleHeadRequeueDepth,
-            source: "ensemble-after-inline-overview",
-            ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
-          })
-          return finalize(telemetry, env, "stale_head", cache)
-        }
-      } catch (err) {
-        // Fail-closed: uncertain head state → abort the submit rather
-        // than risk shipping a stale review. Matches Codex's pattern in
-        // `triage-pr-overview.ts`.
-        console.warn(JSON.stringify({
-          event: "pr-review-stale-recheck-failed-aborted",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
-        telemetry.fellBackReason = "stale_head_recheck_failed"
-        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
-      }
-    }
-
-    // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
-    // posting the new one, so the GitHub timeline renders cleanup-
-    // above-current-review (oldest-at-top). Pre-ARC-287 the dismiss
-    // fired AFTER the submit, producing a footgun where the dismissal
-    // banner showed BELOW the new review chronologically (PR #95's
-    // `8ad306a` review demonstrated this — see ARC-287).
-    //
-    // SIG-85 (2026-05-18): `dismissPriorSigilixReviews` no longer
-    // dismisses — it emits `pr-review-stale-detected` telemetry per
-    // matching prior. Customers enable GitHub's repo-level "Dismiss
-    // stale pull request approvals when new commits are pushed"
-    // branch-protection setting; GitHub then handles the dismissal
-    // natively and attributes it to the commit pusher. See
-    // docs/setup/customer-onboarding.md. The call stays here for the
-    // telemetry signal; arguments unchanged so callers don't need
-    // updating.
-    //
-    // Best-effort try/catch — the helper never throws in practice,
-    // but defense in depth keeps a hypothetical bug from breaking the
-    // submit path.
-    try {
-      await dismissPriorSigilixReviews({
-        client, owner, repo, prNumber,
-        currentReviewId: null,
-        headSha,
-      })
-    } catch (err) {
-      console.error(JSON.stringify({
-        event: "pr-review-dismiss-prior-failed",
-        owner, repo, prNumber,
-        submit_path: "pre-submit",
-        err: err instanceof Error ? err.message : String(err),
-      }))
-    }
-
-    // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
-    // the trace. Covers BOTH the success path and the 422-fallback
-    // path that the catch block dispatches to.
-    const submitStartMs = Date.now()
-    try {
-      const submitted = await client.submitReview(owner, repo, prNumber, submission)
-      // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
-      // GitHub's `POST /pulls/{n}/reviews` occasionally returns 2xx
-      // with a valid-looking `{id, state}` payload but the review
-      // doesn't become publicly visible — either it never persists
-      // (PR #84) or it persists in `PENDING` (draft) state (PR #86).
-      // Both are caught by verifying against `listPullRequestReviews`
-      // (the public list excludes PENDING). If verify can't confirm,
-      // mark the run as `errored` so the Check Run reflects reality
-      // (failure ≠ silent success) and the customer sees a signal
-      // that a real submit didn't happen.
-      const verified = await verifyReviewPersisted(
-        client, owner, repo, prNumber, submitted.id,
-        "inline-anchored", submitted.state,
-      )
-      if (!verified) {
-        console.error(JSON.stringify({
-          event: "pr-review-submit-not-persisted",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          claimed_review_id: submitted.id,
-          submit_path: "inline-anchored",
-        }))
-        telemetry.fellBackReason = "submit_not_persisted"
-        telemetry.fellBackToPhase3 = false
-        // ARC-279: GitHub silently dropped the formal review. Post
-        // the synth body as a regular PR comment so the review
-        // signal isn't lost. Dispatcher sees `posted` + surface=
-        // "comment" → maps the Check Run to `failure` with a "see
-        // PR comment" title so the customer knows the normal
-        // review pipeline didn't run.
-        //
-        // CodeRabbit catch on PR #91: on the inline-anchored path,
-        // `submission.body` is ONLY the formal review body — the
-        // actual findings live separately in `submission.comments`
-        // because they're meant to anchor as inline review comments.
-        // Posting `submission.body` as a top-level comment would
-        // drop every finding. Re-render via `buildFallbackSubmission`
-        // (the anchorless body-only renderer) so findings move into
-        // the body and survive the channel switch.
-        const fallbackCommentEvent = previewFallbackSubmissionEvent({
-          verdict: submissionVerdict,
-          unanchored: renderableUnanchoredForSubmission,
-          ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-        })
-        const fallbackCommentAffordance = await prepareFallbackAffordance(fallbackCommentEvent)
-        const fallbackCommentSubmission = buildFallbackSubmission(withSubmissionAffordance({
-          trustLedger: trustLedgerMode === "on",
-          showEvidence,
-          notReviewedFiles: filesDroppedFromReview,
-          verdict: submissionVerdict,
-          unanchored: renderableUnanchoredForSubmission,
-          prAuthor: meta.user?.login ?? null,
-          headSha,
-          ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-          ...(stack.isStacked ? { stack } : {}),
-          // ARC-281: keep coverage + delta consistent between the
-          // primary submit and the comment-fallback body — otherwise
-          // a customer who only sees the comment-fallback loses the
-          // coverage signal that ARC-277 surfaces on the main path.
-          coverage,
-          delta: deltaCounts,
-        }, fallbackCommentAffordance))
-        const fallback = await postReviewCommentFallback({
-          env, client, owner, repo, prNumber, headSha,
-          body: fallbackCommentSubmission.body ?? "<!-- sigilix:pr-review -->\n(no body)",
-          submitPath: "inline-anchored",
-        })
-        if (fallback.ok) {
-          const findingsCount =
-            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-          // SIG-89 note: comment-fallback paths intentionally do NOT
-          // write a noop-merge diff hash. The surface is degraded
-          // already (we couldn't post a formal review), and the next
-          // push should re-attempt the formal review rather than skip
-          // dispatch. Same rationale at all four `surface: "comment"`
-          // return sites below.
-          await fallbackCommentAffordance.persistReviewCounter()
-          return finalize(telemetry, env, "posted", cache, {
-            event: fallbackCommentSubmission.event,
-            findingsCount,
-            surface: "comment",
-            // No runner pill on `surface: "comment"`: the dispatcher maps these
-            // to a `failure` conclusion whose summary is error prose, and the
-            // pill is a success-summary-only signal (Kimi spec). Threading it
-            // here would be dead data the renderer never shows.
-            ...deterministicCheckAnnotationMeta(),
-            ...checkAnnotationMeta(allFindingAnnotations),
-          })
-        }
-        // Comment fallback ALSO failed — `errored` is the truth.
-        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
-      }
-      await primaryAffordance.persistReviewCounter()
-      telemetry.submitted = true
-      const suggestionEmissionEvents = buildSuggestionEmissionLogEvents({
-        owner,
-        repo,
-        prNumber,
-        headSha,
-        commentsSubmitted: (submission.comments?.length ?? 0) > 0,
-      }, submissionBuild.suggestionEmissions)
-      for (const event of suggestionEmissionEvents) {
-        console.log(JSON.stringify(event))
-      }
-      // ARC-258 follow-up: dismiss any stale Sigilix reviews from
-      // earlier commits on this PR so the Reviews tab reflects only
-      // the current head. Without this, customers see "Sigilix
-      // approved a while ago" pointing at an outdated commit even
-      // after Sigilix has re-reviewed the new head. Body-marker
-      // match ensures we only ever dismiss our own reviews — never
-      // touch another reviewer's.
-      //
-      // ARC-287: post-submit dismissPriorSigilixReviews call removed.
-      // Dismissal now fires BEFORE submitReview (see the pre-submit
-      // block above) so the GitHub timeline renders dismissal-above-
-      // current-review chronologically. ARC-279's comment-fallback
-      // covers the "dismiss succeeded + submit failed" failure mode.
-
-      // ARC-184: write review-provenance manifest. Best-effort.
-      // ARC-271: also persist the per-finding snapshot so the next
-      // push's review can compute a new/still-open/likely-fixed
-      // delta against this run.
-      await writeReviewManifestForEnsemble({
-        env, client, owner, repo, prNumber,
-        headSha,
-        baseSha: meta.base?.sha ?? "",
-        modelId: "ensemble-synth",
-        reviewId: submitted.id,
-        findings: currentFindingsForManifest,
-      })
-      // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
-      // only after a confirmed GitHub submit. Previously this fired
-      // before guard #2 — a stale-head skip still marked the SHA
-      // reviewed, corrupting the next push's compare-diff.
-      //
-      // CodeRabbit PR #75 catch: a KV failure here MUST NOT bubble
-      // out as `errored`. The customer-facing review has already
-      // been submitted; an outer-catch `errored` would make
-      // `dispatchJob` fall back to Phase 3 and post a SECOND review
-      // on the same head. Best-effort: swallow + log instead.
-      try {
-        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-last-reviewed-sha-write-failed",
-          owner, repo, prNumber, headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
-      // SIG-89: stash the diff hash so the next synchronize push can
-      // detect no-op merges (Update-branch button, rebase-no-op force
-      // push, empty commit) and skip dispatch. Same best-effort
-      // semantics as writeLastReviewedSha — the customer-facing
-      // review already shipped; KV failure only means the next push
-      // falls back to dispatch instead of skipping. The helper
-      // swallows internally.
-      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // SIG-216: post-submit `pr-overview` refresh enqueue removed.
-      // The overview is now rendered INLINE earlier in this handler
-      // (right before `dismissPriorSigilixReviews`), informed by the
-      // same submissionVerdict the review is built from — so there's
-      // no stale-warmup-callout to clear and nothing for a separate
-      // queue job to add. ARC-258's post-review refresh use case is
-      // subsumed by the inline render.
-      await maybePostAstAutoInline()
-      // ARC-276: signal the customer-visible verdict back to the
-      // dispatcher so the Sigilix Check Run title can render
-      // "Approved — no issues found" vs "N findings posted".
-      const inlineFindings =
-        submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-      return finalize(telemetry, env, "posted", cache, {
-        event: submission.event,
-        findingsCount: inlineFindings,
-        ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
-        ...deterministicCheckAnnotationMeta(),
-        // SIG-144 (PR #339 review fix): in annotations-only mode inline
-        // comments are suppressed, so the annotations payload must carry
-        // ALL findings — not just the body-only leftovers — or anchored
-        // findings get dropped from every surface.
-        ...checkAnnotationMeta(
-          selectPrimarySubmitAnnotations(reviewOutputSurface, bodyOnlyAnnotations, allFindingAnnotations),
-        ),
-      })
-    } catch (submitErr) {
-      // Narrow the anchorless-retry fallback to GitHub HTTP 422 — that's
-      // the specific status GitHub returns when an inline anchor is
-      // invalid. CR PR #38 round-2 catch: the original catch-all retry
-      // was unsafe because `POST /pulls/{n}/reviews` is non-idempotent.
-      // A timeout / network error after GitHub accepted the first
-      // submission would have produced a duplicate review on retry.
-      // So: 422 → re-render anchorless + retry submitReview;
-      //     non-422 → don't retry submit, but DO post the comment
-      //     fallback (CR PR #97 catch — see below).
-      const is422 =
-        submitErr instanceof GitHubHttpError && submitErr.status === 422
-      if (!is422) {
-        // CR PR #97 catch (Major): pre-ARC-287, a non-422 submit
-        // failure rethrew and the prior review stayed intact — the
-        // customer saw a stale-but-existing signal. Post-ARC-287,
-        // the prior is ALREADY DISMISSED (the pre-submit dismiss
-        // fired before submit), so rethrowing here would leave the
-        // customer with NO Sigilix signal at all.
-        //
-        // Restore the "customer always sees Sigilix" guarantee by
-        // posting the comment fallback (ARC-279's helper, normally
-        // used on verify-fail) on every non-422 submit error too.
-        // The synth verdict still hits the PR — just as a regular
-        // comment instead of a formal review.
-        console.warn(JSON.stringify({
-          event: "pr-review-submit-non-422-error",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          err: submitErr instanceof Error ? submitErr.message : String(submitErr),
-        }))
-        const fallbackBodyOnlyEvent = previewFallbackSubmissionEvent({
-          verdict: submissionVerdict,
-          unanchored: renderableUnanchoredForSubmission,
-          ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-        })
-        const fallbackBodyOnlyAffordance = await prepareFallbackAffordance(fallbackBodyOnlyEvent)
-        const fallbackBodyOnly = buildFallbackSubmission(withSubmissionAffordance({
-          trustLedger: trustLedgerMode === "on",
-          showEvidence,
-          notReviewedFiles: filesDroppedFromReview,
-          verdict: submissionVerdict,
-          unanchored: renderableUnanchoredForSubmission,
-          prAuthor: meta.user?.login ?? null,
-          headSha,
-          ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-          ...(stack.isStacked ? { stack } : {}),
-          coverage,
-          delta: deltaCounts,
-        }, fallbackBodyOnlyAffordance))
-        const commentFallback = await postReviewCommentFallback({
-          env, client, owner, repo, prNumber, headSha,
-          body: fallbackBodyOnly.body ?? "<!-- sigilix:pr-review -->\n(no body)",
-          submitPath: "inline-anchored-error",
-        })
-        if (commentFallback.ok) {
-          const findingsCount =
-            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-          await fallbackBodyOnlyAffordance.persistReviewCounter()
-          return finalize(telemetry, env, "posted", cache, {
-            event: fallbackBodyOnly.event,
-            findingsCount,
-            surface: "comment",
-            // No runner pill on `surface: "comment"` — see the note at the
-            // fallbackCommentSubmission site above (failure conclusion, pill is
-            // success-summary-only).
-            ...deterministicCheckAnnotationMeta(),
-            ...checkAnnotationMeta(allFindingAnnotations),
-          })
-        }
-        // Both inline submit AND comment fallback failed — rethrow
-        // so the outer catch records `internal_error` and the
-        // Check Run reflects the failure.
-        throw submitErr
-      }
-      const fallbackReason = `HTTP 422 ${submitErr.message}`
-      // Set telemetry BEFORE the fallback submit. If the fallback
-      // ALSO fails, the outer catch overwrites `internalError` but
-      // these two fields stay set — preserves the "we attempted a
-      // fallback" signal that Phase 4b shadow-mode monitoring needs.
-      // CR PR #38 round-2 catch.
-      telemetry.submitFallback = true
-      telemetry.submitFallbackReason = fallbackReason
-      console.warn("[ensemble] inline submit rejected (HTTP 422); falling back to anchorless review", {
-        owner,
-        repo,
-        prNumber,
-        reason: fallbackReason,
-      })
-      const fallbackEvent = previewFallbackSubmissionEvent({
-        verdict: submissionVerdict,
-        unanchored: renderableUnanchoredForSubmission,
-        ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-      })
-      const fallbackAffordance = await prepareFallbackAffordance(fallbackEvent)
-      const fallback = buildFallbackSubmission(withSubmissionAffordance({
-        trustLedger: trustLedgerMode === "on",
-        showEvidence,
-        notReviewedFiles: filesDroppedFromReview,
-        // ARC-189: fallback path also receives the soften-applied
-        // verdict. Markers are NOT emitted on the fallback (it's a
-        // body-only review with no inline anchors) — see Task 2.5.
-        verdict: submissionVerdict,
-        unanchored: renderableUnanchoredForSubmission,
-        prAuthor: meta.user?.login ?? null,
-        headSha,
-        ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-        // ARC-182 (code-review C1): thread stack to the anchorless
-        // fallback as well — the stack parenthetical belongs in the
-        // body regardless of whether inline anchoring succeeded.
-        ...(stack.isStacked ? { stack } : {}),
-        // ARC-281: coverage + delta survive the anchorless-fallback
-        // too, so a 422-driven body-only review reads the same way
-        // as the inline-anchored primary.
-        coverage,
-        delta: deltaCounts,
-      }, fallbackAffordance))
-      // CR PR #97 round-4 catch: the anchorless-fallback submit
-      // can also throw (merge race after the guard, transient
-      // GitHub 5xx, connection drop). With ARC-287's pre-submit
-      // dismiss already done, an un-caught throw here would leave
-      // the customer with NO Sigilix signal (prior dismissed, no
-      // review posted, no comment). Symmetric to the inline-anchored
-      // catch above — post the synth body as a regular PR comment
-      // tagged `anchorless-fallback-error` so on-call can correlate.
-      let submittedFallback: Awaited<ReturnType<typeof client.submitReview>>
-      try {
-        submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
-      } catch (fallbackSubmitErr) {
-        console.warn(JSON.stringify({
-          event: "pr-review-fallback-submit-error",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          err: fallbackSubmitErr instanceof Error
-            ? fallbackSubmitErr.message
-            : String(fallbackSubmitErr),
-        }))
-        const commentFallback = await postReviewCommentFallback({
-          env, client, owner, repo, prNumber, headSha,
-          body: fallback.body ?? "<!-- sigilix:pr-review -->\n(no body)",
-          submitPath: "anchorless-fallback-error",
-        })
-        if (commentFallback.ok) {
-          const findingsCount =
-            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-          await fallbackAffordance.persistReviewCounter()
-          return finalize(telemetry, env, "posted", cache, {
-            event: fallback.event,
-            findingsCount,
-            surface: "comment",
-            // No runner pill on `surface: "comment"` — failure conclusion; the
-            // pill is success-summary-only (see fallbackCommentSubmission note).
-            ...deterministicCheckAnnotationMeta(),
-            ...checkAnnotationMeta(allFindingAnnotations),
-          })
-        }
-        // Both anchorless submit AND comment fallback failed — rethrow
-        // so the outer catch records `internal_error` and the
-        // Check Run reflects the failure.
-        throw fallbackSubmitErr
-      }
-      // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
-      // same post-submit verification as the primary path — catches
-      // both the 404-on-id and the PENDING-state silent-success
-      // cases for the anchorless fallback.
-      const verifiedFallback = await verifyReviewPersisted(
-        client, owner, repo, prNumber, submittedFallback.id,
-        "anchorless-fallback", submittedFallback.state,
-      )
-      if (!verifiedFallback) {
-        console.error(JSON.stringify({
-          event: "pr-review-submit-not-persisted",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          claimed_review_id: submittedFallback.id,
-          submit_path: "anchorless-fallback",
-        }))
-        telemetry.fellBackReason = "submit_not_persisted"
-        telemetry.fellBackToPhase3 = false
-        // ARC-279: same comment-fallback as the inline-anchored
-        // verify-fail path. By this point we've tried inline,
-        // 422'd, anchorless, and silent-rejected. The synth body
-        // is real signal the reviewer would benefit from — post
-        // it as a regular comment instead of dropping it.
-        const commentFallback = await postReviewCommentFallback({
-          env, client, owner, repo, prNumber, headSha,
-          // Same defensive default as the inline-anchored path:
-          // `fallback.body` is typed optional but the anchorless
-          // path always emits it (buildFallbackBody + the marker).
-          body: fallback.body ?? "<!-- sigilix:pr-review -->\n(no body)",
-          submitPath: "anchorless-fallback",
-        })
-        if (commentFallback.ok) {
-          const findingsCount =
-            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-          await fallbackAffordance.persistReviewCounter()
-          return finalize(telemetry, env, "posted", cache, {
-            event: fallback.event,
-            findingsCount,
-            surface: "comment",
-            // No runner pill on `surface: "comment"` — failure conclusion; the
-            // pill is success-summary-only (see fallbackCommentSubmission note).
-            ...deterministicCheckAnnotationMeta(),
-            ...checkAnnotationMeta(allFindingAnnotations),
-          })
-        }
-        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
-      }
-      await fallbackAffordance.persistReviewCounter()
-      telemetry.submitted = true
-      // ARC-287: post-submit dismissPriorSigilixReviews call removed
-      // (was the anchorless-fallback's parallel of the inline-anchored
-      // helper). Both submit paths now rely on the single pre-submit
-      // dismissal at the top of this submit block.
-
-      // ARC-184: write manifest for the fallback path too. Same target
-      // shape (kind: "review") because the fallback is still a GitHub
-      // review (just anchorless body). ARC-271: same per-finding
-      // snapshot as the primary path.
-      await writeReviewManifestForEnsemble({
-        env, client, owner, repo, prNumber,
-        headSha,
-        baseSha: meta.base?.sha ?? "",
-        modelId: "ensemble-synth",
-        reviewId: submittedFallback.id,
-        findings: currentFindingsForManifest,
-      })
-      // ARC-194 (moved here in ARC-250): mirror the primary submit
-      // path — only mark `lastReviewedSha` after a confirmed GitHub
-      // submit. CR PR #75 catch: same try/catch as the primary path
-      // so a KV write failure doesn't bubble out as `errored` and
-      // trigger a duplicate Phase 3 fallback review.
-      try {
-        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-last-reviewed-sha-write-failed",
-          owner, repo, prNumber, headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
-      // SIG-89: mirror the primary path — stash the diff hash for
-      // noop-merge skip on the next synchronize. Same best-effort
-      // semantics as the lastReviewedSha write above.
-      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // SIG-216: post-submit `pr-overview` refresh enqueue removed
-      // here too — same rationale as the primary inline-anchored
-      // submit path above. The overview already ran inline at the
-      // top of the submit block, before the 422 fallback was even
-      // considered, so the comment is already on the timeline.
-      await maybePostAstAutoInline()
-      // ARC-276: same reviewMeta plumbing as the inline-anchored
-      // path — the anchorless fallback is still a posted review.
-      const fallbackFindings =
-        submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-      return finalize(telemetry, env, "posted", cache, {
-        event: fallback.event,
-        findingsCount: fallbackFindings,
-        ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
-        ...deterministicCheckAnnotationMeta(),
-        ...checkAnnotationMeta(allFindingAnnotations),
-      })
-    } finally {
-      // ARC-284: fire the submit phase event on every exit path —
-      // inline-anchored success, inline-anchored verify-fail (comment
-      // fallback), 422 → anchorless fallback success, 422 → fallback
-      // verify-fail. Catches the GitHub roundtrip + verify time
-      // independently of the synth latency above.
-      emitPhaseCompleted(perfCtx, "submit", submitStartMs)
-    }
+    // SIG-318 (PR 12f): the PUBLISH phase — the inline PR-overview render + its
+    // post-overview stale-head guard (#3), the pre-submit dismiss, the submit +
+    // 4-level fallback ladder (inline → comment-fallback / 422 → anchorless →
+    // comment-fallback, the inner try/catch/finally + its `emitPhaseCompleted`
+    // intact), and the per-path post-submit persistence — moved verbatim to
+    // ensemble/app/publish. Every terminal path returns `finalize(...)`, so the
+    // phase returns the `EnsembleResult` directly. The two submit-ladder rethrows
+    // (`throw submitErr` / `throw fallbackSubmitErr`) propagate OUT of
+    // `publishReviewSubmission` to this outer catch — publish adds no catch of its
+    // own. The orchestrator threads in the ambient identity, the verify-and-build
+    // outputs, the mutable telemetry + cache, and the deterministic-annotation /
+    // ast-auto-inline closures.
+    return await publishReviewSubmission({
+      env,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      installationId,
+      staleHeadRequeueDepth,
+      repoId: args.repoId,
+      client,
+      sigilixConfig,
+      meta,
+      perfCtx,
+      telemetry,
+      startMs,
+      cache,
+      fullPrDiff,
+      stack,
+      coverage,
+      deltaCounts,
+      filesDroppedFromReview,
+      currentFindingsForManifest,
+      reviewEventOverride,
+      trustLedgerMode,
+      showEvidence,
+      runnerEvidenceBadge,
+      submissionVerdict,
+      renderableUnanchoredForSubmission,
+      primaryEvent,
+      primaryAffordance,
+      prepareFallbackAffordance,
+      submissionBuild,
+      submission,
+      bodyOnlyAnnotations,
+      allFindingAnnotations,
+      checkAnnotationMeta,
+      reviewOutputSurface,
+      maybePostAstAutoInline,
+      deterministicCheckAnnotationMeta,
+      deterministicErroredReviewMeta,
+    })
   } catch (e) {
     telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
@@ -4107,36 +3515,9 @@ function countLines(diff: string): number {
 // SIG-361 (PR 9): `severityTier` moved to the verdict domain (imported above;
 // import-back only, NOT re-exported — it was private here).
 
-/**
- * SIG-216: count findings by P0/P1/P2/P3 severity tier for the
- * `reviewContext.severityBreakdown` passed into `handlePrOverview`.
- * Empty buckets are omitted so the prompt stays compact. Pure.
- */
-function countBySeverity(
-  findings: readonly { score: number }[],
-): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const f of findings) {
-    const tier = severityTier(f.score)
-    out[tier] = (out[tier] ?? 0) + 1
-  }
-  return out
-}
-
-/**
- * SIG-216: count findings by `FindingCategory` for the
- * `reviewContext.categoryBreakdown` passed into `handlePrOverview`.
- * Empty buckets are omitted so the prompt stays compact. Pure.
- */
-function countByCategory(
-  findings: readonly { category: string }[],
-): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const f of findings) {
-    out[f.category] = (out[f.category] ?? 0) + 1
-  }
-  return out
-}
+// SIG-318 (PR 12f): `countBySeverity` / `countByCategory` (the inline-overview
+// severity/category breakdown helpers) moved with the publish seam to
+// ensemble/app/publish — their only caller was the inline-overview reviewContext.
 
 // SIG-363 (PR 11): the per-installation client factory (`buildClient`), the
 // post-submit visibility check (`verifyReviewPersisted`), and its page-cap
@@ -4151,13 +3532,12 @@ import {
 // SIG-363 (PR 11): the KV write obligations — the review-provenance manifest
 // (`writeReviewManifestForEnsemble`), the per-day budget counter
 // (`incrementDailyBudget`), and the SLO/FP-rate telemetry record
-// (`writeTelemetry`) — moved to ensemble/adapters/persistence. All were private
-// here → imported-back, not re-exported.
-import {
-  writeReviewManifestForEnsemble,
-  incrementDailyBudget,
-  writeTelemetry,
-} from "./ensemble/adapters/persistence"
+// (`writeTelemetry`) — live in ensemble/adapters/persistence. SIG-318 (PR 12f):
+// their last orchestrator consumers — `writeReviewManifestForEnsemble` (the submit
+// paths) + `incrementDailyBudget` / `writeTelemetry` (the relocated `finalize`) —
+// moved to ensemble/app/{publish,session}, so the orchestrator no longer imports
+// them back. The persistence module is unchanged; the public surface is unaffected
+// (these were private here, never re-exported).
 
 // ─── specialist + synth runners (moved) ──────────────────────────────────
 // SIG-362 (PR 10): the specialist runner, the retry-and-fallback executor, the
@@ -4224,68 +3604,9 @@ export function checkQuorum(
   return succeeded.some((v) => v.role === "logic" || v.role === "security")
 }
 
-/**
- * SIG-216 fix-up: run the inline pr-overview with a single retry on
- * transient errors, bounded by `budgetMs` per attempt.
- *
- * Why two attempts and not three: the pre-SIG-216 queue consumer gave
- * `MAX_RETRIES = 3` on Ollama transient failures because the consumer
- * could afford the wall-time. The inline path runs inside the same
- * review handler that's already against the orchestrator's wall-clock
- * (`ORCHESTRATOR_TIMEOUT_MS`), so a single retry is the most we
- * can fit without risking the orchestrator's own abort firing.
- *
- * Transient classification matches the queue consumer's heuristic +
- * the budget-exceeded signal raised by the per-attempt `Promise.race`.
- * Non-transient errors propagate immediately to the caller.
- */
-async function runInlineOverviewWithRetry(
-  args: PrOverviewArgs,
-  totalBudgetMs: number,
-): Promise<void> {
-  // SIG-216 fix-up: ONE shared deadline across both attempts (was: a
-  // fresh per-attempt budget that could allow overlapping attempts on
-  // retry and let the wall-clock blow past the budget). Each attempt
-  // also gets its own AbortController so the in-flight Ollama fetch
-  // from the first attempt is actually cancelled when retry fires —
-  // otherwise the abandoned Promise burns CPU + network until the
-  // 600s default `generate` timeout.
-  const deadline = Date.now() + totalBudgetMs
-  const computeRemaining = (): number => Math.max(0, deadline - Date.now())
-
-  const attempt = async (): Promise<void> => {
-    const remainingMs = computeRemaining()
-    if (remainingMs <= 0) {
-      throw new Error("inline-overview-budget-exceeded")
-    }
-    const ctl = new AbortController()
-    const timeoutId = setTimeout(() => {
-      ctl.abort(new Error("inline-overview-budget-exceeded"))
-    }, remainingMs)
-    try {
-      await handlePrOverview({ ...args, abortSignal: ctl.signal })
-    } finally {
-      clearTimeout(timeoutId)
-    }
-  }
-
-  try {
-    await attempt()
-    return
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    const transient = /budget-exceeded|timeout|abort|503|502|504|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg)
-    if (!transient) throw err
-    if (computeRemaining() <= 0) throw err
-    console.log(JSON.stringify({
-      event: "pr-review-inline-overview-retry",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      head_sha: args.headSha.slice(0, 7),
-      err: msg.slice(0, 200),
-    }))
-    await attempt()
-  }
-}
+// SIG-318 (PR 12f): `runInlineOverviewWithRetry` (the single-retry inline-overview
+// runner) moved with the publish seam to ensemble/app/publish — its only caller was
+// the inline-overview render in the publish block.
 
 // SIG-360: thin public wrapper preserving the original `validateForSubmission`
 // signature (astCache OPTIONAL). The believability core moved to
@@ -4610,149 +3931,11 @@ interface EnsembleTelemetry {
   totalMs: number
 }
 
-// ARC-250: `stale_head` is split out from `skipped` so the dispatcher
-// can short-circuit the Phase 3 fallback. Falling through to Phase 3
-// when the ensemble guard fired would just hit Phase 3's identical
-// stale-head guard and skip again — invisible to the customer.
-type EnsembleResultStatus =
-  | "posted"
-  | "shadow_recorded"
-  | "skipped"
-  | "stale_head"
-  | "errored"
-
-/**
- * ARC-276: signal the customer-visible verdict + findings count back
- * to the dispatcher so the Sigilix Check Run title can reflect the
- * actual review outcome (`Approved — no issues found` vs `N findings
- * posted`).
- *
- * ARC-279: `surface` distinguishes a real GitHub review from the
- * fallback PR comment that fires when the formal submit silently
- * rejects. The dispatcher uses `surface === "comment"` to map the
- * Check Run to `failure` with a "see PR comment" title instead of
- * the normal `success` outcome.
- *
- * ARC-280 follow-up: `surface === "skip-notice"` signals that the
- * ensemble couldn't even generate a verdict (router_no_specialists,
- * specialists_all_failed, synth retry exhausted) and posted a
- * minimal "Sigilix couldn't review" comment instead. The catch-all
- * `internal_error` path is intentionally NOT in this list — it
- * returns a generic `errored` result with no `surface`, because the
- * catch may fire before the client/auth is built (so the
- * `bailWithSkipNotice` closure isn't reachable). Set on `status ===
- * "errored"` so the dispatcher's existing errored → failure mapping
- * kicks in; the Check Run renderer then branches on `surface ===
- * "skip-notice"` to show a "couldn't review — see PR comment"
- * title. `event` + `findingsCount` are required by the type but
- * ignored on this branch (we don't have a verdict to count).
- */
-export interface ReviewMeta {
-  event: ReviewEvent
-  findingsCount: number
-  /** Default behavior when omitted is `"review"` (back-compat with
-   *  Phase 3's `PrReviewMeta` shape). */
-  surface?: "review" | "comment" | "skip-notice"
-  /** Body-only findings rendered as GitHub Checks annotations. */
-  checkAnnotations?: CheckRunAnnotation[]
-  /** SIG-171: scanner-derived Lane A annotations rendered independently
-   *  from model-authored review findings. */
-  deterministicCheckAnnotations?: CheckRunAnnotation[]
-  /** SIG-184: the runner-evidence trust state when a receipt was
-   *  consulted (flag-gated; omitted = `runner-absent` = no badge).
-   *  Flows verbatim into `ReviewCheckMeta.runnerEvidence` (index.ts
-   *  spreads this object) so the check-run summary renders the pill. */
-  runnerEvidence?: "verified" | "evidence-pending"
-}
-
-export interface EnsembleResult {
-  status: EnsembleResultStatus
-  telemetry: EnsembleTelemetry
-  /** ARC-276/279/280: set on `posted` (real review or comment
-   *  fallback) AND on `errored` when a skip-notice was posted. */
-  reviewMeta?: ReviewMeta
-}
-
-async function finalize(
-  telemetry: EnsembleTelemetry,
-  env: Env,
-  status: EnsembleResultStatus,
-  cache: ReturnType<typeof createRetrievalCache> | null,
-  reviewMeta?: ReviewMeta,
-): Promise<EnsembleResult> {
-  telemetry.totalMs = Date.now() - telemetry.startMs
-  // Capture retrieval cache stats BEFORE the KV write so telemetry
-  // reflects everything the cache observed during this run (CR catch).
-  if (cache !== null) {
-    telemetry.retrievalCacheStats = cache.stats()
-  }
-  // Best-effort daily-budget increment.
-  //
-  // CR PR #37 catch: previously this counted dispatched specialists as
-  // 1 each + synth as 1. With retries + cross-provider fallback, a
-  // single role can use up to 4 model invocations. Using attemptsUsed
-  // (set by runWithRetryAndFallback) gives accurate spend telemetry
-  // and keeps the daily budget honest.
-  let callsUsed = 0
-  for (const sv of telemetry.specialistVerdicts) {
-    callsUsed += sv.attemptsUsed ?? 1  // ?? 1 — defensive for legacy records
-  }
-  if (telemetry.synthesizer) {
-    callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
-  }
-  await incrementDailyBudget(env, callsUsed).catch(() => {})
-  // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
-  // because finalize() is the single choke point every exit path funnels
-  // through (success, stale-head, errored, skip-notice) and `totalMs` +
-  // `tokenUsageByModel` are both final by now. Pure-observability: the
-  // emitter only console.log's + does arithmetic, but we still guard it
-  // so a telemetry bug can never convert a posted review into a throw
-  // (same discipline as the writeTelemetry catch below). Tier omitted →
-  // the `default` SLO target applies until SIG-41 lands plan tiers.
-  try {
-    emitReviewSlo(
-      {
-        owner: telemetry.owner,
-        repo: telemetry.repo,
-        prNumber: telemetry.prNumber,
-        headSha: telemetry.headSha,
-      },
-      {
-        status,
-        totalMs: telemetry.totalMs,
-        usage: telemetry.tokenUsageByModel,
-        // Conditional spread under exactOptionalPropertyTypes — absent
-        // when no overview posted, so the overview SLO dimension is
-        // evaluated as "no data" rather than 0.
-        ...(telemetry.timeToFirstOverviewMs !== undefined
-          ? { timeToFirstOverviewMs: telemetry.timeToFirstOverviewMs }
-          : {}),
-      },
-    )
-  } catch (e) {
-    console.error(
-      JSON.stringify({
-        event: "review-slo-emit-failed",
-        owner: telemetry.owner,
-        repo: telemetry.repo,
-        prNumber: telemetry.prNumber,
-        err: e instanceof Error ? e.message : String(e),
-      }),
-    )
-  }
-  // Best-effort telemetry write — but no longer SILENT (SIG-306): a swallowed
-  // failure here is exactly how the FP-rate ruler went blind for ~30 days after
-  // the org rename. Log the failure (owner/repo/pr) so a regression is visible.
-  await writeTelemetry(env, telemetry).catch((e) => {
-    console.error(
-      JSON.stringify({
-        event: "telemetry-write-failed",
-        owner: telemetry.owner,
-        repo: telemetry.repo,
-        prNumber: telemetry.prNumber,
-        err: e instanceof Error ? e.message : String(e),
-      }),
-    )
-  })
-  return reviewMeta !== undefined ? { status, telemetry, reviewMeta } : { status, telemetry }
-}
+// SIG-318 (PR 12f): `EnsembleResultStatus` (internal status union), the public
+// `ReviewMeta` review-result contract, the generic `EnsembleResult`, and the
+// `finalize` choke point moved to ensemble/app/session. `EnsembleResult` is bound
+// here to the concrete (god-file-resident) `EnsembleTelemetry` so the public type
+// is byte-identical; `ReviewMeta` is re-exported at the import site above. The
+// telemetry-type parameter exists so session never imports the ~310-line private
+// `EnsembleTelemetry` interface — see the session header note.
+export type EnsembleResult = EnsembleResultBase<EnsembleTelemetry>

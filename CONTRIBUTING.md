@@ -5,6 +5,11 @@ hand or with an AI assistant. It's short on purpose. Read it once; follow it eve
 
 > We build an AI code-review product. We hold our own code to the bar we sell.
 
+This file is the *workflow*. [`COMPLIANCE.md`](./COMPLIANCE.md) is the *structure* standard —
+the rules CI enforces (the dependency rule, barrel-only imports, `@/` imports, the file-size
+budget). **If you are an intern, worker, or AI model, read `COMPLIANCE.md` before you touch code
+and tell your point of contact you have read it.**
+
 ---
 
 ## The workflow (every change follows this)

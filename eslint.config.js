@@ -67,6 +67,24 @@ export default tseslint.config(
       // empty-ish lines where it removed unused `// eslint-disable…`
       // directives.
       "no-trailing-spaces": "error",
+      // File-size budget — COMPLIANCE.md §4. Default ceiling is 1,000
+      // physical lines (blank + comment lines counted, matching the
+      // `wc -l` number the team reasons about). Single-cohesive-module
+      // files that read better whole than split get 1,500 via the
+      // explicit allowlist override block below — nothing else does.
+      "max-lines": ["error", { max: 1000, skipBlankLines: false, skipComments: false }],
+    },
+  },
+  {
+    // ── Class-module allowlist (COMPLIANCE.md §4) ──────────────────────
+    // One-class-one-module files where splitting would hurt readability
+    // more than the size does. Hard ceiling 1,500. Add a file here ONLY
+    // in the same PR that needs it, so the claim is visible in review and
+    // a reviewer can judge whether it genuinely meets the one-class bar.
+    // Being large, or merely containing a class, does NOT qualify a file.
+    files: ["src/shared/adapters/github/client.ts"],
+    rules: {
+      "max-lines": ["error", { max: 1500, skipBlankLines: false, skipComments: false }],
     },
   },
   {

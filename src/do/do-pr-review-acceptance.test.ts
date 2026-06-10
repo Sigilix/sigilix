@@ -24,7 +24,7 @@ import { GitHubHttpError } from "@/src/shared/adapters/github"
 const SAMPLE_HEAD_SHA = "a".repeat(40)
 const SAMPLE_BASE_SHA = "b".repeat(40)
 const DELIVERY_ID = "delivery-acceptance-1"
-const OWNER = "Arc-and-Anchor"
+const OWNER = "Sigilix"
 const REPO = "sigilix"
 const PR_NUMBER = 7
 const INSTALLATION_ID = 99

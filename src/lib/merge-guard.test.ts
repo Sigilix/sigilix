@@ -18,7 +18,7 @@ import {
 import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 const BASE = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 97,
   headSha: "deadbeef1234567890abcdef1234567890abcdef",
@@ -110,7 +110,7 @@ describe("checkIsPrMerged (ARC-286)", () => {
 // ─── SIG-88: submitMergedOnApprove ─────────────────────────────────────
 
 const SUBMIT_BASE = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 104,
   headSha: "deadbeef1234567890abcdef1234567890abcdef",

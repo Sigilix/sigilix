@@ -76,7 +76,7 @@ function makeRecord(signals: ReviewMemorySignal[]): ReviewMemoryRecord {
   }
 }
 
-const OWNER = "Arc-and-Anchor"
+const OWNER = "Sigilix"
 const REPO = "sigilix"
 const REPO_ID = 808247824
 

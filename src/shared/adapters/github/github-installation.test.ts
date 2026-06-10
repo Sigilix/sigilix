@@ -9,18 +9,18 @@ import {
 describe("resolveInstallation", () => {
   it("prefers exact owner/repo over owner-only fallback", () => {
     const map = JSON.stringify({
-      "Arc-and-Anchor/rema-portal": "12345",
-      "Arc-and-Anchor": "9999",
+      "Sigilix/rema-portal": "12345",
+      "Sigilix": "9999",
     })
-    expect(resolveInstallation("Arc-and-Anchor", "rema-portal", map)).toEqual({
+    expect(resolveInstallation("Sigilix", "rema-portal", map)).toEqual({
       ok: true,
       installationId: 12345,
     })
   })
 
   it("falls back to owner-only when no exact match", () => {
-    const map = JSON.stringify({ "Arc-and-Anchor": "9999" })
-    expect(resolveInstallation("Arc-and-Anchor", "other-repo", map)).toEqual({
+    const map = JSON.stringify({ "Sigilix": "9999" })
+    expect(resolveInstallation("Sigilix", "other-repo", map)).toEqual({
       ok: true,
       installationId: 9999,
     })
@@ -102,12 +102,12 @@ describe("resolveInstallation", () => {
 describe("listTeamRepoMappings", () => {
   it("emits one entry per team", () => {
     const json = JSON.stringify({
-      ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
-      RFD: { owner: "Arc-and-Anchor", repo: "rubberfit-desktop" },
+      ARC: { owner: "Sigilix", repo: "rema-portal" },
+      RFD: { owner: "Sigilix", repo: "rubberfit-desktop" },
     })
     expect(listTeamRepoMappings(json)).toEqual([
-      { teamKey: "ARC", owner: "Arc-and-Anchor", repo: "rema-portal" },
-      { teamKey: "RFD", owner: "Arc-and-Anchor", repo: "rubberfit-desktop" },
+      { teamKey: "ARC", owner: "Sigilix", repo: "rema-portal" },
+      { teamKey: "RFD", owner: "Sigilix", repo: "rubberfit-desktop" },
     ])
   })
 
@@ -122,11 +122,11 @@ describe("listTeamRepoMappings", () => {
 
   it("skips entries that don't have both owner and repo", () => {
     const json = JSON.stringify({
-      ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
+      ARC: { owner: "Sigilix", repo: "rema-portal" },
       BAD: { owner: "only-owner" },
     })
     expect(listTeamRepoMappings(json)).toEqual([
-      { teamKey: "ARC", owner: "Arc-and-Anchor", repo: "rema-portal" },
+      { teamKey: "ARC", owner: "Sigilix", repo: "rema-portal" },
     ])
   })
 })
@@ -134,10 +134,10 @@ describe("listTeamRepoMappings", () => {
 describe("parseTeamGithubRepo", () => {
   it("returns the mapping for the requested team", () => {
     const json = JSON.stringify({
-      ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
+      ARC: { owner: "Sigilix", repo: "rema-portal" },
     })
     expect(parseTeamGithubRepo(json, "ARC")).toEqual({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "rema-portal",
     })
   })
@@ -178,29 +178,29 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
 
   it("returns namespaces derived from `repo-index-manifest:*` keys (SIG-132 <owner>/<repo>)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/rubberfit",
-      "repo-index-manifest:arc-and-anchor/arc-and-anchor-website",
+      "repo-index-manifest:sigilix/rubberfit",
+      "repo-index-manifest:sigilix/sigilix-website",
       "repo-index-manifest:acme/openclaw-worker",
     ])
     const result = await listIndexedRepos(env)
     expect(result.sort()).toEqual([
       "acme/openclaw-worker",
-      "arc-and-anchor/arc-and-anchor-website",
-      "arc-and-anchor/rubberfit",
+      "sigilix/rubberfit",
+      "sigilix/sigilix-website",
     ])
   })
 
   it("filters namespaces to the requested owner case-insensitively (SIG-134)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/rubberfit",
-      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:sigilix/rubberfit",
+      "repo-index-manifest:sigilix/sigilix",
       "repo-index-manifest:acme/api",
       "repo-index-manifest:other/sigilix",
     ])
-    const result = await listIndexedRepos(env, { owner: "Arc-and-Anchor" })
+    const result = await listIndexedRepos(env, { owner: "Sigilix" })
     expect(result.sort()).toEqual([
-      "arc-and-anchor/rubberfit",
-      "arc-and-anchor/sigilix",
+      "sigilix/rubberfit",
+      "sigilix/sigilix",
     ])
   })
 
@@ -212,61 +212,61 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     // (`<owner>/<repo>`) namespaces are surfaced.
     const env = makeKvStub([
       "repo-index-manifest:rubberfit", // legacy bare orphan → excluded
-      "repo-index-manifest:arc-and-anchor/rubberfit", // new shape → kept
+      "repo-index-manifest:sigilix/rubberfit", // new shape → kept
     ])
-    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["sigilix/rubberfit"])
   })
 
   it("dedupes if the same key is somehow listed twice (defensive)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/rubberfit",
-      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:sigilix/rubberfit",
+      "repo-index-manifest:sigilix/rubberfit",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["sigilix/rubberfit"])
   })
 
   it("ignores empty + bare (owner-less) segments after the prefix", async () => {
     const env = makeKvStub([
       "repo-index-manifest:",
       "repo-index-manifest:rubberfit", // bare → excluded
-      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:sigilix/rubberfit",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["sigilix/rubberfit"])
   })
 
   it("ignores branch-scoped manifest keys so Linear sees repos, not branches (SIG-35)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/sigilix",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h666561747572652f5349472d3335",
+      "repo-index-manifest:sigilix/sigilix",
+      "repo-index-manifest:sigilix/sigilix/__branch__/h646576",
+      "repo-index-manifest:sigilix/sigilix/__branch__/h666561747572652f5349472d3335",
     ])
-    expect(await listIndexedRepos(env, { owner: "Arc-and-Anchor" })).toEqual([
-      "arc-and-anchor/sigilix",
+    expect(await listIndexedRepos(env, { owner: "Sigilix" })).toEqual([
+      "sigilix/sigilix",
     ])
   })
 
   it("can include branch-scoped namespaces for agent tools when explicitly requested (SIG-35)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/sigilix",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
+      "repo-index-manifest:sigilix/sigilix",
+      "repo-index-manifest:sigilix/sigilix/__branch__/h646576",
       "repo-index-manifest:acme/sigilix/__branch__/h646576",
     ])
     expect(await listIndexedRepos(env, {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       includeBranches: true,
     })).toEqual([
-      "arc-and-anchor/sigilix",
-      "arc-and-anchor/sigilix/__branch__/h646576",
+      "sigilix/sigilix",
+      "sigilix/sigilix/__branch__/h646576",
     ])
   })
 
   it("ignores keys outside the `repo-index-manifest:` prefix", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:arc-and-anchor/rubberfit",
-      "pr-review-manifest:Arc-and-Anchor/sigilix#10",
-      "pr-review:Arc-and-Anchor/rubberfit#5@abc",
+      "repo-index-manifest:sigilix/rubberfit",
+      "pr-review-manifest:Sigilix/sigilix#10",
+      "pr-review:Sigilix/rubberfit#5@abc",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["sigilix/rubberfit"])
   })
 
   it("returns empty array when KV is empty (fresh deploy, no installs yet)", async () => {

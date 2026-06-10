@@ -140,7 +140,7 @@ const VALID_SYNTH_JSON = JSON.stringify({
 })
 
 const PERF_CTX: EnsembleRunCtx = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 149,
   headSha: "a".repeat(40),
@@ -210,7 +210,7 @@ describe("review-slo-summary — full orchestrator, no-fan-out exit (SIG-149)", 
     mockGetFileContent.mockResolvedValueOnce(null)
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9001,
       headSha: HEAD_SHA,
@@ -227,7 +227,7 @@ describe("review-slo-summary — full orchestrator, no-fan-out exit (SIG-149)", 
     const summaries = collectSloSummaries(logSpy)
     expect(summaries).toHaveLength(1)
     const ev = summaries[0]!
-    expect(ev["owner"]).toBe("Arc-and-Anchor")
+    expect(ev["owner"]).toBe("Sigilix")
     expect(ev["repo"]).toBe("sigilix")
     expect(ev["prNumber"]).toBe(9001)
     expect(ev["headSha"]).toBe(HEAD_SHA.slice(0, 7))

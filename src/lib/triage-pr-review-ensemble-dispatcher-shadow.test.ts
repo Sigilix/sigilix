@@ -234,7 +234,7 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
       .mockRejectedValue(new Error("test boundary — specialist chat not mocked further"))
 
     await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5001,
       headSha: HEAD_SHA,
@@ -288,7 +288,7 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     mockChat.mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5002,
       headSha: HEAD_SHA,
@@ -348,7 +348,7 @@ index abc1234..def5678 100644
     mockChat.mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5004,
       headSha: HEAD_SHA,
@@ -402,7 +402,7 @@ index abc1234..def5678 100644
       .mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5003,
       headSha: HEAD_SHA,

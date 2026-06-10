@@ -251,7 +251,7 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     mockGetFileContent.mockResolvedValueOnce(null)
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9001,
       headSha: HEAD_SHA,
@@ -294,7 +294,7 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9002,
       headSha: HEAD_SHA,
@@ -332,7 +332,7 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     }))
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9003,
       headSha: HEAD_SHA,
@@ -370,7 +370,7 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9004,
       headSha: HEAD_SHA,
@@ -414,7 +414,7 @@ describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (S
     mockCreateIssueComment.mockResolvedValueOnce({ id: 12_345 })
 
     const result = await handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9005,
       headSha: HEAD_SHA,
@@ -478,7 +478,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
     })
 
     const resultPromise = handlePrReviewEnsemble({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9006,
       headSha: HEAD_SHA,
@@ -495,7 +495,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
     expect(result.telemetry.fellBackReason).toBe("internal_error")
     expect(result.telemetry.internalError).toMatch(/aborted/i)
     expect(mockGetBranch).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       "sig-222",
       { signal: expect.any(AbortSignal) },

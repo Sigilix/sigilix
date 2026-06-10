@@ -145,7 +145,7 @@ describe("evaluateLinkedIssueGate", () => {
   })
 
   it("passes on `Resolves owner/repo#7` (fully qualified)", () => {
-    expect(evaluateLinkedIssueGate("Resolves Arc-and-Anchor/sigilix#7", [], cfg).passed).toBe(true)
+    expect(evaluateLinkedIssueGate("Resolves Sigilix/sigilix#7", [], cfg).passed).toBe(true)
   })
 
   it("is case-insensitive on the keyword", () => {

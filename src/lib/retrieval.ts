@@ -90,7 +90,7 @@ export interface RetrievedChunk {
  *
  * SIG-132: the Vectorize namespace is now `<owner>/<repo>` lowercased
  * (multi-tenant isolation). Map VALUES must therefore be `owner/repo`,
- * e.g. `{"ARC":"arc-and-anchor/rubberfit","RFD":"arc-and-anchor/rubberfit-desktop"}`.
+ * e.g. `{"ARC":"sigilix/rubberfit","RFD":"sigilix/rubberfit-desktop"}`.
  * Stale single-segment values (e.g. `"rubberfit"`) will simply produce
  * zero retrieval matches against the new `<owner>/<repo>` namespaces.
  *

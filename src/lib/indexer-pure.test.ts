@@ -473,7 +473,7 @@ describe("shouldCommitGraph", () => {
 describe("computeRunId", () => {
   it("returns a 16-char hex id", async () => {
     const id = await computeRunId({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha: "a".repeat(40),
       modelId: "@cf/baai/bge-base-en-v1.5",
@@ -484,7 +484,7 @@ describe("computeRunId", () => {
 
   it("depends on every input", async () => {
     const base = {
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha: "a".repeat(40),
       modelId: "@cf/baai/bge-base-en-v1.5",
@@ -514,7 +514,7 @@ describe("shouldSkipForLength (SIG-218 defense)", () => {
   // well under that, but this guard catches any future code path that
   // forgets to encode.
   it("passes legitimate-length namespace + id", () => {
-    expect(shouldSkipForLength("a".repeat(48), "arc-and-anchor/sigilix")).toBe(false)
+    expect(shouldSkipForLength("a".repeat(48), "sigilix/sigilix")).toBe(false)
   })
 
   it("trips when the namespace exceeds 60 chars", () => {
@@ -522,7 +522,7 @@ describe("shouldSkipForLength (SIG-218 defense)", () => {
   })
 
   it("trips when the id exceeds 60 chars (extreme safety net)", () => {
-    expect(shouldSkipForLength("a".repeat(80), "arc-and-anchor/sigilix")).toBe(true)
+    expect(shouldSkipForLength("a".repeat(80), "sigilix/sigilix")).toBe(true)
   })
 
   it("does not trip at the 60-char boundary (only > 60 is skipped)", () => {

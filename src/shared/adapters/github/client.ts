@@ -622,7 +622,7 @@ export class GitHubClient {
   /**
    * List PR review comments (the inline ones). Paginates so callers
    * doing thread-ancestry walks (e.g. `arcInThreadAbove`) don't get
-   * silently truncated on PRs with >100 review comments — Arc's
+   * silently truncated on PRs with >100 review comments — Sigilix's
    * parent comment could otherwise be missing from the result and
    * legitimate replies would be skipped. Mirrors the pagination
    * pattern in `listIssueComments` above.
@@ -1232,7 +1232,7 @@ export class GitHubClient {
    * Add an emoji reaction to a top-level issue/PR-conversation comment.
    * Idempotent at the API level — re-posting the same reaction returns
    * the existing one with 200, not a duplicate. We use it to "ack" an
-   * @-mention with 👀 so the asker knows Arc saw the message before
+   * @-mention with 👀 so the asker knows Sigilix saw the message before
    * the LLM call returns (which can take 30-90s on Ollama Turbo).
    *
    * Returns 200 on existing-reaction, 201 on newly-created. We don't

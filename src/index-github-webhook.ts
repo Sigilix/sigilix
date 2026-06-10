@@ -769,7 +769,7 @@ export async function handleGitHubWebhook(
   // GitHub @-mention reply — top-level PR conversation thread.
   // `issue_comment` fires for both issues and PR conversation comments;
   // we only care when the issue is actually a PR (`issue.pull_request`
-  // is present) and the body @-mentions Arc.
+  // is present) and the body @-mentions Sigilix.
   if (event === "issue_comment") {
     if (payload.action !== "created") {
       return new Response("skip issue_comment action\n", { status: 200 })

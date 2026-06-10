@@ -201,13 +201,13 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
 describe("buildBranchRetrievalEvent (SIG-86 telemetry shape)", () => {
   it("emits the pinned snake_case shape with a 7-char headSha", () => {
     const ev = buildBranchRetrievalEvent({
-      owner: "Arc-and-Anchor", repo: "sigilix", prNumber: 123,
+      owner: "Sigilix", repo: "sigilix", prNumber: 123,
       headSha: "abcdef1234567890", branchChunkCount: 12, embedElapsedMs: 340,
       headOverride: { preflight: 2, perf: 1, symbol: 3 },
     })
     expect(ev).toEqual({
       event: "pr-review-branch-retrieval",
-      owner: "Arc-and-Anchor", repo: "sigilix", prNumber: 123,
+      owner: "Sigilix", repo: "sigilix", prNumber: 123,
       headSha: "abcdef1",
       branch_chunk_count: 12,
       embed_elapsed_ms: 340,

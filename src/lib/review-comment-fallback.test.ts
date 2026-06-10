@@ -178,7 +178,7 @@ describe("renderReviewCommentFallback", () => {
 
 describe("postReviewCommentFallback — happy path", () => {
   const baseArgs = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 90,
     headSha: "abc1234567890abcdef",
@@ -199,7 +199,7 @@ describe("postReviewCommentFallback — happy path", () => {
     expect(out).toEqual({ ok: true, reason: "posted", commentId: 999_999 })
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
     const [owner, repo, prNumber, body] = mockCreateIssueComment.mock.calls[0]!
-    expect(owner).toBe("Arc-and-Anchor")
+    expect(owner).toBe("Sigilix")
     expect(repo).toBe("sigilix")
     expect(prNumber).toBe(90)
     expect(body).toContain("<!-- sigilix:review-comment-fallback -->")
@@ -208,7 +208,7 @@ describe("postReviewCommentFallback — happy path", () => {
     // leave a phantom dedupe that suppresses a retry).
     expect(writes).toHaveLength(1)
     expect(writes[0]!.key).toBe(
-      "pr-review-comment-fallback:Arc-and-Anchor/sigilix#90@abc1234567890abcdef",
+      "pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef",
     )
     const opts = writes[0]!.opts as { expirationTtl: number } | undefined
     expect(opts?.expirationTtl).toBe(7 * 24 * 60 * 60)
@@ -343,7 +343,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
     await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 90,
       headSha: "abc1234567890abcdef",
@@ -362,7 +362,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
   it("emits `pr-review-comment-fallback-dedupe-hit` with submit_path + headSha on dedupe hit", async () => {
     const { kv, store } = makeKvStub()
     store.set(
-      "pr-review-comment-fallback:Arc-and-Anchor/sigilix#90@abc1234567890abcdef",
+      "pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef",
       String(Date.now()),
     )
     const client = new GitHubClient({ token: "t" })
@@ -370,7 +370,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
     await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 90,
       headSha: "abc1234567890abcdef",
@@ -431,7 +431,7 @@ describe("renderReviewSkipNotice", () => {
 
 describe("postReviewSkipNotice — happy path", () => {
   const baseArgs = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 92,
     headSha: "abc1234567890abcdef",
@@ -457,7 +457,7 @@ describe("postReviewSkipNotice — happy path", () => {
     // skip-notice + comment-fallback can coexist on the same head.
     expect(writes).toHaveLength(1)
     expect(writes[0]!.key).toBe(
-      "pr-review-skip-notice:Arc-and-Anchor/sigilix#92@abc1234567890abcdef",
+      "pr-review-skip-notice:Sigilix/sigilix#92@abc1234567890abcdef",
     )
     const opts = writes[0]!.opts as { expirationTtl: number } | undefined
     expect(opts?.expirationTtl).toBe(7 * 24 * 60 * 60)

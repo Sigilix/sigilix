@@ -44,7 +44,7 @@ export interface StackPr {
   title: string
   headRef: string
   baseRef: string
-  /** Repo `full_name` (e.g., "Arc-and-Anchor/sigilix" or "fork/sigilix")
+  /** Repo `full_name` (e.g., "Sigilix/sigilix" or "fork/sigilix")
    * where the head branch lives. Used to disambiguate same-named
    * branches across forks. */
   headRepo: string

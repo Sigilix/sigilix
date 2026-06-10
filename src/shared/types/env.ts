@@ -49,7 +49,7 @@ export interface Env {
   // configured callback URL). Defaults to https://app.sigilix.ai.
   OPENCLAW_BASE_URL?: string
   // SIG-132: VALUES are `<owner>/<repo>` lowercased (the Vectorize
-  // namespace), e.g. {"ARC":"arc-and-anchor/rubberfit"}.
+  // namespace), e.g. {"ARC":"sigilix/rubberfit"}.
   OPENCLAW_TEAM_REPO_MAP?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
@@ -57,7 +57,7 @@ export interface Env {
   // Phase 1 — Linear PR-aware @-mentions.
   // OPENCLAW_TEAM_GITHUB_REPO_MAP carries owner+repo identity per team
   // (separate from OPENCLAW_TEAM_REPO_MAP which is namespace-only).
-  // Schema: {"ARC":{"owner":"Arc-and-Anchor","repo":"rema-portal"}}
+  // Schema: {"ARC":{"owner":"Sigilix","repo":"rema-portal"}}
   OPENCLAW_TEAM_GITHUB_REPO_MAP?: string
   // Schema: {"<owner>/<repo>":"<id>","<owner>":"<id>"}
   // Lookup order: exact owner/repo, then owner-only fallback.

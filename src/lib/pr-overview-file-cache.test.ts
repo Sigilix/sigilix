@@ -42,10 +42,10 @@ const sampleRow: CachedFileRow = {
 describe("buildCacheKey", () => {
   it("normalizes owner/repo to lowercase and includes both hashes", async () => {
     const key = await buildCacheKey({
-      owner: "Arc-and-Anchor", repo: "Sigilix", prNumber: 42,
+      owner: "Sigilix", repo: "Sigilix", prNumber: 42,
       filename: "src/foo.ts", patch: "@@ -1 +1 @@\n-old\n+new",
     })
-    expect(key.startsWith("pr-overview-file-cache:arc-and-anchor/sigilix#42:")).toBe(true)
+    expect(key.startsWith("pr-overview-file-cache:sigilix/sigilix#42:")).toBe(true)
     // Two SHA-256 hex hashes (24 chars each) separated by ":"
     const tail = key.split("#42:")[1]!
     const [pathHash, patchHash] = tail.split(":")

@@ -82,12 +82,12 @@ describe("handleAdminIndexRoute", () => {
   it("202 enqueues a manual index-repo job with the resolved installationId", async () => {
     mockResolve.mockResolvedValue(998877)
     const { env, sent } = makeEnv()
-    const res = await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=Arc-and-Anchor&repo=sigilix", `Bearer ${TOKEN}`), env)
+    const res = await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=Sigilix&repo=sigilix", `Bearer ${TOKEN}`), env)
     expect(res.status).toBe(202)
     expect(sent).toHaveLength(1)
     expect(sent[0]).toEqual({
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 998877,
       reason: "manual",

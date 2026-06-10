@@ -38,7 +38,7 @@ interface FakeDoState {
   alarms: FakeAlarmState
 }
 
-function makeDoState(name: string = "Arc-and-Anchor/sigilix#7"): FakeDoState {
+function makeDoState(name: string = "Sigilix/sigilix#7"): FakeDoState {
   const store = new Map<string, unknown>()
   const alarms: FakeAlarmState = { alarmAt: null }
   const fakeState: FakeDoState = {
@@ -105,7 +105,7 @@ const SAMPLE_BASE_SHA = "b".repeat(40)
 
 function makeEnqueueReq(over: Partial<EnqueueRequest> = {}): EnqueueRequest {
   return {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     headSha: SAMPLE_HEAD_SHA,

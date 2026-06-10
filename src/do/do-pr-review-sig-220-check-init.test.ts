@@ -66,7 +66,7 @@ function makeDoState(): {
         return m
       },
     },
-    id: { toString: () => "Arc-and-Anchor/sigilix#7", name: "Arc-and-Anchor/sigilix#7" },
+    id: { toString: () => "Sigilix/sigilix#7", name: "Sigilix/sigilix#7" },
   } as unknown as DurableObjectState
   ;(ctx as unknown as { _setAlarmHandler: (h: () => Promise<void>) => void })._setAlarmHandler = (h) => {
     alarmHandler = h
@@ -102,7 +102,7 @@ const SAMPLE_RUN_ID = "11111111-1111-4111-8111-111111111111"
 
 function makeEnqueueReq(over: Partial<EnqueueRequest> = {}): EnqueueRequest {
   return {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     headSha: SAMPLE_HEAD_SHA,
@@ -136,13 +136,13 @@ beforeEach(() => {
   startSpy.mockResolvedValue({
     id: SAMPLE_CHECK_RUN_ID,
     client: {} as unknown,
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
   })
   attachSpy.mockImplementation(async (args: { checkRunId: number }) => ({
     id: args.checkRunId,
     client: {} as unknown,
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
   }))
   completeSpy.mockResolvedValue(undefined)
@@ -168,7 +168,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     expect(startSpy).toHaveBeenCalledTimes(1)
     expect(startSpy.mock.calls[0]![0]).toMatchObject({
       env,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       headSha: SAMPLE_HEAD_SHA,
       installationId: 99,
@@ -221,7 +221,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
         setTimeout(() => resolve({
           id: 11111,
           client: {} as unknown,
-          owner: "Arc-and-Anchor",
+          owner: "Sigilix",
           repo: "sigilix",
         }), 10_000)
       }))
@@ -318,7 +318,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     startSpy.mockResolvedValueOnce({
       id: 99999,
       client: {} as unknown,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
     })
     const res = await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "NEW".padEnd(40, "0") }))
@@ -343,7 +343,7 @@ describe("SIG-220 — retry alarm forwards checkRunId from RunState", () => {
 
     const seeded: RunState = {
       schemaVersion: 1,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: SAMPLE_RUN_ID,
@@ -375,7 +375,7 @@ describe("SIG-220 — retry alarm forwards checkRunId from RunState", () => {
 
     const seeded: RunState = {
       schemaVersion: 1,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: SAMPLE_RUN_ID,
@@ -408,7 +408,7 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
 
     const seeded: RunState = {
       schemaVersion: 1,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: SAMPLE_RUN_ID,
@@ -429,7 +429,7 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
     expect(attachSpy).toHaveBeenCalledTimes(1)
     expect(attachSpy.mock.calls[0]![0]).toMatchObject({
       env,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       checkRunId: SAMPLE_CHECK_RUN_ID,
@@ -459,7 +459,7 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
 
     const seeded: RunState = {
       schemaVersion: 1,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: SAMPLE_RUN_ID,
@@ -482,7 +482,7 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
     expect(closeOrphanSpy).toHaveBeenCalledTimes(1)
     expect(closeOrphanSpy.mock.calls[0]![0]).toMatchObject({
       env,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       headSha: SAMPLE_HEAD_SHA,
@@ -500,7 +500,7 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
 
     const seeded: RunState = {
       schemaVersion: 1,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: SAMPLE_RUN_ID,

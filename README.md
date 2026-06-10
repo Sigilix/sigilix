@@ -901,7 +901,7 @@ Sigilix/
 - HMAC verification on every webhook delivery — invalid signatures return 401. Linear: raw hex digest in `linear-signature`. GitHub: `sha256=<hex>` in `X-Hub-Signature-256`.
 - All secrets live in Cloudflare's secret store, encrypted at rest, never logged.
 - The Worker has no filesystem; the GitHub App private key path that historically lived on the Windows box is gone.
-- Linear API token is workspace-scoped; the Worker can't write outside the Arc and Anchor workspace.
+- Linear API token is workspace-scoped; the Worker can't write outside the Sigilix workspace.
 - GitHub App installation tokens are scoped to whatever the App is installed on. Tokens last ~1 hour and are KV-cached per-installation; the App's master private key is the only sensitive credential.
 - Manual trigger route requires a Bearer token equal to `LINEAR_API_KEY`. Random clients can't fire triages.
 

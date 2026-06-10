@@ -77,7 +77,7 @@ function makeEnv(args: MakeEnvArgs = {}): {
 }
 
 const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 7,
   headSha: "a".repeat(40),
@@ -152,7 +152,7 @@ describe("enqueuePrReviewJob — authoritative DO path", () => {
 
   it("get throw returns do-transport", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    const idFromName = vi.fn(() => ({ name: "Arc-and-Anchor/sigilix#7" }) as unknown as DurableObjectId)
+    const idFromName = vi.fn(() => ({ name: "Sigilix/sigilix#7" }) as unknown as DurableObjectId)
     const get = vi.fn(() => {
       throw new Error("PR_REVIEW_RUN get misconfigured")
     })
@@ -185,7 +185,7 @@ describe("enqueuePrReviewJob — DO request payload", () => {
     await enqueuePrReviewJob(env, baseArgs)
     const body = doCalls[0]?.body as EnqueueRequest
     expect(body).toEqual({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       headSha: "a".repeat(40),
@@ -206,7 +206,7 @@ describe("enqueuePrReviewJob — DO request payload", () => {
   it("uses ${owner}/${repo}#${prNumber} as DO instance name", async () => {
     const { env, idFromName } = makeEnv()
     await enqueuePrReviewJob(env, baseArgs)
-    expect(idFromName).toHaveBeenCalledWith("Arc-and-Anchor/sigilix#7")
+    expect(idFromName).toHaveBeenCalledWith("Sigilix/sigilix#7")
   })
 })
 
@@ -214,7 +214,7 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
   it("returns skipped-paused when pr-paused KV flag is set; no DO call, no queue send", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { env, doCalls, queueSend, idFromName } = makeEnv({
-      kvState: { "pr-paused:Arc-and-Anchor/sigilix#7": "1700000000000" },
+      kvState: { "pr-paused:Sigilix/sigilix#7": "1700000000000" },
     })
     const result = await enqueuePrReviewJob(env, baseArgs)
     expect(result).toEqual({ ok: true, route: "skipped-paused" })
@@ -228,7 +228,7 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
   it("returns skipped-ignored when pr-ignored KV flag is set", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { env, doCalls, queueSend } = makeEnv({
-      kvState: { "pr-ignored:Arc-and-Anchor/sigilix#7": "1700000000000" },
+      kvState: { "pr-ignored:Sigilix/sigilix#7": "1700000000000" },
     })
     const result = await enqueuePrReviewJob(env, baseArgs)
     expect(result).toEqual({ ok: true, route: "skipped-ignored" })
@@ -241,8 +241,8 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { env, doCalls, queueSend, idFromName } = makeEnv({
       kvState: {
-        "pr-paused:Arc-and-Anchor/sigilix#7": "1700000000000",
-        "pr-ignored:Arc-and-Anchor/sigilix#7": "1700000000000",
+        "pr-paused:Sigilix/sigilix#7": "1700000000000",
+        "pr-ignored:Sigilix/sigilix#7": "1700000000000",
       },
     })
     const result = await enqueuePrReviewJob(env, baseArgs)

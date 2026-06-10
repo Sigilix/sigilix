@@ -54,7 +54,7 @@ function makeDoState(): {
         return m
       },
     },
-    id: { toString: () => "Arc-and-Anchor/sigilix#7", name: "Arc-and-Anchor/sigilix#7" },
+    id: { toString: () => "Sigilix/sigilix#7", name: "Sigilix/sigilix#7" },
   } as unknown as DurableObjectState
   return { ctx, store, alarms }
 }
@@ -77,7 +77,7 @@ const CHECK_RUN_ID = 8675309
 function seedState(store: Map<string, unknown>, over: Partial<RunState> = {}): RunState {
   const s: RunState = {
     schemaVersion: 1,
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 7,
     runId: RUN_ID,
@@ -150,7 +150,7 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
 
     expect(attachSpy).toHaveBeenCalledTimes(1)
     expect(attachSpy.mock.calls[0]![0]).toMatchObject({
-      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99, checkRunId: CHECK_RUN_ID,
+      owner: "Sigilix", repo: "sigilix", installationId: 99, checkRunId: CHECK_RUN_ID,
     })
     expect(completeSpy).toHaveBeenCalledTimes(1)
     expect(completeSpy.mock.calls[0]![0]).toMatchObject({ conclusion: "skipped" })
@@ -178,7 +178,7 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
     expect(closeOrphanSpy).toHaveBeenCalledTimes(1)
     expect(closeOrphanSpy.mock.calls[0]![0]).toMatchObject({
       env,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       headSha: HEAD_SHA,

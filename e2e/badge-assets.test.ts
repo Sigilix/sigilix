@@ -269,7 +269,7 @@ describe("badge assets (SIG-201)", () => {
     const env = {
       OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS: "strict",
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-        SIG: { owner: "Arc-and-Anchor", repo: "sigilix" },
+        SIG: { owner: "Sigilix", repo: "sigilix" },
       }),
       OPENCLAW_GITHUB_INSTALLATION_MAP: "{}",
     } as Partial<Env> as Env

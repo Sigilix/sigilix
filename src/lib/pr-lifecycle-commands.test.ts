@@ -139,7 +139,7 @@ function makeEnv(kv: MockKv): { env: Env; fetches: FetchCall[]; responses: MockR
 }
 
 const args = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 7,
   installationId: 99,
@@ -404,7 +404,7 @@ describe("handlePrCancel", () => {
     await handlePrCancel({ env: stubbed.env, ...args })
 
     expect(stubbed.cancelCalls).toBe(1)
-    expect(stubbed.names).toContain("Arc-and-Anchor/sigilix#7")
+    expect(stubbed.names).toContain("Sigilix/sigilix#7")
     const ackPost = envBundle.fetches.find(
       (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
     )

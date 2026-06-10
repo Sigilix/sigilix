@@ -122,7 +122,7 @@ function makeClientStub(): ClientStub {
   return stub
 }
 
-const OWNER = "Arc-and-Anchor"
+const OWNER = "Sigilix"
 const REPO = "sigilix"
 const PR = 42
 

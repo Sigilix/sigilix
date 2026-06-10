@@ -42,7 +42,7 @@ describe("dispatchJob — ci-triage scoping (Codex B2 regression)", () => {
     const { env, idFromName, get } = makeEnvWithDoSpy()
     const job: JobMessage = {
       type: "ci-triage",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       // Numeric runId — would falsely match a generic `if (job.runId)`
@@ -55,7 +55,7 @@ describe("dispatchJob — ci-triage scoping (Codex B2 regression)", () => {
     await dispatchJob(job, env)
     expect(handleCiTriageMock).toHaveBeenCalledOnce()
     expect(handleCiTriageMock.mock.calls[0]?.[0]).toMatchObject({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       runId: 12345,

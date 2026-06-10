@@ -73,7 +73,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
 function makeGithubCtx(): NonNullable<AgentToolsContext["github"]> {
   return {
     githubClient: new GitHubClient({ token: "t" }),
-    allowedRepos: [{ owner: "Arc-and-Anchor", repo: "rubberfit" }],
+    allowedRepos: [{ owner: "Sigilix", repo: "rubberfit" }],
     defaultRef: "main",
     installationId: 12345,
   }
@@ -171,7 +171,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: ["rubberfit", "arc-and-anchor-website"],
+      allowedRepos: ["rubberfit", "sigilix-website"],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "made-up-repo" },
@@ -180,7 +180,7 @@ describe("retrieve_codebase", () => {
     )) as { ok: boolean; error: string; allowedRepos: string[] }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/'made-up-repo' is not in the indexed namespace set/)
-    expect(result.allowedRepos).toEqual(["rubberfit", "arc-and-anchor-website"])
+    expect(result.allowedRepos).toEqual(["rubberfit", "sigilix-website"])
     expect(mockRetrieveChunks).not.toHaveBeenCalled()
   })
 
@@ -205,16 +205,16 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: ["arc-and-anchor/rubberfit", "acme/api"],
+      allowedRepos: ["sigilix/rubberfit", "acme/api"],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: "Arc-and-Anchor/Rubberfit" },
+      { query: "x", repo: "Sigilix/Rubberfit" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
     expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: "arc-and-anchor/rubberfit" }),
+      expect.objectContaining({ teamKey: "sigilix/rubberfit" }),
     )
   })
 
@@ -222,17 +222,17 @@ describe("retrieve_codebase", () => {
     mockRetrieveChunks.mockResolvedValue([])
     // SIG-218: branch segment is the bounded-length sha256 hash.
     const encodedDev = await encodeBranchName("dev")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedDev}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: `Arc-and-Anchor/Sigilix/__branch__/${encodedDev}` },
+      { query: "x", repo: `Sigilix/Sigilix/__branch__/${encodedDev}` },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean }
@@ -245,17 +245,17 @@ describe("retrieve_codebase", () => {
   it("resolves a human branch argument to the encoded branch namespace (SIG-207)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const encodedDev = await encodeBranchName("dev")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedDev}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
     const result = (await tool!.execute(
-      { query: "index producer", repo: "arc-and-anchor/sigilix", branch: "dev" },
+      { query: "index producer", repo: "sigilix/sigilix", branch: "dev" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; repo?: string }
@@ -269,12 +269,12 @@ describe("retrieve_codebase", () => {
 
   it("returns branch choices when a requested branch is not indexed (SIG-207)", async () => {
     const encodedDev = await encodeBranchName("dev")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedDev}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
@@ -290,7 +290,7 @@ describe("retrieve_codebase", () => {
     // the human branch name (the hash is irreversible).
     expect(result.availableBranches).toEqual([
       {
-        repo: "arc-and-anchor/sigilix",
+        repo: "sigilix/sigilix",
         encodedBranch: encodedDev,
         namespace: branchNs,
       },
@@ -305,17 +305,17 @@ describe("retrieve_codebase", () => {
     // matches.
     mockRetrieveChunks.mockResolvedValue([])
     const encodedLower = await encodeBranchName("my-branch")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedLower}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: "arc-and-anchor/sigilix", branch: "My-Branch" },
+      { query: "x", repo: "sigilix/sigilix", branch: "My-Branch" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; repo?: string }
@@ -330,17 +330,17 @@ describe("retrieve_codebase", () => {
   it("resolves an ALL-CAPS branch via case-folding fallback (SIG-218)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const encodedLower = await encodeBranchName("my-branch")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedLower}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: "arc-and-anchor/sigilix", branch: "MY-BRANCH" },
+      { query: "x", repo: "sigilix/sigilix", branch: "MY-BRANCH" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; repo?: string }
@@ -351,17 +351,17 @@ describe("retrieve_codebase", () => {
 
   it("rejects a nonexistent branch even after case-folding (SIG-218)", async () => {
     const encodedLower = await encodeBranchName("my-branch")
-    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const branchNs = `sigilix/sigilix/__branch__/${encodedLower}`
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
       allowedRepos: [
-        "arc-and-anchor/sigilix",
+        "sigilix/sigilix",
         branchNs,
       ],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: "arc-and-anchor/sigilix", branch: "Nonexistent-Branch" },
+      { query: "x", repo: "sigilix/sigilix", branch: "Nonexistent-Branch" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -376,7 +376,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: ["arc-and-anchor/rubberfit", "acme/api"],
+      allowedRepos: ["sigilix/rubberfit", "acme/api"],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "rubberfit" },
@@ -385,7 +385,7 @@ describe("retrieve_codebase", () => {
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
     expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: "arc-and-anchor/rubberfit" }),
+      expect.objectContaining({ teamKey: "sigilix/rubberfit" }),
     )
   })
 
@@ -393,7 +393,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: ["arc-and-anchor/api", "acme/api"],
+      allowedRepos: ["sigilix/api", "acme/api"],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "api" },
@@ -453,7 +453,7 @@ describe("fetch_pr", () => {
     mockFetchPullRequestContext.mockResolvedValue({
       ok: true,
       context: {
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "rubberfit",
         number: 162,
         title: "x",
@@ -465,7 +465,7 @@ describe("fetch_pr", () => {
       },
     })
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", number: 162 },
+      { owner: "Sigilix", repo: "rubberfit", number: 162 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; pr: unknown }
@@ -481,13 +481,13 @@ describe("fetch_pr", () => {
     )) as { ok: boolean; error: string; allowedRepos: Array<{ owner: string; repo: string }> }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/outside the allowed set/)
-    expect(result.allowedRepos).toEqual([{ owner: "Arc-and-Anchor", repo: "rubberfit" }])
+    expect(result.allowedRepos).toEqual([{ owner: "Sigilix", repo: "rubberfit" }])
     expect(mockFetchPullRequestContext).not.toHaveBeenCalled()
   })
 
   it("returns recoverable error on missing args", async () => {
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit" },
+      { owner: "Sigilix", repo: "rubberfit" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -498,7 +498,7 @@ describe("fetch_pr", () => {
   it("returns recoverable error on number = 0 or negative", async () => {
     for (const n of [0, -1, 1.5]) {
       const result = (await ghTool().execute(
-        { owner: "Arc-and-Anchor", repo: "rubberfit", number: n },
+        { owner: "Sigilix", repo: "rubberfit", number: n },
         new AbortController().signal,
         new Map(),
       )) as { ok: boolean }
@@ -509,7 +509,7 @@ describe("fetch_pr", () => {
   it("propagates fetchPullRequestContext failure as recoverable error", async () => {
     mockFetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", number: 999 },
+      { owner: "Sigilix", repo: "rubberfit", number: 999 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -532,7 +532,7 @@ describe("read_file_lines", () => {
     const fileContent = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")
     mockGetFileContent.mockResolvedValue(fileContent)
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 10, lineEnd: 14 },
+      { owner: "Sigilix", repo: "rubberfit", path: "src/foo.ts", lineStart: 10, lineEnd: 14 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; content: string; lineStart: number; lineEnd: number; totalLinesInFile: number }
@@ -545,7 +545,7 @@ describe("read_file_lines", () => {
 
   it("rejects lineEnd < lineStart with recoverable error", async () => {
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 50, lineEnd: 10 },
+      { owner: "Sigilix", repo: "rubberfit", path: "src/foo.ts", lineStart: 50, lineEnd: 10 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -556,7 +556,7 @@ describe("read_file_lines", () => {
 
   it("rejects per-call cap (>200 lines)", async () => {
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 1, lineEnd: 500 },
+      { owner: "Sigilix", repo: "rubberfit", path: "src/foo.ts", lineStart: 1, lineEnd: 500 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -572,7 +572,7 @@ describe("read_file_lines", () => {
     )) as { ok: boolean; error: string; allowedRepos: unknown }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/outside the allowed set/)
-    expect(result.allowedRepos).toEqual([{ owner: "Arc-and-Anchor", repo: "rubberfit" }])
+    expect(result.allowedRepos).toEqual([{ owner: "Sigilix", repo: "rubberfit" }])
   })
 
   it("enforces 50KB per-loop bytes budget across multiple calls", async () => {
@@ -586,7 +586,7 @@ describe("read_file_lines", () => {
 
     // First call returns 50 lines * ~601 bytes = ~30KB
     const r1 = (await tool.execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
+      { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
       new AbortController().signal,
       perLoopContext,
     )) as { ok: boolean; bytesReturned: number; bytesBudgetRemaining: number }
@@ -597,7 +597,7 @@ describe("read_file_lines", () => {
     // Second call should be rejected because bytesUsed > 50KB cap
     // (we make sure to push it over by another big read)
     const r2 = (await tool.execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 51, lineEnd: 200 },
+      { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 51, lineEnd: 200 },
       new AbortController().signal,
       perLoopContext,
     )) as { ok: boolean; bytesReturned?: number; error?: string }
@@ -610,7 +610,7 @@ describe("read_file_lines", () => {
     } else {
       // Third call WILL be rejected.
       const r3 = (await tool.execute(
-        { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
+        { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
         new AbortController().signal,
         perLoopContext,
       )) as { ok: boolean; error?: string }
@@ -622,7 +622,7 @@ describe("read_file_lines", () => {
   it("returns recoverable error when file is missing or unreadable", async () => {
     mockGetFileContent.mockResolvedValue(null)
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "nope.ts", lineStart: 1, lineEnd: 5 },
+      { owner: "Sigilix", repo: "rubberfit", path: "nope.ts", lineStart: 1, lineEnd: 5 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -633,7 +633,7 @@ describe("read_file_lines", () => {
   it("returns recoverable error when lineStart exceeds file length", async () => {
     mockGetFileContent.mockResolvedValue("a\nb\nc")
     const result = (await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 100, lineEnd: 150 },
+      { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 100, lineEnd: 150 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; error: string }
@@ -645,7 +645,7 @@ describe("read_file_lines", () => {
     mockGetInstallationToken.mockRejectedValue(new Error("token expired"))
     await expect(
       ghTool().execute(
-        { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 5 },
+        { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 5 },
         new AbortController().signal,
         new Map(),
       ),
@@ -655,12 +655,12 @@ describe("read_file_lines", () => {
   it("uses defaultRef when ref omitted", async () => {
     mockGetFileContent.mockResolvedValue("a\nb\nc")
     await ghTool().execute(
-      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 2 },
+      { owner: "Sigilix", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 2 },
       new AbortController().signal,
       new Map(),
     )
     expect(mockGetFileContent).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "rubberfit",
       "f.ts",
       "main", // defaultRef

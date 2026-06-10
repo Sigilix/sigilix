@@ -97,7 +97,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-abc",
     })
 
@@ -124,7 +124,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-1",
     })
 
@@ -142,7 +142,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-1",
     })
 
@@ -156,7 +156,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
@@ -173,7 +173,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-abc",
     })
 
@@ -188,7 +188,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
@@ -206,14 +206,14 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     const first = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "same-run-id",
     })
     expect(first.enqueued).toBe(1)
     expect(sent).toHaveLength(2) // 1 rerun + 1 overview
 
     const second = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "same-run-id",
     })
     expect(second).toEqual({ enqueued: 0, scanned: 0, skipped: "already-fanned-out" })
@@ -227,11 +227,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-one",
     })
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
       runId: "run-two",
     })
 

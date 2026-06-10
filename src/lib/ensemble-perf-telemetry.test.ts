@@ -21,7 +21,7 @@ import {
 } from "@/src/lib/ensemble-perf-telemetry"
 
 const CTX: EnsembleRunCtx = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   prNumber: 94,
   headSha: "abcdef1234567890abcdef1234567890abcdef12",
@@ -52,7 +52,7 @@ describe("emitPhaseCompleted", () => {
     emitPhaseCompleted(CTX, "specialist_fanout", 1_000, 1_270)
     const event = lastLogged()
     expect(event["event"]).toBe("ensemble-phase-completed")
-    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["owner"]).toBe("Sigilix")
     expect(event["repo"]).toBe("sigilix")
     expect(event["prNumber"]).toBe(94)
     // headSha is truncated to 7 chars at log time. This is a stable
@@ -221,7 +221,7 @@ describe("emitModelAttempt", () => {
     expect(event["elapsedMs"]).toBe(120)
     expect(event["outcome"]).toBe("ok")
     // Correlation fields.
-    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["owner"]).toBe("Sigilix")
     expect(event["repo"]).toBe("sigilix")
     expect(event["prNumber"]).toBe(94)
     expect(event["headSha"]).toBe("abcdef1")

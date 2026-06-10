@@ -115,7 +115,7 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
       await captureReviewFeedback({
         env: sharedEnv,
         client: fakeClient,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         prNumber: 100 + i,
         replyComment: {
@@ -130,9 +130,9 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
 
     // ── Phase 3: assert KV state. One category-scope record + one
     //   path-category record, each with 3 signals.
-    const catKey = "review-memory:Arc-and-Anchor/sigilix:cat:performance"
+    const catKey = "review-memory:Sigilix/sigilix:cat:performance"
     const expectedSha256 = await computePathSha256(path)
-    const pathKey = `review-memory:Arc-and-Anchor/sigilix:path:${expectedSha256}:cat:performance`
+    const pathKey = `review-memory:Sigilix/sigilix:path:${expectedSha256}:cat:performance`
     const catRecord = JSON.parse(shared.store.get(catKey)!)
     const pathRecord = JSON.parse(shared.store.get(pathKey)!)
     expect(catRecord.signals).toHaveLength(3)
@@ -144,7 +144,7 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
     // ── Phase 4: simulate the 4th PR's lookup with this same path.
     const lookup = await runReviewMemoryLookup({
       env: sharedEnv,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 200,
       paths: [path],
@@ -218,7 +218,7 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
       await captureReviewFeedback({
         env: sharedEnv,
         client: fakeClient,
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         prNumber: 100 + i,
         replyComment: {
@@ -233,7 +233,7 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
 
     const lookup = await runReviewMemoryLookup({
       env: sharedEnv,
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 200,
       paths: [path],

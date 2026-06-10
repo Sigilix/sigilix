@@ -442,7 +442,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
     provenance: { findings: [], dropped: [] },
   })
   const perfCtx = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     prNumber: 1,
     headSha: "a".repeat(40),

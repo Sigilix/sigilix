@@ -435,7 +435,7 @@ describe("handleGithubMention dismiss path", () => {
     ])
 
     await handleGithubMention({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       installationId: 99,
@@ -448,20 +448,20 @@ describe("handleGithubMention dismiss path", () => {
       installationId: 99,
     }))
     expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       4242,
       "eyes",
     )
     expect(dismissReviewMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       90,
       "Dismissed by explicit @sigilix dismiss request.",
     )
     expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       expect.stringContaining("Dismissed the latest blocking Sigilix review"),
@@ -488,7 +488,7 @@ describe("handleGithubMention dismiss path", () => {
     ])
 
     await handleGithubMention({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       installationId: 99,
@@ -500,7 +500,7 @@ describe("handleGithubMention dismiss path", () => {
     expect(listPullRequestReviewsMock).not.toHaveBeenCalled()
     expect(dismissReviewMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       expect.stringContaining("couldn't find an active blocking Sigilix review"),
@@ -525,7 +525,7 @@ describe("handleGithubMention dismiss path", () => {
     ])
 
     await handleGithubMention({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       installationId: 99,
@@ -535,7 +535,7 @@ describe("handleGithubMention dismiss path", () => {
     })
 
     expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       4242,
       "eyes",
@@ -568,7 +568,7 @@ describe("handleGithubMention dismiss path", () => {
     ])
 
     await handleGithubMention({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       installationId: 99,
@@ -619,7 +619,7 @@ describe("handleGithubMention dismiss path", () => {
     ])
 
     await handleGithubMention({
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       prNumber: 7,
       installationId: 99,
@@ -630,7 +630,7 @@ describe("handleGithubMention dismiss path", () => {
 
     // (1) The dismiss API call fired against the right review.
     expect(dismissReviewMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       90,
@@ -640,7 +640,7 @@ describe("handleGithubMention dismiss path", () => {
     // formatReviewDismissReply. Match the literal suffix shape so a copy
     // change requires intentionally updating this assertion.
     expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       expect.stringContaining("(reason: too-minor)"),
@@ -732,7 +732,7 @@ describe("dismissLatestBlockingSigilixReview", () => {
     }
   }
 
-  const base = { owner: "Arc-and-Anchor", repo: "sigilix", prNumber: 7 }
+  const base = { owner: "Sigilix", repo: "sigilix", prNumber: 7 }
 
   it("dismisses the highest-id blocking Sigilix review by API", async () => {
     const client = clientWithReviews([
@@ -746,7 +746,7 @@ describe("dismissLatestBlockingSigilixReview", () => {
 
     expect(result).toEqual({ kind: "dismissed", reviewId: 13 })
     expect(client.dismissReview).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       13,
@@ -775,7 +775,7 @@ describe("dismissLatestBlockingSigilixReview", () => {
 
     expect(result).toEqual({ kind: "dismissed", reviewId: 25 })
     expect(client.dismissReview).toHaveBeenCalledWith(
-      "Arc-and-Anchor",
+      "Sigilix",
       "sigilix",
       7,
       25,

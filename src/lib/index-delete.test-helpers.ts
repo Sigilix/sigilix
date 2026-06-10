@@ -93,7 +93,7 @@ export function manifest(over: Partial<RepoIndexManifestV1> = {}): RepoIndexMani
   return {
     v: 1,
     repo: "sigilix",
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     headSha: "a".repeat(40),
     runId: "0123456789abcdef",
     fileCount: 1, chunkCount: 1, shardCount: 1,
@@ -110,7 +110,7 @@ export function vectors(over: Partial<RepoIndexVectorsV1> = {}): RepoIndexVector
   return {
     v: 1,
     repo: "sigilix",
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     runId: "0123456789abcdef",
     byPath: {
       "src/a.ts": ["id-a1", "id-a2"],

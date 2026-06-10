@@ -44,7 +44,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   v: 1,
   repo: "sigilix",
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   headSha: "a".repeat(40),
   runId: "0123456789abcdef",
   fileCount: 42,
@@ -60,7 +60,7 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
 
 describe("indexNamespace", () => {
   it("lowercases owner + repo and joins with a slash", () => {
-    expect(indexNamespace("Arc-and-Anchor", "Sigilix")).toBe("arc-and-anchor/sigilix")
+    expect(indexNamespace("Sigilix", "Sigilix")).toBe("sigilix/sigilix")
     expect(indexNamespace("ACME", "API")).toBe("acme/api")
     expect(indexNamespace("acme", "api")).toBe("acme/api")
   })
@@ -68,8 +68,8 @@ describe("indexNamespace", () => {
 
 describe("repoIndexManifestKey", () => {
   it("keys by the lowercased <owner>/<repo> namespace", () => {
-    expect(repoIndexManifestKey("Arc-and-Anchor", "SIGILIX")).toBe(
-      "repo-index-manifest:arc-and-anchor/sigilix",
+    expect(repoIndexManifestKey("Sigilix", "SIGILIX")).toBe(
+      "repo-index-manifest:sigilix/sigilix",
     )
     expect(repoIndexManifestKey("acme", "api")).toBe("repo-index-manifest:acme/api")
   })
@@ -97,9 +97,9 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
   it("round-trips a valid manifest under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
     await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
-    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-manifest:sigilix/sigilix")).toBe(true)
 
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.manifest).toEqual(SAMPLE_MANIFEST)
@@ -108,14 +108,14 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
 
   it("returns missing when no record exists", async () => {
     const { kv } = makeKvStub()
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "nothing")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "nothing")
     expect(result.kind).toBe("missing")
   })
 
   it("returns invalid/json-parse for non-JSON garbage", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", "{not json")
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", "{not json")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("json-parse")
@@ -125,10 +125,10 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
   it("returns invalid/wrong-version for a v0 (or otherwise mismatched) record", async () => {
     const { kv, store } = makeKvStub()
     store.set(
-      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:sigilix/sigilix",
       JSON.stringify({ ...SAMPLE_MANIFEST, v: 2 }),
     )
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("wrong-version")
@@ -139,8 +139,8 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     const { kv, store } = makeKvStub()
     const broken = { ...SAMPLE_MANIFEST } as Partial<RepoIndexManifestV1>
     delete broken.headSha
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(broken))
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(broken))
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("shape")
@@ -154,7 +154,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     const { kv } = makeKvStub()
     const withId: RepoIndexManifestV1 = { ...SAMPLE_MANIFEST, githubRepoId: 808247824 }
     await writeRepoIndexManifest(makeEnv(kv), withId)
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.manifest.githubRepoId).toBe(808247824)
@@ -169,7 +169,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     // records; until then, absence is legitimate.
     const { kv } = makeKvStub()
     await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.manifest.githubRepoId).toBeUndefined()
@@ -184,13 +184,13 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     const { kv, store } = makeKvStub()
     const withId: RepoIndexManifestV1 = { ...SAMPLE_MANIFEST, githubRepoId: 808247824 }
     await writeRepoIndexManifest(makeEnv(kv), withId)
-    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-manifest:sigilix/sigilix")).toBe(true)
     expect(store.has("repo-tenant:808247824")).toBe(true)
 
     // Both keys contain identical payloads — the new key isn't a
     // pointer; it's a sibling write so Phase 3's read-switch is a
     // pure code change with no data migration needed.
-    const legacyValue = store.get("repo-index-manifest:arc-and-anchor/sigilix")
+    const legacyValue = store.get("repo-index-manifest:sigilix/sigilix")
     const newValue = store.get("repo-tenant:808247824")
     expect(newValue).toBe(legacyValue)
   })
@@ -203,7 +203,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     // writer with the ID set.
     const { kv, store } = makeKvStub()
     await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
-    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-index-manifest:sigilix/sigilix")).toBe(true)
     const tenantKeys = [...store.keys()].filter((k) => k.startsWith("repo-tenant:"))
     expect(tenantKeys).toEqual([])
   })
@@ -225,7 +225,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     await writeRepoIndexManifest(makeEnv(kv), branchManifest)
     // Legacy key writes (branch state lives under the branch-state
     // namespace).
-    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576")).toBe(true)
+    expect(store.has("repo-index-manifest:sigilix/sigilix/__branch__/h646576")).toBe(true)
     // New key NOT written — would have stomped the default-branch
     // manifest for the same repo ID.
     expect(store.has("repo-tenant:808247824")).toBe(false)
@@ -263,27 +263,27 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     // that repo. Validate the shape at read time.
     const { kv, store } = makeKvStub()
     const stringId = { ...SAMPLE_MANIFEST, githubRepoId: "not-a-number" }
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(stringId))
-    const r1 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(stringId))
+    const r1 = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(r1.kind).toBe("invalid")
     if (r1.kind === "invalid") expect(r1.reason).toBe("shape")
 
     // Zero is not a valid GitHub repo ID.
     const zeroId = { ...SAMPLE_MANIFEST, githubRepoId: 0 }
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(zeroId))
-    const r2 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(zeroId))
+    const r2 = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(r2.kind).toBe("invalid")
 
     // Negative integers are not valid GitHub repo IDs.
     const negId = { ...SAMPLE_MANIFEST, githubRepoId: -5 }
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(negId))
-    const r3 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(negId))
+    const r3 = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(r3.kind).toBe("invalid")
 
     // Non-integer floats are not valid.
     const floatId = { ...SAMPLE_MANIFEST, githubRepoId: 808247824.5 }
-    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(floatId))
-    const r4 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(floatId))
+    const r4 = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(r4.kind).toBe("invalid")
   })
 

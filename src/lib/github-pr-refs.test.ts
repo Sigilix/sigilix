@@ -2,16 +2,16 @@ import { describe, expect, it } from "vitest"
 import { extractPullRequestRefs } from "@/src/lib/github-pr-refs"
 
 const noInfer = () => null
-const arcInfer = () => ({ owner: "Arc-and-Anchor", repo: "rema-portal" })
+const arcInfer = () => ({ owner: "Sigilix", repo: "rema-portal" })
 
 describe("extractPullRequestRefs", () => {
   it("extracts a full PR URL", () => {
     const refs = extractPullRequestRefs(
-      "is this done via https://github.com/Arc-and-Anchor/rema-portal/pull/162",
+      "is this done via https://github.com/Sigilix/rema-portal/pull/162",
       noInfer
     )
     expect(refs).toEqual([
-      { owner: "Arc-and-Anchor", repo: "rema-portal", number: 162, source: "url" },
+      { owner: "Sigilix", repo: "rema-portal", number: 162, source: "url" },
     ])
   })
 
@@ -53,7 +53,7 @@ describe("extractPullRequestRefs", () => {
   it("matches bare 'PR #N' when inferRepo returns a value", () => {
     const refs = extractPullRequestRefs("@arc this is technically done right via PR #162?", arcInfer)
     expect(refs).toEqual([
-      { owner: "Arc-and-Anchor", repo: "rema-portal", number: 162, source: "bare-pr-n" },
+      { owner: "Sigilix", repo: "rema-portal", number: 162, source: "bare-pr-n" },
     ])
   })
 
@@ -75,7 +75,7 @@ describe("extractPullRequestRefs", () => {
 
   it("extracts both full URL and bare PR in one comment", () => {
     const refs = extractPullRequestRefs(
-      "compare https://github.com/Arc-and-Anchor/rema-portal/pull/100 and PR #200",
+      "compare https://github.com/Sigilix/rema-portal/pull/100 and PR #200",
       arcInfer
     )
     expect(refs).toHaveLength(2)

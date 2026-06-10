@@ -91,7 +91,7 @@ function makeEnv(opts: {
 const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   v: 1,
   repo: "sigilix",
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   headSha: "a".repeat(40),
   runId: "0123456789abcdef",
   fileCount: 10,
@@ -107,12 +107,12 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
 
 function seedManifest(kv: Map<string, string>, over: Partial<RepoIndexManifestV1> = {}): void {
   // SIG-132: the producer reads the manifest under the job's
-  // `<owner>/<repo>` namespace (always "Arc-and-Anchor"/"sigilix" in
+  // `<owner>/<repo>` namespace (always "Sigilix"/"sigilix" in
   // these tests). The cross-tenant test overrides the BODY's owner to
   // "different-org" while the record still lives under the read key, so
   // the producer's `manifest.owner !== owner` guard fires.
   kv.set(
-    repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+    repoIndexManifestKey("Sigilix", "sigilix"),
     JSON.stringify({ ...SAMPLE_MANIFEST, ...over }),
   )
 }
@@ -133,7 +133,7 @@ afterEach(() => {
 })
 
 const baseArgs = {
-  owner: "Arc-and-Anchor",
+  owner: "Sigilix",
   repo: "sigilix",
   installationId: 99,
 }
@@ -185,7 +185,7 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     expect(outcome).toEqual({ enqueued: true, reason: "branch-delete" })
     expect(sent).toEqual([{
       type: "delete-repo-index",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       branch: "feature/remove-me",
       reason: "branch-deleted",
@@ -193,7 +193,7 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
   })
 
   it("skips sensitive repos before any GitHub I/O", async () => {
-    const { env, sent } = makeEnv({ sensitive: "arc-and-anchor/sigilix" })
+    const { env, sent } = makeEnv({ sensitive: "sigilix/sigilix" })
     const outcome = await maybeEnqueuePushIndexJob({
       env, ...baseArgs,
       ref: "refs/heads/main",
@@ -302,7 +302,7 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
     expect(sent).toEqual([{
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "push",
@@ -326,7 +326,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     expect(sent).toHaveLength(1)
     expect(sent[0]).toEqual({
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "push",
@@ -351,7 +351,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     expect(sent).toHaveLength(1)
     expect(sent[0]).toEqual({
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       githubRepoId: 808247824,
       installationId: 99,
@@ -404,7 +404,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
     expect(sent).toEqual([{
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "push",
@@ -416,7 +416,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     mockListOpenPullRequests.mockResolvedValue([
-      { head: { ref: "dev", repo: { full_name: "Arc-and-Anchor/sigilix" } } },
+      { head: { ref: "dev", repo: { full_name: "Sigilix/sigilix" } } },
     ])
     const outcome = await maybeEnqueuePushIndexJob({
       env, ...baseArgs,
@@ -445,7 +445,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     mockListOpenPullRequests.mockResolvedValue([
-      { head: { ref: "feature-branch", repo: { full_name: "Arc-and-Anchor/sigilix" } } },
+      { head: { ref: "feature-branch", repo: { full_name: "Sigilix/sigilix" } } },
     ])
     const outcome = await maybeEnqueuePushIndexJob({
       env, ...baseArgs,
@@ -455,7 +455,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
     expect(sent[0]).toMatchObject({
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       branch: "feature-branch",
       reason: "push",
@@ -477,7 +477,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
     })
     expect(sent).toEqual([{
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "pull-request",
@@ -513,14 +513,14 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
     expect(sent).toEqual([
       {
         type: "delete-repo-index",
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         branch: "feature-branch",
         reason: "pr-branch-closed",
       },
       {
         type: "index-repo",
-        owner: "Arc-and-Anchor",
+        owner: "Sigilix",
         repo: "sigilix",
         installationId: 99,
         reason: "merged-pr",
@@ -542,7 +542,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
     })
     expect(sent).toEqual([{
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "merged-pr",
@@ -571,7 +571,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
     })).rejects.toThrow("pull-request branch enqueue failures")
     expect(sent).toEqual([{
       type: "index-repo",
-      owner: "Arc-and-Anchor",
+      owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "merged-pr",

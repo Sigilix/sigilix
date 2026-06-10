@@ -75,7 +75,7 @@ describe("startInProgressCheckRun", () => {
     expect(handle!.id).toBe(7777)
     expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
     const [owner, repo, payload] = mockCreateCheckRun.mock.calls[0]!
-    expect(owner).toBe("Arc-and-Anchor")
+    expect(owner).toBe("Sigilix")
     expect(repo).toBe("sigilix")
     expect((payload as { name: string }).name).toBe(CHECK_RUN_NAME)
     expect((payload as { headSha: string }).headSha).toBe(baseArgs.headSha)
@@ -108,7 +108,7 @@ describe("startInProgressCheckRun", () => {
 // happy path returns a handle pointing at the threaded checkRunId.
 describe("SIG-220: attachExistingCheckRun", () => {
   const attachBaseArgs = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     installationId: 99,
     checkRunId: 4242,
@@ -120,7 +120,7 @@ describe("SIG-220: attachExistingCheckRun", () => {
 
     expect(handle).not.toBeNull()
     expect(handle!.id).toBe(4242)
-    expect(handle!.owner).toBe("Arc-and-Anchor")
+    expect(handle!.owner).toBe("Sigilix")
     expect(handle!.repo).toBe("sigilix")
     // Token acquisition is the only side effect — no createCheckRun
     // call, no listCheckRuns; we're attaching, not creating.
@@ -236,7 +236,7 @@ describe("SIG-220: attachExistingCheckRun", () => {
 // failures never throw).
 describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
   const orphanArgs = {
-    owner: "Arc-and-Anchor",
+    owner: "Sigilix",
     repo: "sigilix",
     installationId: 99,
     headSha: "a".repeat(40),
@@ -265,7 +265,7 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
       expect(payload.status).toBe("completed")
       expect(payload.conclusion).toBe("cancelled") // GitHub-terminal conclusion
     }
-    expect(mockListCheckRunsForRef).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", orphanArgs.headSha)
+    expect(mockListCheckRunsForRef).toHaveBeenCalledWith("Sigilix", "sigilix", orphanArgs.headSha)
   })
 
   it("applies the title/summary/conclusion override on the closed orphan (watchdog → timed_out)", async () => {
@@ -351,7 +351,7 @@ describe("completeCheckRun", () => {
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
     const [owner, repo, checkRunId, payload] = mockUpdateCheckRun.mock.calls[0]!
-    expect(owner).toBe("Arc-and-Anchor")
+    expect(owner).toBe("Sigilix")
     expect(repo).toBe("sigilix")
     expect(checkRunId).toBe(7777)
     const p = payload as { status: string; conclusion: string; output: { title: string; summary: string } }
@@ -464,7 +464,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("Approved — no issues found")
     expect(p.output.summary).toBe(
-      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+      "Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)",
     )
   })
 
@@ -484,7 +484,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("3 findings — changes requested")
     expect(p.output.summary).toBe(
-      "3 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+      "3 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)",
     )
   })
 
@@ -504,7 +504,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("2 non-blocking findings posted")
     expect(p.output.summary).toBe(
-      "2 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+      "2 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)",
     )
   })
 
@@ -525,7 +525,7 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("1 finding — changes requested")
     // SIG-216: singular "suggestion" in the Greptile-direction summary too.
     expect(p.output.summary).toBe(
-      "1 suggestion · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+      "1 suggestion · [View review](https://github.com/Sigilix/sigilix/pull/42)",
     )
   })
 
@@ -568,7 +568,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("Approved — no issues found") // title NOT decorated
     expect(p.output.summary).toBe(
-      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
+      "Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)" +
         ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/runner-verified.svg" alt="Runner verified: GitHub-signed receipt attests provenance">',
     )
   })
@@ -588,7 +588,7 @@ describe("completeCheckRun", () => {
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { summary: string } }
     expect(p.output.summary).toBe(
-      "3 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
+      "3 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)" +
         ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/runner-pending.svg" alt="Runner evidence pending: receipt expected">',
     )
   })
@@ -608,7 +608,7 @@ describe("completeCheckRun", () => {
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { summary: string } }
     expect(p.output.summary).toBe(
-      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+      "Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)",
     )
     expect(p.output.summary).not.toContain("<img")
   })

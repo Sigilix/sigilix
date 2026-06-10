@@ -116,7 +116,7 @@ describe("resolveRepoInstallationId", () => {
 
   it("returns the installation id on 200", async () => {
     stubFetch(async () => new Response(JSON.stringify({ id: 12345 }), { status: 200 }))
-    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "Arc-and-Anchor", "sigilix")).toBe(12345)
+    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "Sigilix", "sigilix")).toBe(12345)
   })
 
   it("returns null when the app isn't installed (non-OK status)", async () => {

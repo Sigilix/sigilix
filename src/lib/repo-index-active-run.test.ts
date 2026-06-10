@@ -20,7 +20,7 @@ function kvMock(initial: Record<string, string> = {}) {
 
 describe("activeRunKey", () => {
   it("keys by lowercased owner/repo namespace", () => {
-    expect(activeRunKey("Arc-and-Anchor", "Sigilix")).toBe("repo-index-active-run:arc-and-anchor/sigilix")
+    expect(activeRunKey("Sigilix", "Sigilix")).toBe("repo-index-active-run:sigilix/sigilix")
   })
 })
 

@@ -24,7 +24,7 @@ import type { Env } from "@/shared/types/env"
 import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/shared/domain/pr-review-finding"
 import type { SpecialistRole } from "@/shared/domain/specialist-role"
 import type { ValidationRejectionEvent } from "@/do/validation-metrics"
-import type { DeltaBadgeCounts } from "../../triage-pr-review"
+import type { DeltaBadgeCounts } from "../render/review-body"
 import { parseDiffToReviewablePositions } from "../../diff-positions"
 import {
   loadWithdrawals,

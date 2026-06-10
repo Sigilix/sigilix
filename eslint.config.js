@@ -13,10 +13,13 @@ import tseslint from "typescript-eslint"
 
 export default tseslint.config(
   {
-    // Apply to TypeScript source + tests only. The CLI script
-    // `scripts/index-repo.mjs` is a Node ESM module (no types) and
-    // gets the recommended JS rules below but not the TS parser.
-    files: ["src/**/*.ts", "tests/**/*.ts"],
+    // Apply to TypeScript source + tests only. Co-located unit tests live
+    // beside their subject under `src/**` (so the src glob already covers
+    // them); cross-cutting tests still live in `tests/**`; the evals-tool
+    // test lives in `evals/**`. The CLI script `scripts/index-repo.mjs` is a
+    // Node ESM module (no types) and gets the recommended JS rules below but
+    // not the TS parser.
+    files: ["src/**/*.ts", "tests/**/*.ts", "evals/**/*.test.ts"],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {

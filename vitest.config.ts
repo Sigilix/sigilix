@@ -44,7 +44,7 @@ export default defineConfig({
     },
   ],
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "evals/**/*.test.ts", "tests/**/*.test.ts"],
     environment: "node",
   },
   resolve: {
@@ -61,7 +61,7 @@ export default defineConfig({
       // wrangler ignore the alias.
       "cloudflare:workers": path.resolve(
         __dirname,
-        "./tests/_shims/cloudflare-workers-shim.ts",
+        "./src/test-shims/cloudflare-workers-shim.ts",
       ),
     },
   },

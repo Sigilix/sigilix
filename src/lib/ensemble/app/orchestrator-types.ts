@@ -40,6 +40,13 @@ import type { EnsembleConfig } from "../domain/config"
 import type { ValidationRejectionEvent } from "@/do/validation-metrics"
 import type { GraphRetrievalSample } from "@/do/graph-metrics"
 import type { GraphExpansionSample } from "@/do/graph-expansion-metrics"
+// SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>`
+// binding moved here from the orchestrator to land that file at <=1k lines. This is
+// `EnsembleTelemetry`'s natural co-location (the binding is one of its two named
+// consumers, per the header note above). Acyclic: `session.ts` never imports this
+// leaf. The orchestrator re-exports `EnsembleResult` so its public surface is
+// byte-identical.
+import type { EnsembleResult as EnsembleResultBase } from "./session"
 
 export interface EnsembleHandlerArgs {
   owner: string
@@ -405,3 +412,5 @@ export interface EnsembleTelemetry {
   startMs: number
   totalMs: number
 }
+
+export type EnsembleResult = EnsembleResultBase<EnsembleTelemetry>

@@ -9,15 +9,25 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 
 const here = dirname(fileURLToPath(import.meta.url))
+// SIG-318 (PR 12d): the SIG-276 Site-2 shadow-claim block + the findingMarkers
+// landmark it orders against moved verbatim from the orchestrator god-file into
+// the verification/marker pre-compute phase (ensemble/app/verification-prep.ts).
+// The block relocated as one unit, so the consumer-less ordering invariants this
+// guard pins (shadowRows / shadowMemoriesForPhase3 / shadowEvent all precede
+// findingMarkers) still hold within the carved file.
 const ENSEMBLE = readFileSync(
-  resolve(here, "../src/lib/triage-pr-review-ensemble.ts"),
+  resolve(here, "../src/lib/ensemble/app/verification-prep.ts"),
   "utf8",
 )
 
 // The marker-building declaration is the "start of the posting path" landmark
 // the ordering guards anchor on. One lookup, validated once (CodeRabbit #257).
+// SIG-318 (PR 12d): anchor on the marker-building STATEMENT (`const
+// findingMarkers ... = await Promise.all(`), not the bare type, since the carved
+// module's VerificationPrepResult interface also names `findingMarkers: Array<...>`
+// earlier in the file — only the await-statement is the posting-path landmark.
 function findingMarkersIdx(): number {
-  const idx = ENSEMBLE.indexOf("findingMarkers: Array<string | null>")
+  const idx = ENSEMBLE.indexOf("const findingMarkers: Array<string | null> = await Promise.all(")
   expect(idx).toBeGreaterThan(0)
   return idx
 }

@@ -19,6 +19,8 @@ import type { SpecialistRole } from "@/shared/domain/specialist-role"
 import type { PrReviewVerdict, PrReviewFinding } from "@/shared/domain/pr-review-finding"
 import type { SynthesizerProvenance } from "./validation"
 import type { PrReviewVerdictWithIds } from "./findings"
+import { filterWithdrawnFindings, type WithdrawalRecord } from "../../review-withdrawal-store"
+import type { ApprovalReadinessSourceFinding } from "../../approval-readiness"
 
 // SIG-318: the per-specialist verdict token cap, relocated with the synth-input
 // builder it bounds.
@@ -42,6 +44,27 @@ export function buildSynthInputVerdicts<T extends ApprovalReadinessSourceVerdict
     } as T & { verdict: PrReviewVerdictWithIds })
   }
   return out
+}
+
+// SIG-318 (PR 12d): the source-finding flattener relocated verbatim from the
+// god-file with the render-prep phase that calls it. Pure — flattens the synth-
+// input specialist verdicts to their (withdrawal-filtered) findings tagged with
+// role + verdict confidence, for approval-readiness assessment.
+export function collectApprovalReadinessSourceFindings(
+  sourceVerdicts: ReadonlyArray<ApprovalReadinessSourceVerdict>,
+  withdrawals: ReadonlyArray<WithdrawalRecord>,
+): ApprovalReadinessSourceFinding[] {
+  return sourceVerdicts.flatMap((v) => {
+    const verdict = v.verdict
+    if (!verdict) return []
+    const { kept } = filterWithdrawnFindings(verdict.findings, withdrawals)
+    return kept.map((finding) => ({
+      role: v.role,
+      id: finding.id,
+      finding,
+      verdictConfidence: verdict.confidence,
+    }))
+  })
 }
 
 /**

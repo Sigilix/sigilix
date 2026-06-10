@@ -75,8 +75,6 @@ import { GRAPH_EXPANSION_TIMEOUT_MS } from "../../domain/budget"
 import type { EnsembleConfig } from "../../domain/config"
 import {
   GRAPH_BLAST_PROMPT_CAP,
-  graphRetrievalEnabled,
-  graphRetrievalMode,
   formatGraphContext,
   formatGraphBlastContext,
   graphOverlapStats,
@@ -220,7 +218,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
     let graphBlastDependentPaths: string[] = []
     // SIG-143: blast paths folded into the prompt graph-context block (post mode).
     let graphBlastContextString = ""
-    if (graphRetrievalEnabled(env)) {
+    if (ensembleConfig.flags.graphRetrievalEnabled) {
       const graphRpcBudgetMs = ensembleConfig.tunables.graphRpcTimeoutMs
       try {
         // Seed from deduplicated chunk paths of the merged hit set.
@@ -315,7 +313,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
         console.log(JSON.stringify({
           event: "pr-review-graph-retrieval",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: graphRetrievalMode(env),
+          mode: ensembleConfig.flags.graphRetrievalMode,
           jaccard,
           added_count: addedCount,
           node_count: nodes.length,
@@ -329,7 +327,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
         // GraphMetricsDO (curl-able via /metrics/graph). Telemetry-only — fires
         // in both shadow and post, matching the log event above.
         a.graphMetricsSink?.push({
-          mode: graphRetrievalMode(env),
+          mode: ensembleConfig.flags.graphRetrievalMode,
           jaccard,
           addedCount,
           nodeCount: nodes.length,
@@ -359,7 +357,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
     // fires in both modes).
     // `let`: SIG-286 may APPEND a targeted cross-file expansion block below (in
     // OPENCLAW_GRAPH_EXPANSION=post mode) once `enriched` is computed.
-    let graphCtxForPrompt = graphRetrievalMode(env) === "post"
+    let graphCtxForPrompt = ensembleConfig.flags.graphRetrievalMode === "post"
       ? [graphContextString, graphBlastContextString].filter((s) => s.length > 0).join("\n")
       : ""
     // ──────────────────────────────────────────────────────────────────

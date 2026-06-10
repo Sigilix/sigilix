@@ -31,6 +31,12 @@ import { resolvePrecisionMode } from "@/features/precision-profile"
 import { parseReviewOutputSurface } from "../pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
+import {
+  parseGraphRetrievalEnabled,
+  parseGraphRetrievalMode,
+} from "./domain/graph-context-format"
+import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
+import type { Env } from "@/shared/types/env"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
@@ -77,6 +83,10 @@ export interface EnsembleConfigEnv {
   OPENCLAW_PRECISION_PROFILE_MODE?: string | undefined
   OPENCLAW_REVIEW_OUTPUT_SURFACE?: string | undefined
   OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT?: string | undefined
+  // the final flag reads (SIG-375)
+  OPENCLAW_GRAPH_RETRIEVAL?: string | undefined
+  OPENCLAW_SYNTH_BYPASS_ENABLED?: string | undefined
+  OPENCLAW_REVIEW_MANIFEST_ENABLED?: string | undefined
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
@@ -149,10 +159,53 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
       reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
       minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT),
+      // The final flag reads (SIG-375). graphRetrieval is read into BOTH an
+      // enabled-boolean and the effective mode (the two old helpers); the synth
+      // bypass is a parsed boolean; the manifest kill-switch is a default-on
+      // boolean (only `=== "off"` short-circuits — preserve the exact comparison).
+      graphRetrievalEnabled: parseGraphRetrievalEnabled(env.OPENCLAW_GRAPH_RETRIEVAL),
+      graphRetrievalMode: parseGraphRetrievalMode(env.OPENCLAW_GRAPH_RETRIEVAL),
+      synthBypassEnabled: parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED),
+      reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
     },
     tunables: {
       maxRetrieveCallsPerPr: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),
       graphRpcTimeoutMs: parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS),
     },
   }
+}
+
+// SIG-375 (SIG-318 env→Config): the env-taking flag wrappers. The src consumers
+// now read `EnsembleConfig.flags.*`; these thin edge wrappers (re-exported via the
+// god-file shim) keep the long-standing public helper names + their unit tests
+// working without re-introducing an env read into the domain. Each delegates to
+// the pure domain parser on the single OPENCLAW_ field it owns — byte-identical to
+// the helper bodies that used to live in the domain.
+
+/** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
+export function graphRetrievalEnabled(env: Env): boolean {
+  return parseGraphRetrievalEnabled(env.OPENCLAW_GRAPH_RETRIEVAL)
+}
+
+/** Returns the effective graph-retrieval mode: "off" | "shadow" | "post". */
+export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
+  return parseGraphRetrievalMode(env.OPENCLAW_GRAPH_RETRIEVAL)
+}
+
+/** Returns true when OPENCLAW_SYNTH_BYPASS_ENABLED is "on". */
+export function isSynthBypassEnabled(env: Env): boolean {
+  return parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED)
+}
+
+/**
+ * SIG-228 Phase 3c synth-bypass eligibility — env-taking wrapper around the pure
+ * `isSynthBypassEligible(enabled, …)` domain predicate (the unit tests pin it via
+ * this surface). Reads the flag once, then defers to the pure gate.
+ */
+export function isSynthBypassEligible(
+  env: Env,
+  dispatchedCount: number,
+  candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
+): boolean {
+  return isSynthBypassEligibleCore(parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED), dispatchedCount, candidates)
 }

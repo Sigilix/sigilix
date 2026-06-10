@@ -37,10 +37,14 @@ import type {
  * gracefully — never block the review flow.
  *
  * Skipped when the kill-switch is set: `OPENCLAW_REVIEW_MANIFEST_ENABLED=off`.
+ * SIG-375 (SIG-318 env→Config): the kill-switch is read once at the edge into
+ * `EnsembleConfig.flags.reviewManifestEnabled` and threaded in as `enabled`.
  */
 export async function writeReviewManifestForEnsemble(args: {
   env: Env
   client: GitHubClient
+  /** ARC-184: `OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off"` — false short-circuits the write. */
+  enabled: boolean
   owner: string
   repo: string
   prNumber: number
@@ -54,8 +58,8 @@ export async function writeReviewManifestForEnsemble(args: {
    *  delta (e.g., the review had zero findings to record). */
   findings?: ReviewManifestFinding[]
 }): Promise<void> {
-  const { env, client, owner, repo, prNumber, headSha, baseSha, modelId, reviewId, findings } = args
-  if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED === "off") return
+  const { env, client, enabled, owner, repo, prNumber, headSha, baseSha, modelId, reviewId, findings } = args
+  if (!enabled) return
   try {
     const [files, mergeBaseSha] = await Promise.all([
       client.listPullFilesForManifest(owner, repo, prNumber),
@@ -128,11 +132,19 @@ export async function writeTelemetry(env: Env, telemetry: EnsembleTelemetrySumma
  * closing over `env` (and, for the manifest, a `GitHubClient`). Today the
  * orchestrator calls the bare functions directly; PR 12 swaps those for this
  * port-typed handle.
+ *
+ * SIG-375 (SIG-318 env→Config): the manifest kill-switch is parsed once at the
+ * edge into `EnsembleConfig.flags.reviewManifestEnabled` and closed over here as
+ * `reviewManifestEnabled`, so the manifest write no longer reads `env` for the flag.
  */
-export function makePersistenceAdapter(env: Env, client: GitHubClient): EnsemblePersistencePort {
+export function makePersistenceAdapter(
+  env: Env,
+  client: GitHubClient,
+  reviewManifestEnabled: boolean,
+): EnsemblePersistencePort {
   return {
     writeReviewManifest(args) {
-      return writeReviewManifestForEnsemble({ env, client, ...args })
+      return writeReviewManifestForEnsemble({ env, client, enabled: reviewManifestEnabled, ...args })
     },
     incrementDailyBudget(by) {
       return incrementDailyBudget(env, by)

@@ -99,6 +99,18 @@ export interface EnsembleFeatureFlags {
   precisionProfileMode: PrecisionMode
   reviewOutputSurface: ReviewOutputSurface
   minSpecialistsEarlyExitMode: MinSpecialistsEarlyExitMode
+  /** `OPENCLAW_GRAPH_RETRIEVAL` is "shadow" | "post" (SIG-138). Drives the
+   *  graph-expansion DO calls in `gatherGraphEvidence`. */
+  graphRetrievalEnabled: boolean
+  /** Effective `OPENCLAW_GRAPH_RETRIEVAL` mode: "off" | "shadow" | "post". A raw
+   *  "post" is honored once `BLAST_RADIUS_RESOLUTION_READY` is true (SIG-143). */
+  graphRetrievalMode: "off" | "shadow" | "post"
+  /** `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"` (SIG-228 Phase 3c). Gates the
+   *  single-specialist no-major synth-skip optimization. */
+  synthBypassEnabled: boolean
+  /** `OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off"` (ARC-184). The review-provenance
+   *  manifest kill-switch — default-on; "off" short-circuits the manifest write. */
+  reviewManifestEnabled: boolean
 }
 
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed

@@ -87,10 +87,12 @@ export {
   buildSynthRetryMessage,
   truncateVerdictToTokens,
   buildAstFindingsSynthBlock,
-  isSynthBypassEnabled,
-  isSynthBypassEligible,
 } from "./ensemble/domain/synth"
 export type { ApprovalReadinessSourceVerdict, SynthAttemptOutcome } from "./ensemble/domain/synth"
+// SIG-375 (SIG-318 env→Config): the env-taking synth-bypass wrappers moved to the
+// `./ensemble/config` edge (the domain now exposes the pure boolean-taking gate).
+// Re-exported here so the public helper names + their unit tests stay unchanged.
+export { isSynthBypassEnabled, isSynthBypassEligible } from "./ensemble/config"
 
 // SIG-318 (PR 12g-3): the dynamic-evidence-block domain.
 export { resolveDynamicEvidencePromptBlock } from "./ensemble/domain/dynamic-evidence-block"
@@ -102,12 +104,14 @@ export type {
 // SIG-318 (PR 12g-2): the graph-context-format domain + the AST-scan-gate helper.
 export {
   BLAST_RADIUS_RESOLUTION_READY,
-  graphRetrievalEnabled,
-  graphRetrievalMode,
   formatGraphContext,
   formatGraphBlastContext,
   graphOverlapStats,
 } from "./ensemble/domain/graph-context-format"
+// SIG-375 (SIG-318 env→Config): the env-taking graph-retrieval wrappers moved to
+// the `./ensemble/config` edge (the domain now exposes the pure raw-string parsers).
+// Re-exported here so the public helper names + their unit tests stay unchanged.
+export { graphRetrievalEnabled, graphRetrievalMode } from "./ensemble/config"
 export { applyAstScanGate } from "./ensemble/domain/ast-scan-gate"
 
 // SIG-286: graphExpansionMode (the light module the metrics route imports).

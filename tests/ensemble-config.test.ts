@@ -187,6 +187,12 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_PRECISION_PROFILE_MODE: "enforce",
       OPENCLAW_REVIEW_OUTPUT_SURFACE: "annotations",
       OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT: "shadow",
+      // SIG-375: the final three flag reads. graphRetrieval drives both the
+      // enabled-boolean and the effective mode; bypass is `=== "on"`; manifest is
+      // the default-on `!== "off"` kill-switch.
+      OPENCLAW_GRAPH_RETRIEVAL: "shadow",
+      OPENCLAW_SYNTH_BYPASS_ENABLED: "on",
+      OPENCLAW_REVIEW_MANIFEST_ENABLED: "off",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -211,6 +217,14 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
       reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
       minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT),
+      // SIG-375: reproduce the EXACT pre-migration reads byte-for-byte —
+      // graphRetrievalEnabled was `v === "shadow" || v === "post"`, graphRetrievalMode
+      // honored post (BLAST_RADIUS_RESOLUTION_READY is true), bypass was `=== "on"`,
+      // manifest was the `!== "off"` kill-switch.
+      graphRetrievalEnabled: scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "shadow" || scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "post",
+      graphRetrievalMode: scanMode(env.OPENCLAW_GRAPH_RETRIEVAL),
+      synthBypassEnabled: scanMode(env.OPENCLAW_SYNTH_BYPASS_ENABLED) === "on",
+      reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
     })
   })
 
@@ -235,6 +249,14 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       precisionProfileMode: resolvePrecisionMode(undefined),
       reviewOutputSurface: parseReviewOutputSurface(undefined),
       minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(undefined),
+      // SIG-375: the final three flag reads. graphRetrieval defaults off (both the
+      // enabled-boolean and the mode); the synth bypass defaults off; the manifest
+      // kill-switch is default-ON (`undefined !== "off"` → true — only an explicit
+      // "off" short-circuits the write).
+      graphRetrievalEnabled: false,
+      graphRetrievalMode: "off",
+      synthBypassEnabled: false,
+      reviewManifestEnabled: true,
     })
   })
 

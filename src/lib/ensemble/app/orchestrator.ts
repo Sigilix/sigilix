@@ -909,6 +909,7 @@ export async function handlePrReviewEnsemble(
       deltaCounts,
       filesDroppedFromReview,
       currentFindingsForManifest,
+      reviewManifestEnabled: ensembleConfig.flags.reviewManifestEnabled,
       reviewEventOverride,
       trustLedgerMode,
       showEvidence,

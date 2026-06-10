@@ -3,6 +3,11 @@
 Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first. That's the team standard and it
 applies to you. This file adds the operating rules specific to working as an agent here.
 
+Also read [`COMPLIANCE.md`](./COMPLIANCE.md) — the structural rules CI enforces (the dependency
+rule, barrel-only imports, `@/` imports, the file-size budget) — and tell your point of contact
+(the engineer running you) you have read it. [`ENGINEERING.md`](./ENGINEERING.md) explains how
+the system is built and where code goes; read it before working in an unfamiliar area.
+
 ---
 
 ## The loop — every task

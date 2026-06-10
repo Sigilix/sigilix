@@ -3,6 +3,11 @@
 The engineering standard for this repo lives in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 It applies to AI agents too — read it.
 
+**Before you touch code, also read [`COMPLIANCE.md`](./COMPLIANCE.md)** — the structural rules
+CI enforces (the dependency rule, barrel-only imports, `@/` imports, the file-size budget) — and
+tell your point of contact (the engineer running you) that you have. Read
+[`ENGINEERING.md`](./ENGINEERING.md) to learn how the system is built and where code goes.
+
 If you're **Claude Code**, also read [`CLAUDE.md`](./CLAUDE.md) for the agent-specific
 operating rules (an internal code-review pass before the PR, and the bot-response gate).
 

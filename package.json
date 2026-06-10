@@ -21,7 +21,7 @@
     "performance-overfire-eval": "vitest run tests/performance-overfire-eval.live.test.ts",
     "tests-overfire-eval": "vitest run tests/tests-overfire-eval.live.test.ts",
     "synth-retention-eval": "vitest run tests/synth-retention-eval.live.test.ts",
-    "compare-reviewers": "tsx compare-reviewers/cli.ts",
+    "evals": "tsx evals/cli.ts",
     "retrieval-ab-report": "tsx scripts/retrieval-ab-report.ts",
     "phase4-calibrate": "tsx scripts/phase4-calibrate.ts",
     "collect-sig-161-findings": "tsx scripts/collect-sig-161-findings.ts",

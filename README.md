@@ -616,7 +616,7 @@ Sigilix runs a **deterministic dep-vuln scan** before the LLM specialist fanout 
 3. Computes the added/upgraded set as the `(name, version)` pairs in the head lockfile that differ from the base lockfile. Lockfile-only changes (e.g. `npm audit fix` bumps with no `package.json` edit) are detected.
 4. For each added/upgraded dep, looks it up in the bundled advisory DB and runs **range-aware** matching: a finding emits only when the version is inside a vulnerable range AND below the patch_in for THAT specific range. Multi-major advisories (e.g. patched in `1.4.2` AND `2.1.3`) are matched correctly without the false-negative trap of a global-min `>= patched_in` rule.
 
-**Bundled advisory DB:** `src/data/dep-vulns.json` — capped at **500 KB** (CI enforces). v1 ships 8 well-known historical advisories as a seed. Full curation lands in a quarterly operator-refresh PR per the §10a retention policy: all critical+high regardless of age, all medium from the last 12 months, top-N low by npm download count.
+**Bundled advisory DB:** `src/features/dep-vulns/domain/dep-vulns.json` — capped at **500 KB** (CI enforces). v1 ships 8 well-known historical advisories as a seed. Full curation lands in a quarterly operator-refresh PR per the §10a retention policy: all critical+high regardless of age, all medium from the last 12 months, top-N low by npm download count.
 
 **Strict missing-lockfile policy:** if the head lockfile is absent (gitignored, etc.), the scan emits `dep-vuln-scan-skipped { reason: "missing-lockfile" }` and exits cleanly. No `package.json`-only fallback in v1; deferred to v2.
 

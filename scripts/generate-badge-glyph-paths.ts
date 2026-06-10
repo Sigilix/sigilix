@@ -33,7 +33,7 @@ import {
   PRIORITY_BADGE_HEIGHT,
   PRIORITY_BADGE_WIDTH,
   categoryBadgeWidth,
-} from "../src/lib/badge-geometry"
+} from "@/lib/badge-geometry"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, "..")

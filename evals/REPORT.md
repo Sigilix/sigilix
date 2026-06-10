@@ -8,7 +8,7 @@
 > Re-judge and rerun on the shared Sigilix/CodeRabbit/Greptile PR set before
 > relying on the numbers.
 >
-> Regenerate the body with `npm run compare-reviewers -- summary`; this banner is
+> Regenerate the body with `npm run evals -- summary`; this banner is
 > manual and will need to be re-added after regeneration.
 
 _Generated 2026-06-07T14:58:00.441Z · 6 PR(s) collected, 6 labeled · 34 labeled issues._

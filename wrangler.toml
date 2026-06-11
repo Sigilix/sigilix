@@ -708,6 +708,29 @@ OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
 # flat, default-lane p50 unmoved. Rollback = flip back to "shadow"
 # (telemetry only) or "off" (inert); both are safe one-line changes.
 OPENCLAW_RESWEEP_MODE = "shadow"
+# SIG-395 — invariant lens (cross-cutting recall lever). Three-state rollout:
+#   "off"     — phase is inert: no dispatch evaluation, no model calls, no
+#               telemetry; verdicts pass through by reference (the pinned
+#               zero-change default in code).
+#   "shadow"  — the breadth gate + per-family preconditions decide which
+#               single-charge auditors to dispatch; dispatched auditors RUN
+#               (concurrent with the specialist fan-out — ~zero added
+#               wall-clock) and emit `invariant-lens-decision` /
+#               `invariant-lens-shadow-summary`, but candidates are NEVER
+#               merged — zero posted-output change. SHIPPING IN THIS STATE
+#               FIRST to measure family fire-rates + post-gate candidate
+#               survival on organic traffic before enforcement.
+#   "on"      — kept candidates (anchored-to-diff guard) merge into the
+#               protected logic verdict pre-synth and flow through the
+#               UNCHANGED validation/grounding/verification gates — no
+#               gate bypass, no new posting surface.
+#
+# Rollout: shadow soak alongside SIG-393's, then JOINT promotion of both
+# levers — one enforce flip, one frozen-fixture clone delta
+# (`evals score --pr --baseline`), post-gate high-sev FP flat, default-lane
+# p50 unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
+# (inert); both are safe one-line changes.
+OPENCLAW_INVARIANT_LENS_MODE = "shadow"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

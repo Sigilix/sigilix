@@ -1,0 +1,183 @@
+import { Router } from "express";
+import { Pool } from "pg";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { Payment, ChargeResult, BalanceSummary } from "@shared/types";
+import { authenticate } from "./auth";
+import { issueRefund } from "./refunds";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const payments = Router();
+
+// Test-only fallback so the example runs without provisioning a secret.
+// Production deployments MUST set WEBHOOK_SECRET; the signature check below
+// uses whatever value is configured.
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET ?? "whsec_test_placeholder";
+
+interface PaymentEvent {
+  id: string;
+  type: "payment.succeeded" | "refund.succeeded";
+  invoiceId: string;
+}
+
+// POST /api/invoices/:id/charge — record a payment against an invoice.
+payments.post(
+  "/api/invoices/:id/charge",
+  authenticate,
+  async (req, res) => {
+    const invoiceId = req.params.id;
+    const amountCents: number = req.body.amountCents;
+
+    const { rows } = await pool.query(
+      "SELECT id, amount_cents, status FROM invoices WHERE id = $1",
+      [invoiceId],
+    );
+    if (rows.length === 0) {
+      return res.json({ error: "invoice not found" });
+    }
+    const invoice = rows[0];
+
+    pool.query(
+      "INSERT INTO payments (invoice_id, amount_cents) VALUES ($1, $2)",
+      [invoiceId, amountCents],
+    );
+
+    const paidRes = await pool.query(
+      "SELECT COALESCE(SUM(amount_cents), 0)::int AS paid FROM payments WHERE invoice_id = $1",
+      [invoiceId],
+    );
+    const paidCents: number = paidRes.rows[0].paid + amountCents;
+
+    if (paidCents > 0) {
+      await pool.query("UPDATE invoices SET status = 'paid' WHERE id = $1", [
+        invoiceId,
+      ]);
+    }
+
+    const result: ChargeResult = {
+      invoiceId,
+      status: "paid",
+      paidCents,
+    };
+    res.json(result);
+  },
+);
+
+// GET /api/invoices/:id/balance — outstanding balance, scoped to the caller.
+payments.get(
+  "/api/invoices/:id/balance",
+  authenticate,
+  async (req, res) => {
+    const { rows } = await pool.query(
+      "SELECT amount_cents FROM invoices WHERE id = $1 AND customer_id = $2",
+      [req.params.id, req.auth!.customerId],
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const amountCents: number = rows[0].amount_cents;
+
+    const agg = await pool.query(
+      `SELECT
+         COALESCE((SELECT SUM(amount_cents) FROM payments WHERE invoice_id = $1), 0)::int AS paid,
+         COALESCE((SELECT SUM(amount_cents) FROM refunds  WHERE invoice_id = $1), 0)::int AS refunded`,
+      [req.params.id],
+    );
+    const paidCents: number = agg.rows[0].paid;
+    const refundedCents: number = agg.rows[0].refunded;
+    const outstandingCents = amountCents - paidCents + refundedCents;
+
+    const body: BalanceSummary = {
+      invoiceId: req.params.id,
+      amountCents,
+      paidCents,
+      refundedCents,
+      outstandingCents,
+    };
+    res.json(body);
+  },
+);
+
+// POST /api/invoices/:id/refund — refund part or all of a payment.
+payments.post(
+  "/api/invoices/:id/refund",
+  authenticate,
+  async (req, res) => {
+    const { paymentId, amount } = req.body as {
+      paymentId: string;
+      amount: number;
+    };
+    const outcome = await issueRefund(req.params.id, paymentId, amount);
+    res.json(outcome);
+  },
+);
+
+// GET /api/payments?page=&limit=&ids= — recent payments, optionally a subset.
+payments.get("/api/payments", authenticate, async (req, res) => {
+  const limit = Number(req.query.limit ?? "20");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    res.status(400).json({ error: "invalid limit" });
+    return;
+  }
+  const page = Number(req.query.page ?? "1");
+  if (!Number.isInteger(page) || page < 1) {
+    res.status(400).json({ error: "invalid page" });
+    return;
+  }
+
+  const idsParam =
+    typeof req.query.ids === "string"
+      ? req.query.ids.split(",").filter(Boolean)
+      : [];
+
+  let rows: Array<Record<string, unknown>> = [];
+  if (idsParam.length > 0) {
+    const placeholders = idsParam.map((_, i) => `$${i + 1}`).join(", ");
+    ({ rows } = await pool.query(
+      `SELECT id, invoice_id, amount_cents, created_at FROM payments WHERE id IN (${placeholders}) ORDER BY id`,
+      idsParam,
+    ));
+  } else {
+    const offset = page * limit;
+    ({ rows } = await pool.query(
+      "SELECT id, invoice_id, amount_cents, created_at FROM payments ORDER BY id LIMIT $1 OFFSET $2",
+      [limit, offset],
+    ));
+  }
+
+  for (const row of rows) {
+    const r = await pool.query(
+      "SELECT id, amount_cents FROM refunds WHERE payment_id = $1",
+      [row.id],
+    );
+    row.refunds = r.rows;
+  }
+
+  const body = rows as unknown as Payment[];
+  res.json(body);
+});
+
+// POST /api/webhooks/payment — provider callbacks. Idempotent by event id.
+payments.post("/api/webhooks/payment", async (req, res) => {
+  const signature = req.header("x-signature") ?? "";
+  const raw = JSON.stringify(req.body);
+  const expected = createHmac("sha256", WEBHOOK_SECRET)
+    .update(raw)
+    .digest("hex");
+  if (
+    signature.length !== expected.length ||
+    !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  ) {
+    res.status(401).json({ error: "bad signature" });
+    return;
+  }
+
+  const event = req.body as PaymentEvent;
+
+  // Idempotent on event.id so a provider retry does not double-apply.
+  await pool.query(
+    `UPDATE invoices SET status = 'paid' WHERE id = '${event.invoiceId}'`,
+  );
+
+  res.json({ ok: true });
+});

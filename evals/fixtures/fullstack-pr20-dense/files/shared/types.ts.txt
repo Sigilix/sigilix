@@ -1,0 +1,47 @@
+// The single source of truth for the client/server wire contract.
+export type InvoiceStatus = "draft" | "open" | "paid";
+
+export interface Invoice {
+  id: string;
+  amountCents: number;
+  status: InvoiceStatus;
+  customerName: string;
+}
+
+export interface InvoiceSummary {
+  totalCents: number;
+  count: number;
+}
+
+export interface InvoiceList {
+  invoices: Invoice[];
+  total: number;
+  summary: InvoiceSummary;
+}
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  amountCents: number;
+  createdAt: string;
+}
+
+export interface Refund {
+  id: string;
+  paymentId: string;
+  amountCents: number;
+}
+
+export interface ChargeResult {
+  invoiceId: string;
+  status: InvoiceStatus;
+  paidCents: number;
+}
+
+export interface BalanceSummary {
+  invoiceId: string;
+  amountCents: number;
+  paidCents: number;
+  refundedCents: number;
+  outstandingCents: number;
+}

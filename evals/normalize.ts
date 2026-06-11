@@ -70,15 +70,20 @@ export function matchableBody(body: string): string {
     .trim()
 }
 
-/** Parse the hidden Sigilix severity score into a P-label; null for other tools / no marker. */
+/**
+ * Parse the hidden Sigilix severity score into a P-label; null for other
+ * tools, no marker, or a score outside the engine's 1-5 scale (an invalid
+ * score must not masquerade as P0/P3 and distort high-sev-FP metrics).
+ */
 export function sigilixSeverity(body: string): Severity | null {
   const m = SIGILIX_SEVERITY_MARKER.exec(body)
   if (!m) return null
   const score = Number(m[1])
-  if (score >= 5) return "P0"
+  if (score === 5) return "P0"
   if (score === 4) return "P1"
   if (score === 3) return "P2"
-  return "P3"
+  if (score === 2 || score === 1) return "P3"
+  return null
 }
 
 function sigilixCategory(body: string): string | undefined {

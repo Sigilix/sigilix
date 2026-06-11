@@ -45,6 +45,9 @@ function clauseMatches(clause: MatcherClause, paths: string[], finding: FixtureF
 }
 
 function ruleMatches(rule: EquivalenceRule, paths: string[], finding: FixtureFinding): boolean {
+  if (rule.anyOf.length === 0) {
+    throw new Error("equivalence rule has empty anyOf — the row would be silently uncatchable, corrupting recall")
+  }
   return rule.anyOf.some((clause) => clauseMatches(clause, paths, finding))
 }
 
@@ -190,6 +193,12 @@ export function formatScoreMarkdown(score: FixtureScore): string {
 
 /** Δ block comparing a lever run against the frozen baseline. */
 export function formatDeltaMarkdown(baseline: FixtureScore, current: FixtureScore, label: string): string {
+  if (baseline.fixture !== current.fixture || baseline.tool !== current.tool) {
+    throw new Error(
+      `delta requires matching scores: baseline is ${baseline.fixture}/${baseline.tool}, ` +
+        `current is ${current.fixture}/${current.tool}`,
+    )
+  }
   const d = (a: number | null, b: number | null): string =>
     a === null || b === null ? "—" : `${b - a >= 0 ? "+" : ""}${((b - a) * 100).toFixed(1)}pp`
   const lines: string[] = []

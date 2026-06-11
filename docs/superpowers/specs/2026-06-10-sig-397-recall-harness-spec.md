@@ -43,7 +43,7 @@ interface FixtureGroundTruth {
   traps: GroundTruthTrap[];
 }
 interface GroundTruthBug {
-  id: string;                       // "b1".."b19"
+  id: string;                       // "b1".."b20"
   title: string;                    // one-line description from the reconciled doc
   paths: string[];                  // file(s) whose change contains the bug
   lineRanges: Array<[number, number]>; // head-sha line spans (derived from the diff during impl)

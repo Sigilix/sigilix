@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { greptileLoginsFromEnv } from "./env"
 import { fetchPrUrl, fetchReviewComments } from "./github"
-import { comparisonBasename, mergeComparison, parseTarget } from "./io"
+import { comparisonBasename, mergeComparison, parseTarget, scoreTargetFromArgs } from "./io"
 import { normalizeFindings, normalizeFixtureFindings } from "./normalize"
 import { formatDeltaMarkdown, formatScoreMarkdown, scoreFixture } from "./scorer"
 import { formatSummaryMarkdown, summarize } from "./summary"
@@ -294,10 +294,8 @@ async function main(): Promise<void> {
     case "score": {
       const scoreOpts: Parameters<typeof cmdScore>[0] = { tool: values.tool ?? "sigilix" }
       if (values.fixture) scoreOpts.fixture = values.fixture
-      // Live re-collect accepts both forms: a positional / --repo OWNER/REPO[#N]
-      // (optionally split across --pr), or --pr alone carrying OWNER/REPO#N.
-      if (repo) scoreOpts.pr = values.pr ? `${repo}#${values.pr}` : repo
-      else if (values.pr?.includes("/")) scoreOpts.pr = values.pr
+      const target = scoreTargetFromArgs(repo, values.pr)
+      if (target) scoreOpts.pr = target
       if (values.findings) scoreOpts.findingsPath = values.findings
       if (values.baseline) scoreOpts.baseline = values.baseline
       if (values.label) scoreOpts.label = values.label

@@ -1,5 +1,16 @@
 # Benchmark ground truth — sigilix-e2e-fullstack — "payments & refunds" (RECONCILED)
 
+> **⚠️ Historical document — superseded by the machine truth.** This is the Jun-9
+> hand-written manifest, preserved verbatim as provenance. Its prose denominators
+> are internally stale (it says "18 rows"/÷18/÷13/÷6 while its own table lists 19
+> rows / 14 P0-P1 / 7 UNGODLY), and it predates **b20** (webhook HMAC over
+> re-serialized JSON — Greptile's unique catch, verified real in the diff).
+> The authoritative, internally-consistent version is
+> `evals/fixtures/fullstack-pr20-dense/ground-truth.json` (20 rows / 15 P0-P1 /
+> 7 UNGODLY); the scorer derives all denominators from that JSON, never from
+> this prose. Do not "fix" the numbers below — the calibration tests pin the
+> JSON, and this document records what the human scoring actually said.
+
 Branch `pr/11-payments-refunds`, commit 2a3bc30. Head-to-head: Sigilix vs CodeRabbit vs
 Greptile, blind, same diff/moment. Ground truth hand-verified by an independent blind
 bug-hunt (code-reviewer) + adversarial label audit (DeepSeek-v4-pro). Code is UNCHANGED;

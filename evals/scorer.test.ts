@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { classifyFinding, formatDeltaMarkdown, formatScoreMarkdown, scoreFixture } from "./scorer"
 import { matchableBody, sigilixSeverity } from "./normalize"
+import { scoreTargetFromArgs } from "./io"
 import type { FixtureFinding, FixtureGroundTruth } from "./fixture-types"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -49,6 +50,11 @@ describe("sigilixSeverity", () => {
     expect(sigilixSeverity("<!-- sigilix:severity:2 -->")).toBe("P3")
     expect(sigilixSeverity("<!-- sigilix:severity:1 -->")).toBe("P3")
     expect(sigilixSeverity("no marker")).toBeNull()
+  })
+
+  it("rejects scores outside the engine's 1-5 scale instead of coercing", () => {
+    expect(sigilixSeverity("<!-- sigilix:severity:0 -->")).toBeNull()
+    expect(sigilixSeverity("<!-- sigilix:severity:99 -->")).toBeNull()
   })
 })
 
@@ -159,6 +165,16 @@ describe("classifyFinding", () => {
     expect(classifyFinding(SYNTH_TRUTH, covered)).toEqual({ kind: "out_of_scope", id: "coverage" })
     const notCovered = finding({ ref: "f2", bodyText: "alpha ships without tests", botCategory: "logic" })
     expect(classifyFinding(SYNTH_TRUTH, notCovered)).toEqual({ kind: "bug", id: "x1" })
+  })
+
+  it("an empty anyOf rule throws — the row would be silently uncatchable", () => {
+    const bad: FixtureGroundTruth = {
+      ...SYNTH_TRUTH,
+      bugs: [{ ...SYNTH_TRUTH.bugs[0]!, match: { anyOf: [] } }],
+      traps: [],
+      outOfScope: [],
+    }
+    expect(() => classifyFinding(bad, finding({ ref: "f1", bodyText: "alpha" }))).toThrow(/empty anyOf/)
   })
 
   it("an empty allKeywords clause is rejected — line proximity alone is not a matcher", () => {
@@ -292,6 +308,28 @@ describe("calibration — fullstack-low-density control (Jun-6 labels)", () => {
   })
 })
 
+// ─── score CLI target routing ────────────────────────────────────
+
+describe("scoreTargetFromArgs", () => {
+  it("no repo and no --pr → frozen snapshot (undefined)", () => {
+    expect(scoreTargetFromArgs(undefined, undefined)).toBeUndefined()
+    expect(scoreTargetFromArgs(undefined, "")).toBeUndefined()
+  })
+
+  it("positional/--repo forms resolve to a live target", () => {
+    expect(scoreTargetFromArgs("Sigilix/sigilix-e2e-fullstack#20", undefined)).toBe("Sigilix/sigilix-e2e-fullstack#20")
+    expect(scoreTargetFromArgs("Sigilix/sigilix-e2e-fullstack", "20")).toBe("Sigilix/sigilix-e2e-fullstack#20")
+  })
+
+  it("--pr alone carrying OWNER/REPO#N resolves to a live target", () => {
+    expect(scoreTargetFromArgs(undefined, "Sigilix/sigilix-e2e-fullstack#20")).toBe("Sigilix/sigilix-e2e-fullstack#20")
+  })
+
+  it("a numeric --pr without a repo fails fast instead of silently scoring the snapshot", () => {
+    expect(() => scoreTargetFromArgs(undefined, "20")).toThrow(/without --repo/)
+  })
+})
+
 // ─── report formatting ───────────────────────────────────────────
 
 describe("report formatting", () => {
@@ -304,6 +342,13 @@ describe("report formatting", () => {
     expect(md).toContain("| Precision | 90.9% (10/11) |")
     expect(md).toContain("| High-sev false positives | 1 |")
     expect(md).toContain("Missed: b4, b5, b8, b10, b12, b14, b15, b16, b17, b18, b19, b20")
+  })
+
+  it("delta refuses mismatched fixture/tool score pairs", () => {
+    const other = { ...base, fixture: "fullstack-low-density" }
+    expect(() => formatDeltaMarkdown(base, other, "x")).toThrow(/matching scores/)
+    const otherTool = { ...base, tool: "greptile" as const }
+    expect(() => formatDeltaMarkdown(base, otherTool, "x")).toThrow(/matching scores/)
   })
 
   it("delta markdown reports pp deltas vs a baseline", () => {

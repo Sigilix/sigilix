@@ -3,7 +3,12 @@
 // served via a stubbed global fetch). Mocks: the receipt DO + the KV binding.
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
+import {
+  handleRunnerIngestRoute,
+  normalizeScanManifest,
+  scanManifestSummary,
+  type NormalizedScanManifestTool,
+} from "@/src/lib/runner-ingest-route"
 import { __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
 import { RunnerReceiptDO } from "@/src/do/runner-receipt"
 import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
@@ -15,6 +20,30 @@ const AUD = "sigilix-runner-ingest"
 const KID = "test-kid-1"
 const WORKFLOW = "sigilix/runner/.github/workflows/scan.yml"
 const VALID_SARIF = JSON.stringify({ version: "2.1.0", runs: [] })
+const VALID_SCAN_MANIFEST = JSON.stringify({
+  schemaVersion: 1,
+  tools: [
+    {
+      toolId: "semgrep",
+      enabled: true,
+      status: "empty",
+      path: "/tmp/runner/sarif/semgrep.sarif",
+      runCount: 0,
+      resultCount: 0,
+    },
+  ],
+  summary: { enabled: 999, produced: 999, empty: 999, missing: 999, invalid: 999 },
+})
+const EXPECTED_SCAN_MANIFEST = JSON.stringify({
+  schemaVersion: 1,
+  tools: [{ toolId: "semgrep", enabled: true, status: "empty", runCount: 0, resultCount: 0 }],
+  summary: { enabled: 1, produced: 0, empty: 1, missing: 0, invalid: 0 },
+})
+
+async function sha256Hex(raw: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw))
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("")
+}
 
 function b64url(bytes: Uint8Array): string {
   let s = ""
@@ -69,7 +98,7 @@ const baseClaims: GitHubOidcClaims = {
 }
 
 function makeReceiptDo() {
-  const store = new Map<string, string>() // key → sarifSha256
+  const store = new Map<string, { sarifSha256: string; scanManifestSha256?: string }>()
   let throwOnClaim = false
   const ns = {
     idFromName: (id: string) => ({ id }),
@@ -80,16 +109,20 @@ function makeReceiptDo() {
         runId: string
         runAttempt: string
         sarifSha256: string
+        scanManifestSha256?: string
       }) {
         if (throwOnClaim) throw new Error("do down")
         const k = `${args.repositoryId}:${args.sha}:${args.runId}:${args.runAttempt}`
         const existing = store.get(k)
         if (existing === undefined) {
-          store.set(k, args.sarifSha256)
+          store.set(k, {
+            sarifSha256: args.sarifSha256,
+            ...(args.scanManifestSha256 !== undefined ? { scanManifestSha256: args.scanManifestSha256 } : {}),
+          })
           return { outcome: "accepted" as const }
         }
-        if (existing === args.sarifSha256) return { outcome: "duplicate" as const }
-        return { outcome: "conflict" as const, existingSarifSha256: existing }
+        if (existing.sarifSha256 === args.sarifSha256) return { outcome: "duplicate" as const }
+        return { outcome: "conflict" as const, existingSarifSha256: existing.sarifSha256 }
       },
     }),
   }
@@ -152,6 +185,99 @@ const envelope = (over: Record<string, unknown> = {}) => ({
   repository: "Sigilix/sigilix",
   sha: "deadbeef",
   ...over,
+})
+
+describe("scanManifestSummary", () => {
+  it("counts enabled produced, empty, missing, and invalid tools while skipping disabled tools", () => {
+    const tools: NormalizedScanManifestTool[] = [
+      { toolId: "semgrep", enabled: true, status: "produced", resultCount: 2 },
+      { toolId: "eslint", enabled: true, status: "empty", resultCount: 0 },
+      { toolId: "ruff", enabled: true, status: "missing-output" },
+      { toolId: "shellcheck", enabled: true, status: "invalid-output" },
+      { toolId: "actionlint", enabled: false, status: "disabled" },
+    ]
+
+    expect(scanManifestSummary(tools)).toEqual({ enabled: 4, produced: 1, empty: 1, missing: 1, invalid: 1 })
+  })
+
+  it("skips contradictory enabled+disabled entries defensively", () => {
+    const tools = [{ toolId: "semgrep", enabled: true, status: "disabled" }] as NormalizedScanManifestTool[]
+
+    expect(scanManifestSummary(tools)).toEqual({ enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 })
+  })
+
+  it("returns zero counts for an empty manifest", () => {
+    expect(scanManifestSummary([])).toEqual({ enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 })
+  })
+})
+
+describe("normalizeScanManifest", () => {
+  const rawManifest = (tools: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ schemaVersion: 1, tools, summary: { stale: true }, ...extra })
+
+  it("normalizes tools, strips runner paths, and recomputes summary", () => {
+    const normalized = normalizeScanManifest(
+      rawManifest([
+        {
+          toolId: "semgrep",
+          enabled: true,
+          status: "produced",
+          path: "/tmp/runner/sarif/semgrep.sarif",
+          runCount: 1,
+          resultCount: 2,
+        },
+        { toolId: "eslint", enabled: false, status: "disabled" },
+      ]),
+    )
+
+    expect(normalized).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [
+          { toolId: "semgrep", enabled: true, status: "produced", runCount: 1, resultCount: 2 },
+          { toolId: "eslint", enabled: false, status: "disabled" },
+        ],
+        summary: { enabled: 1, produced: 1, empty: 0, missing: 0, invalid: 0 },
+      }),
+    )
+  })
+
+  it("accepts an empty tools array and recomputes zero summary counts", () => {
+    expect(normalizeScanManifest(rawManifest([]))).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [],
+        summary: { enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 },
+      }),
+    )
+  })
+
+  it("rejects malformed manifest structure and tool entries", () => {
+    const invalidManifests = [
+      "{",
+      "x".repeat(64 * 1024 + 1),
+      JSON.stringify({ schemaVersion: 2, tools: [] }),
+      JSON.stringify({ schemaVersion: 1, tools: "semgrep" }),
+      rawManifest(Array.from({ length: 14 }, () => ({ toolId: "semgrep", enabled: true, status: "empty" }))),
+      rawManifest([null]),
+      rawManifest([{ toolId: "bandit", enabled: true, status: "empty" }]),
+      rawManifest([
+        { toolId: "semgrep", enabled: true, status: "empty" },
+        { toolId: "semgrep", enabled: true, status: "empty" },
+      ]),
+      rawManifest([{ toolId: "semgrep", status: "empty" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "unknown" }]),
+      rawManifest([{ toolId: "semgrep", enabled: false, status: "empty" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "disabled" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", path: "x".repeat(1025) }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", runCount: -1 }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", resultCount: 1.5 }]),
+    ]
+
+    for (const manifest of invalidManifests) {
+      expect(normalizeScanManifest(manifest)).toBeNull()
+    }
+  })
 })
 
 afterEach(() => {
@@ -242,6 +368,29 @@ describe("handleRunnerIngestRoute", () => {
     expect(res.status).toBe(400)
   })
 
+  it("400 on malformed or unknown-tool scan manifests before claiming a receipt", async () => {
+    stubJwksFetch()
+    const tok = await signToken(baseClaims)
+    for (const scanManifest of [
+      JSON.stringify({ schemaVersion: 1, tools: [null], summary: {} }),
+      JSON.stringify({ schemaVersion: 1, tools: [{ toolId: "bandit", enabled: true, status: "empty" }] }),
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [
+          { toolId: "semgrep", enabled: true, status: "empty" },
+          { toolId: "semgrep", enabled: true, status: "empty" },
+        ],
+      }),
+    ]) {
+      const { ns, store } = makeReceiptDo()
+      const { kv } = makeKv()
+      const res = await handleRunnerIngestRoute(post(envelope({ scanManifest }), tok), makeEnv({}, ns, kv))
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { error: string }).error).toBe("bad-scan-manifest")
+      expect(store.size).toBe(0)
+    }
+  })
+
   it("403 when the envelope repo doesn't match the token (provenance binding)", async () => {
     stubJwksFetch()
     const { ns } = makeReceiptDo()
@@ -273,12 +422,15 @@ describe("handleRunnerIngestRoute", () => {
     expect(((await res.json()) as { error: string }).error).toBe("bad-sarif")
   })
 
-  it("200 accepted on the happy path + persists the receipt to KV", async () => {
+  it("200 accepted on the happy path + persists the receipt and scan manifest to KV", async () => {
     stubJwksFetch()
     const { ns, store } = makeReceiptDo()
     const kvWrap = makeKv()
     const tok = await signToken(baseClaims)
-    const res = await handleRunnerIngestRoute(post(envelope(), tok), makeEnv({}, ns, kvWrap.kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope({ scanManifest: VALID_SCAN_MANIFEST }), tok),
+      makeEnv({}, ns, kvWrap.kv),
+    )
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({
       ok: true,
@@ -286,7 +438,11 @@ describe("handleRunnerIngestRoute", () => {
       receipt: { repository: "Sigilix/sigilix", sha: "deadbeef", runId: "555", runAttempt: "1" },
     })
     expect(store.size).toBe(1)
+    expect([...store.values()][0]?.scanManifestSha256).toBe(await sha256Hex(EXPECTED_SCAN_MANIFEST))
     expect([...kvWrap.store.keys()][0]).toBe("runner-receipt:repo:424242:deadbeef:555:1")
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { scanManifest?: string }
+    expect(stored.scanManifest).toBe(EXPECTED_SCAN_MANIFEST)
+    expect(stored.scanManifest).not.toContain("path")
   })
 
   it("derives the review-join pull_number from the SIGNED claims.ref (refs/pull/N/merge), NOT the body (CR-4)", async () => {

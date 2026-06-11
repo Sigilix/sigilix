@@ -5,6 +5,7 @@
 
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { DeterministicCheck } from "@/src/shared/domain/deterministic-checks"
+import { RUNNER_TOOL_IDS, type RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
 export const SIGILIX_CONFIG_PATH = "sigilix.json"
 
@@ -189,9 +190,10 @@ export interface SigilixConfig {
 
   /**
    * SIG-107: per-repo enablement for deterministic linter tools run
-   * by the runner workflow. All known tools default enabled at
-   * resolution time; repo config can explicitly disable individual
-   * tools with `{ enabled: false }` or strict boolean shorthand.
+   * by the runner workflow. Defaults come from the runner tool profile;
+   * adding a tool to the catalog does not automatically enable it.
+   * Repo config can explicitly enable or disable individual tools with
+   * `{ enabled: boolean }` or strict boolean shorthand.
    */
   linters?: Partial<Record<LinterId, LinterConfig>>
 
@@ -455,9 +457,9 @@ export interface DispatcherSafetyNetPattern {
   role: SpecialistRole
 }
 
-export const LINTER_IDS = ["semgrep", "eslint", "ruff", "actionlint", "shellcheck"] as const
+export const LINTER_IDS = RUNNER_TOOL_IDS
 
-export type LinterId = (typeof LINTER_IDS)[number]
+export type LinterId = RunnerToolId
 
 export interface LinterConfig {
   enabled?: boolean

@@ -287,6 +287,9 @@ describe("runSarifEvidence — runner metadata", () => {
         ruleId: "syntax-check",
       },
       { toolId: "shellcheck", toolName: "ShellCheck", path: "scripts/build.sh", line: 5, ruleId: "SC2086" },
+      { toolId: "gitleaks", toolName: "gitleaks", path: "src/secrets.ts", line: 6, ruleId: "gitleaks:generic" },
+      { toolId: "osv-scanner", toolName: "OSV-Scanner", path: "package-lock.json", line: 7, ruleId: "GHSA-xxxx" },
+      { toolId: "checkov", toolName: "Checkov", path: "main.tf", line: 8, ruleId: "CKV_AWS_1" },
     ].map(({ toolId, toolName, path, line, ruleId }) => ({
       tool: { driver: { name: toolName, properties: runnerMetadata(toolId) } },
       results: [
@@ -309,6 +312,9 @@ describe("runSarifEvidence — runner metadata", () => {
         { path: "src/app.py", line: 3 },
         { path: ".github/workflows/ci.yml", line: 4 },
         { path: "scripts/build.sh", line: 5 },
+        { path: "src/secrets.ts", line: 6 },
+        { path: "package-lock.json", line: 7 },
+        { path: "main.tf", line: 8 },
       ]),
       config: DEFAULT_CONFIG,
     })
@@ -320,7 +326,19 @@ describe("runSarifEvidence — runner metadata", () => {
     expect(byTool.get("ruff")?.roleHints).toEqual(["logic", "performance"])
     expect(byTool.get("actionlint")?.roleHints).toEqual(["logic", "security"])
     expect(byTool.get("shellcheck")?.roleHints).toEqual(["security", "logic"])
-    for (const toolId of ["semgrep", "eslint", "ruff", "actionlint", "shellcheck"]) {
+    expect(byTool.get("gitleaks")?.roleHints).toEqual(["security"])
+    expect(byTool.get("osv-scanner")?.roleHints).toEqual(["security"])
+    expect(byTool.get("checkov")?.roleHints).toEqual(["security"])
+    for (const toolId of [
+      "semgrep",
+      "eslint",
+      "ruff",
+      "actionlint",
+      "shellcheck",
+      "gitleaks",
+      "osv-scanner",
+      "checkov",
+    ]) {
       expect(byTool.get(toolId)?.source).toBe("deterministic-tool")
     }
   })

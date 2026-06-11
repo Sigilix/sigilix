@@ -17,14 +17,20 @@
 // Plan-v1 BLOCKING from Codex: `taxa` lives on `result`, not `rule`.
 // Resolver signature takes both + run-level taxa + tool name.
 
-import type { SarifFindingCategory, SarifResult, SarifRule, SarifTaxa, RoleHint } from "./types"
+import { parseRunnerMetadata } from "./runner-metadata"
+import type { SarifFindingCategory, SarifResult, SarifRule, SarifTaxa, RoleHint, SarifEvidenceSource } from "./types"
+import type { RunnerToolId } from "./runner-metadata"
 
 export interface TaxonomyResolution {
   category: SarifFindingCategory
   roleHint: RoleHint
+  roleHints?: RoleHint[]
   /** Whether the rule was tagged as SBOM — runner filters these out
    *  of findings (SBOM is metadata, not a finding; spec §3.6a). */
   isSbom: boolean
+  toolId?: RunnerToolId
+  source?: SarifEvidenceSource
+  schemaWarning?: "unknown-schema-version"
 }
 
 interface ResolveArgs {
@@ -34,6 +40,8 @@ interface ResolveArgs {
   runTaxa?: SarifTaxa[]
   /** Raw `runs[].tool.driver.name`. */
   toolName: string
+  /** Raw `runs[].tool.driver.properties`. */
+  toolDriverProperties?: Record<string, unknown>
 }
 
 const SBOM_KEYWORDS: ReadonlySet<string> = new Set(["sbom"])
@@ -79,6 +87,7 @@ function categoryToRoleHint(cat: SarifFindingCategory): RoleHint {
 
 export function resolveTaxonomy(args: ResolveArgs): TaxonomyResolution {
   const { result, rule, runTaxa, toolName } = args
+  const runnerMetadata = parseRunnerMetadata(args.toolDriverProperties)
 
   // Source 1: result-level taxa references → run-level taxonomy table
   const taxaNames: string[] = []
@@ -110,22 +119,49 @@ export function resolveTaxonomy(args: ResolveArgs): TaxonomyResolution {
 
   // Quick ID-pattern checks (before keyword-blob match for precision)
   if (isVulnRuleId(ruleId)) {
-    return { category: "vulnerability", roleHint: "security", isSbom: false }
+    return applyRunnerMetadata({ category: "vulnerability", roleHint: "security", isSbom: false }, runnerMetadata)
   }
   if (isIaCRuleId(ruleId)) {
-    return { category: "iac", roleHint: "security", isSbom: false }
+    return applyRunnerMetadata({ category: "iac", roleHint: "security", isSbom: false }, runnerMetadata)
   }
 
   // Keyword-blob match across all sources, in priority order.
   const sources = [...taxaNames, ...tags, ruleId, ruleName, ruleShort, toolKeyword]
   const cat = pickCategory(sources)
   if (cat === "sbom") {
-    return { category: "other", roleHint: "security", isSbom: true }
+    return applyRunnerMetadata({ category: "other", roleHint: "security", isSbom: true }, runnerMetadata)
   }
   if (cat !== null) {
-    return { category: cat, roleHint: categoryToRoleHint(cat), isSbom: false }
+    return applyRunnerMetadata({ category: cat, roleHint: categoryToRoleHint(cat), isSbom: false }, runnerMetadata)
   }
 
   // Default: security/other when nothing matches.
-  return { category: "other", roleHint: "security", isSbom: false }
+  return applyRunnerMetadata({ category: "other", roleHint: "security", isSbom: false }, runnerMetadata)
+}
+
+function applyRunnerMetadata(
+  legacy: TaxonomyResolution,
+  runnerMetadata: ReturnType<typeof parseRunnerMetadata>,
+): TaxonomyResolution {
+  if (runnerMetadata.ok) {
+    if (legacy.isSbom) {
+      return {
+        ...legacy,
+        toolId: runnerMetadata.metadata.toolId,
+        source: runnerMetadata.metadata.source,
+      }
+    }
+    const [primaryRole] = runnerMetadata.metadata.roleHints
+    return {
+      ...legacy,
+      roleHint: primaryRole ?? legacy.roleHint,
+      roleHints: [...runnerMetadata.metadata.roleHints],
+      toolId: runnerMetadata.metadata.toolId,
+      source: runnerMetadata.metadata.source,
+    }
+  }
+  if (runnerMetadata.reason === "unknown-schema-version") {
+    return { ...legacy, schemaWarning: "unknown-schema-version" }
+  }
+  return legacy
 }

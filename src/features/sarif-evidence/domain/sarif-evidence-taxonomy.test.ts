@@ -1,6 +1,7 @@
 // ARC-188 — taxonomy resolver tests.
 
 import { describe, it, expect } from "vitest"
+import { parseRunnerMetadata } from "@/src/features/sarif-evidence/domain/runner-metadata"
 import { resolveTaxonomy } from "@/src/features/sarif-evidence/domain/taxonomy"
 import type { SarifResult, SarifRule, SarifTaxa } from "@/src/features/sarif-evidence/domain/types"
 
@@ -129,6 +130,210 @@ describe("resolveTaxonomy — null/empty inputs", () => {
       category: "other",
       roleHint: "security",
       isSbom: false,
+    })
+  })
+})
+
+describe("parseRunnerMetadata", () => {
+  it("returns explicit reasons for absent and invalid metadata", () => {
+    expect(parseRunnerMetadata(undefined)).toEqual({ ok: false, reason: "absent-metadata" })
+    expect(parseRunnerMetadata({})).toEqual({ ok: false, reason: "absent-metadata" })
+    expect(parseRunnerMetadata({ sigilixSource: "deterministic-tool" })).toEqual({
+      ok: false,
+      reason: "absent-metadata",
+    })
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 2,
+        sigilixToolId: "eslint",
+        sigilixSource: "deterministic-tool",
+      }),
+    ).toEqual({ ok: false, reason: "unknown-schema-version", schemaVersion: 2 })
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 1,
+        sigilixToolId: "biome",
+        sigilixSource: "deterministic-tool",
+      }),
+    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "biome" })
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 1,
+        sigilixToolId: "eslint",
+        sigilixSource: "repo-tool",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-source", source: "repo-tool" })
+  })
+
+  it("prioritizes schema then tool id then source when multiple metadata fields are invalid", () => {
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 2,
+        sigilixToolId: "biome",
+        sigilixSource: "repo-tool",
+      }),
+    ).toEqual({ ok: false, reason: "unknown-schema-version", schemaVersion: 2 })
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 1,
+        sigilixToolId: "biome",
+        sigilixSource: "repo-tool",
+      }),
+    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "biome" })
+  })
+
+  it("accepts valid metadata with ignored extra keys and optional dropped-result counts", () => {
+    const parsed = parseRunnerMetadata({
+      sigilixSchemaVersion: 1,
+      sigilixToolId: "shellcheck",
+      sigilixSource: "deterministic-tool",
+      sigilixDroppedResults: { droppedCount: 3, keptCount: 50 },
+      sigilixRoleHints: ["tests"],
+    })
+    expect(parsed).toEqual({
+      ok: true,
+      metadata: {
+        schemaVersion: 1,
+        toolId: "shellcheck",
+        source: "deterministic-tool",
+        roleHints: ["security", "logic"],
+        droppedResults: { toolId: "shellcheck", droppedCount: 3, keptCount: 50 },
+      },
+    })
+  })
+
+  it("ignores malformed dropped-result counts without rejecting otherwise valid metadata", () => {
+    const parsed = parseRunnerMetadata({
+      sigilixSchemaVersion: 1,
+      sigilixToolId: "ruff",
+      sigilixSource: "deterministic-tool",
+      sigilixDroppedResults: { droppedCount: -1 },
+    })
+    expect(parsed).toEqual({
+      ok: true,
+      metadata: {
+        schemaVersion: 1,
+        toolId: "ruff",
+        source: "deterministic-tool",
+        roleHints: ["logic", "performance"],
+      },
+    })
+  })
+})
+
+describe("resolveTaxonomy — Sigilix runner metadata", () => {
+  const metadata = (toolId: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    sigilixSchemaVersion: 1,
+    sigilixToolId: toolId,
+    sigilixSource: "deterministic-tool",
+    ...extra,
+  })
+
+  it("valid ESLint metadata routes to logic and exposes tool metadata", () => {
+    expect(
+      resolveTaxonomy({
+        result: emptyResult,
+        rule: { id: "no-undef" },
+        toolName: "ESLint",
+        toolDriverProperties: metadata("eslint"),
+      }),
+    ).toEqual({
+      category: "other",
+      roleHint: "logic",
+      roleHints: ["logic"],
+      isSbom: false,
+      toolId: "eslint",
+      source: "deterministic-tool",
+    })
+  })
+
+  it("valid Ruff metadata routes to logic primary plus performance secondary", () => {
+    const r = resolveTaxonomy({
+      result: emptyResult,
+      rule: { id: "PERF401" },
+      toolName: "Ruff",
+      toolDriverProperties: metadata("ruff"),
+    })
+    expect(r.roleHint).toBe("logic")
+    expect(r.roleHints).toEqual(["logic", "performance"])
+    expect(r.toolId).toBe("ruff")
+    expect(r.source).toBe("deterministic-tool")
+  })
+
+  it("routes all first-slice tools with engine-owned role policy", () => {
+    const cases = [
+      ["semgrep", ["security"]],
+      ["eslint", ["logic"]],
+      ["ruff", ["logic", "performance"]],
+      ["actionlint", ["logic", "security"]],
+      ["shellcheck", ["security", "logic"]],
+    ] as const
+
+    for (const [toolId, roleHints] of cases) {
+      const r = resolveTaxonomy({
+        result: emptyResult,
+        rule: { id: "X" },
+        toolName: toolId,
+        toolDriverProperties: metadata(toolId),
+      })
+      expect(r.roleHints).toEqual(roleHints)
+      expect(r.roleHint).toBe(roleHints[0])
+      expect(r.toolId).toBe(toolId)
+      expect(r.source).toBe("deterministic-tool")
+    }
+  })
+
+  it("unknown schema version falls back to legacy taxonomy and records a schema warning", () => {
+    const r = resolveTaxonomy({
+      result: emptyResult,
+      rule: { id: "CVE-2024-1234" },
+      toolName: "ESLint",
+      toolDriverProperties: metadata("eslint", { sigilixSchemaVersion: 2 }),
+    })
+    expect(r).toEqual({
+      category: "vulnerability",
+      roleHint: "security",
+      isSbom: false,
+      schemaWarning: "unknown-schema-version",
+    })
+  })
+
+  it("unknown tool and invalid source fall back without setting toolId/source", () => {
+    const unknownTool = resolveTaxonomy({
+      result: emptyResult,
+      rule: { id: "CVE-2024-1234" },
+      toolName: "Biome",
+      toolDriverProperties: metadata("biome"),
+    })
+    expect(unknownTool.roleHint).toBe("security")
+    expect(unknownTool.toolId).toBeUndefined()
+    expect(unknownTool.source).toBeUndefined()
+
+    const invalidSource = resolveTaxonomy({
+      result: emptyResult,
+      rule: { id: "X", properties: { tags: ["License"] } },
+      toolName: "ESLint",
+      toolDriverProperties: metadata("eslint", { sigilixSource: "repo-tool" }),
+    })
+    expect(invalidSource.category).toBe("license")
+    expect(invalidSource.roleHint).toBe("security")
+    expect(invalidSource.toolId).toBeUndefined()
+    expect(invalidSource.source).toBeUndefined()
+  })
+
+  it("valid tool metadata does not override SBOM security routing", () => {
+    const r = resolveTaxonomy({
+      result: emptyResult,
+      rule: { id: "X", properties: { tags: ["sbom"] } },
+      toolName: "ESLint",
+      toolDriverProperties: metadata("eslint"),
+    })
+    expect(r).toEqual({
+      category: "other",
+      roleHint: "security",
+      isSbom: true,
+      toolId: "eslint",
+      source: "deterministic-tool",
     })
   })
 })

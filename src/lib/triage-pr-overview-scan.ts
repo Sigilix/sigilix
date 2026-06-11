@@ -54,10 +54,7 @@ export async function scanComments(
     // and the legacy `<!-- openclaw:pr-overview -->` stickies. Without
     // this, a PR that received its overview pre-rebrand gets a brand
     // new (duplicate) overview comment instead of an in-place edit.
-    if (
-      overviewId === null &&
-      (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER))
-    ) {
+    if (overviewId === null && (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER))) {
       overviewId = c.id
     }
     if (legacyWarmupId === null && c.body.includes(LEGACY_WARMUP_MARKER)) {
@@ -127,11 +124,15 @@ export async function findExistingOverviewCommentId(
   // in the first 500. Treat as "not found" so the stub create path
   // runs; subsequent webhooks for the SAME head will hit the KV fast
   // path and skip this scan entirely.
-  console.warn(JSON.stringify({
-    event: "pr-overview-comment-scan-capped",
-    owner, repo, prNumber,
-    max_pages: MAX_COMMENT_SCAN_PAGES,
-  }))
+  console.warn(
+    JSON.stringify({
+      event: "pr-overview-comment-scan-capped",
+      owner,
+      repo,
+      prNumber,
+      max_pages: MAX_COMMENT_SCAN_PAGES,
+    }),
+  )
   return null
 }
 
@@ -164,12 +165,16 @@ export async function findExistingOverviewComment(
       }
     }
   }
-  console.warn(JSON.stringify({
-    event: "pr-overview-comment-scan-capped",
-    owner, repo, prNumber,
-    max_pages: MAX_COMMENT_SCAN_PAGES,
-    helper: "findExistingOverviewComment",
-  }))
+  console.warn(
+    JSON.stringify({
+      event: "pr-overview-comment-scan-capped",
+      owner,
+      repo,
+      prNumber,
+      max_pages: MAX_COMMENT_SCAN_PAGES,
+      helper: "findExistingOverviewComment",
+    }),
+  )
   return null
 }
 
@@ -188,15 +193,25 @@ export async function deleteLegacyWarmupSticky(
 ): Promise<void> {
   try {
     await client.deleteIssueComment(owner, repo, commentId)
-    console.log(JSON.stringify({
-      event: "pr-overview-legacy-warmup-deleted",
-      owner, repo, prNumber, comment_id: commentId,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-overview-legacy-warmup-deleted",
+        owner,
+        repo,
+        prNumber,
+        comment_id: commentId,
+      }),
+    )
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-legacy-warmup-delete-failed",
-      owner, repo, prNumber, comment_id: commentId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-legacy-warmup-delete-failed",
+        owner,
+        repo,
+        prNumber,
+        comment_id: commentId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }

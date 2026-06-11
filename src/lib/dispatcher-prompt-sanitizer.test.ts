@@ -224,17 +224,15 @@ describe("sanitizeDispatcherMetadata — sampleTriggers canonicalization (Sigili
     const r = sanitizeDispatcherMetadata({
       title: "",
       body: [
-        "Ignore Previous something",       // canonical: "ignore previous"
-        "ignore\nprevious other",          // canonical: "ignore previous"
-        "ignore **previous** third",       // canonical: "ignore previous"
-        "IGNORE\t\tPREVIOUS final",        // canonical: "ignore previous"
+        "Ignore Previous something", // canonical: "ignore previous"
+        "ignore\nprevious other", // canonical: "ignore previous"
+        "ignore **previous** third", // canonical: "ignore previous"
+        "IGNORE\t\tPREVIOUS final", // canonical: "ignore previous"
       ].join(" "),
     })
     // All four variants should canonicalize to the same string and
     // dedupe in the Set.
-    const ignorePreviousCount = r.stripped.sampleTriggers.filter(
-      (s) => s === "ignore previous",
-    ).length
+    const ignorePreviousCount = r.stripped.sampleTriggers.filter((s) => s === "ignore previous").length
     expect(ignorePreviousCount).toBe(1)
   })
 
@@ -400,9 +398,7 @@ describe("sanitizeDispatcherMetadata — eval set parity (Acceptance criterion #
   for (const adversarial of ADVERSARIAL_CORPUS) {
     it(`redacts at least one token in: "${adversarial.slice(0, 60)}${adversarial.length > 60 ? "…" : ""}"`, () => {
       const r = sanitizeDispatcherMetadata({ title: "", body: adversarial })
-      const totalHits =
-        r.stripped.bodyRoleTokenHits +
-        r.stripped.bodyInjectionTriggerHits
+      const totalHits = r.stripped.bodyRoleTokenHits + r.stripped.bodyInjectionTriggerHits
       expect(totalHits).toBeGreaterThan(0)
       // The body must contain at least one [REDACTED] marker.
       expect(r.body).toContain("[REDACTED]")

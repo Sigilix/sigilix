@@ -1,22 +1,27 @@
-// ARC-190: PrReviewRunDO class + pure decision helpers + route
-// dispatch.
+// ARC-190: PrReviewRunDO class + route dispatch. The pure decision helpers + the
+// IO-free history helpers live in `./pr-review-run-internals` (the class delegates).
 //
 // Spec: docs/superpowers/specs/2026-05-07-arc-190-durable-objects-webhook-ingest-design.md
 // Plan: docs/superpowers/plans/2026-05-07-arc-190-durable-objects-webhook-ingest.md
-//
-// Task 5 lands the route handlers (/enqueue, /pickup, /run-result,
-// /status). Task 6 lands the alarm() handler.
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
 import type {
-  EnqueueRequest, EnqueueResponse, HeartbeatRequest, ResolvedDoConfig,
-  RunRecord, RunResultRequest, RunState, StatusResponse,
+  EnqueueRequest,
+  EnqueueResponse,
+  HeartbeatRequest,
+  ResolvedDoConfig,
+  RunRecord,
+  RunResultRequest,
+  RunState,
+  StatusResponse,
 } from "./types"
 import { resolveDoConfig } from "./config"
 import {
-  attachExistingCheckRun, closeOrphanedInProgressChecksByHeadSha,
-  completeCheckRun, startInProgressCheckRun,
+  attachExistingCheckRun,
+  closeOrphanedInProgressChecksByHeadSha,
+  completeCheckRun,
+  startInProgressCheckRun,
 } from "@/src/lib/pr-review-check-run"
 // SIG-376 (SIG-318 Tier-1 5/8): the DO's pure internals — IO-free
 // module-level helpers + the spec §4.5/§4.6/§4.10 decision functions — were
@@ -26,13 +31,27 @@ import {
 // `@/do/pr-review-run` — including the co-located helpers test — is unchanged.
 // The leaf imports only `./types` (no cycle: it never imports this DO).
 import {
-  decideEnqueueAction, decidePickupAction, decideRunResultAction, emit,
-  isSupersededByNewSha, jsonResponse, nextBackoffMs, normalizeRepoId,
-  nowIso, pruneHistoryRecords,
+  buildRunRecord,
+  collectHistoryRecords,
+  decideEnqueueAction,
+  decidePickupAction,
+  decideRunResultAction,
+  emit,
+  isSupersededByNewSha,
+  jsonResponse,
+  nextBackoffMs,
+  normalizeRepoId,
+  nowIso,
+  pruneHistoryRecords,
+  pruneHistoryStorage,
 } from "./pr-review-run-internals"
 export {
-  decideEnqueueAction, decidePickupAction, decideRunResultAction,
-  isSupersededByNewSha, nextBackoffMs, pruneHistoryRecords,
+  decideEnqueueAction,
+  decidePickupAction,
+  decideRunResultAction,
+  isSupersededByNewSha,
+  nextBackoffMs,
+  pruneHistoryRecords,
 }
 export type { PickupActionKind } from "./pr-review-run-internals"
 
@@ -75,7 +94,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
     if (decision.action === "dedupe-active" || decision.action === "dedupe-terminal") {
       const state = existing!
       emit("do-review-deduped", {
-        owner: body.owner, repo: body.repo, prNumber: body.prNumber,
+        owner: body.owner,
+        repo: body.repo,
+        prNumber: body.prNumber,
         runId: state.runId,
         action: decision.action,
         reason: decision.reason,
@@ -94,54 +115,33 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // Archive only if existing was non-idle; idle state has no
       // material history to keep.
       if (existing.state !== "idle") {
-        const record: RunRecord = {
-          runId: existing.runId,
-          headSha: existing.headSha,
+        const record = buildRunRecord({
+          state: existing,
           finalState: existing.state === "done" ? "done" : "failed",
-          attempts: existing.attempts,
-          startedAt: existing.startedAt,
           finishedAt: existing.finishedAt ?? nowIso(),
           ...(existing.lastError ? { lastError: existing.lastError } : {}),
-        }
+        })
         await this.ctx.storage.put(`run:${existing.runId}`, record)
       }
       emit("do-review-superseded", {
-        owner: body.owner, repo: body.repo, prNumber: body.prNumber,
+        owner: body.owner,
+        repo: body.repo,
+        prNumber: body.prNumber,
         oldRunId: existing.runId,
         oldHeadSha: existing.headSha,
         newHeadSha: body.headSha,
       })
     }
 
-    // SIG-220: create the customer-visible "Sigilix · In progress"
-    // check synchronously, BEFORE persisting RunState + enqueueing.
-    // Pre-SIG-220 the dispatcher did this after the consumer dequeued
-    // → check appeared in the GitHub UI 5–30s after push. Now it
-    // appears within the webhook-ack window (~1–2s).
-    //
-    // Codex architecture review on PR #178 follow-up:
-    //   - Creating HERE (post-decideEnqueueAction = create | supersede)
-    //     is strictly better than creating in the worker fetch handler:
-    //     dedupe paths never produce orphan checks, pause/ignore
-    //     never produce orphan checks (those branches don't reach
-    //     this code path).
-    //   - sensitive-repo skip is dispatcher-side — the dispatcher's
-    //     skip branch now closes the check it doesn't own. Watchdog
-    //     terminal failure also closes via `attachExistingCheckRun`.
-    //
-    // Sigilix bot P2 PERF catch on PR #179: wrap the create call in a
-    // `Promise.race` with a 3s timeout. The webhook awaits `/enqueue`
-    // (see `src/do/webhook-enqueue.ts:123`) so an unbounded GitHub
-    // API hang here would couple the webhook ack to GitHub's
-    // latency and could approach the 10s redelivery threshold under
-    // degradation. A timeout resolves to `null`, which the existing
-    // dispatcher-side fallback (`startInProgressCheckRun`) handles
-    // exactly like a creds-missing / 5xx outcome.
-    //
-    // Best-effort: a null result (creds missing, GitHub 5xx, timeout,
-    // etc.) leaves `checkRunId` undefined on RunState; the dispatcher
-    // falls back to its own `startInProgressCheckRun` exactly like
-    // legacy queue messages.
+    // SIG-220: create the customer-visible "Sigilix · In progress" check
+    // synchronously, BEFORE persisting RunState + enqueueing, so it appears in the
+    // GitHub UI within the webhook-ack window (~1–2s) rather than 5–30s after push.
+    // Reached only on the create | supersede branches (dedupe/pause/ignore don't
+    // produce orphan checks). Sigilix bot P2 PERF catch on PR #179: wrap the create
+    // in a `Promise.race` with a 3s timeout — the webhook awaits `/enqueue`, so an
+    // unbounded GitHub hang could approach the 10s redelivery threshold. Best-effort:
+    // a null result (creds missing / 5xx / timeout) leaves `checkRunId` undefined and
+    // the dispatcher falls back to its own `startInProgressCheckRun`.
     const CHECK_RUN_CREATE_TIMEOUT_MS = 3_000
     // CodeRabbit catch on PR #179 fixup: capture the timer handle so we
     // can clear it after `startInProgressCheckRun` wins the race.
@@ -158,12 +158,16 @@ export class PrReviewRunDO extends DurableObject<Env> {
       }),
       new Promise<null>((resolve) => {
         createTimeoutId = setTimeout(() => {
-          console.warn(JSON.stringify({
-            event: "pr-review-check-run-create-timeout",
-            owner: body.owner, repo: body.repo, prNumber: body.prNumber,
-            head_sha: body.headSha.slice(0, 7),
-            timeout_ms: CHECK_RUN_CREATE_TIMEOUT_MS,
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "pr-review-check-run-create-timeout",
+              owner: body.owner,
+              repo: body.repo,
+              prNumber: body.prNumber,
+              head_sha: body.headSha.slice(0, 7),
+              timeout_ms: CHECK_RUN_CREATE_TIMEOUT_MS,
+            }),
+          )
           resolve(null)
         }, CHECK_RUN_CREATE_TIMEOUT_MS)
       }),
@@ -188,9 +192,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // it survives retry-alarm-generated queue messages. Without this,
       // the retry-alarm rebuilds the pr-review message from RunState
       // and the depth silently resets to 0 — bypassing the cap.
-      ...(body.staleHeadRequeueDepth !== undefined
-        ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
-        : {}),
+      ...(body.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth } : {}),
       // SIG-220: persist the upstream-created check id so the
       // consumer + watchdog can close it. Undefined if creation
       // failed (best-effort dispatcher fallback applies).
@@ -200,9 +202,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // this, retries silently lose the repo-id and fall back to
       // legacy-only review-memory lookups. CR-1: normalize at the DO
       // trust boundary — caller-provided values are not pre-validated.
-      ...(normalizeRepoId(body.repoId) !== undefined
-        ? { repoId: normalizeRepoId(body.repoId)! }
-        : {}),
+      ...(normalizeRepoId(body.repoId) !== undefined ? { repoId: normalizeRepoId(body.repoId)! } : {}),
     }
 
     // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
@@ -224,23 +224,23 @@ export class PrReviewRunDO extends DurableObject<Env> {
       runId,
       // ARC-251: forward requeue depth so the consumer side keeps
       // the cap accurate across the initial enqueue path too.
-      ...(body.staleHeadRequeueDepth !== undefined
-        ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
-        : {}),
+      ...(body.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth } : {}),
       // SIG-220: forward the upstream-created check id so the
       // dispatcher attaches instead of creating a duplicate.
       ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
       // SIG-247 Phase 1: forward immutable repo.id to the consumer so
       // review-memory dual-write/read-union semantics apply on this run.
       // CR-1: normalize at the DO trust boundary.
-      ...(normalizeRepoId(body.repoId) !== undefined
-        ? { repoId: normalizeRepoId(body.repoId)! }
-        : {}),
+      ...(normalizeRepoId(body.repoId) !== undefined ? { repoId: normalizeRepoId(body.repoId)! } : {}),
     })
 
     emit("do-review-enqueued", {
-      owner: body.owner, repo: body.repo, prNumber: body.prNumber,
-      runId, headSha: body.headSha, action: decision.action,
+      owner: body.owner,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      runId,
+      headSha: body.headSha,
+      action: decision.action,
     })
 
     const resp: EnqueueResponse = {
@@ -260,15 +260,23 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
     if (decision.action === "stale-runId-410" || decision.action === "terminal-410") {
       emit("do-review-pickup-skipped", {
-        owner: existing?.owner, repo: existing?.repo, prNumber: existing?.prNumber,
-        runId: body.runId, consumerId: body.consumerId, reason: decision.action,
+        owner: existing?.owner,
+        repo: existing?.repo,
+        prNumber: existing?.prNumber,
+        runId: body.runId,
+        consumerId: body.consumerId,
+        reason: decision.action,
       })
       return jsonResponse(410, { reason: decision.action })
     }
     if (decision.action === "duplicate-409") {
       emit("do-review-pickup-skipped", {
-        owner: existing?.owner, repo: existing?.repo, prNumber: existing?.prNumber,
-        runId: body.runId, consumerId: body.consumerId, reason: decision.action,
+        owner: existing?.owner,
+        repo: existing?.repo,
+        prNumber: existing?.prNumber,
+        runId: body.runId,
+        consumerId: body.consumerId,
+        reason: decision.action,
       })
       return jsonResponse(409, { reason: decision.action })
     }
@@ -306,8 +314,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, updated)
 
     emit("do-review-picked-up", {
-      owner: updated.owner, repo: updated.repo, prNumber: updated.prNumber,
-      runId: updated.runId, consumerId: body.consumerId,
+      owner: updated.owner,
+      repo: updated.repo,
+      prNumber: updated.prNumber,
+      runId: updated.runId,
+      consumerId: body.consumerId,
     })
     return jsonResponse(200, { picked: true })
   }
@@ -321,7 +332,8 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // No state at all — write a history record from the payload
       // alone so we don't lose telemetry, and return 200.
       emit("do-review-result-superseded", {
-        runId: body.runId, reason: "no-state",
+        runId: body.runId,
+        reason: "no-state",
       })
       return jsonResponse(200, { recorded: "history" })
     }
@@ -356,8 +368,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // record is meant to be a frozen snapshot, not a sentinel).
       // No history put for cross-runId late results.
       emit("do-review-result-superseded", {
-        owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-        runId: body.runId, currentRunId: existing.runId,
+        owner: existing.owner,
+        repo: existing.repo,
+        prNumber: existing.prNumber,
+        runId: body.runId,
+        currentRunId: existing.runId,
         sameRunId: body.runId === existing.runId,
       })
       return jsonResponse(200, { recorded: "history" })
@@ -389,36 +404,32 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
     if (decision.transition === "done" || decision.transition === "failed") {
       // Append to history.
-      const record: RunRecord = {
-        runId: existing.runId,
-        headSha: existing.headSha,
+      const record = buildRunRecord({
+        state: existing,
         finalState: decision.transition,
-        attempts: existing.attempts,
-        startedAt: existing.startedAt,
         finishedAt: updated.finishedAt!,
         ...(body.error ? { lastError: body.error } : {}),
-      }
+      })
       await this.ctx.storage.put(`run:${existing.runId}`, record)
-      // Prune history to limit.
-      const allHistory = await this.collectHistory()
-      const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-      if (pruned.evicted > 0) {
-        // Rewrite kept records + remove evicted.
-        for (const key of Object.keys(allHistory)) {
-          if (!Object.hasOwn(pruned.kept, key)) {
-            await this.ctx.storage.delete(key)
-          }
-        }
-      }
+      // Prune history to limit (SIG-366: pruneHistoryRecords + evict-delete loop
+      // extracted to `pruneHistoryStorage` in ./pr-review-run-internals).
+      await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
       emit("do-review-completed", {
-        owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-        runId: existing.runId, finalState: decision.transition, attempts: existing.attempts,
+        owner: existing.owner,
+        repo: existing.repo,
+        prNumber: existing.prNumber,
+        runId: existing.runId,
+        finalState: decision.transition,
+        attempts: existing.attempts,
       })
     } else {
       // failed-transient
       emit("do-review-retry-scheduled", {
-        owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-        runId: existing.runId, attempt: existing.attempts,
+        owner: existing.owner,
+        repo: existing.repo,
+        prNumber: existing.prNumber,
+        runId: existing.runId,
+        attempt: existing.attempts,
         nextRetryAt: updated.nextRetryAt,
       })
     }
@@ -446,9 +457,13 @@ export class PrReviewRunDO extends DurableObject<Env> {
       existing.consumerId !== body.consumerId
     ) {
       emit("do-review-heartbeat-stale", {
-        owner: existing?.owner, repo: existing?.repo, prNumber: existing?.prNumber,
-        runId: body.runId, consumerId: body.consumerId,
-        currentRunId: existing?.runId, currentState: existing?.state,
+        owner: existing?.owner,
+        repo: existing?.repo,
+        prNumber: existing?.prNumber,
+        runId: body.runId,
+        consumerId: body.consumerId,
+        currentRunId: existing?.runId,
+        currentState: existing?.state,
       })
       return jsonResponse(410, { reason: "stale-or-terminal" })
     }
@@ -458,12 +473,8 @@ export class PrReviewRunDO extends DurableObject<Env> {
     // heartbeating-but-stuck consumer still terminates at the deadline.
     // Guard Date.parse against a corrupted/unparseable persisted ISO so a
     // NaN can never reach setAlarm via Math.min(x, NaN) === NaN.
-    const parsedDeadline = existing.watchdogDeadlineAt !== undefined
-      ? Date.parse(existing.watchdogDeadlineAt)
-      : NaN
-    const deadlineMs = Number.isFinite(parsedDeadline)
-      ? parsedDeadline
-      : nowMs + config.watchdogMs
+    const parsedDeadline = existing.watchdogDeadlineAt !== undefined ? Date.parse(existing.watchdogDeadlineAt) : NaN
+    const deadlineMs = Number.isFinite(parsedDeadline) ? parsedDeadline : nowMs + config.watchdogMs
     // If the deadline already elapsed, the cap yields an instant (≤ now)
     // alarm — that's intended: it fires immediately and the liveness
     // handler takes the absolute-backstop branch.
@@ -478,8 +489,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(nextAlarmAt)
     await this.ctx.storage.put(STATE_KEY, updated)
     emit("do-review-heartbeat", {
-      owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-      runId: existing.runId, consumerId: body.consumerId,
+      owner: existing.owner,
+      repo: existing.repo,
+      prNumber: existing.prNumber,
+      runId: existing.runId,
+      consumerId: body.consumerId,
     })
     return jsonResponse(200, { ok: true })
   }
@@ -501,14 +515,14 @@ export class PrReviewRunDO extends DurableObject<Env> {
       emit("do-review-cancel-noop", { reason: "no-state" })
       return jsonResponse(200, { cancelled: false, reason: "no-state" })
     }
-    if (
-      existing.state === "done" ||
-      existing.state === "failed" ||
-      existing.state === "idle"
-    ) {
+    if (existing.state === "done" || existing.state === "failed" || existing.state === "idle") {
       emit("do-review-cancel-noop", {
-        owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-        runId: existing.runId, currentState: existing.state, reason: "already-terminal",
+        owner: existing.owner,
+        repo: existing.repo,
+        prNumber: existing.prNumber,
+        runId: existing.runId,
+        currentState: existing.state,
+        reason: "already-terminal",
       })
       return jsonResponse(200, { cancelled: false, reason: "already-terminal" })
     }
@@ -534,25 +548,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, updated)
 
     // Archive + prune history (mirrors the watchdog-terminal path).
-    const record: RunRecord = {
-      runId: existing.runId,
-      headSha: existing.headSha,
-      finalState: "failed",
-      attempts: existing.attempts,
-      startedAt: existing.startedAt,
-      finishedAt,
-      lastError,
-    }
+    const record = buildRunRecord({ state: existing, finalState: "failed", finishedAt, lastError })
     await this.ctx.storage.put(`run:${existing.runId}`, record)
-    const allHistory = await this.collectHistory()
-    const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-    if (pruned.evicted > 0) {
-      for (const key of Object.keys(allHistory)) {
-        if (!Object.hasOwn(pruned.kept, key)) {
-          await this.ctx.storage.delete(key)
-        }
-      }
-    }
+    await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
 
     // Close the upstream check as `skipped` (wire `neutral`): the bot
     // did not complete a review. `cancelled` is intentionally not a
@@ -588,7 +586,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
         })
       } catch (err) {
         emit("do-review-cancel-orphan-close-failed", {
-          owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
+          owner: existing.owner,
+          repo: existing.repo,
+          prNumber: existing.prNumber,
           runId: existing.runId,
           err: err instanceof Error ? err.message : String(err),
         })
@@ -596,8 +596,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     }
 
     emit("do-review-cancelled", {
-      owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
-      runId: existing.runId, attempts: existing.attempts,
+      owner: existing.owner,
+      repo: existing.repo,
+      prNumber: existing.prNumber,
+      runId: existing.runId,
+      attempts: existing.attempts,
       priorState: existing.state,
       ...(existing.checkRunId !== undefined ? { checkRunId: existing.checkRunId } : {}),
     })
@@ -613,9 +616,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       return jsonResponse(200, empty)
     }
     const history = await this.collectHistory()
-    const historyRecords = Object.values(history).sort(
-      (a, b) => b.finishedAt.localeCompare(a.finishedAt),
-    )
+    const historyRecords = Object.values(history).sort((a, b) => b.finishedAt.localeCompare(a.finishedAt))
     const found: StatusResponse = {
       kind: "found",
       current: {
@@ -650,15 +651,21 @@ export class PrReviewRunDO extends DurableObject<Env> {
     const kind = state.alarmKind
     if (!kind) {
       emit("do-review-alarm-no-kind", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
         runId: state.runId,
       })
       return
     }
     if (state.alarmTargetRunId && state.alarmTargetRunId !== state.runId) {
       emit("do-review-alarm-stale", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, alarmTargetRunId: state.alarmTargetRunId, kind,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        alarmTargetRunId: state.alarmTargetRunId,
+        kind,
       })
       return
     }
@@ -678,8 +685,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     // the retry alarm but before that alarm fired.
     if (state.state === "done" || state.state === "failed") {
       emit("do-review-retry-noop", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, currentState: state.state,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        currentState: state.state,
       })
       return
     }
@@ -700,25 +710,19 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // ARC-251 Codex BLOCKER #2: rebuild the message from RunState
       // INCLUDING the stale-head requeue depth. Without this the cap
       // resets to 0 every time the watchdog/retry alarm fires.
-      ...(state.staleHeadRequeueDepth !== undefined
-        ? { staleHeadRequeueDepth: state.staleHeadRequeueDepth }
-        : {}),
+      ...(state.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: state.staleHeadRequeueDepth } : {}),
       // SIG-220: forward the upstream-created check id on retries too
       // so the retry consumer attaches to the same check the original
       // attempt set up (`startInProgressCheckRun` cancels stale checks
       // by head_sha so a duplicate-create on retry would be idempotent,
       // but attaching is one fewer GitHub call).
-      ...(state.checkRunId !== undefined
-        ? { checkRunId: state.checkRunId }
-        : {}),
+      ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
       // SIG-247 Phase 1: rebuild from RunState INCLUDING the immutable
       // repo.id so retry-alarm queue messages preserve dual-write
       // semantics. Mirrors the staleHeadRequeueDepth pattern above.
       // CR-1: re-normalize on read in case a pre-Phase-1-fix RunState
       // persisted an invalid value.
-      ...(normalizeRepoId(state.repoId) !== undefined
-        ? { repoId: normalizeRepoId(state.repoId)! }
-        : {}),
+      ...(normalizeRepoId(state.repoId) !== undefined ? { repoId: normalizeRepoId(state.repoId)! } : {}),
     })
     const watchdogAt = Date.now() + config.watchdogMs
     const updated: RunState = {
@@ -744,16 +748,22 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, updated)
     await this.ctx.storage.setAlarm(watchdogAt)
     emit("do-review-retry-fired", {
-      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-      runId: state.runId, attempt: newAttempts,
+      owner: state.owner,
+      repo: state.repo,
+      prNumber: state.prNumber,
+      runId: state.runId,
+      attempt: newAttempts,
     })
   }
 
   private async handleWatchdogAlarm(state: RunState): Promise<void> {
     if (state.state === "done" || state.state === "failed") {
       emit("do-review-watchdog-noop", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, currentState: state.state,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        currentState: state.state,
       })
       return
     }
@@ -783,16 +793,17 @@ export class PrReviewRunDO extends DurableObject<Env> {
   private async handleLivenessAlarm(state: RunState): Promise<void> {
     if (state.state === "done" || state.state === "failed") {
       emit("do-review-liveness-noop", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, currentState: state.state,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        currentState: state.state,
       })
       return
     }
     const config = resolveDoConfig(this.env)
     const nowMs = Date.now()
-    const deadlineMs = state.watchdogDeadlineAt !== undefined
-      ? Date.parse(state.watchdogDeadlineAt)
-      : undefined
+    const deadlineMs = state.watchdogDeadlineAt !== undefined ? Date.parse(state.watchdogDeadlineAt) : undefined
 
     // 1. Absolute backstop.
     if (deadlineMs !== undefined && nowMs >= deadlineMs) {
@@ -814,8 +825,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     const baselineMs = Number.isFinite(baselineParsed) ? baselineParsed : undefined
     if (baselineMs === undefined || nowMs - baselineMs >= config.livenessMs) {
       emit("do-review-liveness-dead", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, attempts: state.attempts,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        attempts: state.attempts,
         gapMs: baselineMs !== undefined ? nowMs - baselineMs : undefined,
         livenessMs: config.livenessMs,
       })
@@ -832,8 +846,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     if (deadlineMs !== undefined && deadlineMs < nextAlarmAt) nextAlarmAt = deadlineMs
     await this.ctx.storage.setAlarm(nextAlarmAt)
     emit("do-review-liveness-rearm", {
-      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-      runId: state.runId, nextAlarmAt: new Date(nextAlarmAt).toISOString(),
+      owner: state.owner,
+      repo: state.repo,
+      prNumber: state.prNumber,
+      runId: state.runId,
+      nextAlarmAt: new Date(nextAlarmAt).toISOString(),
     })
   }
 
@@ -862,26 +879,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
         lastError,
       }
       await this.ctx.storage.put(STATE_KEY, updated)
-      const record: RunRecord = {
-        runId: state.runId,
-        headSha: state.headSha,
-        finalState: "failed",
-        attempts: state.attempts,
-        startedAt: state.startedAt,
-        finishedAt,
-        lastError,
-      }
+      const record = buildRunRecord({ state, finalState: "failed", finishedAt, lastError })
       await this.ctx.storage.put(`run:${state.runId}`, record)
-      // Prune history to limit (mirrors /run-result terminal path).
-      const allHistory = await this.collectHistory()
-      const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-      if (pruned.evicted > 0) {
-        for (const key of Object.keys(allHistory)) {
-          if (!Object.hasOwn(pruned.kept, key)) {
-            await this.ctx.storage.delete(key)
-          }
-        }
-      }
+      // Prune history to limit (mirrors /run-result terminal path; SIG-366: extracted
+      // to `pruneHistoryStorage` in ./pr-review-run-internals).
+      await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
       // SIG-220: terminal failure ⇒ the consumer never reported result,
       // so the upstream-created check is still `in_progress`. Close it as
       // `failure` (wire-mapped to `neutral` per the SIG-216 advisory-bot
@@ -919,15 +921,22 @@ export class PrReviewRunDO extends DurableObject<Env> {
           })
         } catch (err) {
           emit("do-review-watchdog-orphan-close-failed", {
-            owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-            runId: state.runId, trigger,
+            owner: state.owner,
+            repo: state.repo,
+            prNumber: state.prNumber,
+            runId: state.runId,
+            trigger,
             err: err instanceof Error ? err.message : String(err),
           })
         }
       }
       emit("do-review-watchdog-terminal", {
-        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, attempts: state.attempts, trigger,
+        owner: state.owner,
+        repo: state.repo,
+        prNumber: state.prNumber,
+        runId: state.runId,
+        attempts: state.attempts,
+        trigger,
         ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
       })
       return
@@ -945,45 +954,22 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, updated)
     await this.ctx.storage.setAlarm(nextAlarmAt)
     emit("do-review-watchdog-transient", {
-      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-      runId: state.runId, attempts: state.attempts, trigger,
+      owner: state.owner,
+      repo: state.repo,
+      prNumber: state.prNumber,
+      runId: state.runId,
+      attempts: state.attempts,
+      trigger,
       nextRetryAt: updated.nextRetryAt,
     })
   }
 
   // ── helpers ─────────────────────────────────────────────────
 
+  // SIG-366: the body moved (verbatim) to `collectHistoryRecords` in
+  // `./pr-review-run-internals` (the only change: `this.ctx` becomes a param);
+  // the method delegates so its signature + every call site is unchanged.
   private async collectHistory(): Promise<Record<string, RunRecord>> {
-    // Workers DO doesn't expose a `list()` method on storage in all
-    // runtimes. Iterate by enumerating known prefixes via a stored
-    // index — but we don't maintain one. As a v1 simplification,
-    // tests provide a shim that exposes `store: Map<string, unknown>`
-    // for direct enumeration. Production runtime: each `run:<runId>`
-    // record is small, and we keep at most `historyLimit` of them
-    // (default 10), so a transactional scan during prune is
-    // affordable. v1: rely on the test stub's direct Map access; in
-    // production the prune step uses storage.list({ prefix: "run:" }).
-    const out: Record<string, RunRecord> = {}
-    const storage = this.ctx.storage as {
-      list?: (opts: { prefix: string }) => Promise<Map<string, unknown>>
-    }
-    if (typeof storage.list === "function") {
-      const items = await storage.list({ prefix: "run:" })
-      for (const [key, value] of items.entries()) {
-        out[key] = value as RunRecord
-      }
-      return out
-    }
-    // Test-only fallback: read the Map directly via the stub's
-    // exposed `store` property.
-    const stub = this.ctx as unknown as { store?: Map<string, unknown> }
-    if (stub.store instanceof Map) {
-      for (const [key, value] of stub.store.entries()) {
-        if (key.startsWith("run:")) {
-          out[key] = value as RunRecord
-        }
-      }
-    }
-    return out
+    return collectHistoryRecords(this.ctx)
   }
 }

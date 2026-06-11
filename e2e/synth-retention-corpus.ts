@@ -5,11 +5,7 @@
 // checks provenance, path/line/category, required diagnosis tokens, severity,
 // and distinct-bug collapse.
 
-import type {
-  FindingCategory,
-  PrReviewFinding,
-  PrReviewVerdict,
-} from "@/src/lib/triage-pr-review"
+import type { FindingCategory, PrReviewFinding, PrReviewVerdict } from "@/src/lib/triage-pr-review"
 import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
 import type { SpecialistRole } from "@/src/lib/ensemble-router"
 import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
@@ -99,7 +95,8 @@ const WINDOW = 3
 
 function finding(
   id: string,
-  overrides: Partial<PrReviewFinding> & Pick<PrReviewFinding, "path" | "line" | "score" | "category" | "headline" | "body">,
+  overrides: Partial<PrReviewFinding> &
+    Pick<PrReviewFinding, "path" | "line" | "score" | "category" | "headline" | "body">,
 ): SynthSourceFinding {
   return {
     scope: "line",
@@ -125,13 +122,10 @@ function samePath(found: string, expected: string): boolean {
 }
 
 function diagnosticTextOf(f: PrReviewFinding): string {
-  return [
-    f.headline,
-    f.body,
-    f.failureExample,
-    f.fixExample,
-    f.testGap,
-  ].filter((v): v is string => typeof v === "string").join("\n").toLowerCase()
+  return [f.headline, f.body, f.failureExample, f.fixExample, f.testGap]
+    .filter((v): v is string => typeof v === "string")
+    .join("\n")
+    .toLowerCase()
 }
 
 function knownSourceIds(c: SynthRetentionCase): Set<string> {
@@ -195,10 +189,7 @@ function outputSupportsExpected(finding: PrReviewFinding, expected: SynthExpecte
   return expected.requiredTokens.every((token) => text.includes(token.toLowerCase()))
 }
 
-export function scoreSynthRetentionCase(
-  c: SynthRetentionCase,
-  output: SynthRetentionOutput,
-): SynthRetentionCaseScore {
+export function scoreSynthRetentionCase(c: SynthRetentionCase, output: SynthRetentionOutput): SynthRetentionCaseScore {
   validateSynthRetentionCase(c)
   const knownIds = knownSourceIds(c)
   const outputRows = output.verdict.findings.map((finding, index) => ({
@@ -300,11 +291,8 @@ export function scoreSynthRetentionCase(
   }
 }
 
-export function summarizeSynthRetentionResults(
-  results: readonly SynthRetentionCaseScore[],
-): SynthRetentionSummary {
-  const sum = (pick: (r: SynthRetentionCaseScore) => number): number =>
-    results.reduce((total, r) => total + pick(r), 0)
+export function summarizeSynthRetentionResults(results: readonly SynthRetentionCaseScore[]): SynthRetentionSummary {
+  const sum = (pick: (r: SynthRetentionCaseScore) => number): number => results.reduce((total, r) => total + pick(r), 0)
   const elapsed = results.map((r) => r.elapsedMs).sort((a, b) => a - b)
   const p95Index = elapsed.length === 0 ? -1 : Math.min(elapsed.length - 1, Math.ceil(elapsed.length * 0.95) - 1)
   const totalMustKeep = sum((r) => r.totalMustKeep)

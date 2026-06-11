@@ -52,9 +52,7 @@ export function parseGraphRetrievalMode(raw: string | undefined): "off" | "shado
  * Render graph-expansion nodes as the `[GRAPH CONTEXT]` content string.
  * Each line is `<path> (hopN, <edgeKind>)`. Empty array → empty string.
  */
-export function formatGraphContext(
-  nodes: { path: string; hop: number; edgeKind: string }[],
-): string {
+export function formatGraphContext(nodes: { path: string; hop: number; edgeKind: string }[]): string {
   return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
 }
 
@@ -95,10 +93,10 @@ export function formatGraphBlastContext(args: {
  * - `jaccard`: |intersection| / |union|. 0 when both sets are empty.
  * - `addedCount`: paths in graph that were NOT in vector hits (net-new context).
  */
-export function graphOverlapStats(a: {
-  vectorPaths: string[]
-  graphPaths: string[]
-}): { jaccard: number; addedCount: number } {
+export function graphOverlapStats(a: { vectorPaths: string[]; graphPaths: string[] }): {
+  jaccard: number
+  addedCount: number
+} {
   const v = new Set(a.vectorPaths)
   const g = new Set(a.graphPaths)
   const inter = [...g].filter((p) => v.has(p)).length

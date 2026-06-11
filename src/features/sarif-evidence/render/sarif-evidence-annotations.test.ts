@@ -67,9 +67,7 @@ describe("buildSarifCheckAnnotations", () => {
   })
 
   it("falls back to ruleId when ruleName is blank", () => {
-    const annotations = buildSarifCheckAnnotations([
-      F({ ruleId: "no-eval", ruleName: "   " }),
-    ])
+    const annotations = buildSarifCheckAnnotations([F({ ruleId: "no-eval", ruleName: "   " })])
 
     expect(annotations[0]?.title).toBe("[SARIF warning] Semgrep: no-eval")
     expect(annotations[0]?.message).toContain("Rule: no-eval")
@@ -141,9 +139,7 @@ describe("buildSarifCheckAnnotations", () => {
 
   it("redacts bearer tokens with base64 padding", () => {
     const bearer = `Bearer ${"a".repeat(22)}==`
-    const annotations = buildSarifCheckAnnotations([
-      F({ message: `Header ${bearer}` }),
-    ])
+    const annotations = buildSarifCheckAnnotations([F({ message: `Header ${bearer}` })])
 
     expect(annotations[0]?.message).toContain("Header [REDACTED]")
     expect(annotations[0]?.message).not.toContain(bearer)
@@ -151,27 +147,21 @@ describe("buildSarifCheckAnnotations", () => {
 
   it("redacts JWT-like tokens in public messages", () => {
     const jwt = `eyJ${"a".repeat(16)}.eyJ${"b".repeat(16)}.${"c".repeat(32)}`
-    const annotations = buildSarifCheckAnnotations([
-      F({ message: `OIDC token ${jwt}` }),
-    ])
+    const annotations = buildSarifCheckAnnotations([F({ message: `OIDC token ${jwt}` })])
 
     expect(annotations[0]?.message).toContain("OIDC token [REDACTED]")
     expect(annotations[0]?.message).not.toContain(jwt)
   })
 
   it("truncates long titles to GitHub's title budget", () => {
-    const annotations = buildSarifCheckAnnotations([
-      F({ ruleName: "x".repeat(500) }),
-    ])
+    const annotations = buildSarifCheckAnnotations([F({ ruleName: "x".repeat(500) })])
 
     expect(annotations[0]?.title).toHaveLength(240)
     expect(annotations[0]?.title.endsWith("...")).toBe(true)
   })
 
   it("truncates long messages to GitHub's annotation text budget", () => {
-    const annotations = buildSarifCheckAnnotations([
-      F({ message: "x".repeat(70000) }),
-    ])
+    const annotations = buildSarifCheckAnnotations([F({ message: "x".repeat(70000) })])
 
     expect(annotations[0]?.message).toHaveLength(60000)
     expect(annotations[0]?.message.endsWith("...")).toBe(true)

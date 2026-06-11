@@ -37,9 +37,8 @@ function isSbomRun(run: SarifReport["runs"][number]): boolean {
   if (Array.isArray(run.results)) {
     for (const r of run.results) {
       if (r.kind !== SBOM_RESULT_KIND) continue
-      const hasSbomTaxaSignal = Array.isArray(r.taxa) && r.taxa.some((t) =>
-        typeof t.id === "string" && t.id.toLowerCase().includes("sbom"),
-      )
+      const hasSbomTaxaSignal =
+        Array.isArray(r.taxa) && r.taxa.some((t) => typeof t.id === "string" && t.id.toLowerCase().includes("sbom"))
       if (hasSbomTaxaSignal) return true
     }
   }
@@ -48,14 +47,15 @@ function isSbomRun(run: SarifReport["runs"][number]): boolean {
 
 function readArtifactPackage(a: SarifArtifact): SbomPackage | null {
   const props = a.properties ?? {}
-  const name = typeof props.name === "string"
-    ? props.name
-    : (typeof a.description?.text === "string" ? a.description.text : null)
+  const name =
+    typeof props.name === "string" ? props.name : typeof a.description?.text === "string" ? a.description.text : null
   if (!name) return null
   const version = typeof props.version === "string" ? props.version : undefined
   const licenses = Array.isArray(props.licenses)
     ? (props.licenses as unknown[]).filter((v): v is string => typeof v === "string")
-    : (typeof props.license === "string" ? [props.license] : [])
+    : typeof props.license === "string"
+      ? [props.license]
+      : []
   const license = licenses[0]
   const relationship = typeof props.relationship === "string" ? props.relationship : null
   const isDirect = relationship === "direct" || relationship === "root"
@@ -104,12 +104,12 @@ export function buildSbomSummary(report: SarifReport): SbomSummary {
   const sortedLicenses = Object.entries(licenseCounts).sort((a, b) => b[1] - a[1])
   const topLicenses = sortedLicenses.slice(0, TOP_N_LICENSES)
   const otherCount = sortedLicenses.slice(TOP_N_LICENSES).reduce((acc, [, c]) => acc + c, 0)
-  const licenseSummary = topLicenses.map(([k, c]) => `${k}=${c}`).join(", ")
-    + (otherCount > 0 ? `, Other=${otherCount}` : "")
+  const licenseSummary =
+    topLicenses.map(([k, c]) => `${k}=${c}`).join(", ") + (otherCount > 0 ? `, Other=${otherCount}` : "")
 
   // Top-N direct deps for display (deterministic order: by name asc)
   const directNames = direct
-    .map((p) => p.version ? `${p.name}@${p.version}` : p.name)
+    .map((p) => (p.version ? `${p.name}@${p.version}` : p.name))
     .sort()
     .slice(0, TOP_N_PACKAGES)
 

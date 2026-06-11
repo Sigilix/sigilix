@@ -17,13 +17,7 @@
 // Plan-v1 BLOCKING from Codex: `taxa` lives on `result`, not `rule`.
 // Resolver signature takes both + run-level taxa + tool name.
 
-import type {
-  SarifFindingCategory,
-  SarifResult,
-  SarifRule,
-  SarifTaxa,
-  RoleHint,
-} from "./types"
+import type { SarifFindingCategory, SarifResult, SarifRule, SarifTaxa, RoleHint } from "./types"
 
 export interface TaxonomyResolution {
   category: SarifFindingCategory
@@ -123,14 +117,7 @@ export function resolveTaxonomy(args: ResolveArgs): TaxonomyResolution {
   }
 
   // Keyword-blob match across all sources, in priority order.
-  const sources = [
-    ...taxaNames,
-    ...tags,
-    ruleId,
-    ruleName,
-    ruleShort,
-    toolKeyword,
-  ]
+  const sources = [...taxaNames, ...tags, ruleId, ruleName, ruleShort, toolKeyword]
   const cat = pickCategory(sources)
   if (cat === "sbom") {
     return { category: "other", roleHint: "security", isSbom: true }

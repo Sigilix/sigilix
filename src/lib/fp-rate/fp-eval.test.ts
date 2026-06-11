@@ -126,7 +126,10 @@ describe("computeEvalReport", () => {
       ...Array.from({ length: 26 }, (_, i) => l(`tp${i}`, "TP")),
       ...Array.from({ length: 4 }, (_, i) => l(`bl${i}`, "borderline")),
     ]
-    const overall = computeEvalReport(joinFindingsToLabels(findings, labels), { minN: 20, target: 0.1 }).groups[0]!
+    const overall = computeEvalReport(joinFindingsToLabels(findings, labels), {
+      minN: 20,
+      target: 0.1,
+    }).groups[0]!
     expect(overall.fpRate).toBe(0) // labeled FP rate
     expect(overall.meetsTarget).toBe(false) // worst case 4/30 > 10%
   })

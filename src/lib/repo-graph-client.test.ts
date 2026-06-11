@@ -25,7 +25,10 @@ import type { Env } from "@/src/shared/types/env"
 
 type Call = { method: string; args: unknown[] }
 
-function makeStub(): { calls: Call[]; stub: Record<string, (...a: unknown[]) => Promise<unknown>> } {
+function makeStub(): {
+  calls: Call[]
+  stub: Record<string, (...a: unknown[]) => Promise<unknown>>
+} {
   const calls: Call[] = []
   const stub = new Proxy({} as Record<string, (...a: unknown[]) => Promise<unknown>>, {
     get(_t, method: string) {
@@ -76,7 +79,12 @@ describe("graphContextFor delegation", () => {
     const repo = "widget"
     const { env, calls } = makeEnv(owner, repo)
 
-    const args = { seedPaths: ["src/a.ts"], maxFiles: 8, maxSymbolsPerHit: 12, maxEdgesPerSymbol: 6 }
+    const args = {
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 6,
+    }
     await graphContextFor(env, owner, repo, args)
 
     // idFromName was called with the correct namespace key

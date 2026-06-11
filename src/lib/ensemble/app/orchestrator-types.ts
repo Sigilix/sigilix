@@ -266,7 +266,7 @@ export interface EnsembleTelemetry {
      * token, uncorroborated by any scanner fact (would-demote-to-body in
      * shadow, actual-demote in enforce; 0 when the gate is off). */
     droppedForFailedSecurityGroundingValidation: number
-  droppedForFailedSecurityUsageValidation: number
+    droppedForFailedSecurityUsageValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**
@@ -353,7 +353,14 @@ export interface EnsembleTelemetry {
    * `scanned: false` with optional `skipReason` on skip paths.
    */
   astRules?:
-    | { scanned: true; filesScanned: number; filesSkippedLarge: number; filesParseFailed: number; findingsCount: number; durationMs: number }
+    | {
+        scanned: true
+        filesScanned: number
+        filesSkippedLarge: number
+        filesParseFailed: number
+        findingsCount: number
+        durationMs: number
+      }
     | { scanned: false; skipReason?: "disabled-config" | "no-js-ts-files"; findingsCount: 0 }
   /**
    * ARC-188: SARIF evidence channel telemetry. `findingsCount`

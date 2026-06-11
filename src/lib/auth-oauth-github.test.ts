@@ -131,10 +131,7 @@ describe("handleGitHubAuthKickoff", () => {
   it("fails 503 when GITHUB_OAUTH_CLIENT_ID is unset", async () => {
     const kv = makeKV()
     const e = { ...env(kv), GITHUB_OAUTH_CLIENT_ID: undefined }
-    const res = await handleGitHubAuthKickoff(
-      new Request("https://app.sigilix.ai/auth/github"),
-      e,
-    )
+    const res = await handleGitHubAuthKickoff(new Request("https://app.sigilix.ai/auth/github"), e)
     expect(res.status).toBe(503)
   })
 
@@ -179,23 +176,18 @@ describe("handleGitHubAuthCallback", () => {
       // RequestInfo | URL is { string | Request | URL }. Each shape has
       // a different way to get the request URL — normalize all three
       // explicitly so the mock doesn't throw on a URL input.
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (url.includes("github.com/login/oauth/access_token")) {
-        return new Response(
-          JSON.stringify(args.tokenResponse ?? { access_token: "ghu_token", token_type: "bearer" }),
-          { status: args.tokenStatus ?? 200, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify(args.tokenResponse ?? { access_token: "ghu_token", token_type: "bearer" }), {
+          status: args.tokenStatus ?? 200,
+          headers: { "content-type": "application/json" },
+        })
       }
       if (url.includes("api.github.com/user")) {
-        return new Response(
-          JSON.stringify(args.userResponse ?? { login: "alice", id: 12345 }),
-          { status: args.userStatus ?? 200, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify(args.userResponse ?? { login: "alice", id: 12345 }), {
+          status: args.userStatus ?? 200,
+          headers: { "content-type": "application/json" },
+        })
       }
       throw new Error(`unexpected fetch: ${url}`)
     })
@@ -219,9 +211,7 @@ describe("handleGitHubAuthCallback", () => {
     expect(sessionCookie).toContain("Secure")
     expect(sessionCookie).toContain("SameSite=Lax")
     // State cookie cleared
-    const stateCookie = cookies.find(
-      (c) => c.startsWith("__Host-sigilix_oauth_state=") && c.includes("Max-Age=0"),
-    )
+    const stateCookie = cookies.find((c) => c.startsWith("__Host-sigilix_oauth_state=") && c.includes("Max-Age=0"))
     expect(stateCookie).toBeTruthy()
     // KV session record was written
     const sessionEntry = [...kv._store.entries()].find(([k]) => k.startsWith("auth_session:"))

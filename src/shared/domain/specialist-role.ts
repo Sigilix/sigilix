@@ -8,9 +8,4 @@
 
 export type SpecialistRole = "logic" | "security" | "performance" | "tests"
 
-export const ALL_SPECIALISTS: readonly SpecialistRole[] = [
-  "logic",
-  "security",
-  "performance",
-  "tests",
-] as const
+export const ALL_SPECIALISTS: readonly SpecialistRole[] = ["logic", "security", "performance", "tests"] as const

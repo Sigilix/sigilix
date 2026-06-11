@@ -6,7 +6,10 @@ export function greptileLoginsFromEnv(
 ): readonly string[] {
   const raw = env.COMPARE_REVIEWERS_GREPTILE_LOGINS
   if (raw === undefined || raw === "") return DEFAULT_GREPTILE_BOTS
-  const values = raw.split(",").map((s) => s.trim()).filter(Boolean)
+  const values = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
   if (values.length === 0) {
     warn("COMPARE_REVIEWERS_GREPTILE_LOGINS is set but contains no valid logins; using default Greptile bot logins")
     return DEFAULT_GREPTILE_BOTS

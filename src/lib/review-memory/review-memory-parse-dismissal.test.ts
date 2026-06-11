@@ -1,10 +1,7 @@
 // ARC-189 — Reviewer-reply dismissal-signal parser tests (Task 3).
 
 import { describe, expect, it } from "vitest"
-import {
-  parseDismissalSignal,
-  parseReviewFeedbackSignal,
-} from "@/src/lib/review-memory/parse-dismissal"
+import { parseDismissalSignal, parseReviewFeedbackSignal } from "@/src/lib/review-memory/parse-dismissal"
 
 describe("parseDismissalSignal — keyword set triggers", () => {
   it.each([
@@ -28,13 +25,10 @@ describe("parseDismissalSignal — keyword set triggers", () => {
 })
 
 describe("parseDismissalSignal — `nit` is bare-only (spec §13 risk #4)", () => {
-  it.each(["nit", "Nit", "NIT", "nit.", "nit!", "Nit ", "  nit  "])(
-    `triggers on bare %p`,
-    (body) => {
-      const r = parseDismissalSignal(body)
-      expect(r).not.toBeNull()
-    },
-  )
+  it.each(["nit", "Nit", "NIT", "nit.", "nit!", "Nit ", "  nit  "])(`triggers on bare %p`, (body) => {
+    const r = parseDismissalSignal(body)
+    expect(r).not.toBeNull()
+  })
 
   it.each([
     "nit: actually let's keep this",
@@ -97,7 +91,9 @@ describe("parseDismissalSignal — SIG-114 PR 4 canonical reason capture", () =>
     expect(parseDismissalSignal("Hmm, I think this is a false positive — see PR #42.")).toEqual({
       kind: "dismissed-textual",
     })
-    expect(parseDismissalSignal("ignore, out of scope for this PR")).toEqual({ kind: "dismissed-textual" })
+    expect(parseDismissalSignal("ignore, out of scope for this PR")).toEqual({
+      kind: "dismissed-textual",
+    })
   })
   it("leaves bare nit unlabeled", () => {
     expect(parseDismissalSignal("nit")).toEqual({ kind: "dismissed-textual" })
@@ -120,7 +116,6 @@ describe("parseDismissalSignal — degenerate / empty inputs", () => {
   })
 
   it("returns null for non-string input (defensive)", () => {
-
     expect(parseDismissalSignal(null as any)).toBeNull()
 
     expect(parseDismissalSignal(undefined as any)).toBeNull()
@@ -192,14 +187,7 @@ describe("parseReviewFeedbackSignal — SIG-185 accepted/dismissed outcomes", ()
   })
 
   it("ignores accepted keywords inside fenced code blocks", () => {
-    const body = [
-      "I disagree with this pattern.",
-      "",
-      "```md",
-      "good catch",
-      "fixed",
-      "```",
-    ].join("\n")
+    const body = ["I disagree with this pattern.", "", "```md", "good catch", "fixed", "```"].join("\n")
     expect(parseReviewFeedbackSignal(body)).toBeNull()
   })
 

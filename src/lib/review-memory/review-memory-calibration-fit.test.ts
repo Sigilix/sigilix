@@ -44,11 +44,7 @@ describe("betaLowerBound — Beta(1,9) posterior 5% quantile (normal approx)", (
   })
 })
 
-function rec(
-  prNumber: number,
-  createdMs: number,
-  rows: CalibrationShadowRecord["rows"],
-): CalibrationShadowRecord {
+function rec(prNumber: number, createdMs: number, rows: CalibrationShadowRecord["rows"]): CalibrationShadowRecord {
   return { prNumber, createdMs, rows }
 }
 
@@ -60,9 +56,7 @@ describe("computeClaimCalibration — leakage-safe distinct-PR join", () => {
     // Row at PR 50 carrying claim X; the only dismissal of fid X is at PR 30
     // (BEFORE) — that's the signal that built the memory, NOT a fresh
     // dismissal. So it counts in the denominator but NOT as a success.
-    const shadowRecords = [
-      rec(50, mature, [{ fid: "fidX", claimType: "auth-gate-is-boundary" }]),
-    ]
+    const shadowRecords = [rec(50, mature, [{ fid: "fidX", claimType: "auth-gate-is-boundary" }])]
     const dismissals: CalibrationDismissal[] = [{ fid: "fidX", prNumber: 30 }]
     const blob = computeClaimCalibration({ shadowRecords, dismissals, nowMs: NOW })
     const p = blob["auth-gate-is-boundary"]
@@ -103,9 +97,7 @@ describe("computeClaimCalibration — leakage-safe distinct-PR join", () => {
 
   it("drops shadow records younger than the 14-day maturity lag (right-censoring guard)", () => {
     const fresh = NOW - 3 * DAY // inside the lag → excluded
-    const shadowRecords = [
-      rec(50, fresh, [{ fid: "fidF", claimType: "auth-gate-is-boundary" }]),
-    ]
+    const shadowRecords = [rec(50, fresh, [{ fid: "fidF", claimType: "auth-gate-is-boundary" }])]
     const blob = computeClaimCalibration({ shadowRecords, dismissals: [], nowMs: NOW })
     expect(blob["auth-gate-is-boundary"]).toBeUndefined()
   })
@@ -153,9 +145,7 @@ describe("computeClaimCalibration — leakage-safe distinct-PR join", () => {
     const shadowRecords = Array.from({ length: 120 }, (_, i) =>
       rec(1000 + i, mature, [{ fid: `g${i}`, claimType: "globally-unique-id-is-tenant-isolation" }]),
     )
-    const dismissals = shadowRecords
-      .slice(0, 115)
-      .map((r, i) => ({ fid: `g${i}`, prNumber: r.prNumber }))
+    const dismissals = shadowRecords.slice(0, 115).map((r, i) => ({ fid: `g${i}`, prNumber: r.prNumber }))
     const blob = computeClaimCalibration({ shadowRecords, dismissals, nowMs: NOW })
     const p = blob["globally-unique-id-is-tenant-isolation"]
     expect(p?.n).toBe(120)

@@ -95,7 +95,11 @@ export async function dispatchRunnerCheck(args: DispatchRunnerCheckArgs): Promis
     })
     if (res.status === 204) return { dispatched: true, status: 204 }
     let detail = ""
-    try { detail = (await res.text()).slice(0, 300) } catch { /* ignore */ }
+    try {
+      detail = (await res.text()).slice(0, 300)
+    } catch {
+      /* ignore */
+    }
     return { dispatched: false, status: res.status, error: detail }
   } catch (err) {
     return { dispatched: false, status: 0, error: err instanceof Error ? err.message : String(err) }

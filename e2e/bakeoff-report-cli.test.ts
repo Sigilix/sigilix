@@ -139,12 +139,7 @@ describe("bakeoff-report CLI — end-to-end", () => {
   })
 
   it("exits 2 on a missing required --input argument", () => {
-    const { code, stderr } = runCli([
-      "--since",
-      "2026-05-01T00:00:00Z",
-      "--until",
-      "2026-05-31T00:00:00Z",
-    ])
+    const { code, stderr } = runCli(["--since", "2026-05-01T00:00:00Z", "--until", "2026-05-31T00:00:00Z"])
     expect(code).toBe(2)
     expect(stderr).toMatch(/missing required --input/)
   })

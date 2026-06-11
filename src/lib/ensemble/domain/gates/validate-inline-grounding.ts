@@ -49,18 +49,14 @@ export type InlineGroundingValidatorMode = "shadow" | "enforce"
  * the literal "enforce" (case-insensitive, trimmed) resolves to
  * "shadow" — the cautious default.
  */
-export function parseInlineGroundingValidatorMode(
-  raw: string | undefined,
-): InlineGroundingValidatorMode {
+export function parseInlineGroundingValidatorMode(raw: string | undefined): InlineGroundingValidatorMode {
   return (raw ?? "").trim().toLowerCase() === "enforce" ? "enforce" : "shadow"
 }
 
 /** Single failure shape — a sub-4 finding with no grounding signal. */
 export type InlineGroundingDropReason = "ungrounded-inline-finding"
 
-export type InlineGroundingDecision =
-  | { keep: true }
-  | { keep: false; reason: InlineGroundingDropReason }
+export type InlineGroundingDecision = { keep: true } | { keep: false; reason: InlineGroundingDropReason }
 
 export interface InlineGroundingEvidence {
   /**
@@ -115,9 +111,7 @@ export function hasResolvableBacktickedToken(
   // Require a LETTER/_/$ and length >= 2 so a pure-punctuation or numeric
   // backtick (`==`, `()`, `10`) can't anchor on almost any line — a real
   // finding names a concrete identifier/member, not an operator/number.
-  const tokens = [...new Set(backtickedTokens(finding))].filter(
-    (t) => t.length >= 2 && /[A-Za-z_$]/.test(t),
-  )
+  const tokens = [...new Set(backtickedTokens(finding))].filter((t) => t.length >= 2 && /[A-Za-z_$]/.test(t))
   if (tokens.length === 0) return false
   for (const tok of tokens) {
     // A pure identifier ([A-Za-z_$][\w$]*) is escape-free, so `\b<tok>\b`
@@ -161,8 +155,7 @@ export function evaluateInlineGrounding(
   const grounded =
     hasStructuredFix(finding) ||
     hasNonEmptyString(finding.failureExample) ||
-    (Array.isArray(finding.evidenceRefs) &&
-      finding.evidenceRefs.some((r) => hasNonEmptyString(r))) ||
+    (Array.isArray(finding.evidenceRefs) && finding.evidenceRefs.some((r) => hasNonEmptyString(r))) ||
     hasValidEvidenceId(finding.evidenceId) ||
     hasResolvableBacktickedToken(finding, addedLineTextByLine)
 

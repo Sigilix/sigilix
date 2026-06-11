@@ -75,12 +75,14 @@ describe("index branch helpers", () => {
   })
 
   it("resolves default branches to the existing repo namespace", async () => {
-    expect(await resolveIndexTarget({
-      owner: "Sigilix",
-      repo: "sigilix",
-      defaultBranch: "main",
-      branch: "main",
-    })).toMatchObject({
+    expect(
+      await resolveIndexTarget({
+        owner: "Sigilix",
+        repo: "sigilix",
+        defaultBranch: "main",
+        branch: "main",
+      }),
+    ).toMatchObject({
       branch: "main",
       stateRepo: "sigilix",
       namespace: "sigilix/sigilix",
@@ -90,12 +92,14 @@ describe("index branch helpers", () => {
 
   it("resolves non-default branches to isolated state and namespace", async () => {
     const encoded = await encodeBranchName("dev")
-    expect(await resolveIndexTarget({
-      owner: "Sigilix",
-      repo: "sigilix",
-      defaultBranch: "main",
-      branch: "dev",
-    })).toMatchObject({
+    expect(
+      await resolveIndexTarget({
+        owner: "Sigilix",
+        repo: "sigilix",
+        defaultBranch: "main",
+        branch: "dev",
+      }),
+    ).toMatchObject({
       branch: "dev",
       stateRepo: `sigilix/__branch__/${encoded}`,
       namespace: `sigilix/sigilix/__branch__/${encoded}`,

@@ -25,9 +25,8 @@ export const noThrowLiteral: AstRule = {
     const arg = node.argument
     if (!arg) return null
     const isLit = arg.type === "Literal"
-    const isPlainTemplate = arg.type === "TemplateLiteral"
-      && Array.isArray(arg.expressions)
-      && arg.expressions.length === 0
+    const isPlainTemplate =
+      arg.type === "TemplateLiteral" && Array.isArray(arg.expressions) && arg.expressions.length === 0
     if (!isLit && !isPlainTemplate) return null
     return {
       message: "Throwing a literal loses the stack trace. Use `throw new Error(message)` or a typed Error class.",

@@ -12,20 +12,12 @@ import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { type GhMentionSurface } from "@/src/lib/github-mention"
-import {
-  bodyMentionsBot,
-  getMentionTriggers,
-  isArcGithubLogin,
-  stripQuotesAndCode,
-} from "@/src/lib/mention"
-import {
-  parseSlashCommand,
-  renderSlashCommandAck,
-  isAuthorAllowedForSlashCommand,
-} from "@/src/lib/slash-commands"
+import { bodyMentionsBot, getMentionTriggers, isArcGithubLogin, stripQuotesAndCode } from "@/src/lib/mention"
+import { parseSlashCommand, renderSlashCommandAck, isAuthorAllowedForSlashCommand } from "@/src/lib/slash-commands"
 import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
 import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
+import { isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
 import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
@@ -230,17 +222,26 @@ export async function dispatchReviewMemoryCapture(args: {
     const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
     const config = resolveReviewMemoryConfig(sigilixConfig)
     await captureReviewFeedback({
-      env, client, owner, repo, prNumber,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
       replyComment: comment,
       config,
       ...(repoId !== undefined ? { repoId } : {}),
     })
   } catch (err) {
-    console.log(JSON.stringify({
-      event: "review-memory-capture-dispatch-failed",
-      owner, repo, prNumber, commentId: comment.id,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-memory-capture-dispatch-failed",
+        owner,
+        repo,
+        prNumber,
+        commentId: comment.id,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -293,12 +294,17 @@ export async function dispatchTopLevelReviewMemoryCapture(args: {
       ...(repoId !== undefined ? { repoId } : {}),
     })
   } catch (err) {
-    console.log(JSON.stringify({
-      event: "review-memory-capture-dispatch-failed",
-      owner, repo, prNumber, commentId: comment.id,
-      signal_source: "top-level-explicit",
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-memory-capture-dispatch-failed",
+        owner,
+        repo,
+        prNumber,
+        commentId: comment.id,
+        signal_source: "top-level-explicit",
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -334,12 +340,17 @@ export async function dispatchDismissedReviewMemoryCapture(args: {
       config,
     })
   } catch (err) {
-    console.log(JSON.stringify({
-      event: "review-memory-capture-dispatch-failed",
-      owner, repo, prNumber, commentId: review.id,
-      signal_source: "review-dismissed-stale",
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-memory-capture-dispatch-failed",
+        owner,
+        repo,
+        prNumber,
+        commentId: review.id,
+        signal_source: "review-dismissed-stale",
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -413,14 +424,18 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     // forever, which is too broad a circle for a privileged channel.
     if (!isAuthorAllowedForSlashCommand(comment.author_association)) {
       const association = (comment.author_association ?? "").toUpperCase()
-      console.log(JSON.stringify({
-        event: "slash-command-rejected",
-        reason: "untrusted_author_association",
-        cmd: slashCmd.cmd,
-        author_association: association || null,
-        login: comment.user?.login ?? null,
-        owner, repo, prNumber,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "slash-command-rejected",
+          reason: "untrusted_author_association",
+          cmd: slashCmd.cmd,
+          author_association: association || null,
+          login: comment.user?.login ?? null,
+          owner,
+          repo,
+          prNumber,
+        }),
+      )
       return new Response("forbidden\n", { status: 403 })
     }
 
@@ -437,17 +452,19 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
           installationId,
         })
         const client = new GitHubClient({ token })
-        await client.createIssueComment(
-          owner, repo, prNumber,
-          renderSlashCommandAck(slashCmd),
-        )
+        await client.createIssueComment(owner, repo, prNumber, renderSlashCommandAck(slashCmd))
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "slash-command-usage-post-failed",
-          err: err instanceof Error ? err.message : String(err),
-          cmd: "describe", rawArg: slashCmd.rawArg,
-          owner, repo, prNumber,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "slash-command-usage-post-failed",
+            err: err instanceof Error ? err.message : String(err),
+            cmd: "describe",
+            rawArg: slashCmd.rawArg,
+            owner,
+            repo,
+            prNumber,
+          }),
+        )
       }
       return new Response("usage posted\n", { status: 200 })
     }
@@ -465,15 +482,22 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     // keep the existing key shape. (The `unknown` describe variant
     // returned via the fast path above, so here describe.mode is
     // always a canonical DescribeMode.)
-    const coalesceKey = slashCmd.cmd === "describe"
-      ? `slash-cmd:describe:${slashCmd.mode}${slashCmd.apply ? ":apply" : ""}:${owner}/${repo}#${prNumber}`
-      : `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
+    const coalesceKey =
+      slashCmd.cmd === "describe"
+        ? `slash-cmd:describe:${slashCmd.mode}${slashCmd.apply ? ":apply" : ""}:${owner}/${repo}#${prNumber}`
+        : `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
     if (existing) {
-      console.log(JSON.stringify({
-        event: "slash-command-coalesced",
-        coalesceKey, owner, repo, prNumber, cmd: slashCmd.cmd,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "slash-command-coalesced",
+          coalesceKey,
+          owner,
+          repo,
+          prNumber,
+          cmd: slashCmd.cmd,
+        }),
+      )
       return new Response("coalesced\n", { status: 202 })
     }
     await env.OPENCLAW_STATE.put(coalesceKey, String(Date.now()), {
@@ -486,19 +510,26 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     // ctx.waitUntil so the webhook can return 202 immediately. Fires
     // ONLY when the slash command parsed AND ACL passed AND coalesce
     // didn't hit — earlier branches return without touching this.
-    ctx.waitUntil(postSlashCommandEyesAck({
-      env, owner, repo,
-      commentId: comment.id,
-      surface,
-      installationId,
-    }))
+    ctx.waitUntil(
+      postSlashCommandEyesAck({
+        env,
+        owner,
+        repo,
+        commentId: comment.id,
+        surface,
+        installationId,
+      }),
+    )
 
     let message: JobMessage
     switch (slashCmd.cmd) {
       case "review":
         message = {
           type: "pr-review-rerun",
-          owner, repo, prNumber, installationId,
+          owner,
+          repo,
+          prNumber,
+          installationId,
         }
         break
       case "full-review":
@@ -507,20 +538,29 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
         // explicit bypass + telemetry can distinguish the two CTAs.
         message = {
           type: "pr-review-rerun",
-          owner, repo, prNumber, installationId,
+          owner,
+          repo,
+          prNumber,
+          installationId,
           forceFresh: true,
         }
         break
       case "improve":
         message = {
           type: "pr-improve",
-          owner, repo, prNumber, installationId,
+          owner,
+          repo,
+          prNumber,
+          installationId,
         }
         break
       case "help":
         message = {
           type: "pr-help",
-          owner, repo, prNumber, installationId,
+          owner,
+          repo,
+          prNumber,
+          installationId,
         }
         break
       case "describe":
@@ -529,7 +569,10 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
         // variant of the describe union.
         message = {
           type: "pr-describe",
-          owner, repo, prNumber, installationId,
+          owner,
+          repo,
+          prNumber,
+          installationId,
           mode: slashCmd.mode,
           // ARC-264: thread the apply flag through to the queue
           // consumer. False (post a comment) is the describe v1
@@ -602,15 +645,19 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
       inReplyToId: comment.in_reply_to_id ?? null,
     })
     if (!gate.ok) {
-      console.log(JSON.stringify({
-        event: "review-reply-skipped",
-        reason: gate.reason,
-        owner, repo, prNumber,
-        comment_id: comment.id,
-        body_length: bodyLength,
-        body_ends_with_q: bodyEndsWithQ,
-        had_in_reply_to_id: hadInReplyToId,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "review-reply-skipped",
+          reason: gate.reason,
+          owner,
+          repo,
+          prNumber,
+          comment_id: comment.id,
+          body_length: bodyLength,
+          body_ends_with_q: bodyEndsWithQ,
+          had_in_reply_to_id: hadInReplyToId,
+        }),
+      )
       // 200 not 202: we explicitly chose not to queue. The webhook
       // is acknowledged but no work is created.
       return new Response(`skip review-reply: ${gate.reason}\n`, { status: 200 })
@@ -630,21 +677,79 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     installationId,
     surface,
     commentId: comment.id,
-    ...(typeof comment.in_reply_to_id === "number"
-      ? { threadRootId: comment.in_reply_to_id }
-      : {}),
+    ...(typeof comment.in_reply_to_id === "number" ? { threadRootId: comment.in_reply_to_id } : {}),
   }
   await env.OPENCLAW_JOBS.send(message)
-  console.log(JSON.stringify({
-    event: isReviewCommentWithoutMention ? "review-reply-dispatched" : "github-mention-dispatched",
-    surface,
-    owner, repo, prNumber,
-    comment_id: comment.id,
-    has_mention: hasMention,
-    is_review_thread_reply: isReviewCommentWithoutMention,
-    body_length: bodyLength,
-    body_ends_with_q: bodyEndsWithQ,
-    had_in_reply_to_id: hadInReplyToId,
-  }))
+  console.log(
+    JSON.stringify({
+      event: isReviewCommentWithoutMention ? "review-reply-dispatched" : "github-mention-dispatched",
+      surface,
+      owner,
+      repo,
+      prNumber,
+      comment_id: comment.id,
+      has_mention: hasMention,
+      is_review_thread_reply: isReviewCommentWithoutMention,
+      body_length: bodyLength,
+      body_ends_with_q: bodyEndsWithQ,
+      had_in_reply_to_id: hadInReplyToId,
+    }),
+  )
   return new Response("queued\n", { status: 202 })
+}
+
+/**
+ * SIG-318 / SIG-366: ARC-237 / SIG-35 push-driven re-index sub-handler — the
+ * `event === "push"` branch of the webhook router, lifted out of
+ * `handleGitHubWebhook` (verbatim — only the closed-over `env` / `owner` / `repo` /
+ * `installationId` / `payload` become params) so the entry-adjacent
+ * `index-github-webhook.ts` stays under the 1k cap. Mirrors `queueGithubMention`
+ * (an IO sub-handler returning a Response). The producer refreshes the default
+ * branch, configured long-lived branches, and active same-repo PR branches on
+ * already-indexed repos; push-storm coalescing falls out of ARC-235's freshness check.
+ */
+export async function handlePushEvent(args: {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  payload: GitHubWebhookPayload
+}): Promise<Response> {
+  const { env, owner, repo, installationId, payload } = args
+  if (!isIndexerEnabled(env)) {
+    return new Response("push event ignored (indexer off)\n", { status: 200 })
+  }
+  const outcome = await maybeEnqueuePushIndexJob({
+    env,
+    owner,
+    repo,
+    // SIG-243 Phase 1: capture the immutable repo ID from the push
+    // payload and thread it to the producer. The producer attaches
+    // it to the queue message; the consumer persists it on the
+    // manifest. Falls back to `undefined` (treated as legacy) if a
+    // webhook arrives without the field. GitHub repo IDs are strictly
+    // positive integers; the guard rejects 0 / negative / non-integer
+    // / NaN / Infinity at the entry point so a spoofed or malformed
+    // payload can't land an invalid `repo-tenant:0` key downstream.
+    repoId:
+      typeof payload.repository?.id === "number" && Number.isInteger(payload.repository.id) && payload.repository.id > 0
+        ? payload.repository.id
+        : undefined,
+    installationId,
+    ref: typeof payload.ref === "string" ? payload.ref : undefined,
+    after: typeof payload.after === "string" ? payload.after : undefined,
+  })
+  if ("enqueued" in outcome && outcome.enqueued) {
+    return new Response("push indexed\n", { status: 202 })
+  }
+  if ("failed" in outcome) {
+    // Producer threw on OPENCLAW_JOBS.send (binding broken /
+    // backpressure). Surface 503 so GitHub redelivers — the
+    // enqueue is the only side-effect, idempotent on the consumer
+    // side because chunk ids are content-addressed.
+    return new Response("push enqueue failed\n", { status: 503 })
+  }
+  // Any other `{skipped: ...}` outcome is a deliberate no-op (the
+  // producer logged the specific reason).
+  return new Response("push skipped\n", { status: 200 })
 }

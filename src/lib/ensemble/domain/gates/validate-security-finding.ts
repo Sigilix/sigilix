@@ -152,14 +152,12 @@ export function deriveSecurityBucket(finding: PrReviewFinding): SecurityBucket |
 export const REMEDIATION_BY_BUCKET: Record<SecurityBucket, string> = {
   injection:
     "Treat all external input as untrusted: use parameterized queries / prepared statements (or the framework's safe API) and never build SQL, shell, or template strings by concatenation.",
-  xss:
-    "Escape untrusted data for the exact output context (HTML, attribute, JS, URL) at render time, prefer framework auto-escaping, and apply a Content-Security-Policy as defense in depth.",
+  xss: "Escape untrusted data for the exact output context (HTML, attribute, JS, URL) at render time, prefer framework auto-escaping, and apply a Content-Security-Policy as defense in depth.",
   "path-traversal":
     "Resolve the path and confirm it stays within an allowed base directory (reject `..` and absolute paths); prefer an allow-list of known-safe names over user-supplied paths.",
   deserialization:
     "Do not deserialize untrusted data into arbitrary types. Use a safe format and validate against a strict schema; never run language-native object deserialization on external input.",
-  ssrf:
-    "Validate and allow-list the destination host/port before the request, resolve DNS and block private/link-local/loopback ranges, and do not follow redirects to untrusted hosts.",
+  ssrf: "Validate and allow-list the destination host/port before the request, resolve DNS and block private/link-local/loopback ranges, and do not follow redirects to untrusted hosts.",
   "memory-safety":
     "Bound every read/write to the allocation size, check for integer overflow before size/index arithmetic, and clear freed pointers to avoid use-after-free. Prefer safe buffer wrappers.",
   "authn-access-control":
@@ -212,10 +210,7 @@ export const SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED =
  * bucket is UNCHANGED regardless of `citedLineText`. Non-security findings
  * still return null.
  */
-export function remediationForFinding(
-  finding: PrReviewFinding,
-  citedLineText?: string,
-): string | null {
+export function remediationForFinding(finding: PrReviewFinding, citedLineText?: string): string | null {
   if (finding.category !== "security") return null
   const bucket = deriveSecurityBucket(finding)
   if (!bucket) return null
@@ -454,10 +449,7 @@ export function factClassCompatible(fact: SecurityFact, finding: PrReviewFinding
  *     usable cweId (the canonical "model forgot the id" case) its bucket is
  *     unknown, so `factClassCompatible` allows the enrich as before.
  */
-function findEnrichingFact(
-  finding: PrReviewFinding,
-  manifest: Map<string, SecurityFact>,
-): SecurityFact | null {
+function findEnrichingFact(finding: PrReviewFinding, manifest: Map<string, SecurityFact>): SecurityFact | null {
   let best: SecurityFact | null = null
   let bestDistance = Number.POSITIVE_INFINITY
   for (const fact of manifest.values()) {

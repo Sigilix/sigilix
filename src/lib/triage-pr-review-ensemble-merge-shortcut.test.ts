@@ -31,7 +31,9 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
+  )
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -127,7 +129,12 @@ describe("handlePrReviewEnsemble — pre-fanout merged-on-approve short-circuit 
     // verifyReviewPersisted lookup (CR PR #104 Major fix): the review
     // is present in the list with a non-PENDING state → verified.
     mockListPullRequestReviews.mockResolvedValueOnce([
-      { id: 99_001, state: "APPROVED", body: "<!-- sigilix:pr-review -->\n", user: { login: "sigilix[bot]" } },
+      {
+        id: 99_001,
+        state: "APPROVED",
+        body: "<!-- sigilix:pr-review -->\n",
+        user: { login: "sigilix[bot]" },
+      },
     ])
 
     const result = await handlePrReviewEnsemble({

@@ -5,10 +5,7 @@
 
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { ResolvedPerfBudgets } from "@/src/shared/domain/perf-budgets"
-import {
-  DEFAULT_PRE_MERGE_GATES_CONFIG,
-  type ResolvedPreMergeGatesConfig,
-} from "@/src/shared/domain/pre-merge-gates"
+import { DEFAULT_PRE_MERGE_GATES_CONFIG, type ResolvedPreMergeGatesConfig } from "@/src/shared/domain/pre-merge-gates"
 import { pathMatchesAny } from "@/src/shared/util/path-glob"
 import {
   SPECIALIST_ROLES,
@@ -74,9 +71,7 @@ export interface ResolvedCostControls {
  * ARC-273: resolve cost-control config to a fully-locked shape with
  * defaults filled in. Pure; never throws.
  */
-export function resolveCostControlsConfig(
-  config: SigilixConfig | null,
-): ResolvedCostControls {
+export function resolveCostControlsConfig(config: SigilixConfig | null): ResolvedCostControls {
   const cc = config?.costControls
   return {
     maxPatchLength: cc?.maxPatchLength ?? DEFAULT_MAX_PATCH_LENGTH,
@@ -95,10 +90,7 @@ export function resolveCostControlsConfig(
  *
  * Pure; exported for unit tests.
  */
-export function passesLabelGate(
-  labels: ReadonlyArray<string>,
-  runOnLabels: ReadonlyArray<string>,
-): boolean {
+export function passesLabelGate(labels: ReadonlyArray<string>, runOnLabels: ReadonlyArray<string>): boolean {
   if (runOnLabels.length === 0) return true
   const labelSet = new Set(labels.map((l) => l.toLowerCase()))
   return runOnLabels.some((g) => labelSet.has(g.toLowerCase()))
@@ -112,11 +104,7 @@ export function resolvePathInstructionsForChangedPaths(
 ): MatchedSigilixPathInstruction[] {
   const instructions = config?.pathInstructions ?? []
   if (instructions.length === 0 || changedPaths.length === 0) return []
-  const uniqueChangedPaths = [...new Set(
-    changedPaths
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0),
-  )]
+  const uniqueChangedPaths = [...new Set(changedPaths.map((p) => p.trim()).filter((p) => p.length > 0))]
   const matches: MatchedSigilixPathInstruction[] = []
   for (const instruction of instructions) {
     const matchedPaths = uniqueChangedPaths.filter((path) => pathMatchesAny(path, instruction.paths))
@@ -140,10 +128,12 @@ export function renderPathInstructionsForPrompt(
   let renderedIndex = 1
   for (const match of matches) {
     const roleRules = role
-      ? match.rules?.[role] ? [[role, match.rules[role]]] as Array<[SpecialistRole, string]> : []
-      : SPECIALIST_ROLES
-        .map((r): [SpecialistRole, string] | null => match.rules?.[r] ? [r, match.rules[r]] : null)
-        .filter((entry): entry is [SpecialistRole, string] => entry !== null)
+      ? match.rules?.[role]
+        ? ([[role, match.rules[role]]] as Array<[SpecialistRole, string]>)
+        : []
+      : SPECIALIST_ROLES.map((r): [SpecialistRole, string] | null =>
+          match.rules?.[r] ? [r, match.rules[r]] : null,
+        ).filter((entry): entry is [SpecialistRole, string] => entry !== null)
     if (!match.guidance && roleRules.length === 0) continue
 
     const lines = [
@@ -209,9 +199,7 @@ export interface ResolvedDocsReview {
  *
  * Pure; never throws.
  */
-export function resolveDocsReviewConfig(
-  config: SigilixConfig | null,
-): ResolvedDocsReview {
+export function resolveDocsReviewConfig(config: SigilixConfig | null): ResolvedDocsReview {
   const dr = config?.docsReview
   return {
     enabled: dr?.enabled !== false,
@@ -233,9 +221,7 @@ export function resolveDocsReviewConfig(
  *   - bundleSizeBudgetKb: null
  *   - hotPaths: []
  */
-export function resolvePerfBudgetsConfig(
-  config: SigilixConfig | null,
-): ResolvedPerfBudgets {
+export function resolvePerfBudgetsConfig(config: SigilixConfig | null): ResolvedPerfBudgets {
   const pb = config?.perfBudgets
   return {
     p50LatencyBudgetMs: pb?.p50LatencyBudgetMs ?? null,
@@ -319,9 +305,7 @@ const DEFAULT_REVIEW_MEMORY_CATEGORIES: ReadonlyArray<ReviewMemoryCategoryRef> =
  *   - minSignalThreshold: 3
  *   - maxSignalAgeDays: 90
  */
-export function resolveReviewMemoryConfig(
-  config: SigilixConfig | null,
-): {
+export function resolveReviewMemoryConfig(config: SigilixConfig | null): {
   enabled: boolean
   captureOnly: boolean
   categories: readonly ReviewMemoryCategoryRef[]
@@ -332,10 +316,7 @@ export function resolveReviewMemoryConfig(
 } {
   const cfg = config?.reviewMemory
   const cats = cfg?.categories
-  const resolvedCats =
-    Array.isArray(cats) && cats.length > 0
-      ? cats
-      : DEFAULT_REVIEW_MEMORY_CATEGORIES
+  const resolvedCats = Array.isArray(cats) && cats.length > 0 ? cats : DEFAULT_REVIEW_MEMORY_CATEGORIES
   return {
     enabled: cfg?.enabled === true,
     captureOnly: cfg?.captureOnly === true,
@@ -353,9 +334,7 @@ export function resolveReviewMemoryConfig(
  * ARC-181: resolve the per-repo astRules config to a fully-locked
  * shape with defaults filled in. Pure function; never throws.
  */
-export function resolveAstRulesConfig(
-  config: SigilixConfig | null,
-): {
+export function resolveAstRulesConfig(config: SigilixConfig | null): {
   enabled: boolean
   severityThreshold: "info" | "warning" | "error"
   disabledRules: string[]
@@ -381,9 +360,7 @@ export function resolveAstRulesConfig(
  *   - disabledRules: []
  *   - disabledCategories: []
  */
-export function resolveSarifEvidenceConfig(
-  config: SigilixConfig | null,
-): {
+export function resolveSarifEvidenceConfig(config: SigilixConfig | null): {
   enabled: boolean
   path: string
   severityThreshold: "info" | "warning" | "error"
@@ -413,9 +390,7 @@ export function resolveSarifEvidenceConfig(
  * explicit `"off"` source resolves to "off", so the orchestrator skips
  * the entire ingestion path and production behavior is unchanged.
  */
-export function resolveCoverageConfig(
-  config: SigilixConfig | null,
-): {
+export function resolveCoverageConfig(config: SigilixConfig | null): {
   source: "off" | "github-actions-artifact"
   artifactName: string
   entry: string
@@ -448,9 +423,8 @@ export function resolveCommandConfig(
   const promptAddendum = cmd?.prompt?.addendum ?? null
   const modelPrimary = cmd?.model?.primary ?? null
   const fallbacks = cmd?.model?.fallbacks
-  const modelFallbacks = (fallbacks && fallbacks.length > 0)
-    ? { override: true as const, models: fallbacks }
-    : { override: false as const }
+  const modelFallbacks =
+    fallbacks && fallbacks.length > 0 ? { override: true as const, models: fallbacks } : { override: false as const }
   return { promptAddendum, modelPrimary, modelFallbacks }
 }
 

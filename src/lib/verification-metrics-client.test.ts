@@ -40,13 +40,15 @@ describe("recordVerificationMetricsBounded", () => {
   })
 
   it("swallows a DO rejection and logs it once", async () => {
-    const recordBatch = vi.fn(async () => { throw new Error("DO down") })
+    const recordBatch = vi.fn(async () => {
+      throw new Error("DO down")
+    })
     const log = vi.fn()
-    await expect(
-      recordVerificationMetricsBounded(makeEnv(recordBatch), ITEMS, 1_500, log),
-    ).resolves.toBeUndefined()
+    await expect(recordVerificationMetricsBounded(makeEnv(recordBatch), ITEMS, 1_500, log)).resolves.toBeUndefined()
     expect(log).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith("verification-metric-record-failed", { error: "Error: DO down" })
+    expect(log).toHaveBeenCalledWith("verification-metric-record-failed", {
+      error: "Error: DO down",
+    })
   })
 
   it("resolves anyway when the DO hangs past timeoutMs, logging the timeout", async () => {
@@ -82,9 +84,9 @@ describe("recordVerificationMetricsBounded", () => {
   })
 
   it("tolerates a missing log callback", async () => {
-    const recordBatch = vi.fn(async () => { throw new Error("boom") })
-    await expect(
-      recordVerificationMetricsBounded(makeEnv(recordBatch), ITEMS, 1_500),
-    ).resolves.toBeUndefined()
+    const recordBatch = vi.fn(async () => {
+      throw new Error("boom")
+    })
+    await expect(recordVerificationMetricsBounded(makeEnv(recordBatch), ITEMS, 1_500)).resolves.toBeUndefined()
   })
 })

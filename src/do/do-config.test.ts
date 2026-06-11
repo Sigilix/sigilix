@@ -88,12 +88,14 @@ describe("resolveDoConfig — historyLimit clamp [1, 100]", () => {
 
 describe("resolveDoConfig — combined", () => {
   it("custom retries + custom watchdog + custom liveness + custom history", () => {
-    const c = resolveDoConfig(envWith({
-      OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: "5",
-      OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "900000",
-      OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "60000",
-      OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "20",
-    }))
+    const c = resolveDoConfig(
+      envWith({
+        OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: "5",
+        OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "900000",
+        OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "60000",
+        OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "20",
+      }),
+    )
     expect(c).toEqual({
       maxRetries: 5,
       watchdogMs: 900000,

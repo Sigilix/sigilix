@@ -192,17 +192,16 @@ function precisionCell(s: ToolStats): string {
 }
 
 /** Render the summary as a committable markdown report. */
-export function formatSummaryMarkdown(
-  report: SummaryReport,
-  opts: { generatedIso: string },
-): string {
+export function formatSummaryMarkdown(report: SummaryReport, opts: { generatedIso: string }): string {
   const r = report
   const l = r.byOutcome
   const lines: string[] = []
 
   lines.push("# Reviewer head-to-head comparison")
   lines.push("")
-  lines.push(`_Generated ${opts.generatedIso} · ${r.filesCollected} PR(s) collected, ${r.filesLabeled} labeled · ${r.totalItems} labeled issues._`)
+  lines.push(
+    `_Generated ${opts.generatedIso} · ${r.filesCollected} PR(s) collected, ${r.filesLabeled} labeled · ${r.totalItems} labeled issues._`,
+  )
   lines.push("")
 
   lines.push("## Outcome Matrix")
@@ -217,13 +216,17 @@ export function formatSummaryMarkdown(
 
   lines.push("## Per-Tool Precision And Recall")
   lines.push("")
-  lines.push("Precision = real bugs flagged ÷ everything the tool flagged. Recall = real bugs flagged ÷ all ground-truth real bugs.")
+  lines.push(
+    "Precision = real bugs flagged ÷ everything the tool flagged. Recall = real bugs flagged ÷ all ground-truth real bugs.",
+  )
   lines.push("")
   lines.push("| tool | comments | flagged issues | real | noise | precision | recall | unique real | only noise |")
   lines.push("|------|---------:|---------------:|-----:|------:|----------:|-------:|------------:|-----------:|")
   for (const tool of TOOLS) {
     const s = r.byTool[tool]
-    lines.push(`| ${toolDisplayName(tool)} | ${r.commentVolume[tool]} | ${s.flagged} | ${s.real} | ${s.noise} | ${precisionCell(s)} | ${ratioCell(s.recall)} | ${s.uniqueRealBugs} | ${s.onlyNoise} |`)
+    lines.push(
+      `| ${toolDisplayName(tool)} | ${r.commentVolume[tool]} | ${s.flagged} | ${s.real} | ${s.noise} | ${precisionCell(s)} | ${ratioCell(s.recall)} | ${s.uniqueRealBugs} | ${s.onlyNoise} |`,
+    )
   }
   lines.push("")
   const zeroCommentTools = TOOLS.filter((tool) => r.commentVolume[tool] === 0)
@@ -234,7 +237,9 @@ export function formatSummaryMarkdown(
     )
     lines.push("")
   }
-  lines.push(`Ground-truth real bugs: **${r.totalRealBugs}**; missed by all compared tools: **${r.missedByAllRealBugs}**.`)
+  lines.push(
+    `Ground-truth real bugs: **${r.totalRealBugs}**; missed by all compared tools: **${r.missedByAllRealBugs}**.`,
+  )
   lines.push("")
 
   lines.push("## Overlap")

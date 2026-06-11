@@ -56,10 +56,7 @@ export function parseIngestAiInstructionsEnabled(raw: string | undefined): boole
  * explicit `sigilix.json` guidance (precedence) AND the flag is enabled. Pure —
  * the testable precedence decision behind the ensemble glue.
  */
-export function shouldIngestAiInstructions(
-  sigilixGuidance: string | undefined,
-  flagRaw: string | undefined,
-): boolean {
+export function shouldIngestAiInstructions(sigilixGuidance: string | undefined, flagRaw: string | undefined): boolean {
   if (typeof sigilixGuidance === "string" && sigilixGuidance.trim().length > 0) return false
   return parseIngestAiInstructionsEnabled(flagRaw)
 }
@@ -272,13 +269,16 @@ export async function loadAiInstructions(
     }
   }
 
-  const getRepoTree = (client as GitHubClient & {
-    getRepoTree?: GitHubClient["getRepoTree"]
-  }).getRepoTree
+  const getRepoTree = (
+    client as GitHubClient & {
+      getRepoTree?: GitHubClient["getRepoTree"]
+    }
+  ).getRepoTree
   if (typeof getRepoTree !== "function") {
     consoleWarnJson({
       event: "ai-instructions-tree-unavailable",
-      owner, repo,
+      owner,
+      repo,
       reason: "getRepoTree missing",
     })
     return capInstructionChunks(chunks)
@@ -290,7 +290,8 @@ export async function loadAiInstructions(
   } catch (err) {
     consoleWarnJson({
       event: "ai-instructions-tree-fetch-failed",
-      owner, repo,
+      owner,
+      repo,
       err: err instanceof Error ? err.message : String(err),
     })
     return capInstructionChunks(chunks)
@@ -299,30 +300,34 @@ export async function loadAiInstructions(
   if (!isRepoTreeResult(treeResult)) {
     consoleWarnJson({
       event: "ai-instructions-tree-unexpected-shape",
-      owner, repo,
+      owner,
+      repo,
     })
     return capInstructionChunks(chunks)
   }
   if (treeResult.truncated) {
     consoleWarnJson({
       event: "ai-instructions-tree-truncated",
-      owner, repo,
+      owner,
+      repo,
       total_entries: treeResult.tree.length,
     })
     return capInstructionChunks(chunks)
   }
 
-  const oversizedCount = treeResult.tree.filter((entry) =>
-    entry.type === "blob" &&
-    typeof entry.path === "string" &&
-    isGithubInstructionFilePath(entry.path) &&
-    typeof entry.size === "number" &&
-    entry.size > MAX_GITHUB_INSTRUCTION_FILE_BYTES
+  const oversizedCount = treeResult.tree.filter(
+    (entry) =>
+      entry.type === "blob" &&
+      typeof entry.path === "string" &&
+      isGithubInstructionFilePath(entry.path) &&
+      typeof entry.size === "number" &&
+      entry.size > MAX_GITHUB_INSTRUCTION_FILE_BYTES,
   ).length
   if (oversizedCount > 0) {
     consoleWarnJson({
       event: "ai-instructions-oversized-skipped",
-      owner, repo,
+      owner,
+      repo,
       skipped_count: oversizedCount,
       cap_bytes: MAX_GITHUB_INSTRUCTION_FILE_BYTES,
     })
@@ -332,7 +337,8 @@ export async function loadAiInstructions(
   if (githubFiles.length > MAX_GITHUB_INSTRUCTION_FILES) {
     consoleWarnJson({
       event: "ai-instructions-file-count-capped",
-      owner, repo,
+      owner,
+      repo,
       discovered_count: githubFiles.length,
       cap: MAX_GITHUB_INSTRUCTION_FILES,
     })
@@ -345,7 +351,8 @@ export async function loadAiInstructions(
     } catch (err) {
       consoleWarnJson({
         event: "ai-instructions-file-fetch-failed",
-        owner, repo,
+        owner,
+        repo,
         path: file.path,
         err: err instanceof Error ? err.message : String(err),
       })
@@ -356,7 +363,8 @@ export async function loadAiInstructions(
     if (parsed.malformed) {
       consoleWarnJson({
         event: "ai-instructions-frontmatter-malformed",
-        owner, repo,
+        owner,
+        repo,
         path: file.path,
       })
       continue
@@ -410,17 +418,12 @@ export function buildAiInstructionGuidance(ai: AiInstructions): string {
   const chunkBlocks = ai.chunks.map((chunk) => {
     const metadata = [
       `[Source: ${chunk.source}]`,
-      ...(chunk.applyTo !== undefined && chunk.applyTo.length > 0
-        ? [`applyTo: ${chunk.applyTo.join(", ")}`]
-        : []),
+      ...(chunk.applyTo !== undefined && chunk.applyTo.length > 0 ? [`applyTo: ${chunk.applyTo.join(", ")}`] : []),
       ...(chunk.matchedPaths !== undefined && chunk.matchedPaths.length > 0
         ? [`Matched changed files: ${chunk.matchedPaths.join(", ")}`]
         : []),
     ]
-    return [
-      ...metadata,
-      defangFenceMarkers(chunk.text),
-    ].join("\n")
+    return [...metadata, defangFenceMarkers(chunk.text)].join("\n")
   })
   return [
     `NOTE: the text between the markers below was ingested from this repository's own ` +

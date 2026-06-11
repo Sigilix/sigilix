@@ -55,9 +55,7 @@ export const LOGIC_PROMPT_INPUT_TOKEN_CAP = 6_000
  * other Sigilix feature flags (see `parseMinSpecialistsEarlyExitMode`,
  * `isSynthBypassEnabled`).
  */
-export function parseLogicPromptBudgetMode(
-  raw: string | undefined,
-): LogicPromptBudgetMode {
+export function parseLogicPromptBudgetMode(raw: string | undefined): LogicPromptBudgetMode {
   const v = (raw ?? "").trim().toLowerCase()
   if (v === "shadow") return "shadow"
   if (v === "enforce") return "enforce"
@@ -238,9 +236,7 @@ const BLOCK_HEADER = /^\[[A-Z]/gm
  * last section's span and silently dropped). Falls back to EOF only when no
  * later header exists.
  */
-function computeSectionSpans(
-  prompt: string,
-): Array<{ label: PromptSectionLabel; start: number; end: number }> {
+function computeSectionSpans(prompt: string): Array<{ label: PromptSectionLabel; start: number; end: number }> {
   // All block-header line positions, ascending (regex scans left→right).
   const headerPositions: number[] = []
   BLOCK_HEADER.lastIndex = 0
@@ -274,10 +270,7 @@ export interface LogicPromptTrimResult {
  * never mutates input; whole-section removal (not mid-section truncation) so the
  * prompt never ends up structurally malformed. A no-op when already within cap.
  */
-export function trimLogicPrompt(
-  prompt: string,
-  cap: number = LOGIC_PROMPT_INPUT_TOKEN_CAP,
-): LogicPromptTrimResult {
+export function trimLogicPrompt(prompt: string, cap: number = LOGIC_PROMPT_INPUT_TOKEN_CAP): LogicPromptTrimResult {
   const beforeTokens = estimateTokens(prompt)
   if (beforeTokens <= cap) return { prompt, trimmed: [], beforeTokens, afterTokens: beforeTokens }
 
@@ -325,27 +318,31 @@ export function maybeEmitLogicPromptBudget(args: MaybeEmitLogicPromptBudgetArgs)
   try {
     const measurement = measureLogicPrompt(args.prompt)
     const effectiveMode = args.mode === "enforce" ? "enforce-pending" : "shadow"
-    console.log(JSON.stringify({
-      event: "logic-prompt-budget",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      headSha: args.headSha.slice(0, 7),
-      mode: effectiveMode,
-      capTokens: LOGIC_PROMPT_INPUT_TOKEN_CAP,
-      totalTokens: measurement.totalTokens,
-      overCap: measurement.overCap,
-      overByTokens: measurement.overByTokens,
-      sections: measurement.sections,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "logic-prompt-budget",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        mode: effectiveMode,
+        capTokens: LOGIC_PROMPT_INPUT_TOKEN_CAP,
+        totalTokens: measurement.totalTokens,
+        overCap: measurement.overCap,
+        overByTokens: measurement.overByTokens,
+        sections: measurement.sections,
+      }),
+    )
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "logic-prompt-budget-emit-failed",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      reason: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "logic-prompt-budget-emit-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        reason: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -369,28 +366,32 @@ export function applyLogicPromptBudget(args: MaybeEmitLogicPromptBudgetArgs): st
   // enforce
   try {
     const trim = trimLogicPrompt(args.prompt)
-    console.log(JSON.stringify({
-      event: "logic-prompt-budget",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      headSha: args.headSha.slice(0, 7),
-      mode: "enforce",
-      capTokens: LOGIC_PROMPT_INPUT_TOKEN_CAP,
-      beforeTokens: trim.beforeTokens,
-      afterTokens: trim.afterTokens,
-      overCap: trim.afterTokens > LOGIC_PROMPT_INPUT_TOKEN_CAP,
-      trimmed: trim.trimmed,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "logic-prompt-budget",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        mode: "enforce",
+        capTokens: LOGIC_PROMPT_INPUT_TOKEN_CAP,
+        beforeTokens: trim.beforeTokens,
+        afterTokens: trim.afterTokens,
+        overCap: trim.afterTokens > LOGIC_PROMPT_INPUT_TOKEN_CAP,
+        trimmed: trim.trimmed,
+      }),
+    )
     return trim.prompt
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "logic-prompt-budget-enforce-failed",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      reason: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "logic-prompt-budget-enforce-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        reason: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return args.prompt // fail-open: logic runs with the un-trimmed prompt
   }
 }

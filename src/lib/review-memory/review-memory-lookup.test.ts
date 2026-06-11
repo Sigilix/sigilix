@@ -42,10 +42,7 @@ function makeKvStub(): KvStub {
   return { kv, store, failGet, getCallCount }
 }
 
-function makeEnv(
-  kv: Env["OPENCLAW_STATE"],
-  retrievalEnv: "on" | "off" | undefined = "on",
-): Env {
+function makeEnv(kv: Env["OPENCLAW_STATE"], retrievalEnv: "on" | "off" | undefined = "on"): Env {
   return {
     OPENCLAW_STATE: kv,
     OPENCLAW_REVIEW_MEMORY_ENABLED: retrievalEnv,
@@ -54,9 +51,7 @@ function makeEnv(
 
 const ALL_CATEGORIES = ["security", "logic", "performance", "tests"] as const
 
-function defaultConfig(
-  over: Partial<ResolvedReviewMemoryConfig> = {},
-): ResolvedReviewMemoryConfig {
+function defaultConfig(over: Partial<ResolvedReviewMemoryConfig> = {}): ResolvedReviewMemoryConfig {
   return {
     enabled: true,
     captureOnly: false,
@@ -105,7 +100,11 @@ describe("runReviewMemoryLookup — gate skips", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv, "off")
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1, paths: ["src/foo.ts"],
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
+      paths: ["src/foo.ts"],
       config: defaultConfig(),
     })
     expect(r.skipped).toBe(true)
@@ -116,7 +115,11 @@ describe("runReviewMemoryLookup — gate skips", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv, "on")
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1, paths: ["src/foo.ts"],
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
+      paths: ["src/foo.ts"],
       config: defaultConfig({ enabled: false }),
     })
     expect(r.skipped).toBe(true)
@@ -127,7 +130,11 @@ describe("runReviewMemoryLookup — gate skips", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv, "on")
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1, paths: ["src/foo.ts"],
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
+      paths: ["src/foo.ts"],
       config: defaultConfig({ enabled: false, captureOnly: true }),
     })
     expect(r.skipped).toBe(true)
@@ -138,7 +145,11 @@ describe("runReviewMemoryLookup — gate skips", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv, "on")
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1, paths: [],
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
+      paths: [],
       config: defaultConfig(),
     })
     expect(r.skipped).toBe(true)
@@ -168,7 +179,10 @@ describe("runReviewMemoryLookup — happy path", () => {
       JSON.stringify(rec("performance", signals)),
     )
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig(),
     })
@@ -184,16 +198,16 @@ describe("runReviewMemoryLookup — happy path", () => {
   it("2 signals → 0 findings (below threshold)", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
-    const signals = [
-      makeSignal({ ts: isoDaysAgo(10), commentId: 1 }),
-      makeSignal({ ts: isoDaysAgo(20), commentId: 2 }),
-    ]
+    const signals = [makeSignal({ ts: isoDaysAgo(10), commentId: 1 }), makeSignal({ ts: isoDaysAgo(20), commentId: 2 })]
     store.set(
       buildKey("a", "r", { kind: "category", category: "performance" }),
       JSON.stringify(rec("performance", signals)),
     )
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig(),
     })
@@ -214,7 +228,10 @@ describe("runReviewMemoryLookup — happy path", () => {
       JSON.stringify(rec("performance", signals)),
     )
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig(),
     })
@@ -248,7 +265,10 @@ describe("runReviewMemoryLookup — happy path", () => {
       JSON.stringify(rec("tests", signals, pathSha)),
     )
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: [path],
       config: defaultConfig(),
     })
@@ -270,12 +290,12 @@ describe("runReviewMemoryLookup — happy path", () => {
       buildKey("a", "r", { kind: "category", category: "performance" }),
       JSON.stringify(rec("performance", signals)),
     )
-    store.set(
-      buildKey("a", "r", { kind: "category", category: "tests" }),
-      JSON.stringify(rec("tests", signals)),
-    )
+    store.set(buildKey("a", "r", { kind: "category", category: "tests" }), JSON.stringify(rec("tests", signals)))
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig({ categories: ["performance"] }),
     })
@@ -289,7 +309,10 @@ describe("runReviewMemoryLookup — happy path", () => {
     failGet.value = true
     const env = makeEnv(kv, "on")
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig(),
     })
@@ -301,7 +324,10 @@ describe("runReviewMemoryLookup — happy path", () => {
     const { kv, getCallCount } = makeKvStub()
     const env = makeEnv(kv, "on")
     await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["a.ts", "b.ts"],
       config: defaultConfig(),
     })
@@ -323,13 +349,13 @@ describe("runReviewMemoryLookup — caps + ordering", () => {
         makeSignal({ ts: isoDaysAgo(15), commentId: 2 }),
         makeSignal({ ts: isoDaysAgo(25), commentId: 3 }),
       ]
-      store.set(
-        buildKey("a", "r", { kind: "category", category: cat }),
-        JSON.stringify(rec(cat, signals)),
-      )
+      store.set(buildKey("a", "r", { kind: "category", category: cat }), JSON.stringify(rec(cat, signals)))
     }
     const r = await runReviewMemoryLookup({
-      env, owner: "a", repo: "r", prNumber: 1,
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       paths: ["src/foo.ts"],
       config: defaultConfig({ maxInjectedMemories: 2 }),
     })
@@ -363,10 +389,7 @@ describe("isMemoryActive (pure)", () => {
   })
 
   it("inactive at threshold-1", () => {
-    const r = recAll([
-      makeSignal({ ts: isoDaysAgo(10) }),
-      makeSignal({ ts: isoDaysAgo(20) }),
-    ])
+    const r = recAll([makeSignal({ ts: isoDaysAgo(10) }), makeSignal({ ts: isoDaysAgo(20) })])
     expect(isMemoryActive(r, "category", cfg, now)).toBe(false)
   })
 
@@ -381,10 +404,7 @@ describe("isMemoryActive (pure)", () => {
     expect(isMemoryActive(oldOnly, "path-category", cfg, now)).toBe(false)
 
     // Add a recent signal → both active
-    const withRecent = recAll([
-      ...oldOnly.signals,
-      makeSignal({ ts: isoDaysAgo(15) }),
-    ])
+    const withRecent = recAll([...oldOnly.signals, makeSignal({ ts: isoDaysAgo(15) })])
     expect(isMemoryActive(withRecent, "path-category", cfg, now)).toBe(true)
   })
 
@@ -413,10 +433,7 @@ describe("isMemoryActive (pure)", () => {
     ])
     expect(isMemoryActive(twoTooMinor, "category", cfg, now)).toBe(true)
 
-    const twoUnlabeled = recAll([
-      makeSignal({ ts: isoDaysAgo(10) }),
-      makeSignal({ ts: isoDaysAgo(20) }),
-    ])
+    const twoUnlabeled = recAll([makeSignal({ ts: isoDaysAgo(10) }), makeSignal({ ts: isoDaysAgo(20) })])
     expect(isMemoryActive(twoUnlabeled, "category", cfg, now)).toBe(false)
   })
 
@@ -468,21 +485,15 @@ describe("selectTopMemories (pure)", () => {
 // ─── SIG-276 Phase 3: aggregateShadowClaims (pure) ──────────────
 
 describe("aggregateShadowClaims (pure)", () => {
-  const claim = (
-    type: string,
-    confidence = 0.8,
-    extractorVersion = 1,
-  ) => ({ id: "x".repeat(16), type, confidence, extractorVersion }) as never
+  const claim = (type: string, confidence = 0.8, extractorVersion = 1) =>
+    ({ id: "x".repeat(16), type, confidence, extractorVersion }) as never
 
   it("returns [] for no signals", () => {
     expect(aggregateShadowClaims([])).toEqual([])
   })
 
   it("ignores signals with no claims (legacy / claimless)", () => {
-    const out = aggregateShadowClaims([
-      makeSignal({ prNumber: 1 }),
-      makeSignal({ prNumber: 2, claims: undefined }),
-    ])
+    const out = aggregateShadowClaims([makeSignal({ prNumber: 1 }), makeSignal({ prNumber: 2, claims: undefined })])
     expect(out).toEqual([])
   })
 
@@ -500,12 +511,12 @@ describe("aggregateShadowClaims (pure)", () => {
 
   it("separates distinct claim types into distinct buckets", () => {
     const out = aggregateShadowClaims([
-      makeSignal({ prNumber: 1, claims: [claim("auth-gate-is-boundary"), claim("rethrowing-catch-not-swallowed")] }),
+      makeSignal({
+        prNumber: 1,
+        claims: [claim("auth-gate-is-boundary"), claim("rethrowing-catch-not-swallowed")],
+      }),
     ])
-    expect(out.map((c) => c.type).sort()).toEqual([
-      "auth-gate-is-boundary",
-      "rethrowing-catch-not-swallowed",
-    ])
+    expect(out.map((c) => c.type).sort()).toEqual(["auth-gate-is-boundary", "rethrowing-catch-not-swallowed"])
   })
 
   it("collects distinct extractorVersions and raw confidences", () => {
@@ -537,8 +548,7 @@ describe("runReviewMemoryLookup — shadowClaims flag", () => {
   })
   afterEach(() => consoleSpy.mockRestore())
 
-  const claim = (type: string) =>
-    ({ id: "x".repeat(16), type, confidence: 0.8, extractorVersion: 1 }) as never
+  const claim = (type: string) => ({ id: "x".repeat(16), type, confidence: 0.8, extractorVersion: 1 }) as never
 
   // The shadow pass requires ALL THREE flags on (ENABLED + CLAIMS +
   // CLAIM_SHADOW). These tests toggle only CLAIM_SHADOW; CLAIMS stays on.
@@ -553,9 +563,24 @@ describe("runReviewMemoryLookup — shadowClaims flag", () => {
 
   function activeCatRecord(): ReviewMemoryRecord {
     return rec("logic", [
-      makeSignal({ prNumber: 1, commentId: 1, ts: isoDaysAgo(5), claims: [claim("structural-glue-not-test-target")] }),
-      makeSignal({ prNumber: 2, commentId: 2, ts: isoDaysAgo(6), claims: [claim("structural-glue-not-test-target")] }),
-      makeSignal({ prNumber: 3, commentId: 3, ts: isoDaysAgo(7), claims: [claim("structural-glue-not-test-target")] }),
+      makeSignal({
+        prNumber: 1,
+        commentId: 1,
+        ts: isoDaysAgo(5),
+        claims: [claim("structural-glue-not-test-target")],
+      }),
+      makeSignal({
+        prNumber: 2,
+        commentId: 2,
+        ts: isoDaysAgo(6),
+        claims: [claim("structural-glue-not-test-target")],
+      }),
+      makeSignal({
+        prNumber: 3,
+        commentId: 3,
+        ts: isoDaysAgo(7),
+        claims: [claim("structural-glue-not-test-target")],
+      }),
     ])
   }
 
@@ -564,7 +589,10 @@ describe("runReviewMemoryLookup — shadowClaims flag", () => {
     store.set(buildKey("a", "r", { kind: "category", category: "logic" }), JSON.stringify(activeCatRecord()))
     const res = await runReviewMemoryLookup({
       env: envWithShadow(kv, "on"),
-      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      owner: "a",
+      repo: "r",
+      prNumber: 50,
+      paths: ["src/x.ts"],
       config: defaultConfig(),
     })
     expect(res.skipped).toBe(false)
@@ -580,7 +608,10 @@ describe("runReviewMemoryLookup — shadowClaims flag", () => {
     store.set(buildKey("a", "r", { kind: "category", category: "logic" }), JSON.stringify(activeCatRecord()))
     const res = await runReviewMemoryLookup({
       env: envWithShadow(kv, undefined),
-      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      owner: "a",
+      repo: "r",
+      prNumber: 50,
+      paths: ["src/x.ts"],
       config: defaultConfig(),
     })
     expect(res.skipped).toBe(false)
@@ -599,7 +630,10 @@ describe("runReviewMemoryLookup — shadowClaims flag", () => {
     } as unknown as Env
     const res = await runReviewMemoryLookup({
       env,
-      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      owner: "a",
+      repo: "r",
+      prNumber: 50,
+      paths: ["src/x.ts"],
       config: defaultConfig(),
     })
     expect(res.skipped).toBe(false)

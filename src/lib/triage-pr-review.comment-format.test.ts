@@ -16,11 +16,14 @@ describe("isCommentAnchorable (SIG-164 PR 5)", () => {
   // requires every line in the range to be RIGHT-reviewable
   // contiguously — correct for committable suggestion blocks).
   const reviewable: ReviewableMap = new Map([
-    ["src/a.ts", [
-      { line: 10, side: "RIGHT" as const },
-      // gap: lines 11-19 are context (unchanged), NOT in the map
-      { line: 20, side: "RIGHT" as const },
-    ]],
+    [
+      "src/a.ts",
+      [
+        { line: 10, side: "RIGHT" as const },
+        // gap: lines 11-19 are context (unchanged), NOT in the map
+        { line: 20, side: "RIGHT" as const },
+      ],
+    ],
   ])
 
   it("allows wide ranges whose endpoints are RIGHT-reviewable but interior is context", () => {
@@ -52,17 +55,25 @@ describe("isCommentAnchorable (SIG-164 PR 5)", () => {
 
 describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
   const addedLines = new Map([
-    ["src/a.ts", new Map<number, string>([
-      [10, "  const x = compute()"],
-      [11, "  if (x > 100) return"],
-      [12, "  return x"],
-    ])],
+    [
+      "src/a.ts",
+      new Map<number, string>([
+        [10, "  const x = compute()"],
+        [11, "  if (x > 100) return"],
+        [12, "  return x"],
+      ]),
+    ],
   ])
 
   it("emits **Current:** + **Proposed:** for a replacement", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, startLine: 10, score: 4,
-      category: "logic", headline: "h", body: "b",
+      path: "src/a.ts",
+      line: 12,
+      startLine: 10,
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
       kind: "replace",
       suggestedReplacement: "  const x = computeSafe()\n  return x",
     }
@@ -76,8 +87,13 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("emits ONLY **Current:** for a deletion (no Proposed — the deletion IS the proposal)", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, startLine: 10, score: 4,
-      category: "logic", headline: "h", body: "b",
+      path: "src/a.ts",
+      line: 12,
+      startLine: 10,
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
       kind: "delete",
       suggestedReplacement: "",
     }
@@ -89,8 +105,13 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("returns empty string when kind is describe-only (no actionable change)", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, startLine: 10, score: 4,
-      category: "complexity", headline: "h", body: "b",
+      path: "src/a.ts",
+      line: 12,
+      startLine: 10,
+      score: 4,
+      category: "complexity",
+      headline: "h",
+      body: "b",
       kind: "describe",
     }
     expect(formatProposedChangeBlock(f, addedLines)).toBe("")
@@ -98,8 +119,13 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("returns empty string when no addedLineTextByPath context is available", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, startLine: 10, score: 4,
-      category: "logic", headline: "h", body: "b",
+      path: "src/a.ts",
+      line: 12,
+      startLine: 10,
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
       kind: "replace",
       suggestedReplacement: "x = 1",
     }
@@ -109,8 +135,13 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("returns empty string when finding's range has no added lines (anchored at context only)", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 99, startLine: 95, score: 4,
-      category: "logic", headline: "h", body: "b",
+      path: "src/a.ts",
+      line: 99,
+      startLine: 95,
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
       kind: "replace",
       suggestedReplacement: "x = 1",
     }
@@ -119,12 +150,14 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
   })
 
   it("picks the right language fence based on file extension", () => {
-    const py = new Map([
-      ["src/x.py", new Map([[5, "  return 0"]])],
-    ])
+    const py = new Map([["src/x.py", new Map([[5, "  return 0"]])]])
     const f: PrReviewFinding = {
-      path: "src/x.py", line: 5, score: 4,
-      category: "logic", headline: "h", body: "b",
+      path: "src/x.py",
+      line: 5,
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
       kind: "replace",
       suggestedReplacement: "  return 1",
     }
@@ -133,13 +166,15 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("skips Current/Proposed when replacement scope is much smaller and body names multiple exact lines", () => {
     const wideLines = new Map([
-      ["src/a.ts", new Map<number, string>(
-        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
-      )],
+      ["src/a.ts", new Map<number, string>(Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]))],
     ])
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 10, startLine: 1, score: 4,
-      category: "logic", headline: "h",
+      path: "src/a.ts",
+      line: 10,
+      startLine: 1,
+      score: 4,
+      category: "logic",
+      headline: "h",
       body: "Add suppression comments on lines 2, 8.",
       kind: "replace",
       suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
@@ -150,13 +185,15 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("detects comma-free multi-line wording when checking scope mismatch", () => {
     const wideLines = new Map([
-      ["src/a.ts", new Map<number, string>(
-        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
-      )],
+      ["src/a.ts", new Map<number, string>(Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]))],
     ])
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 10, startLine: 1, score: 4,
-      category: "logic", headline: "h",
+      path: "src/a.ts",
+      line: 10,
+      startLine: 1,
+      score: 4,
+      category: "logic",
+      headline: "h",
       body: "Add suppression comments on lines 2 and 8.",
       kind: "replace",
       suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
@@ -166,13 +203,15 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("keeps Current/Proposed for scope mismatch when the body only names one line", () => {
     const wideLines = new Map([
-      ["src/a.ts", new Map<number, string>(
-        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
-      )],
+      ["src/a.ts", new Map<number, string>(Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]))],
     ])
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 10, startLine: 1, score: 4,
-      category: "logic", headline: "h",
+      path: "src/a.ts",
+      line: 10,
+      startLine: 1,
+      score: 4,
+      category: "logic",
+      headline: "h",
       body: "Add a guard on line 8.",
       kind: "replace",
       suggestedReplacement: "  if (!ok) return\n  line8()",
@@ -182,16 +221,23 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("keeps Current/Proposed when replacement scope roughly matches the anchor", () => {
     const lines = new Map([
-      ["src/a.ts", new Map<number, string>([
-        [1, "  a()"],
-        [2, "  b()"],
-        [3, "  c()"],
-        [4, "  d()"],
-      ])],
+      [
+        "src/a.ts",
+        new Map<number, string>([
+          [1, "  a()"],
+          [2, "  b()"],
+          [3, "  c()"],
+          [4, "  d()"],
+        ]),
+      ],
     ])
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 4, startLine: 1, score: 4,
-      category: "logic", headline: "h",
+      path: "src/a.ts",
+      line: 4,
+      startLine: 1,
+      score: 4,
+      category: "logic",
+      headline: "h",
       body: "Rewrite lines 1, 4.",
       kind: "replace",
       suggestedReplacement: "  aSafe()\n  bSafe()\n  cSafe()",
@@ -201,19 +247,24 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 
   it("still emits the committable suggestion when Current/Proposed is skipped for scope mismatch", () => {
     const wideLines = new Map([
-      ["src/a.ts", new Map<number, string>(
-        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
-      )],
+      ["src/a.ts", new Map<number, string>(Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]))],
     ])
     const reviewable: ReviewableMap = new Map([
-      ["src/a.ts", Array.from({ length: 10 }, (_, i) => ({
-        line: i + 1,
-        side: "RIGHT" as const,
-      }))],
+      [
+        "src/a.ts",
+        Array.from({ length: 10 }, (_, i) => ({
+          line: i + 1,
+          side: "RIGHT" as const,
+        })),
+      ],
     ])
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 10, startLine: 1, score: 4,
-      category: "logic", headline: "h",
+      path: "src/a.ts",
+      line: 10,
+      startLine: 1,
+      score: 4,
+      category: "logic",
+      headline: "h",
       body: "Add suppression comments on lines 2, 8.",
       kind: "replace",
       suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
@@ -230,7 +281,10 @@ describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
   // leading emoji on the summary (the words are the affordance) and
   // body matches their copy-pastable structure verbatim.
   const f: PrReviewFinding = {
-    path: "src/foo.ts", line: 50, startLine: 42, score: 4,
+    path: "src/foo.ts",
+    line: 50,
+    startLine: 42,
+    score: 4,
     category: "logic",
     headline: "missing null guard on `user.profile`",
     body: "Wrap with `if (!user) return` before accessing `user.profile`.",
@@ -261,7 +315,9 @@ describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
   })
 
   it("ends with the Greptile-style fix-request question", () => {
-    expect(formatAiAgentPromptBlock(f)).toContain("How can I resolve this? If you propose a fix, please make it concise.")
+    expect(formatAiAgentPromptBlock(f)).toContain(
+      "How can I resolve this? If you propose a fix, please make it concise.",
+    )
   })
 
   it("wraps the structured prompt body in a fenced code block (PR #146 founder feedback)", () => {
@@ -293,24 +349,34 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
   //   2. ```suggestion committable block (high confidence + anchorable)
   //   3. <details>Prompt To Fix With AI</details> (always at bottom)
   const reviewable: ReviewableMap = new Map([
-    ["src/a.ts", [
-      { line: 10, side: "RIGHT" as const },
-      { line: 11, side: "RIGHT" as const },
-      { line: 12, side: "RIGHT" as const },
-    ]],
+    [
+      "src/a.ts",
+      [
+        { line: 10, side: "RIGHT" as const },
+        { line: 11, side: "RIGHT" as const },
+        { line: 12, side: "RIGHT" as const },
+      ],
+    ],
   ])
   const addedLines = new Map([
-    ["src/a.ts", new Map<number, string>([
-      [10, "  const x = compute()"],
-      [11, "  if (x > 100) return"],
-      [12, "  return x"],
-    ])],
+    [
+      "src/a.ts",
+      new Map<number, string>([
+        [10, "  const x = compute()"],
+        [11, "  if (x > 100) return"],
+        [12, "  return x"],
+      ]),
+    ],
   ])
 
   it("emits Current/Proposed + committable suggestion + AI agent prompt (all three tiers)", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, startLine: 10, score: 5,
-      category: "logic", headline: "guard against undefined",
+      path: "src/a.ts",
+      line: 12,
+      startLine: 10,
+      score: 5,
+      category: "logic",
+      headline: "guard against undefined",
       body: "x can be undefined here.",
       kind: "replace",
       suggestedReplacement: "  const x = compute() ?? 0\n  return x",
@@ -335,8 +401,11 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
   it("emits AI agent prompt even on describe-only findings (no fix to commit)", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, score: 3,
-      category: "complexity", headline: "this block is hard to read",
+      path: "src/a.ts",
+      line: 12,
+      score: 3,
+      category: "complexity",
+      headline: "this block is hard to read",
       body: "Consider extracting a helper.",
       kind: "describe",
     }
@@ -350,13 +419,14 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     // Pattern A: the alarmist secrets-exposure remediation fires only when the
     // CITED line actually holds a credential. Thread an AWS key on line 12.
     const credLines = new Map([
-      ["src/config.ts", new Map<number, string>([
-        [12, '  const apiKey = "AKIAIOSFODNN7EXAMPLE"'],
-      ])],
+      ["src/config.ts", new Map<number, string>([[12, '  const apiKey = "AKIAIOSFODNN7EXAMPLE"']])],
     ])
     const f: PrReviewFinding = {
-      path: "src/config.ts", line: 12, score: 5,
-      category: "security", headline: "hardcoded API token committed",
+      path: "src/config.ts",
+      line: 12,
+      score: 5,
+      category: "security",
+      headline: "hardcoded API token committed",
       body: "A live provider token is committed in source.",
       cweId: "CWE-798",
     }
@@ -371,13 +441,14 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     // history". With the gate, a credential-free cited line gets the
     // CONDITIONAL remediation, never the confident compromise assertion.
     const noCredLines = new Map([
-      ["src/log.ts", new Map<number, string>([
-        [12, "  console.log(`payload size: ${payload.length}`)"],
-      ])],
+      ["src/log.ts", new Map<number, string>([[12, "  console.log(`payload size: ${payload.length}`)"]])],
     ])
     const f: PrReviewFinding = {
-      path: "src/log.ts", line: 12, score: 5,
-      category: "security", headline: "secret length logged",
+      path: "src/log.ts",
+      line: 12,
+      score: 5,
+      category: "security",
+      headline: "secret length logged",
       body: "The byte length of a sensitive payload is written to the log.",
       cweId: "CWE-798",
     }
@@ -390,8 +461,11 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
   it("SIG-282: does not append a remediation to non-security findings", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, score: 3,
-      category: "logic", headline: "off-by-one",
+      path: "src/a.ts",
+      line: 12,
+      score: 3,
+      category: "logic",
+      headline: "off-by-one",
       body: "loop bound is wrong.",
     }
     const out = formatFindingComment(f, 4, reviewable, addedLines)
@@ -400,11 +474,14 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
   it("renders structured examples, suggested fix shape, and test-gap sections", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, score: 4,
-      category: "logic", headline: "greedy regex returns the wrong token",
+      path: "src/a.ts",
+      line: 12,
+      score: 4,
+      category: "logic",
+      headline: "greedy regex returns the wrong token",
       body: "`extract()` uses a greedy capture when the response has multiple `FINAL(...)` calls.",
       failureExample: "My first thought was FINAL(wrong) but actually FINAL(correct)",
-      fixExample: "match = re.search(r\"FINAL\\\\((.*?)\\\\)\", response, re.DOTALL)",
+      fixExample: 'match = re.search(r"FINAL\\\\((.*?)\\\\)", response, re.DOTALL)',
       testGap: "The existing test only covers a single FINAL(...) occurrence.",
     }
     const out = formatFindingComment(f, 5, reviewable, addedLines)
@@ -420,8 +497,11 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
   it("suppresses illustrative fixExample when an exact suggestedReplacement exists", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, score: 5,
-      category: "logic", headline: "guard against undefined",
+      path: "src/a.ts",
+      line: 12,
+      score: 5,
+      category: "logic",
+      headline: "guard against undefined",
       body: "x can be undefined here.",
       fixExample: "const x = compute() ?? 0",
       kind: "replace",
@@ -435,8 +515,11 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
   it("keeps fixExample visible for unsupported insert-shaped replacements", () => {
     const f: PrReviewFinding = {
-      path: "src/a.ts", line: 12, score: 4,
-      category: "logic", headline: "insert shape needs manual handling",
+      path: "src/a.ts",
+      line: 12,
+      score: 4,
+      category: "logic",
+      headline: "insert shape needs manual handling",
       body: "Insertion suggestions are not committable yet.",
       kind: "insert",
       suggestedReplacement: "  inserted()",
@@ -452,16 +535,22 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
 
 describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
   const reviewable: ReviewableMap = new Map([
-    ["src/a.ts", [
-      { line: 10, side: "RIGHT" },
-      { line: 11, side: "RIGHT" },
-    ]],
+    [
+      "src/a.ts",
+      [
+        { line: 10, side: "RIGHT" },
+        { line: 11, side: "RIGHT" },
+      ],
+    ],
   ])
   const addedLines = new Map([
-    ["src/a.ts", new Map([
-      [10, "  const x = compute()"],
-      [11, "  return x"],
-    ])],
+    [
+      "src/a.ts",
+      new Map([
+        [10, "  const x = compute()"],
+        [11, "  return x"],
+      ]),
+    ],
   ])
   const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
     path: "src/a.ts",
@@ -527,11 +616,13 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
   })
 
   it("does not count literal suggestion fences inside ordinary code blocks as emissions", () => {
-    const out = submit(finding({
-      kind: "describe",
-      suggestedReplacement: undefined,
-      fixExample: "```suggestion\nconst x = compute() ?? 0\n```",
-    }))
+    const out = submit(
+      finding({
+        kind: "describe",
+        suggestedReplacement: undefined,
+        fixExample: "```suggestion\nconst x = compute() ?? 0\n```",
+      }),
+    )
 
     expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
     expect(out.submission.comments?.[0]?.body).not.toContain("\n```suggestion\n  const x = compute() ?? 0\n```")
@@ -539,11 +630,13 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
   })
 
   it("does not count literal suggestion fences inside tilde code blocks as emissions", () => {
-    const out = submit(finding({
-      body: "Example:\n~~~text\n```suggestion\nconst x = compute() ?? 0\n```\n~~~",
-      kind: "describe",
-      suggestedReplacement: undefined,
-    }))
+    const out = submit(
+      finding({
+        body: "Example:\n~~~text\n```suggestion\nconst x = compute() ?? 0\n```\n~~~",
+        kind: "describe",
+        suggestedReplacement: undefined,
+      }),
+    )
 
     expect(out.submission.comments?.[0]?.body).toContain("~~~text")
     expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
@@ -551,12 +644,14 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
   })
 
   it("strips deletion suggestions when the anchored range is not fully reviewable", () => {
-    const out = submit(finding({
-      kind: "delete",
-      suggestedReplacement: "",
-      startLine: 10,
-      line: 12,
-    }))
+    const out = submit(
+      finding({
+        kind: "delete",
+        suggestedReplacement: "",
+        startLine: 10,
+        line: 12,
+      }),
+    )
 
     expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
     expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed change:** remove")

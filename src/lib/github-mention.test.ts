@@ -66,10 +66,7 @@ import {
   serializeReviewDismissDedupeRecord,
   serializeReviewDismissInProgressRecord,
 } from "@/src/lib/github-mention"
-import {
-  LEGACY_REVIEW_BODY_MARKER,
-  SIGILIX_REVIEW_BODY_MARKER,
-} from "@/src/lib/dismiss-prior-reviews"
+import { LEGACY_REVIEW_BODY_MARKER, SIGILIX_REVIEW_BODY_MARKER } from "@/src/lib/dismiss-prior-reviews"
 import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
@@ -130,9 +127,7 @@ describe("parseGithubMentionResponse", () => {
   })
 
   it("coerces abstain to boolean", () => {
-    const out = parseGithubMentionResponse(
-      JSON.stringify({ answer: valid.answer, confidence: 2, abstain: "yes" })
-    )
+    const out = parseGithubMentionResponse(JSON.stringify({ answer: valid.answer, confidence: 2, abstain: "yes" }))
     expect(out?.abstain).toBe(true)
   })
 
@@ -202,40 +197,91 @@ describe("parseDismissCommand", () => {
     expect(parseDismissCommand("dismiss")).toEqual({ kind: "dismiss", reason: "unlabeled" })
     expect(parseDismissCommand("Dismiss.")).toEqual({ kind: "dismiss", reason: "unlabeled" })
     expect(parseDismissCommand("dismiss review")).toEqual({ kind: "dismiss", reason: "unlabeled" })
-    expect(parseDismissCommand("dismiss this review")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss this review")).toEqual({
+      kind: "dismiss",
+      reason: "unlabeled",
+    })
   })
 
   it("parses all five canonical labels (hyphen form)", () => {
-    expect(parseDismissCommand("dismiss not-a-bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss bad-anchor")).toEqual({ kind: "dismiss", reason: "bad-anchor" })
-    expect(parseDismissCommand("dismiss already-covered")).toEqual({ kind: "dismiss", reason: "already-covered" })
-    expect(parseDismissCommand("dismiss too-minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("dismiss wrong-context")).toEqual({ kind: "dismiss", reason: "wrong-context" })
+    expect(parseDismissCommand("dismiss not-a-bug")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss bad-anchor")).toEqual({
+      kind: "dismiss",
+      reason: "bad-anchor",
+    })
+    expect(parseDismissCommand("dismiss already-covered")).toEqual({
+      kind: "dismiss",
+      reason: "already-covered",
+    })
+    expect(parseDismissCommand("dismiss too-minor")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("dismiss wrong-context")).toEqual({
+      kind: "dismiss",
+      reason: "wrong-context",
+    })
   })
 
   it("accepts mixed case", () => {
-    expect(parseDismissCommand("Dismiss TOO-MINOR")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("DISMISS Not-A-Bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("Dismiss TOO-MINOR")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("DISMISS Not-A-Bug")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
   })
 
   it("tolerates underscores and spaces in place of hyphens", () => {
-    expect(parseDismissCommand("dismiss not_a_bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss not a bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss too_minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("dismiss too minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss not_a_bug")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss not a bug")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss too_minor")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("dismiss too minor")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
   })
 
   it("tolerates surrounding whitespace + a longer prefix", () => {
-    expect(parseDismissCommand("  dismiss   too-minor  ")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("dismiss this review too-minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("dismiss review too minor.")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("  dismiss   too-minor  ")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("dismiss this review too-minor")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("dismiss review too minor.")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
   })
 
   it("falls back to unlabeled on an unknown / typo'd label (forgiving parse)", () => {
     expect(parseDismissCommand("dismiss notabug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss whatever")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss whatever")).toEqual({
+      kind: "dismiss",
+      reason: "unlabeled",
+    })
     expect(parseDismissCommand("dismiss nope")).toEqual({ kind: "dismiss", reason: "unlabeled" })
-    expect(parseDismissCommand("dismiss too-mnir")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss too-mnir")).toEqual({
+      kind: "dismiss",
+      reason: "unlabeled",
+    })
   })
 
   it("returns null on free prose that happens to start with 'dismiss' (SIG-173 follow-up)", () => {
@@ -254,15 +300,33 @@ describe("parseDismissCommand", () => {
   it("pins the boundary: 3-word label-shape residual still parses", () => {
     // "not a bug" is 3 words, all label-shape — the hyphen-tolerant alias
     // table converts the space-separated form to the canonical label.
-    expect(parseDismissCommand("dismiss not a bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss not a bug")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
   })
 
   it("tolerates markdown-emphasis and trailing-emoji wrappers around labels (SIG-173 follow-up)", () => {
-    expect(parseDismissCommand("dismiss *not-a-bug*")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss `not-a-bug`")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss _too-minor_")).toEqual({ kind: "dismiss", reason: "too-minor" })
-    expect(parseDismissCommand("dismiss not-a-bug 🎉")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
-    expect(parseDismissCommand("dismiss too-minor 🤷‍♀️")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss *not-a-bug*")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss `not-a-bug`")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss _too-minor_")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
+    expect(parseDismissCommand("dismiss not-a-bug 🎉")).toEqual({
+      kind: "dismiss",
+      reason: "not-a-bug",
+    })
+    expect(parseDismissCommand("dismiss too-minor 🤷‍♀️")).toEqual({
+      kind: "dismiss",
+      reason: "too-minor",
+    })
   })
 })
 
@@ -339,9 +403,7 @@ describe("review dismiss dedupe records", () => {
   })
 
   it("round-trips a tokenized in-progress lock record", () => {
-    const parsed = parseReviewDismissDedupeRecord(
-      serializeReviewDismissInProgressRecord("lock-token-1")
-    )
+    const parsed = parseReviewDismissDedupeRecord(serializeReviewDismissInProgressRecord("lock-token-1"))
     expect(parsed).toMatchObject({
       kind: "review-dismiss-in-progress",
       token: "lock-token-1",
@@ -369,10 +431,14 @@ describe("review dismiss dedupe records", () => {
     expect(parseReviewDismissDedupeRecord("[]")).toBeNull()
     expect(parseReviewDismissDedupeRecord(JSON.stringify({ kind: "other" }))).toBeNull()
     expect(parseReviewDismissDedupeRecord(JSON.stringify({ kind: "review-dismiss-result" }))).toBeNull()
-    expect(parseReviewDismissDedupeRecord(JSON.stringify({
-      kind: "review-dismiss-result",
-      result: { kind: "dismissed" },
-    }))).toBeNull()
+    expect(
+      parseReviewDismissDedupeRecord(
+        JSON.stringify({
+          kind: "review-dismiss-result",
+          result: { kind: "dismissed" },
+        }),
+      ),
+    ).toBeNull()
   })
 })
 
@@ -385,8 +451,12 @@ describe("handleGithubMention dismiss path", () => {
     const store = new Map(Object.entries(initial ?? {}))
     const kv = {
       get: vi.fn(async (key: string) => store.get(key) ?? null),
-      put: vi.fn(async (key: string, value: string) => { store.set(key, value) }),
-      delete: vi.fn(async (key: string) => { store.delete(key) }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value)
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key)
+      }),
     } as unknown as KVNamespace
     // SIG-173 follow-up: minimal VALIDATION_METRICS_DO stub so the
     // dismissal-metric record call hits the happy path instead of
@@ -444,15 +514,12 @@ describe("handleGithubMention dismiss path", () => {
       env,
     })
 
-    expect(getInstallationTokenMock).toHaveBeenCalledWith(expect.objectContaining({
-      installationId: 99,
-    }))
-    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      4242,
-      "eyes",
+    expect(getInstallationTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 99,
+      }),
     )
+    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 4242, "eyes")
     expect(dismissReviewMock).toHaveBeenCalledWith(
       "Sigilix",
       "sigilix",
@@ -534,12 +601,7 @@ describe("handleGithubMention dismiss path", () => {
       env,
     })
 
-    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      4242,
-      "eyes",
-    )
+    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 4242, "eyes")
     expect(listPullRequestReviewsMock).not.toHaveBeenCalled()
     expect(dismissReviewMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).not.toHaveBeenCalled()
@@ -657,9 +719,7 @@ describe("handleGithubMention dismiss path", () => {
     // env binds VALIDATION_METRICS_DO so we exercise the real call site,
     // not the swallowed-error fallback).
     expect(metricsBatches).toHaveLength(1)
-    expect(metricsBatches[0].events).toEqual([
-      { kind: "dismissal-reason", reason: "too-minor" },
-    ])
+    expect(metricsBatches[0].events).toEqual([{ kind: "dismissal-reason", reason: "too-minor" }])
   })
 })
 
@@ -671,8 +731,12 @@ describe("review dismiss in-progress lock", () => {
       store,
       kv: {
         get: vi.fn(async (key: string) => store.get(key) ?? null),
-        put: vi.fn(async (key: string, value: string) => { store.set(key, value) }),
-        delete: vi.fn(async (key: string) => { store.delete(key) }),
+        put: vi.fn(async (key: string, value: string) => {
+          store.set(key, value)
+        }),
+        delete: vi.fn(async (key: string) => {
+          store.delete(key)
+        }),
       } as unknown as KVNamespace,
     }
   }
@@ -714,20 +778,24 @@ describe("review dismiss in-progress lock", () => {
 })
 
 describe("dismissLatestBlockingSigilixReview", () => {
-  function clientWithReviews(reviews: Array<{
-    id: number
-    state: string
-    login?: string
-    body?: string
-  }>) {
+  function clientWithReviews(
+    reviews: Array<{
+      id: number
+      state: string
+      login?: string
+      body?: string
+    }>,
+  ) {
     return {
-      listPullRequestReviews: vi.fn(async () => reviews.map((r) => ({
-        id: r.id,
-        state: r.state,
-        user: r.login ? { login: r.login } : null,
-        body: r.body ?? "",
-        commitId: null,
-      }))),
+      listPullRequestReviews: vi.fn(async () =>
+        reviews.map((r) => ({
+          id: r.id,
+          state: r.state,
+          user: r.login ? { login: r.login } : null,
+          body: r.body ?? "",
+          commitId: null,
+        })),
+      ),
       dismissReview: vi.fn(async () => undefined),
     }
   }
@@ -736,10 +804,25 @@ describe("dismissLatestBlockingSigilixReview", () => {
 
   it("dismisses the highest-id blocking Sigilix review by API", async () => {
     const client = clientWithReviews([
-      { id: 13, state: "CHANGES_REQUESTED", login: "sigilix[bot]", body: SIGILIX_REVIEW_BODY_MARKER },
-      { id: 11, state: "CHANGES_REQUESTED", login: "coderabbitai", body: SIGILIX_REVIEW_BODY_MARKER },
+      {
+        id: 13,
+        state: "CHANGES_REQUESTED",
+        login: "sigilix[bot]",
+        body: SIGILIX_REVIEW_BODY_MARKER,
+      },
+      {
+        id: 11,
+        state: "CHANGES_REQUESTED",
+        login: "coderabbitai",
+        body: SIGILIX_REVIEW_BODY_MARKER,
+      },
       { id: 12, state: "COMMENTED", login: "sigilix[bot]", body: SIGILIX_REVIEW_BODY_MARKER },
-      { id: 10, state: "CHANGES_REQUESTED", login: "sigilix[bot]", body: SIGILIX_REVIEW_BODY_MARKER },
+      {
+        id: 10,
+        state: "CHANGES_REQUESTED",
+        login: "sigilix[bot]",
+        body: SIGILIX_REVIEW_BODY_MARKER,
+      },
     ])
 
     const result = await dismissLatestBlockingSigilixReview({ client, ...base })
@@ -768,7 +851,12 @@ describe("dismissLatestBlockingSigilixReview", () => {
 
   it("dismisses a blocking Sigilix review with the legacy marker", async () => {
     const client = clientWithReviews([
-      { id: 25, state: "CHANGES_REQUESTED", login: "sigilix[bot]", body: LEGACY_REVIEW_BODY_MARKER },
+      {
+        id: 25,
+        state: "CHANGES_REQUESTED",
+        login: "sigilix[bot]",
+        body: LEGACY_REVIEW_BODY_MARKER,
+      },
     ])
 
     const result = await dismissLatestBlockingSigilixReview({ client, ...base })
@@ -798,7 +886,12 @@ describe("dismissLatestBlockingSigilixReview", () => {
 
   it("reports permission/API failures instead of claiming success", async () => {
     const client = clientWithReviews([
-      { id: 30, state: "CHANGES_REQUESTED", login: "sigilix[bot]", body: SIGILIX_REVIEW_BODY_MARKER },
+      {
+        id: 30,
+        state: "CHANGES_REQUESTED",
+        login: "sigilix[bot]",
+        body: SIGILIX_REVIEW_BODY_MARKER,
+      },
     ])
     client.dismissReview.mockRejectedValueOnce(new Error("Resource not accessible by integration"))
 

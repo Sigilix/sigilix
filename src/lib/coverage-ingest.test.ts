@@ -13,10 +13,7 @@ import {
   ingestCoverage,
   type CoverageGap,
 } from "@/src/lib/coverage-ingest"
-import {
-  evaluateTestFinding,
-  parseCoverageGapRef,
-} from "@/src/lib/ensemble/domain/gates/validate-test-finding"
+import { evaluateTestFinding, parseCoverageGapRef } from "@/src/lib/ensemble/domain/gates/validate-test-finding"
 import { evaluateTestingFindingCitation } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
@@ -25,14 +22,7 @@ import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 
 describe("parseLcov", () => {
   it("collects ONLY DA lines with hits === 0 (uncovered)", () => {
-    const lcov = [
-      "SF:src/a.ts",
-      "DA:1,1",
-      "DA:2,0",
-      "DA:3,0",
-      "DA:4,5",
-      "end_of_record",
-    ].join("\n")
+    const lcov = ["SF:src/a.ts", "DA:1,1", "DA:2,0", "DA:3,0", "DA:4,5", "end_of_record"].join("\n")
     const out = parseLcov(lcov)
     expect(out.get("src/a.ts")).toEqual([2, 3])
   })
@@ -60,28 +50,16 @@ describe("parseLcov", () => {
   })
 
   it("ignores BRDA/FN/FNDA and malformed DA lines", () => {
-    const lcov = [
-      "SF:src/a.ts",
-      "FN:1,foo",
-      "FNDA:0,foo",
-      "BRDA:1,0,0,-",
-      "DA:bogus",
-      "DA:2,0",
-      "end_of_record",
-    ].join("\n")
+    const lcov = ["SF:src/a.ts", "FN:1,foo", "FNDA:0,foo", "BRDA:1,0,0,-", "DA:bogus", "DA:2,0", "end_of_record"].join(
+      "\n",
+    )
     expect(parseLcov(lcov).get("src/a.ts")).toEqual([2])
   })
 
   it("merges + dedupes uncovered lines across records for the same file", () => {
-    const lcov = [
-      "SF:src/a.ts",
-      "DA:5,0",
-      "end_of_record",
-      "SF:src/a.ts",
-      "DA:3,0",
-      "DA:5,0",
-      "end_of_record",
-    ].join("\n")
+    const lcov = ["SF:src/a.ts", "DA:5,0", "end_of_record", "SF:src/a.ts", "DA:3,0", "DA:5,0", "end_of_record"].join(
+      "\n",
+    )
     expect(parseLcov(lcov).get("src/a.ts")).toEqual([3, 5])
   })
 
@@ -176,13 +154,9 @@ describe("intersectAddedUncovered", () => {
   })
 
   it("resolves a runner-prefixed SF path before intersecting", () => {
-    const uncovered = new Map<string, number[]>([
-      ["/home/runner/work/r/r/src/a.ts", [2]],
-    ])
+    const uncovered = new Map<string, number[]>([["/home/runner/work/r/r/src/a.ts", [2]]])
     const changedLines = new Map<string, Set<number>>([["src/a.ts", new Set([2])]])
-    expect(intersectAddedUncovered(uncovered, changedLines)).toEqual([
-      { path: "src/a.ts", lines: [2] },
-    ])
+    expect(intersectAddedUncovered(uncovered, changedLines)).toEqual([{ path: "src/a.ts", lines: [2] }])
   })
 
   it("merges two SF records resolving to the same changed file", () => {
@@ -191,9 +165,7 @@ describe("intersectAddedUncovered", () => {
       ["./src/a.ts", [3]],
     ])
     const changedLines = new Map<string, Set<number>>([["src/a.ts", new Set([2, 3])]])
-    expect(intersectAddedUncovered(uncovered, changedLines)).toEqual([
-      { path: "src/a.ts", lines: [2, 3] },
-    ])
+    expect(intersectAddedUncovered(uncovered, changedLines)).toEqual([{ path: "src/a.ts", lines: [2, 3] }])
   })
 })
 
@@ -231,7 +203,10 @@ describe("parseCoverageGapRef", () => {
   })
 
   it("keeps paths that themselves contain colons intact (line from LAST colon)", () => {
-    expect(parseCoverageGapRef("coverageGap:C:/repo/a.ts:7")).toEqual({ path: "C:/repo/a.ts", line: 7 })
+    expect(parseCoverageGapRef("coverageGap:C:/repo/a.ts:7")).toEqual({
+      path: "C:/repo/a.ts",
+      line: 7,
+    })
   })
 
   it("returns null for a non-coverageGap ref", () => {
@@ -362,7 +337,10 @@ describe("ingestCoverage — best-effort failure modes", () => {
   it("returns null when source is off (without any fetch)", async () => {
     let called = false
     const client: FakeClient = {
-      listRunsForSha: async () => { called = true; return [] },
+      listRunsForSha: async () => {
+        called = true
+        return []
+      },
       listArtifacts: async () => [],
       downloadArtifactZip: async () => new Uint8Array(),
     }
@@ -378,7 +356,13 @@ describe("ingestCoverage — best-effort failure modes", () => {
     const client: FakeClient = {
       // Wrong head_sha — must be skipped.
       listRunsForSha: async () => [
-        { id: 1, head_sha: "different", status: "completed", conclusion: "success", created_at: "2026-01-01" },
+        {
+          id: 1,
+          head_sha: "different",
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-01-01",
+        },
       ],
       listArtifacts: async () => [],
       downloadArtifactZip: async () => new Uint8Array(),
@@ -389,12 +373,18 @@ describe("ingestCoverage — best-effort failure modes", () => {
   it("returns null when the only matching artifact is expired", async () => {
     const client: FakeClient = {
       listRunsForSha: async () => [
-        { id: 1, head_sha: "abc1234", status: "completed", conclusion: "success", created_at: "2026-01-01" },
+        {
+          id: 1,
+          head_sha: "abc1234",
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-01-01",
+        },
       ],
-      listArtifacts: async () => [
-        { id: 9, name: "coverage-lcov", size_in_bytes: 100, expired: true },
-      ],
-      downloadArtifactZip: async () => { throw new Error("should not download") },
+      listArtifacts: async () => [{ id: 9, name: "coverage-lcov", size_in_bytes: 100, expired: true }],
+      downloadArtifactZip: async () => {
+        throw new Error("should not download")
+      },
     }
     expect(await ingestCoverage(ingestArgs(client))).toBeNull()
   })
@@ -402,19 +392,27 @@ describe("ingestCoverage — best-effort failure modes", () => {
   it("returns null when the artifact exceeds the compressed cap", async () => {
     const client: FakeClient = {
       listRunsForSha: async () => [
-        { id: 1, head_sha: "abc1234", status: "completed", conclusion: "success", created_at: "2026-01-01" },
+        {
+          id: 1,
+          head_sha: "abc1234",
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-01-01",
+        },
       ],
-      listArtifacts: async () => [
-        { id: 9, name: "coverage-lcov", size_in_bytes: 6 * 1024 * 1024, expired: false },
-      ],
-      downloadArtifactZip: async () => { throw new Error("should not download") },
+      listArtifacts: async () => [{ id: 9, name: "coverage-lcov", size_in_bytes: 6 * 1024 * 1024, expired: false }],
+      downloadArtifactZip: async () => {
+        throw new Error("should not download")
+      },
     }
     expect(await ingestCoverage(ingestArgs(client))).toBeNull()
   })
 
   it("returns null (never throws) when a fetch step throws", async () => {
     const client: FakeClient = {
-      listRunsForSha: async () => { throw new Error("boom") },
+      listRunsForSha: async () => {
+        throw new Error("boom")
+      },
       listArtifacts: async () => [],
       downloadArtifactZip: async () => new Uint8Array(),
     }
@@ -428,11 +426,15 @@ describe("ingestCoverage — best-effort failure modes", () => {
     const zip = zipSync({ "lcov.info": strToU8(lcov) })
     const client: FakeClient = {
       listRunsForSha: async () => [
-        { id: 7, head_sha: "abc1234", status: "completed", conclusion: "success", created_at: "2026-01-01" },
+        {
+          id: 7,
+          head_sha: "abc1234",
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-01-01",
+        },
       ],
-      listArtifacts: async () => [
-        { id: 9, name: "coverage-lcov", size_in_bytes: zip.byteLength, expired: false },
-      ],
+      listArtifacts: async () => [{ id: 9, name: "coverage-lcov", size_in_bytes: zip.byteLength, expired: false }],
       downloadArtifactZip: async () => zip,
     }
     const diff = [

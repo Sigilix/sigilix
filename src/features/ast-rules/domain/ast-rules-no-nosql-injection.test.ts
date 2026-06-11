@@ -37,13 +37,21 @@ describe("no-nosql-injection — FIRES on a request object handed directly to a 
     expect(runRule(`app.post("/d", (req, res) => { Order.deleteMany(req.body.filter); });`).length).toBe(1)
   })
   it("distinctive method via a whole-object alias: const f = req.body; updateMany(f, ...)", () => {
-    expect(runRule(`app.post("/a", (req, res) => { const f = req.body; Account.updateMany(f, { $set: { active: false } }); });`).length).toBe(1)
+    expect(
+      runRule(
+        `app.post("/a", (req, res) => { const f = req.body; Account.updateMany(f, { $set: { active: false } }); });`,
+      ).length,
+    ).toBe(1)
   })
   it("$where with a tainted value (server-side JS injection) — $where is itself a Mongo signal", () => {
     expect(runRule(`app.get("/w", (req, res) => { User.find({ $where: req.query.fn }); });`).length).toBe(1)
   })
   it("$function with a tainted value", () => {
-    expect(runRule(`app.get("/f", (req, res) => { User.find({ $function: { body: req.query.fn, args: [], lang: "js" } }); });`).length).toBe(1)
+    expect(
+      runRule(
+        `app.get("/f", (req, res) => { User.find({ $function: { body: req.query.fn, args: [], lang: "js" } }); });`,
+      ).length,
+    ).toBe(1)
   })
   it("$accumulator with a tainted value", () => {
     expect(runRule(`app.post("/ac", (req, res) => { Metric.find({ $accumulator: req.body.acc }); });`).length).toBe(1)
@@ -62,18 +70,28 @@ app.post("/u", (c) => { return db.collection("u").deleteOne(c.req.query("id")); 
 
 describe("no-nosql-injection — FP-safety: does NOT fire on safe / non-Mongo code", () => {
   it("fixed-shape literal with a tainted SCALAR is safe even on a real collection", () => {
-    expect(runRule(`app.get("/u", (req, res) => { db.collection("users").findOne({ _id: req.params.id }); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/u", (req, res) => { db.collection("users").findOne({ _id: req.params.id }); });`).length,
+    ).toBe(0)
   })
   it("fixed-shape multi-field literal: find({ username: req.body.username, active: true })", () => {
-    expect(runRule(`app.post("/u", (req, res) => { db.collection("u").find({ username: req.body.username, active: true }); });`).length).toBe(0)
+    expect(
+      runRule(
+        `app.post("/u", (req, res) => { db.collection("u").find({ username: req.body.username, active: true }); });`,
+      ).length,
+    ).toBe(0)
   })
   it("knex `.update(req.body)` is the safe parameterized column-map idiom", () => {
-    expect(runRule(`app.post("/k", (req, res) => { knex("users").where({ id: req.params.id }).update(req.body); });`).length).toBe(0)
+    expect(
+      runRule(`app.post("/k", (req, res) => { knex("users").where({ id: req.params.id }).update(req.body); });`).length,
+    ).toBe(0)
   })
   it("Sequelize/TypeORM ambiguous names with no Mongo signal do not fire", () => {
     expect(runRule(`app.get("/seq", (req, res) => { User.count(req.query); });`).length).toBe(0)
     expect(runRule(`app.get("/orm", (req, res) => { repo.find(req.query); });`).length).toBe(0)
-    expect(runRule(`app.post("/orm2", (req, res) => { Model.update(req.body, { where: { id: 1 } }); });`).length).toBe(0)
+    expect(runRule(`app.post("/orm2", (req, res) => { Model.update(req.body, { where: { id: 1 } }); });`).length).toBe(
+      0,
+    )
   })
   it("array .find(callback) never fires (callback, not a tainted object)", () => {
     expect(runRule(`app.get("/a", (req, res) => { items.find((x) => x.id === req.query.id); });`).length).toBe(0)
@@ -100,7 +118,10 @@ describe("no-nosql-injection — FP-safety: does NOT fire on safe / non-Mongo co
     expect(runRule(src).length).toBe(0)
   })
   it("a sanitized filter is skipped (fail closed)", () => {
-    expect(runRule(`app.get("/u", (req, res) => { const f = mongoSanitize(req.query); db.collection("u").find(f); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/u", (req, res) => { const f = mongoSanitize(req.query); db.collection("u").find(f); });`)
+        .length,
+    ).toBe(0)
   })
   it("skips test / spec / config / migration / script files", () => {
     const src = `app.get("/u", (req, res) => { db.collection("u").find(req.query); });`

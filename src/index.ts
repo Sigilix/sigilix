@@ -21,7 +21,6 @@
 //   typed JobMessage → returns 200 in ~50ms → queue() handler runs the
 //   actual work (Ollama + GitHub/Linear API calls) with full budget.
 
-
 import {
   detectRecallAlarm,
   recallOutcomeFromTelemetry,
@@ -49,11 +48,7 @@ import {
 } from "@/src/lib/admin-index-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
-import {
-  handleGitHubAuthCallback,
-  handleGitHubAuthKickoff,
-  handleLogout,
-} from "@/src/lib/auth-oauth-github"
+import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { requireSession } from "@/src/lib/auth-middleware"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
@@ -112,7 +107,7 @@ export default {
 
     const key = validationCacheKey(env)
     if (validatedKey !== key) {
-      validatedKey = key  // SET BEFORE call — prevents retry loop on throw
+      validatedKey = key // SET BEFORE call — prevents retry loop on throw
       validationError = null
       try {
         validateEnv(env, parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS))
@@ -120,10 +115,7 @@ export default {
         validationError = e as Error
       }
     }
-    if (
-      validationError &&
-      parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS) === "strict"
-    ) {
+    if (validationError && parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS) === "strict") {
       // Never include validationError.message in the response body — it
       // names the team / repo / installation entries that are missing,
       // which we don't want to leak to whoever's poking the public URL.
@@ -246,10 +238,7 @@ export default {
     // immutable repo.id, and writes UNIONED records to the new
     // `review-memory:repo:<id>:*` keys with a `migratedAt` sentinel.
     // Supports ?dryRun=true. Idempotent re-runs.
-    if (
-      request.method === "POST" &&
-      url.pathname === "/admin/migrate-review-memory-to-repo-id"
-    ) {
+    if (request.method === "POST" && url.pathname === "/admin/migrate-review-memory-to-repo-id") {
       return handleAdminMigrateReviewMemoryToRepoIdRoute(request, env)
     }
 
@@ -306,10 +295,10 @@ export default {
     if (request.method === "GET" && url.pathname.startsWith("/reviews/")) {
       const segments = url.pathname.slice("/reviews/".length).split("/")
       if (segments.length !== 3) {
-        return new Response(
-          JSON.stringify({ error: "expected /reviews/<owner>/<repo>/<prNumber>" }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify({ error: "expected /reviews/<owner>/<repo>/<prNumber>" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
       }
       let owner: string, repo: string, prNumberRaw: string
       try {
@@ -317,10 +306,10 @@ export default {
         repo = decodeURIComponent(segments[1]!)
         prNumberRaw = decodeURIComponent(segments[2]!)
       } catch {
-        return new Response(
-          JSON.stringify({ error: "malformed percent-encoding in path" }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify({ error: "malformed percent-encoding in path" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
       }
       // CR PR #70: strict-positive-integer check. `Number.parseInt`
       // accepts trailing garbage (`"12foo"` → 12), the unary `+`
@@ -328,17 +317,17 @@ export default {
       // false but several string forms (e.g. `" 12 "`) would still
       // parse. Anchor on `^\d+$` and reject anything else with 400.
       if (!/^\d+$/.test(prNumberRaw)) {
-        return new Response(
-          JSON.stringify({ error: "prNumber must be a positive integer" }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify({ error: "prNumber must be a positive integer" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
       }
       const prNumber = Number.parseInt(prNumberRaw, 10)
       if (!Number.isInteger(prNumber) || prNumber <= 0) {
-        return new Response(
-          JSON.stringify({ error: "prNumber must be a positive integer" }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+        return new Response(JSON.stringify({ error: "prNumber must be a positive integer" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
       }
       return handleReviewStatusRoute(env, owner, repo, prNumber)
     }
@@ -416,10 +405,12 @@ export default {
     // review (no writes, no posting).
     ctx.waitUntil(
       runRecallAlarmCheck(env).catch((err) => {
-        console.error(JSON.stringify({
-          event: "review-recall-check-error",
-          error: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "review-recall-check-error",
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }),
     )
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
@@ -436,10 +427,12 @@ export default {
         try {
           await runIndexReconciliation(env, { dryRun: false })
         } catch (err) {
-          console.error(JSON.stringify({
-            event: "index-reconcile-tick-error",
-            error: err instanceof Error ? err.message : String(err),
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-reconcile-tick-error",
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          )
         }
       })(),
     )
@@ -476,22 +469,26 @@ async function runRecallAlarmCheck(env: Env): Promise<void> {
   }
   const result = detectRecallAlarm(outcomes)
   for (const alarm of result.alarms) {
-    console.error(JSON.stringify({
-      event: "review-recall-alarm",
-      kind: alarm.kind,
-      streak: alarm.streak,
-      threshold: alarm.threshold,
-      prNumbers: alarm.prNumbers,
-      sampleSize: outcomes.length,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-recall-alarm",
+        kind: alarm.kind,
+        streak: alarm.streak,
+        threshold: alarm.threshold,
+        prNumbers: alarm.prNumbers,
+        sampleSize: outcomes.length,
+      }),
+    )
   }
-  console.log(JSON.stringify({
-    event: "review-recall-check",
-    logicDegradedStreak: result.logicDegradedStreak,
-    synthZeroFindingStreak: result.synthZeroFindingStreak,
-    sampleSize: outcomes.length,
-    alarmCount: result.alarms.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "review-recall-check",
+      logicDegradedStreak: result.logicDegradedStreak,
+      synthZeroFindingStreak: result.synthZeroFindingStreak,
+      sampleSize: outcomes.length,
+      alarmCount: result.alarms.length,
+    }),
+  )
 }
 
 // ARC-190: Durable Object class export. Cloudflare's worker runtime

@@ -11,8 +11,7 @@ import {
 } from "@/src/lib/triage-pr-review-ensemble"
 
 describe("graphRetrievalEnabled", () => {
-  const makeEnv = (v: string | undefined) =>
-    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/src/index").Env)
+  const makeEnv = (v: string | undefined) => ({ OPENCLAW_GRAPH_RETRIEVAL: v }) as unknown as import("@/src/index").Env
 
   it("returns true for 'shadow'", () => {
     expect(graphRetrievalEnabled(makeEnv("shadow"))).toBe(true)
@@ -45,8 +44,7 @@ describe("graphRetrievalEnabled", () => {
 })
 
 describe("graphRetrievalMode", () => {
-  const makeEnv = (v: string | undefined) =>
-    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("@/src/index").Env)
+  const makeEnv = (v: string | undefined) => ({ OPENCLAW_GRAPH_RETRIEVAL: v }) as unknown as import("@/src/index").Env
 
   it("returns 'shadow' for 'shadow'", () => {
     expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")
@@ -84,9 +82,7 @@ describe("formatGraphContext", () => {
       { path: "src/lib/foo.ts", hop: 1, edgeKind: "import" },
       { path: "src/lib/bar.ts", hop: 2, edgeKind: "same_file" },
     ]
-    expect(formatGraphContext(nodes)).toBe(
-      "src/lib/foo.ts (hop1, import)\nsrc/lib/bar.ts (hop2, same_file)",
-    )
+    expect(formatGraphContext(nodes)).toBe("src/lib/foo.ts (hop1, import)\nsrc/lib/bar.ts (hop2, same_file)")
   })
 
   it("returns empty string for empty array", () => {
@@ -143,12 +139,14 @@ describe("formatGraphBlastContext", () => {
   })
 
   it("returns empty string when nothing new to add", () => {
-    expect(formatGraphBlastContext({
-      callerPaths: [],
-      dependentPaths: [],
-      exclude: new Set<string>(),
-      cap: 4,
-    })).toBe("")
+    expect(
+      formatGraphBlastContext({
+        callerPaths: [],
+        dependentPaths: [],
+        exclude: new Set<string>(),
+        cap: 4,
+      }),
+    ).toBe("")
   })
 })
 

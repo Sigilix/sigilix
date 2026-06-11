@@ -23,14 +23,22 @@ function makeSqliteState(name: string = "test-instance") {
         return undefined
       },
       async put<T>(key: string, value: T): Promise<void> {
-        void key; void value
+        void key
+        void value
       },
       async delete(key: string): Promise<boolean> {
-        void key; return false
+        void key
+        return false
       },
-      async setAlarm(timestamp: number): Promise<void> { void timestamp },
-      async getAlarm(): Promise<number | null> { return null },
-      async deleteAlarm(): Promise<void> { /* no-op */ },
+      async setAlarm(timestamp: number): Promise<void> {
+        void timestamp
+      },
+      async getAlarm(): Promise<number | null> {
+        return null
+      },
+      async deleteAlarm(): Promise<void> {
+        /* no-op */
+      },
     },
     id: { toString: () => name, name },
   }
@@ -575,15 +583,43 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     // joined caller span is null — the LEFT JOIN is forward-compat for when
     // the indexer starts writing caller_symbol_id.)
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/b.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
       symbols: [
-        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
-        { symbolId: "src/b.ts function useBar 5 0", path: "src/b.ts", name: "useBar", kind: "function", exported: false, startLine: 5, startCol: 0, endLine: 9, endCol: 1 },
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
+        {
+          symbolId: "src/b.ts function useBar 5 0",
+          path: "src/b.ts",
+          name: "useBar",
+          kind: "function",
+          exported: false,
+          startLine: 5,
+          startCol: 0,
+          endLine: 9,
+          endCol: 1,
+        },
       ],
       fileEdgesRaw: [],
       callEdges: [
         // same-file call to bar → gets callee_symbol_id at commit
-        { sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file", startLine: 7, startCol: 2 },
+        {
+          sourcePath: "src/b.ts",
+          calleeName: "bar",
+          callKind: "same_file",
+          startLine: 7,
+          startCol: 2,
+        },
       ],
     })
 
@@ -592,13 +628,30 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     // callee_symbol_id from the import binding, so this CROSS-FILE call surfaces
     // as a caller row too (it was excluded before).
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/a.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
       symbols: [],
       fileEdgesRaw: [
-        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./b", importedName: "bar", localName: "bar", exportedName: null, startLine: 1, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
       ],
       callEdges: [
-        { sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding", startLine: 4, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "bar",
+          callKind: "imported_binding",
+          startLine: 4,
+          startCol: 0,
+        },
       ],
     })
 
@@ -615,8 +668,11 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     expect(exp.definitionRows).toHaveLength(1)
     expect(exp.definitionRows[0]).toMatchObject({
       symbolId: "src/b.ts function bar 1 0",
-      path: "src/b.ts", name: "bar", kind: "function",
-      startLine: 1, endLine: 3,
+      path: "src/b.ts",
+      name: "bar",
+      kind: "function",
+      startLine: 1,
+      endLine: 3,
     })
 
     // callers: the same-file call in b.ts (line 7) AND — NEW with SIG-286 — the
@@ -626,13 +682,21 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     expect(exp.callerRows).toHaveLength(2)
     const bCaller = exp.callerRows.find((r) => r.sourcePath === "src/b.ts")
     expect(bCaller).toMatchObject({
-      sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
-      startLine: 7, callerSymbolId: null, callerStartLine: null, callerEndLine: null,
+      sourcePath: "src/b.ts",
+      calleeName: "bar",
+      callKind: "same_file",
+      startLine: 7,
+      callerSymbolId: null,
+      callerStartLine: null,
+      callerEndLine: null,
     })
     const aCaller = exp.callerRows.find((r) => r.sourcePath === "src/a.ts")
     expect(aCaller).toMatchObject({
-      sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding",
-      startLine: 4, callerSymbolId: null,
+      sourcePath: "src/a.ts",
+      calleeName: "bar",
+      callKind: "imported_binding",
+      startLine: 4,
+      callerSymbolId: null,
     })
 
     // import: a.ts imports bar (resolved target_symbol_id) at line 1.
@@ -658,28 +722,60 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
   it("returns graphAvailable=false when changedNames or changedPaths is empty", async () => {
     const do_ = makeDoInstance("o/exp-empty-input")
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/b.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
       symbols: [
-        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     })
     await do_.commitGraphVersion("r")
 
-    const noNames = await do_.contextExpansionForChangedSymbols({ changedNames: [], changedPaths: ["src/b.ts"] })
+    const noNames = await do_.contextExpansionForChangedSymbols({
+      changedNames: [],
+      changedPaths: ["src/b.ts"],
+    })
     expect(noNames.graphAvailable).toBe(false)
-    const noPaths = await do_.contextExpansionForChangedSymbols({ changedNames: ["bar"], changedPaths: [] })
+    const noPaths = await do_.contextExpansionForChangedSymbols({
+      changedNames: ["bar"],
+      changedPaths: [],
+    })
     expect(noPaths.graphAvailable).toBe(false)
   })
 
   it("graphAvailable=true with empty rows when a changed name resolves to no symbol in changed files", async () => {
     const do_ = makeDoInstance("o/exp-no-resolve")
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/b.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
       symbols: [
-        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     })
     await do_.commitGraphVersion("r")
 
@@ -699,20 +795,38 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     const do_ = makeDoInstance("o/exp-cap")
     // One changed symbol `bar` with many same-file callers.
     const callEdges = Array.from({ length: 10 }, (_, i) => ({
-      sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
-      startLine: 20 + i, startCol: 0,
+      sourcePath: "src/b.ts",
+      calleeName: "bar",
+      callKind: "same_file",
+      startLine: 20 + i,
+      startCol: 0,
     }))
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/b.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
       symbols: [
-        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges,
+      fileEdgesRaw: [],
+      callEdges,
     })
     await do_.commitGraphVersion("r")
 
     const exp = await do_.contextExpansionForChangedSymbols({
-      changedNames: ["bar"], changedPaths: ["src/b.ts"], maxRows: 3,
+      changedNames: ["bar"],
+      changedPaths: ["src/b.ts"],
+      maxRows: 3,
     })
     expect(exp.callerRows.length).toBeLessThanOrEqual(3)
     expect(exp.callerRows).toHaveLength(3)

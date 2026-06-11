@@ -1,10 +1,7 @@
 // ARC-190 Task 3 — classifyEnsembleError tests.
 
 import { describe, it, expect } from "vitest"
-import {
-  classifyEnsembleError,
-  classifyEnsembleStage,
-} from "@/src/do/classify-error"
+import { classifyEnsembleError, classifyEnsembleStage } from "@/src/do/classify-error"
 import { GitHubHttpError } from "@/src/shared/adapters/github"
 
 describe("classifyEnsembleError — TRANSIENT triggers", () => {

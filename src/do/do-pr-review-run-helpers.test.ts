@@ -67,42 +67,27 @@ describe("decideEnqueueAction", () => {
   })
 
   it("same SHA + state queued → dedupe-active", () => {
-    const r = decideEnqueueAction(
-      makeState({ headSha: incoming.headSha, state: "queued" }),
-      incoming,
-    )
+    const r = decideEnqueueAction(makeState({ headSha: incoming.headSha, state: "queued" }), incoming)
     expect(r.action).toBe("dedupe-active")
   })
 
   it("same SHA + state running → dedupe-active", () => {
-    const r = decideEnqueueAction(
-      makeState({ headSha: incoming.headSha, state: "running" }),
-      incoming,
-    )
+    const r = decideEnqueueAction(makeState({ headSha: incoming.headSha, state: "running" }), incoming)
     expect(r.action).toBe("dedupe-active")
   })
 
   it("same SHA + state done → dedupe-terminal", () => {
-    const r = decideEnqueueAction(
-      makeState({ headSha: incoming.headSha, state: "done" }),
-      incoming,
-    )
+    const r = decideEnqueueAction(makeState({ headSha: incoming.headSha, state: "done" }), incoming)
     expect(r.action).toBe("dedupe-terminal")
   })
 
   it("same SHA + state failed → dedupe-terminal", () => {
-    const r = decideEnqueueAction(
-      makeState({ headSha: incoming.headSha, state: "failed" }),
-      incoming,
-    )
+    const r = decideEnqueueAction(makeState({ headSha: incoming.headSha, state: "failed" }), incoming)
     expect(r.action).toBe("dedupe-terminal")
   })
 
   it("different SHA → supersede", () => {
-    const r = decideEnqueueAction(
-      makeState({ headSha: "OLD".padEnd(40, "0"), state: "running" }),
-      incoming,
-    )
+    const r = decideEnqueueAction(makeState({ headSha: "OLD".padEnd(40, "0"), state: "running" }), incoming)
     expect(r.action).toBe("supersede")
   })
 })
@@ -122,14 +107,18 @@ describe("decidePickupAction", () => {
 
   it("state running + matching runId + different consumerId → duplicate-409", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "consumer-A",
+      state: "running",
+      runId: "rid-1",
+      consumerId: "consumer-A",
     })
     expect(decidePickupAction(s, "rid-1", "consumer-B").action).toBe("duplicate-409")
   })
 
   it("state running + same consumerId → claim (re-pickup)", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "consumer-A",
+      state: "running",
+      runId: "rid-1",
+      consumerId: "consumer-A",
     })
     expect(decidePickupAction(s, "rid-1", "consumer-A").action).toBe("claim")
   })
@@ -179,24 +168,25 @@ describe("decideRunResultAction", () => {
 
   it("status=success → transition done", () => {
     const s = makeState({ state: "running", runId: "rid-1", consumerId: "c-A" })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-1", consumerId: "c-A", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-1", consumerId: "c-A", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("done")
     expect(r.nextAlarmAt).toBeUndefined()
   })
 
   it("status=transient + attempts<max → failed-transient + alarm scheduled", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "c-A", attempts: 1,
+      state: "running",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 1,
     })
     const nowMs = Date.parse(NOW_ISO)
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "transient",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "transient",
         error: { stage: "github-5xx", message: "503" },
       },
       MAX_RETRIES,
@@ -208,12 +198,17 @@ describe("decideRunResultAction", () => {
 
   it("status=transient + attempts=max → failed (terminal)", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "c-A", attempts: 3,
+      state: "running",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 3,
     })
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "transient",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "transient",
         error: { stage: "github-5xx", message: "503" },
       },
       MAX_RETRIES,
@@ -224,12 +219,17 @@ describe("decideRunResultAction", () => {
 
   it("status=terminal regardless of attempts → failed", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "c-A", attempts: 1,
+      state: "running",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 1,
     })
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "terminal",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "terminal",
         error: { stage: "submit-422", message: "invalid anchor" },
       },
       MAX_RETRIES,
@@ -239,23 +239,17 @@ describe("decideRunResultAction", () => {
 
   it("consumerId mismatch (superseded consumer) → history", () => {
     const s = makeState({
-      state: "running", runId: "rid-1", consumerId: "c-NEW",
+      state: "running",
+      runId: "rid-1",
+      consumerId: "c-NEW",
     })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-1", consumerId: "c-OLD", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-1", consumerId: "c-OLD", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("history")
   })
 
   it("runId mismatch (superseded run) → history", () => {
     const s = makeState({ runId: "rid-NEW", consumerId: "c-A" })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-OLD", consumerId: "c-A", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-OLD", consumerId: "c-A", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("history")
   })
 
@@ -265,24 +259,28 @@ describe("decideRunResultAction", () => {
   // attempt and belongs in history.
   it("current state=failed (watchdog-terminal) + late status=success → history (no-flip)", () => {
     const s = makeState({
-      state: "failed", runId: "rid-1", consumerId: "c-A", attempts: 3,
+      state: "failed",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 3,
     })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-1", consumerId: "c-A", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-1", consumerId: "c-A", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("history")
   })
 
   it("current state=failed + late status=terminal → history (no-flip)", () => {
     const s = makeState({
-      state: "failed", runId: "rid-1", consumerId: "c-A", attempts: 3,
+      state: "failed",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 3,
     })
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "terminal",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "terminal",
         error: { stage: "submit-422", message: "x" },
       },
       MAX_RETRIES,
@@ -292,12 +290,17 @@ describe("decideRunResultAction", () => {
 
   it("current state=done + late status=transient → history (no-flip)", () => {
     const s = makeState({
-      state: "done", runId: "rid-1", consumerId: "c-A", attempts: 1,
+      state: "done",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 1,
     })
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "transient",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "transient",
         error: { stage: "github-5xx", message: "503" },
       },
       MAX_RETRIES,
@@ -310,24 +313,28 @@ describe("decideRunResultAction", () => {
   // retry alarm or reset backoff.
   it("current state=failed-transient (watchdog rescheduled retry) + late same-runId same-consumer success → history (no-flip, retry preserved)", () => {
     const s = makeState({
-      state: "failed-transient", runId: "rid-1", consumerId: "c-A", attempts: 1,
+      state: "failed-transient",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 1,
     })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-1", consumerId: "c-A", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-1", consumerId: "c-A", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("history")
   })
 
   it("current state=queued (retry alarm requeued) + late same-runId same-consumer transient → history (no-flip, no double-schedule)", () => {
     const s = makeState({
-      state: "queued", runId: "rid-1", consumerId: "c-A", attempts: 2,
+      state: "queued",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 2,
     })
     const r = decideRunResultAction(
       s,
       {
-        runId: "rid-1", consumerId: "c-A", status: "transient",
+        runId: "rid-1",
+        consumerId: "c-A",
+        status: "transient",
         error: { stage: "github-5xx", message: "503" },
       },
       MAX_RETRIES,
@@ -338,13 +345,12 @@ describe("decideRunResultAction", () => {
 
   it("current state=idle + same-runId result → history", () => {
     const s = makeState({
-      state: "idle", runId: "rid-1", consumerId: "c-A", attempts: 1,
+      state: "idle",
+      runId: "rid-1",
+      consumerId: "c-A",
+      attempts: 1,
     })
-    const r = decideRunResultAction(
-      s,
-      { runId: "rid-1", consumerId: "c-A", status: "success" },
-      MAX_RETRIES,
-    )
+    const r = decideRunResultAction(s, { runId: "rid-1", consumerId: "c-A", status: "success" }, MAX_RETRIES)
     expect(r.transition).toBe("history")
   })
 })
@@ -389,7 +395,7 @@ describe("pruneHistoryRecords", () => {
 
   it("over cap → evicts oldest by finishedAt", () => {
     const r: Record<string, RunRecord> = {
-      "run:0": rec("run:0", "2026-05-07T00:00:00Z"),  // oldest
+      "run:0": rec("run:0", "2026-05-07T00:00:00Z"), // oldest
       "run:1": rec("run:1", "2026-05-07T01:00:00Z"),
       "run:2": rec("run:2", "2026-05-07T02:00:00Z"),
     }

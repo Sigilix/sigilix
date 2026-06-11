@@ -44,14 +44,8 @@ import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import {
-  EMBEDDING_DIMENSIONS,
-  EMBEDDING_MODEL,
-} from "@/src/shared/adapters/model"
-import {
-  isManifestFresh,
-  readRepoIndexManifest,
-} from "./repo-index-manifest"
+import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
+import { isManifestFresh, readRepoIndexManifest } from "./repo-index-manifest"
 import { isRepoSensitive } from "./repo-policy"
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
@@ -115,10 +109,7 @@ export { graphIndexEnabled } from "./graph-flags"
  * failure, so callers reaching shouldCommitGraph have a written manifest
  * by construction.
  */
-export function shouldCommitGraph(args: {
-  activeRunId: string | null
-  runId: string
-}): boolean {
+export function shouldCommitGraph(args: { activeRunId: string | null; runId: string }): boolean {
   return shouldFinalize(args.activeRunId, args.runId)
 }
 
@@ -150,10 +141,15 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    console.log(JSON.stringify({
-      event: "index-job-skip-sensitive-consumer",
-      owner, repo, installation_id: installationId, reason,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-skip-sensitive-consumer",
+        owner,
+        repo,
+        installation_id: installationId,
+        reason,
+      }),
+    )
     return
   }
 
@@ -165,10 +161,15 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   const repoMeta = await client.getRepository(owner, repo)
   if (!repoMeta) {
-    console.log(JSON.stringify({
-      event: "index-job-skip-repo-not-found",
-      owner, repo, installation_id: installationId, reason,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-skip-repo-not-found",
+        owner,
+        repo,
+        installation_id: installationId,
+        reason,
+      }),
+    )
     return
   }
   const target = await resolveIndexTarget({
@@ -181,12 +182,16 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const stateRepo = target.stateRepo
   const branch = await client.getBranch(owner, repo, target.branch)
   if (!branch) {
-    console.log(JSON.stringify({
-      event: "index-job-skip-branch-not-found",
-      owner, repo, installation_id: installationId,
-      branch: target.branch,
-      default_branch: repoMeta.default_branch,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-skip-branch-not-found",
+        owner,
+        repo,
+        installation_id: installationId,
+        branch: target.branch,
+        default_branch: repoMeta.default_branch,
+      }),
+    )
     return
   }
   const { headSha, treeSha } = branch
@@ -212,21 +217,31 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
     if (fresh) {
-      if (!target.isDefault || await freshManifestHasActiveGraph({ env, owner, repo, runId })) {
-        console.log(JSON.stringify({
-          event: "index-job-skip-fresh",
-          owner, repo, branch: target.isDefault ? null : target.branch,
-          head_sha: headSha, run_id: runId,
-        }))
+      if (!target.isDefault || (await freshManifestHasActiveGraph({ env, owner, repo, runId }))) {
+        console.log(
+          JSON.stringify({
+            event: "index-job-skip-fresh",
+            owner,
+            repo,
+            branch: target.isDefault ? null : target.branch,
+            head_sha: headSha,
+            run_id: runId,
+          }),
+        )
         return
       }
     }
   } else if (existing.kind === "invalid") {
-    console.warn(JSON.stringify({
-      event: "repo-index-manifest-invalid",
-      owner, repo, branch: target.isDefault ? null : target.branch,
-      state_repo: stateRepo, reason: existing.reason,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "repo-index-manifest-invalid",
+        owner,
+        repo,
+        branch: target.isDefault ? null : target.branch,
+        state_repo: stateRepo,
+        reason: existing.reason,
+      }),
+    )
     // Fall through to re-index.
   }
 
@@ -240,30 +255,43 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   const tree = await client.getRepoTree(owner, repo, treeSha)
   if (!tree) {
-    console.log(JSON.stringify({
-      event: "index-job-skip-tree-not-found",
-      owner, repo, tree_sha: treeSha,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-skip-tree-not-found",
+        owner,
+        repo,
+        tree_sha: treeSha,
+      }),
+    )
     return
   }
   if (tree.truncated) {
-    console.warn(JSON.stringify({
-      event: "index-tree-truncated",
-      owner, repo, head_sha: headSha, total_entries: tree.tree.length,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-tree-truncated",
+        owner,
+        repo,
+        head_sha: headSha,
+        total_entries: tree.tree.length,
+      }),
+    )
     // Codex v2 BLOCKING: do NOT write a manifest. Customer retrieval
     // stays empty until a partial-indexing fallback ships.
     return
   }
 
   const indexableFiles = walkIndexableFiles(tree.tree)
-  console.log(JSON.stringify({
-    event: "index-tree-walked",
-    owner, repo, branch: target.isDefault ? null : target.branch,
-    run_id: runId,
-    total_entries: tree.tree.length,
-    indexable_files: indexableFiles.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-tree-walked",
+      owner,
+      repo,
+      branch: target.isDefault ? null : target.branch,
+      run_id: runId,
+      total_entries: tree.tree.length,
+      indexable_files: indexableFiles.length,
+    }),
+  )
 
   // SIG-172: enumerate SIGILIX.md + .sigilix/rules/*.md at any depth
   // and persist the manifest separately from the vector index. Runs
@@ -285,15 +313,25 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (target.isDefault) {
     try {
       await persistScopedRulesManifest({
-        env, client, owner, repo, headSha, runId, stateRepo,
+        env,
+        client,
+        owner,
+        repo,
+        headSha,
+        runId,
+        stateRepo,
         treeEntries: tree.tree,
       })
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "scoped-rules-manifest-write-failed",
-        owner, repo, run_id: runId,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "scoped-rules-manifest-write-failed",
+          owner,
+          repo,
+          run_id: runId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
 
@@ -305,26 +343,46 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // commit check below without a second KV read (don't re-read KV).
     const activeRunId = await readActiveRunId(env, owner, stateRepo)
     if (!shouldFinalize(activeRunId, runId)) {
-      console.warn(JSON.stringify({
-        event: "index-job-skip-superseded-finalize",
-        owner, repo, branch: target.isDefault ? null : target.branch,
-        run_id: runId, site: "bootstrap-empty-manifest",
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-job-skip-superseded-finalize",
+          owner,
+          repo,
+          branch: target.isDefault ? null : target.branch,
+          run_id: runId,
+          site: "bootstrap-empty-manifest",
+        }),
+      )
       return
     }
     await persistManifest({
-      env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
+      env,
+      owner,
+      repo,
+      githubRepoId,
+      stateRepo,
+      namespace,
+      headSha,
+      runId,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
-      fileCount: 0, chunkCount: 0, shardCount: 1,
+      fileCount: 0,
+      chunkCount: 0,
+      shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
     })
-    console.log(JSON.stringify({
-      event: "index-job-completed",
-      owner, repo, branch: target.isDefault ? null : target.branch,
-      run_id: runId,
-      file_count: 0, chunk_count: 0, shard_count: 1,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-completed",
+        owner,
+        repo,
+        branch: target.isDefault ? null : target.branch,
+        run_id: runId,
+        file_count: 0,
+        chunk_count: 0,
+        shard_count: 1,
+      }),
+    )
     // SIG-138: commit an empty graph version to GC any stale graph left
     // from a previously-indexed repo that is now empty. Best-effort —
     // never fails the index job.
@@ -332,11 +390,15 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       try {
         await commitGraph(env, owner, repo, runId)
       } catch (err) {
-        console.warn(JSON.stringify({
-          event: "graph-commit-failed",
-          owner, repo, run_id: runId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "graph-commit-failed",
+            owner,
+            repo,
+            run_id: runId,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
     return
@@ -345,8 +407,16 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const sliceHi = Math.min(totalFiles, MAX_FILES_PER_JOB)
   const sliceFiles = indexableFiles.slice(0, sliceHi)
   const { chunkCount, idsByPath } = await processSlice({
-    client, env, owner, repo, stateRepo, namespace,
-    headSha, runId, files: sliceFiles, astChunking: astOn,
+    client,
+    env,
+    owner,
+    repo,
+    stateRepo,
+    namespace,
+    headSha,
+    runId,
+    files: sliceFiles,
+    astChunking: astOn,
   })
 
   // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
@@ -357,15 +427,24 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // SIG-136: the run lease was claimed early (right after the freshness
   // gate, before processSlice) so a stale run can't clobber it late.
   const vectorsResult = await persistVectorIds({
-    env, owner, repo: stateRepo, githubRepoId, runId, idsByPathSlice: idsByPath,
+    env,
+    owner,
+    repo: stateRepo,
+    githubRepoId,
+    runId,
+    idsByPathSlice: idsByPath,
     isBootstrap: true,
   })
   if (!vectorsResult.proceed) {
-    console.warn(JSON.stringify({
-      event: "index-job-skip-stale-bootstrap",
-      owner, repo, branch: target.isDefault ? null : target.branch,
-      run_id: runId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-job-skip-stale-bootstrap",
+        owner,
+        repo,
+        branch: target.isDefault ? null : target.branch,
+        run_id: runId,
+      }),
+    )
     return
   }
 
@@ -373,20 +452,29 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // Hand off to the next continuation shard. Final shard will write
     // the manifest with cumulative totals; this bootstrap doesn't.
     if (!(await leaseAllows(env, owner, stateRepo, runId))) {
-      console.warn(JSON.stringify({
-        event: "index-job-skip-superseded-finalize",
-        site: "bootstrap-enqueue",
-        owner, repo, branch: target.isDefault ? null : target.branch,
-        run_id: runId,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-job-skip-superseded-finalize",
+          site: "bootstrap-enqueue",
+          owner,
+          repo,
+          branch: target.isDefault ? null : target.branch,
+          run_id: runId,
+        }),
+      )
       return
     }
     await enqueueNextShard(env, {
-      owner, repo, githubRepoId, installationId, reason,
+      owner,
+      repo,
+      githubRepoId,
+      installationId,
+      reason,
       ...(target.isDefault ? {} : { branch: target.branch }),
       lo: MAX_FILES_PER_JOB,
       hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
-      headSha, treeSha,
+      headSha,
+      treeSha,
       defaultBranch: target.defaultBranch,
       totalFiles,
       filesDone: sliceHi,
@@ -401,38 +489,61 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // commit check below without a second KV read (don't re-read KV).
   const activeRunId = await readActiveRunId(env, owner, stateRepo)
   if (!shouldFinalize(activeRunId, runId)) {
-    console.warn(JSON.stringify({
-      event: "index-job-skip-superseded-finalize",
-      site: "bootstrap-manifest",
-      owner, repo, branch: target.isDefault ? null : target.branch,
-      run_id: runId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        site: "bootstrap-manifest",
+        owner,
+        repo,
+        branch: target.isDefault ? null : target.branch,
+        run_id: runId,
+      }),
+    )
     return
   }
   await persistManifest({
-    env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
+    env,
+    owner,
+    repo,
+    githubRepoId,
+    stateRepo,
+    namespace,
+    headSha,
+    runId,
     branch: target.isDefault ? null : target.branch,
     defaultBranch: target.defaultBranch,
-    fileCount: sliceHi, chunkCount, shardCount: 1,
+    fileCount: sliceHi,
+    chunkCount,
+    shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
   })
-  console.log(JSON.stringify({
-    event: "index-job-completed",
-    owner, repo, branch: target.isDefault ? null : target.branch,
-    run_id: runId,
-    file_count: sliceHi, chunk_count: chunkCount, shard_count: 1,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-job-completed",
+      owner,
+      repo,
+      branch: target.isDefault ? null : target.branch,
+      run_id: runId,
+      file_count: sliceHi,
+      chunk_count: chunkCount,
+      shard_count: 1,
+    }),
+  )
   // SIG-138: commit the graph version after a successful manifest write,
   // lease-gated. Best-effort — never fails the index job.
   if (target.isDefault && graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
     try {
       await commitGraph(env, owner, repo, runId)
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "graph-commit-failed",
-        owner, repo, run_id: runId,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "graph-commit-failed",
+          owner,
+          repo,
+          run_id: runId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
   // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
@@ -447,15 +558,25 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // throw here must NOT fail the index job (which already
   // succeeded) and trigger an indexer queue retry → full re-embed.
   try {
-    if (target.isDefault) await enqueueWarmupRerunsForIndex({
-      env, client, owner, repo, installationId, runId,
-    })
+    if (target.isDefault)
+      await enqueueWarmupRerunsForIndex({
+        env,
+        client,
+        owner,
+        repo,
+        installationId,
+        runId,
+      })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "warmup-rerun-fanout-failed",
-      owner, repo, run_id: runId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "warmup-rerun-fanout-failed",
+        owner,
+        repo,
+        run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -472,21 +593,29 @@ async function freshManifestHasActiveGraph(args: {
   try {
     activeGraphVersion = await debugActiveGraphVersion(env, owner, repo)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "graph-active-version-read-failed",
-      owner, repo, run_id: runId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "graph-active-version-read-failed",
+        owner,
+        repo,
+        run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return true
   }
 
   if (activeGraphVersion === runId) return true
 
-  console.warn(JSON.stringify({
-    event: "index-job-fresh-manifest-graph-missing",
-    owner, repo, run_id: runId,
-    active_graph_version: activeGraphVersion,
-  }))
+  console.warn(
+    JSON.stringify({
+      event: "index-job-fresh-manifest-graph-missing",
+      owner,
+      repo,
+      run_id: runId,
+      active_graph_version: activeGraphVersion,
+    }),
+  )
   return false
 }
 
@@ -503,13 +632,17 @@ async function handleShardJob(
   const githubRepoId = job.githubRepoId
   const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
   if (resolvedDefaultBranch === null) {
-    console.warn(JSON.stringify({
-      event: "index-shard-default-branch-missing",
-      owner, repo, run_id: shard.runId,
-      shard_lo: shard.lo,
-      shard_hi: shard.hi,
-      note: "legacy shard missing defaultBranch; using sentinel",
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-shard-default-branch-missing",
+        owner,
+        repo,
+        run_id: shard.runId,
+        shard_lo: shard.lo,
+        shard_hi: shard.hi,
+        note: "legacy shard missing defaultBranch; using sentinel",
+      }),
+    )
   }
   const target = await resolveIndexTarget({
     owner,
@@ -522,11 +655,16 @@ async function handleShardJob(
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    console.log(JSON.stringify({
-      event: "index-job-skip-sensitive-consumer",
-      owner, repo, installation_id: installationId, reason,
-      run_id: shard.runId,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-skip-sensitive-consumer",
+        owner,
+        repo,
+        installation_id: installationId,
+        reason,
+        run_id: shard.runId,
+      }),
+    )
     return
   }
 
@@ -542,10 +680,15 @@ async function handleShardJob(
     chunkerVersion: effectiveChunkerVersion(astOn),
   })
   if (currentRunId !== shard.runId) {
-    console.warn(JSON.stringify({
-      event: "index-shard-config-drift",
-      owner, repo, expected_run_id: shard.runId, current_run_id: currentRunId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-shard-config-drift",
+        owner,
+        repo,
+        expected_run_id: shard.runId,
+        current_run_id: currentRunId,
+      }),
+    )
     return
   }
 
@@ -556,18 +699,28 @@ async function handleShardJob(
 
   const tree = await client.getRepoTree(owner, repo, shard.treeSha)
   if (!tree) {
-    console.warn(JSON.stringify({
-      event: "index-shard-tree-not-found",
-      owner, repo, tree_sha: shard.treeSha, run_id: shard.runId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-shard-tree-not-found",
+        owner,
+        repo,
+        tree_sha: shard.treeSha,
+        run_id: shard.runId,
+      }),
+    )
     return
   }
   if (tree.truncated) {
-    console.warn(JSON.stringify({
-      event: "index-tree-truncated",
-      owner, repo, head_sha: shard.headSha, total_entries: tree.tree.length,
-      run_id: shard.runId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-tree-truncated",
+        owner,
+        repo,
+        head_sha: shard.headSha,
+        total_entries: tree.tree.length,
+        run_id: shard.runId,
+      }),
+    )
     return
   }
   const indexableFiles = walkIndexableFiles(tree.tree)
@@ -576,11 +729,16 @@ async function handleShardJob(
     // hasn't changed but the filter result differs — shouldn't
     // normally happen since the tree SHA pins both). Refuse to write
     // the manifest; the next push-driven re-index will repair.
-    console.warn(JSON.stringify({
-      event: "index-shard-tree-drift",
-      owner, repo, run_id: shard.runId,
-      expected: shard.totalFiles, current: indexableFiles.length,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-shard-tree-drift",
+        owner,
+        repo,
+        run_id: shard.runId,
+        expected: shard.totalFiles,
+        current: indexableFiles.length,
+      }),
+    )
     return
   }
 
@@ -596,10 +754,16 @@ async function handleShardJob(
   // (vectors not recorded in the id-list pollute retrieval + escape the
   // GDPR uninstall delete). persistVectorIds re-checks at the end as backstop.
   if (!(await leaseAllows(env, owner, stateRepo, shard.runId))) {
-    console.warn(JSON.stringify({
-      event: "index-job-skip-superseded-shard",
-      owner, repo, run_id: shard.runId, lo: shard.lo, hi: shard.hi,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-job-skip-superseded-shard",
+        owner,
+        repo,
+        run_id: shard.runId,
+        lo: shard.lo,
+        hi: shard.hi,
+      }),
+    )
     return
   }
   // The check above and this refresh are NOT atomic, but that's safe: the
@@ -609,21 +773,38 @@ async function handleShardJob(
 
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
   const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
-    client, env, owner, repo, stateRepo, namespace,
-    headSha: shard.headSha, runId: shard.runId, files: sliceFiles, astChunking: astOn,
+    client,
+    env,
+    owner,
+    repo,
+    stateRepo,
+    namespace,
+    headSha: shard.headSha,
+    runId: shard.runId,
+    files: sliceFiles,
+    astChunking: astOn,
   })
 
   const vectorsResult = await persistVectorIds({
-    env, owner, repo: stateRepo, githubRepoId,
+    env,
+    owner,
+    repo: stateRepo,
+    githubRepoId,
     runId: shard.runId,
     idsByPathSlice: idsByPath,
     isBootstrap: false,
   })
   if (!vectorsResult.proceed) {
-    console.warn(JSON.stringify({
-      event: "index-job-skip-stale-shard",
-      owner, repo, run_id: shard.runId, lo: shard.lo, hi: shard.hi,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-job-skip-stale-shard",
+        owner,
+        repo,
+        run_id: shard.runId,
+        lo: shard.lo,
+        hi: shard.hi,
+      }),
+    )
     return
   }
 
@@ -637,41 +818,59 @@ async function handleShardJob(
     // commit check below without a second KV read (don't re-read KV).
     const activeRunId = await readActiveRunId(env, owner, stateRepo)
     if (!shouldFinalize(activeRunId, shard.runId)) {
-      console.warn(JSON.stringify({
-        event: "index-job-skip-superseded-finalize",
-        site: "shard-manifest",
-        owner, repo, run_id: shard.runId,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-job-skip-superseded-finalize",
+          site: "shard-manifest",
+          owner,
+          repo,
+          run_id: shard.runId,
+        }),
+      )
       return
     }
     await persistManifest({
-      env, owner, repo, githubRepoId, stateRepo, namespace,
+      env,
+      owner,
+      repo,
+      githubRepoId,
+      stateRepo,
+      namespace,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
-      headSha: shard.headSha, runId: shard.runId,
+      headSha: shard.headSha,
+      runId: shard.runId,
       fileCount: cumulativeFiles,
       chunkCount: cumulativeChunks,
       shardCount,
       chunkerVersion: effectiveChunkerVersion(astOn),
     })
-    console.log(JSON.stringify({
-      event: "index-job-completed",
-      owner, repo, run_id: shard.runId,
-      file_count: cumulativeFiles,
-      chunk_count: cumulativeChunks,
-      shard_count: shardCount,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-job-completed",
+        owner,
+        repo,
+        run_id: shard.runId,
+        file_count: cumulativeFiles,
+        chunk_count: cumulativeChunks,
+        shard_count: shardCount,
+      }),
+    )
     // SIG-138: commit the graph version after a successful manifest write,
     // lease-gated. Best-effort — never fails the index job.
     if (target.isDefault && graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId: shard.runId })) {
       try {
         await commitGraph(env, owner, repo, shard.runId)
       } catch (err) {
-        console.warn(JSON.stringify({
-          event: "graph-commit-failed",
-          owner, repo, run_id: shard.runId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "graph-commit-failed",
+            owner,
+            repo,
+            run_id: shard.runId,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
     // ARC-236: fan out reruns on the final-shard path too. Multi-
@@ -682,29 +881,47 @@ async function handleShardJob(
     // try/catch as the bootstrap path. Best-effort applies here
     // too — multi-shard repos already paid the indexing cost.
     try {
-      if (target.isDefault) await enqueueWarmupRerunsForIndex({
-        env, client, owner, repo, installationId, runId: shard.runId,
-      })
+      if (target.isDefault)
+        await enqueueWarmupRerunsForIndex({
+          env,
+          client,
+          owner,
+          repo,
+          installationId,
+          runId: shard.runId,
+        })
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "warmup-rerun-fanout-failed",
-        owner, repo, run_id: shard.runId,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "warmup-rerun-fanout-failed",
+          owner,
+          repo,
+          run_id: shard.runId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
     return
   }
 
   if (!(await leaseAllows(env, owner, stateRepo, shard.runId))) {
-    console.warn(JSON.stringify({
-      event: "index-job-skip-superseded-finalize",
-      site: "shard-enqueue",
-      owner, repo, run_id: shard.runId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        site: "shard-enqueue",
+        owner,
+        repo,
+        run_id: shard.runId,
+      }),
+    )
     return
   }
   await enqueueNextShard(env, {
-    owner, repo, githubRepoId, installationId, reason,
+    owner,
+    repo,
+    githubRepoId,
+    installationId,
+    reason,
     ...(target.isDefault ? {} : { branch: target.branch }),
     lo: shard.hi,
     hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),

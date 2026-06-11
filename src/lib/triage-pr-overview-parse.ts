@@ -40,28 +40,23 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     ? obj.files
         .filter(
           (f): f is Record<string, unknown> =>
-            !!f && typeof f === "object" && !Array.isArray(f) && typeof (f as { path?: unknown }).path === "string"
+            !!f && typeof f === "object" && !Array.isArray(f) && typeof (f as { path?: unknown }).path === "string",
         )
         .filter((f) => (f.path as string).trim().length > 0)
         .slice(0, 20)
         .map((f) => ({
           path: (f.path as string).trim(),
-          score: Number.isFinite(Number(f.score))
-            ? Math.max(1, Math.min(5, Math.round(Number(f.score))))
-            : 3,
+          score: Number.isFinite(Number(f.score)) ? Math.max(1, Math.min(5, Math.round(Number(f.score)))) : 3,
           overview: typeof f.overview === "string" ? f.overview.trim() : "",
           nextStep: typeof f.nextStep === "string" ? f.nextStep.trim() : "",
         }))
     : []
 
   const bullets = Array.isArray(obj.bullets)
-    ? obj.bullets
-        .filter((b): b is string => typeof b === "string" && b.trim().length > 0)
-        .map((b) => b.trim())
+    ? obj.bullets.filter((b): b is string => typeof b === "string" && b.trim().length > 0).map((b) => b.trim())
     : []
 
-  const confidenceReason =
-    typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
+  const confidenceReason = typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
 
   // SIG-99: optional polish fields. Each is independently clamped /
   // filtered; nothing fails the parse if any is malformed. Absent
@@ -128,11 +123,7 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     // the renderer's mermaid fence early, letting the trailing prose
     // render as top-level markdown. Reject any value containing
     // triple-backtick so the fence stays intact.
-    if (
-      m.length > 0 &&
-      /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m) &&
-      !m.includes("```")
-    ) {
+    if (m.length > 0 && /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m) && !m.includes("```")) {
       verdict.mermaidDiagram = m
     }
   }
@@ -166,8 +157,7 @@ export function scopedDiffFromMisses(
     return "[All file rows were served from the walkthrough cache; no fresh per-file patches needed.]"
   }
   const withPatch = misses.filter(
-    (f): f is { filename: string; patch: string; status?: string } =>
-      typeof f.patch === "string" && f.patch.length > 0,
+    (f): f is { filename: string; patch: string; status?: string } => typeof f.patch === "string" && f.patch.length > 0,
   )
   if (withPatch.length === 0) {
     // code-reviewer L3 catch (commit 1): every miss is binary /
@@ -176,16 +166,16 @@ export function scopedDiffFromMisses(
     // this run. Distinct from the misses.length === 0 path above:
     // here the misses are REAL changes that simply don't have a
     // textual diff, so we need the full context.
-    console.log(JSON.stringify({
-      event: "pr-overview-scoped-diff-fellback-to-full",
-      miss_count: misses.length,
-      reason: "no-patches-available",
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-overview-scoped-diff-fellback-to-full",
+        miss_count: misses.length,
+        reason: "no-patches-available",
+      }),
+    )
     return fallbackDiff
   }
-  const blocks = withPatch.map(
-    (f) => `diff --git a/${f.filename} b/${f.filename}\n${f.patch}`,
-  )
+  const blocks = withPatch.map((f) => `diff --git a/${f.filename} b/${f.filename}\n${f.patch}`)
   const noPatch = misses.filter((f) => typeof f.patch !== "string" || f.patch.length === 0)
   let scoped = blocks.join("\n")
   if (noPatch.length > 0) {

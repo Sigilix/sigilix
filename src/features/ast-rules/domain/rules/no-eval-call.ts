@@ -30,7 +30,8 @@ export const noEvalCall: AstRule = {
     const callee = node.callee
     if (!callee || callee.type !== "Identifier" || callee.name !== "eval") return null
     return {
-      message: "Direct eval() call — runtime code execution from a value is dangerous. Refactor to use a safe alternative or an explicit allowlist.",
+      message:
+        "Direct eval() call — runtime code execution from a value is dangerous. Refactor to use a safe alternative or an explicit allowlist.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       column: node.loc?.start?.column ?? 0,

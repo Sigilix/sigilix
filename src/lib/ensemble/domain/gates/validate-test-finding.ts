@@ -61,9 +61,7 @@ export function parseTestsValidatorMode(raw: string | undefined): TestsValidator
  * Result of evaluating one in-scope testing finding. `keep:false`
  * carries a structured reason for telemetry; `keep:true` is bare.
  */
-export type TestFindingDecision =
-  | { keep: true }
-  | { keep: false; reason: TestDropReason }
+export type TestFindingDecision = { keep: true } | { keep: false; reason: TestDropReason }
 
 export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
@@ -179,10 +177,7 @@ function citesRealMissingCoverage(finding: PrReviewFinding, pack: TestingEvidenc
  * to the gate (the LCOV-derived added-and-uncovered set). This is a
  * MISSING-COVERAGE-style claim backed by deterministic CI evidence.
  */
-function citesRealCoverageGap(
-  finding: PrReviewFinding,
-  coverageGaps: ReadonlySet<string>,
-): boolean {
+function citesRealCoverageGap(finding: PrReviewFinding, coverageGaps: ReadonlySet<string>): boolean {
   if (coverageGaps.size === 0) return false
   if (!Array.isArray(finding.evidenceRefs)) return false
   const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
@@ -299,9 +294,7 @@ function citesInspectedClass(finding: PrReviewFinding): boolean {
     }
   }
   if (Array.isArray(finding.evidenceRefs)) {
-    return finding.evidenceRefs.some(
-      (ref) => typeof ref === "string" && ref.trim().startsWith("inspectedTestFile:"),
-    )
+    return finding.evidenceRefs.some((ref) => typeof ref === "string" && ref.trim().startsWith("inspectedTestFile:"))
   }
   return false
 }
@@ -347,7 +340,9 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
   // contradicting the keep-biased contract). So the keyword counts even
   // alongside vague call-to-action phrasing.
   if (
-    /\b(branch|error path|edge case|null|undefined|throw|reject|exception|boundary|overflow|race|timeout|retry|fallback)\b/i.test(text)
+    /\b(branch|error path|edge case|null|undefined|throw|reject|exception|boundary|overflow|race|timeout|retry|fallback)\b/i.test(
+      text,
+    )
   ) {
     return true
   }
@@ -357,25 +352,29 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
 function claimsSpeculativeConstantIntent(finding: PrReviewFinding): boolean {
   const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
   return (
-    /\b(?:signal(?:s|ing|ed)?|suggest(?:s|ing|ed)?|indicat(?:es|ing|ed)?|implies|intent|future|eventually|prepar(?:es|ing|ed)?)\b/i.test(text)
-    && /\b(?:const(?:ant)?|default value|delayMs|timeoutMs|backoff delay|retry delay)\b/i.test(text)
+    /\b(?:signal(?:s|ing|ed)?|suggest(?:s|ing|ed)?|indicat(?:es|ing|ed)?|implies|intent|future|eventually|prepar(?:es|ing|ed)?)\b/i.test(
+      text,
+    ) && /\b(?:const(?:ant)?|default value|delayMs|timeoutMs|backoff delay|retry delay)\b/i.test(text)
   )
 }
 
 function namesConcreteBranchOrErrorPath(finding: PrReviewFinding): boolean {
   const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
   return (
-    /\b(?:branch|error path|failure path|failure case|rejection|throw|throws|thrown|catch|rejects?|exception|guard|negative case|null case|undefined case|boundary case|overflow case|race case|timeout branch)\b/i.test(text)
-    || /`[^`]*(?:if\s*\(|throw|catch|reject|timeout|null|undefined)[^`]*`/i.test(text)
+    /\b(?:branch|error path|failure path|failure case|rejection|throw|throws|thrown|catch|rejects?|exception|guard|negative case|null case|undefined case|boundary case|overflow case|race case|timeout branch)\b/i.test(
+      text,
+    ) || /`[^`]*(?:if\s*\(|throw|catch|reject|timeout|null|undefined)[^`]*`/i.test(text)
   )
 }
 
 function claimsRetryDelayWithoutConcreteExecutionPath(finding: PrReviewFinding): boolean {
   const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
   return (
-    /\b(?:backoff|delayMs|timeoutMs|delay|timeout)\b/i.test(text)
-    && /\b(?:happy path|success(?:ful)? path|successful attempt|only asserts|only covers|only exercises|does not cover|doesn't cover|missing coverage|needs coverage)\b/i.test(text)
-    && !namesConcreteBranchOrErrorPath(finding)
+    /\b(?:backoff|delayMs|timeoutMs|delay|timeout)\b/i.test(text) &&
+    /\b(?:happy path|success(?:ful)? path|successful attempt|only asserts|only covers|only exercises|does not cover|doesn't cover|missing coverage|needs coverage)\b/i.test(
+      text,
+    ) &&
+    !namesConcreteBranchOrErrorPath(finding)
   )
 }
 
@@ -395,7 +394,9 @@ function claimsAbsentRetryImplementationAsTestGap(finding: PrReviewFinding): boo
   if ((nameImpliesBehavior || nameOrUtilityOnly) && absentBehavior) return true
   return (
     nameImpliesBehavior ||
-    /\b(?:no|without|lacks?)\s+(?:retry|backoff|fallback)\s+(?:loop|logic|behavior|behaviour|implementation)\b/i.test(text) ||
+    /\b(?:no|without|lacks?)\s+(?:retry|backoff|fallback)\s+(?:loop|logic|behavior|behaviour|implementation)\b/i.test(
+      text,
+    ) ||
     /\bstill\s+(?:contains|has)\s+no\s+(?:retry|backoff|fallback)\b/i.test(text)
   )
 }
@@ -407,9 +408,28 @@ function claimsAbsentRetryImplementationAsTestGap(finding: PrReviewFinding): boo
  * safety belt (a too-generic / too-short token never triggers a drop).
  */
 const CROSS_CHECK_STOPLIST = new Set<string>([
-  "null", "undefined", "true", "false", "error", "value", "result", "data",
-  "function", "return", "async", "await", "const", "type", "test", "expect",
-  "string", "number", "object", "array", "promise", "void",
+  "null",
+  "undefined",
+  "true",
+  "false",
+  "error",
+  "value",
+  "result",
+  "data",
+  "function",
+  "return",
+  "async",
+  "await",
+  "const",
+  "type",
+  "test",
+  "expect",
+  "string",
+  "number",
+  "object",
+  "array",
+  "promise",
+  "void",
 ])
 
 /**
@@ -463,10 +483,7 @@ function escapeForRegExp(s: string): string {
  * in-diff sibling test, or no sibling body is available — the gate then keeps
  * the finding via its normal path.
  */
-function isCrossReferencedInSiblingTest(
-  finding: PrReviewFinding,
-  pack: TestingEvidencePack,
-): boolean {
+function isCrossReferencedInSiblingTest(finding: PrReviewFinding, pack: TestingEvidencePack): boolean {
   const contentByPath = pack.inspectedTestContentByPath
   if (!contentByPath) return false
   const idents = extractCitedIdentifiers(finding)
@@ -482,9 +499,7 @@ function isCrossReferencedInSiblingTest(
   // Word-boundary match (no lookbehind) so `parse` doesn't hit inside
   // `parseFoo`; `$`/`_` count as identifier chars at the boundary. Compiled
   // once per identifier (not per identifier × test-body) — Sigilix #401 perf.
-  const idRegexes = idents.map(
-    (id) => new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeForRegExp(id)}(?:[^A-Za-z0-9_$]|$)`),
-  )
+  const idRegexes = idents.map((id) => new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeForRegExp(id)}(?:[^A-Za-z0-9_$]|$)`))
   const changed = new Set(pack.testFilesChanged)
   for (const testPath of siblingTests) {
     if (!changed.has(testPath)) continue
@@ -530,7 +545,11 @@ function concreteBranchOrErrorPathAlreadyAssertedInSiblingTest(
   const contentByPath = pack.inspectedTestContentByPath
   if (!contentByPath) return false
   const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
-  if (!/\b(?:error path|error branch|failure path|failure branch|failure case|rejection|rejection branch|throw|throws|thrown|throw branch|catch|rejects?|exception|exception branch)\b/i.test(text)) {
+  if (
+    !/\b(?:error path|error branch|failure path|failure branch|failure case|rejection|rejection branch|throw|throws|thrown|throw branch|catch|rejects?|exception|exception branch)\b/i.test(
+      text,
+    )
+  ) {
     return false
   }
   const tokens = extractConcreteErrorPathTokens(finding)
@@ -655,8 +674,7 @@ export function evaluateTestFinding(
   // coverage) while preventing a bogus coverageGap from piggybacking on a
   // real inspected-test citation to straddle both classes and escape via
   // ambiguous-keep (the bypass Codex flagged).
-  const missingClass =
-    siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
+  const missingClass = siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
 
   // SIG-166-1: structural orchestrator-glue suppression fires for EITHER
   // the ->NONE sibling-mapping missing class OR the insufficient-test
@@ -709,10 +727,10 @@ export function evaluateTestFinding(
   // the positive signal). When the inspected citation doesn't resolve OR
   // nothing concrete is named, it's the vague-insufficient-test FP shape.
   if (
-    (citesRealInspectedTest(finding, pack) || citesRealCoveredSiblingMapping(finding, pack))
-    && namesConcreteTarget(finding)
-    && (!claimsSpeculativeConstantIntent(finding) || namesConcreteBranchOrErrorPath(finding))
-    && !claimsRetryDelayWithoutConcreteExecutionPath(finding)
+    (citesRealInspectedTest(finding, pack) || citesRealCoveredSiblingMapping(finding, pack)) &&
+    namesConcreteTarget(finding) &&
+    (!claimsSpeculativeConstantIntent(finding) || namesConcreteBranchOrErrorPath(finding)) &&
+    !claimsRetryDelayWithoutConcreteExecutionPath(finding)
   ) {
     // SIG-347 (AC #2): the specialist read a real test AND named a concrete
     // target — but if that target is already referenced by an in-diff sibling
@@ -724,10 +742,8 @@ export function evaluateTestFinding(
     // error assertion and shares a specific error/path token from the finding.
     if (
       citesRealInspectedTest(finding, pack) &&
-      (
-        !namesConcreteBranchOrErrorPath(finding) ||
-        concreteBranchOrErrorPathAlreadyAssertedInSiblingTest(finding, pack)
-      ) &&
+      (!namesConcreteBranchOrErrorPath(finding) ||
+        concreteBranchOrErrorPathAlreadyAssertedInSiblingTest(finding, pack)) &&
       isCrossReferencedInSiblingTest(finding, pack)
     ) {
       return { keep: false, reason: "cross-referenced-in-sibling-test" }

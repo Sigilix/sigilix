@@ -3,8 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Env } from "@/src/shared/types/env"
 
-const VALID_MARKER =
-  "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
+const VALID_MARKER = "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
 const VALID_FINGERPRINT = "f".repeat(64)
 const PRECISION_FINDING_MARKERS = [
   "<!-- sigilix:pr-review-finding -->",
@@ -23,9 +22,7 @@ const {
   mockListPullRequestReviewComments,
   mockListPullRequestReviews,
 } = vi.hoisted(() => ({
-  mockGetFileContent: vi.fn(async (..._args: unknown[]) =>
-    JSON.stringify({ reviewMemory: { captureOnly: true } }),
-  ),
+  mockGetFileContent: vi.fn(async (..._args: unknown[]) => JSON.stringify({ reviewMemory: { captureOnly: true } })),
   mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
   mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({
     number: 7,
@@ -35,24 +32,21 @@ const {
     head: { sha: "head", ref: "branch" },
     base: { sha: "base", ref: "main" },
   })),
-  mockGetRepository: vi.fn(async (..._args: unknown[]) => ({ default_branch: "main", id: 555_000 })),
+  mockGetRepository: vi.fn(async (..._args: unknown[]) => ({
+    default_branch: "main",
+    id: 555_000,
+  })),
   mockGitHubClient: vi.fn(() => ({
     getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
     getPullRequest: (...args: unknown[]) => mockGetPullRequest(...args),
     getRepository: (...args: unknown[]) => mockGetRepository(...args),
     listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
-    listPullRequestReviewComments: (...args: unknown[]) =>
-      mockListPullRequestReviewComments(...args),
-    listPullRequestReviews: (...args: unknown[]) =>
-      mockListPullRequestReviews(...args),
+    listPullRequestReviewComments: (...args: unknown[]) => mockListPullRequestReviewComments(...args),
+    listPullRequestReviews: (...args: unknown[]) => mockListPullRequestReviews(...args),
   })),
   mockListIssueComments: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>[]> => []),
-  mockListPullRequestReviewComments: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>[]> => [],
-  ),
-  mockListPullRequestReviews: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>[]> => [],
-  ),
+  mockListPullRequestReviewComments: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>[]> => []),
+  mockListPullRequestReviews: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>[]> => []),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
@@ -67,10 +61,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
   }
 })
 
-import {
-  dispatchDismissedReviewMemoryCapture,
-  dispatchTopLevelReviewMemoryCapture,
-} from "@/src/index"
+import { dispatchDismissedReviewMemoryCapture, dispatchTopLevelReviewMemoryCapture } from "@/src/index"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]
@@ -81,8 +72,12 @@ function makeKvStub(): KvStub {
   const store = new Map<string, string>()
   const kv = {
     get: async (key: string) => store.get(key) ?? null,
-    put: async (key: string, value: string) => { store.set(key, value) },
-    delete: async (key: string) => { store.delete(key) },
+    put: async (key: string, value: string) => {
+      store.set(key, value)
+    },
+    delete: async (key: string) => {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -97,9 +92,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 }
 
 beforeEach(() => {
-  mockGetFileContent.mockReset().mockResolvedValue(
-    JSON.stringify({ reviewMemory: { captureOnly: true } }),
-  )
+  mockGetFileContent.mockReset().mockResolvedValue(JSON.stringify({ reviewMemory: { captureOnly: true } }))
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
   mockGetPullRequest.mockClear()
   mockGetRepository.mockClear()

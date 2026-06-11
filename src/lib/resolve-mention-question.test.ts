@@ -132,13 +132,7 @@ describe("resolveMentionQuestion — contract invariants", () => {
     // the conditional and applies bodyMentionsBot to thread-followup,
     // every prod thread-reply triggers a `no-mention` bail again.
     // Pin it as an explicit test so the regression breaks loudly.
-    const cases = [
-      "plain reply",
-      "",
-      "no @ here at all",
-      "🔥 emoji-only reply",
-      "multi\nline\nreply\nno mention",
-    ]
+    const cases = ["plain reply", "", "no @ here at all", "🔥 emoji-only reply", "multi\nline\nreply\nno mention"]
     for (const body of cases) {
       const gate = resolveMentionQuestion({
         triggerReason: "thread-followup",

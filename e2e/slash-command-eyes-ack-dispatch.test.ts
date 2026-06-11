@@ -47,11 +47,18 @@ function makeEnv(opts: { coalesceKeyExists?: boolean } = {}): { env: Env; queueS
   const env = {
     OPENCLAW_STATE: {
       get: async (key: string) => store.get(key) ?? null,
-      put: async (key: string, value: string) => { store.set(key, value) },
-      delete: async (key: string) => { store.delete(key); return true },
+      put: async (key: string, value: string) => {
+        store.set(key, value)
+      },
+      delete: async (key: string) => {
+        store.delete(key)
+        return true
+      },
     } as unknown as KVNamespace,
     OPENCLAW_JOBS: {
-      send: async (msg: unknown) => { queueSent.push(msg) },
+      send: async (msg: unknown) => {
+        queueSent.push(msg)
+      },
     } as unknown as Queue<unknown>,
     GITHUB_APP_ID: "1",
     GITHUB_PRIVATE_KEY: "k",
@@ -60,7 +67,9 @@ function makeEnv(opts: { coalesceKeyExists?: boolean } = {}): { env: Env; queueS
 }
 
 const fakeCtx: ExecutionContext = {
-  waitUntil: (p: Promise<unknown>) => { void p },
+  waitUntil: (p: Promise<unknown>) => {
+    void p
+  },
   passThroughOnException: () => {},
 } as unknown as ExecutionContext
 
@@ -69,31 +78,41 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv()
     const res = await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "MEMBER" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(1)
     expect(eyesAckDispatchMock).toHaveBeenCalledOnce()
-    expect(eyesAckDispatchMock).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "Sigilix",
-      repo: "sigilix",
-      commentId: 4242,
-      surface: "issue",
-      installationId: 99,
-    }))
+    expect(eyesAckDispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "Sigilix",
+        repo: "sigilix",
+        commentId: 4242,
+        surface: "issue",
+        installationId: 99,
+      }),
+    )
   })
 
   it("/sigilix review queues a manual rerun without consulting pull-request draft state", async () => {
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv()
     const res = await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix review", authorAssoc: "MEMBER" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(1)
@@ -110,10 +129,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv()
     const res = await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "FIRST_TIME_CONTRIBUTOR" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(res.status).toBe(403)
     expect(queueSent).toHaveLength(0)
@@ -124,10 +147,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv({ coalesceKeyExists: true })
     const res = await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix help", authorAssoc: "MEMBER" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(0)
@@ -138,10 +165,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv()
     const res = await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "@sigilix what does this do?" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(res.status).toBe(202)
     expect(queueSent).toHaveLength(1)
@@ -163,10 +194,14 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     // logs that. We only care that eyes is NOT dispatched.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix describe garbage", authorAssoc: "MEMBER" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "issue", prNumber: 7,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      surface: "issue",
+      prNumber: 7,
     })
     expect(queueSent).toHaveLength(0)
     expect(eyesAckDispatchMock).not.toHaveBeenCalled()
@@ -177,13 +212,19 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     eyesAckDispatchMock.mockClear()
     const { env } = makeEnv()
     await queueGithubMention({
-      env, ctx: fakeCtx,
+      env,
+      ctx: fakeCtx,
       payload: makePayload({ body: "/sigilix improve", authorAssoc: "OWNER" }),
-      owner: "Sigilix", repo: "sigilix", installationId: 99,
-      surface: "review-comment", prNumber: 7,
-    })
-    expect(eyesAckDispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       surface: "review-comment",
-    }))
+      prNumber: 7,
+    })
+    expect(eyesAckDispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "review-comment",
+      }),
+    )
   })
 })

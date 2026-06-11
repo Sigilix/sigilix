@@ -31,10 +31,7 @@ import { resolvePrecisionMode } from "@/src/features/precision-profile"
 import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
-import {
-  parseGraphRetrievalEnabled,
-  parseGraphRetrievalMode,
-} from "./domain/graph-context-format"
+import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
 import type { Env } from "@/src/shared/types/env"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
@@ -133,7 +130,9 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
-      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(
+        env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE,
+      ),
       securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
     },
     flags: {
@@ -169,7 +168,10 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
     },
     tunables: {
-      maxRetrieveCallsPerPr: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),
+      maxRetrieveCallsPerPr: parseIntEnv(
+        env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR,
+        DEFAULT_MAX_RETRIEVE_CALLS_PER_PR,
+      ),
       graphRpcTimeoutMs: parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS),
     },
   }
@@ -207,5 +209,9 @@ export function isSynthBypassEligible(
   dispatchedCount: number,
   candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
 ): boolean {
-  return isSynthBypassEligibleCore(parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED), dispatchedCount, candidates)
+  return isSynthBypassEligibleCore(
+    parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED),
+    dispatchedCount,
+    candidates,
+  )
 }

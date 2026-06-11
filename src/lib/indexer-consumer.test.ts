@@ -73,10 +73,7 @@ vi.mock("@/src/lib/repo-graph-client", () => ({
 }))
 
 import { handleIndexRepoJob, MAX_FILES_PER_JOB } from "@/src/lib/indexer"
-import {
-  repoIndexManifestKey,
-  type RepoIndexManifestV1,
-} from "@/src/lib/repo-index-manifest"
+import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { scopedRulesKey } from "@/src/lib/scoped-rules-kv"
@@ -109,13 +106,19 @@ function makeKvStub(): {
   return { kv, store }
 }
 
-function makeEnv(opts: { sensitive?: string } = {}): { env: Env; sent: Sent[]; kv: Map<string, string> } {
+function makeEnv(opts: { sensitive?: string } = {}): {
+  env: Env
+  sent: Sent[]
+  kv: Map<string, string>
+} {
   const { kv, store } = makeKvStub()
   const sent: Sent[] = []
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_JOBS: {
-      send: async (message: JobMessage) => { sent.push({ message }) },
+      send: async (message: JobMessage) => {
+        sent.push({ message })
+      },
     },
     AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
     OPENCLAW_CODE_INDEX: { upsert: mockVectorizeUpsert },
@@ -187,9 +190,7 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     // SIG-132: vectors are upserted under the <owner>/<repo> namespace,
     // not the bare repo, so two orgs with a repo named the same don't
     // share a Vectorize namespace.
-    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
-      (call) => call[0] as Array<{ namespace?: string }>,
-    )
+    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap((call) => call[0] as Array<{ namespace?: string }>)
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
       expect(rec.namespace).toBe("sigilix/sigilix")
@@ -226,9 +227,7 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     const encodedDev = await encodeBranchName("dev")
     const branchRepo = `sigilix/__branch__/${encodedDev}`
     const branchNamespace = `sigilix/${branchRepo}`
-    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
-      (call) => call[0] as Array<{ namespace?: string }>,
-    )
+    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap((call) => call[0] as Array<{ namespace?: string }>)
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
       expect(rec.namespace).toBe(branchNamespace)
@@ -262,15 +261,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
     // Seed a fresh manifest first.
     const headSha = "a".repeat(40)
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha,
       runId: "0123456789abcdef",
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: 2,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
@@ -294,15 +298,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha,
       runId,
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue(runId)
@@ -334,15 +343,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha,
       runId,
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue(null)
@@ -373,15 +387,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha,
       runId,
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockResolvedValue("older-run")
@@ -406,15 +425,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
     const { env, kv } = makeEnv()
     ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha,
       runId,
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
     mockDebugActiveGraphVersion.mockRejectedValue(new Error("DO transient"))
@@ -436,15 +460,20 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
     const { env, kv } = makeEnv()
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha: "a".repeat(40),
       runId: "deadbeefdeadbeef",
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: 1,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
@@ -475,22 +504,29 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
     // Seed the OLD-run manifest (old headSha, current model/dim/chunker).
     const manifest: RepoIndexManifestV1 = {
-      v: 1, repo: "sigilix", owner: "Sigilix",
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
       headSha: "a".repeat(40),
       runId: "old-run",
-      fileCount: 1, chunkCount: 1, shardCount: 1,
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
-      windowLines: 30, overlapLines: 10,
+      windowLines: 30,
+      overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
 
     // Seed the prior OLD-run vectors record — the piece the existing
     // re-index test omits. This is what drove the stale-skip pre-fix.
     const vectors: RepoIndexVectorsV1 = {
-      v: 1, owner: "Sigilix", repo: "sigilix",
+      v: 1,
+      owner: "Sigilix",
+      repo: "sigilix",
       runId: "old-run",
       byPath: { "src/index.ts": ["sigilix/sigilix#old-run#0"] },
     }
@@ -638,7 +674,8 @@ describe("handleIndexRepoJob — config-drift refusal (Kimi v2 d.1)", () => {
       installationId: 99,
       reason: "install",
       shard: {
-        lo: 0, hi: 100,
+        lo: 0,
+        hi: 100,
         headSha: "a".repeat(40),
         treeSha: "b".repeat(40),
         totalFiles: 100,
@@ -810,7 +847,11 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     } as unknown as Env["OPENCLAW_STATE"]
     const env = {
       OPENCLAW_STATE: kv,
-      OPENCLAW_JOBS: { send: async (m: JobMessage) => { sent.push(m) } },
+      OPENCLAW_JOBS: {
+        send: async (m: JobMessage) => {
+          sent.push(m)
+        },
+      },
       AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
       OPENCLAW_CODE_INDEX: { upsert: mockVectorizeUpsert },
       GITHUB_APP_ID: "12345",
@@ -848,9 +889,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     }
 
     // SIG-137: coverage write precedes upsert → caught before any upsert.
-    await expect(handleIndexRepoJob({ job: shardJob, env })).rejects.toThrow(
-      /repo-index-vectors coverage write failed/,
-    )
+    await expect(handleIndexRepoJob({ job: shardJob, env })).rejects.toThrow(/repo-index-vectors coverage write failed/)
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     // No manifest, no next-shard enqueue (final shard would have
     // written the manifest; non-final would have enqueued).
@@ -891,9 +930,14 @@ describe("handleIndexRepoJob — scoped-rules write yields to a newer run", () =
         // Overwrite the active-run lease with a fresher runId. This
         // is the in-the-wild scenario: a second `writeActiveRun` from
         // a newer bootstrap landing while THIS run was mid-fetch.
-        kv.set(activeRunKey(owner, repo), JSON.stringify({
-          v: 1, runId: "newer-run-supersedes", startedAt: new Date().toISOString(),
-        }))
+        kv.set(
+          activeRunKey(owner, repo),
+          JSON.stringify({
+            v: 1,
+            runId: "newer-run-supersedes",
+            startedAt: new Date().toISOString(),
+          }),
+        )
         return `# Repo-root SIGILIX.md\nbody`
       }
       return `// content of ${path}\nconsole.log("hi")`
@@ -910,7 +954,11 @@ describe("handleIndexRepoJob — scoped-rules write yields to a newer run", () =
     // can see that the rule walk was thrown away (rather than
     // silently dropped).
     const events = warnSpy.mock.calls.map((c) => {
-      try { return JSON.parse(c[0] as string) } catch { return null }
+      try {
+        return JSON.parse(c[0] as string)
+      } catch {
+        return null
+      }
     })
     warnSpy.mockRestore()
     const skipped = events.find((e) => e && e.event === "scoped-rules-manifest-skip-superseded")

@@ -13,13 +13,25 @@ function makeDoInstance() {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -42,8 +54,16 @@ const pr = { owner: "o", repo: "r", prNumber: 1, headSha: "abc" }
 describe("GraphMetricsDO.recordSample + query", () => {
   it("averages numeric metrics across same-day samples", async () => {
     const do_ = makeDoInstance()
-    await do_.recordSample({ ...pr, occurredAt: "2026-05-22T08:00:00.000Z", sample: sample({ jaccard: 0.4, addedCount: 1 }) })
-    await do_.recordSample({ ...pr, occurredAt: "2026-05-22T09:00:00.000Z", sample: sample({ jaccard: 0.6, addedCount: 3 }) })
+    await do_.recordSample({
+      ...pr,
+      occurredAt: "2026-05-22T08:00:00.000Z",
+      sample: sample({ jaccard: 0.4, addedCount: 1 }),
+    })
+    await do_.recordSample({
+      ...pr,
+      occurredAt: "2026-05-22T09:00:00.000Z",
+      sample: sample({ jaccard: 0.6, addedCount: 3 }),
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.reviews).toBe(2)
     expect(out.averages.jaccard).toBeCloseTo(0.5)
@@ -53,9 +73,21 @@ describe("GraphMetricsDO.recordSample + query", () => {
 
   it("breaks reviews down by mode", async () => {
     const do_ = makeDoInstance()
-    await do_.recordSample({ ...pr, occurredAt: "2026-05-22T08:00:00.000Z", sample: sample({ mode: "shadow" }) })
-    await do_.recordSample({ ...pr, occurredAt: "2026-05-22T09:00:00.000Z", sample: sample({ mode: "shadow" }) })
-    await do_.recordSample({ ...pr, occurredAt: "2026-05-22T10:00:00.000Z", sample: sample({ mode: "post" }) })
+    await do_.recordSample({
+      ...pr,
+      occurredAt: "2026-05-22T08:00:00.000Z",
+      sample: sample({ mode: "shadow" }),
+    })
+    await do_.recordSample({
+      ...pr,
+      occurredAt: "2026-05-22T09:00:00.000Z",
+      sample: sample({ mode: "shadow" }),
+    })
+    await do_.recordSample({
+      ...pr,
+      occurredAt: "2026-05-22T10:00:00.000Z",
+      sample: sample({ mode: "post" }),
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.modeReviews).toEqual({ shadow: 2, post: 1 })
   })
@@ -81,8 +113,22 @@ describe("GraphMetricsDO.recordSample + query", () => {
 
   it("tracks last-seen head SHA per PR (latest wins)", async () => {
     const do_ = makeDoInstance()
-    await do_.recordSample({ owner: "o", repo: "r", prNumber: 5, headSha: "aaa", occurredAt: "2026-05-22T10:00:00.000Z", sample: sample() })
-    await do_.recordSample({ owner: "o", repo: "r", prNumber: 5, headSha: "bbb", occurredAt: "2026-05-22T11:00:00.000Z", sample: sample() })
+    await do_.recordSample({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+      headSha: "aaa",
+      occurredAt: "2026-05-22T10:00:00.000Z",
+      sample: sample(),
+    })
+    await do_.recordSample({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+      headSha: "bbb",
+      occurredAt: "2026-05-22T11:00:00.000Z",
+      sample: sample(),
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     const head = out.lastSeenPrHeads.find((h) => h.prNumber === 5)
     expect(head?.headSha).toBe("bbb")
@@ -92,9 +138,23 @@ describe("GraphMetricsDO.recordSample + query", () => {
 describe("GraphMetricsDO.alarm (retention GC)", () => {
   it("prunes daily aggregates + PR heads older than retention", async () => {
     const do_ = makeDoInstance()
-    await do_.recordSample({ owner: "o", repo: "r", prNumber: 9, headSha: "old", occurredAt: "2020-01-01T00:00:00.000Z", sample: sample() })
+    await do_.recordSample({
+      owner: "o",
+      repo: "r",
+      prNumber: 9,
+      headSha: "old",
+      occurredAt: "2020-01-01T00:00:00.000Z",
+      sample: sample(),
+    })
     const fresh = new Date().toISOString()
-    await do_.recordSample({ owner: "o", repo: "r", prNumber: 10, headSha: "new", occurredAt: fresh, sample: sample() })
+    await do_.recordSample({
+      owner: "o",
+      repo: "r",
+      prNumber: 10,
+      headSha: "new",
+      occurredAt: fresh,
+      sample: sample(),
+    })
     await do_.alarm()
     const out = await do_.query({ windowDays: 30, nowIso: fresh })
     expect(out.reviews).toBe(1)

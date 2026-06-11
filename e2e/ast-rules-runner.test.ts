@@ -31,8 +31,7 @@ function diffAddingLineAt(line: number, path: string, lineText = "changed"): str
   return header + hunkStart + `+${lineText}\n`
 }
 
-const REVIEWABLE_AT = (path: string, line: number): ReviewableMap =>
-  new Map([[path, [{ line, side: "RIGHT" }]]])
+const REVIEWABLE_AT = (path: string, line: number): ReviewableMap => new Map([[path, [{ line, side: "RIGHT" }]]])
 
 describe("runAstRules — skip paths", () => {
   it("skips with disabled-config when astRules.enabled = false", async () => {
@@ -50,7 +49,10 @@ describe("runAstRules — skip paths", () => {
   it("skips with no-js-ts-files when no supported files in diff", async () => {
     const r = await runAstRules({
       diff: "",
-      filesByPath: new Map([["README.md", "# hi"], ["x.py", "print(1)"]]),
+      filesByPath: new Map([
+        ["README.md", "# hi"],
+        ["x.py", "print(1)"],
+      ]),
       reviewable: new Map(),
       config: DEFAULT_CONFIG,
       ctx: CTX,
@@ -75,11 +77,13 @@ describe("runAstRules — skip paths", () => {
   it("keeps enum-drift scanning bounded when another file seeds a union map", async () => {
     const sourcePath = "src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts"
     const unionPath = "src/types.ts"
-    const source = readFileSync(new URL("../src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts", import.meta.url), "utf8")
+    const source = readFileSync(
+      new URL("../src/lib/ensemble/domain/gates/validate-logic-claim-refutation.ts", import.meta.url),
+      "utf8",
+    )
     const unionSource = `export interface Charge { status: "pending" | "settled" | "failed" }\n`
     const r = await runAstRules({
-      diff: diffAddingLineAt(1, sourcePath, "// touched")
-        + diffAddingLineAt(1, unionPath, unionSource.trim()),
+      diff: diffAddingLineAt(1, sourcePath, "// touched") + diffAddingLineAt(1, unionPath, unionSource.trim()),
       filesByPath: new Map([
         [sourcePath, source],
         [unionPath, unionSource],
@@ -128,7 +132,7 @@ describe("runAstRules — pathFilters compatibility (Codex MAJOR #4)", () => {
   it("when ALL paths are filtered out, no scan happens", async () => {
     const r = await runAstRules({
       diff: diffWithEvalAt(1, "dist/foo.js"),
-      filesByPath: new Map(),  // nothing left after pathFilters
+      filesByPath: new Map(), // nothing left after pathFilters
       reviewable: new Map([["dist/foo.js", [{ line: 1, side: "RIGHT" }]]]),
       config: DEFAULT_CONFIG,
       ctx: CTX,
@@ -203,7 +207,7 @@ describe("runAstRules — finding emission", () => {
     const r = await runAstRules({
       diff: diffWithEvalAt(1, "src/a.js") + diffWithEvalAt(1, "src/b.js"),
       filesByPath: new Map([
-        ["src/a.js", `const x = ;`],         // syntax error
+        ["src/a.js", `const x = ;`], // syntax error
         ["src/b.js", `const x = eval("p")\n`],
       ]),
       reviewable: new Map([
@@ -264,10 +268,10 @@ describe("runAstRules — finding emission", () => {
       changedLine: 5,
       source: [
         "function oldOne(xs) {",
-        "  for (const x of xs) { new RegExp(\"old\").test(x) }",
+        '  for (const x of xs) { new RegExp("old").test(x) }',
         "}",
         "function newOne(xs) {",
-        "  for (const x of xs) { new RegExp(\"new\").test(x) }",
+        '  for (const x of xs) { new RegExp("new").test(x) }',
         "}",
       ].join("\n"),
     },
@@ -277,10 +281,10 @@ describe("runAstRules — finding emission", () => {
       changedLine: 5,
       source: [
         "async function oldOne(ids) {",
-        "  for (const id of ids) { await db.query(\"old\") }",
+        '  for (const id of ids) { await db.query("old") }',
         "}",
         "async function newOne(ids) {",
-        "  for (const id of ids) { await db.query(\"new\") }",
+        '  for (const id of ids) { await db.query("new") }',
         "}",
       ].join("\n"),
     },
@@ -289,28 +293,26 @@ describe("runAstRules — finding emission", () => {
       path: "src/app.ts",
       changedLine: 4,
       source: [
-        "import fs from \"fs\"",
-        "app.get(\"/old\", (req, res) => { fs.readFileSync(\"old\") })",
+        'import fs from "fs"',
+        'app.get("/old", (req, res) => { fs.readFileSync("old") })',
         "",
-        "app.get(\"/new\", (req, res) => { fs.readFileSync(\"new\") })",
+        'app.get("/new", (req, res) => { fs.readFileSync("new") })',
       ].join("\n"),
     },
-  ])("emits changed $ruleId hit when an unchanged earlier hit exists", async ({
-    ruleId,
-    path,
-    changedLine,
-    source,
-  }) => {
-    const r = await runAstRules({
-      diff: diffAddingLineAt(changedLine, path),
-      filesByPath: new Map([[path, source]]),
-      reviewable: REVIEWABLE_AT(path, changedLine),
-      config: DEFAULT_CONFIG,
-      ctx: CTX,
-    })
+  ])(
+    "emits changed $ruleId hit when an unchanged earlier hit exists",
+    async ({ ruleId, path, changedLine, source }) => {
+      const r = await runAstRules({
+        diff: diffAddingLineAt(changedLine, path),
+        filesByPath: new Map([[path, source]]),
+        reviewable: REVIEWABLE_AT(path, changedLine),
+        config: DEFAULT_CONFIG,
+        ctx: CTX,
+      })
 
-    const findings = r.findings.filter((f) => f.ruleId === ruleId)
-    expect(findings).toHaveLength(1)
-    expect(findings[0]!.line).toBe(changedLine)
-  })
+      const findings = r.findings.filter((f) => f.ruleId === ruleId)
+      expect(findings).toHaveLength(1)
+      expect(findings[0]!.line).toBe(changedLine)
+    },
+  )
 })

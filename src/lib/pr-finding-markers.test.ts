@@ -29,11 +29,13 @@ describe("pr finding marker parsing", () => {
   })
 
   it("parses multiple finding blocks and dedupes repeated category/fingerprint pairs", () => {
-    const markers = parseFindingOutcomeMarkers([
-      findingBlock(FINGERPRINT_A, "performance"),
-      findingBlock(FINGERPRINT_A, "performance"),
-      findingBlock(FINGERPRINT_B, "security"),
-    ].join("\n\n"))
+    const markers = parseFindingOutcomeMarkers(
+      [
+        findingBlock(FINGERPRINT_A, "performance"),
+        findingBlock(FINGERPRINT_A, "performance"),
+        findingBlock(FINGERPRINT_B, "security"),
+      ].join("\n\n"),
+    )
 
     expect(markers).toEqual([
       { patternHash: FINGERPRINT_A, category: "performance" },

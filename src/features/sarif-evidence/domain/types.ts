@@ -7,13 +7,7 @@
 
 export type Severity = "info" | "warning" | "error"
 
-export type SarifFindingCategory =
-  | "iac"
-  | "misconfiguration"
-  | "vulnerability"
-  | "license"
-  | "secret"
-  | "other"
+export type SarifFindingCategory = "iac" | "misconfiguration" | "vulnerability" | "license" | "secret" | "other"
 
 export type RoleHint = "security" | "logic" | "performance" | "tests"
 

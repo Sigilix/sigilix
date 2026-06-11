@@ -22,10 +22,15 @@ function mockCommentCreateFetch(): { captured: CapturedRequest[] } {
   const captured: CapturedRequest[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init?: RequestInit) => {
     const bodyText = typeof init?.body === "string" ? init.body : ""
-    const body = JSON.parse(bodyText) as { query: string; variables: { input: Record<string, unknown> } }
+    const body = JSON.parse(bodyText) as {
+      query: string
+      variables: { input: Record<string, unknown> }
+    }
     captured.push({ body })
     return new Response(
-      JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "new-comment-id" } } } }),
+      JSON.stringify({
+        data: { commentCreate: { success: true, comment: { id: "new-comment-id" } } },
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     )
   })

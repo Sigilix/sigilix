@@ -17,9 +17,15 @@ import type { RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -28,7 +34,9 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
   return { OPENCLAW_STATE: kv } as unknown as Env
 }
 
-function makeClient(getRepository: (owner: string, repo: string) => Promise<{ default_branch: string; id: number | undefined } | null>): GitHubClient {
+function makeClient(
+  getRepository: (owner: string, repo: string) => Promise<{ default_branch: string; id: number | undefined } | null>,
+): GitHubClient {
   return { getRepository } as unknown as GitHubClient
 }
 
@@ -67,10 +75,7 @@ describe("migrateOneRepo — outcome state machine", () => {
 
   it("returns 'already-migrated' when manifest already has a positive integer githubRepoId", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "repo-index-manifest:sigilix/sigilix",
-      JSON.stringify({ ...SAMPLE_MANIFEST, githubRepoId: 808247824 }),
-    )
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify({ ...SAMPLE_MANIFEST, githubRepoId: 808247824 }))
     const client = makeClient(async () => {
       throw new Error("should not be called — manifest already migrated")
     })
@@ -128,8 +133,12 @@ describe("migrateOneRepo — outcome state machine", () => {
     // KV stub whose `put` throws — simulates a transient KV outage
     // during the migration write.
     const explodingKv = {
-      async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-      async put(): Promise<void> { throw new Error("KV transient") },
+      async get(key: string): Promise<string | null> {
+        return store.get(key) ?? null
+      },
+      async put(): Promise<void> {
+        throw new Error("KV transient")
+      },
       async delete(): Promise<void> {},
     } as unknown as Env["OPENCLAW_STATE"]
     const env = { OPENCLAW_STATE: explodingKv } as unknown as Env

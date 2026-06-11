@@ -17,10 +17,7 @@
 // `buildPrompt` call sites — no LIMITS plumbing or duplication is required.
 
 import { WARMUP_CALLOUT_MARKER } from "./warmup"
-import {
-  renderPreMergeGatesSection,
-  type GateResult,
-} from "@/src/shared/domain/pre-merge-gates"
+import { renderPreMergeGatesSection, type GateResult } from "@/src/shared/domain/pre-merge-gates"
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 import type { PrOverviewReviewContext, PrOverviewVerdict } from "./triage-pr-overview"
 
@@ -37,12 +34,8 @@ export function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
   const catEntries = Object.entries(ctx.categoryBreakdown)
     .filter(([, n]) => typeof n === "number" && n > 0)
     .sort(([a], [b]) => a.localeCompare(b))
-  const sevLine = sevEntries.length > 0
-    ? sevEntries.map(([k, n]) => `${k}=${n}`).join(", ")
-    : "(none)"
-  const catLine = catEntries.length > 0
-    ? catEntries.map(([k, n]) => `${k}=${n}`).join(", ")
-    : "(none)"
+  const sevLine = sevEntries.length > 0 ? sevEntries.map(([k, n]) => `${k}=${n}`).join(", ") : "(none)"
+  const catLine = catEntries.length > 0 ? catEntries.map(([k, n]) => `${k}=${n}`).join(", ") : "(none)"
   return [
     `Verdict: ${ctx.verdict}`,
     `Findings: ${ctx.findingsCount}`,
@@ -77,12 +70,7 @@ interface FormatArgs {
  * on line 1 is what `findExistingOverviewComment` greps for to decide
  * between POST-new and PATCH-in-place.
  */
-export function formatOverviewComment({
-  verdict,
-  isFirstRun,
-  warmup = "none",
-  gateResults = [],
-}: FormatArgs): string {
+export function formatOverviewComment({ verdict, isFirstRun, warmup = "none", gateResults = [] }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
   lines.push("## Sigilix Overview")
   lines.push("")
@@ -134,7 +122,7 @@ export function formatOverviewComment({
       // `|` in `overview` or `nextStep` would split the cell and corrupt
       // the table. Escape with `\|` per CommonMark.
       lines.push(
-        `| \`${f.path}\` | ${f.score}/5 | ${escapeTableCell(f.overview) || "—"} | ${escapeTableCell(f.nextStep) || "—"} |`
+        `| \`${f.path}\` | ${f.score}/5 | ${escapeTableCell(f.overview) || "—"} | ${escapeTableCell(f.nextStep) || "—"} |`,
       )
     }
   }
@@ -195,12 +183,18 @@ export function formatOverviewComment({
  */
 function effortLabel(effort: number): string {
   switch (effort) {
-    case 1: return "_(trivial)_"
-    case 2: return "_(small)_"
-    case 3: return "_(medium)_"
-    case 4: return "_(large)_"
-    case 5: return "_(needs deep review)_"
-    default: return ""
+    case 1:
+      return "_(trivial)_"
+    case 2:
+      return "_(small)_"
+    case 3:
+      return "_(medium)_"
+    case 4:
+      return "_(large)_"
+    case 5:
+      return "_(needs deep review)_"
+    default:
+      return ""
   }
 }
 

@@ -240,9 +240,7 @@ describe("generate() — token usage capture (SIG-212)", () => {
   })
 
   it("returns empty usage object when token counters are absent", async () => {
-    mockFetchOnceWithChunks([
-      JSON.stringify({ response: "ok", done: true }),
-    ])
+    mockFetchOnceWithChunks([JSON.stringify({ response: "ok", done: true })])
     const { usage } = await generate({
       model: FAKE_MODEL,
       prompt: "test",
@@ -252,9 +250,7 @@ describe("generate() — token usage capture (SIG-212)", () => {
   })
 
   it("captures only outputTokens when only eval_count is reported (partial usage)", async () => {
-    mockFetchOnceWithChunks([
-      JSON.stringify({ response: "ok", done: true, eval_count: 567 }),
-    ])
+    mockFetchOnceWithChunks([JSON.stringify({ response: "ok", done: true, eval_count: 567 })])
     const { usage } = await generate({
       model: FAKE_MODEL,
       prompt: "test",

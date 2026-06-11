@@ -224,10 +224,7 @@ describe("fence safety", () => {
   const reviewable = parseDiffToReviewablePositions(DIFF)
 
   it("routes a patch whose replacement contains ``` to the un-anchorable fallback", () => {
-    const { anchorable, unanchorable } = partitionCiPatches(
-      [patch("src/a.ts", 2, "before ``` after")],
-      reviewable,
-    )
+    const { anchorable, unanchorable } = partitionCiPatches([patch("src/a.ts", 2, "before ``` after")], reviewable)
     expect(anchorable).toHaveLength(0)
     expect(unanchorable).toHaveLength(1)
   })

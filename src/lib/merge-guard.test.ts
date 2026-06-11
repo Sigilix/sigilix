@@ -119,9 +119,7 @@ const SUBMIT_BASE = {
   startMs: new Date("2026-05-18T17:59:30Z").getTime(),
 } as const
 
-function mockSubmitClient(
-  impl: () => Promise<{ id: number; state: string }>,
-): MergeApproveSubmitClient {
+function mockSubmitClient(impl: () => Promise<{ id: number; state: string }>): MergeApproveSubmitClient {
   return { submitReview: vi.fn(impl) }
 }
 
@@ -141,12 +139,7 @@ describe("submitMergedOnApprove (SIG-88)", () => {
 
   it("submits a marker-only APPROVE on success and returns {ok: true, reviewId}", async () => {
     let captured: SubmitReviewBody | undefined
-    const submitFn = vi.fn(async (
-      _owner: string,
-      _repo: string,
-      _prNumber: number,
-      review: SubmitReviewBody,
-    ) => {
+    const submitFn = vi.fn(async (_owner: string, _repo: string, _prNumber: number, review: SubmitReviewBody) => {
       captured = review
       return { id: 99_001, state: "APPROVED" }
     })
@@ -160,12 +153,7 @@ describe("submitMergedOnApprove (SIG-88)", () => {
 
     expect(out).toEqual({ ok: true, reviewId: 99_001, state: "APPROVED" })
     expect(submitFn).toHaveBeenCalledTimes(1)
-    expect(submitFn).toHaveBeenCalledWith(
-      SUBMIT_BASE.owner,
-      SUBMIT_BASE.repo,
-      SUBMIT_BASE.prNumber,
-      expect.any(Object),
-    )
+    expect(submitFn).toHaveBeenCalledWith(SUBMIT_BASE.owner, SUBMIT_BASE.repo, SUBMIT_BASE.prNumber, expect.any(Object))
     // Marker-only body: just the dedupe marker (post-ARC-293 + SIG-87).
     expect(captured?.event).toBe("APPROVE")
     expect(captured?.body).toBe("<!-- sigilix:pr-review -->\n")

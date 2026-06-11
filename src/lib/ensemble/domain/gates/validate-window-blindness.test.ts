@@ -134,7 +134,10 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     ].join("\n")
     const d = evaluateWindowBlindness(
       finding({ line: 7 }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([7])]]) }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([7])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })
@@ -150,8 +153,15 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
       "}",
     ].join("\n")
     const d = evaluateWindowBlindness(
-      finding({ line: 4, headline: "`amount` can be NaN", body: "amount is never finite-checked." }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([4])]]) }),
+      finding({
+        line: 4,
+        headline: "`amount` can be NaN",
+        body: "amount is never finite-checked.",
+      }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([4])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })
@@ -166,7 +176,10 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     ].join("\n")
     const d = evaluateWindowBlindness(
       finding({ line: 4 }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([4])]]) }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([4])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })
@@ -180,24 +193,35 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
       "}",
     ].join("\n")
     const keep = evaluateWindowBlindness(
-      finding({ line: 4, headline: "`items` index is unbounded", body: "items has no length check." }),
-      ctx({ fullFileByPath: new Map([[PATH, bare]]), windowLinesByPath: new Map([[PATH, new Set([4])]]) }),
+      finding({
+        line: 4,
+        headline: "`items` index is unbounded",
+        body: "items has no length check.",
+      }),
+      ctx({
+        fullFileByPath: new Map([[PATH, bare]]),
+        windowLinesByPath: new Map([[PATH, new Set([4])]]),
+      }),
     )
     expect(keep.keep).toBe(true)
 
     const cmp = bare.replace("const n = items.length", "if (items.length > 5) return 0")
     const demote = evaluateWindowBlindness(
-      finding({ line: 4, headline: "`items` index is unbounded", body: "items has no length check." }),
-      ctx({ fullFileByPath: new Map([[PATH, cmp]]), windowLinesByPath: new Map([[PATH, new Set([4])]]) }),
+      finding({
+        line: 4,
+        headline: "`items` index is unbounded",
+        body: "items has no length check.",
+      }),
+      ctx({
+        fullFileByPath: new Map([[PATH, cmp]]),
+        windowLinesByPath: new Map([[PATH, new Set([4])]]),
+      }),
     )
     expect(demote.keep).toBe(false)
   })
 
   it("KEEPS when the guard line IS in the window (the model saw it and judged it insufficient)", () => {
-    const d = evaluateWindowBlindness(
-      finding(),
-      ctx({ windowLinesByPath: new Map([[PATH, new Set([5, 17])]]) }),
-    )
+    const d = evaluateWindowBlindness(finding(), ctx({ windowLinesByPath: new Map([[PATH, new Set([5, 17])]]) }))
     expect(d.keep).toBe(true)
   })
 
@@ -216,7 +240,10 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     ].join("\n")
     const d = evaluateWindowBlindness(
       finding({ line: 2 }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([2])]]) }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([2])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })
@@ -235,7 +262,10 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     ].join("\n")
     const d = evaluateWindowBlindness(
       finding({ line: 8 }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([8])]]) }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([8])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })
@@ -273,7 +303,10 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     const full = lines.join("\n")
     const d = evaluateWindowBlindness(
       finding({ line: 60 }),
-      ctx({ fullFileByPath: new Map([[PATH, full]]), windowLinesByPath: new Map([[PATH, new Set([60])]]) }),
+      ctx({
+        fullFileByPath: new Map([[PATH, full]]),
+        windowLinesByPath: new Map([[PATH, new Set([60])]]),
+      }),
     )
     expect(d.keep).toBe(true)
   })

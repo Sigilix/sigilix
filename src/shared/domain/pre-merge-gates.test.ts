@@ -175,14 +175,14 @@ describe("evaluateLinkedIssueGate", () => {
 describe("runPreMergeGates", () => {
   it("runs every enabled gate in canonical order", () => {
     const results = runPreMergeGates(
-      { prTitle: "feat: foo", prBody: "## Summary\nf\n## Test plan\nt", commitMessages: ["Closes #1"] },
+      {
+        prTitle: "feat: foo",
+        prBody: "## Summary\nf\n## Test plan\nt",
+        commitMessages: ["Closes #1"],
+      },
       DEFAULT_PRE_MERGE_GATES_CONFIG,
     )
-    expect(results.map((r) => r.id)).toEqual([
-      "titleFormat",
-      "descriptionCompleteness",
-      "linkedIssue",
-    ])
+    expect(results.map((r) => r.id)).toEqual(["titleFormat", "descriptionCompleteness", "linkedIssue"])
     expect(results.every((r) => r.passed)).toBe(true)
   })
 
@@ -202,13 +202,13 @@ describe("runPreMergeGates", () => {
   it("ALL gates disabled → empty result set → render skipped", () => {
     const cfg: ResolvedPreMergeGatesConfig = {
       titleFormat: { ...DEFAULT_PRE_MERGE_GATES_CONFIG.titleFormat, enabled: false },
-      descriptionCompleteness: { ...DEFAULT_PRE_MERGE_GATES_CONFIG.descriptionCompleteness, enabled: false },
+      descriptionCompleteness: {
+        ...DEFAULT_PRE_MERGE_GATES_CONFIG.descriptionCompleteness,
+        enabled: false,
+      },
       linkedIssue: { ...DEFAULT_PRE_MERGE_GATES_CONFIG.linkedIssue, enabled: false },
     }
-    const results = runPreMergeGates(
-      { prTitle: "feat: foo", prBody: "body", commitMessages: [] },
-      cfg,
-    )
+    const results = runPreMergeGates({ prTitle: "feat: foo", prBody: "body", commitMessages: [] }, cfg)
     expect(results).toEqual([])
     expect(renderPreMergeGatesSection(results)).toBeNull()
   })
@@ -222,19 +222,31 @@ describe("renderPreMergeGatesSection", () => {
   })
 
   it("renders a heading + one checklist line per result", () => {
-    const out = renderPreMergeGatesSection(runPreMergeGates(
-      { prTitle: "feat: foo", prBody: "## Summary\nf\n## Test plan\nt", commitMessages: ["Closes #1"] },
-      cfg,
-    ))!
+    const out = renderPreMergeGatesSection(
+      runPreMergeGates(
+        {
+          prTitle: "feat: foo",
+          prBody: "## Summary\nf\n## Test plan\nt",
+          commitMessages: ["Closes #1"],
+        },
+        cfg,
+      ),
+    )!
     expect(out).toContain("### Quality gates")
     expect(out.split("\n").filter((l) => l.startsWith("- ")).length).toBe(3)
   })
 
   it("uses ✅ for passing gates", () => {
-    const out = renderPreMergeGatesSection(runPreMergeGates(
-      { prTitle: "feat: foo", prBody: "## Summary\nf\n## Test plan\nt", commitMessages: ["Closes #1"] },
-      cfg,
-    ))!
+    const out = renderPreMergeGatesSection(
+      runPreMergeGates(
+        {
+          prTitle: "feat: foo",
+          prBody: "## Summary\nf\n## Test plan\nt",
+          commitMessages: ["Closes #1"],
+        },
+        cfg,
+      ),
+    )!
     expect(out).toContain("✅")
   })
 
@@ -242,10 +254,9 @@ describe("renderPreMergeGatesSection", () => {
     // Default: titleFormat / descriptionCompleteness = warning;
     // linkedIssue = info. Bad title + missing template + no
     // linked-issue → ⚠️ × 2 + ℹ️ × 1.
-    const out = renderPreMergeGatesSection(runPreMergeGates(
-      { prTitle: "nope", prBody: "wip", commitMessages: [] },
-      cfg,
-    ))!
+    const out = renderPreMergeGatesSection(
+      runPreMergeGates({ prTitle: "nope", prBody: "wip", commitMessages: [] }, cfg),
+    )!
     expect((out.match(/⚠️/g) ?? []).length).toBe(2)
     expect((out.match(/ℹ️/g) ?? []).length).toBe(1)
   })
@@ -255,18 +266,23 @@ describe("renderPreMergeGatesSection", () => {
       ...cfg,
       titleFormat: { ...cfg.titleFormat, severity: "error" },
     }
-    const out = renderPreMergeGatesSection(runPreMergeGates(
-      { prTitle: "nope", prBody: "## Summary\nf\n## Test plan\nt", commitMessages: ["Closes #1"] },
-      cfgErr,
-    ))!
+    const out = renderPreMergeGatesSection(
+      runPreMergeGates(
+        {
+          prTitle: "nope",
+          prBody: "## Summary\nf\n## Test plan\nt",
+          commitMessages: ["Closes #1"],
+        },
+        cfgErr,
+      ),
+    )!
     expect(out).toContain("❌")
   })
 
   it("renders the failure message inline after the label", () => {
-    const out = renderPreMergeGatesSection(runPreMergeGates(
-      { prTitle: "nope", prBody: "wip", commitMessages: [] },
-      cfg,
-    ))!
+    const out = renderPreMergeGatesSection(
+      runPreMergeGates({ prTitle: "nope", prBody: "wip", commitMessages: [] }, cfg),
+    )!
     expect(out).toContain("PR title follows convention — Title doesn't match")
     expect(out).toContain("PR description is complete — Missing required sections")
   })

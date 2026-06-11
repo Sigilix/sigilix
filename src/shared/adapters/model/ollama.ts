@@ -111,8 +111,6 @@ export async function generate({
   }
 }
 
-
-
 /**
  * Read the NDJSON stream and accumulate the `response` field across
  * chunks. Each line in the stream is a JSON object like:

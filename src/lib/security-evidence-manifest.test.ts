@@ -5,10 +5,7 @@
 // per-tool id schemes (secret / depvuln / sarif / ast).
 
 import { describe, it, expect } from "vitest"
-import {
-  buildSecurityFactManifest,
-  type SecurityFactManifest,
-} from "@/src/lib/security-evidence-manifest"
+import { buildSecurityFactManifest, type SecurityFactManifest } from "@/src/lib/security-evidence-manifest"
 import type { SecretHit } from "@/src/lib/secret-scan"
 import type { DepVulnFinding } from "@/src/features/dep-vulns"
 import type { SarifFinding } from "@/src/features/sarif-evidence"
@@ -167,8 +164,14 @@ describe("buildSecurityFactManifest", () => {
   })
 
   it("produces DIFFERENT hashes when a stable field changes (id can't be guessed without the fact)", async () => {
-    const a = await buildSecurityFactManifest({ ...EMPTY, secretHits: [secretHit({ redactedPreview: "aaaa…bbbb" })] })
-    const b = await buildSecurityFactManifest({ ...EMPTY, secretHits: [secretHit({ redactedPreview: "cccc…dddd" })] })
+    const a = await buildSecurityFactManifest({
+      ...EMPTY,
+      secretHits: [secretHit({ redactedPreview: "aaaa…bbbb" })],
+    })
+    const b = await buildSecurityFactManifest({
+      ...EMPTY,
+      secretHits: [secretHit({ redactedPreview: "cccc…dddd" })],
+    })
     expect([...a.manifest.keys()][0]).not.toBe([...b.manifest.keys()][0])
   })
 

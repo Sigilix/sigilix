@@ -99,9 +99,7 @@ export interface ChooseReviewEventForRenderedFindingsArgs {
  * markdown table row does not gate a merge — only the review event does.
  * A separate policy blocker can still override the event upward.
  */
-export function chooseReviewEventForRenderedFindings(
-  args: ChooseReviewEventForRenderedFindingsArgs,
-): ReviewEvent {
+export function chooseReviewEventForRenderedFindings(args: ChooseReviewEventForRenderedFindingsArgs): ReviewEvent {
   const sigilixOpenItems = filterToSigilixAuthored(args.openItems ?? [])
   if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
 
@@ -111,9 +109,7 @@ export function chooseReviewEventForRenderedFindings(
   // findings the PR is clean → APPROVE. Keys on `outOfPrScope` (path-not-changed),
   // NOT anchor-failure — a real blocker on a CHANGED file that merely failed to
   // anchor inline is in-scope and STILL blocks (closes the recall hole).
-  const inScope = [...args.inlineFindings, ...args.bodyOnlyFindings].filter(
-    (f) => !f.outOfPrScope,
-  )
+  const inScope = [...args.inlineFindings, ...args.bodyOnlyFindings].filter((f) => !f.outOfPrScope)
   if (inScope.length === 0) return "APPROVE"
   const nonTestingInScope = inScope.filter((f) => f.category !== "testing")
   if (nonTestingInScope.length === 0) return "COMMENT"
@@ -210,9 +206,7 @@ export interface ChooseReviewEventWithGateArgs {
  * structural-glue suppression). The gate sees only findings that
  * already survived suppression and decides which event to emit.
  */
-export function chooseReviewEventWithGate(
-  args: ChooseReviewEventWithGateArgs,
-): ReviewEvent {
+export function chooseReviewEventWithGate(args: ChooseReviewEventWithGateArgs): ReviewEvent {
   const { findings, threshold, openItems = [], missingScorePolicy } = args
 
   const effectiveScore = (f: PrReviewFinding): number => {
@@ -282,10 +276,7 @@ export function hasRequiredEvidence(f: PrReviewFinding): boolean {
   if (f.category === "security") {
     if (f.score < 4) return true
     return (
-      typeof f.cweId === "string" &&
-      f.cweId.length > 0 &&
-      typeof f.evidenceId === "string" &&
-      f.evidenceId.length > 0
+      typeof f.cweId === "string" && f.cweId.length > 0 && typeof f.evidenceId === "string" && f.evidenceId.length > 0
     )
   }
   if (f.category === "performance") {
@@ -333,28 +324,25 @@ export function hasRequiredEvidence(f: PrReviewFinding): boolean {
  * PR 4b's ensemble post-processing calls this on each finding before
  * emit; PR 4c flips the flag so the score actually drives the gate.
  */
-export function computeGateScore(
-  f: PrReviewFinding,
-  p: GateScoreProvenance,
-): number {
+export function computeGateScore(f: PrReviewFinding, p: GateScoreProvenance): number {
   // Rescale self-reported 1-5 confidence to 0-1, conservative on the
   // high end. Missing self-report defaults to 3 (neutral) to mirror
   // `resolveFindingConfidence`'s "as confident as the verdict" fallback.
   const confRaw = typeof f.confidence === "number" ? f.confidence : 3
   const confBucket = Math.max(1, Math.min(5, Math.round(confRaw))) as 1 | 2 | 3 | 4 | 5
-  const confMap = { 1: 0.10, 2: 0.30, 3: 0.50, 4: 0.75, 5: 0.90 } as const
+  const confMap = { 1: 0.1, 2: 0.3, 3: 0.5, 4: 0.75, 5: 0.9 } as const
   const conf = confMap[confBucket]
 
-  const evidence = hasRequiredEvidence(f) ? 0.10 : 0
+  const evidence = hasRequiredEvidence(f) ? 0.1 : 0
 
   // Cap agreement at +0.10 (two extra specialists). Beyond that, more
   // agreement doesn't add precision — diminishing returns + risk of
   // false-consensus boosts on category-overlap noise.
   const extraSpecs = Math.max(0, p.sourceSpecialists.length - 1)
-  const agreement = Math.min(0.10, 0.05 * extraSpecs)
+  const agreement = Math.min(0.1, 0.05 * extraSpecs)
 
   const sevBucket = Math.max(1, Math.min(5, Math.round(f.score))) as 1 | 2 | 3 | 4 | 5
-  const sevMap = { 1: -0.10, 2: -0.05, 3: 0, 4: 0.05, 5: 0.10 } as const
+  const sevMap = { 1: -0.1, 2: -0.05, 3: 0, 4: 0.05, 5: 0.1 } as const
   const severity = sevMap[sevBucket]
 
   return Math.max(0, Math.min(1, conf + evidence + agreement + severity))
@@ -394,16 +382,14 @@ export interface ShadowDivergenceInputs {
  */
 export interface ShadowDivergenceResult {
   gateEvent: ReviewEvent
-  divergence:
-    | {
-        threshold: number
-        legacyEvent: ReviewEvent
-        gateEvent: ReviewEvent
-        findingCount: number
-        blockingFindingCount: number
-        scoreSummary: string
-      }
-    | null
+  divergence: {
+    threshold: number
+    legacyEvent: ReviewEvent
+    gateEvent: ReviewEvent
+    findingCount: number
+    blockingFindingCount: number
+    scoreSummary: string
+  } | null
 }
 
 /**
@@ -430,24 +416,18 @@ export interface ShadowDivergenceResult {
  * Exported for tests. Production caller is `handlePrReviewEnsemble`
  * (single call site as of PR 4b).
  */
-export function computeShadowGateDivergence(
-  args: ShadowDivergenceInputs,
-): ShadowDivergenceResult {
+export function computeShadowGateDivergence(args: ShadowDivergenceInputs): ShadowDivergenceResult {
   const { renderable, unanchored, provenance, threshold, legacyEvent } = args
 
-  const fillScore = (
-    f: PrReviewFinding,
-    specialists: ReadonlyArray<string>,
-  ): PrReviewFinding => ({
+  const fillScore = (f: PrReviewFinding, specialists: ReadonlyArray<string>): PrReviewFinding => ({
     ...f,
-    gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
-      ? f.gateScore
-      : computeGateScore(f, { sourceSpecialists: specialists }),
+    gateScore:
+      typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
+        ? f.gateScore
+        : computeGateScore(f, { sourceSpecialists: specialists }),
   })
 
-  const scoredRenderable = renderable.map((f, i) =>
-    fillScore(f, provenance[i]?.sourceSpecialists ?? []),
-  )
+  const scoredRenderable = renderable.map((f, i) => fillScore(f, provenance[i]?.sourceSpecialists ?? []))
   const scoredUnanchored = unanchored.map((f) => fillScore(f, []))
   const allScored = [...scoredRenderable, ...scoredUnanchored]
 
@@ -513,9 +493,7 @@ export interface AuthoredItem {
  * code that wants to count "Sigilix-authored unresolved threads vs
  * other-actor threads" separately) reuse the same predicate.
  */
-export function filterToSigilixAuthored<T extends AuthoredItem>(
-  items: ReadonlyArray<T>,
-): T[] {
+export function filterToSigilixAuthored<T extends AuthoredItem>(items: ReadonlyArray<T>): T[] {
   return items.filter((item) => item.user?.login === SIGILIX_BOT_LOGIN)
 }
 

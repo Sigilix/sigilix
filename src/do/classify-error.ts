@@ -24,11 +24,7 @@ const TERMINAL_ENSEMBLE_REASONS = new Set<string>([
   "submit_fallback_failed",
 ])
 
-const TRANSIENT_ENSEMBLE_REASON_PREFIXES = [
-  "timeout",
-  "aborted",
-  "fallback_failed",
-]
+const TRANSIENT_ENSEMBLE_REASON_PREFIXES = ["timeout", "aborted", "fallback_failed"]
 
 function readEnsembleReason(err: unknown): string | null {
   if (typeof err !== "object" || err === null) return null

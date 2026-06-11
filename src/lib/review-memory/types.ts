@@ -19,12 +19,7 @@
  * `categoryFromRoleHint()` / `roleHintFromCategory()` in
  * `src/lib/review-memory/marker.ts`.
  */
-export type ReviewMemoryCategory =
-  | "security"
-  | "logic"
-  | "performance"
-  | "tests"
-  | "architecture"
+export type ReviewMemoryCategory = "security" | "logic" | "performance" | "tests" | "architecture"
 
 export const ALL_REVIEW_MEMORY_CATEGORIES: readonly ReviewMemoryCategory[] = [
   "security",
@@ -36,11 +31,7 @@ export const ALL_REVIEW_MEMORY_CATEGORIES: readonly ReviewMemoryCategory[] = [
 
 export type ReviewMemorySeverityLabel = "info" | "warning" | "error"
 
-export const ALL_REVIEW_MEMORY_SEVERITIES: readonly ReviewMemorySeverityLabel[] = [
-  "info",
-  "warning",
-  "error",
-]
+export const ALL_REVIEW_MEMORY_SEVERITIES: readonly ReviewMemorySeverityLabel[] = ["info", "warning", "error"]
 
 /**
  * SIG-247 Phase 2 (SIG-276): enum-bounded vocabulary for structured

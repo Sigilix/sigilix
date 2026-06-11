@@ -1,76 +1,42 @@
 // SIG-318 (PR 12h) — the residual ORCHESTRATOR of the PR-review ensemble (app
-// layer). This is the thin coordinator `handlePrReviewEnsemble` that PRs 12a–12g
-// carved the phase seams out of: it owns the run setup (config resolve, abort
-// timer, telemetry skeleton, the shadow-bakeoff holder), the orchestral gates that
-// stayed god-file-side (the two stale-head guards, the pre-fanout / pre-submit
-// merged-on-approve short-circuits, the label gate, the router-empty skip), the
-// `bailWithSkipNotice` closure, the seam calls into the carved phases
-// (fetch-and-pack → gather-evidence → gather-graph → assemble-prompts → specialists
-// → adjudicate → render-prep → verify-and-build → publish), and the catch / finally.
+// layer): the thin coordinator `handlePrReviewEnsemble` that PRs 12a–12g carved the
+// phase seams out of. It owns the run setup (config resolve, abort timer, telemetry
+// skeleton, the shadow-bakeoff holder), the orchestral gates that stayed god-file-
+// side (the two stale-head guards, the pre-fanout / pre-submit merged-on-approve
+// short-circuits, the label gate, the router-empty skip), the `bailWithSkipNotice`
+// closure, the seam calls into the carved phases (fetch-and-pack → gather-evidence →
+// gather-graph → assemble-prompts → specialists → adjudicate → render-prep →
+// verify-and-build → publish), and the catch / finally. ZERO behavior change.
 //
-// Carved verbatim from `src/lib/triage-pr-review-ensemble.ts` (which is now a pure
-// re-export shim preserving the module path for the 72 external importers + the
-// `vi.mock("../src/lib/triage-pr-review-ensemble", …)` interception in the
-// dispatch-job tests). The coordinator body, `EnsembleHandlerArgs`,
-// `resolveEnsembleConfig`, `checkQuorum`, the `validateForSubmission` public
-// wrapper, the `EnsembleTelemetry` run-record interface, and the `EnsembleResult`
-// binding all moved here byte-identical; only the import paths change (each
-// dependency now imports from its canonical NON-shim home, never back into the old
-// god-file — the dependency rule holds, app → domain/leaf/adapter, the orchestrator
-// is the single app-layer composition root). ZERO behavior change.
-//
-// THE EnsembleTelemetry HOME (reported): the ~310-line run-record `interface` is
-// orchestrator-private (never exported, never imported outside the old god-file —
-// the persistence port / SLO leaf consume the decoupled `EnsembleTelemetrySummary`
-// slice, not this type). It transitively names many lib leaves (`RouterDecision`,
-// `DeterministicCheckHit`, the diff-packing/secret-scan/dep-vuln/sarif/review-memory
-// blobs); its only consumers are the `telemetry` skeleton built in the handler and
-// the `EnsembleResult` binding below. It is relocated to a sibling leaf
-// `./orchestrator-types` (alongside the public `EnsembleHandlerArgs`, so THIS file
-// stays under the 1k-line cap) and import-typed here — kept out of `app/session.ts`,
-// which stays generic over the telemetry type (its whole reason for the `Tel` param).
+// Re-exported through the `triage-pr-review-ensemble` shim (the module path the 72
+// external importers + the dispatch-job `vi.mock` still use). The public type
+// contracts (`EnsembleHandlerArgs`, `EnsembleResult`) + the private
+// `EnsembleTelemetry` run-record live in the `./orchestrator-types` leaf; the pure
+// tunables + `resolveEnsembleConfig` / `validateForSubmission` / the telemetry-
+// skeleton factory live in the `./orchestrator-helpers` leaf (both splits keep this
+// file under the 1k-line cap). Dependency rule: app → domain/leaf/adapter, never
+// back into the shim.
 
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
-import { postReviewSkipNotice, type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
-import {
-  type SpecialistRole,
-} from "@/src/lib/ensemble-router"
-import {
-  createRetrievalCache,
-} from "@/src/lib/retrieval-cache"
-import {
-  passesLabelGate,
-} from "@/src/lib/sigilix-config"
-import { createAstCache, type AstCache } from "@/src/features/ast-rules"
+import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
+import { type SpecialistRole } from "@/src/lib/ensemble-router"
+import { createRetrievalCache } from "@/src/lib/retrieval-cache"
+import { passesLabelGate } from "@/src/lib/sigilix-config"
 import { handleStaleHead } from "@/src/lib/stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "@/src/lib/merge-guard"
+import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { type TokenUsageByModel, makeTokenRecorder } from "@/src/lib/ensemble-slo-telemetry"
+import { type ShadowRunResult } from "@/src/lib/shadow-bakeoff-runner"
+import { ORCHESTRATOR_TIMEOUT_MS, SHADOW_FINALIZE_GRACE_MS } from "@/src/lib/ensemble/domain/budget"
 import {
-  type EnsembleRunCtx,
-} from "@/src/lib/ensemble-perf-telemetry"
-import {
-  type TokenUsageByModel,
-  makeTokenRecorder,
-} from "@/src/lib/ensemble-slo-telemetry"
-import {
-  type ShadowRunResult,
-} from "@/src/lib/shadow-bakeoff-runner"
-import {
-  ORCHESTRATOR_TIMEOUT_MS,
-  SHADOW_FINALIZE_GRACE_MS,
-} from "@/src/lib/ensemble/domain/budget"
-import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
-import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
-import {
-  validateForSubmission as validateForSubmissionDomain,
-  type ValidateForSubmissionArgs,
-  type ValidatedOutput,
-} from "@/src/lib/ensemble/domain/validation"
+  resolveEnsembleConfig,
+  createEnsembleTelemetrySkeleton,
+  buildDeterministicCheckAnnotationMeta,
+  buildDeterministicErroredReviewMeta,
+  runBailWithSkipNotice,
+} from "./orchestrator-helpers"
 import { adjudicateFindings } from "./adjudicate"
-import {
-  settleShadowBakeoff,
-  type ShadowBakeoffState,
-  type ProdSpecialistSnapshot,
-} from "./shadow-settle"
+import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
 import { runSpecialistsAndSynthesize } from "./specialists"
 import { fetchDiffAndConfig, packAndRoute } from "./context/fetch-and-pack"
 import { gatherRetrievalEvidence } from "./context/gather-evidence"
@@ -79,46 +45,24 @@ import { assembleSpecialistPrompts } from "./context/assemble-prompts"
 import { prepareRender } from "./render-prep"
 import { verifyAndBuildSubmission } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
-import {
-  finalize,
-  type ReviewMeta,
-} from "./session"
+import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
-import {
-  buildClient,
-  verifyReviewPersisted,
-} from "@/src/lib/ensemble/adapters/review-sink"
+import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
-// SIG-216 fix-up: inline-overview budgeting.
-//
-// The inline pr-overview call inside `handlePrReviewEnsemble` (added in
-// SIG-216) runs an additional Ollama generate ON TOP of the ensemble's
-// 895s orchestrator budget. The full review handler must finish inside
-// the 900s `CF_QUEUE_CONSUMER_CEILING_MS` queue-consumer wall — a stalled
-// overview can otherwise push the consumer past the platform ceiling,
-// leaving the queue message in the in_progress state and triggering a
-// re-delivery + duplicate review.
-//
-// Floor: when the remaining review budget drops below this, skip the
-// inline overview entirely. The overview will fire on the next push or
-// can be re-attempted via warmup. 30s reserves enough room for the
-// post-overview stale-head re-check + submitReview round-trip + the
-// finally cleanup paths.
-export const INLINE_OVERVIEW_MIN_BUDGET_MS = 30_000
-
-// Ceiling: even on a generous budget surplus, cap the inline overview
-// wall-time at 90s so a single slow overview can never starve the rest
-// of the submit pipeline. Matches the same order-of-magnitude as a
-// SPECIALIST_TIMEOUT_MS attempt.
-export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
-
-// SIG-318 (PR 12f): the private `INLINE_OVERVIEW_SUBMIT_RESERVE_MS` (the reserved
-// tail subtracted from the inline-overview budget for the submit + stale-head
-// re-check) moved with the publish phase to ensemble/app/publish, which is now the
-// only place the inline-overview budget math runs. The two EXPORTED thresholds
-// above stay here to preserve the module's public surface.
+// SIG-318 / SIG-366: the two EXPORTED inline-overview budget thresholds
+// (SIG-216) + the pure `resolveEnsembleConfig` / `validateForSubmission` wrappers
+// moved to the `./orchestrator-helpers` leaf (so this file stays under the 1k cap
+// after Prettier). `resolveEnsembleConfig` is imported above for the handler's own
+// config resolution; the consts + `validateForSubmission` are re-exported here —
+// and through the shim — so the public surface is byte-identical.
+export {
+  INLINE_OVERVIEW_MIN_BUDGET_MS,
+  INLINE_OVERVIEW_MAX_BUDGET_MS,
+  resolveEnsembleConfig,
+  validateForSubmission,
+} from "./orchestrator-helpers"
 
 // ─── public types ──────────────────────────────────────────────────────
 
@@ -130,23 +74,7 @@ export type { EnsembleHandlerArgs }
 
 // ─── orchestrator ──────────────────────────────────────────────────────
 
-/**
- * SIG-318 (PR 5a): resolve the typed ensemble config. The Worker edge
- * (src/index.ts) parses it once via `parseEnsembleConfig(env)` and injects it as
- * `args.ensembleConfig`; callers that omit it (tests / non-edge paths) fall back to
- * parsing `env` here. The fallback is transitional and is removed when the
- * orchestrator is thinned (PR 12). Exported so the inject-vs-parse contract is
- * unit-tested directly.
- */
-export function resolveEnsembleConfig(
-  args: Pick<EnsembleHandlerArgs, "env" | "ensembleConfig">,
-): EnsembleConfig {
-  return args.ensembleConfig ?? parseEnsembleConfig(args.env)
-}
-
-export async function handlePrReviewEnsemble(
-  args: EnsembleHandlerArgs,
-): Promise<EnsembleResult> {
+export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise<EnsembleResult> {
   // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode
   // routing (shadow vs post) is gone; this handler is the only
   // production review path. The `EnsembleTelemetry.mode` field is
@@ -183,23 +111,13 @@ export async function handlePrReviewEnsemble(
   // Function-scoped (like `cache`) so it crosses the inner try-block boundaries.
   // `undefined` = `runner-absent` = no badge (the default, flag-off path).
   let runnerEvidenceBadge: "verified" | "evidence-pending" | undefined = undefined
+  // SIG-366: the two builders moved (pure) to `./orchestrator-helpers`; these thin
+  // zero-arg closures over the mutable `deterministicCheckAnnotations` preserve the
+  // callback shape the publish phase + the bail paths consume.
   let deterministicCheckAnnotations: CheckRunAnnotation[] | undefined
-  const deterministicCheckAnnotationMeta = () =>
-    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
-      ? { deterministicCheckAnnotations: [...deterministicCheckAnnotations] }
-      : {}
+  const deterministicCheckAnnotationMeta = () => buildDeterministicCheckAnnotationMeta(deterministicCheckAnnotations)
   const deterministicErroredReviewMeta = (): ReviewMeta | undefined =>
-    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
-      ? {
-          // Generic `errored` check-run rendering ignores `event` and
-          // `findingsCount`; ReviewMeta requires them only for success titles.
-          // These placeholders carry Lane A annotations through post-SARIF
-          // failure paths without pretending a model review was posted.
-          event: "REQUEST_CHANGES",
-          findingsCount: 0,
-          deterministicCheckAnnotations: [...deterministicCheckAnnotations],
-        }
-      : undefined
+    buildDeterministicErroredReviewMeta(deterministicCheckAnnotations)
 
   // ARC-258: the in-progress check run is owned by `dispatchJob`,
   // not by this orchestrator. Reason: when ensemble-post fails
@@ -244,65 +162,43 @@ export async function handlePrReviewEnsemble(
   }
 
   // Telemetry skeleton — populated as we go so we can write a record
-  // even on early failure paths.
-  const telemetry: EnsembleTelemetry = {
-    schemaVersion: 3,
+  // even on early failure paths. SIG-366: built by the pure
+  // `createEnsembleTelemetrySkeleton` factory in `./orchestrator-helpers`
+  // (`tokenUsageByModel` shared by reference, as before).
+  const telemetry: EnsembleTelemetry = createEnsembleTelemetrySkeleton({
+    mode,
     owner,
     repo,
     prNumber,
     headSha,
-    mode,
-    fellBackToPhase3: false,
-    routerDecision: null,
-    specialistVerdicts: [],
-    synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedLogicClaimRefutation: 0, droppedForFailedRefutationSurvival: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
-    retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
-    totalMs: 0,
-  }
+  })
 
   try {
     const client = await buildClient(env, installationId)
 
-    // ARC-280 follow-up: bail with a customer-visible skip-notice
-    // comment + an `errored` result. Used by the silent-skip paths
-    // that used to fall through to Phase 3 (router_no_specialists,
-    // specialists_all_failed, synth retry exhausted). The
-    // dispatcher already maps `errored` to a `failure` Check Run;
-    // the reviewMeta.surface signal flips the title to "Couldn't
-    // review — see PR comment."
-    //
-    // CR Major / Sigilix Logic catch on PR #92: gate the
-    // `surface: "skip-notice"` reviewMeta on the post actually
-    // succeeding. If `postReviewSkipNotice` returned !ok (or
-    // dedupe-hit'd with no comment), we have no comment to point
-    // the user at — the Check Run should render the generic
-    // "Review failed" title instead of the misleading
-    // "Couldn't review — see PR comment" one.
-    const bailWithSkipNotice = async (
+    // SIG-366: the ARC-280 skip-notice bail moved (verbatim) to
+    // `runBailWithSkipNotice` in `./orchestrator-helpers`; this thin closure threads
+    // the live identity + the mutable `cache` / `deterministicCheckAnnotations` at
+    // call time (the specialists phase consumes it).
+    const bailWithSkipNotice = (
       reason: SkipNoticeReason,
       opts?: { dispatchedRoles?: readonly string[] },
-    ): Promise<EnsembleResult> => {
-      const out = await postReviewSkipNotice({
-        env, client, owner, repo, prNumber, headSha, reason,
-        ...(opts?.dispatchedRoles !== undefined ? { dispatchedRoles: opts.dispatchedRoles } : {}),
+    ): Promise<EnsembleResult> =>
+      runBailWithSkipNotice({
+        reason,
+        opts,
+        env,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        telemetry,
+        cache,
+        deterministicCheckAnnotations,
       })
-      // `ok && reason === "posted"` → a fresh comment is on the PR.
-      // `ok && reason === "dedupe-hit"` → a prior run already
-      //   posted one for this head; safe to claim "see PR comment".
-      // `!ok` → no comment; don't lie to the customer.
-      if (out.ok) {
-        return finalize(telemetry, env, "errored", cache, {
-          event: "REQUEST_CHANGES",
-          findingsCount: 0,
-          surface: "skip-notice",
-          ...deterministicCheckAnnotationMeta(),
-        })
-      }
-      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
-    }
 
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
@@ -319,7 +215,11 @@ export async function handlePrReviewEnsemble(
       // the dispatcher does NOT fall through to Phase 3 (which would
       // also stale-head and post a duplicate sticky / second requeue).
       await handleStaleHead({
-        env, owner, repo, prNumber, installationId,
+        env,
+        owner,
+        repo,
+        prNumber,
+        installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta.head.sha,
         baseSha: meta.base?.sha ?? null,
@@ -348,7 +248,11 @@ export async function handlePrReviewEnsemble(
       const mergedAtMs = new Date(meta.merged_at).getTime()
       telemetry.fellBackReason = "merged_before_fanout"
       const out = await submitMergedOnApprove({
-        client, owner, repo, prNumber, headSha,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
         stage: "pre-fanout",
         mergedAtMs,
         startMs,
@@ -362,8 +266,13 @@ export async function handlePrReviewEnsemble(
         // results we still claim `posted` (matches the standard
         // path's semantics on capped/error returns).
         await verifyReviewPersisted(
-          client, owner, repo, prNumber, out.reviewId,
-          "merged-on-approve-pre-fanout", out.state,
+          client,
+          owner,
+          repo,
+          prNumber,
+          out.reviewId,
+          "merged-on-approve-pre-fanout",
+          out.state,
         )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
@@ -383,14 +292,20 @@ export async function handlePrReviewEnsemble(
       // a noop-merge skip would help with anyway.
     }
 
-    // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the SIG-10 incremental-
-    // select marker read, the per-repo sigilix.json load, the AI-instruction-
-    // ingest decision flag, and `resolveCostControlsConfig` (the label-gate INPUT)
-    // moved to ensemble/app/context/fetch-and-pack. The label-gate DECISION below
-    // stays orchestral. It mutates `telemetry.incrementalReview` by reference.
-    // `sigilixConfig` is a `let` — `packAndRoute` reassigns it on the AI-ingest path.
+    // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the incremental-select marker
+    // read, the per-repo sigilix.json load, the AI-instruction-ingest flag, and the
+    // label-gate INPUT live in ensemble/app/context/fetch-and-pack (the label-gate
+    // DECISION below stays orchestral). It mutates `telemetry.incrementalReview` by
+    // reference; `sigilixConfig` is a `let` (`packAndRoute` reassigns on AI-ingest).
     const fetched = await fetchDiffAndConfig({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      telemetry,
     })
     const { fullPrDiff, openPrsForStack, fullDiff, shouldLoadAiInstructions, costControls } = fetched
     let sigilixConfig = fetched.sigilixConfig
@@ -402,17 +317,20 @@ export async function handlePrReviewEnsemble(
     // dispatcher-owned Check Run completes as `neutral` rather
     // than misclassifying as a failed review.
     if (costControls.runOnLabels.length > 0) {
-      const labelNames = (meta.labels ?? [])
-        .map((l) => l.name)
-        .filter((n): n is string => typeof n === "string")
+      const labelNames = (meta.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === "string")
       if (!passesLabelGate(labelNames, costControls.runOnLabels)) {
-        console.log(JSON.stringify({
-          event: "pr-review-skipped",
-          reason: "label-gate",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          pr_labels: labelNames,
-          run_on_labels: [...costControls.runOnLabels],
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-review-skipped",
+            reason: "label-gate",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            pr_labels: labelNames,
+            run_on_labels: [...costControls.runOnLabels],
+          }),
+        )
         telemetry.fellBackReason = "label_gate_skip"
         // SIG-224 Phase 0 follow-along: thread `reviewMeta` so the
         // Check Run renders "Approved — no issues found · Sigilix
@@ -438,8 +356,20 @@ export async function handlePrReviewEnsemble(
     // deterministicChecks / secretScan / router writes) by reference; the final
     // (post-dispatcher) router flows out for the orchestral router-empty gate below.
     const packed = await packAndRoute({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, orchCtrl, meta,
-      fullDiff, sigilixConfig, shouldLoadAiInstructions, costControls, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      orchCtrl,
+      meta,
+      fullDiff,
+      sigilixConfig,
+      shouldLoadAiInstructions,
+      costControls,
+      telemetry,
     })
     sigilixConfig = packed.sigilixConfig
     const {
@@ -483,7 +413,7 @@ export async function handlePrReviewEnsemble(
       // dynamic dispatcher starts skipping legitimately-not-applicable
       // specialists more often, this path will fire more often, and the
       // wrong "couldn't review" surface would be customer-visible noise.
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+      telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
       return finalize(telemetry, env, "skipped", cache, {
         event: "APPROVE",
@@ -492,15 +422,26 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── SIG-318 (PR 12g-2): the GATHER-EVIDENCE seam ─────────
-    // The pre-flight + perf + multi-corpus retrieval, the dep-vuln scan, the AST-
-    // source fetch + shared parse-once cache, the branch-vector build + per-pass
-    // `branchAwareMerge` closure, and the symbol retrieval moved to ensemble/app/
-    // context/gather-evidence. It mutates `telemetry` (dep-vuln) by reference and
-    // returns the retrieval cache so the orchestrator's `let cache` (the finally-
-    // cleanup reads its stats) is reassigned — the 12a pre-try-let pattern.
+    // The multi-corpus retrieval, dep-vuln scan, AST-source fetch + parse-once cache,
+    // branch-vector build, and symbol retrieval live in ensemble/app/context/gather-
+    // evidence. It mutates `telemetry` (dep-vuln) by reference and returns the
+    // retrieval cache so the orchestrator's `let cache` is reassigned (12a pre-try-let).
     const evidence = await gatherRetrievalEvidence({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, perfCtx, orchCtrl,
-      meta, sigilixConfig, router, diff, filePaths, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      perfCtx,
+      orchCtrl,
+      meta,
+      sigilixConfig,
+      router,
+      diff,
+      filePaths,
+      telemetry,
     })
     cache = evidence.cache
     const {
@@ -522,16 +463,33 @@ export async function handlePrReviewEnsemble(
     // It mutates `telemetry` (graphExpansionAb / astRules / sarifEvidence) by
     // reference and returns `runnerEvidenceBadge` + `deterministicCheckAnnotations`
     // so the orchestrator's two pre-try `let`s (read by the posted finalize meta)
-    // are reassigned. The graph-context-format + ast-scan-gate pure helpers
-    // relocated to the domain (re-exported below to preserve the public surface).
+    // are reassigned.
     const graphEvidence = await gatherGraphEvidence({
-      env, client, owner, repo, prNumber, headSha,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
       ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
-      ensembleConfig, meta, sigilixConfig, diff, fullDiff, wasTruncated, reviewable,
-      filePaths, splitFiles, sharedChunksForOverlap, astFilesByPath, astCache,
-      astRulesConfig, orchCtrl,
+      ensembleConfig,
+      meta,
+      sigilixConfig,
+      diff,
+      fullDiff,
+      wasTruncated,
+      reviewable,
+      filePaths,
+      splitFiles,
+      sharedChunksForOverlap,
+      astFilesByPath,
+      astCache,
+      astRulesConfig,
+      orchCtrl,
       ...(args.graphMetricsSink !== undefined ? { graphMetricsSink: args.graphMetricsSink } : {}),
-      ...(args.graphExpansionMetricsSink !== undefined ? { graphExpansionMetricsSink: args.graphExpansionMetricsSink } : {}),
+      ...(args.graphExpansionMetricsSink !== undefined
+        ? { graphExpansionMetricsSink: args.graphExpansionMetricsSink }
+        : {}),
       telemetry,
     })
     runnerEvidenceBadge = graphEvidence.runnerEvidenceBadge
@@ -554,22 +512,55 @@ export async function handlePrReviewEnsemble(
     } = graphEvidence
 
     // ─── SIG-318 (PR 12g-3): the ASSEMBLE-PROMPTS seam ────────
-    // The prompt fact-blocks + `buildSecurityFactManifest` + the SIG-317 asymmetry/
-    // toctou hint blocks + `factsByRole` + the `maybePostAstAutoInline` deferred-
-    // poster closure + stack detection + the testing-evidence pack (incl. the bounded
-    // cross-file fetch + repo-tree fallback) + the dynamic evidence block + the
-    // `messageForRole` closure moved to ensemble/app/context/assemble-prompts. The
-    // two closures are RETURNED (they hide their captures); every other value the
-    // downstream phases consume flows out unchanged.
+    // The prompt fact-blocks, security manifest, asymmetry/toctou hints, `factsByRole`,
+    // the `maybePostAstAutoInline` + `messageForRole` closures, stack detection, the
+    // testing-evidence pack, and the dynamic evidence block live in ensemble/app/
+    // context/assemble-prompts. The two closures are RETURNED (they hide their
+    // captures); every other value the downstream phases consume flows out unchanged.
     const prompts = await assembleSpecialistPrompts({
-      env, client, owner, repo, prNumber, headSha, mode, orchCtrlSignal: orchCtrl.signal,
-      meta, sigilixConfig, diff, fullDiff, fullPrDiff, filePaths, splitFiles,
-      filesAfterFilter, reviewedFiles, matchedPathInstructions, scopedRulesBlock,
-      openPrsForStack, deterministicHits, secretHits, depVulnFindings, depVulnBlock,
-      retrievalSnapshot, perfRetrievalSnapshot, logicSymbolSnapshot, sharedChunksForOverlap,
-      astFilesByPath, astCache, astRulesConfig, asymmetryMode, toctouMode, namespace,
-      astResult, sarifFindings, sarifBlock, docsCoverageHit, perfBudgetsHit, coverageResult,
-      graphCtxForPrompt, graphContextNodesForEvidence, graphBlastCallerPaths,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      mode,
+      orchCtrlSignal: orchCtrl.signal,
+      meta,
+      sigilixConfig,
+      diff,
+      fullDiff,
+      fullPrDiff,
+      filePaths,
+      splitFiles,
+      filesAfterFilter,
+      reviewedFiles,
+      matchedPathInstructions,
+      scopedRulesBlock,
+      openPrsForStack,
+      deterministicHits,
+      secretHits,
+      depVulnFindings,
+      depVulnBlock,
+      retrievalSnapshot,
+      perfRetrievalSnapshot,
+      logicSymbolSnapshot,
+      sharedChunksForOverlap,
+      astFilesByPath,
+      astCache,
+      astRulesConfig,
+      asymmetryMode,
+      toctouMode,
+      namespace,
+      astResult,
+      sarifFindings,
+      sarifBlock,
+      docsCoverageHit,
+      perfBudgetsHit,
+      coverageResult,
+      graphCtxForPrompt,
+      graphContextNodesForEvidence,
+      graphBlastCallerPaths,
       graphBlastDependentPaths,
     })
     const {
@@ -584,14 +575,12 @@ export async function handlePrReviewEnsemble(
     } = prompts
 
     // ─── SIG-318 (PR 12c): the SPECIALISTS+SYNTH seam ─────────
-    // The shadow + prod specialist fan-out, the SIG-235 quorum collector,
-    // collectSpecialistVerdicts, the dismissal/cleared telemetry + prod
-    // snapshots + fanout summary, the ARC-277 coverage gate, the synth-bypass /
-    // synthesizer path (+ retry ladder + telemetry + summary), and the recall
-    // floors all moved verbatim to ensemble/app/specialists (which delegates the
-    // synth phase to ensemble/app/synthesize + the floors to ensemble/app/recall-
-    // floors). The phase mutates `telemetry` + `shadowState` by reference; its
-    // skip-notice bails return the `exit` arm, forwarded here.
+    // The shadow + prod specialist fan-out, quorum collector, verdict collection,
+    // fanout telemetry, the ARC-277 coverage gate, the synth-bypass / synthesizer
+    // path (+ retry ladder), and the recall floors live in ensemble/app/specialists
+    // (which delegates synth to ensemble/app/synthesize + the floors to recall-
+    // floors). It mutates `telemetry` + `shadowState` by reference; its skip-notice
+    // bails return the `exit` arm, forwarded here.
     const specialistsPhase = await runSpecialistsAndSynthesize({
       env,
       owner,
@@ -637,31 +626,32 @@ export async function handlePrReviewEnsemble(
     // moved verbatim to ensemble/app/adjudicate. The phase mutates `telemetry`
     // (synthesizer re-point + postValidation) and `validated` (in-place clamps)
     // by reference; the consensus outputs flow downstream unchanged.
-    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } = adjudicateFindings({
-      env,
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      ensembleConfig,
-      telemetry,
-      validationSink: args.validationSink,
-      sigilixConfig,
-      fullPrDiff,
-      wasTruncated,
-      droppedTooLarge,
-      reviewable,
-      astFilesByPath,
-      astCache,
-      astResult,
-      coverageGapSet,
-      securityManifest,
-      changedLineTextByPath,
-      testingEvidencePackWithCoverage,
-      synthInputVerdicts,
-      effectiveSynthVerdict,
-      effectiveSynthProvenance,
-    })
+    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } =
+      adjudicateFindings({
+        env,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        ensembleConfig,
+        telemetry,
+        validationSink: args.validationSink,
+        sigilixConfig,
+        fullPrDiff,
+        wasTruncated,
+        droppedTooLarge,
+        reviewable,
+        astFilesByPath,
+        astCache,
+        astResult,
+        coverageGapSet,
+        securityManifest,
+        changedLineTextByPath,
+        testingEvidencePackWithCoverage,
+        synthInputVerdicts,
+        effectiveSynthVerdict,
+        effectiveSynthProvenance,
+      })
 
     // ARC-280: shadow-mode branch deleted. The dual-mode routing
     // (shadow vs post) is gone — post is the only mode. The
@@ -687,7 +677,11 @@ export async function handlePrReviewEnsemble(
       // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
       await handleStaleHead({
-        env, owner, repo, prNumber, installationId,
+        env,
+        owner,
+        repo,
+        prNumber,
+        installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta2.head.sha,
         baseSha: meta2.base?.sha ?? null,
@@ -711,18 +705,14 @@ export async function handlePrReviewEnsemble(
     // pre-submit dismiss + `submitReview`).
 
     // ─── Submit ────────────────────────────────────────────────
-    // SIG-318 (PR 12d): the render-prep phase — review-memory soften + the
-    // SIG-280 warm veto + the renderable-set assembly (fingerprints, consensus
-    // annotation, withdrawal filtering, repeat-FP metrics, precision profile, the
-    // `keepIndex` parallel-array bookkeeping, approval-readiness, the review-event
-    // resolution, `submissionVerdict`), the cross-push delta-badge snapshot, the
-    // coverage roster, and the verification/marker pre-compute (delegated to
-    // ensemble/app/verification-prep) — moved to ensemble/app/render-prep. It
-    // imports each dependency from its canonical home (app → domain/leaf, never
-    // back into this orchestrator) and mutates `submissionVerdict`'s findings by
-    // reference only on the default-off re-anchor path; every value it returns
-    // flows downstream unchanged. The fragile parallel arrays (keepIndex, the
-    // filtered-consensus triple, markers) moved byte-identical with no reordering.
+    // SIG-318 (PR 12d): the render-prep phase — review-memory soften, the SIG-280 warm
+    // veto, the renderable-set assembly (fingerprints, consensus annotation, withdrawal
+    // filtering, repeat-FP metrics, precision profile, the `keepIndex` parallel arrays,
+    // approval-readiness, review-event resolution, `submissionVerdict`), the cross-push
+    // delta-badge snapshot, the coverage roster, and the verification/marker pre-compute
+    // — lives in ensemble/app/render-prep. It mutates `submissionVerdict`'s findings by
+    // reference only on the default-off re-anchor path; every returned value flows
+    // downstream unchanged (the fragile parallel arrays moved byte-identical).
     const {
       submissionVerdict,
       renderableUnanchoredForSubmission,
@@ -794,7 +784,11 @@ export async function handlePrReviewEnsemble(
     if (mergeGuard.shouldSkip) {
       telemetry.fellBackReason = "merged_during_review"
       const out = await submitMergedOnApprove({
-        client, owner, repo, prNumber, headSha,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
         stage: "pre-submit",
         mergedAtMs: mergeGuard.mergedAtMs,
         startMs,
@@ -803,8 +797,13 @@ export async function handlePrReviewEnsemble(
         // CR PR #104 Major catch: same post-submit verification as the
         // pre-fanout branch above. See that block for the rationale.
         await verifyReviewPersisted(
-          client, owner, repo, prNumber, out.reviewId,
-          "merged-on-approve-pre-submit", out.state,
+          client,
+          owner,
+          repo,
+          prNumber,
+          out.reviewId,
+          "merged-on-approve-pre-submit",
+          out.state,
         )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
@@ -816,18 +815,11 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
-    // SIG-318 (PR 12e): the VERIFY-AND-BUILD phase — the detached gate-shadow
-    // telemetry IIFE (fire-and-forget), the SIG-285 verification + refuted-demote
-    // (the only enforce-path mutation) + the v2 receipt-join + the Trust Ledger v0
-    // baseline annotation + the evidence/scope telemetry, then the submission build
-    // (affordance preparation, buildReviewSubmissionWithMetadata with its
-    // captureGolden(render) seam, and the output-surface strip) — moved verbatim to
-    // ensemble/app/verify-and-build. It imports each dependency from its canonical
-    // home (app → domain/leaf/render-leaf laterals, never back into this
-    // orchestrator) and mutates `submissionVerdict.findings`,
-    // `renderableUnanchoredForSubmission`, and `findingMarkers` in lockstep on the
-    // refuted-demote path; the first two are mutated by reference, the reassigned
-    // `findingMarkers` is returned explicitly and re-bound here.
+    // SIG-318 (PR 12e): the VERIFY-AND-BUILD phase (gate-shadow telemetry, SIG-285
+    // verification + refuted-demote, v2 receipt-join, Trust Ledger v0 baseline, then
+    // the submission build) lives in ensemble/app/verify-and-build. It mutates
+    // `submissionVerdict.findings` + `renderableUnanchoredForSubmission` by reference
+    // on the refuted-demote path; the reassigned `findingMarkers` is re-bound here.
     const {
       primaryEvent,
       primaryAffordance,
@@ -874,18 +866,12 @@ export async function handlePrReviewEnsemble(
       findingMarkers,
     })
     findingMarkers = findingMarkersAfterBuild
-    // SIG-318 (PR 12f): the PUBLISH phase — the inline PR-overview render + its
-    // post-overview stale-head guard (#3), the pre-submit dismiss, the submit +
-    // 4-level fallback ladder (inline → comment-fallback / 422 → anchorless →
-    // comment-fallback, the inner try/catch/finally + its `emitPhaseCompleted`
-    // intact), and the per-path post-submit persistence — moved verbatim to
-    // ensemble/app/publish. Every terminal path returns `finalize(...)`, so the
-    // phase returns the `EnsembleResult` directly. The two submit-ladder rethrows
-    // (`throw submitErr` / `throw fallbackSubmitErr`) propagate OUT of
-    // `publishReviewSubmission` to this outer catch — publish adds no catch of its
-    // own. The orchestrator threads in the ambient identity, the verify-and-build
-    // outputs, the mutable telemetry + cache, and the deterministic-annotation /
-    // ast-auto-inline closures.
+    // SIG-318 (PR 12f): the PUBLISH phase — inline PR-overview render + post-overview
+    // stale-head guard (#3), pre-submit dismiss, the submit + 4-level fallback ladder
+    // (inline → comment-fallback / 422 → anchorless → comment-fallback), and per-path
+    // post-submit persistence — lives in ensemble/app/publish. Every terminal path
+    // returns `finalize(...)`, so it returns the `EnsembleResult` directly; its two
+    // submit-ladder rethrows propagate OUT to this outer catch (publish adds no catch).
     return await publishReviewSubmission({
       env,
       owner,
@@ -929,7 +915,7 @@ export async function handlePrReviewEnsemble(
       deterministicErroredReviewMeta,
     })
   } catch (e) {
-    telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+    telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
     telemetry.internalError = e instanceof Error ? e.message : String(e)
     // ARC-280 follow-up: the internal_error path doesn't post a
@@ -969,17 +955,10 @@ export async function handlePrReviewEnsemble(
 // other fan-out decisions) and re-exported through the shim. The orchestrator no
 // longer references it directly (the specialists phase owns the quorum gate).
 
-// SIG-360: thin public wrapper preserving the original `validateForSubmission`
-// signature (astCache OPTIONAL). The believability core moved to
-// ./ensemble/domain/validation, where `astCache` is REQUIRED (no features-barrel
-// VALUE default in a domain default — the one permitted body delta). Here we
-// supply the default so the orchestrator's `satisfies Parameters<typeof
-// validateForSubmission>[0]` call site is unchanged. Sync, like the domain fn.
-export function validateForSubmission(
-  args: Omit<ValidateForSubmissionArgs, "astCache"> & { astCache?: AstCache },
-): ValidatedOutput {
-  return validateForSubmissionDomain({ ...args, astCache: args.astCache ?? createAstCache() })
-}
+// SIG-360 / SIG-366: the thin public `validateForSubmission` wrapper (astCache
+// OPTIONAL — it supplies the `createAstCache()` default the domain core requires)
+// moved to the `./orchestrator-helpers` leaf; re-exported above so the public
+// surface is byte-identical.
 
 // ─── telemetry / result binding ──────────────────────────────────────────
 

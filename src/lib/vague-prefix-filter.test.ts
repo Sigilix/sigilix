@@ -8,16 +8,10 @@
 //      and the surviving findings flow through correctly.
 
 import { describe, it, expect } from "vitest"
-import {
-  hasVaguePrefix,
-  validateForSubmission,
-  VAGUE_PREFIXES,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { hasVaguePrefix, validateForSubmission, VAGUE_PREFIXES } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
-function finding(
-  overrides: Partial<PrReviewFinding> = {},
-): PrReviewFinding {
+function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
     path: "src/foo.ts",
     line: 1,
@@ -31,14 +25,7 @@ function finding(
 
 describe("VAGUE_PREFIXES constant", () => {
   it("includes exactly the 6 Greptile-spec words", () => {
-    expect([...VAGUE_PREFIXES]).toEqual([
-      "Ensure",
-      "Verify",
-      "Validate",
-      "Consider",
-      "Review",
-      "Confirm",
-    ])
+    expect([...VAGUE_PREFIXES]).toEqual(["Ensure", "Verify", "Validate", "Consider", "Review", "Confirm"])
   })
 })
 
@@ -61,16 +48,12 @@ describe("hasVaguePrefix", () => {
 
   it("matches all 6 trigger words", () => {
     for (const word of VAGUE_PREFIXES) {
-      expect(
-        hasVaguePrefix(finding({ headline: `${word} something here` })),
-      ).toBe(true)
+      expect(hasVaguePrefix(finding({ headline: `${word} something here` }))).toBe(true)
     }
   })
 
   it("matches with leading whitespace (trims before check)", () => {
-    expect(
-      hasVaguePrefix(finding({ headline: "   Ensure inputs are sanitized" })),
-    ).toBe(true)
+    expect(hasVaguePrefix(finding({ headline: "   Ensure inputs are sanitized" }))).toBe(true)
   })
 
   // ── False-positive guards ─────────────────────────────────────
@@ -89,9 +72,7 @@ describe("hasVaguePrefix", () => {
   })
 
   it("does NOT match when the prefix appears mid-string", () => {
-    expect(
-      hasVaguePrefix(finding({ headline: "Auth bug — must Ensure validation runs" })),
-    ).toBe(false)
+    expect(hasVaguePrefix(finding({ headline: "Auth bug — must Ensure validation runs" }))).toBe(false)
   })
 
   it("does NOT match on empty headline + empty body", () => {
@@ -187,8 +168,18 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-1"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
         softened: [],
@@ -224,7 +215,12 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
         softened: [],
@@ -250,15 +246,34 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         confidenceReason: "Test reason.",
         findings: [
           finding({ headline: "Consider extracting this to a helper", line: 1 }),
-          finding({ headline: "Real bug: null deref on line 3", line: 3, body: "`x.field` will throw when `x` is null." }),
+          finding({
+            headline: "Real bug: null deref on line 3",
+            line: 3,
+            body: "`x.field` will throw when `x` is null.",
+          }),
           finding({ headline: "Validate the schema before parsing", line: 10 }),
         ],
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-2"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-1"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-2"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
         softened: [],
@@ -286,13 +301,16 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         summary: "Test",
         confidence: 3,
         confidenceReason: "Test reason.",
-        findings: [
-          finding({ headline: "Ensure the user is logged in" }),
-        ],
+        findings: [finding({ headline: "Ensure the user is logged in" })],
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-99"], action: "kept", verifiedViaRetrieval: false }, // 99 not in validIds
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-99"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }, // 99 not in validIds
         ],
         dropped: [],
         softened: [],
@@ -316,13 +334,16 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         summary: "Test",
         confidence: 3,
         confidenceReason: "Test reason.",
-        findings: [
-          finding({ headline: "Verify if the logging is sufficient", score: 1 }),
-        ],
+        findings: [finding({ headline: "Verify if the logging is sufficient", score: 1 })],
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
         softened: [],

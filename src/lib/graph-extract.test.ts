@@ -41,47 +41,63 @@ describe("extractFileGraph — file edges (raw)", () => {
     const { fileEdgesRaw } = extractFileGraph("src/a.ts", src)
     const imports = fileEdgesRaw.filter((e) => e.edgeKind === "import")
 
-    expect(imports).toContainEqual(expect.objectContaining({
-      edgeKind: "import", specifier: "./math", importedName: "add", localName: "add", sourcePath: "src/a.ts",
-    }))
-    expect(imports).toContainEqual(expect.objectContaining({ specifier: "./math", importedName: "sub", localName: "minus" }))
-    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ edgeKind: "reexport", exportedName: "PI", specifier: "./constants" }))
+    expect(imports).toContainEqual(
+      expect.objectContaining({
+        edgeKind: "import",
+        specifier: "./math",
+        importedName: "add",
+        localName: "add",
+        sourcePath: "src/a.ts",
+      }),
+    )
+    expect(imports).toContainEqual(
+      expect.objectContaining({ specifier: "./math", importedName: "sub", localName: "minus" }),
+    )
+    expect(fileEdgesRaw).toContainEqual(
+      expect.objectContaining({
+        edgeKind: "reexport",
+        exportedName: "PI",
+        specifier: "./constants",
+      }),
+    )
     expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ edgeKind: "star_reexport", specifier: "./all" }))
     expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ specifier: "left-pad" }))
   })
 
   it("covers namespace imports, side-effect imports, and named star re-exports", () => {
-    const src = [
-      "import * as ns from './m'",
-      "import './polyfill'",
-      "export * as utils from './u'",
-    ].join("\n")
+    const src = ["import * as ns from './m'", "import './polyfill'", "export * as utils from './u'"].join("\n")
 
     const { fileEdgesRaw } = extractFileGraph("src/ns.ts", src)
 
     // Namespace import: `import * as ns from './m'`
-    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
-      edgeKind: "import",
-      specifier: "./m",
-      importedName: null,
-      localName: "ns",
-      sourcePath: "src/ns.ts",
-    }))
+    expect(fileEdgesRaw).toContainEqual(
+      expect.objectContaining({
+        edgeKind: "import",
+        specifier: "./m",
+        importedName: null,
+        localName: "ns",
+        sourcePath: "src/ns.ts",
+      }),
+    )
 
     // Side-effect import: `import './polyfill'`
-    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
-      edgeKind: "import",
-      specifier: "./polyfill",
-      importedName: null,
-      localName: null,
-    }))
+    expect(fileEdgesRaw).toContainEqual(
+      expect.objectContaining({
+        edgeKind: "import",
+        specifier: "./polyfill",
+        importedName: null,
+        localName: null,
+      }),
+    )
 
     // Named star re-export: `export * as utils from './u'`
-    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
-      edgeKind: "star_reexport",
-      specifier: "./u",
-      exportedName: "utils",
-    }))
+    expect(fileEdgesRaw).toContainEqual(
+      expect.objectContaining({
+        edgeKind: "star_reexport",
+        specifier: "./u",
+        exportedName: "utils",
+      }),
+    )
   })
 })
 
@@ -159,9 +175,7 @@ describe("extractFileGraph — call edges", () => {
   })
 
   it("unknown free identifiers are not tracked", () => {
-    const src = [
-      "export function go() { console.log('hi'); unknownFn() }",
-    ].join("\n")
+    const src = ["export function go() { console.log('hi'); unknownFn() }"].join("\n")
 
     const { callEdges } = extractFileGraph("src/free.ts", src)
     // `unknownFn` is neither a local function nor an imported binding
@@ -169,10 +183,7 @@ describe("extractFileGraph — call edges", () => {
   })
 
   it("call edge carries correct metadata fields", () => {
-    const src = [
-      "import { fetchUser } from './api'",
-      "export function run() { fetchUser() }",
-    ].join("\n")
+    const src = ["import { fetchUser } from './api'", "export function run() { fetchUser() }"].join("\n")
 
     const { callEdges } = extractFileGraph("src/meta.ts", src)
     const edge = callEdges.find((c) => c.calleeName === "fetchUser")
@@ -193,10 +204,7 @@ describe("extractFileGraph — call edges", () => {
     // `import * as ns from './m'; ns()` — ns is a namespace object, not a
     // named/default binding. Classifying ns() as imported_binding is a false
     // edge; prefer missing over false per the codebase's stated policy.
-    const src = [
-      "import * as ns from './m'",
-      "export function run() { ns() }",
-    ].join("\n")
+    const src = ["import * as ns from './m'", "export function run() { ns() }"].join("\n")
 
     const { callEdges } = extractFileGraph("src/ns-call.ts", src)
     expect(callEdges.find((c) => c.calleeName === "ns")).toBeUndefined()

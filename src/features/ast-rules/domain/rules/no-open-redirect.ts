@@ -32,7 +32,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -96,8 +98,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -245,8 +248,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -268,12 +272,17 @@ export const noOpenRedirect: AstRule = {
     // Functions sorted widest-first; the innermost enclosing one is the LAST
     // whose range contains the sink. Cache each function's validation flag.
     const fns = collectFunctions(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const validatedCache = new Map<AstNode, boolean>()
     const isValidated = (f: AstNode): boolean => {
       let v = validatedCache.get(f)
-      if (v === undefined) { v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source); validatedCache.set(f, v) }
+      if (v === undefined) {
+        v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source)
+        validatedCache.set(f, v)
+      }
       return v
     }
     // Memoize the per-scope taint/headers-locals walks so a function with k
@@ -282,12 +291,18 @@ export const noOpenRedirect: AstRule = {
     const headersCache = new Map<AstNode, Set<string>>()
     const taintLocalsOf = (scope: AstNode): Set<string> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
     const headersLocalsOf = (scope: AstNode): Set<string> => {
       let h = headersCache.get(scope)
-      if (!h) { h = collectHeadersLocals(scope); headersCache.set(scope, h) }
+      if (!h) {
+        h = collectHeadersLocals(scope)
+        headersCache.set(scope, h)
+      }
       return h
     }
 
@@ -312,8 +327,7 @@ export const noOpenRedirect: AstRule = {
           const taintScope = enclosing ?? node
           // `.set`/`.append` are header writes only on a real Headers receiver.
           const headersOk =
-            !sink.needsHeadersReceiver ||
-            isHeadersReceiver(sink.receiver ?? undefined, headersLocalsOf(taintScope))
+            !sink.needsHeadersReceiver || isHeadersReceiver(sink.receiver ?? undefined, headersLocalsOf(taintScope))
           const taintedLocals = taintLocalsOf(taintScope)
           // Skip a same-origin path prefix (`"/dashboard/" + req.query.tab`): the
           // request value can't escape the origin, so it is not an open redirect.
@@ -339,8 +353,9 @@ export const noOpenRedirect: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

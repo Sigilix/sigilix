@@ -49,8 +49,7 @@ export type UnionMap = Map<string, Map<string, Set<string>>>
 /** A property typed as a string-literal union of >=2 members, on one line:
  *  `status: "a" | "b" | "c"` / `status?: "a" | "b"`. Group 1 = property name,
  *  group 2 = the union body. The trailing `(\| ...)+` demands >=2 members. */
-const UNION_DECL_RE =
-  /([A-Za-z_$][\w$]*)\s*\??\s*:\s*("(?:[^"\\]|\\.)*"(?:\s*\|\s*"(?:[^"\\]|\\.)*")+)/g
+const UNION_DECL_RE = /([A-Za-z_$][\w$]*)\s*\??\s*:\s*("(?:[^"\\]|\\.)*"(?:\s*\|\s*"(?:[^"\\]|\\.)*")+)/g
 
 /** An `interface Name { … }` / `type Name = { … }` block with a FLAT body (no
  *  nested braces — property-union types are flat; a nested object type isn't
@@ -90,24 +89,46 @@ function blankComments(src: string, sqlMode = false): string {
   while (i < n) {
     const c = src[i]!
     if (inStr) {
-      if (c === "\\") { i += 2; continue }
+      if (c === "\\") {
+        i += 2
+        continue
+      }
       if (c === inStr) inStr = null
       i++
       continue
     }
-    if (!sqlMode && (c === '"' || c === "'" || c === "`")) { inStr = c; i++; continue }
+    if (!sqlMode && (c === '"' || c === "'" || c === "`")) {
+      inStr = c
+      i++
+      continue
+    }
     if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") { out[i] = " "; i++ }
+      while (i < n && src[i] !== "\n") {
+        out[i] = " "
+        i++
+      }
       continue
     }
     if (sqlMode && c === "-" && src[i + 1] === "-") {
-      while (i < n && src[i] !== "\n") { out[i] = " "; i++ }
+      while (i < n && src[i] !== "\n") {
+        out[i] = " "
+        i++
+      }
       continue
     }
     if (c === "/" && src[i + 1] === "*") {
-      out[i] = " "; out[i + 1] = " "; i += 2
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++ }
-      if (i < n) { out[i] = " "; out[i + 1] = " "; i += 2 }
+      out[i] = " "
+      out[i + 1] = " "
+      i += 2
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] !== "\n") out[i] = " "
+        i++
+      }
+      if (i < n) {
+        out[i] = " "
+        out[i + 1] = " "
+        i += 2
+      }
       continue
     }
     i++
@@ -209,7 +230,7 @@ function sqlStringCandidates(source: string): SqlStringCandidate[] {
     }
 
     const quote = source[i]
-    if (quote !== "\"" && quote !== "`") {
+    if (quote !== '"' && quote !== "`") {
       i++
       continue
     }
@@ -228,7 +249,7 @@ function sqlStringCandidates(source: string): SqlStringCandidate[] {
   return out
 }
 
-function findQuotedStringEnd(source: string, openIdx: number, quote: "\"" | "`"): number {
+function findQuotedStringEnd(source: string, openIdx: number, quote: '"' | "`"): number {
   let i = openIdx + 1
   while (i < source.length) {
     const c = source[i]
@@ -251,10 +272,8 @@ function skipTemplateExpression(source: string, openBraceIdx: number): number {
   let i = openBraceIdx + 1
   while (i < source.length) {
     const c = source[i]
-    if (c === "\"" || c === "'" || c === "`") {
-      const end = c === "`"
-        ? findQuotedStringEnd(source, i, "`")
-        : findSimpleQuotedStringEnd(source, i, c)
+    if (c === '"' || c === "'" || c === "`") {
+      const end = c === "`" ? findQuotedStringEnd(source, i, "`") : findSimpleQuotedStringEnd(source, i, c)
       if (end < 0) return source.length
       i = end + 1
       continue
@@ -285,7 +304,7 @@ function skipTemplateExpression(source: string, openBraceIdx: number): number {
   return source.length
 }
 
-function findSimpleQuotedStringEnd(source: string, openIdx: number, quote: "\"" | "'"): number {
+function findSimpleQuotedStringEnd(source: string, openIdx: number, quote: '"' | "'"): number {
   let i = openIdx + 1
   while (i < source.length) {
     const c = source[i]

@@ -1,7 +1,4 @@
-import {
-  FINDING_CATEGORIES,
-  type FindingCategory,
-} from "./triage-pr-review"
+import { FINDING_CATEGORIES, type FindingCategory } from "./triage-pr-review"
 
 const FINDING_BLOCK_MARKER = "<!-- sigilix:pr-review-finding -->"
 export const MAX_FINDING_OUTCOME_MARKERS = 50
@@ -23,9 +20,7 @@ export function parseFindingFingerprint(body: string): string | undefined {
  */
 export function parseFindingCategory(body: string): FindingCategory {
   const m = /<!-- sigilix:category:([a-z-]+) -->/.exec(body)
-  return m && FINDING_CATEGORIES.has(m[1] as FindingCategory)
-    ? (m[1] as FindingCategory)
-    : "logic"
+  return m && FINDING_CATEGORIES.has(m[1] as FindingCategory) ? (m[1] as FindingCategory) : "logic"
 }
 
 /** SIG-217: parse the hidden numeric severity marker. */
@@ -73,8 +68,7 @@ export function parseFindingOutcomeMarkers(body: string): FindingOutcomeMarker[]
   while (cursor !== -1 && out.length < MAX_FINDING_OUTCOME_MARKERS) {
     const chunkStart = cursor + FINDING_BLOCK_MARKER.length
     const nextMarkerIndex = cappedBody.indexOf(FINDING_BLOCK_MARKER, chunkStart)
-    const chunkEnd =
-      nextMarkerIndex === -1 ? cappedBody.length : nextMarkerIndex
+    const chunkEnd = nextMarkerIndex === -1 ? cappedBody.length : nextMarkerIndex
     addChunk(cappedBody.slice(chunkStart, chunkEnd))
     cursor = nextMarkerIndex
   }

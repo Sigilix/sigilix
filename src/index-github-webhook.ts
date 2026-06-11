@@ -18,42 +18,29 @@ import {
   hasStaleDismissedReviewFeedbackSignal,
 } from "@/src/lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig } from "@/src/lib/sigilix-config"
-import {
-  postDraftPrSkipNotice,
-  supersedeDraftPrSkipNotice,
-} from "@/src/lib/pr-draft-skip-notice"
+import { postDraftPrSkipNotice, supersedeDraftPrSkipNotice } from "@/src/lib/pr-draft-skip-notice"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
-import {
-  computeDiffHash,
-  readPriorReviewDiffHash,
-} from "@/src/lib/noop-merge-detect"
+import { computeDiffHash, readPriorReviewDiffHash } from "@/src/lib/noop-merge-detect"
 import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
   maybeEnqueuePullRequestBranchIndexJobs,
-  maybeEnqueuePushIndexJob,
   type IndexJobReason,
 } from "@/src/lib/index-producer"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 import { postPrOverviewStubIfNeeded } from "@/src/lib/pr-overview-stub"
-import {
-  handleInstallReposRemoved,
-  handleInstallationDeleted,
-} from "@/src/lib/index-delete"
+import { handleInstallReposRemoved, handleInstallationDeleted } from "@/src/lib/index-delete"
 import {
   type GitHubWebhookPayload,
   decidePullRequestJobs,
   queueGithubMention,
+  handlePushEvent,
   dispatchReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
 } from "@/src/index-internals"
 
-export async function handleGitHubWebhook(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
+export async function handleGitHubWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
     return new Response("github app not configured\n", { status: 503 })
   }
@@ -96,81 +83,85 @@ export async function handleGitHubWebhook(
     // REGARDLESS of `OPENCLAW_INDEXER_ENABLED`. If the operator turns
     // the indexer off for cost reasons, prior customer data must
     // still be deletable on uninstall (GDPR / SOC 2).
-    if (
-      event === "installation_repositories" &&
-      payload.action === "removed" &&
-      typeof installationId === "number"
-    ) {
+    if (event === "installation_repositories" && payload.action === "removed" && typeof installationId === "number") {
       const removed = payload.repositories_removed ?? []
       try {
         const { results, anyError } = await handleInstallReposRemoved({
-          env, installationId, repositories: removed,
+          env,
+          installationId,
+          repositories: removed,
         })
         if (anyError) {
-          console.error(JSON.stringify({
-            event: "index-delete-fanout-partial",
-            installation_id: installationId,
-            reason: "install-repos-removed",
-            count: results.length,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-fanout-partial",
+              installation_id: installationId,
+              reason: "install-repos-removed",
+              count: results.length,
+            }),
+          )
           return new Response("delete fanout partial\n", { status: 503 })
         }
         return new Response("repos-removed deleted\n", { status: 202 })
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "index-delete-fanout-threw",
-          installation_id: installationId,
-          reason: "install-repos-removed",
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-fanout-threw",
+            installation_id: installationId,
+            reason: "install-repos-removed",
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         return new Response("delete fanout threw\n", { status: 503 })
       }
     }
-    if (
-      event === "installation" &&
-      payload.action === "deleted" &&
-      typeof installationId === "number"
-    ) {
+    if (event === "installation" && payload.action === "deleted" && typeof installationId === "number") {
       const ownerLogin = payload.installation?.account?.login
       if (typeof ownerLogin !== "string" || ownerLogin.length === 0) {
         // No account.login means we can't disambiguate which repos to
         // delete. Log + return 200 so GitHub doesn't redeliver — there's
         // no actionable retry from our side.
-        console.error(JSON.stringify({
-          event: "index-delete-missing-account-login",
-          installation_id: installationId,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-missing-account-login",
+            installation_id: installationId,
+          }),
+        )
         return new Response("missing account.login\n", { status: 200 })
       }
       try {
         const { results, anyError } = await handleInstallationDeleted({
-          env, installationId, ownerLogin,
+          env,
+          installationId,
+          ownerLogin,
           // code-reviewer HIGH-1: GitHub ships `repositories[]` on
           // `installation.deleted`. Use it as the authoritative
           // discovery source so we clean up indexer-disabled installs
           // (no repo-index-manifest to find) too. KV scan still runs
           // as a backup for orphans.
-          ...(Array.isArray(payload.repositories)
-            ? { repositoriesFromPayload: payload.repositories }
-            : {}),
+          ...(Array.isArray(payload.repositories) ? { repositoriesFromPayload: payload.repositories } : {}),
         })
         if (anyError) {
-          console.error(JSON.stringify({
-            event: "index-delete-fanout-partial",
-            installation_id: installationId,
-            reason: "install-deleted",
-            count: results.length,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-fanout-partial",
+              installation_id: installationId,
+              reason: "install-deleted",
+              count: results.length,
+            }),
+          )
           return new Response("delete fanout partial\n", { status: 503 })
         }
         return new Response("installation deleted\n", { status: 202 })
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "index-delete-fanout-threw",
-          installation_id: installationId,
-          reason: "install-deleted",
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-fanout-threw",
+            installation_id: installationId,
+            reason: "install-deleted",
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         return new Response("delete fanout threw\n", { status: 503 })
       }
     }
@@ -178,17 +169,11 @@ export async function handleGitHubWebhook(
     if (
       isIndexerEnabled(env) &&
       typeof installationId === "number" &&
-      (
-        (event === "installation" && payload.action === "created") ||
-        (event === "installation_repositories" && payload.action === "added")
-      )
+      ((event === "installation" && payload.action === "created") ||
+        (event === "installation_repositories" && payload.action === "added"))
     ) {
-      const repositories =
-        event === "installation"
-          ? payload.repositories ?? []
-          : payload.repositories_added ?? []
-      const reason: IndexJobReason =
-        event === "installation" ? "install" : "install-repos-added"
+      const repositories = event === "installation" ? (payload.repositories ?? []) : (payload.repositories_added ?? [])
+      const reason: IndexJobReason = event === "installation" ? "install" : "install-repos-added"
       try {
         const result = await enqueueIndexJobsForRepos({
           env,
@@ -210,22 +195,26 @@ export async function handleGitHubWebhook(
         // (each redelivery would hit the same denylist and 503 again).
         const nonSensitiveAttempts = result.attempted - result.sensitiveSkipped
         if (nonSensitiveAttempts > 0 && result.succeeded === 0) {
-          console.error(JSON.stringify({
-            event: "index-job-fanout-total-failure",
-            installation_id: installationId,
-            attempted: result.attempted,
-            per_repo_failed: result.perRepoFailed,
-            sensitive_skipped: result.sensitiveSkipped,
-            reason,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-job-fanout-total-failure",
+              installation_id: installationId,
+              attempted: result.attempted,
+              per_repo_failed: result.perRepoFailed,
+              sensitive_skipped: result.sensitiveSkipped,
+              reason,
+            }),
+          )
           return new Response("index fanout failed\n", { status: 503 })
         }
-        console.log(JSON.stringify({
-          event: "index-job-fanout-done",
-          installation_id: installationId,
-          reason,
-          ...result,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "index-job-fanout-done",
+            installation_id: installationId,
+            reason,
+            ...result,
+          }),
+        )
         // SIG-44: alongside code indexing, enqueue a 90-day merged-PR
         // backfill per repo so the pr: corpus is populated on onboarding.
         // Best-effort + fully isolated: a failure here never changes the
@@ -244,11 +233,14 @@ export async function handleGitHubWebhook(
                 installationId,
               })
             } catch (err) {
-              console.warn(JSON.stringify({
-                event: "corpus-pr-backfill-enqueue-failed",
-                owner: bOwner, repo: bRepo,
-                err: err instanceof Error ? err.message : String(err),
-              }))
+              console.warn(
+                JSON.stringify({
+                  event: "corpus-pr-backfill-enqueue-failed",
+                  owner: bOwner,
+                  repo: bRepo,
+                  err: err instanceof Error ? err.message : String(err),
+                }),
+              )
             }
           }
         }
@@ -257,12 +249,14 @@ export async function handleGitHubWebhook(
         // Defensive: enqueueIndexJobsForRepos has per-repo try/catch
         // internally so this branch is for unexpected throws (env
         // shape mismatch, etc.). Surface 503 so GitHub redelivers.
-        console.error(JSON.stringify({
-          event: "index-job-fanout-threw",
-          installation_id: installationId,
-          reason,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-job-fanout-threw",
+            installation_id: installationId,
+            reason,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         return new Response("index fanout threw\n", { status: 503 })
       }
     }
@@ -284,8 +278,7 @@ export async function handleGitHubWebhook(
     }
     const headRepoFullName = pr.head?.repo?.full_name
     const headIsSameRepo =
-      typeof headRepoFullName === "string" &&
-      headRepoFullName.toLowerCase() === `${owner}/${repo}`.toLowerCase()
+      typeof headRepoFullName === "string" && headRepoFullName.toLowerCase() === `${owner}/${repo}`.toLowerCase()
     if (headIsSameRepo) {
       ctx.waitUntil(
         maybeEnqueuePullRequestBranchIndexJobs({
@@ -299,20 +292,28 @@ export async function handleGitHubWebhook(
           baseRef: pr.base?.ref,
           merged: pr.merged,
         }).catch((err) => {
-          console.warn(JSON.stringify({
-            event: "index-pr-branch-enqueue-failed",
-            owner, repo, prNumber: pr.number,
-            action,
-            err: err instanceof Error ? err.message : String(err),
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "index-pr-branch-enqueue-failed",
+              owner,
+              repo,
+              prNumber: pr.number,
+              action,
+              err: err instanceof Error ? err.message : String(err),
+            }),
+          )
         }),
       )
     } else {
-      console.log(JSON.stringify({
-        event: "index-pr-branch-skip-fork",
-        owner, repo, prNumber: pr.number,
-        head_repo: headRepoFullName,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-pr-branch-skip-fork",
+          owner,
+          repo,
+          prNumber: pr.number,
+          head_repo: headRepoFullName,
+        }),
+      )
     }
     // SIG-44: a merged PR refreshes the pr: multi-corpus namespace with its
     // title/body + derived verdict. Placed BEFORE the draft/skip returns
@@ -328,22 +329,21 @@ export async function handleGitHubWebhook(
           title: typeof pr.title === "string" ? pr.title : "",
           body: typeof pr.body === "string" ? pr.body : "",
         }).catch((err) => {
-          console.warn(JSON.stringify({
-            event: "corpus-pr-upsert-enqueue-failed",
-            owner, repo, prNumber: pr.number,
-            err: err instanceof Error ? err.message : String(err),
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "corpus-pr-upsert-enqueue-failed",
+              owner,
+              repo,
+              prNumber: pr.number,
+              err: err instanceof Error ? err.message : String(err),
+            }),
+          )
         }),
       )
     }
     if (pr.draft) {
       const headSha = pr.head?.sha ?? ""
-      const supportedDraftActions = new Set([
-        "opened",
-        "synchronize",
-        "reopened",
-        "converted_to_draft",
-      ])
+      const supportedDraftActions = new Set(["opened", "synchronize", "reopened", "converted_to_draft"])
       if (headSha && supportedDraftActions.has(action ?? "")) {
         try {
           const token = await getInstallationToken({
@@ -362,12 +362,16 @@ export async function handleGitHubWebhook(
             headSha,
           })
         } catch (err) {
-          console.warn(JSON.stringify({
-            event: "pr-draft-skip-notice-auth-failed",
-            owner, repo, prNumber: pr.number,
-            headSha: headSha.slice(0, 7),
-            err: err instanceof Error ? err.message : String(err),
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "pr-draft-skip-notice-auth-failed",
+              owner,
+              repo,
+              prNumber: pr.number,
+              headSha: headSha.slice(0, 7),
+              err: err instanceof Error ? err.message : String(err),
+            }),
+          )
         }
       }
       return new Response("skip draft\n", { status: 200 })
@@ -438,11 +442,16 @@ export async function handleGitHubWebhook(
         // ensemble re-loads config at the head SHA and gates the
         // inline overview render itself; the draft-skip supersede
         // is best-effort.
-        console.warn(JSON.stringify({
-          event: "pr-overview-webhook-config-load-failed",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-overview-webhook-config-load-failed",
+            owner,
+            repo,
+            prNumber,
+            head_sha: headSha.slice(0, 7),
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
     const overviewEnabled = isPrOverviewEnabled(webhookSigilixConfig)
@@ -457,12 +466,16 @@ export async function handleGitHubWebhook(
           headSha,
         })
       } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-draft-skip-notice-supersede-unexpected-failed",
-          owner, repo, prNumber,
-          headSha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-draft-skip-notice-supersede-unexpected-failed",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
 
@@ -475,10 +488,15 @@ export async function handleGitHubWebhook(
       // SIG-90: pr-labels is ENQUEUED INDEPENDENTLY below (founder
       // direction "labels should exist"). It is NOT gated by
       // overview.enabled.
-      console.log(JSON.stringify({
-        event: "pr-overview-skipped-disabled",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-skipped-disabled",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+        }),
+      )
     }
     // ARC-265 + SIG-90: auto-label picker fires alongside pr-overview
     // (same webhook events: opened / synchronize / reopened /
@@ -558,36 +576,39 @@ export async function handleGitHubWebhook(
       // GitHub's ~10s redelivery threshold. On timeout/abort the
       // catch falls through to the normal dispatch path (fail-open).
       let skipNoopMerge = false
-      if (
-        env.OPENCLAW_NOOP_MERGE_SKIP_ENABLED !== "off" &&
-        action === "synchronize" &&
-        webhookClient !== null
-      ) {
+      if (env.OPENCLAW_NOOP_MERGE_SKIP_ENABLED !== "off" && action === "synchronize" && webhookClient !== null) {
         try {
           const prior = await readPriorReviewDiffHash(env, owner, repo, prNumber)
           if (prior !== null) {
-            const currentDiff = await webhookClient.getPullRequestDiff(
-              owner, repo, prNumber,
-              { signal: AbortSignal.timeout(2000) },
-            )
+            const currentDiff = await webhookClient.getPullRequestDiff(owner, repo, prNumber, {
+              signal: AbortSignal.timeout(2000),
+            })
             const currentHash = await computeDiffHash(currentDiff)
             if (currentHash === prior.diffHash) {
               skipNoopMerge = true
-              console.log(JSON.stringify({
-                event: "pr-review-skipped-noop-merge",
-                owner, repo, prNumber,
-                priorHeadSha: prior.reviewedHeadSha,
-                newHeadSha: headSha,
-                diffHashSha7: currentHash.slice(0, 7),
-              }))
+              console.log(
+                JSON.stringify({
+                  event: "pr-review-skipped-noop-merge",
+                  owner,
+                  repo,
+                  prNumber,
+                  priorHeadSha: prior.reviewedHeadSha,
+                  newHeadSha: headSha,
+                  diffHashSha7: currentHash.slice(0, 7),
+                }),
+              )
             }
           }
         } catch (err) {
-          console.warn(JSON.stringify({
-            event: "pr-review-noop-merge-detect-failed",
-            owner, repo, prNumber,
-            err: err instanceof Error ? err.message : String(err),
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "pr-review-noop-merge-detect-failed",
+              owner,
+              repo,
+              prNumber,
+              err: err instanceof Error ? err.message : String(err),
+            }),
+          )
         }
       }
       if (skipNoopMerge) {
@@ -643,27 +664,39 @@ export async function handleGitHubWebhook(
             headSha,
             installationId,
             client: webhookClient,
-          }).then((stubOutcome) => {
-            console.log(JSON.stringify({
-              event: "pr-overview-stub-outcome",
-              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-              outcome: stubOutcome.kind,
-              ...("commentId" in stubOutcome ? { comment_id: stubOutcome.commentId } : {}),
-              ...("reason" in stubOutcome ? { reason: stubOutcome.reason } : {}),
-              ...("phase" in stubOutcome ? { phase: stubOutcome.phase } : {}),
-            }))
-          }).catch((err) => {
-            // `postPrOverviewStubIfNeeded` is structured-outcome
-            // (never throws), but the `.then` callback above could
-            // technically throw (JSON.stringify on a circular object,
-            // etc.). Catch + log so a deferred error can't propagate
-            // up to the runtime and surface as an unhandled rejection.
-            console.warn(JSON.stringify({
-              event: "pr-overview-stub-deferred-failed",
-              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-              err: err instanceof Error ? err.message : String(err),
-            }))
-          }),
+          })
+            .then((stubOutcome) => {
+              console.log(
+                JSON.stringify({
+                  event: "pr-overview-stub-outcome",
+                  owner,
+                  repo,
+                  prNumber,
+                  head_sha: headSha.slice(0, 7),
+                  outcome: stubOutcome.kind,
+                  ...("commentId" in stubOutcome ? { comment_id: stubOutcome.commentId } : {}),
+                  ...("reason" in stubOutcome ? { reason: stubOutcome.reason } : {}),
+                  ...("phase" in stubOutcome ? { phase: stubOutcome.phase } : {}),
+                }),
+              )
+            })
+            .catch((err) => {
+              // `postPrOverviewStubIfNeeded` is structured-outcome
+              // (never throws), but the `.then` callback above could
+              // technically throw (JSON.stringify on a circular object,
+              // etc.). Catch + log so a deferred error can't propagate
+              // up to the runtime and surface as an unhandled rejection.
+              console.warn(
+                JSON.stringify({
+                  event: "pr-overview-stub-deferred-failed",
+                  owner,
+                  repo,
+                  prNumber,
+                  head_sha: headSha.slice(0, 7),
+                  err: err instanceof Error ? err.message : String(err),
+                }),
+              )
+            }),
         )
       }
       // SIG-174: automatic webhook reviews always route through the
@@ -726,11 +759,15 @@ export async function handleGitHubWebhook(
             })
           }
         } catch (err) {
-          console.error(JSON.stringify({
-            event: "pr-stale-mark-enqueue-failed",
-            err: err instanceof Error ? err.message : String(err),
-            owner, repo, prNumber,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "pr-stale-mark-enqueue-failed",
+              err: err instanceof Error ? err.message : String(err),
+              owner,
+              repo,
+              prNumber,
+            }),
+          )
         }
       }
     }
@@ -804,9 +841,7 @@ export async function handleGitHubWebhook(
             id: reviewMemoryComment.id,
             body: reviewMemoryComment.body,
           },
-          ...(reviewMemoryRepoId !== undefined
-            ? { repoId: reviewMemoryRepoId }
-            : {}),
+          ...(reviewMemoryRepoId !== undefined ? { repoId: reviewMemoryRepoId } : {}),
         }),
       )
     }
@@ -843,11 +878,7 @@ export async function handleGitHubWebhook(
     }
     const staleCommitId = reviewMemoryReview.commit_id
     const sigilixLogin = reviewMemoryReview.user?.login
-    if (
-      typeof headSha !== "string" ||
-      typeof staleCommitId !== "string" ||
-      typeof sigilixLogin !== "string"
-    ) {
+    if (typeof headSha !== "string" || typeof staleCommitId !== "string" || typeof sigilixLogin !== "string") {
       return new Response("skip review dismissal capture\n", { status: 200 })
     }
     ctx.waitUntil(
@@ -918,9 +949,7 @@ export async function handleGitHubWebhook(
               ? { in_reply_to_id: reviewMemoryComment.in_reply_to_id }
               : {}),
           },
-          ...(reviewMemoryRepoId !== undefined
-            ? { repoId: reviewMemoryRepoId }
-            : {}),
+          ...(reviewMemoryRepoId !== undefined ? { repoId: reviewMemoryRepoId } : {}),
         }),
       )
     }
@@ -937,51 +966,11 @@ export async function handleGitHubWebhook(
     })
   }
 
-  // ARC-237 / SIG-35: push-driven re-index. Fires on every push to a branch
-  // ref. The producer refreshes the default branch, configured long-lived
-  // branches, and active same-repo PR branches on already-indexed repos
-  // (bootstrap stays install-driven). Push storm coalescing falls out of
-  // ARC-235's freshness check — 10 pushes in 60s become 1 actual re-walk
-  // + 9 cheap skips.
+  // ARC-237 / SIG-35: push-driven re-index. Fires on every push to a branch ref.
+  // SIG-366: the sub-handler body lives in `handlePushEvent` (index-internals); the
+  // entry router just dispatches to it.
   if (event === "push") {
-    if (!isIndexerEnabled(env)) {
-      return new Response("push event ignored (indexer off)\n", { status: 200 })
-    }
-    const outcome = await maybeEnqueuePushIndexJob({
-      env,
-      owner,
-      repo,
-      // SIG-243 Phase 1: capture the immutable repo ID from the push
-      // payload and thread it to the producer. The producer attaches
-      // it to the queue message; the consumer persists it on the
-      // manifest. Falls back to `undefined` (treated as legacy) if a
-      // webhook arrives without the field. GitHub repo IDs are strictly
-      // positive integers; the guard rejects 0 / negative / non-integer
-      // / NaN / Infinity at the entry point so a spoofed or malformed
-      // payload can't land an invalid `repo-tenant:0` key downstream.
-      repoId:
-        typeof payload.repository?.id === "number" &&
-        Number.isInteger(payload.repository.id) &&
-        payload.repository.id > 0
-          ? payload.repository.id
-          : undefined,
-      installationId,
-      ref: typeof payload.ref === "string" ? payload.ref : undefined,
-      after: typeof payload.after === "string" ? payload.after : undefined,
-    })
-    if ("enqueued" in outcome && outcome.enqueued) {
-      return new Response("push indexed\n", { status: 202 })
-    }
-    if ("failed" in outcome) {
-      // Producer threw on OPENCLAW_JOBS.send (binding broken /
-      // backpressure). Surface 503 so GitHub redelivers — the
-      // enqueue is the only side-effect, idempotent on the consumer
-      // side because chunk ids are content-addressed.
-      return new Response("push enqueue failed\n", { status: 503 })
-    }
-    // Any other `{skipped: ...}` outcome is a deliberate no-op (the
-    // producer logged the specific reason).
-    return new Response("push skipped\n", { status: 200 })
+    return handlePushEvent({ env, owner, repo, installationId, payload })
   }
 
   return new Response("skipped\n", { status: 200 })

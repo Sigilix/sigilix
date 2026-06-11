@@ -11,9 +11,7 @@ import { parseSource, type SourceExt } from "./parser"
 import type { AstCache } from "./parse-cache"
 import { walkAst, type AstNode } from "./walker"
 
-const KNOWN_EXTS: ReadonlySet<string> = new Set([
-  ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
-])
+const KNOWN_EXTS: ReadonlySet<string> = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"])
 
 function extOf(path: string): SourceExt | null {
   const dot = path.lastIndexOf(".")

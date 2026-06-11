@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { runAstRules } from "@/src/features/ast-rules/app/runner"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
-import {
-  assessApprovalReadiness,
-  buildApprovalReadinessSummary,
-} from "@/src/lib/approval-readiness"
+import { assessApprovalReadiness, buildApprovalReadinessSummary } from "@/src/lib/approval-readiness"
 import {
   buildReviewSubmission,
   chooseReviewEvent,
@@ -75,10 +72,10 @@ describe("PR review engine acceptance flow (SIG-124 + SIG-116)", () => {
         changedLine: 5,
         source: [
           "function oldOne(xs) {",
-          "  for (const x of xs) { new RegExp(\"old\").test(x) }",
+          '  for (const x of xs) { new RegExp("old").test(x) }',
           "}",
           "function newOne(xs) {",
-          "  for (const x of xs) { new RegExp(\"new\").test(x) }",
+          '  for (const x of xs) { new RegExp("new").test(x) }',
           "}",
         ].join("\n"),
       },
@@ -89,10 +86,10 @@ describe("PR review engine acceptance flow (SIG-124 + SIG-116)", () => {
         changedLine: 5,
         source: [
           "async function oldOne(ids) {",
-          "  for (const id of ids) { await db.query(\"old\") }",
+          '  for (const id of ids) { await db.query("old") }',
           "}",
           "async function newOne(ids) {",
-          "  for (const id of ids) { await db.query(\"new\") }",
+          '  for (const id of ids) { await db.query("new") }',
           "}",
         ].join("\n"),
       },
@@ -102,10 +99,10 @@ describe("PR review engine acceptance flow (SIG-124 + SIG-116)", () => {
         oldLine: 2,
         changedLine: 4,
         source: [
-          "import fs from \"fs\"",
-          "app.get(\"/old\", (req, res) => { fs.readFileSync(\"old\") })",
+          'import fs from "fs"',
+          'app.get("/old", (req, res) => { fs.readFileSync("old") })',
           "",
-          "app.get(\"/new\", (req, res) => { fs.readFileSync(\"new\") })",
+          'app.get("/new", (req, res) => { fs.readFileSync("new") })',
         ].join("\n"),
       },
     ]
@@ -181,12 +178,14 @@ describe("PR review engine acceptance flow (SIG-205)", () => {
     const intendedEvent = chooseReviewEvent(cleanSynthVerdict.findings)
     const readiness = assessApprovalReadiness({
       intendedEvent,
-      sourceFindings: [{
-        role: "logic",
-        id: "logic-0",
-        finding: duplicateAnchorFinding,
-        verdictConfidence: 4,
-      }],
+      sourceFindings: [
+        {
+          role: "logic",
+          id: "logic-0",
+          finding: duplicateAnchorFinding,
+          verdictConfidence: 4,
+        },
+      ],
       provenance: { findings: [], dropped: [] },
     })
     const postGateVerdict: PrReviewVerdict = {

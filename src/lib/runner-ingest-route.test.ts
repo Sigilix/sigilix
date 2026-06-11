@@ -30,7 +30,12 @@ let jwk: Jwk
 
 beforeAll(async () => {
   const pair = (await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
     true,
     ["sign", "verify"],
   )) as CryptoKeyPair
@@ -66,7 +71,13 @@ function makeReceiptDo() {
   const ns = {
     idFromName: (id: string) => ({ id }),
     get: () => ({
-      async claimReceipt(args: { repositoryId: string; sha: string; runId: string; runAttempt: string; sarifSha256: string }) {
+      async claimReceipt(args: {
+        repositoryId: string
+        sha: string
+        runId: string
+        runAttempt: string
+        sarifSha256: string
+      }) {
         if (throwOnClaim) throw new Error("do down")
         const k = `${args.repositoryId}:${args.sha}:${args.runId}:${args.runAttempt}`
         const existing = store.get(k)
@@ -79,15 +90,25 @@ function makeReceiptDo() {
       },
     }),
   }
-  return { ns, store, setThrow: (v: boolean) => { throwOnClaim = v } }
+  return {
+    ns,
+    store,
+    setThrow: (v: boolean) => {
+      throwOnClaim = v
+    },
+  }
 }
 
 function makeKv() {
   const store = new Map<string, string>()
   return {
     kv: {
-      async put(k: string, v: string): Promise<void> { store.set(k, v) },
-      async get(k: string): Promise<string | null> { return store.get(k) ?? null },
+      async put(k: string, v: string): Promise<void> {
+        store.set(k, v)
+      },
+      async get(k: string): Promise<string | null> {
+        return store.get(k) ?? null
+      },
     },
     store,
   }
@@ -104,7 +125,15 @@ function makeEnv(over: Partial<Record<keyof Env, unknown>>, receiptNs: unknown, 
 }
 
 function stubJwksFetch(): void {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ keys: [jwk] }), { headers: { "content-type": "application/json" } })))
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ keys: [jwk] }), {
+          headers: { "content-type": "application/json" },
+        }),
+    ),
+  )
 }
 
 function post(body: unknown, token?: string): Request {
@@ -131,7 +160,10 @@ describe("handleRunnerIngestRoute", () => {
   it("503 when the audience / workflow-ref config is unset", async () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
-    const res = await handleRunnerIngestRoute(post(envelope(), "tok"), makeEnv({ OPENCLAW_RUNNER_OIDC_AUDIENCE: undefined }, ns, kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope(), "tok"),
+      makeEnv({ OPENCLAW_RUNNER_OIDC_AUDIENCE: undefined }, ns, kv),
+    )
     expect(res.status).toBe(503)
   })
 
@@ -179,7 +211,11 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const tok = await signToken(baseClaims)
-    const big = { sarif: "x".repeat(8 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
+    const big = {
+      sarif: "x".repeat(8 * 1024 * 1024 + 16),
+      repository: "Sigilix/sigilix",
+      sha: "deadbeef",
+    }
     expect((await handleRunnerIngestRoute(post(big, tok), makeEnv({}, ns, kv))).status).toBe(413)
   })
 
@@ -196,7 +232,10 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const tok = await signToken(baseClaims)
-    const res = await handleRunnerIngestRoute(post({ sarif: VALID_SARIF, repository: "Sigilix/sigilix" }, tok), makeEnv({}, ns, kv))
+    const res = await handleRunnerIngestRoute(
+      post({ sarif: VALID_SARIF, repository: "Sigilix/sigilix" }, tok),
+      makeEnv({}, ns, kv),
+    )
     expect(res.status).toBe(400)
   })
 
@@ -205,7 +244,9 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const tok = await signToken(baseClaims)
-    expect((await handleRunnerIngestRoute(post(envelope({ repository: "evil/repo" }), tok), makeEnv({}, ns, kv))).status).toBe(403)
+    expect(
+      (await handleRunnerIngestRoute(post(envelope({ repository: "evil/repo" }), tok), makeEnv({}, ns, kv))).status,
+    ).toBe(403)
   })
 
   it("403 on a self-hosted runner (isolation gate)", async () => {
@@ -221,7 +262,10 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const tok = await signToken(baseClaims)
-    const res = await handleRunnerIngestRoute(post(envelope({ sarif: JSON.stringify({ version: "1.0.0", runs: [] }) }), tok), makeEnv({}, ns, kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope({ sarif: JSON.stringify({ version: "1.0.0", runs: [] }) }), tok),
+      makeEnv({}, ns, kv),
+    )
     expect(res.status).toBe(400)
     expect(((await res.json()) as { error: string }).error).toBe("bad-sarif")
   })
@@ -250,7 +294,10 @@ describe("handleRunnerIngestRoute", () => {
     // influence the join (it carries no PR number). An attacker-supplied body
     // field is irrelevant — the worker reads the PR number from the signed ref.
     const tok = await signToken({ ...baseClaims, ref: "refs/pull/555/merge" })
-    const res = await handleRunnerIngestRoute(post(envelope({ pull_number: 999, headSha: "evilhead" }), tok), makeEnv({}, ns, kvWrap.kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope({ pull_number: 999, headSha: "evilhead" }), tok),
+      makeEnv({}, ns, kvWrap.kv),
+    )
     expect(res.status).toBe(200)
     const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { pullNumber?: number }
     expect(stored.pullNumber).toBe(555)
@@ -297,7 +344,10 @@ describe("handleRunnerIngestRoute", () => {
     const tok = await signToken(baseClaims)
     const env = makeEnv({}, ns, kvWrap.kv)
     await handleRunnerIngestRoute(post(envelope(), tok), env)
-    const res2 = await handleRunnerIngestRoute(post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], extra: 1 }) }), tok), env)
+    const res2 = await handleRunnerIngestRoute(
+      post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], extra: 1 }) }), tok),
+      env,
+    )
     expect(res2.status).toBe(409)
   })
 
@@ -317,7 +367,10 @@ describe("handleRunnerIngestRoute", () => {
     const tok = await signToken(baseClaims)
     const pat = `github_pat_${"A1b2C3d4".repeat(9)}` // > 60 chars after the prefix
     const awsSecret = "aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY12" // 40-char secret
-    const sarif = JSON.stringify({ version: "2.1.0", runs: [{ results: [{ message: { text: `leaked ${pat} and ${awsSecret}` } }] }] })
+    const sarif = JSON.stringify({
+      version: "2.1.0",
+      runs: [{ results: [{ message: { text: `leaked ${pat} and ${awsSecret}` } }] }],
+    })
     await handleRunnerIngestRoute(post(envelope({ sarif }), tok), makeEnv({}, ns, kvWrap.kv))
     const stored = [...kvWrap.store.values()][0] ?? ""
     expect(stored).toContain("[REDACTED]")
@@ -332,10 +385,15 @@ describe("handleRunnerIngestRoute", () => {
     let failNextPut = true
     const kv = {
       async put(k: string, v: string): Promise<void> {
-        if (failNextPut) { failNextPut = false; throw new Error("kv down") }
+        if (failNextPut) {
+          failNextPut = false
+          throw new Error("kv down")
+        }
         store.set(k, v)
       },
-      async get(k: string): Promise<string | null> { return store.get(k) ?? null },
+      async get(k: string): Promise<string | null> {
+        return store.get(k) ?? null
+      },
     }
     const env = makeEnv({}, ns, kv)
     const tok = await signToken(baseClaims)
@@ -354,13 +412,27 @@ describe("handleRunnerIngestRoute", () => {
     const doState = {
       storage: {
         sql: sqlStorage,
-        transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-        async get(): Promise<unknown> { return undefined },
-        async put(): Promise<void> { /* no-op */ },
-        async delete(): Promise<boolean> { return false },
-        async setAlarm(t: number): Promise<void> { alarmAt = t },
-        async getAlarm(): Promise<number | null> { return alarmAt },
-        async deleteAlarm(): Promise<void> { alarmAt = null },
+        transactionSync<T>(fn: () => T): T {
+          return sqlStorage.transactionSync(fn)
+        },
+        async get(): Promise<unknown> {
+          return undefined
+        },
+        async put(): Promise<void> {
+          /* no-op */
+        },
+        async delete(): Promise<boolean> {
+          return false
+        },
+        async setAlarm(t: number): Promise<void> {
+          alarmAt = t
+        },
+        async getAlarm(): Promise<number | null> {
+          return alarmAt
+        },
+        async deleteAlarm(): Promise<void> {
+          alarmAt = null
+        },
       },
       id: { toString: () => "424242", name: "424242" },
     }
@@ -369,12 +441,20 @@ describe("handleRunnerIngestRoute", () => {
     const kvWrap = makeKv()
     const env = makeEnv({}, ns, kvWrap.kv)
     const tok = await signToken(baseClaims)
-    const outcome = async (req: Request) => ((await (await handleRunnerIngestRoute(req, env)).json()) as { outcome: string }).outcome
+    const outcome = async (req: Request) =>
+      ((await (await handleRunnerIngestRoute(req, env)).json()) as { outcome: string }).outcome
 
     expect(await outcome(post(envelope(), tok))).toBe("accepted")
     expect(await outcome(post(envelope(), tok))).toBe("duplicate") // real DO single-use
     // same run, DIFFERENT SARIF → conflict (does not overwrite)
-    expect((await handleRunnerIngestRoute(post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], x: 1 }) }), tok), env)).status).toBe(409)
+    expect(
+      (
+        await handleRunnerIngestRoute(
+          post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], x: 1 }) }), tok),
+          env,
+        )
+      ).status,
+    ).toBe(409)
     // re-run (incremented run_attempt) → a new accepted receipt
     const rerun = await signToken({ ...baseClaims, run_attempt: "2" })
     expect(await outcome(post(envelope(), rerun))).toBe("accepted")
@@ -385,7 +465,10 @@ describe("handleRunnerIngestRoute", () => {
   it("503 when the workflow-ref config is unset (the OTHER required gate)", async () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
-    const res = await handleRunnerIngestRoute(post(envelope(), "tok"), makeEnv({ OPENCLAW_RUNNER_WORKFLOW_REF: undefined }, ns, kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope(), "tok"),
+      makeEnv({ OPENCLAW_RUNNER_WORKFLOW_REF: undefined }, ns, kv),
+    )
     expect(res.status).toBe(503)
   })
 
@@ -394,7 +477,11 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const badTok = await signToken({ ...baseClaims, aud: "someone-else" }) // verify fails
-    const big = { sarif: "x".repeat(8 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
+    const big = {
+      sarif: "x".repeat(8 * 1024 * 1024 + 16),
+      repository: "Sigilix/sigilix",
+      sha: "deadbeef",
+    }
     // 401 (not 413): an unauthenticated caller never gets to force an 8 MiB read.
     expect((await handleRunnerIngestRoute(post(big, badTok), makeEnv({}, ns, kv))).status).toBe(401)
   })
@@ -406,7 +493,10 @@ describe("handleRunnerIngestRoute", () => {
     const tok = await signToken(baseClaims)
     // repo mismatch (403) AND malformed SARIF (400) — assert 403, so provenance
     // can't regress behind the SARIF parse.
-    const res = await handleRunnerIngestRoute(post(envelope({ repository: "evil/repo", sarif: "{not sarif" }), tok), makeEnv({}, ns, kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope({ repository: "evil/repo", sarif: "{not sarif" }), tok),
+      makeEnv({}, ns, kv),
+    )
     expect(res.status).toBe(403)
   })
 })

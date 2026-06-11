@@ -35,11 +35,7 @@
 
 import type { ReviewMemoryClaimType } from "./types"
 import { ALL_REVIEW_MEMORY_CLAIM_TYPES } from "./types"
-import {
-  CLAIM_SOFTEN_TRUSTWORTHY_N,
-  type CalibrationBlob,
-  type ClaimCalibrationParams,
-} from "./calibration"
+import { CLAIM_SOFTEN_TRUSTWORTHY_N, type CalibrationBlob, type ClaimCalibrationParams } from "./calibration"
 
 /** Standard-normal 5% one-sided z (P(Z < -z) = 0.05). */
 const Z_95_ONE_SIDED = 1.6448536269514722

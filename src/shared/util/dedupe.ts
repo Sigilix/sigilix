@@ -7,10 +7,7 @@ interface MarkerRecord {
   triagedAt: number
 }
 
-export async function getMarker(
-  kv: KVNamespace,
-  issueId: string
-): Promise<MarkerRecord | null> {
+export async function getMarker(kv: KVNamespace, issueId: string): Promise<MarkerRecord | null> {
   const raw = await kv.get(`triage:${issueId}`, "json")
   if (!raw || typeof raw !== "object") return null
   const obj = raw as Partial<MarkerRecord>
@@ -18,11 +15,7 @@ export async function getMarker(
   return { commentId: obj.commentId, triagedAt: obj.triagedAt }
 }
 
-export async function setMarker(
-  kv: KVNamespace,
-  issueId: string,
-  commentId: string
-): Promise<void> {
+export async function setMarker(kv: KVNamespace, issueId: string, commentId: string): Promise<void> {
   const record: MarkerRecord = { commentId, triagedAt: Date.now() }
   await kv.put(`triage:${issueId}`, JSON.stringify(record))
 }
@@ -34,9 +27,6 @@ export async function setMarker(
  * indicates the post already succeeded. Best-effort: KV deletes that
  * fail are not fatal.
  */
-export async function deleteMarker(
-  kv: KVNamespace,
-  issueId: string
-): Promise<void> {
+export async function deleteMarker(kv: KVNamespace, issueId: string): Promise<void> {
   await kv.delete(`triage:${issueId}`).catch(() => {})
 }

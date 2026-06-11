@@ -11,13 +11,18 @@
 // (per Codex sign-off §2). Single Vectorize namespace → the bias is via query
 // terms, not a separate index.
 
-import { parseSource, walkAst, nodeOverlapsChanged, type SourceExt, type AstNode, type ChangedLines } from "@/src/features/ast-rules"
+import {
+  parseSource,
+  walkAst,
+  nodeOverlapsChanged,
+  type SourceExt,
+  type AstNode,
+  type ChangedLines,
+} from "@/src/features/ast-rules"
 import type { RetrievedChunk } from "./retrieval"
 
 const MAX_SYMBOLS = 30
-const KNOWN_EXTS: ReadonlySet<string> = new Set([
-  ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
-])
+const KNOWN_EXTS: ReadonlySet<string> = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"])
 
 function extOf(path: string): SourceExt | null {
   const dot = path.lastIndexOf(".")
@@ -48,10 +53,7 @@ function regexFallbackSymbols(src: string, addedLines: Set<number>): string[] {
  * AST-based; regex fallback per file on parse failure. Deduped (insertion
  * order), capped at MAX_SYMBOLS. Never throws.
  */
-export function extractChangedSymbols(
-  filesByPath: ReadonlyMap<string, string>,
-  changed: ChangedLines,
-): string[] {
+export function extractChangedSymbols(filesByPath: ReadonlyMap<string, string>, changed: ChangedLines): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   const push = (name: unknown): void => {
@@ -78,8 +80,12 @@ export function extractChangedSymbols(
       return nodeOverlapsChanged(changed, path, s, e)
     }
     walkAst(parsed.ast as AstNode, {
-      FunctionDeclaration: (n) => { if (overlaps(n)) push(n?.id?.name) },
-      ClassDeclaration: (n) => { if (overlaps(n)) push(n?.id?.name) },
+      FunctionDeclaration: (n) => {
+        if (overlaps(n)) push(n?.id?.name)
+      },
+      ClassDeclaration: (n) => {
+        if (overlaps(n)) push(n?.id?.name)
+      },
       MethodDefinition: (n) => {
         if (!overlaps(n)) return
         // `key.name` for identifier keys; `key.value` for string-literal keys.
@@ -156,9 +162,7 @@ export function shouldRunSymbolRetrieval(
   specialists: readonly string[],
   budgetRemaining: number,
 ): boolean {
-  return (flag ?? "").trim().toLowerCase() === "on" &&
-    specialists.includes("logic") &&
-    budgetRemaining > 1
+  return (flag ?? "").trim().toLowerCase() === "on" && specialists.includes("logic") && budgetRemaining > 1
 }
 
 /**

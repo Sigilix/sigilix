@@ -137,83 +137,144 @@ function childProcessBindings(source: string): ChildProcessBindingSet {
   }
   const addDestructured = (list: string): void => {
     for (const part of list.split(",")) {
-      const spec = part.trim().replace(/\s*=.*$/, "").trim()
+      const spec = part
+        .trim()
+        .replace(/\s*=.*$/, "")
+        .trim()
       if (!spec || spec.startsWith("...")) continue
       const importAlias = /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(spec)
       const objectAlias = /^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$/.exec(spec)
       const simple = /^([A-Za-z_$][\w$]*)$/.exec(spec)
-      addBare(importAlias?.[2] ?? objectAlias?.[2] ?? simple?.[1] ?? null, importAlias?.[1] ?? objectAlias?.[1] ?? simple?.[1] ?? null)
+      addBare(
+        importAlias?.[2] ?? objectAlias?.[2] ?? simple?.[1] ?? null,
+        importAlias?.[1] ?? objectAlias?.[1] ?? simple?.[1] ?? null,
+      )
     }
   }
   for (const m of source.matchAll(new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${CP_SRC}`, "g"))) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     addDestructured(m[1]!)
   }
   for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"),
+  )) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"),
+  )) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(
+      String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`,
+      "g",
+    ),
+  )) {
     addBare(m[1], m[2])
   }
-  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"),
+  )) {
     addBare(m[1], m[2])
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(
+      String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`,
+      "g",
+    ),
+  )) {
     addBare(m[1], m[2])
   }
-  for (const m of source.matchAll(new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*${CP_SRC}`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*${CP_SRC}`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(
+      String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`,
+      "g",
+    ),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(
+    new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"),
+  )) {
     namespaces.add(m[1]!)
   }
   const namespaceNames = escapedAlternation(namespaces)
   if (namespaceNames !== null) {
-    for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${namespaceNames})\b`, "g"))) {
+    for (const m of source.matchAll(
+      new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${namespaceNames})\b`, "g"),
+    )) {
       addDestructured(m[1]!)
     }
     for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*(?:${namespaceNames})\b`, "g"))) {
       addDestructured(m[1]!)
     }
-    for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:${namespaceNames})\b\s*\)`, "g"))) {
+    for (const m of source.matchAll(
+      new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:${namespaceNames})\b\s*\)`, "g"),
+    )) {
       addDestructured(m[1]!)
     }
-    for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+    for (const m of source.matchAll(
+      new RegExp(
+        String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`,
+        "g",
+      ),
+    )) {
       addBare(m[1], m[2])
     }
-    for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+    for (const m of source.matchAll(
+      new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"),
+    )) {
       addBare(m[1], m[2])
     }
-    for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+    for (const m of source.matchAll(
+      new RegExp(
+        String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`,
+        "g",
+      ),
+    )) {
       addBare(m[1], m[2])
     }
   }

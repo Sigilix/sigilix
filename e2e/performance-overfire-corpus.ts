@@ -69,8 +69,7 @@ function samePath(found: string, expected: string): boolean {
   const eParts = e.split("/")
   if (fParts.length < 2 || eParts.length < 2) return false
   return (
-    fParts[fParts.length - 1] === eParts[eParts.length - 1] &&
-    fParts[fParts.length - 2] === eParts[eParts.length - 2]
+    fParts[fParts.length - 1] === eParts[eParts.length - 1] && fParts[fParts.length - 2] === eParts[eParts.length - 2]
   )
 }
 
@@ -104,9 +103,7 @@ export function applyPerfEvidenceGate(
     changedLineTextByPath: buildChangedLineTextByPath(c.diff),
     astPerfFindings: [],
   }
-  const kept = findings
-    .filter((f) => evaluatePerfFinding(toPrReviewFinding(f), evidence).keep)
-    .map((f) => ({ ...f }))
+  const kept = findings.filter((f) => evaluatePerfFinding(toPrReviewFinding(f), evidence).keep).map((f) => ({ ...f }))
   const addedLineTextByLine = buildAddedLineTextByLine(c.diff)
   // The clamps gate on `category === "performance"` and mutate `score` in
   // place. A scored performance finding's category is always "performance"

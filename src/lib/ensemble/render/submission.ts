@@ -16,15 +16,8 @@
 // any app/adapter module. The bodies are byte-identical to their HEAD form in
 // triage-pr-review.ts; only the import paths and the wrapper are new.
 
-import type {
-  CheckRunAnnotation,
-  SubmitReviewBody,
-  SubmitReviewComment,
-} from "@/src/shared/types/github"
-import {
-  deriveSide,
-  type ReviewableMap,
-} from "@/src/shared/util/diff-positions"
+import type { CheckRunAnnotation, SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
+import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { type StackContext } from "@/src/lib/pr-stack"
 import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
 import { hasStructuredFix, isDeletionSuggestion } from "@/src/shared/domain/pr-review-finding"
@@ -158,7 +151,7 @@ interface BuildReviewArgs {
    * model behavior for routing/back-compat and the renderer still
    * refuses committable suggestion blocks.
    */
-	  reviewable?: ReviewableMap
+  reviewable?: ReviewableMap
   /**
    * SIG-127: per-file map of new-side line number → added-line TEXT
    * (from `buildAddedLineTextByLine`). When supplied, a finding whose
@@ -271,10 +264,7 @@ function currentAnchoredLines(
   finding: PrReviewFinding,
   addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
 ): string[] | null {
-  const start =
-    finding.startLine != null && finding.startLine < finding.line
-      ? finding.startLine
-      : finding.line
+  const start = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
   const linesForPath = addedLineTextByLine.get(finding.path)
   if (!linesForPath) return null
   const lines: string[] = []
@@ -287,10 +277,7 @@ function currentAnchoredLines(
 }
 
 function normalizeAnchoredTextForNoopComparison(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/\n$/, "")
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n$/, "")
 }
 
 function validatedStructuredFixForSubmission(
@@ -360,9 +347,7 @@ function prepareReviewSubmissionFindings(args: {
     // is parse-guaranteed 1-5.
     const confidence = resolveFindingConfidence(validatedFinding, verdict.confidence)
     const findingForInline =
-      hasSuggestion && scope !== "line"
-        ? { ...validatedFinding, scope: "line" as const }
-        : validatedFinding
+      hasSuggestion && scope !== "line" ? { ...validatedFinding, scope: "line" as const } : validatedFinding
 
     // SIG-127 wins over broad scope: a localized suggestedReplacement
     // or empty deletion suggestion needs an inline review thread or the
@@ -381,12 +366,9 @@ function prepareReviewSubmissionFindings(args: {
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
     let effective: PrReviewFinding = findingForInline
     const lineIsReviewable =
-      reviewable !== undefined &&
-      deriveSide(reviewable, findingForInline.path, findingForInline.line) === "RIGHT"
+      reviewable !== undefined && deriveSide(reviewable, findingForInline.path, findingForInline.line) === "RIGHT"
     const needsSubstantiveAnchorValidation =
-      addedLineTextByLine !== undefined &&
-      !hasSuggestion &&
-      (!structuredFixWasStripped || !lineIsReviewable)
+      addedLineTextByLine !== undefined && !hasSuggestion && (!structuredFixWasStripped || !lineIsReviewable)
     if (needsSubstantiveAnchorValidation) {
       // Walk forward to the nearest SUBSTANTIVE added line so an in-diff finding
       // whose anchor landed on a brace/blank stays INLINE on real code instead of
@@ -403,10 +385,7 @@ function prepareReviewSubmissionFindings(args: {
         bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
       }
-      if (
-        reviewable !== undefined &&
-        deriveSide(reviewable, findingForInline.path, resolved) !== "RIGHT"
-      ) {
+      if (reviewable !== undefined && deriveSide(reviewable, findingForInline.path, resolved) !== "RIGHT") {
         if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
         bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
@@ -432,8 +411,7 @@ function prepareReviewSubmissionFindings(args: {
     if (
       findingScope(effective) === "line" &&
       effective.score < 4 &&
-      ((confidence <= 2 && !hasStructuredFix(effective)) ||
-        (confidence === 3 && !hasPatchOrRepro(effective)))
+      ((confidence <= 2 && !hasStructuredFix(effective)) || (confidence === 3 && !hasPatchOrRepro(effective)))
     ) {
       bodyFindings.push(effective)
       return
@@ -464,9 +442,7 @@ function prepareReviewSubmissionFindings(args: {
         Number(hasPatchOrRepro(b.finding)) - Number(hasPatchOrRepro(a.finding)) ||
         a.originalIndex - b.originalIndex,
     )
-    const keptIndices = new Set(
-      prioritized.slice(0, MAX_INLINE_COMMENTS).map((c) => c.originalIndex),
-    )
+    const keptIndices = new Set(prioritized.slice(0, MAX_INLINE_COMMENTS).map((c) => c.originalIndex))
     kept = inlineCandidates.filter((c) => keptIndices.has(c.originalIndex))
     for (const candidate of inlineCandidates) {
       if (!keptIndices.has(candidate.originalIndex)) {
@@ -513,10 +489,13 @@ export function previewReviewSubmissionEvent({
     ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
-  return chooseRenderedEventWithOverride({
-    inlineFindings: prepared.inlineFindings,
-    bodyOnlyFindings: prepared.unanchored,
-  }, eventOverride)
+  return chooseRenderedEventWithOverride(
+    {
+      inlineFindings: prepared.inlineFindings,
+      bodyOnlyFindings: prepared.unanchored,
+    },
+    eventOverride,
+  )
 }
 
 export interface PreviewFallbackSubmissionEventArgs {
@@ -533,10 +512,13 @@ export function previewFallbackSubmissionEvent({
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
   const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
-  return chooseRenderedEventWithOverride({
-    inlineFindings: [],
-    bodyOnlyFindings: all,
-  }, eventOverride)
+  return chooseRenderedEventWithOverride(
+    {
+      inlineFindings: [],
+      bodyOnlyFindings: all,
+    },
+    eventOverride,
+  )
 }
 
 export function buildReviewSubmissionWithMetadata({
@@ -563,23 +545,20 @@ export function buildReviewSubmissionWithMetadata({
   trustLedgerSuppressed,
   notReviewedFiles,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
-  const {
-    verdict,
-    renderVerdict,
-    inlineFindings,
-    inlineOriginalIndex,
-    unanchored,
-  } = prepareReviewSubmissionFindings({
+  const { verdict, renderVerdict, inlineFindings, inlineOriginalIndex, unanchored } = prepareReviewSubmissionFindings({
     rawVerdict,
     rawUnanchored,
     headSha,
     ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
-  const event = chooseRenderedEventWithOverride({
-    inlineFindings,
-    bodyOnlyFindings: unanchored,
-  }, eventOverride)
+  const event = chooseRenderedEventWithOverride(
+    {
+      inlineFindings,
+      bodyOnlyFindings: unanchored,
+    },
+    eventOverride,
+  )
 
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   // ARC-281: dispatch directly to the new renderers instead of
@@ -608,7 +587,7 @@ export function buildReviewSubmissionWithMetadata({
       ? renderApproveBody(renderArgs)
       : event === "COMMENT"
         ? renderCommentBody(renderArgs)
-      : renderRequestChangesBody(renderArgs)
+        : renderRequestChangesBody(renderArgs)
   const comments: SubmitReviewComment[] = inlineFindings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
     // the cross-PR review-memory capture pipeline can correlate
@@ -644,8 +623,7 @@ export function buildReviewSubmissionWithMetadata({
     // the prior trust-the-model behavior (emit `start_line` as
     // model-given). Production paths always pass `reviewable`.
     const emitStartLine =
-      f.startLine != null &&
-      (reviewable === undefined || isCommentAnchorable(reviewable, f.path, f.startLine, f.line))
+      f.startLine != null && (reviewable === undefined || isCommentAnchorable(reviewable, f.path, f.startLine, f.line))
     if (emitStartLine && f.startLine != null) {
       c.start_line = f.startLine
       c.start_side = "RIGHT"

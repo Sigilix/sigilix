@@ -40,12 +40,7 @@ import { incrementDailyBudget, writeTelemetry } from "@/src/lib/ensemble/adapter
 // can short-circuit the Phase 3 fallback. Falling through to Phase 3
 // when the ensemble guard fired would just hit Phase 3's identical
 // stale-head guard and skip again — invisible to the customer.
-export type EnsembleResultStatus =
-  | "posted"
-  | "shadow_recorded"
-  | "skipped"
-  | "stale_head"
-  | "errored"
+export type EnsembleResultStatus = "posted" | "shadow_recorded" | "skipped" | "stale_head" | "errored"
 
 /**
  * ARC-276: signal the customer-visible verdict + findings count back
@@ -150,7 +145,7 @@ export async function finalize<Tel extends FinalizeTelemetry>(
   // and keeps the daily budget honest.
   let callsUsed = 0
   for (const sv of telemetry.specialistVerdicts) {
-    callsUsed += sv.attemptsUsed ?? 1  // ?? 1 — defensive for legacy records
+    callsUsed += sv.attemptsUsed ?? 1 // ?? 1 — defensive for legacy records
   }
   if (telemetry.synthesizer) {
     callsUsed += telemetry.synthesizer.attemptsUsed ?? 1

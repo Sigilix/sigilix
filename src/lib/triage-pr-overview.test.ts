@@ -22,9 +22,7 @@ describe("parseOverviewResponse", () => {
     summary: "Adds a regex guard around path normalization.",
     confidence: 4,
     confidenceReason: "Small surface, well-tested.",
-    files: [
-      { path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" },
-    ],
+    files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
     bullets: ["Verify the regex catches `..` segments"],
   }
 
@@ -53,8 +51,11 @@ describe("parseOverviewResponse", () => {
     const out = parseOverviewResponse(
       JSON.stringify({
         ...valid,
-        files: [{ path: "a.ts", score: 99 }, { path: "b.ts", score: -3 }],
-      })
+        files: [
+          { path: "a.ts", score: 99 },
+          { path: "b.ts", score: -3 },
+        ],
+      }),
     )
     expect(out?.files[0]?.score).toBe(5)
     expect(out?.files[1]?.score).toBe(1)
@@ -76,7 +77,7 @@ describe("parseOverviewResponse", () => {
       JSON.stringify({
         ...valid,
         files: [{ score: 3 }, { path: "ok.ts", score: 2 }],
-      })
+      }),
     )
     expect(out?.files).toHaveLength(1)
     expect(out?.files[0]?.path).toBe("ok.ts")
@@ -107,9 +108,7 @@ describe("formatOverviewComment", () => {
     summary: "Adds null-safe access on `user.profile`.",
     confidence: 4,
     confidenceReason: "Narrow surface; good test coverage.",
-    files: [
-      { path: "app/user.ts", score: 4, overview: "Guards profile read", nextStep: "Add e2e test" },
-    ],
+    files: [{ path: "app/user.ts", score: 4, overview: "Guards profile read", nextStep: "Add e2e test" }],
     bullets: ["lines 42-58 — verify the fallback empties the badge cache"],
   }
 
@@ -229,12 +228,17 @@ describe("scopedDiffFromMisses", () => {
 
 describe("mergeCachedAndFreshRows", () => {
   const baseVerdict: PrOverviewVerdict = {
-    summary: "S", confidence: 3, confidenceReason: "R",
+    summary: "S",
+    confidence: 3,
+    confidenceReason: "R",
     files: [{ path: "fresh.ts", score: 5, overview: "fresh-o", nextStep: "fresh-n" }],
     bullets: [],
   }
   const cachedRow = (path: string, score: number): CachedFileRow => ({
-    path, score, overview: "cached-o", nextStep: "cached-n",
+    path,
+    score,
+    overview: "cached-o",
+    nextStep: "cached-n",
   })
 
   it("includes cached rows whose path isn't in the fresh set", () => {
@@ -248,9 +252,7 @@ describe("mergeCachedAndFreshRows", () => {
   })
 
   it("fresh rows win on path collision (model just looked at this file)", () => {
-    const cached = new Map<string, CachedFileRow>([
-      ["fresh.ts", cachedRow("fresh.ts", 1)],
-    ])
+    const cached = new Map<string, CachedFileRow>([["fresh.ts", cachedRow("fresh.ts", 1)]])
     const out = mergeCachedAndFreshRows(baseVerdict, cached)
     expect(out.files).toHaveLength(1)
     expect(out.files[0]?.overview).toBe("fresh-o") // fresh, not cached
@@ -260,7 +262,10 @@ describe("mergeCachedAndFreshRows", () => {
     const fresh: PrOverviewVerdict = {
       ...baseVerdict,
       files: Array.from({ length: 4 }, (_, i) => ({
-        path: `fresh-${i}.ts`, score: 5, overview: "o", nextStep: "n",
+        path: `fresh-${i}.ts`,
+        score: 5,
+        overview: "o",
+        nextStep: "n",
       })),
     }
     const cached = new Map<string, CachedFileRow>(
@@ -304,16 +309,12 @@ describe("parseOverviewResponse — SIG-99 polish fields", () => {
   })
 
   it("clamps suggestedLabels to 3 entries", () => {
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, suggestedLabels: ["bug", "perf", "docs", "extra"] }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, suggestedLabels: ["bug", "perf", "docs", "extra"] }))
     expect(out?.suggestedLabels).toEqual(["bug", "perf", "docs"])
   })
 
   it("filters out empty/whitespace labels and unwraps trim", () => {
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, suggestedLabels: ["  bug  ", "", "  ", "perf"] }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, suggestedLabels: ["  bug  ", "", "  ", "perf"] }))
     expect(out?.suggestedLabels).toEqual(["bug", "perf"])
   })
 
@@ -324,37 +325,30 @@ describe("parseOverviewResponse — SIG-99 polish fields", () => {
     const out = parseOverviewResponse(
       JSON.stringify({
         ...base,
-        suggestedLabels: [
-          "good-label",
-          "back`tick",
-          "new\nline",
-          "pipe|injection",
-          "another-good",
-        ],
+        suggestedLabels: ["good-label", "back`tick", "new\nline", "pipe|injection", "another-good"],
       }),
     )
     expect(out?.suggestedLabels).toEqual(["good-label", "another-good"])
   })
 
   it("strips leading @ from reviewer handles and accepts valid GH usernames", () => {
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, suggestedReviewers: ["@octocat", "monalisa"] }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, suggestedReviewers: ["@octocat", "monalisa"] }))
     expect(out?.suggestedReviewers).toEqual(["octocat", "monalisa"])
   })
 
   it("drops reviewer entries that fail the GH username pattern", () => {
     const out = parseOverviewResponse(
-      JSON.stringify({ ...base, suggestedReviewers: ["valid-user", "spaces in name", "user_with_underscore"] }),
+      JSON.stringify({
+        ...base,
+        suggestedReviewers: ["valid-user", "spaces in name", "user_with_underscore"],
+      }),
     )
     // GitHub usernames disallow spaces + underscores; only `valid-user` survives.
     expect(out?.suggestedReviewers).toEqual(["valid-user"])
   })
 
   it("clamps suggestedReviewers to 2 entries", () => {
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, suggestedReviewers: ["a", "b", "c"] }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, suggestedReviewers: ["a", "b", "c"] }))
     expect(out?.suggestedReviewers).toEqual(["a", "b"])
   })
 
@@ -420,18 +414,14 @@ describe("parseOverviewResponse — SIG-99 polish fields", () => {
   })
 
   it("accepts mermaid diagrams that start with a known diagram kind", () => {
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, mermaidDiagram: "sequenceDiagram\n  A->>B: hello" }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, mermaidDiagram: "sequenceDiagram\n  A->>B: hello" }))
     expect(out?.mermaidDiagram).toContain("sequenceDiagram")
   })
 
   it("rejects mermaid payloads that don't start with a known kind (anti-injection)", () => {
     // Anything other than sequenceDiagram/flowchart/graph/stateDiagram
     // gets dropped — the model can't smuggle arbitrary markdown.
-    const out = parseOverviewResponse(
-      JSON.stringify({ ...base, mermaidDiagram: "## fake heading\nrandom markdown" }),
-    )
+    const out = parseOverviewResponse(JSON.stringify({ ...base, mermaidDiagram: "## fake heading\nrandom markdown" }))
     expect(out?.mermaidDiagram).toBeUndefined()
   })
 
@@ -647,12 +637,7 @@ describe("renderReviewContextBlock", () => {
     const block = renderReviewContextBlock(ctx)
     // Pin the rendered shape so the prompt diff stays stable.
     expect(block).toBe(
-      [
-        "Verdict: REQUEST_CHANGES",
-        "Findings: 7",
-        "By severity: P1=7",
-        "By category: logic=7",
-      ].join("\n"),
+      ["Verdict: REQUEST_CHANGES", "Findings: 7", "By severity: P1=7", "By category: logic=7"].join("\n"),
     )
   })
 })
@@ -666,9 +651,7 @@ describe("buildPrompt — reviewContext threading (SIG-216)", () => {
     head: { sha: "abc123", ref: "feat/widget" },
     base: { sha: "def456", ref: "main" },
   }
-  const newCommits: PrCommit[] = [
-    { sha: "abc1234567", message: "feat: add widget" },
-  ]
+  const newCommits: PrCommit[] = [{ sha: "abc1234567", message: "feat: add widget" }]
   const baseCtx: PromptCtx = {
     prNumber: 42,
     meta,

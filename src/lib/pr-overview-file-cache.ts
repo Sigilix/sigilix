@@ -88,12 +88,16 @@ export async function readFileCache(args: {
   try {
     raw = await env.OPENCLAW_STATE.get(key)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-file-cache-read-failed",
-      owner: args.owner, repo: args.repo, pr_number: args.prNumber,
-      filename: args.filename,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-file-cache-read-failed",
+        owner: args.owner,
+        repo: args.repo,
+        pr_number: args.prNumber,
+        filename: args.filename,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return null
   }
   if (raw === null) return null
@@ -136,12 +140,16 @@ export async function writeFileCache(args: {
       expirationTtl: CACHE_TTL_SECONDS,
     })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-file-cache-write-failed",
-      owner: args.owner, repo: args.repo, pr_number: args.prNumber,
-      filename: args.filename,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-file-cache-write-failed",
+        owner: args.owner,
+        repo: args.repo,
+        pr_number: args.prNumber,
+        filename: args.filename,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -167,25 +175,27 @@ export async function batchReadFileCache(args: {
   const misses: Array<{ filename: string; patch?: string }> = []
   // Parallel reads — KV's per-request consistency is per-key, so
   // there's no ordering concern.
-  await Promise.all(args.files.map(async (f) => {
-    if (typeof f.patch !== "string" || f.patch.length === 0) {
-      misses.push(f)
-      return
-    }
-    const row = await readFileCache({
-      env: args.env,
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      filename: f.filename,
-      patch: f.patch,
-    })
-    if (row !== null) {
-      hits.set(f.filename, row)
-    } else {
-      misses.push(f)
-    }
-  }))
+  await Promise.all(
+    args.files.map(async (f) => {
+      if (typeof f.patch !== "string" || f.patch.length === 0) {
+        misses.push(f)
+        return
+      }
+      const row = await readFileCache({
+        env: args.env,
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        filename: f.filename,
+        patch: f.patch,
+      })
+      if (row !== null) {
+        hits.set(f.filename, row)
+      } else {
+        misses.push(f)
+      }
+    }),
+  )
   return { hits, misses }
 }
 
@@ -205,16 +215,22 @@ export async function batchWriteFileCache(args: {
   const byPath = new Map<string, CachedFileRow>()
   for (const r of args.rows) byPath.set(r.path, r)
   let written = 0
-  await Promise.all(args.misses.map(async (m) => {
-    if (typeof m.patch !== "string" || m.patch.length === 0) return
-    const row = byPath.get(m.filename)
-    if (!row) return // model didn't emit a row for this file — skip
-    await writeFileCache({
-      env: args.env,
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      filename: m.filename, patch: m.patch, row,
-    })
-    written += 1
-  }))
+  await Promise.all(
+    args.misses.map(async (m) => {
+      if (typeof m.patch !== "string" || m.patch.length === 0) return
+      const row = byPath.get(m.filename)
+      if (!row) return // model didn't emit a row for this file — skip
+      await writeFileCache({
+        env: args.env,
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        filename: m.filename,
+        patch: m.patch,
+        row,
+      })
+      written += 1
+    }),
+  )
   return { written }
 }

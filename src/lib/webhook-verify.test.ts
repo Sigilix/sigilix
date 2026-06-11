@@ -10,13 +10,9 @@ const SECRET = "test-secret-do-not-use-in-prod"
 const encoder = new TextEncoder()
 
 async function sign(body: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(body))
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))

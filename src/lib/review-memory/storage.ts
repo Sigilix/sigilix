@@ -34,11 +34,7 @@
 //     full SHA-256 in the key + value's `pathSha256` field.
 //   - No reviewer identity, no PR title/body, no `evidenceQuote`.
 
-import type {
-  ReviewMemoryRecord,
-  ReviewMemorySignal,
-  ReviewMemoryStorageScope,
-} from "./types"
+import type { ReviewMemoryRecord, ReviewMemorySignal, ReviewMemoryStorageScope } from "./types"
 import type { Env } from "@/src/shared/types/env"
 
 const TTL_DAYS = 90
@@ -53,11 +49,7 @@ const TTL_SECONDS = TTL_DAYS * 24 * 60 * 60
  * lands in the key for path-scoped records — the 12-hex truncation is
  * reserved for human-readable display in markers + prompts.
  */
-export function buildKey(
-  owner: string,
-  repo: string,
-  scope: ReviewMemoryStorageScope,
-): string {
+export function buildKey(owner: string, repo: string, scope: ReviewMemoryStorageScope): string {
   const base = `review-memory:${owner}/${repo}`
   if (scope.kind === "category") {
     return `${base}:cat:${scope.category}`
@@ -71,10 +63,7 @@ export function buildKey(
  * repo)` strings. Used in parallel with the legacy key under the
  * dual-write contract.
  */
-export function buildRepoIdKey(
-  repoId: number,
-  scope: ReviewMemoryStorageScope,
-): string {
+export function buildRepoIdKey(repoId: number, scope: ReviewMemoryStorageScope): string {
   const base = `review-memory:repo:${repoId}`
   if (scope.kind === "category") {
     return `${base}:cat:${scope.category}`
@@ -83,9 +72,7 @@ export function buildRepoIdKey(
 }
 
 function isValidRepoId(repoId: number | undefined): repoId is number {
-  return (
-    typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0
-  )
+  return typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0
 }
 
 interface ResolvedKeys {
@@ -192,8 +179,7 @@ export function unionRecords(
       return 0
     })
     .slice(0, SIGNAL_FIFO_CAP)
-  const lastUpdatedTs =
-    a.lastUpdatedTs > b.lastUpdatedTs ? a.lastUpdatedTs : b.lastUpdatedTs
+  const lastUpdatedTs = a.lastUpdatedTs > b.lastUpdatedTs ? a.lastUpdatedTs : b.lastUpdatedTs
   // SIG-247 Phase 1 PR B: preserve the `migratedAt` sentinel across
   // union cycles. Pick the EARLIER of any present timestamps — this
   // is the "first migrated" semantic, not "most-recently touched".
@@ -209,10 +195,8 @@ export function unionRecords(
   // side" rather than propagating bad data.
   const aMigratedAt = a.migratedAt
   const bMigratedAt = b.migratedAt
-  const aMigratedAtMs =
-    aMigratedAt !== undefined ? Date.parse(aMigratedAt) : NaN
-  const bMigratedAtMs =
-    bMigratedAt !== undefined ? Date.parse(bMigratedAt) : NaN
+  const aMigratedAtMs = aMigratedAt !== undefined ? Date.parse(aMigratedAt) : NaN
+  const bMigratedAtMs = bMigratedAt !== undefined ? Date.parse(bMigratedAt) : NaN
   const aValid = Number.isFinite(aMigratedAtMs)
   const bValid = Number.isFinite(bMigratedAtMs)
   const migratedAt =
@@ -231,9 +215,7 @@ export function unionRecords(
     signals: merged,
     lastUpdatedTs,
     ...(migratedAt !== undefined ? { migratedAt } : {}),
-    ...(scope.kind === "path-category"
-      ? { pathSha256: scope.pathSha256 }
-      : {}),
+    ...(scope.kind === "path-category" ? { pathSha256: scope.pathSha256 } : {}),
   }
   return base
 }
@@ -250,12 +232,7 @@ function isValidRecord(value: unknown): value is ReviewMemoryRecord {
   return true
 }
 
-async function readSingleKey(
-  env: Env,
-  owner: string,
-  repo: string,
-  key: string,
-): Promise<ReviewMemoryRecord | null> {
+async function readSingleKey(env: Env, owner: string, repo: string, key: string): Promise<ReviewMemoryRecord | null> {
   let raw: string | null
   try {
     raw = await env.OPENCLAW_STATE.get(key)
@@ -318,9 +295,7 @@ export async function readMemory(
   const keys = resolveKeys(owner, repo, scope, repoId)
   const [legacyRecord, repoIdRecord] = await Promise.all([
     readSingleKey(env, owner, repo, keys.legacy),
-    keys.repoId !== null
-      ? readSingleKey(env, owner, repo, keys.repoId)
-      : Promise.resolve(null),
+    keys.repoId !== null ? readSingleKey(env, owner, repo, keys.repoId) : Promise.resolve(null),
   ])
   if (keys.repoId === null) return legacyRecord
   return unionRecords(legacyRecord, repoIdRecord, scope)
@@ -377,9 +352,7 @@ export async function appendSignal(
     category: scope.category,
     signals: [],
     lastUpdatedTs: nowIso,
-    ...(scope.kind === "path-category"
-      ? { pathSha256: scope.pathSha256 }
-      : {}),
+    ...(scope.kind === "path-category" ? { pathSha256: scope.pathSha256 } : {}),
   }
   // Idempotent dedup on commentId — redundant deliveries no-op.
   // Note: a duplicate-only path SKIPS pruning + cap-trimming. The
@@ -390,9 +363,7 @@ export async function appendSignal(
   // which is impossible in practice (each dismissal has a fresh
   // commentId). Lookup-side `isMemoryActive` re-filters by 90d
   // window anyway, so stale carry has zero observable effect.
-  const skippedDuplicate = base.signals.some(
-    (s) => s.commentId === signal.commentId,
-  )
+  const skippedDuplicate = base.signals.some((s) => s.commentId === signal.commentId)
   let nextSignals: ReviewMemorySignal[]
   if (skippedDuplicate) {
     nextSignals = base.signals
@@ -401,8 +372,7 @@ export async function appendSignal(
     // FIFO-cap at 50 BEFORE appending the new signal — drop oldest
     // first. After append, exactly SIGNAL_FIFO_CAP entries.
     const overflow = pruned.signals.length - (SIGNAL_FIFO_CAP - 1)
-    const trimmed =
-      overflow > 0 ? pruned.signals.slice(overflow) : pruned.signals
+    const trimmed = overflow > 0 ? pruned.signals.slice(overflow) : pruned.signals
     nextSignals = [...trimmed, signal]
   }
   const next: ReviewMemoryRecord = {
@@ -434,10 +404,7 @@ export async function appendSignal(
       key: keys.legacy,
       stage: "kv-write",
       key_mode: "legacy",
-      err:
-        legacyResult.reason instanceof Error
-          ? legacyResult.reason.message
-          : String(legacyResult.reason),
+      err: legacyResult.reason instanceof Error ? legacyResult.reason.message : String(legacyResult.reason),
     })
   }
   if (repoIdPresent && repoIdResult.status === "rejected") {
@@ -447,10 +414,7 @@ export async function appendSignal(
       key: keys.repoId,
       stage: "kv-write",
       key_mode: "repo-id",
-      err:
-        repoIdResult.reason instanceof Error
-          ? repoIdResult.reason.message
-          : String(repoIdResult.reason),
+      err: repoIdResult.reason instanceof Error ? repoIdResult.reason.message : String(repoIdResult.reason),
     })
   }
   if (repoIdPresent) {

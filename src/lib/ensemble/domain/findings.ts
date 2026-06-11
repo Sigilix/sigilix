@@ -132,15 +132,10 @@ export function computeConsensusRanking<P extends { sourceSpecialists?: readonly
  *
  * Pure — exported for unit tests.
  */
-export function annotateWithConsensus(
-  finding: PrReviewFinding,
-  consensus: number,
-): PrReviewFinding {
+export function annotateWithConsensus(finding: PrReviewFinding, consensus: number): PrReviewFinding {
   if (consensus < 2) return finding
   const annotation = `_Flagged by ${consensus} specialists._`
-  const body = finding.body.length > 0
-    ? `${annotation}\n\n${finding.body}`
-    : annotation
+  const body = finding.body.length > 0 ? `${annotation}\n\n${finding.body}` : annotation
   return { ...finding, body }
 }
 
@@ -267,19 +262,38 @@ export function computeFindingDelta(
  */
 export function clampAstEmitScores(
   findings: Array<{ path: string; line: number; category: string; score: number }>,
-  astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
+  astFindings: ReadonlyArray<{
+    path: string
+    line: number
+    endLine?: number
+    roleHint: string
+    severity: string
+    emitWhenUnmatched?: boolean
+  }>,
   provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
 ): number {
   const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
   const emitCeils = astFindings
     .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
-    .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
+    .map((f) => ({
+      path: f.path,
+      role: f.roleHint,
+      lo: f.line,
+      hi: f.endLine ?? f.line,
+      ceil: CEIL[f.severity] ?? 5,
+    }))
   if (emitCeils.length === 0) return 0
   let clamped = 0
   for (let i = 0; i < findings.length; i++) {
     const finding = findings[i]!
     const ceil = emitCeils
-      .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
+      .filter(
+        (e) =>
+          e.path === finding.path &&
+          e.role === finding.category &&
+          finding.line >= e.lo - 2 &&
+          finding.line <= e.hi + 2,
+      )
       .reduce((m, e) => Math.min(m, e.ceil), 5)
     if (ceil >= 5 || finding.score <= ceil) continue
     // SIG-312: never demote a SPECIALIST-backed security finding (the model's

@@ -35,10 +35,7 @@ export const FP_SCORE_GATE = 4
 export const TELEMETRY_TTL_DAYS = 90
 
 /** fellBackReason values that mean the ensemble never ran (exclude from denom). */
-export const GUARD_SKIP_REASONS: ReadonlySet<string> = new Set([
-  "merged_before_fanout",
-  "stale_head_before_fanout",
-])
+export const GUARD_SKIP_REASONS: ReadonlySet<string> = new Set(["merged_before_fanout", "stale_head_before_fanout"])
 
 function emptyBuckets(): Record<DismissBucket, number> {
   return { hard: 0, soft: 0, unlabeled: 0 }
@@ -90,9 +87,7 @@ export interface AttributionResult {
  * unioned); the same (path,line,headline) in a DIFFERENT PR is distinct.
  * `computeFid` is async (crypto.subtle), so this is async. Pure (no IO/clock).
  */
-export async function buildFindingIndex(
-  reviews: ReadonlyArray<FpRateReview>,
-): Promise<Map<string, FpFindingRef>> {
+export async function buildFindingIndex(reviews: ReadonlyArray<FpRateReview>): Promise<Map<string, FpFindingRef>> {
   const index = new Map<string, FpFindingRef>()
   for (const review of reviews) {
     if (!isRealReview(review)) continue
@@ -106,8 +101,8 @@ export async function buildFindingIndex(
       })
       const key = findingKey(review.prNumber, fid)
       // De-dup + sanity: keep only known specialist roles, unique.
-      const roles = [...new Set(finding.sourceSpecialists)].filter(
-        (r): r is SpecialistRole => (ALL_SPECIALISTS as readonly string[]).includes(r),
+      const roles = [...new Set(finding.sourceSpecialists)].filter((r): r is SpecialistRole =>
+        (ALL_SPECIALISTS as readonly string[]).includes(r),
       )
       const existing = index.get(key)
       if (existing) {
@@ -221,9 +216,7 @@ export async function attributeDismissals(
  * same signal under legacy `owner/repo` AND canonical `repo:<id>` keys). Keep
  * the first occurrence. Pure.
  */
-export function dedupeDismissals(
-  dismissals: ReadonlyArray<FpRateDismissal>,
-): FpRateDismissal[] {
+export function dedupeDismissals(dismissals: ReadonlyArray<FpRateDismissal>): FpRateDismissal[] {
   const seen = new Set<number>()
   const out: FpRateDismissal[] = []
   for (const d of dismissals) {

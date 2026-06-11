@@ -25,7 +25,11 @@ export interface CodeownersRule {
 
 export interface CodeownersParseResult {
   rules: CodeownersRule[]
-  skipped: Array<{ line: number; pattern: string; reason: "negation" | "character-class" | "compile-failed" }>
+  skipped: Array<{
+    line: number
+    pattern: string
+    reason: "negation" | "character-class" | "compile-failed"
+  }>
 }
 
 export function parseCodeowners(text: string): CodeownersParseResult {

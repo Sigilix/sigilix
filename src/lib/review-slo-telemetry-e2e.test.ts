@@ -51,7 +51,9 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
+  )
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -61,13 +63,27 @@ vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
 vi.mock("@/src/shared/adapters/github", async () => {
   const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   class GitHubClientMock {
-    async getPullRequest(...args: unknown[]): Promise<unknown> { return mockGetPullRequest(...args) }
-    async getPullRequestDiff(...args: unknown[]): Promise<unknown> { return mockGetPullRequestDiff(...args) }
-    async listOpenPullRequests(...args: unknown[]): Promise<unknown> { return mockListOpenPullRequests(...args) }
-    async getFileContent(...args: unknown[]): Promise<unknown> { return mockGetFileContent(...args) }
-    async submitReview(...args: unknown[]): Promise<unknown> { return mockSubmitReview(...args) }
-    async listPullRequestReviews(...args: unknown[]): Promise<unknown> { return mockListPullRequestReviews(...args) }
-    async createIssueComment(...args: unknown[]): Promise<unknown> { return mockCreateIssueComment(...args) }
+    async getPullRequest(...args: unknown[]): Promise<unknown> {
+      return mockGetPullRequest(...args)
+    }
+    async getPullRequestDiff(...args: unknown[]): Promise<unknown> {
+      return mockGetPullRequestDiff(...args)
+    }
+    async listOpenPullRequests(...args: unknown[]): Promise<unknown> {
+      return mockListOpenPullRequests(...args)
+    }
+    async getFileContent(...args: unknown[]): Promise<unknown> {
+      return mockGetFileContent(...args)
+    }
+    async submitReview(...args: unknown[]): Promise<unknown> {
+      return mockSubmitReview(...args)
+    }
+    async listPullRequestReviews(...args: unknown[]): Promise<unknown> {
+      return mockListPullRequestReviews(...args)
+    }
+    async createIssueComment(...args: unknown[]): Promise<unknown> {
+      return mockCreateIssueComment(...args)
+    }
   }
   return { ...actual, GitHubClient: GitHubClientMock }
 })
@@ -96,9 +112,15 @@ import type { Env } from "@/src/shared/types/env"
 function makeKvStub(): Env["OPENCLAW_STATE"] {
   const store = new Map<string, string>()
   return {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
 }
 
@@ -131,8 +153,7 @@ function badParseWithUsage(inputTokens: number, outputTokens: number) {
   }
 }
 
-const verdictJson = (summary: string) =>
-  JSON.stringify({ summary, confidence: 3, findings: [] })
+const verdictJson = (summary: string) => JSON.stringify({ summary, confidence: 3, findings: [] })
 
 const VALID_SYNTH_JSON = JSON.stringify({
   verdict: { summary: "synthesized", confidence: 3, findings: [] },
@@ -149,8 +170,11 @@ const PERF_CTX: EnsembleRunCtx = {
 function collectSloSummaries(logSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown>[] {
   return logSpy.mock.calls
     .map((c) => {
-      try { return JSON.parse(c[0] as string) as Record<string, unknown> }
-      catch { return null }
+      try {
+        return JSON.parse(c[0] as string) as Record<string, unknown>
+      } catch {
+        return null
+      }
     })
     .filter((e): e is Record<string, unknown> => e !== null && e["event"] === "review-slo-summary")
 }
@@ -325,8 +349,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     const fallbackModel = SPECIALIST_CONFIGS.security.fallback!
 
     mockChat
-      .mockResolvedValueOnce(badParseWithUsage(2000, 50))                       // primary, parse-fail
-      .mockResolvedValueOnce(okWithUsage(verdictJson("security"), 1500, 300))  // fallback, ok
+      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // primary, parse-fail
+      .mockResolvedValueOnce(okWithUsage(verdictJson("security"), 1500, 300)) // fallback, ok
 
     const res = await runSpecialist({
       role: "security",

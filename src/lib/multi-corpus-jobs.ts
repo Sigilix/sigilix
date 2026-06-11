@@ -14,12 +14,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { readReviewManifest } from "./review-manifest"
 import { buildLinearAuth, LinearClient } from "./linear"
 import { listTeamRepoMappings } from "@/src/shared/adapters/github/github-installation"
-import {
-  upsertPrDoc,
-  upsertIssueDoc,
-  deriveVerdictLabel,
-  type PrCorpusDoc,
-} from "./multi-corpus"
+import { upsertPrDoc, upsertIssueDoc, deriveVerdictLabel, type PrCorpusDoc } from "./multi-corpus"
 
 /** Default backfill window: 90 days of merged PRs (per SIG-44). */
 const BACKFILL_DAYS = 90
@@ -46,9 +41,7 @@ export interface CorpusPrUpsertJob {
  */
 export async function handleCorpusPrUpsert(env: Env, job: CorpusPrUpsertJob): Promise<void> {
   const manifest = await readReviewManifest(env, job.owner, job.repo, job.prNumber)
-  const verdict = manifest.kind === "ok"
-    ? deriveVerdictLabel(manifest.manifest.findings)
-    : undefined
+  const verdict = manifest.kind === "ok" ? deriveVerdictLabel(manifest.manifest.findings) : undefined
   const doc: PrCorpusDoc = {
     owner: job.owner,
     repo: job.repo,
@@ -81,11 +74,7 @@ export interface CorpusPrBackfillJob {
  * `nowMs` is injected (not read from Date.now()) so the window is deterministic
  * in tests and the caller controls "now".
  */
-export async function handleCorpusPrBackfill(
-  env: Env,
-  job: CorpusPrBackfillJob,
-  nowMs: number,
-): Promise<void> {
+export async function handleCorpusPrBackfill(env: Env, job: CorpusPrBackfillJob, nowMs: number): Promise<void> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     // Mirrors the indexer's guard — no GitHub App creds means no
     // installation token, so the Search-API backfill can't run. Throw so
@@ -107,9 +96,7 @@ export async function handleCorpusPrBackfill(
   let upserted = 0
   for (const pr of prs) {
     const manifest = await readReviewManifest(env, job.owner, job.repo, pr.number)
-    const verdict = manifest.kind === "ok"
-      ? deriveVerdictLabel(manifest.manifest.findings)
-      : undefined
+    const verdict = manifest.kind === "ok" ? deriveVerdictLabel(manifest.manifest.findings) : undefined
     const ok = await upsertPrDoc(env, {
       owner: job.owner,
       repo: job.repo,
@@ -120,12 +107,17 @@ export async function handleCorpusPrBackfill(
     })
     if (ok) upserted += 1
   }
-  console.log(JSON.stringify({
-    event: "multicorpus-pr-backfill-complete",
-    owner: job.owner, repo: job.repo,
-    sinceDate, found: prs.length, upserted,
-    truncated: prs.length >= BACKFILL_MAX_PRS,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "multicorpus-pr-backfill-complete",
+      owner: job.owner,
+      repo: job.repo,
+      sinceDate,
+      found: prs.length,
+      upserted,
+      truncated: prs.length >= BACKFILL_MAX_PRS,
+    }),
+  )
 }
 
 function isoDate(ms: number): string {
@@ -153,13 +145,15 @@ export async function handleCorpusIssueUpsert(env: Env, job: CorpusIssueUpsertJo
     console.warn(JSON.stringify({ event: "multicorpus-issue-not-found", id: job.linearIssueId }))
     return
   }
-  const mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP)
-    .find((m) => m.teamKey === issue.team.key)
+  const mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team.key)
   if (!mapping) {
-    console.log(JSON.stringify({
-      event: "multicorpus-issue-team-unmapped",
-      identifier: issue.identifier, teamKey: issue.team.key,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "multicorpus-issue-team-unmapped",
+        identifier: issue.identifier,
+        teamKey: issue.team.key,
+      }),
+    )
     return
   }
   await upsertIssueDoc(env, {

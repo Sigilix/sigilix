@@ -7,15 +7,24 @@ import { describe, it, expect } from "vitest"
 import { parseSource } from "@/src/features/ast-rules/domain/parser"
 import { walkAst } from "@/src/features/ast-rules/domain/walker"
 
-function assertParsesAndWalks(code: string, ext: ".js" | ".jsx" | ".ts" | ".tsx" | ".mts" | ".cts" | ".mjs" | ".cjs"): void {
+function assertParsesAndWalks(
+  code: string,
+  ext: ".js" | ".jsx" | ".ts" | ".tsx" | ".mts" | ".cts" | ".mjs" | ".cjs",
+): void {
   const r = parseSource(code, ext)
   expect(r.ok, r.ok ? "" : `parse failed: ${(r as { reason: string }).reason}`).toBe(true)
   if (!r.ok) return
   let nodeCount = 0
   walkAst(r.ast, {
-    Program() { nodeCount++ },
-    Identifier() { nodeCount++ },
-    Literal() { nodeCount++ },
+    Program() {
+      nodeCount++
+    },
+    Identifier() {
+      nodeCount++
+    },
+    Literal() {
+      nodeCount++
+    },
   })
   expect(nodeCount).toBeGreaterThan(0)
 }
@@ -98,7 +107,6 @@ describe("parseSource — error handling", () => {
   })
 
   it("rejects non-string code", () => {
-
     const r = parseSource(123 as any, ".js")
     expect(r.ok).toBe(false)
   })

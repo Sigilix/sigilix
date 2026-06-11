@@ -26,10 +26,7 @@ export interface BackfillSummary {
  * Per-installation/per-repo failures are fail-soft (logged, counted) so one
  * bad installation can't abort the whole fan-out.
  */
-export async function runIndexBackfill(
-  env: Env,
-  opts: { dryRun: boolean },
-): Promise<BackfillSummary> {
+export async function runIndexBackfill(env: Env, opts: { dryRun: boolean }): Promise<BackfillSummary> {
   const summary: BackfillSummary = {
     installations: 0,
     repos: 0,
@@ -71,11 +68,13 @@ export async function runIndexBackfill(
       // installation's fan-out (queue binding broken, etc.) must not abort
       // the whole backfill. Flag coverage as incomplete so the operator
       // re-runs.
-      console.warn(JSON.stringify({
-        event: "index-backfill-enqueue-error",
-        installation_id: installationId,
-        error: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-backfill-enqueue-error",
+          installation_id: installationId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
       summary.enumerationIncomplete = true
     }
   }

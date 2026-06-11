@@ -105,12 +105,7 @@ export function resolveRelative(sourcePath: string, specifier: string): string |
   // Fix 1: only treat a specifier as relative if it is exactly "." or "..",
   // or starts with "./" or "../". Bare dotfiles like ".hidden" or "..b" are
   // NOT relative specifiers and should fall through to the null return.
-  if (
-    specifier !== "." &&
-    specifier !== ".." &&
-    !specifier.startsWith("./") &&
-    !specifier.startsWith("../")
-  ) {
+  if (specifier !== "." && specifier !== ".." && !specifier.startsWith("./") && !specifier.startsWith("../")) {
     return null
   }
   // Build the directory segments of the source file.
@@ -124,8 +119,7 @@ export function resolveRelative(sourcePath: string, specifier: string): string |
       // the repo root — treat as unresolvable.
       if (stack.length === 0) return null
       stack.pop()
-    }
-    else stack.push(p)
+    } else stack.push(p)
   }
   return stack.join("/")
 }
@@ -144,8 +138,16 @@ export function resolveRelative(sourcePath: string, specifier: string): string |
  */
 export const CANDIDATE_EXTS = [
   "",
-  ".ts", ".tsx", ".js", ".jsx", ".mjs",
-  "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  "/index.ts",
+  "/index.tsx",
+  "/index.js",
+  "/index.jsx",
+  "/index.mjs",
 ]
 
 /**

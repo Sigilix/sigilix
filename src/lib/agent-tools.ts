@@ -70,11 +70,7 @@ export interface AgentTool {
    * `{ok:false, error, ...}` is the recoverable path — model retries.
    * Throwing is for genuine runtime failures only (loop fails fast).
    */
-  execute(
-    args: Record<string, unknown>,
-    signal: AbortSignal,
-    perLoopContext: Map<string, unknown>,
-  ): Promise<unknown>
+  execute(args: Record<string, unknown>, signal: AbortSignal, perLoopContext: Map<string, unknown>): Promise<unknown>
 }
 
 export function createAgentTools(ctx: AgentToolsContext): AgentTool[] {
@@ -118,7 +114,10 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       const repo = typeof args.repo === "string" ? args.repo : ""
       const branch = typeof args.branch === "string" ? args.branch.trim() : ""
       if (!query || !repo) {
-        return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
+        return {
+          ok: false,
+          error: "retrieve_codebase requires non-empty `query` and `repo` strings",
+        }
       }
       // SIG-132 / SIG-35: the Vectorize namespace is `<owner>/<repo>`
       // lowercased for default branch and `<owner>/<repo>/__branch__/<hexEncodedBranch>`
@@ -176,12 +175,10 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
           // namespaces require an exact namespace because branch names are
           // not unique or reliably encoded from natural language unless
           // the caller supplies the explicit `branch` argument above.
-          const matches = namespaceUniverse.filter(
-            (ns) => {
-              const parts = ns.split("/")
-              return parts.length === 2 && parts[1] === namespace
-            },
-          )
+          const matches = namespaceUniverse.filter((ns) => {
+            const parts = ns.split("/")
+            return parts.length === 2 && parts[1] === namespace
+          })
           if (matches.length === 1) {
             namespace = matches[0] as string
           } else {
@@ -209,9 +206,10 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         teamKey: namespace,
         env: ctx.env,
       })
-      const noChunksMessage = chunks.length === 0
-        ? `Retrieval returned no chunks for repo '${namespace}'. Refine the query; if this persists, retrieval may be temporarily unavailable.`
-        : undefined
+      const noChunksMessage =
+        chunks.length === 0
+          ? `Retrieval returned no chunks for repo '${namespace}'. Refine the query; if this persists, retrieval may be temporarily unavailable.`
+          : undefined
       return {
         ok: true,
         repo: namespace,
@@ -252,16 +250,19 @@ async function resolveBranchNamespace(
   const branchChoices = namespaceUniverse
     .map((ns) => parseBranchNamespace(ns))
     .filter((ns): ns is NonNullable<ReturnType<typeof parseBranchNamespace>> => ns !== null)
-    .map((ns): BranchChoice => ({
-      repo: `${ns.owner}/${ns.repo}`,
-      encodedBranch: ns.encodedBranch,
-      namespace: ns.namespace,
-    }))
+    .map(
+      (ns): BranchChoice => ({
+        repo: `${ns.owner}/${ns.repo}`,
+        encodedBranch: ns.encodedBranch,
+        namespace: ns.namespace,
+      }),
+    )
 
-  const repoMatches = branchChoices.filter((choice) =>
-    requestedRepo === choice.repo ||
-    requestedRepo === choice.repo.slice(choice.repo.indexOf("/") + 1) ||
-    requestedRepo === choice.namespace,
+  const repoMatches = branchChoices.filter(
+    (choice) =>
+      requestedRepo === choice.repo ||
+      requestedRepo === choice.repo.slice(choice.repo.indexOf("/") + 1) ||
+      requestedRepo === choice.namespace,
   )
 
   // SIG-218: match on the bounded-length hash of the requested branch.
@@ -273,9 +274,7 @@ async function resolveBranchNamespace(
   const exactBranch = repoMatches.filter((choice) => choice.encodedBranch === exactEncoded)
   if (exactBranch.length === 1) return { ok: true, namespace: exactBranch[0]!.namespace }
 
-  const foldedEncoded = trimmed === trimmed.toLowerCase()
-    ? exactEncoded
-    : await encodeBranchName(trimmed.toLowerCase())
+  const foldedEncoded = trimmed === trimmed.toLowerCase() ? exactEncoded : await encodeBranchName(trimmed.toLowerCase())
   const foldedBranch = repoMatches.filter((choice) => choice.encodedBranch === foldedEncoded)
   if (foldedBranch.length === 1) return { ok: true, namespace: foldedBranch[0]!.namespace }
 
@@ -437,13 +436,12 @@ function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsCon
       }
       const client = new GitHubClient({ token })
 
-      const content = await withTimeout(
-        () => client.getFileContent(owner, repo, path, ref),
-        5_000,
-      ).catch((e: unknown) => {
-        if (isAbortError(e)) throw e // re-throw for wall_clock_exceeded mapping
-        return null // file fetch failed (404, 5xx, etc.) — recoverable
-      })
+      const content = await withTimeout(() => client.getFileContent(owner, repo, path, ref), 5_000).catch(
+        (e: unknown) => {
+          if (isAbortError(e)) throw e // re-throw for wall_clock_exceeded mapping
+          return null // file fetch failed (404, 5xx, etc.) — recoverable
+        },
+      )
       if (signal.aborted) {
         const err = new Error("aborted") as Error & { name: string }
         err.name = "AbortError"

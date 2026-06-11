@@ -31,9 +31,7 @@ const SEVERITY_RANK: Record<SarifFinding["severity"], number> = {
   info: 0,
 }
 
-function annotationLevelForSarifSeverity(
-  severity: SarifFinding["severity"],
-): CheckRunAnnotation["annotation_level"] {
+function annotationLevelForSarifSeverity(severity: SarifFinding["severity"]): CheckRunAnnotation["annotation_level"] {
   switch (severity) {
     case "error":
       return "failure"

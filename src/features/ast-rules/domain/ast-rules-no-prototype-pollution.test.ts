@@ -68,7 +68,9 @@ describe("no-prototype-pollution — FP-safety: does NOT fire", () => {
     expect(runRule(`app.post("/acc", (req, res) => { acc[req.body.k] = 1; });`).length).toBe(0)
   })
   it("a __proto__ sanitization guard clears it (dev is defending)", () => {
-    expect(runRule(`app.post("/g", (req, res) => { delete req.body.__proto__; _.merge(target, req.body); });`).length).toBe(0)
+    expect(
+      runRule(`app.post("/g", (req, res) => { delete req.body.__proto__; _.merge(target, req.body); });`).length,
+    ).toBe(0)
   })
   it("tainted SCALAR field in a fixed merge source is not a whole-tainted-ref", () => {
     expect(runRule(`app.post("/f", (req, res) => { _.merge(target, { name: req.body.name }); });`).length).toBe(0)

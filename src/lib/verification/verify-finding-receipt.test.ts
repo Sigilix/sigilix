@@ -31,7 +31,11 @@ const stubNormalize: SarifPathNormalizer = (uri, opts) => {
 }
 
 function run(results: SarifRun["results"], artifacts?: SarifRun["artifacts"]): SarifRun {
-  return { tool: { driver: { name: "semgrep" } }, results, ...(artifacts ? { artifacts } : {}) } as SarifRun
+  return {
+    tool: { driver: { name: "semgrep" } },
+    results,
+    ...(artifacts ? { artifacts } : {}),
+  } as SarifRun
 }
 
 function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
@@ -81,39 +85,48 @@ describe("ruleIdFromEvidenceId", () => {
 
 describe("verifyFindingAgainstReceipt", () => {
   it("NO-CHECK for an ineligible finding (no scan touched)", () => {
-    const r = verifyFindingAgainstReceipt(finding({ category: "logic" }), index([
-      { path: "src/auth.ts", ruleId: "aws-access-key", line: 42 },
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding({ category: "logic" }),
+      index([{ path: "src/auth.ts", ruleId: "aws-access-key", line: 42 }]),
+    )
     expect(r.verdict).toBe("no-check")
   })
 
   it("CONFIRMED: same rule-class still fires at the path + exact line on HEAD", () => {
-    const r = verifyFindingAgainstReceipt(finding(), index([
-      { path: "src/auth.ts", ruleId: "aws-access-key", line: 42 },
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding(),
+      index([{ path: "src/auth.ts", ruleId: "aws-access-key", line: 42 }]),
+    )
     expect(r.verdict).toBe("confirmed")
     expect(r.check?.kind).toBe("receipt-join")
     expect(r.check?.status).toBe("pass")
   })
 
   it("CONFIRMED within the line window (merge/head drift absorbed)", () => {
-    const r = verifyFindingAgainstReceipt(finding({ line: 42 }), index([
-      { path: "src/auth.ts", ruleId: "aws-access-key", line: 49 }, // +7, within ±10
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding({ line: 42 }),
+      index([
+        { path: "src/auth.ts", ruleId: "aws-access-key", line: 49 }, // +7, within ±10
+      ]),
+    )
     expect(r.verdict).toBe("confirmed")
   })
 
   it("CONFIRMED on a path-only (line-less) result", () => {
-    const r = verifyFindingAgainstReceipt(finding(), index([
-      { path: "src/auth.ts", ruleId: "aws-access-key" }, // no line (IaC/dep)
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding(),
+      index([
+        { path: "src/auth.ts", ruleId: "aws-access-key" }, // no line (IaC/dep)
+      ]),
+    )
     expect(r.verdict).toBe("confirmed")
   })
 
   it("CONFIRMED on a namespaced ruleId (either-contains-other)", () => {
-    const r = verifyFindingAgainstReceipt(finding(), index([
-      { path: "src/auth.ts", ruleId: "semgrep.aws-access-key.v2", line: 42 },
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding(),
+      index([{ path: "src/auth.ts", ruleId: "semgrep.aws-access-key.v2", line: 42 }]),
+    )
     expect(r.verdict).toBe("confirmed")
   })
 
@@ -124,23 +137,28 @@ describe("verifyFindingAgainstReceipt", () => {
   })
 
   it("INCONCLUSIVE: matching rule but the line is OUTSIDE the window", () => {
-    const r = verifyFindingAgainstReceipt(finding({ line: 42 }), index([
-      { path: "src/auth.ts", ruleId: "aws-access-key", line: 80 }, // +38, outside ±10
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding({ line: 42 }),
+      index([
+        { path: "src/auth.ts", ruleId: "aws-access-key", line: 80 }, // +38, outside ±10
+      ]),
+    )
     expect(r.verdict).toBe("inconclusive")
   })
 
   it("INCONCLUSIVE: a DIFFERENT rule fires at the same path/line (not the same check)", () => {
-    const r = verifyFindingAgainstReceipt(finding(), index([
-      { path: "src/auth.ts", ruleId: "sql-injection", line: 42 },
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding(),
+      index([{ path: "src/auth.ts", ruleId: "sql-injection", line: 42 }]),
+    )
     expect(r.verdict).toBe("inconclusive")
   })
 
   it("INCONCLUSIVE: a result on a DIFFERENT path doesn't confirm", () => {
-    const r = verifyFindingAgainstReceipt(finding(), index([
-      { path: "src/other.ts", ruleId: "aws-access-key", line: 42 },
-    ]))
+    const r = verifyFindingAgainstReceipt(
+      finding(),
+      index([{ path: "src/other.ts", ruleId: "aws-access-key", line: 42 }]),
+    )
     expect(r.verdict).toBe("inconclusive")
   })
 
@@ -153,57 +171,108 @@ describe("verifyFindingAgainstReceipt", () => {
   })
 
   it("never throws on degenerate input", () => {
-    expect(() => verifyFindingAgainstReceipt(finding({ evidenceId: "weird", line: undefined }), index([]))).not.toThrow()
+    expect(() =>
+      verifyFindingAgainstReceipt(finding({ evidenceId: "weird", line: undefined }), index([])),
+    ).not.toThrow()
   })
 })
 
 describe("extractReceiptScanResults", () => {
   it("maps result path/line/ruleId from an inline uri", () => {
-    const out = extractReceiptScanResults([
-      run([{ ruleId: "aws-key", locations: [{ physicalLocation: { artifactLocation: { uri: "Src/Auth.ts" }, region: { startLine: 42 } } }] }]),
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run([
+          {
+            ruleId: "aws-key",
+            locations: [
+              {
+                physicalLocation: {
+                  artifactLocation: { uri: "Src/Auth.ts" },
+                  region: { startLine: 42 },
+                },
+              },
+            ],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
     expect(out).toEqual([{ path: "src/auth.ts", ruleId: "aws-key", line: 42 }])
   })
 
   it("drops rule-less results", () => {
-    const out = extractReceiptScanResults([
-      run([{ locations: [{ physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } }] }]),
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run([
+          {
+            locations: [{ physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } }],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
     expect(out).toEqual([])
   })
 
   it("emits one entry per location (multi-location result)", () => {
-    const out = extractReceiptScanResults([
-      run([{ ruleId: "r", locations: [
-        { physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } },
-        { physicalLocation: { artifactLocation: { uri: "b.ts" }, region: { startLine: 2 } } },
-      ] }]),
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run([
+          {
+            ruleId: "r",
+            locations: [
+              { physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } },
+              { physicalLocation: { artifactLocation: { uri: "b.ts" }, region: { startLine: 2 } } },
+            ],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
     expect(out).toHaveLength(2)
     expect(out.map((r) => r.path)).toEqual(["a.ts", "b.ts"])
   })
 
   it("path-only (no startLine) yields an entry without a line", () => {
-    const out = extractReceiptScanResults([
-      run([{ ruleId: "dep", locations: [{ physicalLocation: { artifactLocation: { uri: "pkg.lock" } } }] }]),
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run([
+          {
+            ruleId: "dep",
+            locations: [{ physicalLocation: { artifactLocation: { uri: "pkg.lock" } } }],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
     expect(out).toEqual([{ path: "pkg.lock", ruleId: "dep" }])
   })
 
   it("resolves an index-based path via the run artifacts (no inline uri)", () => {
-    const out = extractReceiptScanResults([
-      run(
-        [{ ruleId: "r", locations: [{ physicalLocation: { artifactLocation: { index: 0 }, region: { startLine: 5 } } }] }],
-        [{ location: { uri: "From-Index.ts" } }],
-      ),
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run(
+          [
+            {
+              ruleId: "r",
+              locations: [{ physicalLocation: { artifactLocation: { index: 0 }, region: { startLine: 5 } } }],
+            },
+          ],
+          [{ location: { uri: "From-Index.ts" } }],
+        ),
+      ],
+      stubNormalize,
+    )
     expect(out).toEqual([{ path: "from-index.ts", ruleId: "r", line: 5 }]) // resolved THROUGH run.artifacts
   })
 
   it("skips a location the normalizer rejects (ok:false)", () => {
-    const out = extractReceiptScanResults([
-      run([{ ruleId: "r", locations: [{ physicalLocation: { region: { startLine: 1 } } }] }]), // no uri, no index → fail
-    ], stubNormalize)
+    const out = extractReceiptScanResults(
+      [
+        run([{ ruleId: "r", locations: [{ physicalLocation: { region: { startLine: 1 } } }] }]), // no uri, no index → fail
+      ],
+      stubNormalize,
+    )
     expect(out).toEqual([])
   })
 

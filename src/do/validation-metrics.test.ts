@@ -18,12 +18,24 @@ function makeDoInstance() {
       transactionSync<T>(fn: () => T): T {
         return sqlStorage.transactionSync(fn)
       },
-      async get(): Promise<unknown> { return undefined },
-      async put(): Promise<void> { /* no-op */ },
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(timestamp: number): Promise<void> { alarmAt = timestamp },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async get(): Promise<unknown> {
+        return undefined
+      },
+      async put(): Promise<void> {
+        /* no-op */
+      },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(timestamp: number): Promise<void> {
+        alarmAt = timestamp
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -38,7 +50,14 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
     await do_.recordBatch({
       ...pr,
       occurredAt: "2026-05-22T12:00:00.000Z",
-      events: [{ kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false }],
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: false,
+        },
+      ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.counts.security["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
@@ -58,16 +77,32 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
   it("accumulates same (day,gate,reason) across batches", async () => {
     const do_ = makeDoInstance()
     const at = "2026-05-22T08:00:00.000Z"
-    await do_.recordBatch({ ...pr, occurredAt: at, events: [{ kind: "gate-rejection", gate: "logic", reason: "unanchored-logic-claim", dropped: false }] })
-    await do_.recordBatch({ ...pr, occurredAt: at, events: [{ kind: "gate-rejection", gate: "logic", reason: "unanchored-logic-claim", dropped: true }] })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: at,
+      events: [{ kind: "gate-rejection", gate: "logic", reason: "unanchored-logic-claim", dropped: false }],
+    })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: at,
+      events: [{ kind: "gate-rejection", gate: "logic", reason: "unanchored-logic-claim", dropped: true }],
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.counts.logic["unanchored-logic-claim"]).toEqual({ wouldDrop: 2, kept: 1 })
   })
 
   it("excludes days outside the requested window", async () => {
     const do_ = makeDoInstance()
-    await do_.recordBatch({ ...pr, occurredAt: "2026-05-01T00:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "path-not-changed", dropped: false }] })
-    await do_.recordBatch({ ...pr, occurredAt: "2026-05-22T00:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "path-not-changed", dropped: false }] })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-05-01T00:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "perf", reason: "path-not-changed", dropped: false }],
+    })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-05-22T00:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "perf", reason: "path-not-changed", dropped: false }],
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     // Only the 2026-05-22 event is within the 7-day window ending 2026-05-22.
     expect(out.counts.perf["path-not-changed"]).toEqual({ wouldDrop: 1, kept: 1 })
@@ -76,15 +111,33 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
 
   it("is gate-agnostic — an unknown gate is recorded like any other", async () => {
     const do_ = makeDoInstance()
-    await do_.recordBatch({ ...pr, occurredAt: "2026-05-22T00:00:00.000Z", events: [{ kind: "gate-rejection", gate: "coverage", reason: "uncited-gap", dropped: false }] })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-05-22T00:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "coverage", reason: "uncited-gap", dropped: false }],
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.counts.coverage["uncited-gap"]).toEqual({ wouldDrop: 1, kept: 1 })
   })
 
   it("tracks last-seen head SHA per PR (latest wins)", async () => {
     const do_ = makeDoInstance()
-    await do_.recordBatch({ owner: "o", repo: "r", prNumber: 5, headSha: "aaa", occurredAt: "2026-05-22T10:00:00.000Z", events: [{ kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: false }] })
-    await do_.recordBatch({ owner: "o", repo: "r", prNumber: 5, headSha: "bbb", occurredAt: "2026-05-22T11:00:00.000Z", events: [{ kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: false }] })
+    await do_.recordBatch({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+      headSha: "aaa",
+      occurredAt: "2026-05-22T10:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: false }],
+    })
+    await do_.recordBatch({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+      headSha: "bbb",
+      occurredAt: "2026-05-22T11:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: false }],
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     const head = out.lastSeenPrHeads.find((h) => h.owner === "o" && h.repo === "r" && h.prNumber === 5)
     expect(head?.headSha).toBe("bbb")
@@ -104,9 +157,37 @@ describe("ValidationMetricsDO.alarm (retention GC)", () => {
   it("prunes daily counts + PR heads older than the retention window", async () => {
     const do_ = makeDoInstance()
     // Ancient event (well beyond 35-day retention) + a fresh one.
-    await do_.recordBatch({ owner: "o", repo: "r", prNumber: 9, headSha: "old", occurredAt: "2020-01-01T00:00:00.000Z", events: [{ kind: "gate-rejection", gate: "security", reason: "evidence-out-of-range", dropped: false }] })
+    await do_.recordBatch({
+      owner: "o",
+      repo: "r",
+      prNumber: 9,
+      headSha: "old",
+      occurredAt: "2020-01-01T00:00:00.000Z",
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "evidence-out-of-range",
+          dropped: false,
+        },
+      ],
+    })
     const fresh = new Date().toISOString()
-    await do_.recordBatch({ owner: "o", repo: "r", prNumber: 10, headSha: "new", occurredAt: fresh, events: [{ kind: "gate-rejection", gate: "security", reason: "evidence-out-of-range", dropped: false }] })
+    await do_.recordBatch({
+      owner: "o",
+      repo: "r",
+      prNumber: 10,
+      headSha: "new",
+      occurredAt: fresh,
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "evidence-out-of-range",
+          dropped: false,
+        },
+      ],
+    })
 
     await do_.alarm()
 
@@ -124,13 +205,19 @@ describe("ValidationMetricsDO.alarm (retention GC)", () => {
     // dismissals share `daily_counts` so the same DELETE must cover them.
     const do_ = makeDoInstance()
     await do_.recordBatch({
-      owner: "", repo: "", prNumber: 0, headSha: "",
+      owner: "",
+      repo: "",
+      prNumber: 0,
+      headSha: "",
       occurredAt: "2020-01-01T00:00:00.000Z",
       events: [{ kind: "dismissal-reason", reason: "too-minor" }],
     })
     const fresh = new Date().toISOString()
     await do_.recordBatch({
-      owner: "", repo: "", prNumber: 0, headSha: "",
+      owner: "",
+      repo: "",
+      prNumber: 0,
+      headSha: "",
       occurredAt: fresh,
       events: [{ kind: "dismissal-reason", reason: "too-minor" }],
     })
@@ -157,7 +244,7 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
       "already-covered": 0,
       "too-minor": 0,
       "wrong-context": 0,
-      "unlabeled": 0,
+      unlabeled: 0,
     })
     expect(out.window).toEqual({ days: 30, startDay: "2026-04-23", endDay: "2026-05-22" })
   })
@@ -165,7 +252,10 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
   it("counts a dismissal-reason event under its canonical label", async () => {
     const do_ = makeDoInstance()
     await do_.recordBatch({
-      owner: "", repo: "", prNumber: 0, headSha: "",
+      owner: "",
+      repo: "",
+      prNumber: 0,
+      headSha: "",
       occurredAt: "2026-05-22T12:00:00.000Z",
       events: [{ kind: "dismissal-reason", reason: "too-minor" }],
     })
@@ -179,7 +269,10 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
     const at = "2026-05-22T08:00:00.000Z"
     for (const reason of ["too-minor", "too-minor", "not-a-bug", "unlabeled"] as const) {
       await do_.recordBatch({
-        owner: "", repo: "", prNumber: 0, headSha: "",
+        owner: "",
+        repo: "",
+        prNumber: 0,
+        headSha: "",
         occurredAt: at,
         events: [{ kind: "dismissal-reason", reason }],
       })
@@ -194,12 +287,18 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
   it("excludes dismissals outside the window", async () => {
     const do_ = makeDoInstance()
     await do_.recordBatch({
-      owner: "", repo: "", prNumber: 0, headSha: "",
+      owner: "",
+      repo: "",
+      prNumber: 0,
+      headSha: "",
       occurredAt: "2026-05-01T00:00:00.000Z",
       events: [{ kind: "dismissal-reason", reason: "too-minor" }],
     })
     await do_.recordBatch({
-      owner: "", repo: "", prNumber: 0, headSha: "",
+      owner: "",
+      repo: "",
+      prNumber: 0,
+      headSha: "",
       occurredAt: "2026-05-22T00:00:00.000Z",
       events: [{ kind: "dismissal-reason", reason: "too-minor" }],
     })
@@ -210,7 +309,10 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
   it("does NOT pollute the validator-gate rollup or last-seen tracker", async () => {
     const do_ = makeDoInstance()
     await do_.recordBatch({
-      owner: "x", repo: "y", prNumber: 99, headSha: "shouldnotappear",
+      owner: "x",
+      repo: "y",
+      prNumber: 99,
+      headSha: "shouldnotappear",
       occurredAt: "2026-05-22T12:00:00.000Z",
       events: [{ kind: "dismissal-reason", reason: "bad-anchor" }],
     })
@@ -224,15 +326,26 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
   it("mixes both event kinds in one batch — each routes to its own surface", async () => {
     const do_ = makeDoInstance()
     await do_.recordBatch({
-      owner: "o", repo: "r", prNumber: 1, headSha: "abc",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "abc",
       occurredAt: "2026-05-22T12:00:00.000Z",
       events: [
-        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: true },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: true,
+        },
         { kind: "dismissal-reason", reason: "wrong-context" },
       ],
     })
     const gates = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    const dismissals = await do_.queryDismissals({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
+    const dismissals = await do_.queryDismissals({
+      windowDays: 7,
+      nowIso: "2026-05-22T12:00:00.000Z",
+    })
     expect(gates.counts.security?.["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 0 })
     expect(dismissals.reasonCounts["wrong-context"]).toBe(1)
   })
@@ -263,7 +376,11 @@ describe("ValidationMetricsDO.recordRepeatFps + queryRepeatFps (SIG-217)", () =>
     const do_ = makeDoInstance()
     const at = "2026-05-26T08:00:00.000Z"
     for (let i = 0; i < 3; i++) {
-      await do_.recordRepeatFps({ ...pr, occurredAt: at, events: [{ kind: "repeat-fp-detected", specialist: "perf" }] })
+      await do_.recordRepeatFps({
+        ...pr,
+        occurredAt: at,
+        events: [{ kind: "repeat-fp-detected", specialist: "perf" }],
+      })
     }
     const out = await do_.queryRepeatFps({ windowDays: 7, nowIso: at })
     expect(out.byReason["repeat-fp-detected"]).toBe(3)
@@ -272,8 +389,16 @@ describe("ValidationMetricsDO.recordRepeatFps + queryRepeatFps (SIG-217)", () =>
 
   it("excludes events outside the trailing window", async () => {
     const do_ = makeDoInstance()
-    await do_.recordRepeatFps({ ...pr, occurredAt: "2026-05-01T12:00:00.000Z", events: [{ kind: "repeat-fp-detected", specialist: "logic" }] })
-    await do_.recordRepeatFps({ ...pr, occurredAt: "2026-05-26T12:00:00.000Z", events: [{ kind: "repeat-fp-detected", specialist: "logic" }] })
+    await do_.recordRepeatFps({
+      ...pr,
+      occurredAt: "2026-05-01T12:00:00.000Z",
+      events: [{ kind: "repeat-fp-detected", specialist: "logic" }],
+    })
+    await do_.recordRepeatFps({
+      ...pr,
+      occurredAt: "2026-05-26T12:00:00.000Z",
+      events: [{ kind: "repeat-fp-detected", specialist: "logic" }],
+    })
     const out = await do_.queryRepeatFps({ windowDays: 7, nowIso: "2026-05-26T12:00:00.000Z" })
     expect(out.byReason["repeat-fp-detected"]).toBe(1) // only the in-window one
   })
@@ -293,10 +418,28 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
       occurredAt: at,
       events: [
         // security gate firing on a real security finding (expected)
-        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false, category: "security" },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: false,
+          category: "security",
+        },
         // security gate firing on a TESTING-category finding (the PR #296 meta-FP)
-        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
-        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "no-credential-token",
+          dropped: false,
+          category: "testing",
+        },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "no-credential-token",
+          dropped: false,
+          category: "testing",
+        },
       ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
@@ -313,7 +456,15 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
     await do_.recordBatch({
       ...pr,
       occurredAt: at,
-      events: [{ kind: "gate-rejection", gate: "logic", reason: "no-survival-rationale", dropped: true, category: "logic" }],
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "logic",
+          reason: "no-survival-rationale",
+          dropped: true,
+          category: "logic",
+        },
+      ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
     expect(out.byCategory.logic.logic).toEqual({ wouldDrop: 1, kept: 0 })
@@ -324,26 +475,64 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
     await do_.recordBatch({
       ...pr,
       occurredAt: at,
-      events: [{ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: true }],
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "verification-refuted",
+          reason: "refuted-citation",
+          dropped: true,
+        },
+      ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
     // still recorded in the per-reason counts...
-    expect(out.counts["verification-refuted"]["refuted-citation"]).toEqual({ wouldDrop: 1, kept: 0 })
+    expect(out.counts["verification-refuted"]["refuted-citation"]).toEqual({
+      wouldDrop: 1,
+      kept: 0,
+    })
     // ...but contributes nothing to byCategory
     expect(out.byCategory).toEqual({})
   })
 
   it("excludes category events outside the trailing window", async () => {
     const do_ = makeDoInstance()
-    await do_.recordBatch({ ...pr, occurredAt: "2026-05-01T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "r", dropped: false, category: "performance" }] })
-    await do_.recordBatch({ ...pr, occurredAt: "2026-05-22T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "r", dropped: false, category: "performance" }] })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-05-01T12:00:00.000Z",
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "perf",
+          reason: "r",
+          dropped: false,
+          category: "performance",
+        },
+      ],
+    })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-05-22T12:00:00.000Z",
+      events: [
+        {
+          kind: "gate-rejection",
+          gate: "perf",
+          reason: "r",
+          dropped: false,
+          category: "performance",
+        },
+      ],
+    })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.byCategory.perf.performance).toEqual({ wouldDrop: 1, kept: 1 }) // only the in-window one
   })
 
   it("GC drops category buckets older than retention", async () => {
     const do_ = makeDoInstance()
-    await do_.recordBatch({ ...pr, occurredAt: "2026-04-01T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "logic", reason: "r", dropped: false, category: "logic" }] })
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: "2026-04-01T12:00:00.000Z",
+      events: [{ kind: "gate-rejection", gate: "logic", reason: "r", dropped: false, category: "logic" }],
+    })
     await do_.alarm()
     const out = await do_.query({ windowDays: 30, nowIso: "2026-05-22T12:00:00.000Z" })
     expect(out.byCategory).toEqual({}) // the stale category bucket was GC'd

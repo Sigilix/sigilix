@@ -10,12 +10,7 @@
 import { generate } from "@/src/shared/adapters/model"
 import { LinearClient, buildLinearAuth } from "./linear"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
-import {
-  bodyMentionsBot,
-  getMentionTriggers,
-  isLikelyBotAuthor,
-  stripMentionFromBody,
-} from "./mention"
+import { bodyMentionsBot, getMentionTriggers, isLikelyBotAuthor, stripMentionFromBody } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "@/src/shared/domain/schemas"
@@ -54,16 +49,10 @@ export interface LinearAgentRepoScope {
   repo: string | null
   mappedRepo: string | null
   availableRepos: string[]
-  status:
-    | "unmapped"
-    | "mapped_indexed"
-    | "mapped_not_indexed"
-    | "mapped_default_not_indexed"
+  status: "unmapped" | "mapped_indexed" | "mapped_not_indexed" | "mapped_default_not_indexed"
 }
 
-export function linearRetrievalTeamKey(
-  teamRepo: { owner: string; repo: string } | null,
-): string | null {
+export function linearRetrievalTeamKey(teamRepo: { owner: string; repo: string } | null): string | null {
   return teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : null
 }
 
@@ -92,11 +81,13 @@ export async function resolveLinearAgentRepoScope(
           fallbackAvailable.add(repo)
         }
       } catch (err) {
-        console.warn(JSON.stringify({
-          event: "linear-agent-repo-scope-list-failed",
-          owner,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "linear-agent-repo-scope-list-failed",
+            owner,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
     const availableRepos = Array.from(fallbackAvailable).sort((a, b) => a.localeCompare(b))
@@ -117,23 +108,27 @@ export async function resolveLinearAgentRepoScope(
       available.add(repo)
     }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "linear-agent-repo-scope-list-failed",
-      owner: teamRepo.owner,
-      repo: teamRepo.repo,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-repo-scope-list-failed",
+        owner: teamRepo.owner,
+        repo: teamRepo.repo,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
   try {
     const exactManifest = await readRepoIndexManifest(env as Env, teamRepo.owner, teamRepo.repo)
     if (exactManifest.kind === "ok") available.add(defaultRepo)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "linear-agent-repo-scope-manifest-read-failed",
-      owner: teamRepo.owner,
-      repo: teamRepo.repo,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-repo-scope-manifest-read-failed",
+        owner: teamRepo.owner,
+        repo: teamRepo.repo,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
   const availableRepos = Array.from(available).sort((a, b) => a.localeCompare(b))
   const defaultIndexed = available.has(defaultRepo)
@@ -191,9 +186,7 @@ export interface HandleMentionOpts {
  *     strip step is skipped too — there's no mention to strip, so the
  *     full body (trimmed) becomes the question.
  */
-export type MentionQuestionGate =
-  | { skip: "no-mention" }
-  | { skip: null; fullQuestion: string }
+export type MentionQuestionGate = { skip: "no-mention" } | { skip: null; fullQuestion: string }
 
 export function resolveMentionQuestion(args: {
   triggerReason: "mention" | "thread-followup"
@@ -240,11 +233,7 @@ export function resolveReplyParentId(source: ResolveReplyParentSource): string |
   return id
 }
 
-export async function handleMention(
-  commentId: string,
-  env: Env,
-  opts: HandleMentionOpts = {},
-): Promise<void> {
+export async function handleMention(commentId: string, env: Env, opts: HandleMentionOpts = {}): Promise<void> {
   const t0 = Date.now()
   const triggerReason = opts.triggerReason ?? "mention"
   const log = (label: string, extra?: Record<string, unknown>): void => {
@@ -332,10 +321,10 @@ export async function handleMention(
   const retrievalTeamKey = linearRetrievalTeamKey(teamRepo)
   const chunks = retrievalTeamKey
     ? await retrieveChunks({
-      text: retrievalText,
-      teamKey: retrievalTeamKey,
-      env,
-    })
+        text: retrievalText,
+        teamKey: retrievalTeamKey,
+        env,
+      })
     : []
   log("retrieval-done", { chunks: chunks.length, namespace: retrievalTeamKey })
 
@@ -548,11 +537,7 @@ function buildPrompt(ctx: PromptCtx): string {
     const blocks: string[] = []
     for (const pr of ctx.linkedPrs) blocks.push(renderPrContext(pr))
     for (const f of ctx.linkedPrFailures) blocks.push(renderPrUnavailable(f))
-    sections.push(
-      "[LINKED PR CONTEXT — ground truth for what these PRs changed]",
-      blocks.join("\n\n"),
-      ""
-    )
+    sections.push("[LINKED PR CONTEXT — ground truth for what these PRs changed]", blocks.join("\n\n"), "")
   }
 
   if (ctx.codebaseChunks) {
@@ -561,7 +546,7 @@ function buildPrompt(ctx: PromptCtx): string {
       "Verify each is actually relevant before citing — retrieval can return false positives.",
       "",
       ctx.codebaseChunks,
-      ""
+      "",
     )
   }
 
@@ -614,10 +599,7 @@ export function renderPrUnavailable(f: LinkedPrFailure): string {
  * those as available choices instead of telling the user "no access".
  * Mapping is a soft prior, not a precondition.
  */
-export function renderCodebaseRetrievalStatus(
-  scope: LinearAgentRepoScope,
-  chunkCount: number,
-): string {
+export function renderCodebaseRetrievalStatus(scope: LinearAgentRepoScope, chunkCount: number): string {
   if (scope.repo && chunkCount === 0) {
     return `Repo '${scope.repo}' is indexed, but retrieval returned no relevant chunks for this question.`
   }
@@ -660,24 +642,16 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   // branch than the team's primary. Keep the prompt-visible list
   // bounded; retrieve_codebase authorization still uses the full
   // allowed namespace set outside this prompt.
-  const universe = ctx.availableRepos.length > 0
-    ? ctx.availableRepos
-    : ctx.repo
-      ? [ctx.repo]
-      : []
+  const universe = ctx.availableRepos.length > 0 ? ctx.availableRepos : ctx.repo ? [ctx.repo] : []
   let visibleUniverse = universe.slice(0, MAX_PROMPT_VISIBLE_NAMESPACES)
-  if (
-    ctx.repo &&
-    universe.includes(ctx.repo) &&
-    !visibleUniverse.includes(ctx.repo) &&
-    visibleUniverse.length > 0
-  ) {
+  if (ctx.repo && universe.includes(ctx.repo) && !visibleUniverse.includes(ctx.repo) && visibleUniverse.length > 0) {
     visibleUniverse = [...visibleUniverse.slice(0, -1), ctx.repo]
   }
   const hiddenUniverseCount = Math.max(0, universe.length - visibleUniverse.length)
-  const universeText = visibleUniverse.length > 0
-    ? `${visibleUniverse.map(formatIndexedNamespaceForPrompt).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
-    : "(none configured)"
+  const universeText =
+    visibleUniverse.length > 0
+      ? `${visibleUniverse.map(formatIndexedNamespaceForPrompt).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
+      : "(none configured)"
   // SIG-221: collapsed six prompt variants into three, with no hard
   // "do not call retrieve_codebase" gates. Whenever the indexed
   // universe has at least one entry, the agent may always call
@@ -697,7 +671,8 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   } else if (ctx.mappedRepo) {
     repoLine = `The Linear team maps to '${ctx.mappedRepo}', but no indexed repos are available for this org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt.`
   } else {
-    repoLine = "No indexed repos are available for this Linear org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt."
+    repoLine =
+      "No indexed repos are available for this Linear org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt."
   }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
@@ -745,7 +720,7 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchRes
         number: r.number,
         env,
       }),
-    }))
+    })),
   )
   const contexts: PrContext[] = []
   const failures: LinkedPrFailure[] = []
@@ -753,9 +728,7 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchRes
     if (result.ok) {
       contexts.push(result.context)
     } else {
-      console.warn(
-        `[linear-mention] pr-fetch.skip ref=${ref.owner}/${ref.repo}#${ref.number} reason=${result.reason}`
-      )
+      console.warn(`[linear-mention] pr-fetch.skip ref=${ref.owner}/${ref.repo}#${ref.number} reason=${result.reason}`)
       failures.push({ owner: ref.owner, repo: ref.repo, number: ref.number, reason: result.reason })
     }
   }
@@ -787,10 +760,7 @@ function parseVerdict(text: string): MentionVerdict | null {
   const abstain = Boolean(obj.abstain)
   return {
     answer,
-    confidence:
-      Number.isFinite(confidence) && confidence >= 1 && confidence <= 5
-        ? Math.round(confidence)
-        : 3,
+    confidence: Number.isFinite(confidence) && confidence >= 1 && confidence <= 5 ? Math.round(confidence) : 3,
     abstain,
   }
 }
@@ -809,4 +779,3 @@ function formatReply({ verdict, askerHandle }: FormatArgs): string {
   lines.push(verdict.answer)
   return lines.join("\n")
 }
-

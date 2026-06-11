@@ -11,10 +11,7 @@
  * `&gt;`, so `]]>` becomes `]]&gt;` without needing a separate rule.
  */
 export function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
 /**

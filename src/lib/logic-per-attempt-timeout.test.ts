@@ -11,11 +11,7 @@
 // budget invariant that keeps it safe.
 
 import { describe, expect, it } from "vitest"
-import {
-  SPECIALIST_CONFIGS,
-  SPECIALIST_TIMEOUT_MS,
-  PER_ATTEMPT_TIMEOUT_MS,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS, PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
 
 const TESTS_SPECIALIST_MIN_HEADROOM_MS = 50_000
 

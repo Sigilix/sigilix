@@ -49,17 +49,11 @@ async function findDraftSkipComment(
   prNumber: number,
 ): Promise<{ id: number; body: string } | null> {
   const comments = await client.listIssueComments(owner, repo, prNumber)
-  const existing = comments.find(
-    (c) => typeof c.body === "string" && c.body.includes(DRAFT_SKIP_MARKER),
-  )
+  const existing = comments.find((c) => typeof c.body === "string" && c.body.includes(DRAFT_SKIP_MARKER))
   return existing ? { id: existing.id, body: existing.body } : null
 }
 
-async function rememberCommentId(
-  env: Env,
-  key: string,
-  commentId: number,
-): Promise<void> {
+async function rememberCommentId(env: Env, key: string, commentId: number): Promise<void> {
   try {
     await env.OPENCLAW_STATE.put(key, String(commentId), {
       expirationTtl: DRAFT_SKIP_KV_TTL_SECONDS,
@@ -102,13 +96,17 @@ export async function postDraftPrSkipNotice(args: {
         if (cachedComment?.body.includes(DRAFT_SKIP_MARKER)) {
           await client.updateIssueComment(owner, repo, parsed, body)
           await rememberCommentId(env, key, parsed)
-          console.log(JSON.stringify({
-            event: "pr-draft-skip-notice-updated",
-            owner, repo, prNumber,
-            headSha: headSha.slice(0, 7),
-            commentId: parsed,
-            source: "kv",
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-draft-skip-notice-updated",
+              owner,
+              repo,
+              prNumber,
+              headSha: headSha.slice(0, 7),
+              commentId: parsed,
+              source: "kv",
+            }),
+          )
           return { kind: "updated", commentId: parsed }
         }
         await env.OPENCLAW_STATE.delete(key)
@@ -125,32 +123,44 @@ export async function postDraftPrSkipNotice(args: {
         await client.updateIssueComment(owner, repo, existing.id, body)
       }
       await rememberCommentId(env, key, existing.id)
-      console.log(JSON.stringify({
-        event: "pr-draft-skip-notice-updated",
-        owner, repo, prNumber,
-        headSha: headSha.slice(0, 7),
-        commentId: existing.id,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-draft-skip-notice-updated",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          commentId: existing.id,
+        }),
+      )
       return { kind: "updated", commentId: existing.id }
     }
 
     const created = await client.createIssueComment(owner, repo, prNumber, body)
     await rememberCommentId(env, key, created.id)
-    console.log(JSON.stringify({
-      event: "pr-draft-skip-notice-posted",
-      owner, repo, prNumber,
-      headSha: headSha.slice(0, 7),
-      commentId: created.id,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-draft-skip-notice-posted",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        commentId: created.id,
+      }),
+    )
     return { kind: "posted", commentId: created.id }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.warn(JSON.stringify({
-      event: "pr-draft-skip-notice-failed",
-      owner, repo, prNumber,
-      headSha: headSha.slice(0, 7),
-      err: msg,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-draft-skip-notice-failed",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        err: msg,
+      }),
+    )
     return { kind: "failed", err: msg }
   }
 }
@@ -166,27 +176,30 @@ export async function supersedeDraftPrSkipNotice(args: {
   try {
     const existing = await findDraftSkipComment(client, owner, repo, prNumber)
     if (!existing) return { kind: "not-found" }
-    await client.updateIssueComment(
-      owner,
-      repo,
-      existing.id,
-      renderDraftSkipSupersededNotice(headSha),
+    await client.updateIssueComment(owner, repo, existing.id, renderDraftSkipSupersededNotice(headSha))
+    console.log(
+      JSON.stringify({
+        event: "pr-draft-skip-notice-superseded",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        commentId: existing.id,
+      }),
     )
-    console.log(JSON.stringify({
-      event: "pr-draft-skip-notice-superseded",
-      owner, repo, prNumber,
-      headSha: headSha.slice(0, 7),
-      commentId: existing.id,
-    }))
     return { kind: "updated", commentId: existing.id }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.warn(JSON.stringify({
-      event: "pr-draft-skip-notice-supersede-failed",
-      owner, repo, prNumber,
-      headSha: headSha.slice(0, 7),
-      err: msg,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-draft-skip-notice-supersede-failed",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        err: msg,
+      }),
+    )
     return { kind: "failed", err: msg }
   }
 }

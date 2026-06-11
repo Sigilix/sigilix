@@ -11,10 +11,7 @@
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { type LineSpan } from "@/src/features/ast-rules"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
-import {
-  buildSourceFindingSecurityEvidenceById,
-  buildSourceFindingRationaleById,
-} from "./validation-internals"
+import { buildSourceFindingSecurityEvidenceById, buildSourceFindingRationaleById } from "./validation-internals"
 import type { SigilixProfile } from "@/src/lib/sigilix-config"
 import {
   MAX_ADVISORY_NITS,
@@ -104,9 +101,7 @@ export function initializeValidationState(args: ValidateForSubmissionArgs): {
 
   const cleanFindings: PrReviewFinding[] = []
   const cleanFindingProvenance: ValidationState["cleanFindingProvenance"] = []
-  const provenanceDropped: ValidationState["provenanceDropped"] = [
-    ...synthOutput.provenance.dropped,
-  ]
+  const provenanceDropped: ValidationState["provenanceDropped"] = [...synthOutput.provenance.dropped]
   const unanchoredFindings: PrReviewFinding[] = []
   const advisoryNits: PrReviewFinding[] = []
 
@@ -120,15 +115,14 @@ export function initializeValidationState(args: ValidateForSubmissionArgs): {
   // specialist actually saw per path — its diff window (changed + context
   // lines). A guard at a full-file line NOT in this set was outside the model's
   // window. Built once, but only when the gate runs (`off` skips entirely).
-  const windowLinesByPath: ReadonlyMap<string, ReadonlySet<number>> =
-    windowBlindnessValidatorMode === "off"
-      ? new Map<string, ReadonlySet<number>>()
-      : new Map(
-          [...reviewable.entries()].map(([path, positions]) => [
-            path,
-            new Set(positions.filter((p) => p.side === "RIGHT").map((p) => p.line)),
-          ]),
-        )
+  const windowLinesByPath: ReadonlyMap<string, ReadonlySet<number>> = windowBlindnessValidatorMode === "off"
+    ? new Map<string, ReadonlySet<number>>()
+    : new Map(
+        [...reviewable.entries()].map(([path, positions]) => [
+          path,
+          new Set(positions.filter((p) => p.side === "RIGHT").map((p) => p.line)),
+        ]),
+      )
 
   const resolved: ResolvedValidationArgs = {
     synthOutput,

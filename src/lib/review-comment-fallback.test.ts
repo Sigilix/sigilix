@@ -16,10 +16,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import {
-  postReviewCommentFallback,
-  renderReviewCommentFallback,
-} from "@/src/lib/review-comment-fallback"
+import { postReviewCommentFallback, renderReviewCommentFallback } from "@/src/lib/review-comment-fallback"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 
@@ -120,7 +117,11 @@ describe("renderReviewCommentFallback", () => {
       "anchorless-fallback-error",
       "phase3",
     ] as const) {
-      const out = renderReviewCommentFallback({ body: SYNTH_BODY, submitPath: path, headSha: "abc1234" })
+      const out = renderReviewCommentFallback({
+        body: SYNTH_BODY,
+        submitPath: path,
+        headSha: "abc1234",
+      })
       expect(out).toContain(`\`${path}\``)
     }
   })
@@ -193,7 +194,8 @@ describe("postReviewCommentFallback — happy path", () => {
 
     const out = await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out).toEqual({ ok: true, reason: "posted", commentId: 999_999 })
@@ -207,9 +209,7 @@ describe("postReviewCommentFallback — happy path", () => {
     // Dedupe key written AFTER the post (so a post failure doesn't
     // leave a phantom dedupe that suppresses a retry).
     expect(writes).toHaveLength(1)
-    expect(writes[0]!.key).toBe(
-      "pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef",
-    )
+    expect(writes[0]!.key).toBe("pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef")
     const opts = writes[0]!.opts as { expirationTtl: number } | undefined
     expect(opts?.expirationTtl).toBe(7 * 24 * 60 * 60)
   })
@@ -223,7 +223,8 @@ describe("postReviewCommentFallback — happy path", () => {
 
     const out = await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out.ok).toBe(true)
@@ -243,15 +244,13 @@ describe("postReviewCommentFallback — dedupe", () => {
 
   it("returns `ok=dedupe-hit` and skips the post when the per-(PR, headSha) key is already set", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
-      String(Date.now()),
-    )
+    store.set("pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
     const client = new GitHubClient({ token: "t" })
 
     const out = await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out).toEqual({ ok: true, reason: "dedupe-hit" })
@@ -260,10 +259,7 @@ describe("postReviewCommentFallback — dedupe", () => {
 
   it("uses distinct dedupe keys per (PR, headSha) — one head's fallback does not suppress another's", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
-      String(Date.now()),
-    )
+    store.set("pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
     mockCreateIssueComment.mockResolvedValueOnce({ id: 1 })
     const client = new GitHubClient({ token: "t" })
 
@@ -293,7 +289,8 @@ describe("postReviewCommentFallback — dedupe", () => {
 
     const out = await postReviewCommentFallback({
       env: { OPENCLAW_STATE: failingKv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out.ok).toBe(true)
@@ -325,7 +322,8 @@ describe("postReviewCommentFallback — post failure", () => {
 
     const out = await postReviewCommentFallback({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out).toEqual({ ok: false, reason: "post-failed", error: "HTTP 403 Forbidden" })
@@ -361,10 +359,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
 
   it("emits `pr-review-comment-fallback-dedupe-hit` with submit_path + headSha on dedupe hit", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef",
-      String(Date.now()),
-    )
+    store.set("pr-review-comment-fallback:Sigilix/sigilix#90@abc1234567890abcdef", String(Date.now()))
     const client = new GitHubClient({ token: "t" })
 
     await postReviewCommentFallback({
@@ -388,10 +383,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
 
 // ARC-280 follow-up — postReviewSkipNotice (silent-skip path elimination)
 
-import {
-  postReviewSkipNotice,
-  renderReviewSkipNotice,
-} from "@/src/lib/review-comment-fallback"
+import { postReviewSkipNotice, renderReviewSkipNotice } from "@/src/lib/review-comment-fallback"
 
 describe("renderReviewSkipNotice", () => {
   it("renders the skip-notice header with reason + sha + retry hint", () => {
@@ -445,7 +437,8 @@ describe("postReviewSkipNotice — happy path", () => {
 
     const out = await postReviewSkipNotice({
       env: { OPENCLAW_STATE: kv } as unknown as Env,
-      client, ...baseArgs,
+      client,
+      ...baseArgs,
     })
 
     expect(out).toEqual({ ok: true, reason: "posted", commentId: 555_000 })
@@ -456,9 +449,7 @@ describe("postReviewSkipNotice — happy path", () => {
     // Distinct dedupe-key family from postReviewCommentFallback so
     // skip-notice + comment-fallback can coexist on the same head.
     expect(writes).toHaveLength(1)
-    expect(writes[0]!.key).toBe(
-      "pr-review-skip-notice:Sigilix/sigilix#92@abc1234567890abcdef",
-    )
+    expect(writes[0]!.key).toBe("pr-review-skip-notice:Sigilix/sigilix#92@abc1234567890abcdef")
     const opts = writes[0]!.opts as { expirationTtl: number } | undefined
     expect(opts?.expirationTtl).toBe(7 * 24 * 60 * 60)
   })
@@ -467,10 +458,7 @@ describe("postReviewSkipNotice — happy path", () => {
 describe("postReviewSkipNotice — dedupe", () => {
   it("returns dedupe-hit + skips the post when the per-(PR, headSha) key is already set", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "pr-review-skip-notice:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
-      String(Date.now()),
-    )
+    store.set("pr-review-skip-notice:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
     const client = new GitHubClient({ token: "t" })
 
     const out = await postReviewSkipNotice({
@@ -491,10 +479,7 @@ describe("postReviewSkipNotice — dedupe", () => {
     // Confirm a comment-fallback dedupe on the same (PR, headSha)
     // does NOT block a skip-notice on the same head.
     const { kv, store } = makeKvStub()
-    store.set(
-      "pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
-      String(Date.now()),
-    )
+    store.set("pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
     mockCreateIssueComment.mockResolvedValueOnce({ id: 1 })
     const client = new GitHubClient({ token: "t" })
 

@@ -25,8 +25,7 @@ import {
 // real implementation (all other tests are unaffected) but can be forced to
 // reject for the hydrate-failure path test below.
 vi.mock("@/src/lib/review-memory/marker", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/src/lib/review-memory/marker")>()
+  const actual = await importOriginal<typeof import("@/src/lib/review-memory/marker")>()
   return { ...actual, hydrateClaimIds: vi.fn(actual.hydrateClaimIds) }
 })
 
@@ -46,7 +45,11 @@ describe("captureReviewFeedback — gate skips", () => {
     const env = makeEnv(kv, "off")
     const client = makeClient("body has parent marker")
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 1,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -58,7 +61,11 @@ describe("captureReviewFeedback — gate skips", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient("body has marker")
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 1,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig({ enabled: false, captureOnly: false }),
     })
@@ -70,7 +77,11 @@ describe("captureReviewFeedback — gate skips", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(null)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 1,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 1,
       replyComment: { id: 100, body: "false positive", path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -94,19 +105,19 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
     // 1 seen-marker write + 2 signal writes = 3 puts total
-    const signalWrites = putKeys.filter((k) =>
-      k.startsWith("review-memory:a/r:"),
-    )
+    const signalWrites = putKeys.filter((k) => k.startsWith("review-memory:a/r:"))
     expect(signalWrites.length).toBe(2)
     // Both stored records present
-    const catRecord = JSON.parse(
-      store.get("review-memory:a/r:cat:performance")!,
-    )
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecord.signals.length).toBe(1)
     expect(catRecord.signals[0].fid).toBe("1111111111111111")
     expect(catRecord.signals[0].commentId).toBe(100)
@@ -118,9 +129,7 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     // Path-scope record exists (path-sha key derived from marker pathSha12 — but
     // capture pipeline uses the FULL sha256 derived independently so the test
     // can't predict the exact key without knowing the path. Check via prefix.)
-    const pathScopeKeys = Array.from(store.keys()).filter((k) =>
-      k.startsWith("review-memory:a/r:path:"),
-    )
+    const pathScopeKeys = Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:path:"))
     expect(pathScopeKeys.length).toBe(1)
     // capture-written telemetry fired
     const events = consoleSpy.mock.calls
@@ -134,8 +143,17 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
-      replyComment: { id: 100, body: "@sigilix dismiss not-a-bug", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      replyComment: {
+        id: 100,
+        body: "@sigilix dismiss not-a-bug",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+      },
       config: makeConfig(),
     })
     const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
@@ -155,15 +173,18 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
     const client = makeClient(`Some review text\n\n${VALID_MARKER}`, {
-      authorLogin: "malicious-user",  // NOT a Sigilix login
+      authorLogin: "malicious-user", // NOT a Sigilix login
     })
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
-    expect(Array.from(store.keys())
-      .filter((k) => k.startsWith("review-memory:")).length).toBe(0)
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("review-memory:")).length).toBe(0)
     const skipEvents = consoleSpy.mock.calls
       .map((args) => String(args[0]))
       .filter((s) => s.includes("parent-not-sigilix-author"))
@@ -177,7 +198,11 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -185,9 +210,7 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     expect(store.has("review-memory:a/r:cat:performance")).toBe(true)
     expect(store.has("review-memory:repo:555000:cat:performance")).toBe(true)
     // Both populated for path-scope (path-sha derived inside capture)
-    const repoIdPathKeys = Array.from(store.keys()).filter((k) =>
-      k.startsWith("review-memory:repo:555000:path:"),
-    )
+    const repoIdPathKeys = Array.from(store.keys()).filter((k) => k.startsWith("review-memory:repo:555000:path:"))
     expect(repoIdPathKeys.length).toBe(1)
   })
 
@@ -199,18 +222,22 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
     // Override getRepository to return null
-    ;(client as unknown as {
-      getRepository: ReturnType<typeof vi.fn>
-    }).getRepository = vi.fn(async () => null)
+    ;(
+      client as unknown as {
+        getRepository: ReturnType<typeof vi.fn>
+      }
+    ).getRepository = vi.fn(async () => null)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
     expect(store.has("review-memory:a/r:cat:performance")).toBe(true)
-    const repoIdKeys = Array.from(store.keys()).filter((k) =>
-      k.startsWith("review-memory:repo:"),
-    )
+    const repoIdKeys = Array.from(store.keys()).filter((k) => k.startsWith("review-memory:repo:"))
     expect(repoIdKeys.length).toBe(0)
   })
 
@@ -219,12 +246,15 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient("Just a review comment with no markers")
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
-    expect(Array.from(store.keys())
-      .filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
     const events = consoleSpy.mock.calls
       .map((args) => String(args[0]))
       .filter((s) => s.includes("not-a-reply-to-sigilix"))
@@ -236,12 +266,20 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`text\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
-      replyComment: { id: 100, body: "Can you explain this?", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      replyComment: {
+        id: 100,
+        body: "Can you explain this?",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+      },
       config: makeConfig(),
     })
-    expect(Array.from(store.keys())
-      .filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
     const events = consoleSpy.mock.calls
       .map((args) => String(args[0]))
       .filter((s) => s.includes("no-dismissal-keyword"))
@@ -253,8 +291,17 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
-      replyComment: { id: 100, body: "Good catch, fixed.", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      replyComment: {
+        id: 100,
+        body: "Good catch, fixed.",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+      },
       config: makeConfig(),
     })
     expect(store.has("review-memory:a/r:cat:performance")).toBe(false)
@@ -268,14 +315,17 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
   it("skips when parent fetch returns null (parent-fetch-failed) — defensive", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
-    const client = makeClient(null)  // parent deleted / 404
+    const client = makeClient(null) // parent deleted / 404
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
-    expect(Array.from(store.keys())
-      .filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
   })
 })
 
@@ -300,7 +350,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -319,16 +373,12 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
       extractorVersion: 1,
     })
     // Path-scope record carries the SAME hydrated claims (shared signal).
-    const pathKey = Array.from(store.keys()).find((k) =>
-      k.startsWith("review-memory:a/r:path:"),
-    )!
+    const pathKey = Array.from(store.keys()).find((k) => k.startsWith("review-memory:a/r:path:"))!
     const pathRecord = JSON.parse(store.get(pathKey)!)
     expect(pathRecord.signals[0].claims).toEqual(sig.claims)
     // Dual-write repo-id keyspace carries the SAME claims — lock the contract
     // that claims propagate to every scope the shared signal is written to.
-    const repoRecord = JSON.parse(
-      store.get("review-memory:repo:555000:cat:performance")!,
-    )
+    const repoRecord = JSON.parse(store.get("review-memory:repo:555000:cat:performance")!)
     expect(repoRecord.signals[0].claims).toEqual(sig.claims)
   })
 
@@ -337,7 +387,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -350,7 +404,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${MARKER_MIXED_CLAIMS}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -365,7 +423,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: {
         id: 100,
         body: "false positive SENTINEL_REPLY_TEXT",
@@ -384,9 +446,7 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     expect(ev.claim_confidences).toContain(0.85)
     // The reviewer's free text must never appear in ANY telemetry line —
     // stringify EVERY console argument per call, not just the first.
-    const allLogs = consoleSpy.mock.calls
-      .map((a) => a.map(String).join(" "))
-      .join("\n")
+    const allLogs = consoleSpy.mock.calls.map((a) => a.map(String).join(" ")).join("\n")
     expect(allLogs).not.toContain("SENTINEL_REPLY_TEXT")
   })
 
@@ -395,7 +455,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -415,7 +479,11 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -426,11 +494,7 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
     // Failure telemetry emitted with the claim-hydrate stage.
     const failed = consoleSpy.mock.calls
       .map((a) => a.map(String).join(" "))
-      .find(
-        (s) =>
-          s.includes("review-memory-capture-failed") &&
-          s.includes("claim-hydrate"),
-      )
+      .find((s) => s.includes("review-memory-capture-failed") && s.includes("claim-hydrate"))
     expect(failed).toBeDefined()
   })
 })
@@ -447,24 +511,39 @@ describe("captureDismissedReviewFeedback — stale precision outcome", () => {
   })
 
   it("prefilters irrelevant dismissed reviews before token/config work", () => {
-    expect(hasStaleDismissedReviewFeedbackSignal({
-      id: 700,
-      body: PRECISION_FINDING_MARKERS,
-      commit_id: "old-head",
-      user: { login: "sigilix[bot]" },
-    }, "new-head")).toBe(true)
-    expect(hasStaleDismissedReviewFeedbackSignal({
-      id: 701,
-      body: PRECISION_FINDING_MARKERS,
-      commit_id: "new-head",
-      user: { login: "sigilix[bot]" },
-    }, "new-head")).toBe(false)
-    expect(hasStaleDismissedReviewFeedbackSignal({
-      id: 702,
-      body: PRECISION_FINDING_MARKERS,
-      commit_id: "old-head",
-      user: { login: "human" },
-    }, "new-head")).toBe(false)
+    expect(
+      hasStaleDismissedReviewFeedbackSignal(
+        {
+          id: 700,
+          body: PRECISION_FINDING_MARKERS,
+          commit_id: "old-head",
+          user: { login: "sigilix[bot]" },
+        },
+        "new-head",
+      ),
+    ).toBe(true)
+    expect(
+      hasStaleDismissedReviewFeedbackSignal(
+        {
+          id: 701,
+          body: PRECISION_FINDING_MARKERS,
+          commit_id: "new-head",
+          user: { login: "sigilix[bot]" },
+        },
+        "new-head",
+      ),
+    ).toBe(false)
+    expect(
+      hasStaleDismissedReviewFeedbackSignal(
+        {
+          id: 702,
+          body: PRECISION_FINDING_MARKERS,
+          commit_id: "old-head",
+          user: { login: "human" },
+        },
+        "new-head",
+      ),
+    ).toBe(false)
   })
 
   it("records stale only when a Sigilix review for an older commit has mappable finding fingerprints", async () => {
@@ -491,8 +570,8 @@ describe("captureDismissedReviewFeedback — stale precision outcome", () => {
     const recorded = consoleSpy.mock.calls
       .map((a) => String(a[0]))
       .find((s) => s.includes("review-feedback-outcome-recorded"))
-    expect(recorded).toContain("\"outcome\":\"stale\"")
-    expect(recorded).toContain("\"pattern_count\":2")
+    expect(recorded).toContain('"outcome":"stale"')
+    expect(recorded).toContain('"pattern_count":2')
   })
 
   it("skips a same-head review dismissal because staleness is not proven", async () => {
@@ -536,25 +615,23 @@ describe("captureReviewFeedback — idempotency + concurrent race", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`text\n${VALID_MARKER}`)
     const args = {
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     } as const
     await captureReviewFeedback(args)
-    const catRecordAfterFirst = JSON.parse(
-      store.get("review-memory:a/r:cat:performance")!,
-    )
+    const catRecordAfterFirst = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecordAfterFirst.signals.length).toBe(1)
 
     // Second call - should hit already-seen and NOT add another signal
     await captureReviewFeedback(args)
-    const catRecordAfterSecond = JSON.parse(
-      store.get("review-memory:a/r:cat:performance")!,
-    )
+    const catRecordAfterSecond = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecordAfterSecond.signals.length).toBe(1)
-    const events = consoleSpy.mock.calls
-      .map((args2) => String(args2[0]))
-      .filter((s) => s.includes("already-seen"))
+    const events = consoleSpy.mock.calls.map((args2) => String(args2[0])).filter((s) => s.includes("already-seen"))
     expect(events.length).toBeGreaterThan(0)
   })
 
@@ -566,17 +643,16 @@ describe("captureReviewFeedback — idempotency + concurrent race", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`text\n${VALID_MARKER}`)
     const args = {
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     } as const
-    await Promise.all([
-      captureReviewFeedback(args),
-      captureReviewFeedback(args),
-    ])
-    const catRecord = JSON.parse(
-      store.get("review-memory:a/r:cat:performance")!,
-    )
+    await Promise.all([captureReviewFeedback(args), captureReviewFeedback(args)])
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecord.signals.length).toBeGreaterThanOrEqual(1)
     expect(catRecord.signals.length).toBeLessThanOrEqual(2)
   })
@@ -600,8 +676,17 @@ describe("captureReviewFeedback — best-effort error resilience", () => {
     const client = makeClient(`text\n${VALID_MARKER}`)
     await expect(
       captureReviewFeedback({
-        env, client, owner: "a", repo: "r", prNumber: 7,
-        replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+        env,
+        client,
+        owner: "a",
+        repo: "r",
+        prNumber: 7,
+        replyComment: {
+          id: 100,
+          body: "false positive",
+          in_reply_to_id: 50,
+          path: "src/lib/foo.ts",
+        },
         config: makeConfig(),
       }),
     ).resolves.toBeUndefined()
@@ -613,7 +698,11 @@ describe("captureReviewFeedback — best-effort error resilience", () => {
     const env = makeEnv(kv, "on")
     const client = makeClient(`text\n${VALID_MARKER}`)
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
@@ -633,8 +722,17 @@ describe("captureReviewFeedback — best-effort error resilience", () => {
     } as unknown as GitHubClient
     await expect(
       captureReviewFeedback({
-        env, client, owner: "a", repo: "r", prNumber: 7,
-        replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+        env,
+        client,
+        owner: "a",
+        repo: "r",
+        prNumber: 7,
+        replyComment: {
+          id: 100,
+          body: "false positive",
+          in_reply_to_id: 50,
+          path: "src/lib/foo.ts",
+        },
         config: makeConfig(),
       }),
     ).resolves.toBeUndefined()
@@ -650,7 +748,11 @@ describe("captureReviewFeedback — path-key derivation uses replyComment.path",
     const client = makeClient(`text\n${VALID_MARKER}`)
     const path = "src/lib/foo.ts"
     await captureReviewFeedback({
-      env, client, owner: "a", repo: "r", prNumber: 7,
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
       replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path },
       config: makeConfig(),
     })

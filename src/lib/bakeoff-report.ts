@@ -174,11 +174,7 @@ export function percentile(values: readonly number[], p: number): number | null 
 
 // ─── Verdict types ────────────────────────────────────────────────
 
-export type MetricVerdict =
-  | "pass"
-  | "fail"
-  | "inconclusive"
-  | "inconclusive_pending_manual_review"
+export type MetricVerdict = "pass" | "fail" | "inconclusive" | "inconclusive_pending_manual_review"
 
 /**
  * Role-level verdict. Adds `pass_pending_manual_review` on top of the
@@ -296,26 +292,18 @@ export function buildDecisionReport(args: {
   }
 }
 
-function buildRoleReport(
-  role: string,
-  windowEvents: readonly ShadowEvent[],
-  config: AggregatorConfig,
-): RoleReport {
+function buildRoleReport(role: string, windowEvents: readonly ShadowEvent[], config: AggregatorConfig): RoleReport {
   const comparisons = windowEvents.filter(
-    (e): e is ShadowVerdictComparisonEvent =>
-      e.event === "shadow-verdict-comparison" && e.role === role,
+    (e): e is ShadowVerdictComparisonEvent => e.event === "shadow-verdict-comparison" && e.role === role,
   )
   const attempts = windowEvents.filter(
-    (e): e is ShadowAttemptCompletedEvent =>
-      e.event === "shadow-model-attempt-completed" && e.role === role,
+    (e): e is ShadowAttemptCompletedEvent => e.event === "shadow-model-attempt-completed" && e.role === role,
   )
   const cutShorts = windowEvents.filter(
-    (e): e is ShadowCutShortEvent =>
-      e.event === "shadow-cut-short" && e.role === role,
+    (e): e is ShadowCutShortEvent => e.event === "shadow-cut-short" && e.role === role,
   )
   const runFails = windowEvents.filter(
-    (e): e is ShadowRunFailedEvent =>
-      e.event === "shadow-run-failed" && e.role === role,
+    (e): e is ShadowRunFailedEvent => e.event === "shadow-run-failed" && e.role === role,
   )
 
   const sampleSize = comparisons.length
@@ -324,9 +312,7 @@ function buildRoleReport(
   // chronological). A backfilled or replayed event with a stale name
   // would otherwise poison the role's report metadata.
   const latestComparison =
-    comparisons.length === 0
-      ? null
-      : [...comparisons].sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0))[0]!
+    comparisons.length === 0 ? null : [...comparisons].sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0))[0]!
   const prodModel = latestComparison?.prodModel ?? null
   const shadowModel = latestComparison?.shadowModel ?? null
 
@@ -335,8 +321,10 @@ function buildRoleReport(
     p95LatencyMs: computeP95Latency(attempts, sampleSize, config),
     transientFailureRate: computeTransientFailureRate(comparisons, sampleSize, config),
     findingsOverlapScore4Plus: computeOverlapScore4Plus(comparisons, sampleSize, config),
-    netUniqueUsefulFindings: { verdict: "inconclusive_pending_manual_review" as const,
-      reason: "Requires founder-eyeballed sample of shadow-only score-4+ findings; not automated in v1 (Codex Q5)." },
+    netUniqueUsefulFindings: {
+      verdict: "inconclusive_pending_manual_review" as const,
+      reason: "Requires founder-eyeballed sample of shadow-only score-4+ findings; not automated in v1 (Codex Q5).",
+    },
     cutShortRate: computeCutShortRate(cutShorts, sampleSize),
     runFailedRate: computeRunFailedRate(runFails, sampleSize),
   } satisfies RoleReport["metrics"]
@@ -387,12 +375,24 @@ function computeValidVerdictRate(
   }
   const ciLabel = ciLabelFor(config.confidence)
   if (ci.lower >= 0) {
-    return { verdict: "pass", reason: `shadow ≥ prod (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`, value }
+    return {
+      verdict: "pass",
+      reason: `shadow ≥ prod (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`,
+      value,
+    }
   }
   if (ci.upper < 0) {
-    return { verdict: "fail", reason: `shadow < prod (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`, value }
+    return {
+      verdict: "fail",
+      reason: `shadow < prod (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`,
+      value,
+    }
   }
-  return { verdict: "inconclusive", reason: `prod/shadow ${ciLabel} straddles 0 (${ci.lower.toFixed(3)}..${ci.upper.toFixed(3)})`, value }
+  return {
+    verdict: "inconclusive",
+    reason: `prod/shadow ${ciLabel} straddles 0 (${ci.lower.toFixed(3)}..${ci.upper.toFixed(3)})`,
+    value,
+  }
 }
 
 function computeP95Latency(
@@ -417,9 +417,17 @@ function computeP95Latency(
     return { verdict: "inconclusive", reason: "p95 unavailable", value }
   }
   if (p95 <= config.p95LatencyBarMs) {
-    return { verdict: "pass", reason: `p95 ${(p95 / 1000).toFixed(1)}s ≤ ${(config.p95LatencyBarMs / 1000).toFixed(0)}s bar`, value }
+    return {
+      verdict: "pass",
+      reason: `p95 ${(p95 / 1000).toFixed(1)}s ≤ ${(config.p95LatencyBarMs / 1000).toFixed(0)}s bar`,
+      value,
+    }
   }
-  return { verdict: "fail", reason: `p95 ${(p95 / 1000).toFixed(1)}s > ${(config.p95LatencyBarMs / 1000).toFixed(0)}s bar`, value }
+  return {
+    verdict: "fail",
+    reason: `p95 ${(p95 / 1000).toFixed(1)}s > ${(config.p95LatencyBarMs / 1000).toFixed(0)}s bar`,
+    value,
+  }
 }
 
 /** Aggregate failure-mode rate (timeout + 429 + 503 + other). The bar
@@ -435,7 +443,10 @@ function computeTransientFailureRate(
   config: AggregatorConfig,
 ): MetricResult {
   if (sampleSize < config.minSampleSize) {
-    return { verdict: "inconclusive", reason: `sample size ${sampleSize} < ${config.minSampleSize}` }
+    return {
+      verdict: "inconclusive",
+      reason: `sample size ${sampleSize} < ${config.minSampleSize}`,
+    }
   }
   const shadowFailures = comparisons.filter((c) => c.shadowFailureReason !== null).length
   const prodFailures = comparisons.filter((c) => c.prodVerdictOk === false).length
@@ -456,10 +467,18 @@ function computeTransientFailureRate(
   }
   const ciLabel = ciLabelFor(config.confidence)
   if (ci.upper <= 0) {
-    return { verdict: "pass", reason: `shadow ≤ prod failures (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`, value }
+    return {
+      verdict: "pass",
+      reason: `shadow ≤ prod failures (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`,
+      value,
+    }
   }
   if (ci.lower > 0) {
-    return { verdict: "fail", reason: `shadow > prod failures (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`, value }
+    return {
+      verdict: "fail",
+      reason: `shadow > prod failures (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`,
+      value,
+    }
   }
   return { verdict: "inconclusive", reason: `prod/shadow failure ${ciLabel} straddles 0`, value }
 }
@@ -470,15 +489,16 @@ function computeOverlapScore4Plus(
   config: AggregatorConfig,
 ): MetricResult {
   if (sampleSize < config.minSampleSize) {
-    return { verdict: "inconclusive", reason: `sample size ${sampleSize} < ${config.minSampleSize}` }
+    return {
+      verdict: "inconclusive",
+      reason: `sample size ${sampleSize} < ${config.minSampleSize}`,
+    }
   }
   // Some events may predate the SIG-86 schema; filter to those that
   // carry the score-4+ fields. If too few, the metric is
   // inconclusive (per Codex Q4: "don't approximate from histograms").
   const enriched = comparisons.filter(
-    (c) =>
-      typeof c.score4PlusOverlapCount === "number" &&
-      typeof c.score4PlusProdOnlyCount === "number",
+    (c) => typeof c.score4PlusOverlapCount === "number" && typeof c.score4PlusProdOnlyCount === "number",
   )
   if (enriched.length < config.minSampleSize) {
     return {
@@ -500,7 +520,13 @@ function computeOverlapScore4Plus(
   // Use Wilson CI on overlap/(overlap + prodOnly). PASS if lower CI
   // bound ≥ bar, FAIL if upper bound < bar.
   const ci = wilsonInterval(totalOverlap, denominator, config.confidence)
-  const value = { overlap: totalOverlap, prodOnly: totalProdOnly, ratio, ci, bar: config.overlapBar }
+  const value = {
+    overlap: totalOverlap,
+    prodOnly: totalProdOnly,
+    ratio,
+    ci,
+    bar: config.overlapBar,
+  }
   const ciLabel = ciLabelFor(config.confidence)
   if (ci.lower >= config.overlapBar) {
     return {
@@ -530,10 +556,7 @@ function ciLabelFor(confidence: 0.95 | 0.99): string {
   return `${Math.round(confidence * 100)}% CI`
 }
 
-function computeCutShortRate(
-  cutShorts: readonly ShadowCutShortEvent[],
-  sampleSize: number,
-): MetricResult {
+function computeCutShortRate(cutShorts: readonly ShadowCutShortEvent[], sampleSize: number): MetricResult {
   // Codex Q5: cut-short FAILS on any non-zero, even pre-100 samples.
   // Regression flag — a single occurrence means something's off.
   if (cutShorts.length > 0) {
@@ -549,15 +572,16 @@ function computeCutShortRate(
   return { verdict: "pass", reason: "0 cut-short events", value: { count: 0, sampleSize } }
 }
 
-function computeRunFailedRate(
-  runFails: readonly ShadowRunFailedEvent[],
-  sampleSize: number,
-): MetricResult {
+function computeRunFailedRate(runFails: readonly ShadowRunFailedEvent[], sampleSize: number): MetricResult {
   if (runFails.length > 0) {
     return {
       verdict: "fail",
       reason: `${runFails.length} run-failed event(s) in window — regression flag, any non-zero fails`,
-      value: { count: runFails.length, sampleSize, sampleMessages: runFails.slice(0, 3).map((e) => e.message) },
+      value: {
+        count: runFails.length,
+        sampleSize,
+        sampleMessages: runFails.slice(0, 3).map((e) => e.message),
+      },
     }
   }
   if (sampleSize === 0) {
@@ -638,9 +662,15 @@ export function renderDecisionReportMarkdown(report: DecisionReport): string {
     const m = role.metrics
     lines.push(`| Valid-verdict rate | ${VERDICT_BADGE[m.validVerdictRate.verdict]} | ${m.validVerdictRate.reason} |`)
     lines.push(`| p95 latency | ${VERDICT_BADGE[m.p95LatencyMs.verdict]} | ${m.p95LatencyMs.reason} |`)
-    lines.push(`| Transient failure rate | ${VERDICT_BADGE[m.transientFailureRate.verdict]} | ${m.transientFailureRate.reason} |`)
-    lines.push(`| Findings overlap (score 4+) | ${VERDICT_BADGE[m.findingsOverlapScore4Plus.verdict]} | ${m.findingsOverlapScore4Plus.reason} |`)
-    lines.push(`| Net unique useful findings | ${VERDICT_BADGE[m.netUniqueUsefulFindings.verdict]} | ${m.netUniqueUsefulFindings.reason} |`)
+    lines.push(
+      `| Transient failure rate | ${VERDICT_BADGE[m.transientFailureRate.verdict]} | ${m.transientFailureRate.reason} |`,
+    )
+    lines.push(
+      `| Findings overlap (score 4+) | ${VERDICT_BADGE[m.findingsOverlapScore4Plus.verdict]} | ${m.findingsOverlapScore4Plus.reason} |`,
+    )
+    lines.push(
+      `| Net unique useful findings | ${VERDICT_BADGE[m.netUniqueUsefulFindings.verdict]} | ${m.netUniqueUsefulFindings.reason} |`,
+    )
     lines.push(`| Cut-short rate | ${VERDICT_BADGE[m.cutShortRate.verdict]} | ${m.cutShortRate.reason} |`)
     lines.push(`| Run-failed rate | ${VERDICT_BADGE[m.runFailedRate.verdict]} | ${m.runFailedRate.reason} |`)
     lines.push("")

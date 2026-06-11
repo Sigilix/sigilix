@@ -7,10 +7,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { migrateOneRepoReviewMemory } from "@/src/lib/review-memory/migrate"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
-import type {
-  ReviewMemoryRecord,
-  ReviewMemorySignal,
-} from "@/src/lib/review-memory/types"
+import type { ReviewMemoryRecord, ReviewMemorySignal } from "@/src/lib/review-memory/types"
 
 interface KvStub {
   kv: Env["OPENCLAW_STATE"]
@@ -48,10 +45,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 }
 
 function makeClient(
-  getRepository: (
-    owner: string,
-    repo: string,
-  ) => Promise<{ default_branch: string; id: number | undefined } | null>,
+  getRepository: (owner: string, repo: string) => Promise<{ default_branch: string; id: number | undefined } | null>,
 ): GitHubClient {
   return { getRepository } as unknown as GitHubClient
 }
@@ -102,10 +96,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
 
   it("returns 'github-404' when GitHub says the repo is gone", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(makeRecord([makeSignal()])),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(makeRecord([makeSignal()])))
     const client = makeClient(async () => null)
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("github-404")
@@ -115,10 +106,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
 
   it("returns 'github-no-id' when GitHub responds without a positive integer id", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(makeRecord([makeSignal()])),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(makeRecord([makeSignal()])))
     const client = makeClient(async () => ({ default_branch: "main", id: undefined }))
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("github-no-id")
@@ -126,10 +114,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
 
   it("returns 'github-error' when the GitHub call throws", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(makeRecord([makeSignal()])),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(makeRecord([makeSignal()])))
     const client = makeClient(async () => {
       throw new Error("transient 502")
     })
@@ -140,23 +125,15 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
 
   it("copies a legacy category-scope record to the new keyspace with migratedAt sentinel", async () => {
     const { kv, store } = makeKvStub()
-    const seedRecord = makeRecord([
-      makeSignal({ commentId: 1 }),
-      makeSignal({ commentId: 2 }),
-    ])
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(seedRecord),
-    )
+    const seedRecord = makeRecord([makeSignal({ commentId: 1 }), makeSignal({ commentId: 2 })])
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(seedRecord))
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("migrated")
     expect(out.githubRepoId).toBe(REPO_ID)
     expect(out.recordsWritten).toBe(1)
     expect(out.signalsCopied).toBe(2)
-    const newRecord = JSON.parse(
-      store.get(`review-memory:repo:${REPO_ID}:cat:performance`)!,
-    )
+    const newRecord = JSON.parse(store.get(`review-memory:repo:${REPO_ID}:cat:performance`)!)
     expect(newRecord.signals).toHaveLength(2)
     expect(newRecord.migratedAt).toBeDefined()
     expect(new Date(newRecord.migratedAt).getTime()).toBeGreaterThan(0)
@@ -164,8 +141,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
 
   it("copies path-scope records preserving the pathSha256 in both key and value", async () => {
     const { kv, store } = makeKvStub()
-    const pathSha =
-      "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    const pathSha = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
     const seedRecord: ReviewMemoryRecord = {
       schemaVersion: 1,
       category: "logic",
@@ -173,10 +149,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
       signals: [makeSignal({ commentId: 7 })],
       lastUpdatedTs: new Date().toISOString(),
     }
-    store.set(
-      `review-memory:${OWNER}/${REPO}:path:${pathSha}:cat:logic`,
-      JSON.stringify(seedRecord),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:path:${pathSha}:cat:logic`, JSON.stringify(seedRecord))
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("migrated")
@@ -201,10 +174,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
       JSON.stringify({
         schemaVersion: 1,
         category: "tests",
-        signals: [
-          makeSignal({ commentId: 1, ts: olderTs }),
-          makeSignal({ commentId: 2, ts: olderTs }),
-        ],
+        signals: [makeSignal({ commentId: 1, ts: olderTs }), makeSignal({ commentId: 2, ts: olderTs })],
         lastUpdatedTs: olderTs,
       }),
     )
@@ -214,27 +184,19 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
       JSON.stringify({
         schemaVersion: 1,
         category: "tests",
-        signals: [
-          makeSignal({ commentId: 2, ts: newerTs }),
-          makeSignal({ commentId: 3, ts: newerTs }),
-        ],
+        signals: [makeSignal({ commentId: 2, ts: newerTs }), makeSignal({ commentId: 3, ts: newerTs })],
         lastUpdatedTs: newerTs,
       }),
     )
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("migrated")
-    const merged = JSON.parse(
-      store.get(`review-memory:repo:${REPO_ID}:cat:tests`)!,
-    )
+    const merged = JSON.parse(store.get(`review-memory:repo:${REPO_ID}:cat:tests`)!)
     expect(merged.signals).toHaveLength(3)
     // commentId 2 deduped — the newerTs wins
-    const dupSignal = merged.signals.find(
-      (s: ReviewMemorySignal) => s.commentId === 2,
-    )
+    const dupSignal = merged.signals.find((s: ReviewMemorySignal) => s.commentId === 2)
     expect(dupSignal.ts).toBe(newerTs)
-    expect(merged.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
-      .toEqual([1, 2, 3])
+    expect(merged.signals.map((s: ReviewMemorySignal) => s.commentId).sort()).toEqual([1, 2, 3])
   })
 
   it("M1: preserves the original migratedAt on idempotent re-runs (NOT restamped)", async () => {
@@ -243,10 +205,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
     // timestamp is what Phase 5 cleanup relies on as evidence.
     const { kv, store } = makeKvStub()
     const seedRecord = makeRecord([makeSignal({ commentId: 1 })])
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(seedRecord),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(seedRecord))
     const originalStamp = "2026-05-01T00:00:00.000Z"
     store.set(
       `review-memory:repo:${REPO_ID}:cat:performance`,
@@ -254,9 +213,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
     )
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
     await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
-    const after = JSON.parse(
-      store.get(`review-memory:repo:${REPO_ID}:cat:performance`)!,
-    )
+    const after = JSON.parse(store.get(`review-memory:repo:${REPO_ID}:cat:performance`)!)
     expect(after.migratedAt).toBe(originalStamp)
   })
 
@@ -265,22 +222,10 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
     // that field's semantic is "actual KV puts that succeeded".
     // recordsConsidered is the "how big is this batch?" surface.
     const { kv, store } = makeKvStub()
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(makeRecord([makeSignal()])),
-    )
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:logic`,
-      JSON.stringify(makeRecord([makeSignal({ commentId: 5 })])),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(makeRecord([makeSignal()])))
+    store.set(`review-memory:${OWNER}/${REPO}:cat:logic`, JSON.stringify(makeRecord([makeSignal({ commentId: 5 })])))
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
-    const out = await migrateOneRepoReviewMemory(
-      makeEnv(kv),
-      client,
-      OWNER,
-      REPO,
-      { dryRun: true },
-    )
+    const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO, { dryRun: true })
     expect(out.recordsConsidered).toBe(2)
     expect(out.recordsWritten).toBe(0)
   })
@@ -288,10 +233,7 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
   it("idempotent re-run: status='already-migrated' when every new-key record has migratedAt", async () => {
     const { kv, store } = makeKvStub()
     const seedRecord = makeRecord([makeSignal({ commentId: 1 })])
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(seedRecord),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(seedRecord))
     // Pre-seed the new key with migratedAt sentinel
     store.set(
       `review-memory:repo:${REPO_ID}:cat:performance`,
@@ -309,21 +251,12 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
   it("dryRun=true: reads + computes union but does NOT write to KV", async () => {
     const { kv, store } = makeKvStub()
     const seedRecord = makeRecord([makeSignal({ commentId: 1 })])
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      JSON.stringify(seedRecord),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, JSON.stringify(seedRecord))
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
-    const out = await migrateOneRepoReviewMemory(
-      makeEnv(kv),
-      client,
-      OWNER,
-      REPO,
-      { dryRun: true },
-    )
+    const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO, { dryRun: true })
     expect(out.status).toBe("migrated")
-    expect(out.recordsConsidered).toBe(1)  // planned
-    expect(out.recordsWritten).toBe(0)     // actual KV puts (M2 fix)
+    expect(out.recordsConsidered).toBe(1) // planned
+    expect(out.recordsWritten).toBe(0) // actual KV puts (M2 fix)
     expect(out.signalsCopied).toBe(1)
     // The new key was NOT written
     expect(store.has(`review-memory:repo:${REPO_ID}:cat:performance`)).toBe(false)
@@ -332,14 +265,8 @@ describe("migrateOneRepoReviewMemory — state machine", () => {
   it("skips corrupt legacy records but continues on remaining valid ones", async () => {
     const { kv, store } = makeKvStub()
     // One corrupt + one valid
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:performance`,
-      "not-json {{",
-    )
-    store.set(
-      `review-memory:${OWNER}/${REPO}:cat:logic`,
-      JSON.stringify(makeRecord([makeSignal()])),
-    )
+    store.set(`review-memory:${OWNER}/${REPO}:cat:performance`, "not-json {{")
+    store.set(`review-memory:${OWNER}/${REPO}:cat:logic`, JSON.stringify(makeRecord([makeSignal()])))
     const client = makeClient(async () => ({ default_branch: "main", id: REPO_ID }))
     const out = await migrateOneRepoReviewMemory(makeEnv(kv), client, OWNER, REPO)
     expect(out.status).toBe("migrated")

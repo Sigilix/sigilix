@@ -51,30 +51,30 @@ describe("SIG-318 ensemble budget — load-time invariants", () => {
   })
 
   it("throws when specialist + synth + headroom exceeds the orchestrator wall", () => {
-    expect(() =>
-      assertEnsembleBudgetInvariants({ ...REAL, specialistMs: REAL.orchestratorMs }),
-    ).toThrow(/timeout invariant violated/)
+    expect(() => assertEnsembleBudgetInvariants({ ...REAL, specialistMs: REAL.orchestratorMs })).toThrow(
+      /timeout invariant violated/,
+    )
   })
 
   it("throws when synth retry + finalize exceeds the reserved headroom", () => {
-    expect(() =>
-      assertEnsembleBudgetInvariants({ ...REAL, synthesizerRetryMs: REAL.reservedHeadroomMs }),
-    ).toThrow(/synth-retry budget invariant violated/)
+    expect(() => assertEnsembleBudgetInvariants({ ...REAL, synthesizerRetryMs: REAL.reservedHeadroomMs })).toThrow(
+      /synth-retry budget invariant violated/,
+    )
   })
 
   it("throws when pre-flight + retry + finalize exceeds the reserved headroom", () => {
     // Bump pre-flight to one ms past the slack left after retry + finalize, so
     // THIS invariant (not the synth-retry one above it) is the one that trips.
     const slack = REAL.reservedHeadroomMs - (REAL.synthesizerRetryMs + REAL.synthRetryFinalizeReserveMs)
-    expect(() =>
-      assertEnsembleBudgetInvariants({ ...REAL, retrievalPreflightMs: slack + 1 }),
-    ).toThrow(/headroom-envelope invariant violated/)
+    expect(() => assertEnsembleBudgetInvariants({ ...REAL, retrievalPreflightMs: slack + 1 })).toThrow(
+      /headroom-envelope invariant violated/,
+    )
   })
 
   it("throws when the orchestrator wall reaches the CF queue-consumer ceiling", () => {
-    expect(() =>
-      assertEnsembleBudgetInvariants({ ...REAL, orchestratorMs: REAL.cfQueueConsumerCeilingMs }),
-    ).toThrow(/queue-ceiling invariant violated/)
+    expect(() => assertEnsembleBudgetInvariants({ ...REAL, orchestratorMs: REAL.cfQueueConsumerCeilingMs })).toThrow(
+      /queue-ceiling invariant violated/,
+    )
   })
 
   it("throws when shadow grace + orchestrator exceeds the CF ceiling", () => {

@@ -16,13 +16,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 // ─── Module mocks (kept above the dynamic import below) ─────────────
 
 const mockPostStub = vi.fn(async (_a?: unknown) => ({ kind: "posted" as const, commentId: 999 }))
-const mockPostDraftSkipNotice = vi.fn(
-  async (_a?: unknown) => ({ kind: "posted" as const, commentId: 1000 }),
-)
+const mockPostDraftSkipNotice = vi.fn(async (_a?: unknown) => ({
+  kind: "posted" as const,
+  commentId: 1000,
+}))
 const mockSupersedeDraftSkipNotice = vi.fn(async (_a?: unknown) => ({ kind: "not-found" as const }))
 const mockLoadSigilixConfig = vi.fn()
 const mockGetInstallationToken = vi.fn(async (_a?: unknown) => "fake-token")
-const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({ ok: true as const }))
+const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({
+  ok: true as const,
+}))
 
 vi.mock("@/src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
@@ -38,9 +41,7 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>(
-    "@/src/shared/adapters/github",
-  )
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({})),
@@ -48,9 +49,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
-    "@/src/lib/sigilix-config",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
     loadSigilixConfig: (...a: unknown[]) => mockLoadSigilixConfig(...a),
@@ -67,13 +66,9 @@ const SECRET = "test-webhook-secret"
 const encoder = new TextEncoder()
 
 async function signBody(body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(body))
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -151,7 +146,9 @@ async function postWebhookPayload(
     body,
   })
   const ctx = {
-    waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
+    waitUntil: (promise: Promise<unknown>) => {
+      waitUntilPromises.push(promise)
+    },
     passThroughOnException: () => {},
   }
   const res = await worker.fetch(req, env as never, ctx as never)
@@ -248,12 +245,14 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     expect(res.status).toBe(200)
     expect(sentJobs.map((j) => j.type)).not.toContain("pr-labels")
     expect(mockPostDraftSkipNotice).toHaveBeenCalledOnce()
-    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "acme",
-      repo: "site",
-      prNumber: 73,
-      headSha: "a".repeat(40),
-    }))
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "acme",
+        repo: "site",
+        prNumber: 73,
+        headSha: "a".repeat(40),
+      }),
+    )
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
   })
 
@@ -283,12 +282,14 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     expect(res.status).toBe(200)
     expect(sentJobs).toHaveLength(0)
     expect(mockPostDraftSkipNotice).toHaveBeenCalledOnce()
-    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "acme",
-      repo: "site",
-      prNumber: 73,
-      headSha: "a".repeat(40),
-    }))
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "acme",
+        repo: "site",
+        prNumber: 73,
+        headSha: "a".repeat(40),
+      }),
+    )
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
   })
 
@@ -333,12 +334,14 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     expect(sentJobs.map((j) => j.type).sort()).toEqual(["pr-labels", "pr-overview"])
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
     expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledOnce()
-    expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "acme",
-      repo: "site",
-      prNumber: 73,
-      headSha: "a".repeat(40),
-    }))
+    expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "acme",
+        repo: "site",
+        prNumber: 73,
+        headSha: "a".repeat(40),
+      }),
+    )
   })
 
   it("enqueues branch indexing only when pull_request head repo is verified same-repo", async () => {
@@ -352,11 +355,13 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     await Promise.all(waitUntilPromises)
 
     expect(res.status).toBe(202)
-    expect(sentJobs).toContainEqual(expect.objectContaining({
-      type: "index-repo",
-      reason: "pull-request",
-      branch: "feature/x",
-    }))
+    expect(sentJobs).toContainEqual(
+      expect.objectContaining({
+        type: "index-repo",
+        reason: "pull-request",
+        branch: "feature/x",
+      }),
+    )
   })
 
   it("does not enqueue branch indexing for missing or forked pull_request heads", async () => {

@@ -31,7 +31,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -69,8 +71,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -95,7 +98,9 @@ function carriesTaint(node: AstNode | undefined, taintedLocals: Map<string, AstN
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
   const decls: Array<{ name: string; init: AstNode }> = []
   const counts = new Map<string, number>()
-  const bump = (name: string | null): void => { if (name) counts.set(name, (counts.get(name) ?? 0) + 1) }
+  const bump = (name: string | null): void => {
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
   walkNoNested(root, (n) => {
     if (n.type === "VariableDeclarator") {
       const name = idName(n.id as AstNode)
@@ -111,7 +116,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     for (const { name, init } of decls) {
       if (tainted.has(name) || (counts.get(name) ?? 0) > 1) continue
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
-      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (aliasesRoot || carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -127,8 +135,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -179,8 +188,12 @@ function hasEnabledEntityOption(call: AstNode): boolean {
     for (const prop of (arg.properties ?? []) as AstNode[]) {
       if (found || prop.type !== "Property" || prop.computed) continue
       const key = prop.key as AstNode
-      const name = key.type === "Identifier" ? (key.name as string)
-        : key.type === "Literal" && typeof key.value === "string" ? key.value : null
+      const name =
+        key.type === "Identifier"
+          ? (key.name as string)
+          : key.type === "Literal" && typeof key.value === "string"
+            ? key.value
+            : null
       if (name && XXE_OPTION_RE.test(name.toLowerCase()) && isEnabled(prop.value as AstNode)) found = true
     }
   }
@@ -200,12 +213,17 @@ export const noXxe: AstRule = {
     if (SKIP_PATH.test(ctx.path)) return null
 
     const fns = collectFunctions(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const taintCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -219,7 +237,9 @@ export const noXxe: AstRule = {
         let enclosing: AstNode | null = null
         for (const f of fns) {
           const [s, e] = fnRange(f)
-          if (s <= start && start < e) { if (!enclosing || s >= fnRange(enclosing)[0]) enclosing = f }
+          if (s <= start && start < e) {
+            if (!enclosing || s >= fnRange(enclosing)[0]) enclosing = f
+          }
         }
         const scope = enclosing ?? node
         const tainted = taintLocalsOf(scope)
@@ -231,7 +251,7 @@ export const noXxe: AstRule = {
             if (start >= 0) seen.add(start)
             hits.push({
               message:
-                "Request-controlled XML is parsed with external-entity / DTD resolution explicitly ENABLED here. An attacker can embed `<!ENTITY xxe SYSTEM \"file:///etc/passwd\">` (or an `http(s)://` entity) and the parser will expand it — disclosing local files, performing SSRF, or DoS (billion-laughs) — XML External Entity injection (CWE-611). Remove the entity-enabling option (parse with entities/DTDs OFF, the safe default), or don't parse untrusted XML with external entities.",
+                'Request-controlled XML is parsed with external-entity / DTD resolution explicitly ENABLED here. An attacker can embed `<!ENTITY xxe SYSTEM "file:///etc/passwd">` (or an `http(s)://` entity) and the parser will expand it — disclosing local files, performing SSRF, or DoS (billion-laughs) — XML External Entity injection (CWE-611). Remove the entity-enabling option (parse with entities/DTDs OFF, the safe default), or don\'t parse untrusted XML with external entities.',
               evidence: sliceEvidence(ctx.source, n),
               line: n.loc?.start?.line ?? 1,
               endLine: n.loc?.end?.line ?? n.loc?.start?.line ?? 1,
@@ -243,8 +263,9 @@ export const noXxe: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

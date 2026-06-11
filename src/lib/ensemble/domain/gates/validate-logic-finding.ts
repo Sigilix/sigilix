@@ -68,9 +68,7 @@ export const AST_COLOCATION_TOLERANCE = 5
  * Result of evaluating one in-scope logic finding. `keep:false` carries
  * a structured reason for telemetry; `keep:true` is bare.
  */
-export type LogicFindingDecision =
-  | { keep: true }
-  | { keep: false; reason: LogicDropReason }
+export type LogicFindingDecision = { keep: true } | { keep: false; reason: LogicDropReason }
 
 export type LogicDropReason =
   | "missing-path" // sev>=4 logic finding with no concrete path to anchor
@@ -124,8 +122,7 @@ export function buildChangedLineTextByPath(diff: string): Map<string, string[]> 
       // `--- ` and everything else (index, mode, etc.).
       if (raw.startsWith("+++ ")) {
         const newPath = raw.slice(4).trim()
-        currentPath =
-          newPath === "/dev/null" ? null : newPath.startsWith("b/") ? newPath.slice(2) : newPath
+        currentPath = newPath === "/dev/null" ? null : newPath.startsWith("b/") ? newPath.slice(2) : newPath
         if (currentPath !== null && !out.has(currentPath)) out.set(currentPath, [])
       }
       continue
@@ -259,10 +256,7 @@ function hasColocatedAstHit(finding: PrReviewFinding, evidence: LogicEvidence): 
  *     vague claim on a changed file that quotes no code and has no
  *     deterministic backing).
  */
-export function evaluateLogicFinding(
-  finding: PrReviewFinding,
-  evidence: LogicEvidence,
-): LogicFindingDecision {
+export function evaluateLogicFinding(finding: PrReviewFinding, evidence: LogicEvidence): LogicFindingDecision {
   // Evidence requirement is severity-gated: only sev>=4 logic findings
   // must be anchored. Lower-severity notes pass untouched.
   if (finding.score < 4) return { keep: true }

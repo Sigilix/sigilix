@@ -111,19 +111,22 @@ export type StaleHeadOutcome =
  * message and trigger Cloudflare Queue retries on every stale-head.
  */
 export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleHeadOutcome> {
-  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source, repoId } = args
+  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source, repoId } =
+    args
 
-  console.log(JSON.stringify({
-    event: "pr-review-stale-head",
-    guard_source: source,
-    owner,
-    repo,
-    pr_number: prNumber,
-    installation_id: installationId,
-    queued_head_sha: queuedHeadSha,
-    current_head_sha: currentHeadSha,
-    depth,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-stale-head",
+      guard_source: source,
+      owner,
+      repo,
+      pr_number: prNumber,
+      installation_id: installationId,
+      queued_head_sha: queuedHeadSha,
+      current_head_sha: currentHeadSha,
+      depth,
+    }),
+  )
 
   // ARC-251: auto-requeue against the live head when retry budget
   // remains. Each requeue increments depth by 1. After MAX swings we
@@ -148,12 +151,7 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
       // that re-reads from a (potentially stale or malformed) state,
       // and forwarding a poisoned value would degrade the requeued
       // run's dual-write keyspace.
-      const requeueRepoId =
-        typeof repoId === "number" &&
-        Number.isInteger(repoId) &&
-        repoId > 0
-          ? repoId
-          : undefined
+      const requeueRepoId = typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0 ? repoId : undefined
       const result = await enqueuePrReviewJob(env, {
         owner,
         repo,
@@ -166,33 +164,50 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
         ...(requeueRepoId !== undefined ? { repoId: requeueRepoId } : {}),
       })
       if (result.ok) {
-        console.log(JSON.stringify({
-          event: "pr-review-stale-head-requeued",
-          owner, repo, pr_number: prNumber, installation_id: installationId,
-          guard_source: source,
-          queued_head_sha: queuedHeadSha,
-          new_head_sha: currentHeadSha,
-          next_depth: depth + 1,
-          route: result.route,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-review-stale-head-requeued",
+            owner,
+            repo,
+            pr_number: prNumber,
+            installation_id: installationId,
+            guard_source: source,
+            queued_head_sha: queuedHeadSha,
+            new_head_sha: currentHeadSha,
+            next_depth: depth + 1,
+            route: result.route,
+          }),
+        )
         return { requeued: true, newHeadSha: currentHeadSha, nextDepth: depth + 1 }
       }
       // result.ok === false → fall through to sticky.
       const reason = `enqueue_${result.reason}${result.status ? `_${result.status}` : ""}`
-      console.error(JSON.stringify({
-        event: "pr-review-stale-head-requeue-failed",
-        reason,
-        owner, repo, pr_number: prNumber, installation_id: installationId,
-        guard_source: source, depth,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-review-stale-head-requeue-failed",
+          reason,
+          owner,
+          repo,
+          pr_number: prNumber,
+          installation_id: installationId,
+          guard_source: source,
+          depth,
+        }),
+      )
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      console.error(JSON.stringify({
-        event: "pr-review-stale-head-requeue-failed",
-        reason,
-        owner, repo, pr_number: prNumber, installation_id: installationId,
-        guard_source: source, depth,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-review-stale-head-requeue-failed",
+          reason,
+          owner,
+          repo,
+          pr_number: prNumber,
+          installation_id: installationId,
+          guard_source: source,
+          depth,
+        }),
+      )
       // fall through to sticky
     }
   }
@@ -202,12 +217,18 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
   //   (b) depth <  MAX but the requeue itself failed (non-ok / thrown).
   // Either way the customer needs a visible signal that Sigilix gave
   // up so they can push or `/sigilix review` to recover.
-  console.log(JSON.stringify({
-    event: "pr-review-stale-head-fallthrough",
-    owner, repo, pr_number: prNumber, installation_id: installationId,
-    guard_source: source, depth,
-    cap: MAX_STALE_HEAD_REQUEUES,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-stale-head-fallthrough",
+      owner,
+      repo,
+      pr_number: prNumber,
+      installation_id: installationId,
+      guard_source: source,
+      depth,
+      cap: MAX_STALE_HEAD_REQUEUES,
+    }),
+  )
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     // No creds = no comment. Telemetry already emitted above; treat as
@@ -215,11 +236,17 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
     // replacing was equally invisible, and we don't want a misconfigured
     // env to drop the queue message and trigger queue retries.
     const reason = "missing_github_app_credentials"
-    console.error(JSON.stringify({
-      event: "pr-review-stale-head-comment-failed",
-      reason,
-      owner, repo, pr_number: prNumber, installation_id: installationId, guard_source: source,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-review-stale-head-comment-failed",
+        reason,
+        owner,
+        repo,
+        pr_number: prNumber,
+        installation_id: installationId,
+        guard_source: source,
+      }),
+    )
     return { posted: "failed", reason }
   }
 
@@ -239,34 +266,51 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
     const existing = await findExistingStaleHeadComment(client, owner, repo, prNumber)
     if (existing !== null) {
       await client.updateIssueComment(owner, repo, existing, body)
-      console.log(JSON.stringify({
-        event: "pr-review-stale-head-comment-updated",
-        owner, repo, pr_number: prNumber, installation_id: installationId, comment_id: existing, guard_source: source,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-stale-head-comment-updated",
+          owner,
+          repo,
+          pr_number: prNumber,
+          installation_id: installationId,
+          comment_id: existing,
+          guard_source: source,
+        }),
+      )
       return { posted: "updated", commentId: existing }
     }
 
     const created = await client.createIssueComment(owner, repo, prNumber, body)
-    console.log(JSON.stringify({
-      event: "pr-review-stale-head-comment-created",
-      owner, repo, pr_number: prNumber, installation_id: installationId, comment_id: created.id, guard_source: source,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-stale-head-comment-created",
+        owner,
+        repo,
+        pr_number: prNumber,
+        installation_id: installationId,
+        comment_id: created.id,
+        guard_source: source,
+      }),
+    )
     return { posted: "created", commentId: created.id }
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "pr-review-stale-head-comment-failed",
-      reason,
-      owner, repo, pr_number: prNumber, installation_id: installationId, guard_source: source,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-review-stale-head-comment-failed",
+        reason,
+        owner,
+        repo,
+        pr_number: prNumber,
+        installation_id: installationId,
+        guard_source: source,
+      }),
+    )
     return { posted: "failed", reason }
   }
 }
 
-export function renderStaleHeadComment(args: {
-  queuedHeadSha: string
-  currentHeadSha: string
-}): string {
+export function renderStaleHeadComment(args: { queuedHeadSha: string; currentHeadSha: string }): string {
   const queued = args.queuedHeadSha.slice(0, 7)
   const current = args.currentHeadSha.slice(0, 7)
   return [

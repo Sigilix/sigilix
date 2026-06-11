@@ -146,7 +146,13 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
     })
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
-      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+      {
+        filename: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@",
+      },
     ])
     mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string, ref: string) => {
       if (path === ".github/CODEOWNERS" && ref === "b".repeat(40)) {
@@ -154,14 +160,16 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
       }
       return null
     })
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds a regex guard around path normalization.",
-      confidence: 4,
-      confidenceReason: "Small surface, well-tested.",
-      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
-      bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["alice", "charlie"],
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds a regex guard around path normalization.",
+        confidence: 4,
+        confidenceReason: "Small surface, well-tested.",
+        files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+        bullets: ["Verify the regex catches `..` segments"],
+        suggestedReviewers: ["alice", "charlie"],
+      }),
+    )
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -176,16 +184,24 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
   it("falls back to model-only reviewers when the base branch has no CODEOWNERS file", async () => {
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
-      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+      {
+        filename: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@",
+      },
     ])
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds a regex guard around path normalization.",
-      confidence: 4,
-      confidenceReason: "Small surface, well-tested.",
-      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
-      bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["model-owner"],
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds a regex guard around path normalization.",
+        confidence: 4,
+        confidenceReason: "Small surface, well-tested.",
+        files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+        bullets: ["Verify the regex catches `..` segments"],
+        suggestedReviewers: ["model-owner"],
+      }),
+    )
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -197,20 +213,28 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
   it("checks lower-priority CODEOWNERS locations only when higher-priority files are missing", async () => {
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
-      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+      {
+        filename: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@",
+      },
     ])
     mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
       if (path === "CODEOWNERS") return "*.ts @root-owner\n"
       return null
     })
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds a regex guard around path normalization.",
-      confidence: 4,
-      confidenceReason: "Small surface, well-tested.",
-      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
-      bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["model-owner"],
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds a regex guard around path normalization.",
+        confidence: 4,
+        confidenceReason: "Small surface, well-tested.",
+        files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+        bullets: ["Verify the regex catches `..` segments"],
+        suggestedReviewers: ["model-owner"],
+      }),
+    )
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -218,7 +242,7 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
     const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
     expect(body).toContain("**Suggested reviewers:** @root-owner, @model-owner")
     const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
-      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string),
     )
     expect(codeownersCalls).toEqual([
       ["acme", "site", ".github/CODEOWNERS", "b".repeat(40)],
@@ -229,21 +253,29 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
   it("fails closed on non-404 CODEOWNERS fetch errors instead of using a lower-priority file", async () => {
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
-      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+      {
+        filename: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@",
+      },
     ])
     mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
       if (path === ".github/CODEOWNERS") throw new Error("rate limited")
       if (path === "CODEOWNERS") return "*.ts @root-owner\n"
       return null
     })
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds a regex guard around path normalization.",
-      confidence: 4,
-      confidenceReason: "Small surface, well-tested.",
-      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
-      bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["model-owner"],
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds a regex guard around path normalization.",
+        confidence: 4,
+        confidenceReason: "Small surface, well-tested.",
+        files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+        bullets: ["Verify the regex catches `..` segments"],
+        suggestedReviewers: ["model-owner"],
+      }),
+    )
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -252,11 +284,9 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
     expect(body).toContain("**Suggested reviewers:** @model-owner")
     expect(body).not.toContain("@root-owner")
     const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
-      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string),
     )
-    expect(codeownersCalls).toEqual([
-      ["acme", "site", ".github/CODEOWNERS", "b".repeat(40)],
-    ])
+    expect(codeownersCalls).toEqual([["acme", "site", ".github/CODEOWNERS", "b".repeat(40)]])
   })
 
   it("does not read CODEOWNERS from the head SHA when PR metadata has no base SHA", async () => {
@@ -267,20 +297,28 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
     })
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
-      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+      {
+        filename: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@",
+      },
     ])
     mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
       if (path === ".github/CODEOWNERS") return "*.ts @head-owner\n"
       return null
     })
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds a regex guard around path normalization.",
-      confidence: 4,
-      confidenceReason: "Small surface, well-tested.",
-      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
-      bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["model-owner"],
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds a regex guard around path normalization.",
+        confidence: 4,
+        confidenceReason: "Small surface, well-tested.",
+        files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+        bullets: ["Verify the regex catches `..` segments"],
+        suggestedReviewers: ["model-owner"],
+      }),
+    )
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -289,7 +327,7 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
     expect(body).toContain("**Suggested reviewers:** @model-owner")
     expect(body).not.toContain("@head-owner")
     const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
-      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string),
     )
     expect(codeownersCalls).toEqual([])
   })
@@ -301,9 +339,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
     // post-Ollama re-scan. First listIssueComments → []; second → [marker].
     mockListIssueComments
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 999, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\nold" },
-      ])
+      .mockResolvedValueOnce([{ id: 999, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\nold" }])
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -318,9 +354,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
   it("emits pr-overview-second-pass-dedupe-fired telemetry when the late re-check catches a marker", async () => {
     mockListIssueComments
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 777, body: "<!-- sigilix:pr-overview -->\nbody" },
-      ])
+      .mockResolvedValueOnce([{ id: 777, body: "<!-- sigilix:pr-overview -->\nbody" }])
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { kv } = makeKvStub()
 
@@ -341,9 +375,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
   it("renders the late-discovered update as an incremental run, not a first-run summary", async () => {
     mockListIssueComments
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 999, body: "<!-- sigilix:pr-overview -->\nold" },
-      ])
+      .mockResolvedValueOnce([{ id: 999, body: "<!-- sigilix:pr-overview -->\nold" }])
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
@@ -364,9 +396,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
   })
 
   it("skips the late re-check when the first scan already found a marker (PATCH on existing)", async () => {
-    mockListIssueComments.mockResolvedValueOnce([
-      { id: 555, body: "<!-- sigilix:pr-overview -->\nprior" },
-    ])
+    mockListIssueComments.mockResolvedValueOnce([{ id: 555, body: "<!-- sigilix:pr-overview -->\nprior" }])
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })

@@ -18,11 +18,7 @@ import {
 // `openclaw` aliases, but a rubberfit#177 case showed `@arc` is too
 // common a dictionary word to leave in production defaults; the false-
 // positive trigger rate didn't justify the back-compat value.
-const TRIGGERS = [
-  "sigilix",
-  "sigilix[bot]",
-  "Sigilix[bot]",
-]
+const TRIGGERS = ["sigilix", "sigilix[bot]", "Sigilix[bot]"]
 
 describe("getMentionTriggers", () => {
   it("returns defaults when env value is empty / undefined", () => {
@@ -132,9 +128,7 @@ describe("stripQuotesAndCode", () => {
 
 describe("stripMentionFromBody", () => {
   it("removes plain @-mentions", () => {
-    expect(stripMentionFromBody("@sigilix what does this do?", TRIGGERS)).toBe(
-      "what does this do?"
-    )
+    expect(stripMentionFromBody("@sigilix what does this do?", TRIGGERS)).toBe("what does this do?")
   })
 
   it("removes @-mentions with a trailing comma", () => {

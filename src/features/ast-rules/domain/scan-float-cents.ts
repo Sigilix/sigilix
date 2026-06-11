@@ -35,18 +35,43 @@ function blank(src: string): string {
   while (i < n) {
     const c = src[i]!
     if (inStr) {
-      if (c === "\\") { out[i] = " "; if (i + 1 < n) out[i + 1] = " "; i += 2; continue }
+      if (c === "\\") {
+        out[i] = " "
+        if (i + 1 < n) out[i + 1] = " "
+        i += 2
+        continue
+      }
       if (c !== "\n") out[i] = " " // blank the body, preserve newlines for line math
       if (c === inStr) inStr = null
       i++
       continue
     }
-    if (c === '"' || c === "'" || c === "`") { inStr = c; out[i] = " "; i++; continue }
-    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { out[i] = " "; i++ } continue }
+    if (c === '"' || c === "'" || c === "`") {
+      inStr = c
+      out[i] = " "
+      i++
+      continue
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        out[i] = " "
+        i++
+      }
+      continue
+    }
     if (c === "/" && src[i + 1] === "*") {
-      out[i] = " "; out[i + 1] = " "; i += 2
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++ }
-      if (i < n) { out[i] = " "; out[i + 1] = " "; i += 2 }
+      out[i] = " "
+      out[i + 1] = " "
+      i += 2
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] !== "\n") out[i] = " "
+        i++
+      }
+      if (i < n) {
+        out[i] = " "
+        out[i + 1] = " "
+        i += 2
+      }
       continue
     }
     i++
@@ -123,7 +148,12 @@ export function scanFractionalCentsMath(source: string): AstRuleHit[] {
     if (seen.has(idx)) return
     seen.add(idx)
     const { line, column } = lineOf(source, idx)
-    hits.push({ message: message(cents, mult), evidence: clip(`${cents} * ${mult}`, 120), line, column })
+    hits.push({
+      message: message(cents, mult),
+      evidence: clip(`${cents} * ${mult}`, 120),
+      line,
+      column,
+    })
   }
   for (const m of blanked.matchAll(MUL_LEFT)) consider(m.index ?? 0, m[1]!, m[2]!)
   for (const m of blanked.matchAll(MUL_RIGHT)) {

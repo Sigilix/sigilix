@@ -49,11 +49,7 @@ export interface EnsembleRunCtx {
    *  (not an import) keeps this module free of an slo-telemetry dependency
    *  — the slo module imports this type, not the other way around.
    *  Absent in tests / shadow paths that don't care about cost. */
-  recordTokens?: (
-    model: string,
-    inputTokens?: number,
-    outputTokens?: number,
-  ) => void
+  recordTokens?: (model: string, inputTokens?: number, outputTokens?: number) => void
 }
 
 function correlationFields(ctx: EnsembleRunCtx): Record<string, string | number> {
@@ -89,14 +85,16 @@ export function emitPhaseCompleted(
   startedAtMs: number,
   endedAtMs: number = Date.now(),
 ): void {
-  console.log(JSON.stringify({
-    event: "ensemble-phase-completed",
-    ...correlationFields(ctx),
-    phase,
-    startedAtMs,
-    endedAtMs,
-    durationMs: endedAtMs - startedAtMs,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "ensemble-phase-completed",
+      ...correlationFields(ctx),
+      phase,
+      startedAtMs,
+      endedAtMs,
+      durationMs: endedAtMs - startedAtMs,
+    }),
+  )
 }
 
 /** `try { ... } finally { emitPhaseCompleted(...) }` shorthand. The
@@ -104,11 +102,7 @@ export function emitPhaseCompleted(
  *  shows up with a real duration instead of dropping silently from
  *  the trace. Re-throws the original error so caller behaviour is
  *  unchanged. */
-export async function recordPhase<T>(
-  ctx: EnsembleRunCtx,
-  phase: EnsemblePhase,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function recordPhase<T>(ctx: EnsembleRunCtx, phase: EnsemblePhase, fn: () => Promise<T>): Promise<T> {
   const startedAtMs = Date.now()
   try {
     return await fn()
@@ -199,15 +193,14 @@ export interface SpecialistFanoutSummary {
   fallbacksUsed: number
 }
 
-export function emitSpecialistFanoutSummary(
-  ctx: EnsembleRunCtx,
-  summary: SpecialistFanoutSummary,
-): void {
-  console.log(JSON.stringify({
-    event: "specialist-fanout-summary",
-    ...correlationFields(ctx),
-    ...summary,
-  }))
+export function emitSpecialistFanoutSummary(ctx: EnsembleRunCtx, summary: SpecialistFanoutSummary): void {
+  console.log(
+    JSON.stringify({
+      event: "specialist-fanout-summary",
+      ...correlationFields(ctx),
+      ...summary,
+    }),
+  )
 }
 
 /** Per-role outcome used by `computeSpecialistFanoutSummary`. Mirrors
@@ -263,18 +256,10 @@ export function computeSpecialistFanoutSummary(args: {
       slowestRole = role
     }
   }
-  const totalAttemptsUsed = args.inputs.reduce(
-    (sum, v) => sum + (v.attemptsUsed ?? 1),
-    0,
-  )
+  const totalAttemptsUsed = args.inputs.reduce((sum, v) => sum + (v.attemptsUsed ?? 1), 0)
   const fallbacksUsed = args.inputs.reduce(
     (sum, v) =>
-      sum +
-      (v.modelUsed !== undefined &&
-      v.fallbackModel !== null &&
-      v.modelUsed === v.fallbackModel
-        ? 1
-        : 0),
+      sum + (v.modelUsed !== undefined && v.fallbackModel !== null && v.modelUsed === v.fallbackModel ? 1 : 0),
     0,
   )
   return {
@@ -308,11 +293,13 @@ export interface SynthSummary {
 }
 
 export function emitSynthSummary(ctx: EnsembleRunCtx, summary: SynthSummary): void {
-  console.log(JSON.stringify({
-    event: "synth-summary",
-    ...correlationFields(ctx),
-    ...summary,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "synth-summary",
+      ...correlationFields(ctx),
+      ...summary,
+    }),
+  )
 }
 
 /** Internal outcome union used by the orchestrator's `synthRetryOutcome`
@@ -320,13 +307,7 @@ export function emitSynthSummary(ctx: EnsembleRunCtx, summary: SynthSummary): vo
  *  `"n/a"` sentinel for "retry didn't fire" and `"exhausted-budget"`
  *  for synth-internal budget exhaustion. The narrowing helper below
  *  collapses both to `null` for the telemetry surface. */
-export type SynthRetryOutcomeInput =
-  | "n/a"
-  | "ok"
-  | "timeout"
-  | "parse"
-  | "provenance"
-  | "exhausted-budget"
+export type SynthRetryOutcomeInput = "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget"
 
 /**
  * Sigilix PR #95 catch — coerce the orchestrator-internal
@@ -352,12 +333,7 @@ export function narrowSynthRetryOutcome(
 ): SynthSummary["retryOutcome"] {
   if (!retryUsed) return null
   if (outcome === "n/a") return null
-  if (
-    outcome === "ok" ||
-    outcome === "timeout" ||
-    outcome === "parse" ||
-    outcome === "provenance"
-  ) {
+  if (outcome === "ok" || outcome === "timeout" || outcome === "parse" || outcome === "provenance") {
     return outcome
   }
   return null
@@ -384,13 +360,12 @@ export interface DoReviewRunTiming {
   finalState: string
 }
 
-export function emitDoReviewRunTiming(
-  ctx: EnsembleRunCtx,
-  timing: DoReviewRunTiming,
-): void {
-  console.log(JSON.stringify({
-    event: "do-review-run-timing",
-    ...correlationFields(ctx),
-    ...timing,
-  }))
+export function emitDoReviewRunTiming(ctx: EnsembleRunCtx, timing: DoReviewRunTiming): void {
+  console.log(
+    JSON.stringify({
+      event: "do-review-run-timing",
+      ...correlationFields(ctx),
+      ...timing,
+    }),
+  )
 }

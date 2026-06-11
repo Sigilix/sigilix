@@ -33,7 +33,7 @@ describe("no-eval-call — positive fixtures", () => {
     expect(runRule(`eval(x)`).length).toBe(1)
   })
 
-  it("flags eval(\"...\")", () => {
+  it('flags eval("...")', () => {
     expect(runRule(`eval("alert(1)")`).length).toBe(1)
   })
 
@@ -71,12 +71,28 @@ describe("no-eval-call — negative fixtures", () => {
 describe("no-eval-call — TS-surface smoke (Codex BLOCKING #1: moved from parser tests)", () => {
   const fixtures: Array<{ name: string; ext: ".ts" | ".tsx"; before: string }> = [
     { name: "TSX", ext: ".tsx", before: `const el: JSX.Element = <div>x</div>;` },
-    { name: "decorators", ext: ".ts", before: `function Cached(){return (t: unknown)=>t} @Cached() class X {}` },
-    { name: "import attributes", ext: ".ts", before: `import data from "./d.json" with { type: "json" };` },
-    { name: "satisfies operator", ext: ".ts", before: `const x = { a: 1 } satisfies { a: number };` },
+    {
+      name: "decorators",
+      ext: ".ts",
+      before: `function Cached(){return (t: unknown)=>t} @Cached() class X {}`,
+    },
+    {
+      name: "import attributes",
+      ext: ".ts",
+      before: `import data from "./d.json" with { type: "json" };`,
+    },
+    {
+      name: "satisfies operator",
+      ext: ".ts",
+      before: `const x = { a: 1 } satisfies { a: number };`,
+    },
     { name: "enums", ext: ".ts", before: `enum Color { Red, Green, Blue }` },
     { name: "namespaces", ext: ".ts", before: `namespace Foo { export const x = 1 }` },
-    { name: "mixed JSX-in-TS", ext: ".tsx", before: `type P={x:number}; const C=(p:P):JSX.Element=><div>{p.x}</div>;` },
+    {
+      name: "mixed JSX-in-TS",
+      ext: ".tsx",
+      before: `type P={x:number}; const C=(p:P):JSX.Element=><div>{p.x}</div>;`,
+    },
   ]
   for (const f of fixtures) {
     it(`flags eval inside ${f.name} fixture`, () => {
@@ -89,35 +105,50 @@ describe("no-eval-call — TS-surface smoke (Codex BLOCKING #1: moved from parse
 describe("rule-registry — getEnabledRules", () => {
   it("returns all rules when enabled + at default threshold", () => {
     const out = getEnabledRules({
-      enabled: true, severityThreshold: "warning", disabledRules: [], autoInline: false,
+      enabled: true,
+      severityThreshold: "warning",
+      disabledRules: [],
+      autoInline: false,
     })
     expect(out.length).toBe(ALL_RULES.length)
   })
 
   it("returns empty when disabled", () => {
     const out = getEnabledRules({
-      enabled: false, severityThreshold: "warning", disabledRules: [], autoInline: false,
+      enabled: false,
+      severityThreshold: "warning",
+      disabledRules: [],
+      autoInline: false,
     })
     expect(out.length).toBe(0)
   })
 
   it("excludes disabledRules entries", () => {
     const out = getEnabledRules({
-      enabled: true, severityThreshold: "warning", disabledRules: ["no-eval-call"], autoInline: false,
+      enabled: true,
+      severityThreshold: "warning",
+      disabledRules: ["no-eval-call"],
+      autoInline: false,
     })
     expect(out.find((r) => r.id === "no-eval-call")).toBeUndefined()
   })
 
   it("threshold error keeps error+, drops warning+", () => {
     const out = getEnabledRules({
-      enabled: true, severityThreshold: "error", disabledRules: [], autoInline: false,
+      enabled: true,
+      severityThreshold: "error",
+      disabledRules: [],
+      autoInline: false,
     })
     for (const r of out) expect(r.severity).toBe("error")
   })
 
   it("threshold info keeps everything", () => {
     const out = getEnabledRules({
-      enabled: true, severityThreshold: "info", disabledRules: [], autoInline: false,
+      enabled: true,
+      severityThreshold: "info",
+      disabledRules: [],
+      autoInline: false,
     })
     expect(out.length).toBe(ALL_RULES.length)
   })

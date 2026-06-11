@@ -68,9 +68,7 @@ describe("indexNamespace", () => {
 
 describe("repoIndexManifestKey", () => {
   it("keys by the lowercased <owner>/<repo> namespace", () => {
-    expect(repoIndexManifestKey("Sigilix", "SIGILIX")).toBe(
-      "repo-index-manifest:sigilix/sigilix",
-    )
+    expect(repoIndexManifestKey("Sigilix", "SIGILIX")).toBe("repo-index-manifest:sigilix/sigilix")
     expect(repoIndexManifestKey("acme", "api")).toBe("repo-index-manifest:acme/api")
   })
 })
@@ -124,10 +122,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
 
   it("returns invalid/wrong-version for a v0 (or otherwise mismatched) record", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "repo-index-manifest:sigilix/sigilix",
-      JSON.stringify({ ...SAMPLE_MANIFEST, v: 2 }),
-    )
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify({ ...SAMPLE_MANIFEST, v: 2 }))
     const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {

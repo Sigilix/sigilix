@@ -140,7 +140,9 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         `INSERT INTO daily_counts (day, verdict, category, count)
          VALUES (?, ?, ?, 1)
          ON CONFLICT(day, verdict, category) DO UPDATE SET count = count + 1`,
-        day, args.verdict, args.category,
+        day,
+        args.verdict,
+        args.category,
       )
     })
     if ((await this.ctx.storage.getAlarm()) === null) {
@@ -162,7 +164,9 @@ export class VerificationMetricsDO extends DurableObject<Env> {
           `INSERT INTO daily_counts (day, verdict, category, count)
            VALUES (?, ?, ?, 1)
            ON CONFLICT(day, verdict, category) DO UPDATE SET count = count + 1`,
-          utcDay(it.occurredAt), it.verdict, it.category,
+          utcDay(it.occurredAt),
+          it.verdict,
+          it.category,
         )
       }
     })
@@ -188,7 +192,8 @@ export class VerificationMetricsDO extends DurableObject<Env> {
       `SELECT verdict, category, SUM(count) AS total
        FROM daily_counts WHERE day >= ? AND day <= ?
        GROUP BY verdict, category`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       // SIG-285 v2 / Trust Ledger: receipt-join + trust-ledger rows share the DO
       // under their sentinel categories but are SEPARATE corpora — keep them out
@@ -249,7 +254,9 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const rows = [
       ...sql.exec<{ count: number }>(
         "SELECT count FROM daily_counts WHERE day = ? AND verdict = ? AND category = ?",
-        day, verdict, category,
+        day,
+        verdict,
+        category,
       ),
     ]
     return rows[0] ? rows[0].count : null

@@ -67,7 +67,7 @@ export class GitHubClient {
   async restGetText(
     path: string,
     accept = "application/vnd.github+json",
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ): Promise<string> {
     return this.request<string>("GET", path, undefined, "text", accept, opts?.signal)
   }
@@ -89,13 +89,9 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ): Promise<string> {
-    return this.restGetText(
-      `/repos/${owner}/${repo}/pulls/${prNumber}`,
-      "application/vnd.github.v3.diff",
-      opts
-    )
+    return this.restGetText(`/repos/${owner}/${repo}/pulls/${prNumber}`, "application/vnd.github.v3.diff", opts)
   }
 
   /**
@@ -115,12 +111,12 @@ export class GitHubClient {
     repo: string,
     base: string,
     head: string,
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ): Promise<string> {
     return this.restGetText(
       `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
       "application/vnd.github.v3.diff",
-      opts
+      opts,
     )
   }
 
@@ -129,7 +125,7 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ): Promise<PullRequestMeta> {
     return this.restGet<PullRequestMeta>(`/repos/${owner}/${repo}/pulls/${prNumber}`, opts)
   }
@@ -140,14 +136,9 @@ export class GitHubClient {
    * branch → commit SHA + tree SHA via `getBranch`). Returns null on
    * 404 so the consumer can ack and skip without retrying.
    */
-  async getRepository(
-    owner: string,
-    repo: string,
-  ): Promise<{ default_branch: string; id: number | undefined } | null> {
+  async getRepository(owner: string, repo: string): Promise<{ default_branch: string; id: number | undefined } | null> {
     try {
-      const res = await this.restGet<{ default_branch?: string; id?: number }>(
-        `/repos/${owner}/${repo}`,
-      )
+      const res = await this.restGet<{ default_branch?: string; id?: number }>(`/repos/${owner}/${repo}`)
       if (typeof res.default_branch !== "string" || res.default_branch.length === 0) {
         return null
       }
@@ -155,10 +146,7 @@ export class GitHubClient {
       // the default branch. Consumers that don't care can ignore it;
       // the admin migration endpoint uses it to backfill
       // `githubRepoId` on legacy manifests.
-      const id =
-        typeof res.id === "number" && Number.isInteger(res.id) && res.id > 0
-          ? res.id
-          : undefined
+      const id = typeof res.id === "number" && Number.isInteger(res.id) && res.id > 0 ? res.id : undefined
       return { default_branch: res.default_branch, id }
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null
@@ -184,10 +172,7 @@ export class GitHubClient {
     try {
       const res = await this.restGet<{
         commit?: { sha?: string; commit?: { tree?: { sha?: string } } }
-      }>(
-        `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
-        opts,
-      )
+      }>(`/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`, opts)
       const headSha = res.commit?.sha
       const treeSha = res.commit?.commit?.tree?.sha
       if (typeof headSha !== "string" || typeof treeSha !== "string") return null
@@ -220,10 +205,7 @@ export class GitHubClient {
       const res = await this.restGet<{
         tree?: Array<{ path?: string; type?: string; sha?: string; size?: number }>
         truncated?: boolean
-      }>(
-        `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
-        opts,
-      )
+      }>(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`, opts)
       return {
         tree: Array.isArray(res.tree) ? res.tree : [],
         truncated: res.truncated === true,
@@ -244,7 +226,7 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-    opts?: { perPage?: number; maxFiles?: number; signal?: AbortSignal }
+    opts?: { perPage?: number; maxFiles?: number; signal?: AbortSignal },
   ): Promise<PrChangedFile[]> {
     const perPage = opts?.perPage ?? 100
     const maxFiles = opts?.maxFiles ?? 50
@@ -253,7 +235,7 @@ export class GitHubClient {
     while (out.length < maxFiles && page < 50) {
       const items = await this.restGet<RawPrFile[]>(
         `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${perPage}&page=${page}`,
-        opts?.signal !== undefined ? { signal: opts.signal } : undefined
+        opts?.signal !== undefined ? { signal: opts.signal } : undefined,
       )
       if (!Array.isArray(items) || items.length === 0) break
       for (const it of items) {
@@ -263,9 +245,7 @@ export class GitHubClient {
           status: it.status ?? "",
           additions: typeof it.additions === "number" ? it.additions : 0,
           deletions: typeof it.deletions === "number" ? it.deletions : 0,
-          ...(typeof it.patch === "string" && it.patch.length > 0
-            ? { patch: it.patch }
-            : {}),
+          ...(typeof it.patch === "string" && it.patch.length > 0 ? { patch: it.patch } : {}),
         })
       }
       if (items.length < perPage) break
@@ -286,7 +266,7 @@ export class GitHubClient {
   async listOpenPullRequests(
     owner: string,
     repo: string,
-    opts?: { perPage?: number; maxItems?: number; signal?: AbortSignal }
+    opts?: { perPage?: number; maxItems?: number; signal?: AbortSignal },
   ): Promise<ListOpenPullsItem[]> {
     const perPage = opts?.perPage ?? 100
     const maxItems = opts?.maxItems ?? 200
@@ -295,7 +275,7 @@ export class GitHubClient {
     while (out.length < maxItems && page < 50) {
       const items = await this.restGet<RawListOpenPullsItem[]>(
         `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${perPage}&page=${page}`,
-        opts?.signal !== undefined ? { signal: opts.signal } : undefined
+        opts?.signal !== undefined ? { signal: opts.signal } : undefined,
       )
       if (!Array.isArray(items) || items.length === 0) break
       for (const it of items) {
@@ -353,7 +333,9 @@ export class GitHubClient {
     const out: Array<{ number: number; title: string; body: string }> = []
     let page = 1
     while (out.length < maxItems && page < 11) {
-      const res = await this.restGet<{ items?: Array<{ number?: number; title?: string; body?: string | null }> }>(
+      const res = await this.restGet<{
+        items?: Array<{ number?: number; title?: string; body?: string | null }>
+      }>(
         `/search/issues?q=${q}&sort=updated&order=desc&per_page=${perPage}&page=${page}`,
         opts?.signal !== undefined ? { signal: opts.signal } : undefined,
       )
@@ -378,14 +360,8 @@ export class GitHubClient {
    * Fetch the most recent commits on a PR (up to GitHub's 250-commit cap).
    * Returns the list newest-last so callers can `.slice(-N)` the latest.
    */
-  async getPullRequestCommits(
-    owner: string,
-    repo: string,
-    prNumber: number
-  ): Promise<PrCommit[]> {
-    const list = await this.restGet<RawCommit[]>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=100`
-    )
+  async getPullRequestCommits(owner: string, repo: string, prNumber: number): Promise<PrCommit[]> {
+    const list = await this.restGet<RawCommit[]>(`/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=100`)
     return list.map((c) => ({
       sha: c.sha,
       message: c.commit?.message ?? "",
@@ -404,14 +380,14 @@ export class GitHubClient {
     repo: string,
     path: string,
     ref: string,
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ): Promise<string | null> {
     const escaped = encodeURIComponent(path).replace(/%2F/g, "/")
     let res: ContentsResponse
     try {
       res = await this.restGet<ContentsResponse>(
         `/repos/${owner}/${repo}/contents/${escaped}?ref=${encodeURIComponent(ref)}`,
-        opts
+        opts,
       )
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null
@@ -429,13 +405,9 @@ export class GitHubClient {
   }
 
   /** List jobs for a workflow run. Used by triage-ci to find failed jobs. */
-  async getWorkflowRunJobs(
-    owner: string,
-    repo: string,
-    runId: number
-  ): Promise<WorkflowJob[]> {
+  async getWorkflowRunJobs(owner: string, repo: string, runId: number): Promise<WorkflowJob[]> {
     const res = await this.restGet<{ jobs?: WorkflowJob[] }>(
-      `/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=100`
+      `/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=100`,
     )
     return Array.isArray(res.jobs) ? res.jobs : []
   }
@@ -456,11 +428,7 @@ export class GitHubClient {
    * LCOV artifact. Filters to `status=completed` server-side; the caller
    * re-checks `head_sha` + `conclusion` before trusting any run.
    */
-  async listRunsForSha(
-    owner: string,
-    repo: string,
-    headSha: string,
-  ): Promise<WorkflowRun[]> {
+  async listRunsForSha(owner: string, repo: string, headSha: string): Promise<WorkflowRun[]> {
     const res = await this.restGet<{ workflow_runs?: RawWorkflowRun[] }>(
       `/repos/${owner}/${repo}/actions/runs?head_sha=${encodeURIComponent(headSha)}&status=completed&per_page=100`,
     )
@@ -484,12 +452,7 @@ export class GitHubClient {
    * COMPRESSED size — the caller enforces the pre-download size cap
    * against it.
    */
-  async listArtifacts(
-    owner: string,
-    repo: string,
-    runId: number,
-    name: string,
-  ): Promise<WorkflowArtifact[]> {
+  async listArtifacts(owner: string, repo: string, runId: number, name: string): Promise<WorkflowArtifact[]> {
     const res = await this.restGet<{ artifacts?: RawWorkflowArtifact[] }>(
       `/repos/${owner}/${repo}/actions/runs/${runId}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
     )
@@ -566,7 +529,10 @@ export class GitHubClient {
       throw new GitHubHttpError(redirectRes.status, "downloadArtifactZip: redirect Location is not an absolute URL")
     }
     if (target.protocol !== "https:") {
-      throw new GitHubHttpError(redirectRes.status, `downloadArtifactZip: redirect Location is not https (${target.protocol})`)
+      throw new GitHubHttpError(
+        redirectRes.status,
+        `downloadArtifactZip: redirect Location is not https (${target.protocol})`,
+      )
     }
 
     // SECURITY: NO auth headers on the signed-URL request — the signed
@@ -627,16 +593,12 @@ export class GitHubClient {
    * legitimate replies would be skipped. Mirrors the pagination
    * pattern in `listIssueComments` above.
    */
-  async listPullRequestReviewComments(
-    owner: string,
-    repo: string,
-    prNumber: number
-  ): Promise<ReviewComment[]> {
+  async listPullRequestReviewComments(owner: string, repo: string, prNumber: number): Promise<ReviewComment[]> {
     const out: ReviewComment[] = []
     let page = 1
     while (page < 50) {
       const items = await this.restGet<ReviewComment[]>(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`
+        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`,
       )
       if (!Array.isArray(items) || items.length === 0) break
       out.push(...items)
@@ -663,12 +625,9 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-    review: SubmitReviewBody
+    review: SubmitReviewBody,
   ): Promise<{ id: number; state: string }> {
-    return this.restPost<{ id: number; state: string }>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-      review
-    )
+    return this.restPost<{ id: number; state: string }>(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, review)
   }
 
   /**
@@ -737,10 +696,7 @@ export class GitHubClient {
     if (args.detailsUrl !== undefined) payload.details_url = args.detailsUrl
     if (args.externalId !== undefined) payload.external_id = args.externalId
     if (args.output !== undefined) payload.output = args.output
-    return this.restPost<{ id: number }>(
-      `/repos/${owner}/${repo}/check-runs`,
-      payload,
-    )
+    return this.restPost<{ id: number }>(`/repos/${owner}/${repo}/check-runs`, payload)
   }
 
   /**
@@ -778,10 +734,7 @@ export class GitHubClient {
     if (args.conclusion !== undefined) payload.conclusion = args.conclusion
     if (args.completedAt !== undefined) payload.completed_at = args.completedAt
     if (args.output !== undefined) payload.output = args.output
-    await this.restPatch<unknown>(
-      `/repos/${owner}/${repo}/check-runs/${checkRunId}`,
-      payload,
-    )
+    await this.restPatch<unknown>(`/repos/${owner}/${repo}/check-runs/${checkRunId}`, payload)
   }
 
   /**
@@ -805,9 +758,7 @@ export class GitHubClient {
     let page = 1
     let overflow = false
     while (page <= MAX_PAGES) {
-      const items = await this.restGet<
-        Array<{ filename?: string; previous_filename?: string; status?: string }>
-      >(
+      const items = await this.restGet<Array<{ filename?: string; previous_filename?: string; status?: string }>>(
         `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${PER_PAGE}&page=${page}`,
       )
       if (!Array.isArray(items) || items.length === 0) break
@@ -834,12 +785,7 @@ export class GitHubClient {
    * (drift-detection itself doesn't compare merge-base directly).
    * Best-effort — returns null on any failure shape.
    */
-  async getMergeBase(
-    owner: string,
-    repo: string,
-    base: string,
-    head: string,
-  ): Promise<string | null> {
+  async getMergeBase(owner: string, repo: string, base: string, head: string): Promise<string | null> {
     try {
       const res = await this.restGet<{ merge_base_commit?: { sha?: string } }>(
         `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
@@ -866,17 +812,19 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-  ): Promise<Array<{
-    id: number
-    state: string
-    user: { login: string } | null
-    body: string
-    /** SHA the review was associated with (REST returns this). Null
-     *  if the upstream payload omits or invalidates the field. Used by
-     *  the dismissal helper to name the stale commit in the dismissal
-     *  message so readers can verify which commit was dismissed. */
-    commitId: string | null
-  }>> {
+  ): Promise<
+    Array<{
+      id: number
+      state: string
+      user: { login: string } | null
+      body: string
+      /** SHA the review was associated with (REST returns this). Null
+       *  if the upstream payload omits or invalidates the field. Used by
+       *  the dismissal helper to name the stale commit in the dismissal
+       *  message so readers can verify which commit was dismissed. */
+      commitId: string | null
+    }>
+  > {
     type Raw = Array<{
       id?: number
       state?: string
@@ -884,9 +832,7 @@ export class GitHubClient {
       body?: string | null
       commit_id?: string | null
     }>
-    const items = await this.restGet<Raw>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
-    )
+    const items = await this.restGet<Raw>(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`)
     if (!Array.isArray(items)) return []
     const out: Array<{
       id: number
@@ -921,13 +867,7 @@ export class GitHubClient {
    * Caller passes a short `message` that GitHub surfaces in the
    * Reviews tab as the dismissal reason.
    */
-  async dismissReview(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    reviewId: number,
-    message: string,
-  ): Promise<void> {
+  async dismissReview(owner: string, repo: string, prNumber: number, reviewId: number, message: string): Promise<void> {
     await this.request<unknown>(
       "PUT",
       `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`,
@@ -941,12 +881,7 @@ export class GitHubClient {
    * insertion. Returns null on 404 (review deleted) — caller exits
    * cleanly via `review-stale-target-missing` telemetry.
    */
-  async getReview(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    reviewId: number,
-  ): Promise<{ body: string } | null> {
+  async getReview(owner: string, repo: string, prNumber: number, reviewId: number): Promise<{ body: string } | null> {
     try {
       const res = await this.restGet<{ body?: string | null }>(
         `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
@@ -963,17 +898,10 @@ export class GitHubClient {
    * queue handler to non-destructively prepend a stale-notice block to
    * a previously-submitted review.
    */
-  async updateReviewBody(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    reviewId: number,
-    body: string,
-  ): Promise<void> {
-    await this.restPatch<unknown>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
-      { body },
-    )
+  async updateReviewBody(owner: string, repo: string, prNumber: number, reviewId: number, body: string): Promise<void> {
+    await this.restPatch<unknown>(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`, {
+      body,
+    })
   }
 
   /**
@@ -983,16 +911,8 @@ export class GitHubClient {
    * endpoint accepts a partial payload; we send only `body` so the
    * title, state, base, and other fields are untouched.
    */
-  async updatePullRequestBody(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    body: string,
-  ): Promise<void> {
-    await this.restPatch<unknown>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}`,
-      { body },
-    )
+  async updatePullRequestBody(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+    await this.restPatch<unknown>(`/repos/${owner}/${repo}/pulls/${prNumber}`, { body })
   }
 
   /**
@@ -1000,15 +920,9 @@ export class GitHubClient {
    * counterpart to `getReview` when the prior review fell back to an
    * issue comment (422-on-submit). Returns null on 404.
    */
-  async getIssueComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-  ): Promise<{ body: string } | null> {
+  async getIssueComment(owner: string, repo: string, commentId: number): Promise<{ body: string } | null> {
     try {
-      const res = await this.restGet<{ body?: string | null }>(
-        `/repos/${owner}/${repo}/issues/comments/${commentId}`,
-      )
+      const res = await this.restGet<{ body?: string | null }>(`/repos/${owner}/${repo}/issues/comments/${commentId}`)
       return { body: res.body ?? "" }
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null
@@ -1030,22 +944,19 @@ export class GitHubClient {
     owner: string,
     repo: string,
     commentId: number,
-  ): Promise<
-    | {
-        id: number
-        body: string
-        in_reply_to_id?: number
-        /**
-         * SIG-247 Phase 1: parent comment author login (e.g. `sigilix[bot]`).
-         * The review-memory capture path gates marker validation on
-         * `isArcGithubLogin(user.login)` so a copied marker in a
-         * human-authored comment cannot trigger a false-positive
-         * dismissal capture.
-         */
-        user?: { login: string }
-      }
-    | null
-  > {
+  ): Promise<{
+    id: number
+    body: string
+    in_reply_to_id?: number
+    /**
+     * SIG-247 Phase 1: parent comment author login (e.g. `sigilix[bot]`).
+     * The review-memory capture path gates marker validation on
+     * `isArcGithubLogin(user.login)` so a copied marker in a
+     * human-authored comment cannot trigger a false-positive
+     * dismissal capture.
+     */
+    user?: { login: string }
+  } | null> {
     try {
       const res = await this.restGet<{
         id: number
@@ -1076,16 +987,12 @@ export class GitHubClient {
   }
 
   /** List top-level issue comments on a PR. Used to find existing markers. */
-  async listIssueComments(
-    owner: string,
-    repo: string,
-    issueNumber: number
-  ): Promise<IssueComment[]> {
+  async listIssueComments(owner: string, repo: string, issueNumber: number): Promise<IssueComment[]> {
     const out: IssueComment[] = []
     let page = 1
     while (page < 50) {
       const items = await this.restGet<IssueComment[]>(
-        `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`
+        `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
       )
       if (!Array.isArray(items) || items.length === 0) break
       out.push(...items)
@@ -1103,36 +1010,20 @@ export class GitHubClient {
    * hard page cap on pathological PRs (1000+ comments). `page` is
    * 1-based to mirror GitHub's REST convention.
    */
-  async listIssueCommentsPage(
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    page: number,
-  ): Promise<IssueComment[]> {
+  async listIssueCommentsPage(owner: string, repo: string, issueNumber: number, page: number): Promise<IssueComment[]> {
     const items = await this.restGet<IssueComment[]>(
-      `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`
+      `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
     )
     return Array.isArray(items) ? items : []
   }
 
-  async createIssueComment(
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    body: string
-  ): Promise<{ id: number }> {
-    return this.restPost<{ id: number }>(
-      `/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-      { body }
-    )
+  async createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ id: number }> {
+    return this.restPost<{ id: number }>(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+      body,
+    })
   }
 
-  async updateIssueComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-    body: string
-  ): Promise<void> {
+  async updateIssueComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
     await this.restPatch<unknown>(`/repos/${owner}/${repo}/issues/comments/${commentId}`, { body })
   }
 
@@ -1142,17 +1033,8 @@ export class GitHubClient {
    * standalone warmup sticky once its content has been folded into
    * the unified overview body (ARC-258 follow-up).
    */
-  async deleteIssueComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-  ): Promise<void> {
-    await this.request<unknown>(
-      "DELETE",
-      `/repos/${owner}/${repo}/issues/comments/${commentId}`,
-      undefined,
-      "json",
-    )
+  async deleteIssueComment(owner: string, repo: string, commentId: number): Promise<void> {
+    await this.request<unknown>("DELETE", `/repos/${owner}/${repo}/issues/comments/${commentId}`, undefined, "json")
   }
 
   /**
@@ -1165,16 +1047,11 @@ export class GitHubClient {
    * that; repos with bigger taxonomies degrade to the first 200 by
    * GitHub's default ordering).
    */
-  async listRepositoryLabels(
-    owner: string,
-    repo: string,
-  ): Promise<Array<{ name: string; description: string }>> {
+  async listRepositoryLabels(owner: string, repo: string): Promise<Array<{ name: string; description: string }>> {
     type Resp = Array<{ name?: string; description?: string | null }>
     const out: Array<{ name: string; description: string }> = []
     for (let page = 1; page <= 2; page += 1) {
-      const items = await this.restGet<Resp>(
-        `/repos/${owner}/${repo}/labels?per_page=100&page=${page}`,
-      )
+      const items = await this.restGet<Resp>(`/repos/${owner}/${repo}/labels?per_page=100&page=${page}`)
       if (!Array.isArray(items) || items.length === 0) break
       for (const it of items) {
         if (typeof it.name === "string" && it.name.length > 0) {
@@ -1202,10 +1079,9 @@ export class GitHubClient {
     labels: ReadonlyArray<string>,
   ): Promise<void> {
     if (labels.length === 0) return
-    await this.restPost<unknown>(
-      `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-      { labels: [...labels] },
-    )
+    await this.restPost<unknown>(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
+      labels: [...labels],
+    })
   }
 
   /**
@@ -1214,12 +1090,7 @@ export class GitHubClient {
    * treats that as a no-op. URL-encodes the name to handle labels
    * containing `:` or whitespace.
    */
-  async removeLabelFromIssue(
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    labelName: string,
-  ): Promise<void> {
+  async removeLabelFromIssue(owner: string, repo: string, issueNumber: number, labelName: string): Promise<void> {
     await this.request<unknown>(
       "DELETE",
       `/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(labelName)}`,
@@ -1242,12 +1113,11 @@ export class GitHubClient {
     owner: string,
     repo: string,
     commentId: number,
-    content: ReactionContent
+    content: ReactionContent,
   ): Promise<void> {
-    await this.restPost<unknown>(
-      `/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
-      { content }
-    )
+    await this.restPost<unknown>(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, {
+      content,
+    })
   }
 
   /** Same as `addReactionToIssueComment` but for inline review comments. */
@@ -1255,12 +1125,11 @@ export class GitHubClient {
     owner: string,
     repo: string,
     commentId: number,
-    content: ReactionContent
+    content: ReactionContent,
   ): Promise<void> {
-    await this.restPost<unknown>(
-      `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
-      { content }
-    )
+    await this.restPost<unknown>(`/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`, {
+      content,
+    })
   }
 
   /**
@@ -1273,12 +1142,11 @@ export class GitHubClient {
     repo: string,
     prNumber: number,
     commentId: number,
-    body: string
+    body: string,
   ): Promise<{ id: number }> {
-    return this.restPost<{ id: number }>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
-      { body }
-    )
+    return this.restPost<{ id: number }>(`/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`, {
+      body,
+    })
   }
 
   /**
@@ -1343,12 +1211,16 @@ export class GitHubClient {
       // 6+ won't be resolved on this run; the user can retry once
       // some are resolved on subsequent reviews.
       if (page === MAX_PAGES - 1 && hasMore) {
-        console.warn(JSON.stringify({
-          event: "pr-resolve-threads-page-cap-hit",
-          owner, repo, prNumber,
-          maxPages: MAX_PAGES,
-          threadsSeen: out.length,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-resolve-threads-page-cap-hit",
+            owner,
+            repo,
+            prNumber,
+            maxPages: MAX_PAGES,
+            threadsSeen: out.length,
+          }),
+        )
       }
       if (!hasMore) break
       cursor = pageData.pageInfo?.endCursor ?? null
@@ -1404,7 +1276,7 @@ export class GitHubClient {
     body: unknown,
     parse: "json" | "text",
     accept = "application/vnd.github+json",
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<T> {
     const url = path.startsWith("http") ? path : `${GITHUB_API}${path}`
     const init: RequestInit = {
@@ -1416,10 +1288,7 @@ export class GitHubClient {
     const res = await fetch(url, init)
     if (!res.ok) {
       const text = await res.text().catch(() => "")
-      throw new GitHubHttpError(
-        res.status,
-        `${method} ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`
-      )
+      throw new GitHubHttpError(res.status, `${method} ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`)
     }
     if (res.status === 204) return undefined as T
     if (parse === "text") return (await res.text()) as T

@@ -62,8 +62,8 @@ export function mapTelemetryToReview(raw: unknown, createdMs: number): FpRateRev
       const fromIds = Array.isArray(entry.sourceFindingIds)
         ? (entry.sourceFindingIds as unknown[]).map((x) => String(x).split("-")[0] ?? "")
         : []
-      const sourceSpecialists = [...new Set([...fromSpecialists, ...fromIds])].filter(
-        (x): x is SpecialistRole => KNOWN_ROLES.has(x),
+      const sourceSpecialists = [...new Set([...fromSpecialists, ...fromIds])].filter((x): x is SpecialistRole =>
+        KNOWN_ROLES.has(x),
       )
       return {
         path: String(f?.path ?? ""),

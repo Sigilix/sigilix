@@ -112,7 +112,8 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       // than failing every INSERT/SELECT with a missing-column error. NOT NULL +
       // DEFAULT '' satisfies any pre-existing rows (there are none).
       const cols = new Set([...sql.exec<{ name: string }>("PRAGMA table_info(receipts)")].map((r) => r.name))
-      if (!cols.has("scrubbed_sha256")) sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
+      if (!cols.has("scrubbed_sha256"))
+        sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
       if (!cols.has("pull_number")) sql.exec("ALTER TABLE receipts ADD COLUMN pull_number INTEGER NOT NULL DEFAULT 0")
       sql.exec(PULL_INDEX) // safe now — pull_number is guaranteed to exist
       this.ready = true
@@ -138,7 +139,10 @@ export class RunnerReceiptDO extends DurableObject<Env> {
         ...sql.exec<{ sarif_sha256: string }>(
           `SELECT sarif_sha256 FROM receipts
            WHERE repository_id = ? AND sha = ? AND run_id = ? AND run_attempt = ?`,
-          args.repositoryId, args.sha, args.runId, args.runAttempt,
+          args.repositoryId,
+          args.sha,
+          args.runId,
+          args.runAttempt,
         ),
       ][0]
 
@@ -148,9 +152,17 @@ export class RunnerReceiptDO extends DurableObject<Env> {
              (repository_id, sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
               pull_number, repository, job_workflow_ref, runner_environment, ingested_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          args.repositoryId, args.sha, args.runId, args.runAttempt,
-          args.sarifSha256, args.scrubbedSha256, args.pullNumber, args.repository,
-          args.jobWorkflowRef, args.runnerEnvironment, at,
+          args.repositoryId,
+          args.sha,
+          args.runId,
+          args.runAttempt,
+          args.sarifSha256,
+          args.scrubbedSha256,
+          args.pullNumber,
+          args.repository,
+          args.jobWorkflowRef,
+          args.runnerEnvironment,
+          at,
         )
         result = { outcome: "accepted" }
       } else if (existing.sarif_sha256 === args.sarifSha256) {
@@ -199,23 +211,37 @@ export class RunnerReceiptDO extends DurableObject<Env> {
     const sql = this.sql()
     const r = [
       ...sql.exec<{
-        sha: string; pull_number: number; run_id: string; run_attempt: string
-        sarif_sha256: string; scrubbed_sha256: string; repository: string
-        job_workflow_ref: string; runner_environment: string; ingested_at: number
+        sha: string
+        pull_number: number
+        run_id: string
+        run_attempt: string
+        sarif_sha256: string
+        scrubbed_sha256: string
+        repository: string
+        job_workflow_ref: string
+        runner_environment: string
+        ingested_at: number
       }>(
         `SELECT sha, pull_number, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
                 repository, job_workflow_ref, runner_environment, ingested_at
          FROM receipts WHERE repository_id = ? AND pull_number = ?
          ORDER BY ingested_at DESC LIMIT 1`,
-        repositoryId, pullNumber,
+        repositoryId,
+        pullNumber,
       ),
     ][0]
     return r
       ? {
-          sha: r.sha, pullNumber: r.pull_number, runId: r.run_id, runAttempt: r.run_attempt,
-          sarifSha256: r.sarif_sha256, scrubbedSha256: r.scrubbed_sha256,
-          repository: r.repository, jobWorkflowRef: r.job_workflow_ref,
-          runnerEnvironment: r.runner_environment, ingestedAt: r.ingested_at,
+          sha: r.sha,
+          pullNumber: r.pull_number,
+          runId: r.run_id,
+          runAttempt: r.run_attempt,
+          sarifSha256: r.sarif_sha256,
+          scrubbedSha256: r.scrubbed_sha256,
+          repository: r.repository,
+          jobWorkflowRef: r.job_workflow_ref,
+          runnerEnvironment: r.runner_environment,
+          ingestedAt: r.ingested_at,
         }
       : null
   }
@@ -232,7 +258,10 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       ...sql.exec<{ sarif_sha256: string; ingested_at: number }>(
         `SELECT sarif_sha256, ingested_at FROM receipts
          WHERE repository_id = ? AND sha = ? AND run_id = ? AND run_attempt = ?`,
-        repositoryId, sha, runId, runAttempt,
+        repositoryId,
+        sha,
+        runId,
+        runAttempt,
       ),
     ][0]
     return r ? { sarifSha256: r.sarif_sha256, ingestedAt: r.ingested_at } : null

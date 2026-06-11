@@ -31,7 +31,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -42,16 +44,52 @@ const TAINTED_CALL_RE =
 
 // Node `fs` / `fs.promises` path operations whose FIRST argument is a path.
 const FS_PATH_METHODS: ReadonlySet<string> = new Set([
-  "readfile", "readfilesync", "writefile", "writefilesync", "appendfile", "appendfilesync",
-  "readdir", "readdirsync", "unlink", "unlinksync", "createreadstream", "createwritestream",
-  "open", "opensync", "stat", "statsync", "lstat", "lstatsync", "access", "accesssync",
-  "rm", "rmsync", "rmdir", "rmdirsync", "copyfile", "copyfilesync", "truncate", "truncatesync",
-  "realpath", "realpathsync", "readlink", "readlinksync",
+  "readfile",
+  "readfilesync",
+  "writefile",
+  "writefilesync",
+  "appendfile",
+  "appendfilesync",
+  "readdir",
+  "readdirsync",
+  "unlink",
+  "unlinksync",
+  "createreadstream",
+  "createwritestream",
+  "open",
+  "opensync",
+  "stat",
+  "statsync",
+  "lstat",
+  "lstatsync",
+  "access",
+  "accesssync",
+  "rm",
+  "rmsync",
+  "rmdir",
+  "rmdirsync",
+  "copyfile",
+  "copyfilesync",
+  "truncate",
+  "truncatesync",
+  "realpath",
+  "realpathsync",
+  "readlink",
+  "readlinksync",
 ])
 // Deno filesystem reads/writes (first arg is a path).
 const DENO_PATH_METHODS: ReadonlySet<string> = new Set([
-  "readfile", "readtextfile", "writefile", "writetextfile", "open", "create",
-  "readdir", "stat", "lstat", "remove", "truncate",
+  "readfile",
+  "readtextfile",
+  "writefile",
+  "writetextfile",
+  "open",
+  "create",
+  "readdir",
+  "stat",
+  "lstat",
+  "remove",
+  "truncate",
 ])
 // Express response file senders (first arg is a path).
 const EXPRESS_SEND_METHODS: ReadonlySet<string> = new Set(["sendfile", "download"])
@@ -89,8 +127,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -124,7 +163,10 @@ function collectTaintedLocals(root: AstNode, source: string): Set<string> {
     let changed = false
     for (const { name, init } of decls) {
       if (tainted.has(name)) continue
-      if (carriesTaint(init, tainted, source)) { tainted.add(name); changed = true }
+      if (carriesTaint(init, tainted, source)) {
+        tainted.add(name)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -221,7 +263,11 @@ function rootOptionValue(arg: AstNode | undefined): AstNode | undefined {
 /** Classify a call as a filesystem path sink and return the path argument, or
  *  null when it's not a sink / is confined to a root. `requiresHandlerShape` =
  *  the caller must additionally confirm an Express handler (for `res.sendFile`). */
-function pathSink(call: AstNode, fsImports: FsImports, source: string): { target: AstNode; requiresHandlerShape: boolean } | null {
+function pathSink(
+  call: AstNode,
+  fsImports: FsImports,
+  source: string,
+): { target: AstNode; requiresHandlerShape: boolean } | null {
   const callee = call.callee as AstNode
   if (!callee) return null
   const args = (call.arguments ?? []) as AstNode[]
@@ -236,14 +282,18 @@ function pathSink(call: AstNode, fsImports: FsImports, source: string): { target
     const objId = idName(obj)
     if (objIsFs(obj, fsImports.namespaces) && FS_PATH_METHODS.has(method)) isSink = true
     else if (objId === "Deno" && DENO_PATH_METHODS.has(method)) isSink = true
-    else if ((objId ?? "").toLowerCase() === "res" && EXPRESS_SEND_METHODS.has(method)) { isSink = true; sendFile = true }
+    else if ((objId ?? "").toLowerCase() === "res" && EXPRESS_SEND_METHODS.has(method)) {
+      isSink = true
+      sendFile = true
+    }
   }
   if (!isSink) return null
   // `res.sendFile(p, { root })` confines to root — but ONLY when `root` is not
   // itself request-controlled (an attacker-chosen root is no boundary).
   if (sendFile) {
     const root = rootOptionValue(args[1]) ?? rootOptionValue(args[2])
-    if (root && !(TAINTED_MEMBER_RE.test(sliceOf(source, root)) || TAINTED_CALL_RE.test(sliceOf(source, root)))) return null
+    if (root && !(TAINTED_MEMBER_RE.test(sliceOf(source, root)) || TAINTED_CALL_RE.test(sliceOf(source, root))))
+      return null
   }
   const target = args[0]
   return target ? { target, requiresHandlerShape: sendFile } : null
@@ -273,7 +323,8 @@ function hasSanitization(body: AstNode, source: string): boolean {
         if (m === "startswith") found = true
         // `p.includes("..")` / `p.indexOf("..")` / `p.replace(/\.\./g, "")` — an
         // explicit traversal rejection or stripper.
-        else if ((m === "includes" || m === "indexof" || m === "replace") && argsTargetDotDot(args, source)) found = true
+        else if ((m === "includes" || m === "indexof" || m === "replace") && argsTargetDotDot(args, source))
+          found = true
       }
     }
   })
@@ -290,8 +341,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -312,18 +364,26 @@ export const noPathTraversal: AstRule = {
 
     const fns = collectFunctions(node)
     const fsImports = collectFsImports(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const sanitizedCache = new Map<AstNode, boolean>()
     const isSanitized = (f: AstNode): boolean => {
       let v = sanitizedCache.get(f)
-      if (v === undefined) { v = hasSanitization((f.body as AstNode) ?? f, ctx.source); sanitizedCache.set(f, v) }
+      if (v === undefined) {
+        v = hasSanitization((f.body as AstNode) ?? f, ctx.source)
+        sanitizedCache.set(f, v)
+      }
       return v
     }
     const taintCache = new Map<AstNode, Set<string>>()
     const taintLocalsOf = (scope: AstNode): Set<string> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -372,8 +432,9 @@ export const noPathTraversal: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

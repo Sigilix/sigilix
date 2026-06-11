@@ -17,12 +17,7 @@ import { formatCsv, FP_RATE_CSV_HEADER } from "@/src/lib/fp-rate/format"
 import { filterReviewsToWindow } from "@/src/lib/fp-rate/window"
 import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview, REVERSE_TS_BASE } from "@/src/lib/fp-rate/ingest"
 import { bucketForReason } from "@/src/lib/fp-rate/types"
-import type {
-  FpRateDismissal,
-  FpRateReview,
-  RawSynthFinding,
-  SpecialistRole,
-} from "@/src/lib/fp-rate/types"
+import type { FpRateDismissal, FpRateReview, RawSynthFinding, SpecialistRole } from "@/src/lib/fp-rate/types"
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -262,7 +257,12 @@ describe("computeFpRates", () => {
     synthNum: { hard: number; soft: number; unlabeled: number },
   ): AttributionResult {
     const ref = (i: number) => ({ fid: String(i), prNumber: 1, score: 5, roles: [], createdMs: 0 })
-    const denominator = { logic: [], security: [], performance: [], tests: [] } as AttributionResult["denominator"]
+    const denominator = {
+      logic: [],
+      security: [],
+      performance: [],
+      tests: [],
+    } as AttributionResult["denominator"]
     const numerator = {
       logic: { hard: 0, soft: 0, unlabeled: 0 },
       security: { hard: 0, soft: 0, unlabeled: 0 },
@@ -371,7 +371,10 @@ describe("ingest — mapTelemetryToReview (real prod shapes)", () => {
         { role: "logic", verdict: { findings: [] }, timedOut: false },
         { role: "security", verdict: { findings: [] }, timedOut: false },
       ],
-      synthesizer: { verdict: { findings: [] }, provenance: { findings: [], dropped: [], softened: [] } },
+      synthesizer: {
+        verdict: { findings: [] },
+        provenance: { findings: [], dropped: [], softened: [] },
+      },
     }
     const review = mapTelemetryToReview(raw, 1_000_000)!
     expect(review.prNumber).toBe(224)
@@ -393,20 +396,39 @@ describe("ingest — mapTelemetryToReview (real prod shapes)", () => {
         },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic", "security"], sourceFindingIds: ["logic-0"], action: "merged" },
-            { sourceSpecialists: ["performance"], sourceFindingIds: ["performance-1"], action: "kept" },
+            {
+              sourceSpecialists: ["logic", "security"],
+              sourceFindingIds: ["logic-0"],
+              action: "merged",
+            },
+            {
+              sourceSpecialists: ["performance"],
+              sourceFindingIds: ["performance-1"],
+              action: "kept",
+            },
           ],
         },
       },
     }
     const review = mapTelemetryToReview(raw, 1_000_000)!
     expect(review.synthFindings).toHaveLength(2)
-    expect(review.synthFindings![0]).toMatchObject({ path: "a.ts", line: 10, score: 5, sourceSpecialists: ["logic", "security"] })
+    expect(review.synthFindings![0]).toMatchObject({
+      path: "a.ts",
+      line: 10,
+      score: 5,
+      sourceSpecialists: ["logic", "security"],
+    })
     expect(review.synthFindings![1]!.sourceSpecialists).toEqual(["performance"])
   })
 
   it("maps a guard-skipped record (synth null) to synthFindings=null", () => {
-    const raw = { owner: "Sigilix", repo: "sigilix", prNumber: 184, fellBackReason: "merged_before_fanout", synthesizer: null }
+    const raw = {
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 184,
+      fellBackReason: "merged_before_fanout",
+      synthesizer: null,
+    }
     const review = mapTelemetryToReview(raw, 1_000_000)!
     expect(review.synthFindings).toBeNull()
     expect(review.fellBackReason).toBe("merged_before_fanout")
@@ -440,7 +462,9 @@ describe("ingest — mapTelemetryToReview (real prod shapes)", () => {
       prNumber: 1,
       synthesizer: {
         verdict: { findings: [{ path: "a.ts", line: 1, headline: "h", score: 5 }] },
-        provenance: { findings: [{ sourceSpecialists: [], sourceFindingIds: ["security-0", "logic-2"] }] },
+        provenance: {
+          findings: [{ sourceSpecialists: [], sourceFindingIds: ["security-0", "logic-2"] }],
+        },
       },
     }
     const review = mapTelemetryToReview(raw, 1)!
@@ -461,10 +485,26 @@ describe("ingest — createdMsFromKey + mapSignalRecord", () => {
       schemaVersion: 1,
       category: "security",
       signals: [
-        { ts: "2026-05-29T06:57:29.330Z", prNumber: 218, commentId: 3322657991, fid: "7fabc47db9c373d5", kind: "dismissed-textual" },
-        { ts: "2026-05-20T00:00:00.000Z", prNumber: 200, commentId: 999, kind: "dismissed-textual" }, // no fid -> skip
+        {
+          ts: "2026-05-29T06:57:29.330Z",
+          prNumber: 218,
+          commentId: 3322657991,
+          fid: "7fabc47db9c373d5",
+          kind: "dismissed-textual",
+        },
+        {
+          ts: "2026-05-20T00:00:00.000Z",
+          prNumber: 200,
+          commentId: 999,
+          kind: "dismissed-textual",
+        }, // no fid -> skip
         { ts: "x", prNumber: 1, commentId: 1, fid: "deadbeef", kind: "other" }, // wrong kind -> skip
-        { ts: "2026-05-20T00:00:00.000Z", prNumber: 218, fid: "abcd1234", kind: "dismissed-textual" }, // no commentId -> skip
+        {
+          ts: "2026-05-20T00:00:00.000Z",
+          prNumber: 218,
+          fid: "abcd1234",
+          kind: "dismissed-textual",
+        }, // no commentId -> skip
       ],
     }
     const out = mapSignalRecord(rec)

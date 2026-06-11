@@ -21,11 +21,7 @@ export async function pathHash7(path: string): Promise<string> {
   return toHex(new Uint8Array(buf)).slice(0, PATH_HASH_PREFIX_BYTES)
 }
 
-export async function astFindingId(
-  ruleId: string,
-  path: string,
-  line: number,
-): Promise<string> {
+export async function astFindingId(ruleId: string, path: string, line: number): Promise<string> {
   const h = await pathHash7(path)
   return `ast/${ruleId}/${h}/${line}`
 }

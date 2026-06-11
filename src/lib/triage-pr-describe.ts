@@ -296,9 +296,7 @@ export function renderApplyFailureComment(mode: DescribeMode, headSha?: string):
     "internal-changelog": "internal",
     "external-changelog": "external",
   }
-  const shaSuffix = typeof headSha === "string" && headSha.length > 0
-    ? ` (run on \`${headSha.slice(0, 7)}\`)`
-    : ""
+  const shaSuffix = typeof headSha === "string" && headSha.length > 0 ? ` (run on \`${headSha.slice(0, 7)}\`)` : ""
   return `**Sigilix describe apply** — generated the \`${mode}\` draft but could not write it to the PR body${shaSuffix} (GitHub PATCH refused). Re-run \`/sigilix describe apply ${shortToken[mode]}\` to retry, or run \`/sigilix describe ${shortToken[mode]}\` to get the draft as a comment instead.`
 }
 
@@ -308,11 +306,7 @@ export function renderApplyFailureComment(mode: DescribeMode, headSha?: string):
  * generic 422; this comment tells the user exactly what hit the
  * limit and offers the comment-mode draft as the workaround.
  */
-export function renderApplyTooLargeComment(
-  mode: DescribeMode,
-  currentLength: number,
-  mergedLength: number,
-): string {
+export function renderApplyTooLargeComment(mode: DescribeMode, currentLength: number, mergedLength: number): string {
   const shortToken: Record<DescribeMode, string> = {
     "pr-description": "pr",
     "internal-changelog": "internal",
@@ -336,10 +330,7 @@ export function renderApplyTooLargeComment(
  *
  * Pure — exposed for tests.
  */
-export function renderDescribeBlockContent(args: {
-  headSha: string
-  body: string
-}): string {
+export function renderDescribeBlockContent(args: { headSha: string; body: string }): string {
   const { headSha, body } = args
   const meta = JSON.stringify({
     kind: "describe-apply",
@@ -388,11 +379,13 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   // comment unlike improve's silent drop — describe is invoked by an
   // explicit `/sigilix describe` from a known author who saw the ack.
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    console.log(JSON.stringify({
-      event: "pr-describe-skipped",
-      reason: "sensitive_repo",
-      ...tag,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-describe-skipped",
+        reason: "sensitive_repo",
+        ...tag,
+      }),
+    )
     await tryPostComment(env, args, mode, renderSensitiveDenialComment())
     return
   }
@@ -403,11 +396,13 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   try {
     client = await buildClient(env, installationId)
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-describe-auth-failed",
-      err: err instanceof Error ? err.message : String(err),
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-describe-auth-failed",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
     return
   }
 
@@ -427,22 +422,35 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
     if (parsed.ok) {
       config = parsed.config
     } else {
-      console.log(JSON.stringify({
-        event: "command-config-parse-error",
-        owner, repo, prNumber,
-        command: "describe",
-        reason: parsed.reason,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "command-config-parse-error",
+          owner,
+          repo,
+          prNumber,
+          command: "describe",
+          reason: parsed.reason,
+        }),
+      )
       postConfigErrorComment({
-        env, client, owner, repo, prNumber, headSha,
+        env,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
         reason: parsed.reason,
         raw: parsed.raw,
       }).catch((err) => {
-        console.error(JSON.stringify({
-          event: "command-config-error-comment-bubbled",
-          err: err instanceof Error ? err.message : String(err),
-          owner, repo, prNumber,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "command-config-error-comment-bubbled",
+            err: err instanceof Error ? err.message : String(err),
+            owner,
+            repo,
+            prNumber,
+          }),
+        )
       })
       config = await loadSigilixConfig(client, owner, repo, headSha)
     }
@@ -450,12 +458,14 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   // Disabled-config gate. Loaded AT the head ref so per-PR config
   // changes are honored.
   if (config.describe?.enabled === false) {
-    console.log(JSON.stringify({
-      event: "pr-describe-skipped",
-      reason: "disabled_in_config",
-      headSha,
-      ...tag,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-describe-skipped",
+        reason: "disabled_in_config",
+        headSha,
+        ...tag,
+      }),
+    )
     await tryPostComment(env, args, mode, renderDisabledComment())
     return
   }
@@ -471,13 +481,15 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   const dedupeKey = `pr-describe:${owner}/${repo}#${prNumber}@${headSha}:${mode}${applySuffix}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
-    console.log(JSON.stringify({
-      event: "pr-describe-skipped",
-      dedupe_system: "kv",
-      reason: "already_ran",
-      headSha,
-      ...tag,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-describe-skipped",
+        dedupe_system: "kv",
+        reason: "already_ran",
+        headSha,
+        ...tag,
+      }),
+    )
     return
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
@@ -488,11 +500,13 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   try {
     const diffRaw = await client.getPullRequestDiff(owner, repo, prNumber)
     if (!diffRaw || diffRaw.trim().length === 0) {
-      console.log(JSON.stringify({
-        event: "pr-describe-no-diff",
-        headSha,
-        ...tag,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-describe-no-diff",
+          headSha,
+          ...tag,
+        }),
+      )
       await tryPostComment(env, args, mode, renderNoChangesComment(prNumber))
       successPosted = true
       return
@@ -502,26 +516,31 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
     // length to the cap; we log BEFORE building the prompt so the
     // builder's internal truncate() is just shaping the prompt.
     if (diffRaw.length > LIMITS.prDiff) {
-      console.log(JSON.stringify({
-        event: "pr-describe-truncated",
-        truncated_diff: true,
-        diffRawLength: diffRaw.length,
-        diffCap: LIMITS.prDiff,
-        headSha,
-        ...tag,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-describe-truncated",
+          truncated_diff: true,
+          diffRawLength: diffRaw.length,
+          diffCap: LIMITS.prDiff,
+          headSha,
+          ...tag,
+        }),
+      )
     }
 
     // ARC-185: per-command config (commands.describe.{prompt.addendum, model.{primary, fallbacks}}).
     const commandConfig = resolveCommandConfig(config, "describe")
 
-    const prompt = buildPrompt({
-      mode,
-      prNumber,
-      title: meta.title ?? "",
-      body: meta.body ?? "",
-      diff: diffRaw,
-    }, commandConfig.promptAddendum)
+    const prompt = buildPrompt(
+      {
+        mode,
+        prNumber,
+        title: meta.title ?? "",
+        body: meta.body ?? "",
+        diff: diffRaw,
+      },
+      commandConfig.promptAddendum,
+    )
 
     const primaryModel = commandConfig.modelPrimary ?? env.OPENCLAW_MODEL ?? DEFAULT_MODEL
     const modelChain = commandConfig.modelFallbacks.override
@@ -533,16 +552,18 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
       commandConfig.modelPrimary !== null ||
       commandConfig.modelFallbacks.override
     ) {
-      console.log(JSON.stringify({
-        event: "command-config-resolved",
-        owner, repo, prNumber,
-        command: "describe",
-        hasPromptAddendum: commandConfig.promptAddendum !== null,
-        modelPrimary: commandConfig.modelPrimary,
-        modelFallbacksCount: commandConfig.modelFallbacks.override
-          ? commandConfig.modelFallbacks.models.length
-          : 0,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "command-config-resolved",
+          owner,
+          repo,
+          prNumber,
+          command: "describe",
+          hasPromptAddendum: commandConfig.promptAddendum !== null,
+          modelPrimary: commandConfig.modelPrimary,
+          modelFallbacksCount: commandConfig.modelFallbacks.override ? commandConfig.modelFallbacks.models.length : 0,
+        }),
+      )
     }
 
     let response: string | null = null
@@ -555,31 +576,38 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         // only consumes the text. The describe path doesn't emit
         // `model-attempt-completed` telemetry today (its own logging is
         // structured separately), so usage is intentionally discarded.
-        response = (await generate({
-          model: m,
-          prompt,
-          apiKey: env.OLLAMA_API_KEY,
-          format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
-        })).text
+        response = (
+          await generate({
+            model: m,
+            prompt,
+            apiKey: env.OLLAMA_API_KEY,
+            format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
+          })
+        ).text
         break
       } catch (err) {
         lastErr = err
-        console.error(JSON.stringify({
-          event: "pr-describe-generate-failed",
-          err: err instanceof Error ? err.message : String(err),
-          headSha, model: m,
-          ...tag,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-describe-generate-failed",
+            err: err instanceof Error ? err.message : String(err),
+            headSha,
+            model: m,
+            ...tag,
+          }),
+        )
       }
     }
     if (response === null) {
-      console.error(JSON.stringify({
-        event: "pr-describe-generate-exhausted",
-        headSha,
-        modelChainLength: modelChain.length,
-        err: lastErr instanceof Error ? lastErr.message : String(lastErr ?? "unknown"),
-        ...tag,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-describe-generate-exhausted",
+          headSha,
+          modelChainLength: modelChain.length,
+          err: lastErr instanceof Error ? lastErr.message : String(lastErr ?? "unknown"),
+          ...tag,
+        }),
+      )
       await tryPostComment(env, args, mode, renderFailureComment(mode))
       return
     }
@@ -587,12 +615,14 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
 
     const verdict = parsePrDescribeResponse(response)
     if (!verdict) {
-      console.error(JSON.stringify({
-        event: "pr-describe-parse-failed",
-        headSha,
-        responseLength: response.length,
-        ...tag,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-describe-parse-failed",
+          headSha,
+          responseLength: response.length,
+          ...tag,
+        }),
+      )
       await tryPostComment(env, args, mode, renderFailureComment(mode))
       return
     }
@@ -626,12 +656,14 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         // GET failure: fall back to the stale `meta.body` snapshot
         // rather than abort. We'd rather PATCH with a slightly-
         // stale view than fail the apply outright.
-        console.warn(JSON.stringify({
-          event: "pr-describe-apply-prefetch-failed",
-          err: err instanceof Error ? err.message : String(err),
-          headSha,
-          ...tag,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-describe-apply-prefetch-failed",
+            err: err instanceof Error ? err.message : String(err),
+            headSha,
+            ...tag,
+          }),
+        )
         currentBody = meta.body ?? ""
       }
       const hadExistingMarkers = currentBody.includes(`<!-- sigilix:describe:${mode}:start -->`)
@@ -653,46 +685,49 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
       // re-apply should not show up in audit history).
       if (nextBody === currentBody) {
         successPosted = true
-        console.log(JSON.stringify({
-          event: "pr-describe-applied-noop",
-          headSha,
-          existing_markers: hadExistingMarkers,
-          ...tag,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-describe-applied-noop",
+            headSha,
+            existing_markers: hadExistingMarkers,
+            ...tag,
+          }),
+        )
       } else if (nextBody.length > PR_BODY_HARD_CAP) {
         // M1: GitHub caps PR bodies at ~262144 chars. If the merged
         // body would exceed our soft cap (well below GitHub's hard
         // cap), surface a clear error to the user rather than let
         // GitHub return a generic 422.
-        console.error(JSON.stringify({
-          event: "pr-describe-apply-too-large",
-          headSha,
-          next_body_length: nextBody.length,
-          cap: PR_BODY_HARD_CAP,
-          existing_markers: hadExistingMarkers,
-          ...tag,
-        }))
-        await tryPostComment(
-          env, args, mode,
-          renderApplyTooLargeComment(mode, currentBody.length, nextBody.length),
+        console.error(
+          JSON.stringify({
+            event: "pr-describe-apply-too-large",
+            headSha,
+            next_body_length: nextBody.length,
+            cap: PR_BODY_HARD_CAP,
+            existing_markers: hadExistingMarkers,
+            ...tag,
+          }),
         )
+        await tryPostComment(env, args, mode, renderApplyTooLargeComment(mode, currentBody.length, nextBody.length))
       } else {
         try {
           await client.updatePullRequestBody(owner, repo, prNumber, nextBody)
           successPosted = true
-          console.log(JSON.stringify({
-            event: "pr-describe-applied",
-            headSha,
-            // Apply path uses the full verdict body, so post-merge
-            // truncation only fires when the merged body would
-            // exceed `PR_BODY_HARD_CAP` (and the cap guard short-
-            // circuits BEFORE this branch). Stays `false` for any
-            // success that reaches this log line.
-            truncated: false,
-            existing_markers: hadExistingMarkers,
-            next_body_length: nextBody.length,
-            ...tag,
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-describe-applied",
+              headSha,
+              // Apply path uses the full verdict body, so post-merge
+              // truncation only fires when the merged body would
+              // exceed `PR_BODY_HARD_CAP` (and the cap guard short-
+              // circuits BEFORE this branch). Stays `false` for any
+              // success that reaches this log line.
+              truncated: false,
+              existing_markers: hadExistingMarkers,
+              next_body_length: nextBody.length,
+              ...tag,
+            }),
+          )
         } catch (err) {
           const status = readHttpStatus(err)
           if (status !== null && status >= 500) {
@@ -701,13 +736,15 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
             // any output yet (only the ack).
             throw err
           }
-          console.error(JSON.stringify({
-            event: "pr-describe-apply-failed",
-            status,
-            err: err instanceof Error ? err.message : String(err),
-            headSha,
-            ...tag,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "pr-describe-apply-failed",
+              status,
+              err: err instanceof Error ? err.message : String(err),
+              headSha,
+              ...tag,
+            }),
+          )
           // 4xx: post a fallback failure comment so the user knows
           // the apply path didn't land. Best-effort; no re-throw.
           await tryPostComment(env, args, mode, renderApplyFailureComment(mode, headSha))
@@ -724,12 +761,14 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
       try {
         await client.createIssueComment(owner, repo, prNumber, commentBody)
         successPosted = true
-        console.log(JSON.stringify({
-          event: "pr-describe-posted",
-          headSha,
-          truncated: commentBodyCapped.length < verdict.body.length,
-          ...tag,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-describe-posted",
+            headSha,
+            truncated: commentBodyCapped.length < verdict.body.length,
+            ...tag,
+          }),
+        )
       } catch (err) {
         const status = readHttpStatus(err)
         if (status !== null && status >= 500) {
@@ -740,13 +779,15 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
           throw err
         }
         // 4xx: log + return (4xx isn't queue-retriable).
-        console.error(JSON.stringify({
-          event: "pr-describe-post-failed",
-          status,
-          err: err instanceof Error ? err.message : String(err),
-          headSha,
-          ...tag,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-describe-post-failed",
+            status,
+            err: err instanceof Error ? err.message : String(err),
+            headSha,
+            ...tag,
+          }),
+        )
       }
     }
   } finally {
@@ -773,12 +814,16 @@ async function tryPostComment(
     const client = await buildClient(env, args.installationId)
     await client.createIssueComment(args.owner, args.repo, args.prNumber, body)
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-describe-best-effort-post-failed",
-      err: err instanceof Error ? err.message : String(err),
-      mode,
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-describe-best-effort-post-failed",
+        err: err instanceof Error ? err.message : String(err),
+        mode,
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+      }),
+    )
   }
 }
 

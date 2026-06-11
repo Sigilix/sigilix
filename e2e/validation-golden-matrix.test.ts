@@ -41,7 +41,11 @@ interface MatrixFixture {
 }
 
 /** Build the args with every declared callback wrapped to push an ordered record. */
-function withRecorders(args: ValidateArgs, callbacks: CallbackArg[], sink: RecordedEvent[]): Parameters<typeof validateForSubmission>[0] {
+function withRecorders(
+  args: ValidateArgs,
+  callbacks: CallbackArg[],
+  sink: RecordedEvent[],
+): Parameters<typeof validateForSubmission>[0] {
   const wired: Record<string, unknown> = { ...args }
   for (const name of callbacks) {
     wired[name] = (finding: { path: string; line: number; headline: string }, payload: unknown): void => {

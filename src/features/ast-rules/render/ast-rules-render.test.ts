@@ -1,10 +1,7 @@
 // ARC-181 — prompt rendering tests.
 
 import { describe, it, expect } from "vitest"
-import {
-  renderAstFindingsForPrompt,
-  renderAstFindingsAsJsonForSynth,
-} from "@/src/features/ast-rules/render/render"
+import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "@/src/features/ast-rules/render/render"
 import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 const F1: AstFinding = {

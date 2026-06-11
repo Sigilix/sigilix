@@ -19,22 +19,14 @@ import {
 describe("raceWithShadowGrace", () => {
   it("resolves to the underlying promise value when it settles before the deadline", async () => {
     const deadline = Date.now() + 1_000
-    const result = await raceWithShadowGrace(
-      Promise.resolve({ ok: true }),
-      deadline,
-      new AbortController().signal,
-    )
+    const result = await raceWithShadowGrace(Promise.resolve({ ok: true }), deadline, new AbortController().signal)
     expect(result).toEqual({ ok: true })
   })
 
   it("resolves to SHADOW_GRACE_EXPIRED when the deadline fires before the promise settles", async () => {
     const deadline = Date.now() + 20 // 20ms grace
     const neverSettles = new Promise<unknown>(() => undefined)
-    const result = await raceWithShadowGrace(
-      neverSettles,
-      deadline,
-      new AbortController().signal,
-    )
+    const result = await raceWithShadowGrace(neverSettles, deadline, new AbortController().signal)
     expect(result).toBe(SHADOW_GRACE_EXPIRED)
   })
 
@@ -42,11 +34,7 @@ describe("raceWithShadowGrace", () => {
     const ac = new AbortController()
     ac.abort()
     const neverSettles = new Promise<unknown>(() => undefined)
-    const result = await raceWithShadowGrace(
-      neverSettles,
-      Date.now() + 60_000,
-      ac.signal,
-    )
+    const result = await raceWithShadowGrace(neverSettles, Date.now() + 60_000, ac.signal)
     expect(result).toBe(SHADOW_GRACE_EXPIRED)
   })
 
@@ -54,11 +42,7 @@ describe("raceWithShadowGrace", () => {
     const ac = new AbortController()
     const neverSettles = new Promise<unknown>(() => undefined)
     setTimeout(() => ac.abort(), 10)
-    const result = await raceWithShadowGrace(
-      neverSettles,
-      Date.now() + 60_000,
-      ac.signal,
-    )
+    const result = await raceWithShadowGrace(neverSettles, Date.now() + 60_000, ac.signal)
     expect(result).toBe(SHADOW_GRACE_EXPIRED)
   })
 

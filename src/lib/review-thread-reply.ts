@@ -38,15 +38,13 @@ import { isArcGithubLogin } from "./mention"
  * count each gate's hit rate separately.
  */
 export type ReviewReplySkipReason =
-  | "self"           // comment authored by Sigilix itself (loop guard)
-  | "not-a-reply"    // no in_reply_to_id — first comment in a new thread
-  | "empty"          // body is blank after stripping quotes + code
-  | "ack-only"       // body is "fixed" / "done" / "thanks" / 👍 / +1 / …
+  | "self" // comment authored by Sigilix itself (loop guard)
+  | "not-a-reply" // no in_reply_to_id — first comment in a new thread
+  | "empty" // body is blank after stripping quotes + code
+  | "ack-only" // body is "fixed" / "done" / "thanks" / 👍 / +1 / …
   | "no-reply-signal" // body has no `?`, no trigger word, and is short
 
-export type ReviewReplyGateResult =
-  | { ok: true }
-  | { ok: false; reason: ReviewReplySkipReason }
+export type ReviewReplyGateResult = { ok: true } | { ok: false; reason: ReviewReplySkipReason }
 
 /** Short acknowledgements that don't deserve an LLM call. Matched
  *  case-insensitively against the WHOLE cleaned body (post-trim).

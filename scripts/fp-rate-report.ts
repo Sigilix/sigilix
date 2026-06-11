@@ -71,7 +71,10 @@ async function cfFetch(url: string): Promise<Response> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), KV_REQUEST_TIMEOUT_MS)
   try {
-    return await fetch(url, { headers: { Authorization: `Bearer ${cfApiToken}` }, signal: ctrl.signal })
+    return await fetch(url, {
+      headers: { Authorization: `Bearer ${cfApiToken}` },
+      signal: ctrl.signal,
+    })
   } finally {
     clearTimeout(timer)
   }
@@ -193,7 +196,9 @@ async function main() {
   // flushes to stdout before the process exits — process.exit() can truncate
   // buffered output in CI (CodeRabbit; Node docs).
   if (failedFetches > 0) {
-    console.error(`WARNING: ${failedFetches} KV fetch(es) failed (non-404) — the report above may be INCOMPLETE (counts under-reported).`)
+    console.error(
+      `WARNING: ${failedFetches} KV fetch(es) failed (non-404) — the report above may be INCOMPLETE (counts under-reported).`,
+    )
     process.exitCode = 1
   }
 }

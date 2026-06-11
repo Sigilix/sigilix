@@ -118,14 +118,10 @@ function isTestsBlocker(f: TestsScoredFinding): boolean {
 }
 
 function textOf(f: TestsScoredFinding): string {
-  return [
-    f.headline,
-    f.body,
-    f.testGap,
-    f.failureExample,
-    ...(f.evidenceRefs ?? []),
-    ...(f.inspectedTestFiles ?? []),
-  ].filter((v): v is string => typeof v === "string").join("\n").toLowerCase()
+  return [f.headline, f.body, f.testGap, f.failureExample, ...(f.evidenceRefs ?? []), ...(f.inspectedTestFiles ?? [])]
+    .filter((v): v is string => typeof v === "string")
+    .join("\n")
+    .toLowerCase()
 }
 
 function onTarget(c: TestsOverfireCase, f: TestsScoredFinding): boolean {
@@ -171,15 +167,10 @@ export function applyCurrentTestGate(
     .map((f) => ({ ...f }))
 }
 
-export function scoreCase(
-  c: TestsOverfireCase,
-  findings: readonly TestsScoredFinding[],
-): TestsCaseResult {
+export function scoreCase(c: TestsOverfireCase, findings: readonly TestsScoredFinding[]): TestsCaseResult {
   const blockers = findings.filter(isTestsBlocker)
   if (c.label === "safe") {
-    const fps = c.anyTestingBlockerIsFp
-      ? blockers
-      : blockers.filter((f) => onTarget(c, f) && matchesTargetTokens(c, f))
+    const fps = c.anyTestingBlockerIsFp ? blockers : blockers.filter((f) => onTarget(c, f) && matchesTargetTokens(c, f))
     return {
       id: c.id,
       label: c.label,

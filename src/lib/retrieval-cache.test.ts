@@ -35,7 +35,7 @@ describe("retrieval cache key", () => {
     const a = await _testOnlyCacheKey("ns", "Where Is X")
     const b = await _testOnlyCacheKey("ns", "where is x")
     expect(a).not.toBe(b)
-    const c = await _testOnlyCacheKey("ns", "where  is  x")  // double space
+    const c = await _testOnlyCacheKey("ns", "where  is  x") // double space
     const d = await _testOnlyCacheKey("ns", "where is x")
     expect(c).not.toBe(d)
   })
@@ -123,7 +123,12 @@ describe("createRetrievalCache — budget enforcement", () => {
       secondFetcherCalls++
       return [fakeChunk("b.ts")]
     }
-    const r = await cache.cachedRetrieve({ caller: "t", query: "q", namespace: "n", fetcher: secondFetcher })
+    const r = await cache.cachedRetrieve({
+      caller: "t",
+      query: "q",
+      namespace: "n",
+      fetcher: secondFetcher,
+    })
     expect(secondFetcherCalls).toBe(0)
     expect(r.chunks).toEqual([fakeChunk("a.ts")])
     expect(cache.budgetRemaining()).toBe(0)
@@ -139,12 +144,22 @@ describe("createRetrievalCache — failure handling", () => {
       throw new Error("vector DB down")
     }
 
-    const r1 = await cache.cachedRetrieve({ caller: "t", query: "q", namespace: "n", fetcher: failingFetcher })
+    const r1 = await cache.cachedRetrieve({
+      caller: "t",
+      query: "q",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
     expect(r1.chunks).toBeNull()
     expect(fetcherCalls).toBe(1)
 
     // Same query → cached failure, no second attempt.
-    const r2 = await cache.cachedRetrieve({ caller: "t", query: "q", namespace: "n", fetcher: failingFetcher })
+    const r2 = await cache.cachedRetrieve({
+      caller: "t",
+      query: "q",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
     expect(r2.chunks).toBeNull()
     expect(fetcherCalls).toBe(1)
   })
@@ -155,12 +170,27 @@ describe("createRetrievalCache — failure handling", () => {
       throw new Error("nope")
     }
 
-    await cache.cachedRetrieve({ caller: "t", query: "q1", namespace: "n", fetcher: failingFetcher })
-    await cache.cachedRetrieve({ caller: "t", query: "q2", namespace: "n", fetcher: failingFetcher })
+    await cache.cachedRetrieve({
+      caller: "t",
+      query: "q1",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
+    await cache.cachedRetrieve({
+      caller: "t",
+      query: "q2",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
     expect(cache.budgetRemaining()).toBe(0)
 
     // 3rd attempt — budget exhausted regardless of failures above.
-    const r = await cache.cachedRetrieve({ caller: "t", query: "q3", namespace: "n", fetcher: failingFetcher })
+    const r = await cache.cachedRetrieve({
+      caller: "t",
+      query: "q3",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
     expect(r.chunks).toBeNull()
   })
 })
@@ -171,12 +201,17 @@ describe("createRetrievalCache — stats / telemetry log", () => {
     const fetcher = async () => [fakeChunk("a.ts"), fakeChunk("b.ts")]
 
     await cache.cachedRetrieve({ caller: "preflight", query: "q1", namespace: "ns", fetcher })
-    await cache.cachedRetrieve({ caller: "specialist:logic", query: "q1", namespace: "ns", fetcher })
+    await cache.cachedRetrieve({
+      caller: "specialist:logic",
+      query: "q1",
+      namespace: "ns",
+      fetcher,
+    })
     await cache.cachedRetrieve({ caller: "synthesizer", query: "q2", namespace: "ns", fetcher })
 
     const s = cache.stats()
     expect(s.totalCalls).toBe(3)
-    expect(s.cacheHits).toBe(1)  // q1 from logic was a hit
+    expect(s.cacheHits).toBe(1) // q1 from logic was a hit
     expect(s.cacheMisses).toBe(2) // q1 preflight + q2 synth
     expect(s.errors).toBe(0)
     expect(s.log).toHaveLength(3)
@@ -194,7 +229,12 @@ describe("createRetrievalCache — stats / telemetry log", () => {
       throw new Error("upstream timeout")
     }
 
-    await cache.cachedRetrieve({ caller: "preflight", query: "q", namespace: "n", fetcher: failingFetcher })
+    await cache.cachedRetrieve({
+      caller: "preflight",
+      query: "q",
+      namespace: "n",
+      fetcher: failingFetcher,
+    })
     const s = cache.stats()
     expect(s.errors).toBe(1)
     expect(s.log[0]?.error).toBe("upstream timeout")

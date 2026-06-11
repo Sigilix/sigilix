@@ -198,10 +198,7 @@ function compareRecency(a: string | null, b: string | null): number {
  * children exist, `hasUpstackFork` is true and `depth` is a lower
  * bound (depth = ancestors + 1 + 1).
  */
-export function detectStack(args: {
-  currentPr: CurrentPrInput
-  openPrs: ReadonlyArray<OpenPrInput>
-}): StackContext {
+export function detectStack(args: { currentPr: CurrentPrInput; openPrs: ReadonlyArray<OpenPrInput> }): StackContext {
   const { currentPr, openPrs } = args
 
   // Filter out the current PR itself (if the caller included it in
@@ -299,7 +296,6 @@ export function detectStack(args: {
   // The walk's telemetry still fires below so the operator can see
   // what happened.
   if (cycleDetectedDown || cappedDown) {
-
     console.warn(
       JSON.stringify({
         event: "pr-stack-down-walk-degraded",
@@ -318,8 +314,7 @@ export function detectStack(args: {
   // to human reading order). Reverse to match.
   ancestors.reverse()
 
-  const parent: StackPr | null =
-    ancestors.length > 0 ? ancestors[ancestors.length - 1]! : null
+  const parent: StackPr | null = ancestors.length > 0 ? ancestors[ancestors.length - 1]! : null
 
   // ── Upstack walk: immediate children ─────────────────────────
   //
@@ -358,8 +353,7 @@ export function detectStack(args: {
   let upstackChainCount = 0
   if (immediateChildren.length > 0) {
     const primary = immediateChildren[0]!
-    upstackChainCount =
-      1 + walkPrimaryUpstack(primary, peersByBaseKey, currentPr.author)
+    upstackChainCount = 1 + walkPrimaryUpstack(primary, peersByBaseKey, currentPr.author)
   }
   const depth = ancestors.length + 1 + upstackChainCount
   const position = ancestors.length + 1
@@ -371,9 +365,7 @@ export function detectStack(args: {
   // unreachable for the parent-only-degraded case. Treat the degraded
   // signal as proof of stackedness even when ancestors are now empty.
   const isStacked =
-    parent !== null ||
-    immediateChildren.length > 0 ||
-    (matchedDownstackPeer && (cycleDetectedDown || cappedDown))
+    parent !== null || immediateChildren.length > 0 || (matchedDownstackPeer && (cycleDetectedDown || cappedDown))
 
   if (!isStacked) {
     return {

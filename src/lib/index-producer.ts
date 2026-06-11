@@ -109,12 +109,14 @@ export async function enqueueIndexJobsForRepos(args: {
   for (const entry of repositories) {
     const parsed = parseFullName(entry)
     if (!parsed) {
-      console.warn(JSON.stringify({
-        event: "index-job-skip-invalid-payload",
-        installation_id: installationId,
-        full_name: typeof entry.full_name === "string" ? entry.full_name : null,
-        reason,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-job-skip-invalid-payload",
+          installation_id: installationId,
+          full_name: typeof entry.full_name === "string" ? entry.full_name : null,
+          reason,
+        }),
+      )
       continue
     }
     const { owner, repo } = parsed
@@ -122,10 +124,15 @@ export async function enqueueIndexJobsForRepos(args: {
 
     if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
       result.sensitiveSkipped += 1
-      console.log(JSON.stringify({
-        event: "index-job-skip-sensitive-producer",
-        owner, repo, installation_id: installationId, reason,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-job-skip-sensitive-producer",
+          owner,
+          repo,
+          installation_id: installationId,
+          reason,
+        }),
+      )
       continue
     }
 
@@ -149,17 +156,27 @@ export async function enqueueIndexJobsForRepos(args: {
         reason,
       })
       result.succeeded += 1
-      console.log(JSON.stringify({
-        event: "index-job-enqueued",
-        owner, repo, installation_id: installationId, reason,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-job-enqueued",
+          owner,
+          repo,
+          installation_id: installationId,
+          reason,
+        }),
+      )
     } catch (err) {
       result.perRepoFailed += 1
-      console.error(JSON.stringify({
-        event: "index-job-enqueue-failed",
-        owner, repo, installation_id: installationId, reason,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-job-enqueue-failed",
+          owner,
+          repo,
+          installation_id: installationId,
+          reason,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
 
@@ -226,33 +243,44 @@ const BRANCH_REF_PREFIX = "refs/heads/"
  * remaining 9 hit `index-job-skip-fresh` and ack. No special primitive
  * required — ARC-235's existing freshness gate is the coalescer.
  */
-export async function maybeEnqueuePushIndexJob(
-  args: MaybeEnqueuePushIndexJobArgs,
-): Promise<PushEnqueueOutcome> {
+export async function maybeEnqueuePushIndexJob(args: MaybeEnqueuePushIndexJobArgs): Promise<PushEnqueueOutcome> {
   const { env, owner, repo, repoId, installationId, ref, after } = args
 
   if (typeof ref !== "string" || !ref.startsWith(BRANCH_REF_PREFIX)) {
-    console.log(JSON.stringify({
-      event: "index-push-skip-non-branch",
-      owner, repo, installation_id: installationId, ref,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-push-skip-non-branch",
+        owner,
+        repo,
+        installation_id: installationId,
+        ref,
+      }),
+    )
     return { skipped: "non-branch" }
   }
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    console.log(JSON.stringify({
-      event: "index-push-skip-sensitive",
-      owner, repo, installation_id: installationId,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-push-skip-sensitive",
+        owner,
+        repo,
+        installation_id: installationId,
+      }),
+    )
     return { skipped: "sensitive" }
   }
 
   const branchName = ref.slice(BRANCH_REF_PREFIX.length)
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.error(JSON.stringify({
-      event: "index-push-skip-missing-creds",
-      owner, repo, installation_id: installationId,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "index-push-skip-missing-creds",
+        owner,
+        repo,
+        installation_id: installationId,
+      }),
+    )
     return { skipped: "missing-creds" }
   }
 
@@ -261,19 +289,27 @@ export async function maybeEnqueuePushIndexJob(
     // No prior default index → don't use push as the bootstrap path.
     // Install / repos-added / reconciliation remain the authorized
     // bootstrap flow; branch indexes depend on a default manifest.
-    console.log(JSON.stringify({
-      event: "index-push-skip-no-prior-index",
-      owner, repo, installation_id: installationId,
-      manifest_kind: manifest.kind,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-push-skip-no-prior-index",
+        owner,
+        repo,
+        installation_id: installationId,
+        manifest_kind: manifest.kind,
+      }),
+    )
     return { skipped: "no-prior-index" }
   }
   if (manifest.manifest.owner !== owner) {
-    console.warn(JSON.stringify({
-      event: "index-push-skip-owner-mismatch",
-      owner, repo, installation_id: installationId,
-      manifest_owner: manifest.manifest.owner,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-push-skip-owner-mismatch",
+        owner,
+        repo,
+        installation_id: installationId,
+        manifest_owner: manifest.manifest.owner,
+      }),
+    )
     return { skipped: "owner-mismatch" }
   }
 
@@ -286,10 +322,7 @@ export async function maybeEnqueuePushIndexJob(
   // anyway for the default-branch policy check, so this is a
   // zero-cost fallback that prevents push-driven refreshes from
   // silently dropping `githubRepoId`.
-  let effectiveRepoId =
-    typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0
-      ? repoId
-      : undefined
+  let effectiveRepoId = typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0 ? repoId : undefined
   try {
     const token = await getInstallationToken({
       kv: env.OPENCLAW_STATE,
@@ -311,10 +344,14 @@ export async function maybeEnqueuePushIndexJob(
     } else {
       // 404 → repo gone. Don't enqueue; the consumer would fail too
       // and the push doesn't represent live state worth indexing.
-      console.warn(JSON.stringify({
-        event: "index-push-skip-missing-default-branch",
-        owner, repo, installation_id: installationId,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-push-skip-missing-default-branch",
+          owner,
+          repo,
+          installation_id: installationId,
+        }),
+      )
       return { skipped: "missing-default-branch" }
     }
   } catch (err) {
@@ -324,20 +361,29 @@ export async function maybeEnqueuePushIndexJob(
     // consumer fetches repo metadata again and maps it to the default namespace
     // if this branch is the repo default.
     branchPolicyLookupFailed = true
-    console.warn(JSON.stringify({
-      event: "index-push-default-branch-lookup-failed",
-      owner, repo, installation_id: installationId,
-      err: err instanceof Error ? err.message : String(err),
-      note: "falling through to enqueue; consumer will revalidate",
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-push-default-branch-lookup-failed",
+        owner,
+        repo,
+        installation_id: installationId,
+        err: err instanceof Error ? err.message : String(err),
+        note: "falling through to enqueue; consumer will revalidate",
+      }),
+    )
   }
 
   if (after === ZERO_SHA) {
     if (defaultBranch !== null && branchName === defaultBranch) {
-      console.log(JSON.stringify({
-        event: "index-push-skip-default-branch-delete",
-        owner, repo, installation_id: installationId, ref,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-push-skip-default-branch-delete",
+          owner,
+          repo,
+          installation_id: installationId,
+          ref,
+        }),
+      )
       return { skipped: "default-branch-delete" }
     }
     try {
@@ -348,19 +394,28 @@ export async function maybeEnqueuePushIndexJob(
         branch: branchName,
         reason: "branch-deleted",
       })
-      console.log(JSON.stringify({
-        event: "index-branch-delete-enqueued",
-        owner, repo, installation_id: installationId, branch: branchName,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-branch-delete-enqueued",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: branchName,
+        }),
+      )
       return { enqueued: true, reason: "branch-delete" }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      console.error(JSON.stringify({
-        event: "index-branch-delete-enqueue-failed",
-        owner, repo, installation_id: installationId,
-        branch: branchName,
-        err: reason,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-branch-delete-enqueue-failed",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: branchName,
+          err: reason,
+        }),
+      )
       return { failed: "enqueue-throw", reason }
     }
   }
@@ -372,14 +427,19 @@ export async function maybeEnqueuePushIndexJob(
     branchToIndex = undefined
   } else if (isTrackedLongLivedBranch(branchName, env.OPENCLAW_INDEX_BRANCHES)) {
     branchToIndex = branchName
-  } else if (client !== null && await branchHasOpenSameRepoPr(client, owner, repo, branchName)) {
+  } else if (client !== null && (await branchHasOpenSameRepoPr(client, owner, repo, branchName))) {
     branchToIndex = branchName
   } else {
-    console.log(JSON.stringify({
-      event: "index-push-skip-untracked-branch",
-      owner, repo, installation_id: installationId,
-      branch: branchName, default_branch: defaultBranch,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-push-skip-untracked-branch",
+        owner,
+        repo,
+        installation_id: installationId,
+        branch: branchName,
+        default_branch: defaultBranch,
+      }),
+    )
     return { skipped: "untracked-branch" }
   }
 
@@ -410,21 +470,29 @@ export async function maybeEnqueuePushIndexJob(
     }
     if (branchToIndex) message.branch = branchToIndex
     await env.OPENCLAW_JOBS.send(message)
-    console.log(JSON.stringify({
-      event: "index-push-enqueued",
-      owner, repo, installation_id: installationId,
-      branch: branchName,
-      index_branch: branchToIndex ?? null,
-      after_sha: typeof after === "string" ? after : null,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-push-enqueued",
+        owner,
+        repo,
+        installation_id: installationId,
+        branch: branchName,
+        index_branch: branchToIndex ?? null,
+        after_sha: typeof after === "string" ? after : null,
+      }),
+    )
     return { enqueued: true, reason: "push" }
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "index-push-enqueue-failed",
-      owner, repo, installation_id: installationId,
-      err: reason,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "index-push-enqueue-failed",
+        owner,
+        repo,
+        installation_id: installationId,
+        err: reason,
+      }),
+    )
     return { failed: "enqueue-throw", reason }
   }
 }
@@ -441,17 +509,20 @@ async function branchHasOpenSameRepoPr(
       perPage: 100,
       maxItems: 200,
     })
-    return open.some((pr) =>
-      pr.head.ref === branchName &&
-      (pr.head.repo?.full_name ?? "").toLowerCase() === expectedFullName
+    return open.some(
+      (pr) => pr.head.ref === branchName && (pr.head.repo?.full_name ?? "").toLowerCase() === expectedFullName,
     )
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "index-push-open-pr-lookup-failed",
-      owner, repo, branch: branchName,
-      err: err instanceof Error ? err.message : String(err),
-      note: "falling through to enqueue branch index; consumer will revalidate",
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-push-open-pr-lookup-failed",
+        owner,
+        repo,
+        branch: branchName,
+        err: err instanceof Error ? err.message : String(err),
+        note: "falling through to enqueue branch index; consumer will revalidate",
+      }),
+    )
     return true
   }
 }
@@ -473,10 +544,7 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
   const enqueueFailures: string[] = []
 
   const isBranchIndexAction =
-    action === "opened" ||
-    action === "synchronize" ||
-    action === "reopened" ||
-    action === "ready_for_review"
+    action === "opened" || action === "synchronize" || action === "reopened" || action === "ready_for_review"
   if (draft !== true && isBranchIndexAction && headRef && headRef !== baseRef) {
     try {
       await env.OPENCLAW_JOBS.send({
@@ -487,21 +555,29 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         reason: "pull-request",
         branch: headRef,
       })
-      console.log(JSON.stringify({
-        event: "index-pr-branch-enqueued",
-        owner, repo, installation_id: installationId,
-        branch: headRef,
-        action,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-pr-branch-enqueued",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: headRef,
+          action,
+        }),
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error(JSON.stringify({
-        event: "index-pr-branch-enqueue-failed",
-        owner, repo, installation_id: installationId,
-        branch: headRef,
-        action,
-        err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-pr-branch-enqueue-failed",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: headRef,
+          action,
+          err: message,
+        }),
+      )
       enqueueFailures.push(`index-pr-branch:${message}`)
     }
   }
@@ -520,21 +596,29 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         branch: headRef,
         reason: "pr-branch-closed",
       })
-      console.log(JSON.stringify({
-        event: "index-pr-branch-delete-enqueued",
-        owner, repo, installation_id: installationId,
-        branch: headRef,
-        merged: merged === true,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-pr-branch-delete-enqueued",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: headRef,
+          merged: merged === true,
+        }),
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error(JSON.stringify({
-        event: "index-pr-branch-delete-enqueue-failed",
-        owner, repo, installation_id: installationId,
-        branch: headRef,
-        merged: merged === true,
-        err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-pr-branch-delete-enqueue-failed",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: headRef,
+          merged: merged === true,
+          err: message,
+        }),
+      )
       enqueueFailures.push(`index-pr-branch-delete:${message}`)
     }
   } else if (
@@ -543,12 +627,16 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
     headRef !== baseRef &&
     isTrackedLongLivedBranch(headRef, env.OPENCLAW_INDEX_BRANCHES)
   ) {
-    console.log(JSON.stringify({
-      event: "index-pr-branch-delete-skipped-tracked",
-      owner, repo, installation_id: installationId,
-      branch: headRef,
-      merged: merged === true,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-pr-branch-delete-skipped-tracked",
+        owner,
+        repo,
+        installation_id: installationId,
+        branch: headRef,
+        merged: merged === true,
+      }),
+    )
   }
 
   if (action === "closed" && merged === true && baseRef) {
@@ -561,19 +649,27 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         reason: "merged-pr",
         branch: baseRef,
       })
-      console.log(JSON.stringify({
-        event: "index-pr-merged-base-enqueued",
-        owner, repo, installation_id: installationId,
-        branch: baseRef,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "index-pr-merged-base-enqueued",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: baseRef,
+        }),
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error(JSON.stringify({
-        event: "index-pr-merged-base-enqueue-failed",
-        owner, repo, installation_id: installationId,
-        branch: baseRef,
-        err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-pr-merged-base-enqueue-failed",
+          owner,
+          repo,
+          installation_id: installationId,
+          branch: baseRef,
+          err: message,
+        }),
+      )
       enqueueFailures.push(`index-pr-merged-base:${message}`)
     }
   }

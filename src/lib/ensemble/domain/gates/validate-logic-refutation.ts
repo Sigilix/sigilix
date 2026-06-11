@@ -66,9 +66,7 @@ export const LOGIC_REFUTATION_MIN_SEVERITY = 4
 /** Single failure shape — a high-sev logic finding with no survival rationale. */
 export type LogicRefutationDropReason = "logic-finding-missing-refutation-survival"
 
-export type LogicRefutationDecision =
-  | { keep: true }
-  | { keep: false; reason: LogicRefutationDropReason }
+export type LogicRefutationDecision = { keep: true } | { keep: false; reason: LogicRefutationDropReason }
 
 /**
  * Evaluate one logic-sourced finding. The call site scopes invocation to
@@ -83,8 +81,7 @@ export type LogicRefutationDecision =
  */
 export function evaluateLogicRefutation(finding: PrReviewFinding): LogicRefutationDecision {
   if (finding.score < LOGIC_REFUTATION_MIN_SEVERITY) return { keep: true }
-  const rationale =
-    typeof finding.independentAssessment === "string" ? finding.independentAssessment.trim() : ""
+  const rationale = typeof finding.independentAssessment === "string" ? finding.independentAssessment.trim() : ""
   if (rationale.length > 0) return { keep: true }
   return { keep: false, reason: "logic-finding-missing-refutation-survival" }
 }

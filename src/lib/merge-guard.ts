@@ -21,16 +21,10 @@ import type { SubmitReviewBody } from "@/src/shared/types/github"
  *  so tests can stub a 1-method object rather than constructing the
  *  full client. */
 export interface MergeGuardClient {
-  getPullRequest(
-    owner: string,
-    repo: string,
-    prNumber: number,
-  ): Promise<{ merged_at?: string | null }>
+  getPullRequest(owner: string, repo: string, prNumber: number): Promise<{ merged_at?: string | null }>
 }
 
-export type MergeGuardResult =
-  | { shouldSkip: false }
-  | { shouldSkip: true; mergedAtMs: number }
+export type MergeGuardResult = { shouldSkip: false } | { shouldSkip: true; mergedAtMs: number }
 
 /**
  * Fetches the PR's current state. Returns `shouldSkip: true` with the
@@ -63,14 +57,16 @@ export async function checkIsPrMerged(args: {
     }
     return { shouldSkip: false }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-merged-guard-failed",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      headSha: args.headSha.slice(0, 7),
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-merged-guard-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { shouldSkip: false }
   }
 }
@@ -94,9 +90,7 @@ export interface MergeApproveSubmitClient {
  *  computing". */
 export type MergedOnApproveStage = "pre-fanout" | "pre-submit"
 
-export type SubmitMergedOnApproveResult =
-  | { ok: true; reviewId: number; state: string }
-  | { ok: false; error: string }
+export type SubmitMergedOnApproveResult = { ok: true; reviewId: number; state: string } | { ok: false; error: string }
 
 /**
  * SIG-88: submit a marker-only APPROVE event when the PR was merged
@@ -161,9 +155,7 @@ export async function submitMergedOnApprove(args: {
     // No `comments` — the marker-only body is the entire review.
   }
   try {
-    const submitted = await args.client.submitReview(
-      args.owner, args.repo, args.prNumber, submission,
-    )
+    const submitted = await args.client.submitReview(args.owner, args.repo, args.prNumber, submission)
     // CR PR #104 Minor catch: clamp at 0 — on `pre-fanout` runs the merge
     // can have happened BEFORE this ensemble started (webhook queued during
     // a long delay), so `mergedAtMs - startMs` would otherwise report a
@@ -171,30 +163,34 @@ export async function submitMergedOnApprove(args: {
     // practice (merge happened during fan-out → after startMs), but the
     // clamp is cheap and keeps the field's semantic ("how long into the
     // review did the merge land") honest across both stages.
-    console.log(JSON.stringify({
-      event: "pr-review-approved-on-merge",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      headSha: args.headSha.slice(0, 7),
-      stage: args.stage,
-      merged_at_ms: args.mergedAtMs,
-      merged_during_review_ms: Math.max(0, args.mergedAtMs - args.startMs),
-      review_elapsed_ms: Date.now() - args.startMs,
-      review_id: submitted.id,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-approved-on-merge",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        stage: args.stage,
+        merged_at_ms: args.mergedAtMs,
+        merged_during_review_ms: Math.max(0, args.mergedAtMs - args.startMs),
+        review_elapsed_ms: Date.now() - args.startMs,
+        review_id: submitted.id,
+      }),
+    )
     return { ok: true, reviewId: submitted.id, state: submitted.state }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.warn(JSON.stringify({
-      event: "pr-review-approved-on-merge-failed",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      headSha: args.headSha.slice(0, 7),
-      stage: args.stage,
-      err: msg,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-approved-on-merge-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        stage: args.stage,
+        err: msg,
+      }),
+    )
     return { ok: false, error: msg }
   }
 }

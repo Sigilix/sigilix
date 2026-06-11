@@ -18,10 +18,7 @@
 import type { SubmitReviewBody } from "@/src/shared/types/github"
 import { type StackContext } from "@/src/lib/pr-stack"
 import type { PrReviewVerdict, PrReviewFinding, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
-import {
-  chooseRenderedEventWithOverride,
-  type ReviewEventOverride,
-} from "@/src/lib/ensemble/domain/verdict"
+import { chooseRenderedEventWithOverride, type ReviewEventOverride } from "@/src/lib/ensemble/domain/verdict"
 import {
   sanitizeVerdictForGitHub,
   sanitizeFindingsForGitHub,
@@ -110,12 +107,22 @@ export function buildFallbackSubmission({
     .map(normalizeTestingFindingForFinalPolicy)
     .filter((finding) => !shouldDropUnanchoredTestingFinding(finding))
   const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
-  const event = chooseRenderedEventWithOverride({
-    inlineFindings: [],
-    bodyOnlyFindings: all,
-  }, eventOverride)
+  const event = chooseRenderedEventWithOverride(
+    {
+      inlineFindings: [],
+      bodyOnlyFindings: all,
+    },
+    eventOverride,
+  )
   const body = buildFallbackBody(
-    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
+    verdict,
+    unanchored,
+    undefined,
+    stack,
+    coverage,
+    delta,
+    reviewCounter,
+    retriggerUrl,
     // Propagate the full override (not just REQUEST_CHANGES) so a COMMENT
     // downgrade — SIG-287 degraded/low-confidence OR SIG-245 files-dropped —
     // survives on the fallback body too; otherwise buildFallbackBody re-derives
@@ -154,10 +161,13 @@ export function buildFallbackBody(
   // the body-only findings section grouped by file, which is exactly
   // the right place when none of them landed inline.
   const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
-  const event = chooseRenderedEventWithOverride({
-    inlineFindings: [],
-    bodyOnlyFindings: all,
-  }, eventOverride)
+  const event = chooseRenderedEventWithOverride(
+    {
+      inlineFindings: [],
+      bodyOnlyFindings: all,
+    },
+    eventOverride,
+  )
   if (event === "APPROVE") {
     // Pour ALL findings into the bucket (not `unanchored: []`) so an out-of-PR-
     // scope note that lives only in `unanchored` still surfaces in the approve
@@ -187,7 +197,5 @@ export function buildFallbackBody(
   // SIG-245 (CR #286): carry the "files not reviewed" notice onto the
   // anchorless-fallback body too, so the 422-retry path never silently drops.
   if (notReviewedFiles && notReviewedFiles.length > 0) args.notReviewedFiles = notReviewedFiles
-  return event === "COMMENT"
-    ? renderCommentBody(args)
-    : renderRequestChangesBody(args)
+  return event === "COMMENT" ? renderCommentBody(args) : renderRequestChangesBody(args)
 }

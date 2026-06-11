@@ -10,10 +10,7 @@
 //      onTestFindingDropped callback.
 
 import { describe, it, expect } from "vitest"
-import {
-  evaluateTestFinding,
-  parseTestsValidatorMode,
-} from "@/src/lib/ensemble/domain/gates/validate-test-finding"
+import { evaluateTestFinding, parseTestsValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-test-finding"
 import type { HelperCoverage } from "@/src/lib/helper-coverage"
 import { finding, pack } from "@/src/lib/ensemble/domain/gates/validate-test-finding.test-helpers"
 
@@ -308,7 +305,8 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     const r = evaluateTestFinding(
       finding({
         path: "src/lib/retry.ts",
-        headline: "retryWithBackoff function name implies retry behavior that is absent from both implementation and tests",
+        headline:
+          "retryWithBackoff function name implies retry behavior that is absent from both implementation and tests",
         body: "The function is named `retryWithBackoff` suggesting retry-and-backoff semantics, but neither the implementation nor the sibling test exercises retry behavior.",
         evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
         inspectedTestFiles: undefined,
@@ -512,16 +510,11 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     pack({
       sourceFilesChanged: ["src/lib/ensemble.ts"],
       siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
-      helperCoverageBySource: coverage
-        ? { "src/lib/ensemble.ts": coverage }
-        : {},
+      helperCoverageBySource: coverage ? { "src/lib/ensemble.ts": coverage } : {},
     })
 
   it("DROPS a glue ->NONE finding when helper-coverage status is 'all'", () => {
-    const r = evaluateTestFinding(
-      orchFinding(),
-      orchPack({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] }),
-    )
+    const r = evaluateTestFinding(orchFinding(), orchPack({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] }))
     expect(r.keep).toBe(false)
     if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
   })
@@ -535,10 +528,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
   })
 
   it("KEEPS a glue ->NONE finding when helper-coverage status is 'none' (FP-safe)", () => {
-    const r = evaluateTestFinding(
-      orchFinding(),
-      orchPack({ status: "none", helpers: [] }),
-    )
+    const r = evaluateTestFinding(orchFinding(), orchPack({ status: "none", helpers: [] }))
     expect(r.keep).toBe(true)
   })
 
@@ -568,10 +558,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
   })
 
   it("DROPS a glue ->NONE finding when structurallyGlue=true and status is 'none' (PR 6)", () => {
-    const r = evaluateTestFinding(
-      orchFinding(),
-      orchPack({ status: "none", helpers: [], structurallyGlue: true }),
-    )
+    const r = evaluateTestFinding(orchFinding(), orchPack({ status: "none", helpers: [], structurallyGlue: true }))
     expect(r.keep).toBe(false)
     if (!r.keep) expect(r.reason).toBe("glue-covered-by-structure")
   })
@@ -707,10 +694,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
         path: "src/lib/ensemble.ts",
         headline: "`ensemble` orchestrator lacks integration coverage",
         body: "The orchestrator at `src/lib/ensemble.ts` cites both ->NONE and an inspected test.",
-        evidenceRefs: [
-          "siblingMapping:src/lib/ensemble.ts->NONE",
-          "inspectedTestFile:tests/ensemble.test.ts",
-        ],
+        evidenceRefs: ["siblingMapping:src/lib/ensemble.ts->NONE", "inspectedTestFile:tests/ensemble.test.ts"],
         inspectedTestFiles: ["tests/ensemble.test.ts"],
       }),
       pack({

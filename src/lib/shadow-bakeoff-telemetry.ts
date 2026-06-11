@@ -113,15 +113,14 @@ export interface ShadowVerdictComparison {
   shadowFailureReason: string | null
 }
 
-export function emitShadowVerdictComparison(
-  ctx: EnsembleRunCtx,
-  comp: ShadowVerdictComparison,
-): void {
-  console.log(JSON.stringify({
-    event: "shadow-verdict-comparison",
-    ...correlationFields(ctx),
-    ...comp,
-  }))
+export function emitShadowVerdictComparison(ctx: EnsembleRunCtx, comp: ShadowVerdictComparison): void {
+  console.log(
+    JSON.stringify({
+      event: "shadow-verdict-comparison",
+      ...correlationFields(ctx),
+      ...comp,
+    }),
+  )
 }
 
 /**
@@ -153,15 +152,14 @@ export interface ShadowCutShortEvent {
   reason: ShadowCutShortReason
 }
 
-export function emitShadowCutShort(
-  ctx: EnsembleRunCtx,
-  info: ShadowCutShortEvent,
-): void {
-  console.log(JSON.stringify({
-    event: "shadow-cut-short",
-    ...correlationFields(ctx),
-    ...info,
-  }))
+export function emitShadowCutShort(ctx: EnsembleRunCtx, info: ShadowCutShortEvent): void {
+  console.log(
+    JSON.stringify({
+      event: "shadow-cut-short",
+      ...correlationFields(ctx),
+      ...info,
+    }),
+  )
 }
 
 /**
@@ -184,15 +182,14 @@ export interface ShadowRunFailedEvent {
   message: string
 }
 
-export function emitShadowRunFailed(
-  ctx: EnsembleRunCtx,
-  info: ShadowRunFailedEvent,
-): void {
-  console.log(JSON.stringify({
-    event: "shadow-run-failed",
-    ...correlationFields(ctx),
-    ...info,
-  }))
+export function emitShadowRunFailed(ctx: EnsembleRunCtx, info: ShadowRunFailedEvent): void {
+  console.log(
+    JSON.stringify({
+      event: "shadow-run-failed",
+      ...correlationFields(ctx),
+      ...info,
+    }),
+  )
 }
 
 // ─── findings overlap + histogram (pure helper) ───────────────────
@@ -367,14 +364,12 @@ export interface BuildShadowVerdictComparisonArgs {
  *     (defensive — `runWithRetryAndFallback` always populates one
  *     today, but the helper stays robust to future shape drift).
  */
-export function buildShadowVerdictComparison(
-  args: BuildShadowVerdictComparisonArgs,
-): ShadowVerdictComparison {
+export function buildShadowVerdictComparison(args: BuildShadowVerdictComparisonArgs): ShadowVerdictComparison {
   const { role, prodModelDefault, prod, shadow } = args
   const overlap = computeFindingsOverlap(prod.findings, shadow.findings)
   return {
     role,
-    prodModel: prod.verdictOk ? prod.modelUsed : (prod.modelUsed || prodModelDefault),
+    prodModel: prod.verdictOk ? prod.modelUsed : prod.modelUsed || prodModelDefault,
     shadowModel: shadow.modelUsed,
     prodVerdictOk: prod.verdictOk,
     shadowVerdictOk: shadow.verdictOk,
@@ -394,8 +389,6 @@ export function buildShadowVerdictComparison(
     score4PlusShadowOnlyCount: overlap.score4PlusShadowOnlyCount,
     score4PlusProdFindingsCount: overlap.score4PlusProdFindingsCount,
     score4PlusShadowFindingsCount: overlap.score4PlusShadowFindingsCount,
-    shadowFailureReason: shadow.verdictOk
-      ? null
-      : (shadow.failureReason ?? "unknown"),
+    shadowFailureReason: shadow.verdictOk ? null : (shadow.failureReason ?? "unknown"),
   }
 }

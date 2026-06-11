@@ -70,30 +70,78 @@ describe("isAbsenceClaim — detector + category scoping", () => {
   })
 
   it("detects guard/validation/error-handling absence phrasings", () => {
-    expect(isAbsenceClaim(finding({ category: "security", headline: "no null check before deref", body: "" }))).toBe(true)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "no null check before deref", body: "" }))).toBe(
+      true,
+    )
     expect(isAbsenceClaim(finding({ category: "security", headline: "missing input validation", body: "" }))).toBe(true)
-    expect(isAbsenceClaim(finding({ category: "error-handling", headline: "lacks error handling on the await", body: "" }))).toBe(true)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "without input sanitization", body: "" }))).toBe(true)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "error-handling",
+          headline: "lacks error handling on the await",
+          body: "",
+        }),
+      ),
+    ).toBe(true)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "without input sanitization", body: "" }))).toBe(
+      true,
+    )
   })
 
   it("detects general 'is never handled / fails to validate / there is no check' phrasings", () => {
-    expect(isAbsenceClaim(finding({ category: "error-handling", headline: "the rejection is never handled", body: "" }))).toBe(true)
-    expect(isAbsenceClaim(finding({ category: "error-handling", headline: "does not validate the payload", body: "" }))).toBe(true)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "error-handling",
+          headline: "the rejection is never handled",
+          body: "",
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "error-handling",
+          headline: "does not validate the payload",
+          body: "",
+        }),
+      ),
+    ).toBe(true)
     expect(isAbsenceClaim(finding({ category: "security", headline: "there is no bounds check", body: "" }))).toBe(true)
   })
 
   it("NEVER scans performance findings (always not-an-absence-claim)", () => {
-    expect(isAbsenceClaim(finding({ category: "performance", headline: "no caching of the result", body: "missing memoization" }))).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "performance",
+          headline: "no caching of the result",
+          body: "missing memoization",
+        }),
+      ),
+    ).toBe(false)
     expect(isAbsenceClaim(finding({ category: "performance", headline: "lacks test coverage", body: "" }))).toBe(false)
   })
 
   it("logic findings count only on a literal absence-pattern hit", () => {
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "off-by-one in the loop bound", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "no null check on the optional", body: "" }))).toBe(true)
+    expect(isAbsenceClaim(finding({ category: "logic", headline: "off-by-one in the loop bound", body: "" }))).toBe(
+      false,
+    )
+    expect(isAbsenceClaim(finding({ category: "logic", headline: "no null check on the optional", body: "" }))).toBe(
+      true,
+    )
   })
 
   it("a non-absence finding (real style/logic nit) is not a claim", () => {
-    expect(isAbsenceClaim(finding({ category: "style", headline: "naming is inconsistent here", body: "rename for clarity" }))).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "style",
+          headline: "naming is inconsistent here",
+          body: "rename for clarity",
+        }),
+      ),
+    ).toBe(false)
   })
 })
 
@@ -101,45 +149,107 @@ describe("isAbsenceClaim — detector + category scoping", () => {
 describe("isAbsenceClaim — EXCLUSIONS (every excluded phrase is NOT a claim)", () => {
   it("'PR adds/fixes/implements the missing X' is a positive change, not an absence", () => {
     expect(isAbsenceClaim(finding({ headline: "this PR adds the missing tests", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "fixes the missing null check", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "implements the missing validation", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "introduces the lacking guard", body: "" }))).toBe(false)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "fixes the missing null check", body: "" }))).toBe(
+      false,
+    )
+    expect(
+      isAbsenceClaim(finding({ category: "security", headline: "implements the missing validation", body: "" })),
+    ).toBe(false)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "introduces the lacking guard", body: "" }))).toBe(
+      false,
+    )
   })
 
   it("'X was/were/had been missing' (past tense, now resolved) is not a current absence", () => {
     expect(isAbsenceClaim(finding({ headline: "the test was missing before this commit", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "the guards were missing previously", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "the check had been absent", body: "" }))).toBe(false)
+    expect(
+      isAbsenceClaim(finding({ category: "security", headline: "the guards were missing previously", body: "" })),
+    ).toBe(false)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "the check had been absent", body: "" }))).toBe(
+      false,
+    )
   })
 
   it("'missing from the allowlist/config/import/...' is a structural reference", () => {
-    expect(isAbsenceClaim(finding({ category: "security", headline: "this domain is missing from the allowlist", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "the symbol is missing from the import", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "the field is missing from the interface", body: "" }))).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "security",
+          headline: "this domain is missing from the allowlist",
+          body: "",
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      isAbsenceClaim(finding({ category: "logic", headline: "the symbol is missing from the import", body: "" })),
+    ).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "logic",
+          headline: "the field is missing from the interface",
+          body: "",
+        }),
+      ),
+    ).toBe(false)
   })
 
   it("a conditional/hypothetical ('if X is missing') is not an asserted absence", () => {
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "if config is missing the call throws", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "when token becomes absent the guard fails", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "logic", headline: "should value be missing, default to 0", body: "" }))).toBe(false)
+    expect(
+      isAbsenceClaim(finding({ category: "logic", headline: "if config is missing the call throws", body: "" })),
+    ).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "logic",
+          headline: "when token becomes absent the guard fails",
+          body: "",
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      isAbsenceClaim(finding({ category: "logic", headline: "should value be missing, default to 0", body: "" })),
+    ).toBe(false)
   })
 
   it("a negation ('not missing', 'no longer lacking') is not an absence", () => {
-    expect(isAbsenceClaim(finding({ category: "security", headline: "the guard is not missing here", body: "" }))).toBe(false)
+    expect(isAbsenceClaim(finding({ category: "security", headline: "the guard is not missing here", body: "" }))).toBe(
+      false,
+    )
     expect(isAbsenceClaim(finding({ headline: "coverage is no longer lacking", body: "" }))).toBe(false)
   })
 
   it("a positive-presence claim ('has test coverage', 'provides validation') is not an absence", () => {
     expect(isAbsenceClaim(finding({ headline: "this module has test coverage already", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "the handler provides input validation", body: "" }))).toBe(false)
-    expect(isAbsenceClaim(finding({ category: "security", headline: "the wrapper includes error handling", body: "" }))).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "security",
+          headline: "the handler provides input validation",
+          body: "",
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      isAbsenceClaim(
+        finding({
+          category: "security",
+          headline: "the wrapper includes error handling",
+          body: "",
+        }),
+      ),
+    ).toBe(false)
   })
 })
 
 // ─────────────────────────────────────────────────────────────────────
 describe("evaluateAbsenceGrounding — grounding predicate per category", () => {
   it("non-absence-claim → keep (predicate never runs)", () => {
-    const f = finding({ category: "style", headline: "naming is inconsistent here", body: "rename for clarity" })
+    const f = finding({
+      category: "style",
+      headline: "naming is inconsistent here",
+      body: "rename for clarity",
+    })
     expect(evaluateAbsenceGrounding(f, ctx())).toEqual({ keep: true })
   })
 
@@ -185,8 +295,13 @@ describe("evaluateAbsenceGrounding — grounding predicate per category", () => 
       headline: "no null check before deref",
       body: "consider adding a test for this branch too",
     })
-    const p = pack({ siblingMappings: [{ source: PATH, test: "tests/orders.test.ts" }], inspectedTestFiles: [] })
-    expect(evaluateAbsenceGrounding(f, ctx({ testingEvidence: p, droppedPaths: [] }))).toEqual({ keep: true })
+    const p = pack({
+      siblingMappings: [{ source: PATH, test: "tests/orders.test.ts" }],
+      inspectedTestFiles: [],
+    })
+    expect(evaluateAbsenceGrounding(f, ctx({ testingEvidence: p, droppedPaths: [] }))).toEqual({
+      keep: true,
+    })
   })
 
   it("testing: NO mapping for the cited path → UNKNOWN → keep", () => {
@@ -211,13 +326,19 @@ describe("evaluateAbsenceGrounding — grounding predicate per category", () => 
 
   it("non-testing: path NOT dropped → UNKNOWN → keep (don't suppress on wasTruncated alone)", () => {
     const f = finding({ category: "security", headline: "no null check before deref", body: "" })
-    expect(evaluateAbsenceGrounding(f, ctx({ droppedPaths: [], wasTruncated: true }))).toEqual({ keep: true })
+    expect(evaluateAbsenceGrounding(f, ctx({ droppedPaths: [], wasTruncated: true }))).toEqual({
+      keep: true,
+    })
   })
 
   it("never throws on degenerate input (empty strings, no context paths)", () => {
     const degenerate = finding({ headline: "", body: "", category: "syntax" as FindingCategory })
     expect(() =>
-      evaluateAbsenceGrounding(degenerate, { reviewablePaths: new Set(), wasTruncated: false, droppedPaths: [] }),
+      evaluateAbsenceGrounding(degenerate, {
+        reviewablePaths: new Set(),
+        wasTruncated: false,
+        droppedPaths: [],
+      }),
     ).not.toThrow()
     expect(evaluateAbsenceGrounding(degenerate, ctx())).toEqual({ keep: true })
   })
@@ -358,7 +479,11 @@ describe("validateForSubmission — SIG-290 absence-grounding gate", () => {
 
   it("ENFORCE: no score floor — a score-4 ungrounded absence-claim is demoted too", () => {
     const onDrop = vi.fn()
-    const result = run([absenceFinding({ score: 4 })], { mode: "enforce", droppedPaths: [PATH], onDrop })
+    const result = run([absenceFinding({ score: 4 })], {
+      mode: "enforce",
+      droppedPaths: [PATH],
+      onDrop,
+    })
     expect(result.droppedForFailedAbsenceGroundingValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(0)
     expect(result.unanchoredFindings.some((f) => f.headline.includes("no null check"))).toBe(true)

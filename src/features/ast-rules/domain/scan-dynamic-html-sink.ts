@@ -77,9 +77,7 @@ function isInterpolatedTemplate(expr: string): boolean {
   return v.startsWith("`") && v.endsWith("`") && v.includes("${")
 }
 
-export type HtmlSinkVerdict =
-  | { flag: false }
-  | { flag: true; reason: "member" | "interpolation" }
+export type HtmlSinkVerdict = { flag: false } | { flag: true; reason: "member" | "interpolation" }
 
 /**
  * Classify the value expression flowing into an HTML sink. Pure; the ordering

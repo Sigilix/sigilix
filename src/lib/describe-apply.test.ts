@@ -2,10 +2,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import {
-  applyDescribeToBody,
-  describeMarkers,
-} from "@/src/lib/describe-apply"
+import { applyDescribeToBody, describeMarkers } from "@/src/lib/describe-apply"
 
 describe("describeMarkers", () => {
   it("returns the start + end marker strings for each mode", () => {
@@ -33,31 +30,35 @@ describe("applyDescribeToBody — empty body", () => {
     })
     expect(out).toBe(
       "<!-- sigilix:describe:pr-description:start -->\n" +
-      "## Summary\n\nAdds the widget.\n" +
-      "<!-- sigilix:describe:pr-description:end -->\n"
+        "## Summary\n\nAdds the widget.\n" +
+        "<!-- sigilix:describe:pr-description:end -->\n",
     )
   })
 
   it("treats null / undefined / whitespace-only bodies as empty (same shape)", () => {
     const expected =
-      "<!-- sigilix:describe:pr-description:start -->\n" +
-      "x\n" +
-      "<!-- sigilix:describe:pr-description:end -->\n"
-    expect(applyDescribeToBody({
-      currentBody: null,
-      mode: "pr-description",
-      sectionContent: "x",
-    })).toBe(expected)
-    expect(applyDescribeToBody({
-      currentBody: undefined,
-      mode: "pr-description",
-      sectionContent: "x",
-    })).toBe(expected)
-    expect(applyDescribeToBody({
-      currentBody: "   \n\n  \t  \n",
-      mode: "pr-description",
-      sectionContent: "x",
-    })).toBe(expected)
+      "<!-- sigilix:describe:pr-description:start -->\n" + "x\n" + "<!-- sigilix:describe:pr-description:end -->\n"
+    expect(
+      applyDescribeToBody({
+        currentBody: null,
+        mode: "pr-description",
+        sectionContent: "x",
+      }),
+    ).toBe(expected)
+    expect(
+      applyDescribeToBody({
+        currentBody: undefined,
+        mode: "pr-description",
+        sectionContent: "x",
+      }),
+    ).toBe(expected)
+    expect(
+      applyDescribeToBody({
+        currentBody: "   \n\n  \t  \n",
+        mode: "pr-description",
+        sectionContent: "x",
+      }),
+    ).toBe(expected)
   })
 })
 
@@ -71,9 +72,9 @@ describe("applyDescribeToBody — body without matching markers (append path)", 
     })
     expect(out).toBe(
       "Manual PR description.\n\nLinks: https://example.com\n\n" +
-      "<!-- sigilix:describe:pr-description:start -->\n" +
-      "## Summary\n\nFoo bar.\n" +
-      "<!-- sigilix:describe:pr-description:end -->\n"
+        "<!-- sigilix:describe:pr-description:start -->\n" +
+        "## Summary\n\nFoo bar.\n" +
+        "<!-- sigilix:describe:pr-description:end -->\n",
     )
   })
 
@@ -85,9 +86,9 @@ describe("applyDescribeToBody — body without matching markers (append path)", 
     })
     expect(out).toBe(
       "Original.\n\n" +
-      "<!-- sigilix:describe:external-changelog:start -->\n" +
-      "User-facing note.\n" +
-      "<!-- sigilix:describe:external-changelog:end -->\n"
+        "<!-- sigilix:describe:external-changelog:start -->\n" +
+        "User-facing note.\n" +
+        "<!-- sigilix:describe:external-changelog:end -->\n",
     )
   })
 
@@ -96,9 +97,7 @@ describe("applyDescribeToBody — body without matching markers (append path)", 
     // Auto-deleting would be destructive; we just append a fresh block
     // and leave the broken pair for the user to clean up.
     const original =
-      "<!-- sigilix:describe:pr-description:end -->\n" +
-      "stuff\n" +
-      "<!-- sigilix:describe:pr-description:start -->"
+      "<!-- sigilix:describe:pr-description:end -->\n" + "stuff\n" + "<!-- sigilix:describe:pr-description:start -->"
     const out = applyDescribeToBody({
       currentBody: original,
       mode: "pr-description",
@@ -128,15 +127,17 @@ describe("applyDescribeToBody — body WITH matching markers (replace path)", ()
       mode: "pr-description",
       sectionContent: "NEW generated content",
     })
-    expect(out).toBe([
-      "Manual prose before.",
-      "",
-      "<!-- sigilix:describe:pr-description:start -->",
-      "NEW generated content",
-      "<!-- sigilix:describe:pr-description:end -->",
-      "",
-      "Manual prose after.",
-    ].join("\n"))
+    expect(out).toBe(
+      [
+        "Manual prose before.",
+        "",
+        "<!-- sigilix:describe:pr-description:start -->",
+        "NEW generated content",
+        "<!-- sigilix:describe:pr-description:end -->",
+        "",
+        "Manual prose after.",
+      ].join("\n"),
+    )
   })
 
   it("user-authored content outside markers is byte-for-byte preserved across multiple applies", () => {
@@ -152,18 +153,19 @@ describe("applyDescribeToBody — body WITH matching markers (replace path)", ()
       "## Manual notes",
       "Some longer prose here.",
     ].join("\n")
-    const expectedOuter = (inner: string) => [
-      "## Manual checklist",
-      "- [x] Item A",
-      "- [ ] Item B",
-      "",
-      "<!-- sigilix:describe:pr-description:start -->",
-      inner,
-      "<!-- sigilix:describe:pr-description:end -->",
-      "",
-      "## Manual notes",
-      "Some longer prose here.",
-    ].join("\n")
+    const expectedOuter = (inner: string) =>
+      [
+        "## Manual checklist",
+        "- [x] Item A",
+        "- [ ] Item B",
+        "",
+        "<!-- sigilix:describe:pr-description:start -->",
+        inner,
+        "<!-- sigilix:describe:pr-description:end -->",
+        "",
+        "## Manual notes",
+        "Some longer prose here.",
+      ].join("\n")
     body = applyDescribeToBody({
       currentBody: body,
       mode: "pr-description",
@@ -196,14 +198,16 @@ describe("applyDescribeToBody — body WITH matching markers (replace path)", ()
       sectionContent: "NEW",
     })
     // First pair replaced; second pair untouched.
-    expect(out).toBe([
-      "<!-- sigilix:describe:pr-description:start -->",
-      "NEW",
-      "<!-- sigilix:describe:pr-description:end -->",
-      "<!-- sigilix:describe:pr-description:start -->",
-      "B",
-      "<!-- sigilix:describe:pr-description:end -->",
-    ].join("\n"))
+    expect(out).toBe(
+      [
+        "<!-- sigilix:describe:pr-description:start -->",
+        "NEW",
+        "<!-- sigilix:describe:pr-description:end -->",
+        "<!-- sigilix:describe:pr-description:start -->",
+        "B",
+        "<!-- sigilix:describe:pr-description:end -->",
+      ].join("\n"),
+    )
   })
 
   // Code-review L8 catch: a body shaped `start … start … end` would
@@ -228,11 +232,11 @@ describe("applyDescribeToBody — body WITH matching markers (replace path)", ()
     // malformed region) — both start markers + the end + a fresh
     // appended block remain.
     expect(out).toContain(original)
-    expect(out.endsWith(
-      "<!-- sigilix:describe:pr-description:start -->\n" +
-      "NEW\n" +
-      "<!-- sigilix:describe:pr-description:end -->\n"
-    )).toBe(true)
+    expect(
+      out.endsWith(
+        "<!-- sigilix:describe:pr-description:start -->\n" + "NEW\n" + "<!-- sigilix:describe:pr-description:end -->\n",
+      ),
+    ).toBe(true)
     // Three start markers total now: the two strays + the freshly
     // appended pair. Two end markers: the stray and the appended.
     expect(out.match(/sigilix:describe:pr-description:start/g)?.length).toBe(3)
@@ -258,17 +262,19 @@ describe("applyDescribeToBody — multi-mode independence", () => {
       mode: "internal-changelog",
       sectionContent: "internal v2",
     })
-    expect(next).toBe([
-      "Prose.",
-      "",
-      "<!-- sigilix:describe:pr-description:start -->",
-      "pr content",
-      "<!-- sigilix:describe:pr-description:end -->",
-      "",
-      "<!-- sigilix:describe:internal-changelog:start -->",
-      "internal v2",
-      "<!-- sigilix:describe:internal-changelog:end -->",
-    ].join("\n"))
+    expect(next).toBe(
+      [
+        "Prose.",
+        "",
+        "<!-- sigilix:describe:pr-description:start -->",
+        "pr content",
+        "<!-- sigilix:describe:pr-description:end -->",
+        "",
+        "<!-- sigilix:describe:internal-changelog:start -->",
+        "internal v2",
+        "<!-- sigilix:describe:internal-changelog:end -->",
+      ].join("\n"),
+    )
   })
 
   it("a body with one mode's markers gets a new section for a different mode appended", () => {
@@ -282,16 +288,18 @@ describe("applyDescribeToBody — multi-mode independence", () => {
       mode: "external-changelog",
       sectionContent: "ext",
     })
-    expect(next).toBe([
-      "<!-- sigilix:describe:pr-description:start -->",
-      "pr",
-      "<!-- sigilix:describe:pr-description:end -->",
-      "",
-      "<!-- sigilix:describe:external-changelog:start -->",
-      "ext",
-      "<!-- sigilix:describe:external-changelog:end -->",
-      "",
-    ].join("\n"))
+    expect(next).toBe(
+      [
+        "<!-- sigilix:describe:pr-description:start -->",
+        "pr",
+        "<!-- sigilix:describe:pr-description:end -->",
+        "",
+        "<!-- sigilix:describe:external-changelog:start -->",
+        "ext",
+        "<!-- sigilix:describe:external-changelog:end -->",
+        "",
+      ].join("\n"),
+    )
   })
 })
 
@@ -324,9 +332,7 @@ describe("applyDescribeToBody — idempotency", () => {
     expect(twice).toBe(once)
     // Confirm trailing whitespace inside the block was trimmed.
     expect(once).toBe(
-      "<!-- sigilix:describe:pr-description:start -->\n" +
-      "auto\n" +
-      "<!-- sigilix:describe:pr-description:end -->\n"
+      "<!-- sigilix:describe:pr-description:start -->\n" + "auto\n" + "<!-- sigilix:describe:pr-description:end -->\n",
     )
   })
 })

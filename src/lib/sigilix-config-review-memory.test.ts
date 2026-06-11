@@ -1,10 +1,7 @@
 // ARC-189 — sigilix.json `reviewMemory` config tests (Task 7).
 
 import { describe, expect, it } from "vitest"
-import {
-  parseSigilixConfigDetailed,
-  resolveReviewMemoryConfig,
-} from "@/src/lib/sigilix-config"
+import { parseSigilixConfigDetailed, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
 
 function parse(json: string) {
   const r = parseSigilixConfigDetailed(json)
@@ -50,16 +47,12 @@ describe("parseSigilixConfig — reviewMemory shape", () => {
   })
 
   it("strict-bool: truthy non-bool enabled is rejected", () => {
-    const cfg = parse(
-      JSON.stringify({ reviewMemory: { enabled: 1 } }),
-    )
+    const cfg = parse(JSON.stringify({ reviewMemory: { enabled: 1 } }))
     expect(cfg.reviewMemory?.enabled).toBeUndefined()
   })
 
   it("strict-bool: string `true` is rejected", () => {
-    const cfg = parse(
-      JSON.stringify({ reviewMemory: { enabled: "true" } }),
-    )
+    const cfg = parse(JSON.stringify({ reviewMemory: { enabled: "true" } }))
     expect(cfg.reviewMemory?.enabled).toBeUndefined()
   })
 
@@ -75,39 +68,40 @@ describe("parseSigilixConfig — reviewMemory shape", () => {
   })
 
   it("drops the categories field entirely on non-array input", () => {
-    const cfg = parse(
-      JSON.stringify({ reviewMemory: { categories: "security" } }),
-    )
+    const cfg = parse(JSON.stringify({ reviewMemory: { categories: "security" } }))
     expect(cfg.reviewMemory?.categories).toBeUndefined()
   })
 
   it("clamps maxInjectedMemories to [1, 10]", () => {
-    expect(parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 0 } }))
-      .reviewMemory?.maxInjectedMemories).toBe(1)
-    expect(parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 100 } }))
-      .reviewMemory?.maxInjectedMemories).toBe(10)
-    expect(parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 5 } }))
-      .reviewMemory?.maxInjectedMemories).toBe(5)
+    expect(parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 0 } })).reviewMemory?.maxInjectedMemories).toBe(
+      1,
+    )
+    expect(
+      parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 100 } })).reviewMemory?.maxInjectedMemories,
+    ).toBe(10)
+    expect(parse(JSON.stringify({ reviewMemory: { maxInjectedMemories: 5 } })).reviewMemory?.maxInjectedMemories).toBe(
+      5,
+    )
   })
 
   it("clamps minSignalThreshold to [2, 20]", () => {
-    expect(parse(JSON.stringify({ reviewMemory: { minSignalThreshold: 1 } }))
-      .reviewMemory?.minSignalThreshold).toBe(2)
-    expect(parse(JSON.stringify({ reviewMemory: { minSignalThreshold: 999 } }))
-      .reviewMemory?.minSignalThreshold).toBe(20)
+    expect(parse(JSON.stringify({ reviewMemory: { minSignalThreshold: 1 } })).reviewMemory?.minSignalThreshold).toBe(2)
+    expect(parse(JSON.stringify({ reviewMemory: { minSignalThreshold: 999 } })).reviewMemory?.minSignalThreshold).toBe(
+      20,
+    )
   })
 
   it("clamps maxSignalAgeDays to [7, 365]", () => {
-    expect(parse(JSON.stringify({ reviewMemory: { maxSignalAgeDays: 1 } }))
-      .reviewMemory?.maxSignalAgeDays).toBe(7)
-    expect(parse(JSON.stringify({ reviewMemory: { maxSignalAgeDays: 999 } }))
-      .reviewMemory?.maxSignalAgeDays).toBe(365)
+    expect(parse(JSON.stringify({ reviewMemory: { maxSignalAgeDays: 1 } })).reviewMemory?.maxSignalAgeDays).toBe(7)
+    expect(parse(JSON.stringify({ reviewMemory: { maxSignalAgeDays: 999 } })).reviewMemory?.maxSignalAgeDays).toBe(365)
   })
 
   it("non-number for clamp inputs ignored entirely", () => {
-    const cfg = parse(JSON.stringify({
-      reviewMemory: { maxInjectedMemories: "five" },
-    }))
+    const cfg = parse(
+      JSON.stringify({
+        reviewMemory: { maxInjectedMemories: "five" },
+      }),
+    )
     expect(cfg.reviewMemory?.maxInjectedMemories).toBeUndefined()
   })
 
@@ -141,7 +135,9 @@ describe("resolveReviewMemoryConfig — defaults + clamps", () => {
     expect(resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: false } }).claimSoftening).toBe(false)
     expect(resolveReviewMemoryConfig({ reviewMemory: {} }).claimSoftening).toBe(false)
     // non-true values do not enable (mirrors enabled/captureOnly polarity)
-    expect(resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: "yes" as unknown as boolean } }).claimSoftening).toBe(false)
+    expect(
+      resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: "yes" as unknown as boolean } }).claimSoftening,
+    ).toBe(false)
   })
 
   it("empty reviewMemory → defaults", () => {

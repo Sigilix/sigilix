@@ -44,7 +44,7 @@ interface InstallationTokenResponse {
 export async function signGitHubAppJwt(
   appId: string,
   privateKeyPem: string,
-  now: number = Math.floor(Date.now() / 1000)
+  now: number = Math.floor(Date.now() / 1000),
 ): Promise<string> {
   if (!appId) throw new Error("signGitHubAppJwt: missing appId")
   if (!privateKeyPem) throw new Error("signGitHubAppJwt: missing privateKeyPem")
@@ -63,11 +63,7 @@ export async function signGitHubAppJwt(
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)))
   const signingInput = `${headerB64}.${payloadB64}`
 
-  const signature = await crypto.subtle.sign(
-    { name: "RSASSA-PKCS1-v1_5" },
-    key,
-    encoder.encode(signingInput)
-  )
+  const signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, key, encoder.encode(signingInput))
 
   return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`
 }
@@ -97,40 +93,31 @@ export async function getInstallationToken(args: {
   }
 
   const jwt = await signGitHubAppJwt(args.appId, args.privateKey)
-  const res = await fetch(
-    `https://api.github.com/app/installations/${args.installationId}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${jwt}`,
-        "x-github-api-version": "2022-11-28",
-        "user-agent": "sigilix-worker",
-      },
-    }
-  )
+  const res = await fetch(`https://api.github.com/app/installations/${args.installationId}/access_tokens`, {
+    method: "POST",
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${jwt}`,
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "sigilix-worker",
+    },
+  })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(
-      `GitHub installation token fetch failed: HTTP ${res.status} ${text.slice(0, 300)}`
-    )
+    throw new Error(`GitHub installation token fetch failed: HTTP ${res.status} ${text.slice(0, 300)}`)
   }
   const json = (await res.json()) as InstallationTokenResponse
   if (typeof json.token !== "string" || typeof json.expires_at !== "string") {
-    throw new Error(
-      `GitHub installation token response missing fields: ${JSON.stringify(json).slice(0, 200)}`
-    )
+    throw new Error(`GitHub installation token response missing fields: ${JSON.stringify(json).slice(0, 200)}`)
   }
   const expiresAt = Date.parse(json.expires_at)
   if (!Number.isFinite(expiresAt)) {
     throw new Error(`Could not parse expires_at: ${json.expires_at}`)
   }
   const ttlSeconds = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000))
-  await args.kv.put(
-    cacheKey,
-    JSON.stringify({ token: json.token, expiresAt } satisfies CachedToken),
-    { expirationTtl: ttlSeconds }
-  )
+  await args.kv.put(cacheKey, JSON.stringify({ token: json.token, expiresAt } satisfies CachedToken), {
+    expirationTtl: ttlSeconds,
+  })
   return json.token
 }
 
@@ -148,17 +135,9 @@ async function importRsaPrivateKey(pem: string): Promise<CryptoKey> {
   } else if (trimmed.includes("BEGIN PRIVATE KEY")) {
     pkcs8Der = pemBodyToBuffer(trimmed, "PRIVATE KEY")
   } else {
-    throw new Error(
-      "GITHUB_PRIVATE_KEY must be PEM (BEGIN RSA PRIVATE KEY or BEGIN PRIVATE KEY)"
-    )
+    throw new Error("GITHUB_PRIVATE_KEY must be PEM (BEGIN RSA PRIVATE KEY or BEGIN PRIVATE KEY)")
   }
-  return crypto.subtle.importKey(
-    "pkcs8",
-    pkcs8Der,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  )
+  return crypto.subtle.importKey("pkcs8", pkcs8Der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"])
 }
 
 function pemBodyToBuffer(pem: string, label: string): ArrayBuffer {
@@ -189,8 +168,7 @@ function wrapPkcs1AsPkcs8(pkcs1: ArrayBuffer): ArrayBuffer {
   const pkcs1Bytes = new Uint8Array(pkcs1)
   // AlgorithmIdentifier: rsaEncryption (1.2.840.113549.1.1.1) + NULL params
   const algId = new Uint8Array([
-    0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01,
-    0x01, 0x05, 0x00,
+    0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
   ])
   const versionInt = new Uint8Array([0x02, 0x01, 0x00]) // INTEGER 0
   const octetHeader = encodeAsnLength(pkcs1Bytes.length, 0x04)
@@ -208,13 +186,7 @@ function encodeAsnLength(length: number, tag: number): Uint8Array {
   if (length < 0x100) return new Uint8Array([tag, 0x81, length])
   if (length < 0x10000) return new Uint8Array([tag, 0x82, length >> 8, length & 0xff])
   if (length < 0x1000000) {
-    return new Uint8Array([
-      tag,
-      0x83,
-      (length >> 16) & 0xff,
-      (length >> 8) & 0xff,
-      length & 0xff,
-    ])
+    return new Uint8Array([tag, 0x83, (length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff])
   }
   throw new Error(`encodeAsnLength: length too large (${length})`)
 }
@@ -237,10 +209,7 @@ function base64UrlEncode(input: ArrayBuffer | Uint8Array): string {
   for (const byte of bytes) {
     binary += String.fromCharCode(byte)
   }
-  return btoa(binary)
-    .replace(/=+$/, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
+  return btoa(binary).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_")
 }
 
 function base64Decode(input: string): Uint8Array {
@@ -284,19 +253,27 @@ export async function resolveRepoInstallationId(
       },
     )
     if (!res.ok) {
-      console.warn(JSON.stringify({
-        event: "resolve-repo-installation-failed",
-        owner, repo, status: res.status,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "resolve-repo-installation-failed",
+          owner,
+          repo,
+          status: res.status,
+        }),
+      )
       return null
     }
     const json = (await res.json()) as { id?: unknown }
     return typeof json.id === "number" ? json.id : null
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "resolve-repo-installation-error",
-      owner, repo, error: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "resolve-repo-installation-error",
+        owner,
+        repo,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return null
   }
 }
@@ -323,18 +300,14 @@ export interface ListingResult<T> {
  * (`GET /app/installations`, paginated). Fail-soft — returns whatever pages
  * succeeded plus a `complete` flag (false on any error / cap hit).
  */
-export async function listAppInstallationIds(
-  appId: string,
-  privateKeyPem: string,
-): Promise<ListingResult<number>> {
+export async function listAppInstallationIds(appId: string, privateKeyPem: string): Promise<ListingResult<number>> {
   const items: number[] = []
   try {
     const jwt = await signGitHubAppJwt(appId, privateKeyPem)
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await fetch(
-        `https://api.github.com/app/installations?per_page=100&page=${page}`,
-        { headers: GH_API_HEADERS(`Bearer ${jwt}`) },
-      )
+      const res = await fetch(`https://api.github.com/app/installations?per_page=100&page=${page}`, {
+        headers: GH_API_HEADERS(`Bearer ${jwt}`),
+      })
       if (!res.ok) {
         console.warn(JSON.stringify({ event: "list-app-installations-failed", page, status: res.status }))
         return { items, complete: false }
@@ -350,7 +323,12 @@ export async function listAppInstallationIds(
     }
     return { items, complete: false }
   } catch (err) {
-    console.warn(JSON.stringify({ event: "list-app-installations-error", error: err instanceof Error ? err.message : String(err) }))
+    console.warn(
+      JSON.stringify({
+        event: "list-app-installations-error",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { items, complete: false }
   }
 }
@@ -377,7 +355,14 @@ export async function listInstallationRepoFullNames(
         { headers: GH_API_HEADERS(`token ${token}`) },
       )
       if (!res.ok) {
-        console.warn(JSON.stringify({ event: "list-installation-repos-failed", installation_id: installationId, page, status: res.status }))
+        console.warn(
+          JSON.stringify({
+            event: "list-installation-repos-failed",
+            installation_id: installationId,
+            page,
+            status: res.status,
+          }),
+        )
         return { items, complete: false }
       }
       const json = (await res.json()) as { repositories?: Array<{ full_name?: unknown }> }
@@ -386,13 +371,25 @@ export async function listInstallationRepoFullNames(
       for (const r of repos) if (typeof r.full_name === "string") items.push(r.full_name)
       if (repos.length < 100) return { items, complete: true }
       if (page === MAX_PAGES) {
-        console.warn(JSON.stringify({ event: "list-installation-repos-truncated", installation_id: installationId, max_pages: MAX_PAGES }))
+        console.warn(
+          JSON.stringify({
+            event: "list-installation-repos-truncated",
+            installation_id: installationId,
+            max_pages: MAX_PAGES,
+          }),
+        )
         return { items, complete: false }
       }
     }
     return { items, complete: false }
   } catch (err) {
-    console.warn(JSON.stringify({ event: "list-installation-repos-error", installation_id: installationId, error: err instanceof Error ? err.message : String(err) }))
+    console.warn(
+      JSON.stringify({
+        event: "list-installation-repos-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { items, complete: false }
   }
 }

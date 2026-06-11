@@ -25,12 +25,12 @@ describe("extractChangedSymbols", () => {
   })
   it("extracts class + method + exported const when their range intersects added lines", () => {
     const src = [
-      "export class Orders {",          // 1
-      "  process(items) {",             // 2
-      "    return items.map(x => x)",    // 3
-      "  }",                             // 4
-      "}",                               // 5
-      "export const TOTAL = compute()",  // 6
+      "export class Orders {", // 1
+      "  process(items) {", // 2
+      "    return items.map(x => x)", // 3
+      "  }", // 4
+      "}", // 5
+      "export const TOTAL = compute()", // 6
     ].join("\n")
     const files = new Map([["src/o.ts", src]])
     const changed = buildChangedLines(
@@ -64,7 +64,9 @@ describe("extractChangedSymbols", () => {
     const diffParts: string[] = []
     for (let i = 0; i < 40; i++) {
       files.set(`src/f${i}.ts`, `function fn${i}() {\n  return ${i}\n}\n`)
-      diffParts.push(`diff --git a/src/f${i}.ts b/src/f${i}.ts\n--- a/src/f${i}.ts\n+++ b/src/f${i}.ts\n@@ -1,0 +1,1 @@\n+function fn${i}() {\n`)
+      diffParts.push(
+        `diff --git a/src/f${i}.ts b/src/f${i}.ts\n--- a/src/f${i}.ts\n+++ b/src/f${i}.ts\n@@ -1,0 +1,1 @@\n+function fn${i}() {\n`,
+      )
     }
     const out = extractChangedSymbols(files, buildChangedLines(diffParts.join("")))
     expect(out.length).toBeLessThanOrEqual(30)

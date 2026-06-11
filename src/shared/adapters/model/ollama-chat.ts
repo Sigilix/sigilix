@@ -21,13 +21,7 @@
 //   parse failures so the model gets a single retry on bad args instead of
 //   the whole loop dying as `chat_error`.
 
-import type {
-  LlmUsage,
-  ChatMessage,
-  ToolCall,
-  ChatArgs,
-  ChatResult,
-} from "@/src/shared/ports/model"
+import type { LlmUsage, ChatMessage, ToolCall, ChatArgs, ChatResult } from "@/src/shared/ports/model"
 
 const OLLAMA_TURBO_URL = "https://ollama.com/api/chat"
 

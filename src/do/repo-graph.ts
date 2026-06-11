@@ -55,13 +55,7 @@ import type {
   GraphImportRow,
   GraphContextExpansion,
 } from "@/src/shared/domain/graph-context"
-export type {
-  GraphContextNode,
-  GraphDefinitionRow,
-  GraphCallerRow,
-  GraphImportRow,
-  GraphContextExpansion,
-}
+export type { GraphContextNode, GraphDefinitionRow, GraphCallerRow, GraphImportRow, GraphContextExpansion }
 
 // ─── Public arg types ─────────────────────────────────────────────
 
@@ -141,23 +135,16 @@ export class RepoGraphDO extends DurableObject<Env> {
       // retry so we never overwrite a committed_at that Task 5 will set.
       sql.exec(
         "INSERT INTO graph_versions (graph_version, head_sha, status, created_at) VALUES (?, ?, 'pending', ?) ON CONFLICT(graph_version) DO NOTHING",
-        args.runId, args.headSha, now,
+        args.runId,
+        args.headSha,
+        now,
       )
 
       // Delete this file's existing rows for this version so the
       // subsequent inserts are the sole source of truth (idempotent).
-      sql.exec(
-        "DELETE FROM symbols WHERE graph_version = ? AND path = ?",
-        args.runId, args.path,
-      )
-      sql.exec(
-        "DELETE FROM file_edges WHERE graph_version = ? AND source_path = ?",
-        args.runId, args.path,
-      )
-      sql.exec(
-        "DELETE FROM call_edges WHERE graph_version = ? AND source_path = ?",
-        args.runId, args.path,
-      )
+      sql.exec("DELETE FROM symbols WHERE graph_version = ? AND path = ?", args.runId, args.path)
+      sql.exec("DELETE FROM file_edges WHERE graph_version = ? AND source_path = ?", args.runId, args.path)
+      sql.exec("DELETE FROM call_edges WHERE graph_version = ? AND source_path = ?", args.runId, args.path)
 
       // Insert symbols. ON CONFLICT DO NOTHING: a duplicate symbol_id
       // within one payload (same file, same symbolId) is silently
@@ -165,9 +152,16 @@ export class RepoGraphDO extends DurableObject<Env> {
       for (const s of args.symbols) {
         sql.exec(
           "INSERT INTO symbols (graph_version, symbol_id, path, name, kind, exported, start_line, start_col, end_line, end_col) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
-          args.runId, s.symbolId, s.path, s.name, s.kind,
+          args.runId,
+          s.symbolId,
+          s.path,
+          s.name,
+          s.kind,
           s.exported ? 1 : 0,
-          s.startLine, s.startCol, s.endLine, s.endCol,
+          s.startLine,
+          s.startCol,
+          s.endLine,
+          s.endCol,
         )
       }
 
@@ -177,14 +171,24 @@ export class RepoGraphDO extends DurableObject<Env> {
       // silently ignored rather than aborting the file write.
       for (const e of args.fileEdgesRaw) {
         const edgeId = this.edgeId(
-          "fe", e.sourcePath, e.startLine, e.startCol,
+          "fe",
+          e.sourcePath,
+          e.startLine,
+          e.startCol,
           `${e.specifier}|${e.importedName ?? ""}`,
         )
         sql.exec(
           "INSERT INTO file_edges (graph_version, edge_id, source_path, edge_kind, specifier, imported_name, local_name, exported_name, resolution_status, start_line, start_col) VALUES (?,?,?,?,?,?,?,?,'raw',?,?) ON CONFLICT DO NOTHING",
-          args.runId, edgeId, e.sourcePath, e.edgeKind, e.specifier,
-          e.importedName, e.localName, e.exportedName,
-          e.startLine, e.startCol,
+          args.runId,
+          edgeId,
+          e.sourcePath,
+          e.edgeKind,
+          e.specifier,
+          e.importedName,
+          e.localName,
+          e.exportedName,
+          e.startLine,
+          e.startCol,
         )
       }
 
@@ -193,19 +197,23 @@ export class RepoGraphDO extends DurableObject<Env> {
       // ON CONFLICT DO NOTHING: duplicate edge_id within one payload is
       // silently ignored rather than aborting the file write.
       for (const c of args.callEdges) {
-        const edgeId = this.edgeId(
-          "ce", c.sourcePath, c.startLine, c.startCol, c.calleeName,
-        )
+        const edgeId = this.edgeId("ce", c.sourcePath, c.startLine, c.startCol, c.calleeName)
         sql.exec(
           "INSERT INTO call_edges (graph_version, edge_id, source_path, callee_name, call_kind, start_line, start_col) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
-          args.runId, edgeId, c.sourcePath, c.calleeName, c.callKind,
-          c.startLine, c.startCol,
+          args.runId,
+          edgeId,
+          c.sourcePath,
+          c.calleeName,
+          c.callKind,
+          c.startLine,
+          c.startCol,
         )
       }
     })
 
     emit("graph-file-upserted", {
-      runId: args.runId, path: args.path,
+      runId: args.runId,
+      path: args.path,
       symbols: args.symbols.length,
       fileEdges: args.fileEdgesRaw.length,
       callEdges: args.callEdges.length,
@@ -224,14 +232,10 @@ export class RepoGraphDO extends DurableObject<Env> {
   }> {
     const sql = this.sql()
 
-    const one = (query: string): number =>
-      ([...sql.exec<{ n: number }>(query, graphVersion)][0]?.n ?? 0)
+    const one = (query: string): number => [...sql.exec<{ n: number }>(query, graphVersion)][0]?.n ?? 0
 
     const statusRows = [
-      ...sql.exec<{ status: string }>(
-        "SELECT status FROM graph_versions WHERE graph_version = ?",
-        graphVersion,
-      ),
+      ...sql.exec<{ status: string }>("SELECT status FROM graph_versions WHERE graph_version = ?", graphVersion),
     ]
 
     return {
@@ -279,7 +283,8 @@ export class RepoGraphDO extends DurableObject<Env> {
     // Step 1: ensure the version row exists even for an empty repo.
     sql.exec(
       "INSERT INTO graph_versions (graph_version, head_sha, status, created_at) VALUES (?, '', 'pending', ?) ON CONFLICT(graph_version) DO NOTHING",
-      runId, now,
+      runId,
+      now,
     )
 
     // Step 2: build symbol lookups and path set for this version.
@@ -313,10 +318,7 @@ export class RepoGraphDO extends DurableObject<Env> {
     // targets. Without the union, imports to edge-only files stay 'unresolved'
     // even though the file is known to the graph.
     const pathExists = new Set<string>()
-    for (const row of sql.exec<{ path: string }>(
-      "SELECT DISTINCT path FROM symbols WHERE graph_version = ?",
-      runId,
-    )) {
+    for (const row of sql.exec<{ path: string }>("SELECT DISTINCT path FROM symbols WHERE graph_version = ?", runId)) {
       pathExists.add(row.path)
     }
     for (const row of sql.exec<{ path: string }>(
@@ -358,7 +360,8 @@ export class RepoGraphDO extends DurableObject<Env> {
         if (!targetPath) {
           sql.exec(
             "UPDATE file_edges SET resolution_status = 'unresolved' WHERE graph_version = ? AND edge_id = ?",
-            runId, e.edge_id,
+            runId,
+            e.edge_id,
           )
           continue
         }
@@ -375,7 +378,11 @@ export class RepoGraphDO extends DurableObject<Env> {
 
         sql.exec(
           "UPDATE file_edges SET target_path = ?, target_symbol_id = ?, resolution_status = ? WHERE graph_version = ? AND edge_id = ?",
-          targetPath, targetSymbolId, resolutionStatus, runId, e.edge_id,
+          targetPath,
+          targetSymbolId,
+          resolutionStatus,
+          runId,
+          e.edge_id,
         )
       }
 
@@ -392,7 +399,9 @@ export class RepoGraphDO extends DurableObject<Env> {
         if (calleeSymbolId !== null) {
           sql.exec(
             "UPDATE call_edges SET callee_symbol_id = ? WHERE graph_version = ? AND edge_id = ?",
-            calleeSymbolId, runId, c.edge_id,
+            calleeSymbolId,
+            runId,
+            c.edge_id,
           )
         }
       }
@@ -433,7 +442,9 @@ export class RepoGraphDO extends DurableObject<Env> {
         if (calleeSymbolId !== null) {
           sql.exec(
             "UPDATE call_edges SET callee_symbol_id = ? WHERE graph_version = ? AND edge_id = ?",
-            calleeSymbolId, runId, c.edge_id,
+            calleeSymbolId,
+            runId,
+            c.edge_id,
           )
         }
       }
@@ -446,10 +457,12 @@ export class RepoGraphDO extends DurableObject<Env> {
       // is safe (Fix A). Fix 3 spread is retained: spread the cursor BEFORE
       // the loop so the DELETE statements inside do not mutate the table while
       // a lazy/streaming cursor is still open.
-      for (const old of [...sql.exec<{ graph_version: string }>(
-        "SELECT graph_version FROM graph_versions WHERE graph_version != ?",
-        runId,
-      )]) {
+      for (const old of [
+        ...sql.exec<{ graph_version: string }>(
+          "SELECT graph_version FROM graph_versions WHERE graph_version != ?",
+          runId,
+        ),
+      ]) {
         const ov = old.graph_version
         sql.exec("DELETE FROM call_edges WHERE graph_version = ?", ov)
         sql.exec("DELETE FROM file_edges WHERE graph_version = ?", ov)
@@ -457,10 +470,7 @@ export class RepoGraphDO extends DurableObject<Env> {
         sql.exec("DELETE FROM graph_versions WHERE graph_version = ?", ov)
       }
 
-      sql.exec(
-        "UPDATE graph_versions SET status = 'active', committed_at = ? WHERE graph_version = ?",
-        now, runId,
-      )
+      sql.exec("UPDATE graph_versions SET status = 'active', committed_at = ? WHERE graph_version = ?", now, runId)
     })
 
     emit("graph-version-committed", { runId })
@@ -470,17 +480,20 @@ export class RepoGraphDO extends DurableObject<Env> {
    * Return resolved edge rows for a source path. Used by tests to
    * inspect edge resolution after commitGraphVersion.
    */
-  async debugResolvedEdges(sourcePath: string): Promise<Array<{
-    targetPath: string | null
-    targetSymbolId: string | null
-    resolutionStatus: string
-  }>> {
+  async debugResolvedEdges(sourcePath: string): Promise<
+    Array<{
+      targetPath: string | null
+      targetSymbolId: string | null
+      resolutionStatus: string
+    }>
+  > {
     const sql = this.sql()
     return [
-      ...sql.exec<{ target_path: string | null; target_symbol_id: string | null; resolution_status: string }>(
-        "SELECT target_path, target_symbol_id, resolution_status FROM file_edges WHERE source_path = ?",
-        sourcePath,
-      ),
+      ...sql.exec<{
+        target_path: string | null
+        target_symbol_id: string | null
+        resolution_status: string
+      }>("SELECT target_path, target_symbol_id, resolution_status FROM file_edges WHERE source_path = ?", sourcePath),
     ].map((row) => ({
       targetPath: row.target_path,
       targetSymbolId: row.target_symbol_id,
@@ -492,22 +505,27 @@ export class RepoGraphDO extends DurableObject<Env> {
    * Return call_edges rows for a source path in the active version.
    * Used by tests to inspect callee resolution after commitGraphVersion.
    */
-  async debugCallEdges(sourcePath: string): Promise<Array<{
-    calleeName: string
-    callKind: string
-    calleeSymbolId: string | null
-  }>> {
+  async debugCallEdges(sourcePath: string): Promise<
+    Array<{
+      calleeName: string
+      callKind: string
+      calleeSymbolId: string | null
+    }>
+  > {
     const sql = this.sql()
     // Find the active graph version first.
-    const versionRows = [...sql.exec<{ graph_version: string }>(
-      "SELECT graph_version FROM graph_versions WHERE status = 'active'",
-    )]
+    const versionRows = [
+      ...sql.exec<{ graph_version: string }>("SELECT graph_version FROM graph_versions WHERE status = 'active'"),
+    ]
     const activeVersion = versionRows[0]?.graph_version
     if (!activeVersion) return []
-    return [...sql.exec<{ callee_name: string; call_kind: string; callee_symbol_id: string | null }>(
-      "SELECT callee_name, call_kind, callee_symbol_id FROM call_edges WHERE graph_version = ? AND source_path = ?",
-      activeVersion, sourcePath,
-    )].map((row) => ({
+    return [
+      ...sql.exec<{ callee_name: string; call_kind: string; callee_symbol_id: string | null }>(
+        "SELECT callee_name, call_kind, callee_symbol_id FROM call_edges WHERE graph_version = ? AND source_path = ?",
+        activeVersion,
+        sourcePath,
+      ),
+    ].map((row) => ({
       calleeName: row.callee_name,
       callKind: row.call_kind,
       calleeSymbolId: row.callee_symbol_id,
@@ -521,9 +539,7 @@ export class RepoGraphDO extends DurableObject<Env> {
   async debugActiveVersion(): Promise<string | null> {
     const sql = this.sql()
     const rows = [
-      ...sql.exec<{ graph_version: string }>(
-        "SELECT graph_version FROM graph_versions WHERE status = 'active'",
-      ),
+      ...sql.exec<{ graph_version: string }>("SELECT graph_version FROM graph_versions WHERE status = 'active'"),
     ]
     return rows[0]?.graph_version ?? null
   }
@@ -595,7 +611,10 @@ export class RepoGraphDO extends DurableObject<Env> {
         // ORDER BY before LIMIT so the capped id set is deterministic when
         // matches exceed MAX_BLAST_IDS (otherwise the kept ids vary by plan).
         `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) ORDER BY symbol_id LIMIT ?`,
-        active, ...names, ...paths, MAX_BLAST_IDS,
+        active,
+        ...names,
+        ...paths,
+        MAX_BLAST_IDS,
       ),
     ].map((r) => r.symbol_id)
 
@@ -608,7 +627,10 @@ export class RepoGraphDO extends DurableObject<Env> {
    * blastRadiusByNames (name-based) delegate here so the import-dependent +
    * caller logic lives in one place. Returns empty when `ids` is empty.
    */
-  private blastRadiusForIds(active: string, ids: string[]): {
+  private blastRadiusForIds(
+    active: string,
+    ids: string[],
+  ): {
     callerPaths: string[]
     importDependents: string[]
   } {
@@ -626,7 +648,8 @@ export class RepoGraphDO extends DurableObject<Env> {
     const importDependents = new Set<string>()
     for (const row of sql.exec<{ source_path: string }>(
       `SELECT DISTINCT source_path FROM file_edges WHERE graph_version = ? AND target_symbol_id IN (${idPlaceholders})`,
-      active, ...ids,
+      active,
+      ...ids,
     )) {
       importDependents.add(row.source_path)
     }
@@ -635,7 +658,8 @@ export class RepoGraphDO extends DurableObject<Env> {
     const names: string[] = [
       ...sql.exec<{ name: string }>(
         `SELECT name FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders})`,
-        active, ...ids,
+        active,
+        ...ids,
       ),
     ].map((r) => r.name)
 
@@ -644,7 +668,8 @@ export class RepoGraphDO extends DurableObject<Env> {
       const namePlaceholders = names.map(() => "?").join(",")
       for (const row of sql.exec<{ source_path: string }>(
         `SELECT DISTINCT source_path FROM call_edges WHERE graph_version = ? AND callee_name IN (${namePlaceholders})`,
-        active, ...names,
+        active,
+        ...names,
       )) {
         callerPaths.add(row.source_path)
       }
@@ -708,7 +733,9 @@ export class RepoGraphDO extends DurableObject<Env> {
         const rows = [
           ...sql.exec<{ target_path: string; edge_kind: string }>(
             "SELECT target_path, edge_kind FROM file_edges WHERE graph_version = ? AND source_path = ? AND target_path IS NOT NULL ORDER BY target_path, edge_kind LIMIT ?",
-            active, path, args.maxEdgesPerSymbol,
+            active,
+            path,
+            args.maxEdgesPerSymbol,
           ),
         ]
 
@@ -783,7 +810,10 @@ export class RepoGraphDO extends DurableObject<Env> {
     const ids = [
       ...sql.exec<{ symbol_id: string }>(
         `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) ORDER BY symbol_id LIMIT ?`,
-        active, ...names, ...paths, MAX_BLAST_IDS,
+        active,
+        ...names,
+        ...paths,
+        MAX_BLAST_IDS,
       ),
     ].map((r) => r.symbol_id)
 
@@ -797,11 +827,17 @@ export class RepoGraphDO extends DurableObject<Env> {
     // definitionRows: the changed symbols' own declaration spans.
     const definitionRows: GraphDefinitionRow[] = [
       ...sql.exec<{
-        symbol_id: string; path: string; name: string; kind: string
-        start_line: number; end_line: number
+        symbol_id: string
+        path: string
+        name: string
+        kind: string
+        start_line: number
+        end_line: number
       }>(
         `SELECT symbol_id, path, name, kind, start_line, end_line FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders}) ORDER BY path, start_line LIMIT ?`,
-        active, ...ids, maxRows,
+        active,
+        ...ids,
+        maxRows,
       ),
     ].map((r) => ({
       symbolId: r.symbol_id,
@@ -818,8 +854,11 @@ export class RepoGraphDO extends DurableObject<Env> {
     // whole caller body.
     const callerRows: GraphCallerRow[] = [
       ...sql.exec<{
-        source_path: string; callee_name: string; call_kind: string
-        start_line: number; start_col: number
+        source_path: string
+        callee_name: string
+        call_kind: string
+        start_line: number
+        start_col: number
         caller_symbol_id: string | null
         caller_start_line: number | null
         caller_end_line: number | null
@@ -833,7 +872,9 @@ export class RepoGraphDO extends DurableObject<Env> {
           WHERE ce.graph_version = ? AND ce.callee_symbol_id IN (${idPlaceholders})
           ORDER BY ce.source_path, ce.start_line
           LIMIT ?`,
-        active, ...ids, maxRows,
+        active,
+        ...ids,
+        maxRows,
       ),
     ].map((r) => ({
       sourcePath: r.source_path,
@@ -852,7 +893,10 @@ export class RepoGraphDO extends DurableObject<Env> {
     const importRows: GraphImportRow[] = [
       ...sql.exec<{ source_path: string; imported_name: string | null; start_line: number }>(
         `SELECT DISTINCT source_path, imported_name, start_line FROM file_edges WHERE graph_version = ? AND (target_symbol_id IN (${idPlaceholders}) OR target_path IN (${pathPlaceholders})) ORDER BY source_path, start_line LIMIT ?`,
-        active, ...ids, ...paths, maxRows,
+        active,
+        ...ids,
+        ...paths,
+        maxRows,
       ),
     ].map((r) => ({
       sourcePath: r.source_path,

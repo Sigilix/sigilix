@@ -120,7 +120,9 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
-      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(
+        env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE,
+      ),
       securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
     })
   })
@@ -150,15 +152,23 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
     // Normalization (trim + lowercase) is the parser's job and has its own suite;
     // here we only guard that the edge hands the RAW, un-mangled env string to the
     // right parser — so a stray `.trim()` added in parseEnsembleConfig is caught.
-    const env = { OPENCLAW_SECURITY_VALIDATOR_MODE: "  ENFORCE  ", OPENCLAW_LOGIC_VALIDATOR_MODE: "Shadow" }
-    expect(parseEnsembleConfig(env).validatorModes.securityValidatorMode).toBe(parseSecurityValidatorMode("  ENFORCE  "))
+    const env = {
+      OPENCLAW_SECURITY_VALIDATOR_MODE: "  ENFORCE  ",
+      OPENCLAW_LOGIC_VALIDATOR_MODE: "Shadow",
+    }
+    expect(parseEnsembleConfig(env).validatorModes.securityValidatorMode).toBe(
+      parseSecurityValidatorMode("  ENFORCE  "),
+    )
     expect(parseEnsembleConfig(env).validatorModes.logicValidatorMode).toBe(parseLogicValidatorMode("Shadow"))
   })
 
   it("treats explicit empty / whitespace-only distinctly from absent (per-parser contract)", () => {
     // Absent (undefined) vs explicit "" / "   " can differ per parser; the edge must
     // forward the explicit value, not collapse it to the absent default.
-    const c = parseEnsembleConfig({ OPENCLAW_SECURITY_VALIDATOR_MODE: "", OPENCLAW_LOGIC_VALIDATOR_MODE: "   " })
+    const c = parseEnsembleConfig({
+      OPENCLAW_SECURITY_VALIDATOR_MODE: "",
+      OPENCLAW_LOGIC_VALIDATOR_MODE: "   ",
+    })
     expect(c.validatorModes.securityValidatorMode).toBe(parseSecurityValidatorMode(""))
     expect(c.validatorModes.logicValidatorMode).toBe(parseLogicValidatorMode("   "))
   })
@@ -221,7 +231,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // graphRetrievalEnabled was `v === "shadow" || v === "post"`, graphRetrievalMode
       // honored post (BLAST_RADIUS_RESOLUTION_READY is true), bypass was `=== "on"`,
       // manifest was the `!== "off"` kill-switch.
-      graphRetrievalEnabled: scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "shadow" || scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "post",
+      graphRetrievalEnabled:
+        scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "shadow" || scanMode(env.OPENCLAW_GRAPH_RETRIEVAL) === "post",
       graphRetrievalMode: scanMode(env.OPENCLAW_GRAPH_RETRIEVAL),
       synthBypassEnabled: scanMode(env.OPENCLAW_SYNTH_BYPASS_ENABLED) === "on",
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
@@ -271,7 +282,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     expect(c.synthRecovery).toBe("post")
   })
 
-  it("forwards the raw value un-mangled for the raw / `=== \"on\"` flags (no edge normalization)", () => {
+  it('forwards the raw value un-mangled for the raw / `=== "on"` flags (no edge normalization)', () => {
     // These call sites do their own normalization (`shouldRunSymbolRetrieval`, the
     // inline `(x ?? "").trim().toLowerCase() === "on"`, `=== "on"`), so the edge
     // must hand them the RAW env string — a stray `.trim()` here would change

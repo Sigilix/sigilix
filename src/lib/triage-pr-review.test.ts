@@ -36,7 +36,8 @@ describe("parsePrReviewResponse", () => {
   })
 
   it("repairs unescaped double quotes inside finding string fields", () => {
-    const text = '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "`parseKind` calls `String(raw ?? "task").toLowerCase()` and should test `"bug"` plus `"task"` inputs." }] }'
+    const text =
+      '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "`parseKind` calls `String(raw ?? "task").toLowerCase()` and should test `"bug"` plus `"task"` inputs." }] }'
     const out = parsePrReviewResponse(text)
     expect(out?.findings).toHaveLength(1)
     expect(out?.findings[0]?.body).toContain('String(raw ?? "task").toLowerCase()')
@@ -44,7 +45,8 @@ describe("parsePrReviewResponse", () => {
   })
 
   it("repairs unescaped quoted object-key text inside finding string fields", () => {
-    const text = '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "The parser should cover `"kind": "bug"` and `"kind": "task"` payloads." }] }'
+    const text =
+      '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "The parser should cover `"kind": "bug"` and `"kind": "task"` payloads." }] }'
     const out = parsePrReviewResponse(text)
     expect(out?.findings).toHaveLength(1)
     expect(out?.findings[0]?.body).toContain('"kind": "bug"')
@@ -54,10 +56,12 @@ describe("parsePrReviewResponse", () => {
   it("preserves already-escaped quotes inside finding string fields", () => {
     const text = JSON.stringify({
       ...valid,
-      findings: [{
-        ...baseFinding,
-        body: '`parseKind` should keep `String(raw ?? "task").toLowerCase()` and `"bug"` examples intact.',
-      }],
+      findings: [
+        {
+          ...baseFinding,
+          body: '`parseKind` should keep `String(raw ?? "task").toLowerCase()` and `"bug"` examples intact.',
+        },
+      ],
     })
     const out = parsePrReviewResponse(text)
     expect(out?.findings[0]?.body).toContain('String(raw ?? "task").toLowerCase()')
@@ -94,16 +98,22 @@ describe("parsePrReviewResponse", () => {
       JSON.stringify({
         ...valid,
         dismissedScanFacts: [
-          { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+          {
+            evidenceId: "secret:generic-high-entropy-token:abc:18",
+            reason: "SRI hash next to a CDN URL; public",
+          },
           { evidenceId: "", reason: "no id" }, // dropped
           { reason: "missing evidenceId" }, // dropped
           { evidenceId: "secret:x:y:1" }, // dropped (no reason)
           "not-an-object", // dropped
         ],
-      })
+      }),
     )
     expect(out?.dismissedScanFacts).toEqual([
-      { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+      {
+        evidenceId: "secret:generic-high-entropy-token:abc:18",
+        reason: "SRI hash next to a CDN URL; public",
+      },
     ])
   })
 
@@ -116,17 +126,27 @@ describe("parsePrReviewResponse", () => {
       JSON.stringify({
         ...valid,
         clearedLogicCandidates: [
-          { path: "src/ui/app.tsx", line: 50, hypothesis: "x*60*60*1000 could overflow", mitigation: "Math.min(parsed, 2160) clamps it" },
+          {
+            path: "src/ui/app.tsx",
+            line: 50,
+            hypothesis: "x*60*60*1000 could overflow",
+            mitigation: "Math.min(parsed, 2160) clamps it",
+          },
           { path: "", line: 50, hypothesis: "h", mitigation: "m" }, // dropped (no path)
           { path: "src/a.ts", line: 0, hypothesis: "h", mitigation: "m" }, // dropped (line <= 0)
           { path: "src/a.ts", line: 5, hypothesis: "", mitigation: "m" }, // dropped (no hypothesis)
           { path: "src/a.ts", line: 5, hypothesis: "h" }, // dropped (no mitigation)
           "not-an-object", // dropped
         ],
-      })
+      }),
     )
     expect(out?.clearedLogicCandidates).toEqual([
-      { path: "src/ui/app.tsx", line: 50, hypothesis: "x*60*60*1000 could overflow", mitigation: "Math.min(parsed, 2160) clamps it" },
+      {
+        path: "src/ui/app.tsx",
+        line: 50,
+        hypothesis: "x*60*60*1000 could overflow",
+        mitigation: "Math.min(parsed, 2160) clamps it",
+      },
     ])
   })
 
@@ -135,8 +155,10 @@ describe("parsePrReviewResponse", () => {
       JSON.stringify({
         ...valid,
         dismissedScanFacts: [{ evidenceId: "secret:x:y:1", reason: "public SRI hash next to a CDN url" }],
-        clearedLogicCandidates: [{ path: "src/a.ts", line: 9, hypothesis: "off-by-one", mitigation: "guarded by i < n" }],
-      })
+        clearedLogicCandidates: [
+          { path: "src/a.ts", line: 9, hypothesis: "off-by-one", mitigation: "guarded by i < n" },
+        ],
+      }),
     )
     expect(out?.findings).toHaveLength(1)
     expect(out?.dismissedScanFacts).toHaveLength(1)
@@ -152,15 +174,13 @@ describe("parsePrReviewResponse", () => {
       JSON.stringify({
         ...valid,
         findings: [{ ...baseFinding, independentAssessment: "Used as an Authorization header value" }],
-      })
+      }),
     )
     expect(out?.findings[0]?.independentAssessment).toBe("Used as an Authorization header value")
   })
 
   it("clamps score into 1-5", () => {
-    const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, score: 4.6 }] })
-    )
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, score: 4.6 }] }))
     expect(out?.findings[0]?.score).toBe(5)
   })
 
@@ -176,23 +196,17 @@ describe("parsePrReviewResponse", () => {
     ["pull_request", "pr"],
     ["review", "pr"],
   ] as const)("normalizes finding scope %s to %s", (raw, expected) => {
-    const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: raw }] })
-    )
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: raw }] }))
     expect(out?.findings[0]?.scope).toBe(expected)
   })
 
   it.each(["thread", ""])("ignores invalid finding scope %j for back-compat", (scope) => {
-    const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope }] })
-    )
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope }] }))
     expect(out?.findings[0]?.scope).toBeUndefined()
   })
 
   it("includes startLine when valid (positive, less than line)", () => {
-    const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, startLine: 38 }] })
-    )
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, startLine: 38 }] }))
     expect(out?.findings[0]?.startLine).toBe(38)
   })
 
@@ -206,12 +220,14 @@ describe("parsePrReviewResponse", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          failureExample: "input: FINAL(wrong) then FINAL(correct)",
-          fixExample: "match = re.search(r\"FINAL\\\\((.*?)\\\\)\", response, re.DOTALL)",
-          testGap: "The existing test only covers one FINAL(...) token.",
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            failureExample: "input: FINAL(wrong) then FINAL(correct)",
+            fixExample: 'match = re.search(r"FINAL\\\\((.*?)\\\\)", response, re.DOTALL)',
+            testGap: "The existing test only covers one FINAL(...) token.",
+          },
+        ],
       }),
     )
     expect(out?.findings[0]?.failureExample).toBe("input: FINAL(wrong) then FINAL(correct)")
@@ -223,11 +239,13 @@ describe("parsePrReviewResponse", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          failureExample: "```text\n" + "x".repeat(2200) + "\n```",
-          fixExample: 42,
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            failureExample: "```text\n" + "x".repeat(2200) + "\n```",
+            fixExample: 42,
+          },
+        ],
       }),
     )
     expect(out?.findings[0]?.failureExample).toHaveLength(2000)
@@ -239,11 +257,13 @@ describe("parsePrReviewResponse", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          failureExample: "```text\r\nvalue```",
-          fixExample: "```ts\r\nconst ok = true\r\n```",
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            failureExample: "```text\r\nvalue```",
+            fixExample: "```ts\r\nconst ok = true\r\n```",
+          },
+        ],
       }),
     )
     expect(out?.findings[0]?.failureExample).toBe("value")
@@ -254,10 +274,12 @@ describe("parsePrReviewResponse", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          failureExample: "value includes ``` inside",
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            failureExample: "value includes ``` inside",
+          },
+        ],
       }),
     )
     const comment = formatFindingComment(out!.findings[0]!, 5)
@@ -339,17 +361,13 @@ describe("chooseReviewEvent", () => {
       // Mixed-bag of other-actor threads — none of which Sigilix
       // owns. Filter strips everything; gate sees an empty list +
       // empty findings → APPROVE.
-      expect(
-        chooseReviewEvent([], [crThread, greptileThread, humanThread]),
-      ).toBe("APPROVE")
+      expect(chooseReviewEvent([], [crThread, greptileThread, humanThread])).toBe("APPROVE")
     })
 
     it("REQUEST_CHANGES when mixed open threads include at least one Sigilix-authored", () => {
       // Even with other-actor noise in the same list, a single
       // Sigilix-authored open thread is enough to withhold APPROVE.
-      expect(
-        chooseReviewEvent([], [crThread, sigilixThread, humanThread]),
-      ).toBe("REQUEST_CHANGES")
+      expect(chooseReviewEvent([], [crThread, sigilixThread, humanThread])).toBe("REQUEST_CHANGES")
     })
 
     it("REQUEST_CHANGES when the synth has its own findings, regardless of openItems mix", () => {
@@ -387,125 +405,177 @@ describe("chooseReviewEventForRenderedFindings", () => {
   const sigilixThread: AuthoredItem = { user: { login: "sigilix[bot]" } }
 
   it("APPROVE when no rendered findings or Sigilix-owned open items remain", () => {
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [],
-    })).toBe("APPROVE")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [],
+      }),
+    ).toBe("APPROVE")
   })
 
   it("REQUEST_CHANGES when at least one finding rendered inline", () => {
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [f()],
-      bodyOnlyFindings: [f(2)],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [f()],
+        bodyOnlyFindings: [f(2)],
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   it("COMMENT when rendered findings are testing-only, even at high score", () => {
     const testingFinding: PrReviewFinding = { ...baseFinding, category: "testing", score: 5 }
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [testingFinding],
-      bodyOnlyFindings: [],
-    })).toBe("COMMENT")
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [testingFinding],
-    })).toBe("COMMENT")
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [testingFinding],
-      bodyOnlyFindings: [f(3)],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [testingFinding],
+        bodyOnlyFindings: [],
+      }),
+    ).toBe("COMMENT")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [testingFinding],
+      }),
+    ).toBe("COMMENT")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [testingFinding],
+        bodyOnlyFindings: [f(3)],
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   // Founder verdict rule: ANY substantive finding blocks, even a sub-4 nit —
   // "no competitor approves on a P2/P3". (`f` has no category → substantive.)
   it("REQUEST_CHANGES on substantive sub-4 findings (a real finding always blocks)", () => {
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [f(3), f(2)],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [f(3), f(2)],
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   // The only non-blocking tier: a truly trivial style/docs nit below P0/P1.
   it("COMMENT only for a truly trivial style/docs nit below P0/P1", () => {
-    const triv = (category: "style" | "docs", score = 2): PrReviewFinding => ({ ...baseFinding, category, score })
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [], bodyOnlyFindings: [triv("style"), triv("docs")],
-    })).toBe("COMMENT")
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [triv("style")], bodyOnlyFindings: [],
-    })).toBe("COMMENT") // a trivial nit inline is still just a COMMENT (category, not anchor)
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [], bodyOnlyFindings: [triv("style", 4)],
-    })).toBe("REQUEST_CHANGES") // a P0/P1 style finding is NOT trivial → blocks (recall floor)
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [], bodyOnlyFindings: [triv("style"), f(2)],
-    })).toBe("REQUEST_CHANGES") // substantive alongside a trivial → blocks
+    const triv = (category: "style" | "docs", score = 2): PrReviewFinding => ({
+      ...baseFinding,
+      category,
+      score,
+    })
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [triv("style"), triv("docs")],
+      }),
+    ).toBe("COMMENT")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [triv("style")],
+        bodyOnlyFindings: [],
+      }),
+    ).toBe("COMMENT") // a trivial nit inline is still just a COMMENT (category, not anchor)
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [triv("style", 4)],
+      }),
+    ).toBe("REQUEST_CHANGES") // a P0/P1 style finding is NOT trivial → blocks (recall floor)
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [triv("style"), f(2)],
+      }),
+    ).toBe("REQUEST_CHANGES") // substantive alongside a trivial → blocks
   })
 
   // SIG-281 PR A — believability floor: a real blocker routed body-only (e.g.
   // unanchorable, or demoted by later routing discipline) must STILL block.
   // Appearing in body text does not gate the merge; only the review event does.
   it("REQUEST_CHANGES when a body-only finding is a blocker (score >= 4)", () => {
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [f(5)],
-    })).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [f(4)], // a lone P1 (exactly the floor) blocks on its own
-    })).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [f(2), f(4)], // one blocker among nits → still blocks
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [f(5)],
+      }),
+    ).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [f(4)], // a lone P1 (exactly the floor) blocks on its own
+      }),
+    ).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [f(2), f(4)], // one blocker among nits → still blocks
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   it("APPROVES when the only finding is OUT-OF-PR-SCOPE — never blocks on code not in the PR (founder ask, Codex-hardened)", () => {
     // out-of-PR-scope = path is not a changed file (NOT mere anchor-failure).
-    const outside = (score: number): PrReviewFinding => ({ ...baseFinding, score, outOfPrScope: true })
+    const outside = (score: number): PrReviewFinding => ({
+      ...baseFinding,
+      score,
+      outOfPrScope: true,
+    })
     // out-of-scope-only, even a "P1", APPROVES (informational, not about this PR — like CodeRabbit)
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [outside(5)],
-    })).toBe("APPROVE")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [outside(5)],
+      }),
+    ).toBe("APPROVE")
     // an IN-SCOPE body blocker still blocks — a mis-anchored real finding on a
     // CHANGED file (no outOfPrScope flag) holds the SIG-281 floor (recall hole closed).
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [outside(5), f(5)],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [outside(5), f(5)],
+      }),
+    ).toBe("REQUEST_CHANGES")
     // out-of-scope + an in-scope SUBSTANTIVE finding → blocks (the in-scope one is real)
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [outside(5), f(3)],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [outside(5), f(3)],
+      }),
+    ).toBe("REQUEST_CHANGES")
     // out-of-scope + an in-scope TRIVIAL style nit → COMMENT (the nit surfaces, doesn't block)
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [outside(5), { ...baseFinding, category: "style", score: 2 }],
-    })).toBe("COMMENT")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [outside(5), { ...baseFinding, category: "style", score: 2 }],
+      }),
+    ).toBe("COMMENT")
   })
 
   it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [],
-      openItems: [crThread],
-    })).toBe("APPROVE")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [],
+        openItems: [crThread],
+      }),
+    ).toBe("APPROVE")
 
     // a competitor (CodeRabbit) open item must NOT escalate; with only a trivial
     // style nit present, the verdict stays a non-blocking COMMENT.
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [{ ...baseFinding, category: "style", score: 2 }],
-      openItems: [crThread],
-    })).toBe("COMMENT")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [{ ...baseFinding, category: "style", score: 2 }],
+        openItems: [crThread],
+      }),
+    ).toBe("COMMENT")
 
-    expect(chooseReviewEventForRenderedFindings({
-      inlineFindings: [],
-      bodyOnlyFindings: [],
-      openItems: [sigilixThread],
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      chooseReviewEventForRenderedFindings({
+        inlineFindings: [],
+        bodyOnlyFindings: [],
+        openItems: [sigilixThread],
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 })
 
@@ -513,27 +583,25 @@ describe("chooseRenderedEventWithOverride — SIG-287 degraded/low-confidence do
   const f = (score = 3): PrReviewFinding => ({ ...baseFinding, score })
 
   it("REQUEST_CHANGES override always escalates (a real blocker must block)", () => {
-    expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "REQUEST_CHANGES"),
-    ).toBe("REQUEST_CHANGES")
+    expect(chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "REQUEST_CHANGES")).toBe(
+      "REQUEST_CHANGES",
+    )
   })
 
   it("COMMENT override DOWNGRADES an otherwise-clean APPROVE to COMMENT (degraded coverage / low confidence)", () => {
     // The SIG-287 fake-approve bug: 0 findings would APPROVE; when the review is
     // degraded (logic specialist absent) or low-confidence, we must post a
     // neutral COMMENT instead of a confident clean sign-off.
-    expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "COMMENT"),
-    ).toBe("COMMENT")
+    expect(chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "COMMENT")).toBe("COMMENT")
   })
 
   it("COMMENT override NEVER weakens a REQUEST_CHANGES (a blocker still blocks)", () => {
-    expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [f(4)], bodyOnlyFindings: [] }, "COMMENT"),
-    ).toBe("REQUEST_CHANGES")
-    expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [f(5)] }, "COMMENT"),
-    ).toBe("REQUEST_CHANGES")
+    expect(chooseRenderedEventWithOverride({ inlineFindings: [f(4)], bodyOnlyFindings: [] }, "COMMENT")).toBe(
+      "REQUEST_CHANGES",
+    )
+    expect(chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [f(5)] }, "COMMENT")).toBe(
+      "REQUEST_CHANGES",
+    )
   })
 
   it("COMMENT override is a no-op when rendered findings already make it COMMENT", () => {
@@ -547,9 +615,7 @@ describe("chooseRenderedEventWithOverride — SIG-287 degraded/low-confidence do
   })
 
   it("no override → unchanged base behavior (clean → APPROVE)", () => {
-    expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }),
-    ).toBe("APPROVE")
+    expect(chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] })).toBe("APPROVE")
   })
 })
 
@@ -563,36 +629,52 @@ describe("previewReviewSubmissionEvent", () => {
 
     // SIG-281 PR A: a body-only score>=4 (P1) blocker escalates to
     // REQUEST_CHANGES; the preview must mirror that escalation.
-    expect(previewReviewSubmissionEvent({
-      verdict: {
-        summary: "Body-only issue.",
-        confidence: 4,
-        confidenceReason: "Specific.",
-        findings: [fileFinding],
-      },
-      headSha: "abc",
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      previewReviewSubmissionEvent({
+        verdict: {
+          summary: "Body-only issue.",
+          confidence: 4,
+          confidenceReason: "Specific.",
+          findings: [fileFinding],
+        },
+        headSha: "abc",
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   it("COMMENT for a trivial style/docs nit below the blocker floor (score < 4)", () => {
-    const fileFinding: PrReviewFinding = { ...baseFinding, scope: "file", category: "style", score: 3 }
-    expect(previewReviewSubmissionEvent({
-      verdict: { summary: "Body-only nit.", confidence: 4, confidenceReason: "Specific.", findings: [fileFinding] },
-      headSha: "abc",
-    })).toBe("COMMENT")
+    const fileFinding: PrReviewFinding = {
+      ...baseFinding,
+      scope: "file",
+      category: "style",
+      score: 3,
+    }
+    expect(
+      previewReviewSubmissionEvent({
+        verdict: {
+          summary: "Body-only nit.",
+          confidence: 4,
+          confidenceReason: "Specific.",
+          findings: [fileFinding],
+        },
+        headSha: "abc",
+      }),
+    ).toBe("COMMENT")
   })
 
   it("honors explicit event overrides", () => {
-    expect(previewReviewSubmissionEvent({
-      verdict: {
-        summary: "Body-only issue.",
-        confidence: 4,
-        confidenceReason: "Specific.",
-        findings: [{ ...baseFinding, scope: "file" }],
-      },
-      headSha: "abc",
-      eventOverride: "REQUEST_CHANGES",
-    })).toBe("REQUEST_CHANGES")
+    expect(
+      previewReviewSubmissionEvent({
+        verdict: {
+          summary: "Body-only issue.",
+          confidence: 4,
+          confidenceReason: "Specific.",
+          findings: [{ ...baseFinding, scope: "file" }],
+        },
+        headSha: "abc",
+        eventOverride: "REQUEST_CHANGES",
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 })
 

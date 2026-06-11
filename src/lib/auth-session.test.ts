@@ -64,11 +64,7 @@ describe("base64url round-trip", () => {
 describe("AES-GCM encrypt + decrypt with AAD", () => {
   it("round-trips a token under the same sessionId + key", async () => {
     const ct = await encryptAccessToken("ghu_secrettoken", "alice-session", TEST_KEY)
-    const pt = await decryptAccessToken(
-      { encryptedAccessToken: ct.ciphertext, iv: ct.iv },
-      "alice-session",
-      TEST_KEY,
-    )
+    const pt = await decryptAccessToken({ encryptedAccessToken: ct.ciphertext, iv: ct.iv }, "alice-session", TEST_KEY)
     expect(pt).toBe("ghu_secrettoken")
   })
 
@@ -78,11 +74,7 @@ describe("AES-GCM encrypt + decrypt with AAD", () => {
     // never decrypt as another user's bearer token.
     const ct = await encryptAccessToken("ghu_alice", "alice-session", TEST_KEY)
     await expect(
-      decryptAccessToken(
-        { encryptedAccessToken: ct.ciphertext, iv: ct.iv },
-        "bob-session",
-        TEST_KEY,
-      ),
+      decryptAccessToken({ encryptedAccessToken: ct.ciphertext, iv: ct.iv }, "bob-session", TEST_KEY),
     ).rejects.toThrow()
   })
 
@@ -90,11 +82,7 @@ describe("AES-GCM encrypt + decrypt with AAD", () => {
     const ct = await encryptAccessToken("ghu_token", "session-x", TEST_KEY)
     const otherKey = base64urlEncode(new Uint8Array(32).fill(13))
     await expect(
-      decryptAccessToken(
-        { encryptedAccessToken: ct.ciphertext, iv: ct.iv },
-        "session-x",
-        otherKey,
-      ),
+      decryptAccessToken({ encryptedAccessToken: ct.ciphertext, iv: ct.iv }, "session-x", otherKey),
     ).rejects.toThrow()
   })
 

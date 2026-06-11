@@ -32,13 +32,19 @@ describe("no-path-traversal — FIRES on request-controlled fs paths", () => {
     expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFile(req.query.file, cb); });`).length).toBe(1)
   })
   it("fixed base + tainted tail still fires (../ escapes): fs.readFileSync('./uploads/' + req.params.name)", () => {
-    expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFileSync("./uploads/" + req.params.name); });`).length).toBe(1)
+    expect(
+      runRule(FS + `app.get("/f", (req, res) => { fs.readFileSync("./uploads/" + req.params.name); });`).length,
+    ).toBe(1)
   })
   it("taint through path.join: fs.readFile(path.join(BASE, req.query.name))", () => {
-    expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFile(path.join(BASE, req.query.name), cb); });`).length).toBe(1)
+    expect(
+      runRule(FS + `app.get("/f", (req, res) => { fs.readFile(path.join(BASE, req.query.name), cb); });`).length,
+    ).toBe(1)
   })
   it("fs.promises member: fs.promises.readFile(req.query.p)", () => {
-    expect(runRule(FS + `app.get("/f", async (req, res) => { await fs.promises.readFile(req.query.p); });`).length).toBe(1)
+    expect(
+      runRule(FS + `app.get("/f", async (req, res) => { await fs.promises.readFile(req.query.p); });`).length,
+    ).toBe(1)
   })
   it("named import: import { readFile } from 'fs/promises'; readFile(req.query.p)", () => {
     const src = `import { readFile } from "fs/promises";\napp.get("/f", async (req, res) => { await readFile(req.query.p); });`
@@ -52,10 +58,14 @@ describe("no-path-traversal — FIRES on request-controlled fs paths", () => {
     expect(runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.path); });`).length).toBe(1)
   })
   it("a request-controlled { root } is no boundary → still fires (CodeRabbit #350)", () => {
-    expect(runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.name, { root: req.query.dir }); });`).length).toBe(1)
+    expect(
+      runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.name, { root: req.query.dir }); });`).length,
+    ).toBe(1)
   })
   it("alias chain: const a = req.query.f; const b = a; fs.readFileSync(b)", () => {
-    expect(runRule(FS + `app.get("/f", (req, res) => { const a = req.query.f; const b = a; fs.readFileSync(b); });`).length).toBe(1)
+    expect(
+      runRule(FS + `app.get("/f", (req, res) => { const a = req.query.f; const b = a; fs.readFileSync(b); });`).length,
+    ).toBe(1)
   })
   it("Deno: Deno.readTextFile(c.req.query('p'))", () => {
     const src = `
@@ -71,17 +81,24 @@ describe("no-path-traversal — FP-safety: does NOT fire on safe fs code", () =>
     expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFile("./config/app.json", cb); });`).length).toBe(0)
   })
   it("basename-sanitized input is skipped", () => {
-    expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFile(path.join(BASE, path.basename(req.query.name)), cb); });`).length).toBe(0)
+    expect(
+      runRule(FS + `app.get("/f", (req, res) => { fs.readFile(path.join(BASE, path.basename(req.query.name)), cb); });`)
+        .length,
+    ).toBe(0)
   })
   it("a within-root startsWith check is skipped", () => {
-    const src = FS + `app.get("/f", (req, res) => {
+    const src =
+      FS +
+      `app.get("/f", (req, res) => {
       const p = path.resolve(BASE, req.query.name);
       if (p.startsWith(BASE)) fs.readFile(p, cb);
     });`
     expect(runRule(src).length).toBe(0)
   })
   it("a '..' rejection is skipped", () => {
-    const src = FS + `app.get("/f", (req, res) => {
+    const src =
+      FS +
+      `app.get("/f", (req, res) => {
       const name = req.query.name;
       if (name.includes("..")) return res.status(400).end();
       fs.readFile(path.join(BASE, name), cb);
@@ -89,14 +106,18 @@ describe("no-path-traversal — FP-safety: does NOT fire on safe fs code", () =>
     expect(runRule(src).length).toBe(0)
   })
   it("a replace-based '..' stripper is skipped (FP-3)", () => {
-    const src = FS + `app.post("/f", (req, res) => {
+    const src =
+      FS +
+      `app.post("/f", (req, res) => {
       const safe = req.body.name.replace(/\\.\\./g, "");
       fs.writeFile(path.join(DIR, safe), data, cb);
     });`
     expect(runRule(src).length).toBe(0)
   })
   it("a named validator is skipped: sanitizePath", () => {
-    expect(runRule(FS + `app.get("/f", (req, res) => { fs.readFile(sanitizePath(req.query.name), cb); });`).length).toBe(0)
+    expect(
+      runRule(FS + `app.get("/f", (req, res) => { fs.readFile(sanitizePath(req.query.name), cb); });`).length,
+    ).toBe(0)
   })
   it("res.sendFile with a { root } option is confined → skipped", () => {
     expect(runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.name, { root: BASE }); });`).length).toBe(0)

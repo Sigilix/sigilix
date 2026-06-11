@@ -25,11 +25,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 
-export function buildReviewCounterKey(
-  owner: string,
-  repo: string,
-  prNumber: number,
-): string {
+export function buildReviewCounterKey(owner: string, repo: string, prNumber: number): string {
   return `pr-review-counter:${owner}/${repo}#${prNumber}`
 }
 
@@ -62,11 +58,15 @@ export async function preparePrReviewCounter(
       }
     }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-counter-read-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-counter-read-failed",
+        owner,
+        repo,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 
   const value = current + 1
@@ -78,11 +78,15 @@ export async function preparePrReviewCounter(
     try {
       await env.OPENCLAW_STATE.put(key, String(value))
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-review-counter-write-failed",
-        owner, repo, prNumber,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-counter-write-failed",
+          owner,
+          repo,
+          prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
 
@@ -105,12 +109,7 @@ export async function preparePrReviewCounter(
  * documented "best effort, may go off-by-one under failure"
  * semantics.
  */
-export async function bumpPrReviewCounter(
-  env: Env,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<number> {
+export async function bumpPrReviewCounter(env: Env, owner: string, repo: string, prNumber: number): Promise<number> {
   const prepared = await preparePrReviewCounter(env, owner, repo, prNumber)
   await prepared.persist()
   return prepared.value

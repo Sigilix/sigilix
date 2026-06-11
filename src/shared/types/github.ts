@@ -18,15 +18,7 @@ export interface GitHubClientOptions {
 }
 
 /** GitHub's accepted reaction emoji values. */
-export type ReactionContent =
-  | "+1"
-  | "-1"
-  | "laugh"
-  | "confused"
-  | "heart"
-  | "hooray"
-  | "rocket"
-  | "eyes"
+export type ReactionContent = "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes"
 
 export interface PullRequestMeta {
   number: number

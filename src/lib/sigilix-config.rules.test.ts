@@ -25,7 +25,7 @@ describe("parseSigilixConfig — astRules (ARC-181)", () => {
     expect(r?.astRules?.enabled).toBe(true)
   })
 
-  it("STRICT-BOOL: string \"false\" does NOT disable", () => {
+  it('STRICT-BOOL: string "false" does NOT disable', () => {
     const r = parseSigilixConfig(JSON.stringify({ astRules: { enabled: "false" } }))
     expect(r?.astRules?.enabled).toBeUndefined()
   })
@@ -43,23 +43,29 @@ describe("parseSigilixConfig — astRules (ARC-181)", () => {
   })
 
   it("captures disabledRules string array", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      astRules: { disabledRules: ["no-eval-call", "no-throw-literal"] },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        astRules: { disabledRules: ["no-eval-call", "no-throw-literal"] },
+      }),
+    )
     expect(r?.astRules?.disabledRules).toEqual(["no-eval-call", "no-throw-literal"])
   })
 
   it("filters non-string entries from disabledRules", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      astRules: { disabledRules: ["no-eval-call", 42, null, ""] },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        astRules: { disabledRules: ["no-eval-call", 42, null, ""] },
+      }),
+    )
     expect(r?.astRules?.disabledRules).toEqual(["no-eval-call"])
   })
 
   it("rejects non-array disabledRules", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      astRules: { disabledRules: "no-eval-call" },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        astRules: { disabledRules: "no-eval-call" },
+      }),
+    )
     expect(r?.astRules?.disabledRules).toBeUndefined()
   })
 
@@ -74,9 +80,11 @@ describe("parseSigilixConfig — astRules (ARC-181)", () => {
   })
 
   it("ignores unknown subfields under astRules (forward-compat)", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      astRules: { enabled: true, futureField: "x" },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        astRules: { enabled: true, futureField: "x" },
+      }),
+    )
     expect(r?.astRules).toEqual({ enabled: true })
   })
 
@@ -166,28 +174,38 @@ describe("parseSigilixConfig — sarifEvidence (ARC-188)", () => {
   })
 
   it("trims + dedupes sarifEvidence disabledRules", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      sarifEvidence: { disabledRules: [" rule-1 ", "rule-1", "rule-2", "", 42 as unknown as string] },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        sarifEvidence: {
+          disabledRules: [" rule-1 ", "rule-1", "rule-2", "", 42 as unknown as string],
+        },
+      }),
+    )
     expect(r?.sarifEvidence?.disabledRules).toEqual(["rule-1", "rule-2"])
   })
 
   it("filters disabledCategories to known values + dedupes", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      sarifEvidence: { disabledCategories: ["license", "license", "vulnerability", "bogus", 42 as unknown as string] },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        sarifEvidence: {
+          disabledCategories: ["license", "license", "vulnerability", "bogus", 42 as unknown as string],
+        },
+      }),
+    )
     expect(r?.sarifEvidence?.disabledCategories).toEqual(["license", "vulnerability"])
   })
 
-  it("STRICT-BOOL: sarifEvidence enabled string \"false\" doesn't disable", () => {
+  it('STRICT-BOOL: sarifEvidence enabled string "false" doesn\'t disable', () => {
     const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { enabled: "false" } }))
     expect(r?.sarifEvidence?.enabled).toBeUndefined()
   })
 
   it("ignores unknown sarifEvidence subfields (forward-compat)", () => {
-    const r = parseSigilixConfig(JSON.stringify({
-      sarifEvidence: { enabled: true, futureField: "x" },
-    }))
+    const r = parseSigilixConfig(
+      JSON.stringify({
+        sarifEvidence: { enabled: true, futureField: "x" },
+      }),
+    )
     expect(r?.sarifEvidence).toEqual({ enabled: true })
   })
 
@@ -234,7 +252,9 @@ describe("resolveSarifEvidenceConfig (ARC-188)", () => {
   })
 
   it("respects custom sarifEvidence path", () => {
-    expect(resolveSarifEvidenceConfig({ sarifEvidence: { path: "reports/x.sarif.json" } }).path).toBe("reports/x.sarif.json")
+    expect(resolveSarifEvidenceConfig({ sarifEvidence: { path: "reports/x.sarif.json" } }).path).toBe(
+      "reports/x.sarif.json",
+    )
   })
 
   it("returns sarifEvidence user disabledRules + disabledCategories arrays", () => {
@@ -274,9 +294,13 @@ describe("parseSigilixConfig — costControls", () => {
   })
 
   it("parses runOnLabels — trims, drops empties, dedupes", () => {
-    const cfg = parseSigilixConfig(JSON.stringify({
-      costControls: { runOnLabels: ["sigilix:review", "  needs-review  ", "", "sigilix:review", "ok"] },
-    }))
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        costControls: {
+          runOnLabels: ["sigilix:review", "  needs-review  ", "", "sigilix:review", "ok"],
+        },
+      }),
+    )
     expect(cfg?.costControls?.runOnLabels?.sort()).toEqual(["needs-review", "ok", "sigilix:review"])
   })
 
@@ -351,13 +375,15 @@ describe("passesLabelGate", () => {
 // ARC-272 — docsReview config parsing
 describe("parseSigilixConfig — docsReview", () => {
   it("parses a fully-populated docsReview block", () => {
-    const cfg = parseSigilixConfig(JSON.stringify({
-      docsReview: {
-        enabled: true,
-        architectureGlobs: ["src/lib/**", "wrangler.toml"],
-        docPaths: ["README.md", "docs/**"],
-      },
-    }))
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        docsReview: {
+          enabled: true,
+          architectureGlobs: ["src/lib/**", "wrangler.toml"],
+          docPaths: ["README.md", "docs/**"],
+        },
+      }),
+    )
     expect(cfg?.docsReview?.enabled).toBe(true)
     expect(cfg?.docsReview?.architectureGlobs).toEqual(["src/lib/**", "wrangler.toml"])
     expect(cfg?.docsReview?.docPaths).toEqual(["README.md", "docs/**"])
@@ -371,23 +397,29 @@ describe("parseSigilixConfig — docsReview", () => {
   })
 
   it("trims + dedupes glob entries", () => {
-    const cfg = parseSigilixConfig(JSON.stringify({
-      docsReview: { architectureGlobs: ["src/**", "  src/**  ", "lib/**"] },
-    }))
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        docsReview: { architectureGlobs: ["src/**", "  src/**  ", "lib/**"] },
+      }),
+    )
     expect(cfg?.docsReview?.architectureGlobs?.sort()).toEqual(["lib/**", "src/**"])
   })
 
   it("drops non-string glob entries", () => {
-    const cfg = parseSigilixConfig(JSON.stringify({
-      docsReview: { architectureGlobs: ["src/**", 42, null, "lib/**"] },
-    }))
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        docsReview: { architectureGlobs: ["src/**", 42, null, "lib/**"] },
+      }),
+    )
     expect(cfg?.docsReview?.architectureGlobs?.sort()).toEqual(["lib/**", "src/**"])
   })
 
   it("drops docsReview entirely when nothing valid is present", () => {
-    const cfg = parseSigilixConfig(JSON.stringify({
-      docsReview: { architectureGlobs: [], docPaths: [] },
-    }))
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        docsReview: { architectureGlobs: [], docPaths: [] },
+      }),
+    )
     expect(cfg?.docsReview).toBeUndefined()
   })
 
@@ -417,25 +449,28 @@ describe("resolveCoverageConfig", () => {
   })
 
   it("opts in on source: github-actions-artifact with defaults", () => {
-    expect(
-      resolveCoverageConfig({ coverage: { source: "github-actions-artifact" } } as SigilixConfig),
-    ).toEqual({ source: "github-actions-artifact", artifactName: "coverage-lcov", entry: "lcov.info" })
+    expect(resolveCoverageConfig({ coverage: { source: "github-actions-artifact" } } as SigilixConfig)).toEqual({
+      source: "github-actions-artifact",
+      artifactName: "coverage-lcov",
+      entry: "lcov.info",
+    })
   })
 
   it("preserves partial artifactName / entry overrides", () => {
     expect(
       resolveCoverageConfig({
-        coverage: { source: "github-actions-artifact", artifactName: "cov", entry: "coverage.lcov" },
+        coverage: {
+          source: "github-actions-artifact",
+          artifactName: "cov",
+          entry: "coverage.lcov",
+        },
       } as SigilixConfig),
     ).toEqual({ source: "github-actions-artifact", artifactName: "cov", entry: "coverage.lcov" })
   })
 
   it("coerces an unrecognized source to off", () => {
-    expect(
-      resolveCoverageConfig({ coverage: { source: "weird" } } as unknown as SigilixConfig).source,
-    ).toBe("off")
+    expect(resolveCoverageConfig({ coverage: { source: "weird" } } as unknown as SigilixConfig).source).toBe("off")
   })
 })
 
 // ─── SIG-138 Phase 2: [GRAPH CONTEXT] prompt block ──────────────────────────
-

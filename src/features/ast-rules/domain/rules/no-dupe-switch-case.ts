@@ -58,7 +58,8 @@ export const noDupeSwitchCase: AstRule = {
       if (key === null) continue
       if (seen.has(key)) {
         return {
-          message: "Duplicate `case` label in this switch — the second clause is unreachable because an earlier case with the same value already matched. Remove the duplicate or correct its value.",
+          message:
+            "Duplicate `case` label in this switch — the second clause is unreachable because an earlier case with the same value already matched. Remove the duplicate or correct its value.",
           evidence: sliceEvidence(ctx.source, c),
           line: c.loc?.start?.line ?? node.loc?.start?.line ?? 1,
           endLine: c.loc?.end?.line ?? c.loc?.start?.line ?? 1,

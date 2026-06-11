@@ -259,18 +259,17 @@ export const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
 }
 export const SYNTHESIZER_MODEL = SYNTHESIZER_CONFIG.primary
 
-export const MAX_CALLS_PER_ENSEMBLE_RUN = (
-  maxAttempts(SPECIALIST_CONFIGS.logic)
-  + maxAttempts(SPECIALIST_CONFIGS.security)
-  + maxAttempts(SPECIALIST_CONFIGS.performance)
-  + maxAttempts(SPECIALIST_CONFIGS.tests)
+export const MAX_CALLS_PER_ENSEMBLE_RUN =
+  maxAttempts(SPECIALIST_CONFIGS.logic) +
+  maxAttempts(SPECIALIST_CONFIGS.security) +
+  maxAttempts(SPECIALIST_CONFIGS.performance) +
+  maxAttempts(SPECIALIST_CONFIGS.tests) +
   // ARC-278 (CR catch on PR #91): reserve TWO synth budgets, not
   // one. The retry path can fire a second `runSynthesizer` call
   // (itself primary + retry + cross-provider fallback). Without
   // this, a worst-case PR can spend up to N + maxAttempts(SYNTH)
   // extra and overshoot the daily cap.
-  + (2 * maxAttempts(SYNTHESIZER_CONFIG))
-)
+  2 * maxAttempts(SYNTHESIZER_CONFIG)
 
 // ─── specialist runner ────────────────────────────────────────────────
 
@@ -343,9 +342,7 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     // Keep the prod path explicit even though runWithRetryAndFallback also
     // defaults from config.perAttemptTimeoutMs. Shadow callers rely on the
     // shared default; prod keeps the override visible at the role boundary.
-    ...(config.perAttemptTimeoutMs !== undefined
-      ? { perAttemptTimeoutMs: config.perAttemptTimeoutMs }
-      : {}),
+    ...(config.perAttemptTimeoutMs !== undefined ? { perAttemptTimeoutMs: config.perAttemptTimeoutMs } : {}),
     // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
     // Bucket attempts into primary/retry/fallback by attemptIndex:
     //   1                  → primary
@@ -355,11 +352,8 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     //                         when fallback is null).
     onAttempt: (info) => {
       try {
-        const attemptKind = info.attemptIndex === 1
-          ? "primary"
-          : info.attemptIndex <= config.retries + 1
-            ? "retry"
-            : "fallback"
+        const attemptKind =
+          info.attemptIndex === 1 ? "primary" : info.attemptIndex <= config.retries + 1 ? "retry" : "fallback"
         const outcome = info.verdictOk
           ? "ok"
           : (info.failureReason ?? "").includes("timeout")
@@ -393,16 +387,18 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
         // specialist verdict into a rejected entry, dropping coverage.
         // Surface the failure as a structured event for CF Logs; don't
         // re-throw.
-        console.log(JSON.stringify({
-          event: "model-attempt-emit-error",
-          owner: args.perfCtx.owner,
-          repo: args.perfCtx.repo,
-          prNumber: args.perfCtx.prNumber,
-          headSha: args.perfCtx.headSha.slice(0, 7),
-          phase: "specialist",
-          role: args.role,
-          message: err instanceof Error ? err.message : String(err),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "model-attempt-emit-error",
+            owner: args.perfCtx.owner,
+            repo: args.perfCtx.repo,
+            prNumber: args.perfCtx.prNumber,
+            headSha: args.perfCtx.headSha.slice(0, 7),
+            phase: "specialist",
+            role: args.role,
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     },
   })
@@ -525,10 +521,17 @@ export async function runWithRetryAndFallback<T>(args: {
     // observes a settled `{verdict: null, failureReason: ...}` and
     // returns it cleanly — no extra throw/catch needed here.
     const outcome = await withComposedTimeout(
-      (perAttemptSignal) => attemptChat({
-        model: config.primary, apiKey, messages, signal: perAttemptSignal,
-        chatEnabled, format, parseAnswer, parseFailureLabel,
-      }),
+      (perAttemptSignal) =>
+        attemptChat({
+          model: config.primary,
+          apiKey,
+          messages,
+          signal: perAttemptSignal,
+          chatEnabled,
+          format,
+          parseAnswer,
+          parseFailureLabel,
+        }),
       perAttemptCap,
       signal,
     )
@@ -591,10 +594,17 @@ export async function runWithRetryAndFallback<T>(args: {
     // gets one shot — capped — so even if the cross-provider model is
     // also slow, the overall specialist run finishes within budget.
     const outcome = await withComposedTimeout(
-      (perAttemptSignal) => attemptChat({
-        model: fallbackModel, apiKey, messages, signal: perAttemptSignal,
-        chatEnabled, format, parseAnswer, parseFailureLabel,
-      }),
+      (perAttemptSignal) =>
+        attemptChat({
+          model: fallbackModel,
+          apiKey,
+          messages,
+          signal: perAttemptSignal,
+          chatEnabled,
+          format,
+          parseAnswer,
+          parseFailureLabel,
+        }),
       perAttemptCap,
       signal,
     )
@@ -630,7 +640,13 @@ export async function runWithRetryAndFallback<T>(args: {
     )
   }
 
-  return wrapFailure(lastFailureReason ?? "exhausted_no_fallback", lastFailureRaw, config.primary, attemptsUsed, startedAt)
+  return wrapFailure(
+    lastFailureReason ?? "exhausted_no_fallback",
+    lastFailureRaw,
+    config.primary,
+    attemptsUsed,
+    startedAt,
+  )
 }
 
 function wrapFailure<T>(
@@ -841,11 +857,8 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
     // type definition in `ensemble-perf-telemetry.ts`).
     onAttempt: (info) => {
       try {
-        const attemptKind = info.attemptIndex === 1
-          ? "primary"
-          : info.attemptIndex <= effectiveConfig.retries + 1
-            ? "retry"
-            : "fallback"
+        const attemptKind =
+          info.attemptIndex === 1 ? "primary" : info.attemptIndex <= effectiveConfig.retries + 1 ? "retry" : "fallback"
         const outcomeLabel = info.verdictOk
           ? "ok"
           : (info.failureReason ?? "").includes("timeout")
@@ -879,16 +892,18 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
         // synth_timeout skip-notice fires for a valid synth output).
         // Surface the failure as a structured event for CF Logs; don't
         // re-throw.
-        console.log(JSON.stringify({
-          event: "model-attempt-emit-error",
-          owner: args.perfCtx.owner,
-          repo: args.perfCtx.repo,
-          prNumber: args.perfCtx.prNumber,
-          headSha: args.perfCtx.headSha.slice(0, 7),
-          phase: "synth",
-          role: "synth",
-          message: err instanceof Error ? err.message : String(err),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "model-attempt-emit-error",
+            owner: args.perfCtx.owner,
+            repo: args.perfCtx.repo,
+            prNumber: args.perfCtx.prNumber,
+            headSha: args.perfCtx.headSha.slice(0, 7),
+            phase: "synth",
+            role: "synth",
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     },
   })

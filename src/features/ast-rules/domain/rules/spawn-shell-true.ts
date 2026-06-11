@@ -9,9 +9,7 @@ import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/
 import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
-const TARGET_FNS: ReadonlySet<string> = new Set([
-  "spawn", "spawnSync", "execFile", "execFileSync",
-])
+const TARGET_FNS: ReadonlySet<string> = new Set(["spawn", "spawnSync", "execFile", "execFileSync"])
 
 function sliceEvidence(source: string, node: AstNode): string {
   if (typeof node?.start !== "number" || typeof node?.end !== "number") return ""
@@ -42,8 +40,14 @@ function hasShellTrueLiteral(args: AstNode[]): boolean {
       // Same `computed` guard — `{ [shell]: true }` where `shell` is a
       // variable shouldn't match the literal `shell:true` pattern.
       const keyName = prop.computed
-        ? (k?.type === "Literal" && typeof k.value === "string" ? k.value : null)
-        : (k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null))
+        ? k?.type === "Literal" && typeof k.value === "string"
+          ? k.value
+          : null
+        : k?.type === "Identifier"
+          ? k.name
+          : k?.type === "Literal"
+            ? k.value
+            : null
       if (keyName !== "shell") continue
       if (v?.type === "Literal" && v.value === true) return true
     }

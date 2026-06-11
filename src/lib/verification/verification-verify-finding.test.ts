@@ -30,7 +30,11 @@ const DIFF = `diff --git a/src/db.ts b/src/db.ts
 
 const index = buildAddedLineTextByLine(DIFF)
 const f = (over: Partial<{ path: string; line: number; headline: string; body: string }>) => ({
-  path: "src/db.ts", line: 10, headline: "", body: "", ...over,
+  path: "src/db.ts",
+  line: 10,
+  headline: "",
+  body: "",
+  ...over,
 })
 
 describe("buildAddedLineTextByLine (the parser prod feeds verifyFinding)", () => {
@@ -44,7 +48,10 @@ describe("buildAddedLineTextByLine (the parser prod feeds verifyFinding)", () =>
 
 describe("deriveTokens", () => {
   it("extracts backticked code tokens from headline + body", () => {
-    expect(deriveTokens({ headline: "SQL injection via `userId`", body: "see `db.query`" })).toEqual(["userId", "db.query"])
+    expect(deriveTokens({ headline: "SQL injection via `userId`", body: "see `db.query`" })).toEqual([
+      "userId",
+      "db.query",
+    ])
   })
   it("drops prose-in-backticks and bare keywords (no phantom confirm token)", () => {
     expect(deriveTokens({ headline: "this is `really bad` and `if`", body: "" })).toEqual([])
@@ -120,18 +127,59 @@ describe("findingKey", () => {
 
 describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", () => {
   // Reuse the DIFF index: line 10 holds `userId`, line 11 does not.
-  const fd = (over: Partial<{ path: string; line: number; startLine: number; headline: string; body: string; score: number; category: string }>) => ({
-    path: "src/db.ts", line: 11, headline: "", body: "", score: 4, category: "logic", ...over,
+  const fd = (
+    over: Partial<{
+      path: string
+      line: number
+      startLine: number
+      headline: string
+      body: string
+      score: number
+      category: string
+    }>,
+  ) => ({
+    path: "src/db.ts",
+    line: 11,
+    headline: "",
+    body: "",
+    score: 4,
+    category: "logic",
+    ...over,
   })
 
   it("selects ONLY score>=4 logic/security findings whose cited token is REFUTED", () => {
-    const refutedLogic = fd({ line: 11, headline: "stale guard `userId`", category: "logic", score: 4 }) // userId not on line 11 → refuted
-    const refutedSec = fd({ line: 11, headline: "leak via `userId`", category: "security", score: 5 }) // refuted, security
-    const confirmed = fd({ line: 10, headline: "SQLi via `userId`", category: "security", score: 5 }) // userId IS on line 10 → confirmed
+    const refutedLogic = fd({
+      line: 11,
+      headline: "stale guard `userId`",
+      category: "logic",
+      score: 4,
+    }) // userId not on line 11 → refuted
+    const refutedSec = fd({
+      line: 11,
+      headline: "leak via `userId`",
+      category: "security",
+      score: 5,
+    }) // refuted, security
+    const confirmed = fd({
+      line: 10,
+      headline: "SQLi via `userId`",
+      category: "security",
+      score: 5,
+    }) // userId IS on line 10 → confirmed
     const lowScore = fd({ line: 11, headline: "nit `userId`", category: "logic", score: 3 }) // refuted but score<4
     const wrongCat = fd({ line: 11, headline: "slow `userId`", category: "performance", score: 4 }) // refuted but not logic/security
-    const inconclusive = fd({ line: 99, headline: "off-diff `userId`", category: "logic", score: 4 }) // line not added → inconclusive
-    const noCheck = fd({ line: 11, headline: "no backticked token here", category: "security", score: 4 }) // no token → no-check
+    const inconclusive = fd({
+      line: 99,
+      headline: "off-diff `userId`",
+      category: "logic",
+      score: 4,
+    }) // line not added → inconclusive
+    const noCheck = fd({
+      line: 11,
+      headline: "no backticked token here",
+      category: "security",
+      score: 4,
+    }) // no token → no-check
 
     const out = selectRefutedInlineDemotions(
       [refutedLogic, refutedSec, confirmed, lowScore, wrongCat, inconclusive, noCheck],
@@ -145,18 +193,34 @@ describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", ()
 
   it("returns [] when nothing is refuted-eligible (empty, all-confirmed, all-ineligible)", () => {
     expect(selectRefutedInlineDemotions([], index)).toEqual([])
-    expect(selectRefutedInlineDemotions([fd({ line: 10, headline: "`userId`", category: "security", score: 4 })], index)).toEqual([]) // confirmed
-    expect(selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "tests", score: 5 })], index)).toEqual([]) // wrong category
+    expect(
+      selectRefutedInlineDemotions([fd({ line: 10, headline: "`userId`", category: "security", score: 4 })], index),
+    ).toEqual([]) // confirmed
+    expect(
+      selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "tests", score: 5 })], index),
+    ).toEqual([]) // wrong category
   })
 
   it("FAILS OPEN on a RANGE finding — never demotes a multi-line finding (Codex #257)", () => {
     // line 11 doesn't contain `userId` → verifyFinding(line 11) is REFUTED, but
     // verifyFinding only checks the END line; the token may be on an earlier line
     // of [startLine, line]. A range finding must NOT be demoted.
-    const range = fd({ startLine: 10, line: 11, headline: "leak via `userId`", category: "security", score: 5 })
+    const range = fd({
+      startLine: 10,
+      line: 11,
+      headline: "leak via `userId`",
+      category: "security",
+      score: 5,
+    })
     expect(selectRefutedInlineDemotions([range], index)).toEqual([])
     // A single-line finding (startLine === line, or undefined) IS still eligible.
-    const single = fd({ startLine: 11, line: 11, headline: "leak via `userId`", category: "security", score: 5 })
+    const single = fd({
+      startLine: 11,
+      line: 11,
+      headline: "leak via `userId`",
+      category: "security",
+      score: 5,
+    })
     expect(selectRefutedInlineDemotions([single], index)).toEqual([single])
   })
 })
@@ -167,7 +231,9 @@ describe("applyRefutedDemotion (SIG-285 PR 4 — marker<->finding alignment)", (
   // lockstep attaches the WRONG finding's dismissal marker to later inline
   // comments, corrupting the cross-PR review-memory corpus (the P1 this fixes).
   it("keeps markers aligned to the kept findings after a MID-list demote", () => {
-    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    const A = { id: "A" },
+      B = { id: "B" },
+      C = { id: "C" }
     const out = applyRefutedDemotion([A, B, C], ["mA", "mB", "mC"], new Set([B]))
     expect(out.keptFindings).toEqual([A, C])
     expect(out.keptMarkers).toEqual(["mA", "mC"]) // NOT ["mA","mB"] — the bug
@@ -177,20 +243,33 @@ describe("applyRefutedDemotion (SIG-285 PR 4 — marker<->finding alignment)", (
   })
 
   it("demoting the FIRST finding shifts the kept markers correctly", () => {
-    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    const A = { id: "A" },
+      B = { id: "B" },
+      C = { id: "C" }
     const out = applyRefutedDemotion([A, B, C], ["mA", "mB", "mC"], new Set([A]))
     expect(out.keptFindings).toEqual([B, C])
     expect(out.keptMarkers).toEqual(["mB", "mC"])
   })
 
   it("no demotions leaves both arrays unchanged; all-demoted empties them", () => {
-    const A = { id: "A" }, B = { id: "B" }
-    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set())).toEqual({ keptFindings: [A, B], keptMarkers: ["mA", "mB"], demoted: [] })
-    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set([A, B]))).toEqual({ keptFindings: [], keptMarkers: [], demoted: [A, B] })
+    const A = { id: "A" },
+      B = { id: "B" }
+    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set())).toEqual({
+      keptFindings: [A, B],
+      keptMarkers: ["mA", "mB"],
+      demoted: [],
+    })
+    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set([A, B]))).toEqual({
+      keptFindings: [],
+      keptMarkers: [],
+      demoted: [A, B],
+    })
   })
 
   it("tolerates a sparse (null) marker without misaligning the rest", () => {
-    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    const A = { id: "A" },
+      B = { id: "B" },
+      C = { id: "C" }
     expect(applyRefutedDemotion([A, B, C], ["mA", null, "mC"], new Set([A])).keptMarkers).toEqual([null, "mC"])
   })
 })
@@ -227,8 +306,24 @@ describe("planReanchor (SIG-285 inline-first — the re-anchor decision)", () =>
 
 describe("applyReanchors (SIG-285 enforce — the in-place mutation)", () => {
   const always = () => true // substantive
-  const fd = (over: Partial<{ path: string; line: number; startLine: number; headline: string; body: string; score: number; category: string }>) => ({
-    path: "src/db.ts", line: 11, headline: "", body: "", score: 5, category: "security", ...over,
+  const fd = (
+    over: Partial<{
+      path: string
+      line: number
+      startLine: number
+      headline: string
+      body: string
+      score: number
+      category: string
+    }>,
+  ) => ({
+    path: "src/db.ts",
+    line: 11,
+    headline: "",
+    body: "",
+    score: 5,
+    category: "security",
+    ...over,
   })
 
   it("moves a refuted finding to the correct line in BOTH the finding AND the marker source (lockstep)", () => {
@@ -277,7 +372,7 @@ describe("applyReanchors (SIG-285 enforce — the in-place mutation)", () => {
 })
 
 describe("readVerificationMode", () => {
-  const mk = (v?: string) => ({ OPENCLAW_VERIFICATION_MODE: v } as unknown as Env)
+  const mk = (v?: string) => ({ OPENCLAW_VERIFICATION_MODE: v }) as unknown as Env
   it("defaults to off (unset / unknown / blank)", () => {
     expect(readVerificationMode(mk(undefined))).toBe("off")
     expect(readVerificationMode(mk("nonsense"))).toBe("off")
@@ -290,7 +385,7 @@ describe("readVerificationMode", () => {
 })
 
 describe("readReanchorEnabled (SIG-285 re-anchor flip)", () => {
-  const mk = (v?: string) => ({ OPENCLAW_VERIFICATION_REANCHOR: v } as unknown as Env)
+  const mk = (v?: string) => ({ OPENCLAW_VERIFICATION_REANCHOR: v }) as unknown as Env
   it("defaults to OFF (unset / blank / garbage / not 'on')", () => {
     expect(readReanchorEnabled(mk(undefined))).toBe(false)
     expect(readReanchorEnabled(mk(""))).toBe(false)

@@ -69,10 +69,13 @@ describe("normalizeFindings", () => {
   })
 
   it("normalizes Greptile inline comments with stable g* refs", () => {
-    const out = normalizeFindings([
-      comment({ id: 9, user: { login: GREPTILE }, body: "Possible issue: auth bypass" }),
-      comment({ id: 7, user: { login: "custom-greptile[bot]" }, body: "Possible issue: race" }),
-    ], { greptileLogins: [GREPTILE, "custom-greptile[bot]"] })
+    const out = normalizeFindings(
+      [
+        comment({ id: 9, user: { login: GREPTILE }, body: "Possible issue: auth bypass" }),
+        comment({ id: 7, user: { login: "custom-greptile[bot]" }, body: "Possible issue: race" }),
+      ],
+      { greptileLogins: [GREPTILE, "custom-greptile[bot]"] },
+    )
     expect(out.greptile.map((f) => [f.ref, f.commentId, f.tool])).toEqual([
       ["g1", 7, "greptile"],
       ["g2", 9, "greptile"],
@@ -82,8 +85,17 @@ describe("normalizeFindings", () => {
   it("excludes thread replies (in_reply_to_id set) so CR replies don't inflate counts", () => {
     const out = normalizeFindings([
       comment({ id: 1, user: { login: CR }, body: "Potential issue: real finding" }),
-      comment({ id: 2, user: { login: CR }, body: "@someone exactly right — thanks", in_reply_to_id: 1 }),
-      comment({ id: 3, body: "<!-- sigilix:pr-review-finding -->\n**logic:** x", in_reply_to_id: 1 }),
+      comment({
+        id: 2,
+        user: { login: CR },
+        body: "@someone exactly right — thanks",
+        in_reply_to_id: 1,
+      }),
+      comment({
+        id: 3,
+        body: "<!-- sigilix:pr-review-finding -->\n**logic:** x",
+        in_reply_to_id: 1,
+      }),
     ])
     expect(out.coderabbit.map((f) => f.commentId)).toEqual([1]) // reply id=2 dropped
     expect(out.sigilix).toHaveLength(0) // reply id=3 dropped even with the marker
@@ -163,10 +175,7 @@ describe("greptileLoginsFromEnv", () => {
 
   it("warns before falling back when the env var contains only whitespace", () => {
     const warnings: string[] = []
-    const out = greptileLoginsFromEnv(
-      { COMPARE_REVIEWERS_GREPTILE_LOGINS: "   " },
-      (message) => warnings.push(message),
-    )
+    const out = greptileLoginsFromEnv({ COMPARE_REVIEWERS_GREPTILE_LOGINS: "   " }, (message) => warnings.push(message))
 
     expect(out).toEqual(DEFAULT_GREPTILE_BOTS)
     expect(warnings).toEqual([
@@ -181,14 +190,47 @@ const twoFindingFile = (): ComparisonFile =>
   emptyFile({
     findings: {
       sigilix: [
-        { ref: "s1", tool: "sigilix", commentId: 10, path: "src/a.ts", line: 5, excerpt: "null deref", url: "u1", botCategory: "logic" },
+        {
+          ref: "s1",
+          tool: "sigilix",
+          commentId: 10,
+          path: "src/a.ts",
+          line: 5,
+          excerpt: "null deref",
+          url: "u1",
+          botCategory: "logic",
+        },
       ],
       coderabbit: [
-        { ref: "c1", tool: "coderabbit", commentId: 11, path: "src/a.ts", line: 5, excerpt: "deref of null", url: "u2" },
-        { ref: "c2", tool: "coderabbit", commentId: 12, path: "README.md", line: null, excerpt: "typo", url: "u3" },
+        {
+          ref: "c1",
+          tool: "coderabbit",
+          commentId: 11,
+          path: "src/a.ts",
+          line: 5,
+          excerpt: "deref of null",
+          url: "u2",
+        },
+        {
+          ref: "c2",
+          tool: "coderabbit",
+          commentId: 12,
+          path: "README.md",
+          line: null,
+          excerpt: "typo",
+          url: "u3",
+        },
       ],
       greptile: [
-        { ref: "g1", tool: "greptile", commentId: 13, path: "src/a.ts", line: 6, excerpt: "same deref", url: "u4" },
+        {
+          ref: "g1",
+          tool: "greptile",
+          commentId: 13,
+          path: "src/a.ts",
+          line: 6,
+          excerpt: "same deref",
+          url: "u4",
+        },
       ],
     },
   })
@@ -230,9 +272,21 @@ describe("parseWorksheet", () => {
     expect(errors).toEqual([])
     expect(notes.some((n) => n.includes("g1"))).toBe(true)
     expect(items).toEqual<LabeledItem[]>([
-      { id: 1, findings: ["s1", "c1"], outcome: "real_bug", category: "logic", note: "both caught it" },
+      {
+        id: 1,
+        findings: ["s1", "c1"],
+        outcome: "real_bug",
+        category: "logic",
+        note: "both caught it",
+      },
       { id: 2, findings: ["c2"], outcome: "noise", category: "style", note: "" },
-      { id: 3, findings: [], outcome: "real_bug", category: "security", note: "missed by every tool" },
+      {
+        id: 3,
+        findings: [],
+        outcome: "real_bug",
+        category: "security",
+        note: "missed by every tool",
+      },
     ])
   })
 
@@ -282,10 +336,7 @@ describe("parseWorksheet", () => {
   })
 
   it("rejects an unknown outcome and an unknown category", () => {
-    const md = fillWorksheet(buildWorksheet(file), [
-      "| s1 | maybe_real | logic | |",
-      "| c1 | real_bug | databases | |",
-    ])
+    const md = fillWorksheet(buildWorksheet(file), ["| s1 | maybe_real | logic | |", "| c1 | real_bug | databases | |"])
     const { items, errors } = parseWorksheet(md, file)
     expect(errors.some((e) => e.includes('invalid outcome "maybe_real"'))).toBe(true)
     expect(errors.some((e) => e.includes('invalid category "databases"'))).toBe(true)
@@ -299,10 +350,7 @@ describe("parseWorksheet", () => {
   })
 
   it("rejects the same finding labeled in two rows", () => {
-    const md = fillWorksheet(buildWorksheet(file), [
-      "| s1 | real_bug | logic | |",
-      "| s1 | noise | logic | |",
-    ])
+    const md = fillWorksheet(buildWorksheet(file), ["| s1 | real_bug | logic | |", "| s1 | noise | logic | |"])
     const { errors } = parseWorksheet(md, file)
     expect(errors.some((e) => e.includes('"s1" already labeled in row 1'))).toBe(true)
   })
@@ -320,9 +368,7 @@ describe("parseWorksheet", () => {
   })
 
   it("preserves a literal pipe in the note cell (no truncation at the first |)", () => {
-    const md = fillWorksheet(buildWorksheet(file), [
-      "| s1 | real_bug | logic | use a || b here |",
-    ])
+    const md = fillWorksheet(buildWorksheet(file), ["| s1 | real_bug | logic | use a || b here |"])
     const { items, errors } = parseWorksheet(md, file)
     expect(errors).toEqual([])
     expect(items[0]!.note).toBe("use a || b here")
@@ -385,7 +431,17 @@ describe("mergeComparison", () => {
       prUrl: "https://github.com/o/r/pull/1",
       collectedAt: "2026-06-06T00:00:00.000Z",
       findings: {
-        sigilix: [{ ref: "s1", tool: "sigilix", commentId: 9, path: null, line: null, excerpt: "x", url: "u" }],
+        sigilix: [
+          {
+            ref: "s1",
+            tool: "sigilix",
+            commentId: 9,
+            path: null,
+            line: null,
+            excerpt: "x",
+            url: "u",
+          },
+        ],
         coderabbit: [],
         greptile: [],
       },
@@ -395,10 +451,16 @@ describe("mergeComparison", () => {
     expect(merged.findings.sigilix).toHaveLength(1)
   })
   it("starts items empty with no prior file", () => {
-    expect(mergeComparison(null, {
-      owner: "o", repo: "r", pr: 1, prUrl: "u", collectedAt: "t",
-      findings: { sigilix: [], coderabbit: [], greptile: [] },
-    }).items).toEqual([])
+    expect(
+      mergeComparison(null, {
+        owner: "o",
+        repo: "r",
+        pr: 1,
+        prUrl: "u",
+        collectedAt: "t",
+        findings: { sigilix: [], coderabbit: [], greptile: [] },
+      }).items,
+    ).toEqual([])
   })
 })
 
@@ -495,7 +557,13 @@ describe("formatSummaryMarkdown", () => {
     const r = summarize([
       emptyFile({
         items: [
-          { id: 1, findings: [], outcome: "real_bug", category: "logic", note: "seeded bug missed by all" },
+          {
+            id: 1,
+            findings: [],
+            outcome: "real_bug",
+            category: "logic",
+            note: "seeded bug missed by all",
+          },
         ],
       }),
     ])
@@ -510,10 +578,33 @@ describe("formatSummaryMarkdown", () => {
 describe("end-to-end pipeline", () => {
   it("flows raw comments through normalize → worksheet → parse → summarize", () => {
     const raw: RawComment[] = [
-      comment({ id: 100, path: "src/auth.ts", line: 22, body: "<!-- sigilix:pr-review-finding -->\n**security:** token logged in plaintext\n<!-- sigilix:category:security -->" }),
-      comment({ id: 101, user: { login: CR }, path: "src/auth.ts", line: 22, body: "Potential issue: secret written to logs" }),
-      comment({ id: 102, user: { login: CR }, path: "README.md", line: 1, body: "Nitpick: trailing whitespace" }),
-      comment({ id: 103, user: { login: GREPTILE }, path: "src/auth.ts", line: 22, body: "Secret appears in log output" }),
+      comment({
+        id: 100,
+        path: "src/auth.ts",
+        line: 22,
+        body: "<!-- sigilix:pr-review-finding -->\n**security:** token logged in plaintext\n<!-- sigilix:category:security -->",
+      }),
+      comment({
+        id: 101,
+        user: { login: CR },
+        path: "src/auth.ts",
+        line: 22,
+        body: "Potential issue: secret written to logs",
+      }),
+      comment({
+        id: 102,
+        user: { login: CR },
+        path: "README.md",
+        line: 1,
+        body: "Nitpick: trailing whitespace",
+      }),
+      comment({
+        id: 103,
+        user: { login: GREPTILE },
+        path: "src/auth.ts",
+        line: 22,
+        body: "Secret appears in log output",
+      }),
       comment({ id: 104, user: { login: "human" }, body: "looks good" }),
     ]
     const file = emptyFile({ findings: normalizeFindings(raw) })

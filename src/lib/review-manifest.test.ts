@@ -34,8 +34,7 @@ function fakeKV(initial: Record<string, string> = {}) {
   return { stub, store }
 }
 
-const fakeEnv = (kv: ReturnType<typeof fakeKV>["stub"]): Env =>
-  ({ OPENCLAW_STATE: kv } as unknown as Env)
+const fakeEnv = (kv: ReturnType<typeof fakeKV>["stub"]): Env => ({ OPENCLAW_STATE: kv }) as unknown as Env
 
 const validManifest = (): ReviewManifestV1 => ({
   v: 1,
@@ -67,7 +66,10 @@ describe("readReviewManifest", () => {
   })
 
   it("returns the parsed v1 record (target.kind = 'issue-comment')", async () => {
-    const m: ReviewManifestV1 = { ...validManifest(), target: { kind: "issue-comment", commentId: 9999 } }
+    const m: ReviewManifestV1 = {
+      ...validManifest(),
+      target: { kind: "issue-comment", commentId: 9999 },
+    }
     const { stub } = fakeKV({
       "pr-review-manifest:owner/repo#42": JSON.stringify(m),
     })

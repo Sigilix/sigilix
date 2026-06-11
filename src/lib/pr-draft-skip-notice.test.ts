@@ -13,17 +13,19 @@ function makeEnv(): { env: Env; kv: Map<string, string> } {
   const env = {
     OPENCLAW_STATE: {
       get: async (key: string) => kv.get(key) ?? null,
-      put: async (key: string, value: string) => { kv.set(key, value) },
-      delete: async (key: string) => { kv.delete(key) },
+      put: async (key: string, value: string) => {
+        kv.set(key, value)
+      },
+      delete: async (key: string) => {
+        kv.delete(key)
+      },
     } as unknown as KVNamespace,
   } as unknown as Env
   return { env, kv }
 }
 
 function makeClient(comments: Array<{ id: number; body: string }> = []) {
-  const listIssueComments = vi.fn(async () =>
-    comments.map((c) => ({ ...c, user: { login: "sigilix[bot]" } })),
-  )
+  const listIssueComments = vi.fn(async () => comments.map((c) => ({ ...c, user: { login: "sigilix[bot]" } })))
   const getIssueComment = vi.fn(async (_owner: string, _repo: string, commentId: number) => {
     const existing = comments.find((c) => c.id === commentId)
     return existing ? { body: existing.body } : null
@@ -107,9 +109,7 @@ describe("postDraftPrSkipNotice", () => {
   it("updates the existing marked comment instead of spamming a new one", async () => {
     const { env } = makeEnv()
     const oldBody = renderDraftSkipNotice("b".repeat(40))
-    const { client, comments, createIssueComment, updateIssueComment } = makeClient([
-      { id: 42, body: oldBody },
-    ])
+    const { client, comments, createIssueComment, updateIssueComment } = makeClient([{ id: 42, body: oldBody }])
 
     const out = await postDraftPrSkipNotice({ env, client, ...base })
 

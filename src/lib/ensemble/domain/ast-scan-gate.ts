@@ -18,9 +18,7 @@
  * (a regression that drops `post` findings or mis-strips is caught). Mirrors the
  * inline IDOR / weak-random / open-redirect / SSRF gates.
  */
-export function applyAstScanGate<
-  F extends { ruleId: string; astFindingId: string; path: string; line: number },
->(
+export function applyAstScanGate<F extends { ruleId: string; astFindingId: string; path: string; line: number }>(
   astResult: { findings: F[]; perFinding: { delete(key: string): void } },
   ruleId: string,
   mode: string,

@@ -21,9 +21,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
     body: "Add a sibling test for the new exported behavior.",
     evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
   }
-  const reviewable: ReviewableMap = new Map([
-    ["src/lib/new-source.ts", [{ line: 7, side: "RIGHT" }]],
-  ])
+  const reviewable: ReviewableMap = new Map([["src/lib/new-source.ts", [{ line: 7, side: "RIGHT" }]]])
   const addedLineTextByLine = new Map<string, Map<number, string>>([
     ["src/lib/new-source.ts", new Map([[7, "export function newSource() { return run() }"]])],
   ])
@@ -55,12 +53,14 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
         summary: "Removed coverage.",
         confidence: 5,
         confidenceReason: "Concrete.",
-        findings: [{
-          ...testingFinding,
-          score: 4,
-          headline: "test coverage was removed",
-          evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
-        }],
+        findings: [
+          {
+            ...testingFinding,
+            score: 4,
+            headline: "test coverage was removed",
+            evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
+          },
+        ],
       },
       prAuthor: null,
       headSha: "abc",
@@ -74,9 +74,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
   })
 
   it("drops a testing finding instead of body-routing it when no substantive anchor exists", () => {
-    const nonSubstantiveLines = new Map<string, Map<number, string>>([
-      ["src/lib/new-source.ts", new Map([[7, "}"]])],
-    ])
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([["src/lib/new-source.ts", new Map([[7, "}"]])]])
     const out = buildReviewSubmissionWithMetadata({
       verdict: {
         summary: "No anchor.",
@@ -97,9 +95,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
   })
 
   it("body-routes explicit removed-test coverage even when no substantive source anchor exists", () => {
-    const nonSubstantiveLines = new Map<string, Map<number, string>>([
-      ["src/lib/new-source.ts", new Map([[7, "}"]])],
-    ])
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([["src/lib/new-source.ts", new Map([[7, "}"]])]])
     const removedCoverage = {
       ...testingFinding,
       score: 4,
@@ -127,9 +123,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
   })
 
   it("body-routes non-missing-sibling testing evidence when no substantive anchor exists", () => {
-    const nonSubstantiveLines = new Map<string, Map<number, string>>([
-      ["src/lib/new-source.ts", new Map([[7, "}"]])],
-    ])
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([["src/lib/new-source.ts", new Map([[7, "}"]])]])
     const coverageGapFinding = {
       ...testingFinding,
       headline: "branch coverage regressed",
@@ -151,9 +145,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
 
     expect(out.submission.event).toBe("COMMENT")
     expect(out.submission.comments ?? []).toHaveLength(0)
-    expect(out.bodyOnlyFindings).toEqual([
-      expect.objectContaining({ ...coverageGapFinding, score: 2 }),
-    ])
+    expect(out.bodyOnlyFindings).toEqual([expect.objectContaining({ ...coverageGapFinding, score: 2 })])
     expect(out.submission.body).toContain("branch coverage regressed")
   })
 
@@ -216,12 +208,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
   }
 
   const addedLineTextByLine = new Map<string, Map<number, string>>([
-    [
-      "src/lib/github-mention.ts",
-      new Map<number, string>([
-        [436, "expirationTtl: MENTION_DEDUPE_TTL,"],
-      ]),
-    ],
+    ["src/lib/github-mention.ts", new Map<number, string>([[436, "expirationTtl: MENTION_DEDUPE_TTL,"]])],
   ])
 
   it("routes comment-scoped findings to the review body even when the nearest changed line is substantive", () => {
@@ -333,7 +320,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
     expect(out.body).toContain("| Severity |")
-    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should stay localized |")
+    expect(out.body).toContain(
+      "| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should stay localized |",
+    )
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -365,7 +354,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
     expect(out.body).toContain("| Severity |")
-    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should be removed |")
+    expect(out.body).toContain(
+      "| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should be removed |",
+    )
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -432,7 +423,11 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     findings,
   })
   const submit = (findings: PrReviewFinding[], confidence = 4) =>
-    buildReviewSubmission({ verdict: mkVerdict(findings, confidence), prAuthor: "a", headSha: "abc" })
+    buildReviewSubmission({
+      verdict: mkVerdict(findings, confidence),
+      prAuthor: "a",
+      headSha: "abc",
+    })
 
   it("Rec 5: demotes a sub-4 line finding at confidence <= 2 with no fix to the body", () => {
     const out = submit([lf({ score: 3, confidence: 2 })])
@@ -456,16 +451,10 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
   })
 
   it("SIG-103: strips identical replacement before routing so bogus fixes do not keep weak findings inline", () => {
-    const reviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [{ line: 42, side: "RIGHT" }]],
-    ])
-    const addedLineTextByLine = new Map([
-      ["src/lib/foo.ts", new Map([[42, "const x = a ?? b"]])],
-    ])
+    const reviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 42, side: "RIGHT" }]]])
+    const addedLineTextByLine = new Map([["src/lib/foo.ts", new Map([[42, "const x = a ?? b"]])]])
     const out = buildReviewSubmissionWithMetadata({
-      verdict: mkVerdict([
-        lf({ score: 3, confidence: 1, suggestedReplacement: "const x = a ?? b" }),
-      ]),
+      verdict: mkVerdict([lf({ score: 3, confidence: 1, suggestedReplacement: "const x = a ?? b" })]),
       prAuthor: "a",
       headSha: "abc",
       reviewable,
@@ -506,9 +495,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
   })
 
   it("Rec 3: caps inline comments at 15 and demotes the overflow to the body (never dropped)", () => {
-    const findings = Array.from({ length: 18 }, (_, i) =>
-      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
-    )
+    const findings = Array.from({ length: 18 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
     const out = buildReviewSubmissionWithMetadata({
       verdict: mkVerdict(findings),
       prAuthor: "a",
@@ -520,9 +507,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
   })
 
   it("Rec 3: prioritizes higher-severity findings to keep inline; the lowest-severity blocker overflows", () => {
-    const high = Array.from({ length: 15 }, (_, i) =>
-      lf({ score: 5, line: 100 + i, headline: `high-${i}` }),
-    )
+    const high = Array.from({ length: 15 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `high-${i}` }))
     const low = lf({ score: 4, line: 999, headline: "low-priority blocker" })
     const out = buildReviewSubmissionWithMetadata({
       verdict: mkVerdict([low, ...high]),
@@ -534,9 +519,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
   })
 
   it("Rec 3: the cap keeps inlineOriginalIndex aligned so each kept comment carries ITS SIG-247 marker", () => {
-    const findings = Array.from({ length: 16 }, (_, i) =>
-      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
-    )
+    const findings = Array.from({ length: 16 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
     const markers = findings.map(
       (_, i) =>
         `<!-- sigilix:fid:${String(i).padStart(16, "0")}:cat:logic:sev:error:path:${String(i).padStart(12, "0")} -->`,
@@ -558,9 +541,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     // 16 blockers — one overflows to the body, but inlineFindings is still
     // non-empty so the gate blocks; even an all-overflow case would block
     // via the body-only score>=4 floor (covered in PR A).
-    const findings = Array.from({ length: 16 }, (_, i) =>
-      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
-    )
+    const findings = Array.from({ length: 16 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
     const out = submit(findings)
     expect(out.event).toBe("REQUEST_CHANGES")
   })
@@ -603,9 +584,7 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
 
   it("the Fix Plan caption appears only when the table contains body-only (non-inline) blockers", () => {
     const withBodyOnlyBlocker = submit([lf({ scope: "file", score: 5 })])
-    expect(withBodyOnlyBlocker.body).toContain(
-      "Rows without a line number are file-level or PR-level",
-    )
+    expect(withBodyOnlyBlocker.body).toContain("Rows without a line number are file-level or PR-level")
     const inlineOnly = submit([lf({ score: 5, line: 42 })])
     expect(inlineOnly.body).toContain("| Severity | Location | Issue |")
     expect(inlineOnly.body).not.toContain("Rows without a line number are file-level or PR-level")
@@ -674,10 +653,7 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     headline: "PR-wide policy gap",
   }
 
-  const buildBody = (
-    f: PrReviewFinding,
-    ctx?: { owner: string; repo: string; headSha: string },
-  ): string => {
+  const buildBody = (f: PrReviewFinding, ctx?: { owner: string; repo: string; headSha: string }): string => {
     const args = {
       verdict: {
         summary: "One body-only finding.",
@@ -694,9 +670,7 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
 
   it("emits a clickable [path:line](github-blob-url) link when linkContext is threaded (line scope)", () => {
     const body = buildBody(lineFinding, linkContext)
-    expect(body).toContain(
-      `[src/lib/foo.ts:42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L42)`,
-    )
+    expect(body).toContain(`[src/lib/foo.ts:42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L42)`)
     // No backticked fallback for the anchor itself when linkContext is present.
     expect(body).not.toContain("`src/lib/foo.ts:42`")
   })
@@ -710,17 +684,13 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
 
   it("renders file-scope as a bare-path link (no `:line`, no `#L`)", () => {
     const body = buildBody(fileFinding, linkContext)
-    expect(body).toContain(
-      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
-    )
+    expect(body).toContain(`[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`)
     expect(body).not.toContain(`/src/lib/foo.ts#L`)
   })
 
   it("renders pr-scope as a bare-path link (same as file scope)", () => {
     const body = buildBody(prFinding, linkContext)
-    expect(body).toContain(
-      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
-    )
+    expect(body).toContain(`[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`)
     expect(body).not.toContain(`/src/lib/foo.ts#L`)
   })
 
@@ -777,10 +747,7 @@ describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)
   const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
   const linkContext = { owner: "octo", repo: "demo", headSha } as const
 
-  const buildBody = (
-    f: PrReviewFinding,
-    ctx?: { owner: string; repo: string; headSha: string },
-  ): string => {
+  const buildBody = (f: PrReviewFinding, ctx?: { owner: string; repo: string; headSha: string }): string => {
     const args = {
       verdict: {
         summary: "One body-only finding.",
@@ -806,9 +773,7 @@ describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)
       body: "Reviewer note.",
     }
     const body = buildBody(f, linkContext)
-    expect(body).toContain(
-      `(https://github.com/octo/demo/blob/${headSha}/src/with%20space.ts#L7)`,
-    )
+    expect(body).toContain(`(https://github.com/octo/demo/blob/${headSha}/src/with%20space.ts#L7)`)
     // Sanity: the `/` separator stayed literal.
     expect(body).not.toContain("src%2Fwith")
   })
@@ -824,9 +789,7 @@ describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)
       body: "b",
     }
     const body = buildBody(f, linkContext)
-    expect(body).toContain(
-      `(https://github.com/octo/demo/blob/${headSha}/src/%28generated%29/foo.ts#L12)`,
-    )
+    expect(body).toContain(`(https://github.com/octo/demo/blob/${headSha}/src/%28generated%29/foo.ts#L12)`)
   })
 
   it("backslash-escapes brackets in the label so the markdown link doesn't truncate", () => {
@@ -844,9 +807,7 @@ describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)
     // parser keeps the whole `src/[id]/page.ts:3` as visible text.
     expect(body).toContain("[src/\\[id\\]/page.ts:3](")
     // URL-side: the brackets are percent-encoded by encodeURIComponent.
-    expect(body).toContain(
-      `(https://github.com/octo/demo/blob/${headSha}/src/%5Bid%5D/page.ts#L3)`,
-    )
+    expect(body).toContain(`(https://github.com/octo/demo/blob/${headSha}/src/%5Bid%5D/page.ts#L3)`)
   })
 
   it("backslash-escapes parens in the label so the link-target parser doesn't get confused", () => {

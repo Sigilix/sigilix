@@ -25,10 +25,20 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const ROUTE_METHODS: ReadonlySet<string> = new Set([
-  "get", "post", "put", "patch", "delete", "all", "head", "options", "use",
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "all",
+  "head",
+  "options",
+  "use",
 ])
 // Conventional router-object identifiers. A `.get`/`.use` call is only
 // treated as a route registration when its object is one of these OR its
@@ -36,16 +46,38 @@ const ROUTE_METHODS: ReadonlySet<string> = new Set([
 // `cache.get("k", cb)` / `emitter.use(...)` would be mistaken for routes
 // (Codex P2 false-positive fix).
 const ROUTE_OBJECT_NAMES: ReadonlySet<string> = new Set([
-  "app", "router", "server", "route", "api", "apirouter", "approuter", "express",
+  "app",
+  "router",
+  "server",
+  "route",
+  "api",
+  "apirouter",
+  "approuter",
+  "express",
 ])
-const NEXT_HTTP_EXPORTS: ReadonlySet<string> = new Set([
-  "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
-])
+const NEXT_HTTP_EXPORTS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 const SYNC_FS_METHODS: ReadonlySet<string> = new Set([
-  "readFileSync", "writeFileSync", "appendFileSync", "readdirSync", "statSync",
-  "lstatSync", "existsSync", "mkdirSync", "rmSync", "rmdirSync", "unlinkSync",
-  "renameSync", "copyFileSync", "accessSync", "realpathSync", "readlinkSync",
-  "openSync", "closeSync", "truncateSync", "chmodSync", "chownSync",
+  "readFileSync",
+  "writeFileSync",
+  "appendFileSync",
+  "readdirSync",
+  "statSync",
+  "lstatSync",
+  "existsSync",
+  "mkdirSync",
+  "rmSync",
+  "rmdirSync",
+  "unlinkSync",
+  "renameSync",
+  "copyFileSync",
+  "accessSync",
+  "realpathSync",
+  "readlinkSync",
+  "openSync",
+  "closeSync",
+  "truncateSync",
+  "chmodSync",
+  "chownSync",
 ])
 const CP_SYNC_FNS: ReadonlySet<string> = new Set(["execSync", "execFileSync", "spawnSync"])
 const FS_SPECIFIERS: ReadonlySet<string> = new Set(["fs", "node:fs"])
@@ -66,8 +98,8 @@ function idName(n: AstNode | undefined): string | null {
 }
 
 interface ImportAliases {
-  fsNamespaces: Set<string>   // `import fs from "fs"` / `* as fs` / `const fs = require("fs")`
-  fsNamed: Set<string>        // `import { readFileSync } from "fs"` / destructured require
+  fsNamespaces: Set<string> // `import fs from "fs"` / `* as fs` / `const fs = require("fs")`
+  fsNamed: Set<string> // `import { readFileSync } from "fs"` / destructured require
   cpNamespaces: Set<string>
   cpNamed: Set<string>
 }
@@ -76,7 +108,10 @@ interface ImportAliases {
  *  flag sync calls that resolve to a real node:fs / child_process import. */
 function collectImports(program: AstNode): ImportAliases {
   const a: ImportAliases = {
-    fsNamespaces: new Set(), fsNamed: new Set(), cpNamespaces: new Set(), cpNamed: new Set(),
+    fsNamespaces: new Set(),
+    fsNamed: new Set(),
+    cpNamespaces: new Set(),
+    cpNamed: new Set(),
   }
   const body = (program.body ?? []) as AstNode[]
   for (const stmt of body) {
@@ -197,8 +232,9 @@ function isRouteShaped(call: AstNode): boolean {
     else break
   }
   const first = (call.arguments ?? [])[0] as AstNode | undefined
-  return !!first && first.type === "Literal" && typeof first.value === "string"
-    && (first.value as string).startsWith("/")
+  return (
+    !!first && first.type === "Literal" && typeof first.value === "string" && (first.value as string).startsWith("/")
+  )
 }
 
 /** Collect request-handler function nodes: Express route callbacks +
@@ -209,8 +245,11 @@ function collectHandlers(program: AstNode): AstNode[] {
     if (!n || typeof n !== "object") return
     // Express: `<x>.get(…, handlerFn)` — property is a route method AND at
     // least one argument is a function.
-    if (n.type === "CallExpression" && (n.callee as AstNode)?.type === "MemberExpression"
-      && !(n.callee as AstNode).computed) {
+    if (
+      n.type === "CallExpression" &&
+      (n.callee as AstNode)?.type === "MemberExpression" &&
+      !(n.callee as AstNode).computed
+    ) {
       const prop = idName((n.callee as AstNode).property as AstNode)
       if (prop && ROUTE_METHODS.has(prop) && isRouteShaped(n)) {
         for (const arg of (n.arguments ?? []) as AstNode[]) {
@@ -259,8 +298,13 @@ export const noSyncIoInRequestPath: AstRule = {
     if (SKIP_PATH.test(ctx.path)) return null
     const aliases = collectImports(node)
     // No fs / child_process import in scope → nothing to resolve, bail fast.
-    if (aliases.fsNamespaces.size === 0 && aliases.fsNamed.size === 0
-      && aliases.cpNamespaces.size === 0 && aliases.cpNamed.size === 0) return null
+    if (
+      aliases.fsNamespaces.size === 0 &&
+      aliases.fsNamed.size === 0 &&
+      aliases.cpNamespaces.size === 0 &&
+      aliases.cpNamed.size === 0
+    )
+      return null
 
     const hits: AstNode[] = []
     for (const handler of collectHandlers(node)) {
@@ -270,7 +314,8 @@ export const noSyncIoInRequestPath: AstRule = {
     }
     if (hits.length === 0) return null
     return hits.map((hit) => ({
-      message: "Synchronous I/O on a request path blocks the event loop and serializes concurrent requests. Use the async API (e.g. `fs.promises.readFile`, `await execFile`) instead.",
+      message:
+        "Synchronous I/O on a request path blocks the event loop and serializes concurrent requests. Use the async API (e.g. `fs.promises.readFile`, `await execFile`) instead.",
       evidence: sliceEvidence(ctx.source, hit),
       line: hit.loc?.start?.line ?? 1,
       endLine: hit.loc?.end?.line ?? hit.loc?.start?.line ?? 1,

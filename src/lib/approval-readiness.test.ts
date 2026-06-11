@@ -170,9 +170,7 @@ describe("assessApprovalReadiness (SIG-205)", () => {
 
     expect(buildApprovalReadinessSummary(clean, cleanSummary)).toBe(cleanSummary)
     expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain("Approval withheld")
-    expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain(
-      "approval validation blocker below",
-    )
+    expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain("approval validation blocker below")
     expect(buildApprovalReadinessSummary(blocked, cleanSummary)).not.toContain(cleanSummary)
   })
 
@@ -198,8 +196,6 @@ describe("assessApprovalReadiness (SIG-205)", () => {
     expect(buildApprovalReadinessSummary(blocked, "No issues found.")).toContain(
       "2 high-confidence Sigilix specialist findings were",
     )
-    expect(buildApprovalReadinessSummary(blocked, "No issues found.")).toContain(
-      "approval validation blockers below",
-    )
+    expect(buildApprovalReadinessSummary(blocked, "No issues found.")).toContain("approval validation blockers below")
   })
 })

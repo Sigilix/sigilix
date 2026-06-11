@@ -84,22 +84,21 @@ describe("shouldReview — pathFilters semantics", () => {
   it("re-includes a path with `!pattern` override", () => {
     const filters = ["**/*.lock", "!critical/important.lock"]
     expect(shouldReview("yarn.lock", filters)).toBe(false)
-    expect(shouldReview("package-lock.json", filters)).toBe(true)  // not a .lock pattern match
-    expect(shouldReview("critical/important.lock", filters)).toBe(true)  // re-included
+    expect(shouldReview("package-lock.json", filters)).toBe(true) // not a .lock pattern match
+    expect(shouldReview("critical/important.lock", filters)).toBe(true) // re-included
   })
 
   it("respects order — later `!pat` overrides earlier exclude", () => {
-    expect(shouldReview("config/secret.json", [
-      "config/**",
-      "!config/secret.json",
-    ])).toBe(true)
+    expect(shouldReview("config/secret.json", ["config/**", "!config/secret.json"])).toBe(true)
   })
 
   it("but later exclude beats earlier `!include`", () => {
-    expect(shouldReview("dist/foo.js", [
-      "!dist/foo.js",  // include without prior exclude is no-op
-      "dist/**",       // then exclude
-    ])).toBe(false)
+    expect(
+      shouldReview("dist/foo.js", [
+        "!dist/foo.js", // include without prior exclude is no-op
+        "dist/**", // then exclude
+      ]),
+    ).toBe(false)
   })
 
   it("ignores a `!` with no body", () => {
@@ -111,6 +110,6 @@ describe("shouldReview — pathFilters semantics", () => {
   })
 
   it("skips bad-glob negation patterns silently", () => {
-    expect(shouldReview("src/foo.ts", ["src/**", "!"])).toBe(false)  // exclude still applies
+    expect(shouldReview("src/foo.ts", ["src/**", "!"])).toBe(false) // exclude still applies
   })
 })

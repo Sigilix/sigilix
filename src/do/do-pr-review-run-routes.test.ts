@@ -8,13 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { PrReviewRunDO } from "@/src/do/pr-review-run"
 import type { Env } from "@/src/shared/types/env"
-import type {
-  EnqueueRequest,
-  PickupRequest,
-  RunResultRequest,
-  RunState,
-  StatusResponse,
-} from "@/src/do/types"
+import type { EnqueueRequest, PickupRequest, RunResultRequest, RunState, StatusResponse } from "@/src/do/types"
 
 // ─── DO storage + state stub ──────────────────────────────────
 
@@ -117,17 +111,21 @@ function makeEnqueueReq(over: Partial<EnqueueRequest> = {}): EnqueueRequest {
 }
 
 async function postJson(instance: PrReviewRunDO, path: string, body: unknown): Promise<Response> {
-  return instance.fetch(new Request(`https://do.internal${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: { "content-type": "application/json" },
-  }))
+  return instance.fetch(
+    new Request(`https://do.internal${path}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+    }),
+  )
 }
 
 async function getJson(instance: PrReviewRunDO, path: string): Promise<Response> {
-  return instance.fetch(new Request(`https://do.internal${path}`, {
-    method: "GET",
-  }))
+  return instance.fetch(
+    new Request(`https://do.internal${path}`, {
+      method: "GET",
+    }),
+  )
 }
 
 let consoleSpy: ReturnType<typeof vi.spyOn>
@@ -148,7 +146,7 @@ describe("PrReviewRunDO /enqueue — first run", () => {
     const req = makeEnqueueReq()
     const res = await postJson(instance, "/enqueue", req)
     expect(res.status).toBe(200)
-    const body = await res.json() as { deduped: boolean; runId: string; action: string }
+    const body = (await res.json()) as { deduped: boolean; runId: string; action: string }
     expect(body.deduped).toBe(false)
     expect(body.action).toBe("create")
     expect(body.runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
@@ -208,11 +206,11 @@ describe("PrReviewRunDO /enqueue — dedupe + supersede", () => {
     const { instance, state } = makeDo(env)
     await postJson(instance, "/enqueue", makeEnqueueReq())
     const firstRunId = (state.store.get("state") as RunState).runId
-    queue.sent.length = 0  // reset
+    queue.sent.length = 0 // reset
 
     const res = await postJson(instance, "/enqueue", makeEnqueueReq())
     expect(res.status).toBe(200)
-    const body = await res.json() as { deduped: boolean; runId: string; action: string }
+    const body = (await res.json()) as { deduped: boolean; runId: string; action: string }
     expect(body.deduped).toBe(true)
     expect(body.action).toBe("dedupe-active")
     expect(body.runId).toBe(firstRunId)
@@ -231,7 +229,7 @@ describe("PrReviewRunDO /enqueue — dedupe + supersede", () => {
 
     const res = await postJson(instance, "/enqueue", makeEnqueueReq())
     expect(res.status).toBe(200)
-    const body = await res.json() as { action: string }
+    const body = (await res.json()) as { action: string }
     expect(body.action).toBe("dedupe-terminal")
     expect(queue.sent.length).toBe(0)
   })
@@ -246,7 +244,7 @@ describe("PrReviewRunDO /enqueue — dedupe + supersede", () => {
 
     const res = await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "NEW".padEnd(40, "0") }))
     expect(res.status).toBe(200)
-    const body = await res.json() as { runId: string; action: string }
+    const body = (await res.json()) as { runId: string; action: string }
     expect(body.action).toBe("supersede")
     expect(body.runId).not.toBe(oldRunId)
     const newState = state.store.get("state") as RunState
@@ -261,7 +259,12 @@ describe("PrReviewRunDO /enqueue — dedupe + supersede", () => {
 // ─── /pickup ──────────────────────────────────────────────────
 
 describe("PrReviewRunDO /pickup", () => {
-  async function setupQueuedRun(): Promise<{ env: Env; instance: PrReviewRunDO; state: FakeDoState; runId: string }> {
+  async function setupQueuedRun(): Promise<{
+    env: Env
+    instance: PrReviewRunDO
+    state: FakeDoState
+    runId: string
+  }> {
     const queue = makeQueue()
     const env = makeEnv(queue.send)
     const { instance, state } = makeDo(env)
@@ -272,7 +275,10 @@ describe("PrReviewRunDO /pickup", () => {
 
   it("200 claim — transitions queued → running, sets pickedUpAt + consumerId", async () => {
     const { instance, state, runId } = await setupQueuedRun()
-    const res = await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" } satisfies PickupRequest)
+    const res = await postJson(instance, "/pickup", {
+      runId,
+      consumerId: "consumer-A",
+    } satisfies PickupRequest)
     expect(res.status).toBe(200)
     const updated = state.store.get("state") as RunState
     expect(updated.state).toBe("running")
@@ -300,7 +306,10 @@ describe("PrReviewRunDO /pickup", () => {
 
   it("410 stale-runId — runId doesn't match current state", async () => {
     const { instance } = await setupQueuedRun()
-    const res = await postJson(instance, "/pickup", { runId: "wrong-runId", consumerId: "consumer-A" })
+    const res = await postJson(instance, "/pickup", {
+      runId: "wrong-runId",
+      consumerId: "consumer-A",
+    })
     expect(res.status).toBe(410)
   })
 
@@ -360,8 +369,9 @@ describe("PrReviewRunDO /pickup", () => {
       throw new Error("alarm unavailable")
     })
 
-    await expect(postJson(instance, "/pickup", { runId, consumerId: "consumer-A" }))
-      .rejects.toThrow("alarm unavailable")
+    await expect(postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })).rejects.toThrow(
+      "alarm unavailable",
+    )
 
     const after = state.store.get("state") as RunState
     expect(after).toBe(queuedState)
@@ -374,7 +384,13 @@ describe("PrReviewRunDO /pickup", () => {
 // ─── /run-result ──────────────────────────────────────────────
 
 describe("PrReviewRunDO /run-result", () => {
-  async function setupRunningRun(): Promise<{ env: Env; instance: PrReviewRunDO; state: FakeDoState; runId: string; consumerId: string }> {
+  async function setupRunningRun(): Promise<{
+    env: Env
+    instance: PrReviewRunDO
+    state: FakeDoState
+    runId: string
+    consumerId: string
+  }> {
     const queue = makeQueue()
     const env = makeEnv(queue.send)
     const { instance, state } = makeDo(env)
@@ -388,7 +404,9 @@ describe("PrReviewRunDO /run-result", () => {
   it("status=success → state=done + finishedAt + history append", async () => {
     const { instance, state, runId, consumerId } = await setupRunningRun()
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId, status: "success",
+      runId,
+      consumerId,
+      status: "success",
     } satisfies RunResultRequest)
     expect(res.status).toBe(200)
     const updated = state.store.get("state") as RunState
@@ -399,9 +417,11 @@ describe("PrReviewRunDO /run-result", () => {
 
   it("status=transient + attempts<max → failed-transient + retry alarm scheduled", async () => {
     const { instance, state, runId, consumerId } = await setupRunningRun()
-    state.alarms.alarmAt = null  // reset watchdog scheduled at enqueue
+    state.alarms.alarmAt = null // reset watchdog scheduled at enqueue
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId, status: "transient",
+      runId,
+      consumerId,
+      status: "transient",
       error: { stage: "github-http-503", message: "503" },
     } satisfies RunResultRequest)
     expect(res.status).toBe(200)
@@ -419,7 +439,9 @@ describe("PrReviewRunDO /run-result", () => {
     s.attempts = 3
     state.store.set("state", s)
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId, status: "transient",
+      runId,
+      consumerId,
+      status: "transient",
       error: { stage: "github-http-503", message: "503" },
     })
     expect(res.status).toBe(200)
@@ -431,7 +453,9 @@ describe("PrReviewRunDO /run-result", () => {
   it("status=terminal → failed regardless of attempts + history", async () => {
     const { instance, state, runId, consumerId } = await setupRunningRun()
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId, status: "terminal",
+      runId,
+      consumerId,
+      status: "terminal",
       error: { stage: "github-http-422", message: "invalid anchor" },
     })
     expect(res.status).toBe(200)
@@ -444,18 +468,22 @@ describe("PrReviewRunDO /run-result", () => {
     const { instance, state, runId } = await setupRunningRun()
     const beforeState = (state.store.get("state") as RunState).state
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId: "consumer-OLD", status: "success",
+      runId,
+      consumerId: "consumer-OLD",
+      status: "success",
     })
     expect(res.status).toBe(200)
     const after = state.store.get("state") as RunState
-    expect(after.state).toBe(beforeState)  // unchanged
+    expect(after.state).toBe(beforeState) // unchanged
   })
 
   it("runId mismatch (superseded run) → history transition + telemetry, no current-state mutation, no synthetic history record", async () => {
     const { instance, state, consumerId } = await setupRunningRun()
     const before = (state.store.get("state") as RunState).state
     const res = await postJson(instance, "/run-result", {
-      runId: "OLD-runId", consumerId, status: "success",
+      runId: "OLD-runId",
+      consumerId,
+      status: "success",
     })
     expect(res.status).toBe(200)
     const after = state.store.get("state") as RunState
@@ -477,14 +505,19 @@ describe("PrReviewRunDO /run-result", () => {
     const cur = state.store.get("state") as RunState
     state.store.set("state", { ...cur, state: "failed", finishedAt: "2026-05-07T06:00:00.000Z" })
     state.store.set(`run:${runId}`, {
-      runId, headSha: cur.headSha, finalState: "failed",
-      attempts: cur.attempts, startedAt: cur.startedAt,
+      runId,
+      headSha: cur.headSha,
+      finalState: "failed",
+      attempts: cur.attempts,
+      startedAt: cur.startedAt,
       finishedAt: "2026-05-07T06:00:00.000Z",
       lastError: { stage: "watchdog", message: "timeout" },
     })
 
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId, status: "success",  // late "success"
+      runId,
+      consumerId,
+      status: "success", // late "success"
     })
     expect(res.status).toBe(200)
     // Current state still failed.
@@ -501,7 +534,9 @@ describe("PrReviewRunDO /run-result", () => {
     expect(state.store.has(`run:${runId}`)).toBe(false)
 
     const res = await postJson(instance, "/run-result", {
-      runId, consumerId: "consumer-OLD", status: "success",
+      runId,
+      consumerId: "consumer-OLD",
+      status: "success",
     })
     expect(res.status).toBe(200)
     // Still no history record at run:<existing.runId>.
@@ -518,7 +553,7 @@ describe("PrReviewRunDO /status", () => {
     const { instance } = makeDo(env)
     const res = await getJson(instance, "/status")
     expect(res.status).toBe(200)
-    const body = await res.json() as StatusResponse
+    const body = (await res.json()) as StatusResponse
     expect(body.kind).toBe("no-state")
   })
 
@@ -529,7 +564,7 @@ describe("PrReviewRunDO /status", () => {
     await postJson(instance, "/enqueue", makeEnqueueReq())
     const res = await getJson(instance, "/status")
     expect(res.status).toBe(200)
-    const body = await res.json() as StatusResponse
+    const body = (await res.json()) as StatusResponse
     if (body.kind !== "found") throw new Error("expected found")
     expect(body.current.state).toBe("queued")
     expect(body.history).toEqual([])
@@ -566,7 +601,9 @@ describe("PrReviewRunDO /enqueue — watchdog armed BEFORE OPENCLAW_JOBS.send (C
   // redelivery would dedupe against the stuck state). Fix: arm the
   // watchdog + persist + setAlarm BEFORE send.
   it("on send-failure, state is still queued AND watchdog alarm is armed (recovery via watchdog)", async () => {
-    const failingSend = vi.fn(async () => { throw new Error("queue producer down") })
+    const failingSend = vi.fn(async () => {
+      throw new Error("queue producer down")
+    })
     const env = makeEnv(failingSend)
     const { instance, state } = makeDo(env)
     await expect(postJson(instance, "/enqueue", makeEnqueueReq())).rejects.toThrow(/queue producer down/)
@@ -598,7 +635,11 @@ describe("PrReviewRunDO /run-result — does not overwrite existing archived Run
     const runIdA = (state.store.get("state") as RunState).runId
     await postJson(instance, "/pickup", { runId: runIdA, consumerId: "c-A" })
     await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "b".repeat(40) }))
-    const archived = state.store.get(`run:${runIdA}`) as { runId: string; headSha: string; finalState: string }
+    const archived = state.store.get(`run:${runIdA}`) as {
+      runId: string
+      headSha: string
+      finalState: string
+    }
     expect(archived).toBeDefined()
     expect(archived.runId).toBe(runIdA)
     expect(archived.headSha).toBe("a".repeat(40))
@@ -612,7 +653,11 @@ describe("PrReviewRunDO /run-result — does not overwrite existing archived Run
       status: "success",
     })
 
-    const after = state.store.get(`run:${runIdA}`) as { runId: string; headSha: string; finalState: string }
+    const after = state.store.get(`run:${runIdA}`) as {
+      runId: string
+      headSha: string
+      finalState: string
+    }
     expect(after.runId).toBe(runIdA)
     // The archive must still reflect the OLD run's headSha, not the
     // new run's. Pre-fix this would have been "b".repeat(40).

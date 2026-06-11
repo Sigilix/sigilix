@@ -15,13 +15,25 @@ function makeDo() {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -40,8 +52,7 @@ function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 
 interface SuppressionBody {
   window: { days: number }
@@ -54,48 +65,102 @@ interface SuppressionBody {
 describe("handleTestSuppressionsMetricsRoute", () => {
   it("503 when the token secret is unset", async () => {
     const env = makeEnv({ OPENCLAW_VALIDATION_METRICS_TOKEN: undefined })
-    const res = await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions", `Bearer ${TOKEN}`), env)
+    const res = await handleTestSuppressionsMetricsRoute(
+      get("https://x/metrics/test-suppressions", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(503)
   })
 
   it("401 when the bearer token is missing or wrong", async () => {
     const env = makeEnv()
     expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions"), env)).status).toBe(401)
-    expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions", "Bearer nope"), env)).status).toBe(401)
+    expect(
+      (await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions", "Bearer nope"), env)).status,
+    ).toBe(401)
   })
 
   it("400 on an invalid window param", async () => {
     const env = makeEnv()
-    const res = await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=99", `Bearer ${TOKEN}`), env)
+    const res = await handleTestSuppressionsMetricsRoute(
+      get("https://x/metrics/test-suppressions?window=99", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(400)
   })
 
   it("accepts the max window (30d) and rejects max+1 — pins the cap (mirrors /metrics/validation)", async () => {
     const env = makeEnv()
-    expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=30", `Bearer ${TOKEN}`), env)).status).toBe(200)
-    expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=31", `Bearer ${TOKEN}`), env)).status).toBe(400)
+    expect(
+      (
+        await handleTestSuppressionsMetricsRoute(
+          get("https://x/metrics/test-suppressions?window=30", `Bearer ${TOKEN}`),
+          env,
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await handleTestSuppressionsMetricsRoute(
+          get("https://x/metrics/test-suppressions?window=31", `Bearer ${TOKEN}`),
+          env,
+        )
+      ).status,
+    ).toBe(400)
   })
 
   it("200 projects only the tests gate, per reason, with suppression rates", async () => {
     const do_ = makeDo()
     await do_.recordBatch({
-      owner: "o", repo: "r", prNumber: 1, headSha: "abc",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "abc",
       events: [
-        { kind: "gate-rejection", gate: "tests", reason: "cross-referenced-in-sibling-test", dropped: true, category: "testing" },
-        { kind: "gate-rejection", gate: "tests", reason: "vague-insufficient-test", dropped: false, category: "testing" },
+        {
+          kind: "gate-rejection",
+          gate: "tests",
+          reason: "cross-referenced-in-sibling-test",
+          dropped: true,
+          category: "testing",
+        },
+        {
+          kind: "gate-rejection",
+          gate: "tests",
+          reason: "vague-insufficient-test",
+          dropped: false,
+          category: "testing",
+        },
         // a non-tests gate event must be excluded from this projection
-        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: true, category: "security" },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: true,
+          category: "security",
+        },
       ],
     })
     const env = makeEnv({ OPENCLAW_TESTS_VALIDATOR_MODE: "enforce" }, do_)
-    const res = await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=14d", `Bearer ${TOKEN}`), env)
+    const res = await handleTestSuppressionsMetricsRoute(
+      get("https://x/metrics/test-suppressions?window=14d", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(200)
-    const body = await res.json() as SuppressionBody
+    const body = (await res.json()) as SuppressionBody
     expect(body.window.days).toBe(14)
     expect(body.mode).toBe("enforce")
     // enforce drop → wouldDrop 1, kept 0, rate 1; shadow → wouldDrop 1, kept 1, rate 0.5
-    expect(body.reasons["cross-referenced-in-sibling-test"]).toEqual({ wouldDrop: 1, kept: 0, suppressionRate: 1 })
-    expect(body.reasons["vague-insufficient-test"]).toEqual({ wouldDrop: 1, kept: 1, suppressionRate: 0.5 })
+    expect(body.reasons["cross-referenced-in-sibling-test"]).toEqual({
+      wouldDrop: 1,
+      kept: 0,
+      suppressionRate: 1,
+    })
+    expect(body.reasons["vague-insufficient-test"]).toEqual({
+      wouldDrop: 1,
+      kept: 1,
+      suppressionRate: 0.5,
+    })
     expect(body.reasons["fabricated-evidence-id"]).toBeUndefined() // security gate not projected
     expect(body.byCategory.testing.wouldDrop).toBe(2)
     expect(body.byCategory.testing.kept).toBe(1)
@@ -106,9 +171,12 @@ describe("handleTestSuppressionsMetricsRoute", () => {
 
   it("200 with an empty window: zero totals, no reasons", async () => {
     const env = makeEnv()
-    const res = await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions", `Bearer ${TOKEN}`), env)
+    const res = await handleTestSuppressionsMetricsRoute(
+      get("https://x/metrics/test-suppressions", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(200)
-    const body = await res.json() as SuppressionBody
+    const body = (await res.json()) as SuppressionBody
     expect(body.window.days).toBe(7)
     expect(body.mode).toBe("shadow")
     expect(body.reasons).toEqual({})

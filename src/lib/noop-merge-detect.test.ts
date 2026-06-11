@@ -24,8 +24,7 @@ function fakeKV(initial: Record<string, string> = {}) {
   return { stub, store }
 }
 
-const fakeEnv = (kv: ReturnType<typeof fakeKV>["stub"]): Env =>
-  ({ OPENCLAW_STATE: kv } as unknown as Env)
+const fakeEnv = (kv: ReturnType<typeof fakeKV>["stub"]): Env => ({ OPENCLAW_STATE: kv }) as unknown as Env
 
 describe("computeDiffHash", () => {
   it("returns deterministic sha256 hex for the same input", async () => {
@@ -53,9 +52,7 @@ describe("computeDiffHash", () => {
 
   it("hashes the empty string to the known sha256 empty constant", async () => {
     const empty = await computeDiffHash("")
-    expect(empty).toBe(
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    )
+    expect(empty).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
   })
 })
 
@@ -74,12 +71,7 @@ describe("readPriorReviewDiffHash", () => {
         hashedAt: 1700000000000,
       }),
     })
-    const result = await readPriorReviewDiffHash(
-      fakeEnv(stub),
-      "owner",
-      "repo",
-      42,
-    )
+    const result = await readPriorReviewDiffHash(fakeEnv(stub), "owner", "repo", 42)
     expect(result).toEqual({
       diffHash: "abc123",
       reviewedHeadSha: "deadbeef",
@@ -91,9 +83,7 @@ describe("readPriorReviewDiffHash", () => {
     const { stub } = fakeKV({
       "pr-review-diff-hash:o/r#1": "{not json",
     })
-    expect(
-      await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1),
-    ).toBeNull()
+    expect(await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1)).toBeNull()
   })
 
   it("returns null when diffHash is missing", async () => {
@@ -103,9 +93,7 @@ describe("readPriorReviewDiffHash", () => {
         hashedAt: 1,
       }),
     })
-    expect(
-      await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1),
-    ).toBeNull()
+    expect(await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1)).toBeNull()
   })
 
   it("returns null when hashedAt is Infinity (corrupt-record guard)", async () => {
@@ -117,9 +105,7 @@ describe("readPriorReviewDiffHash", () => {
     const { stub } = fakeKV({
       "pr-review-diff-hash:o/r#1": '{"diffHash":"abc","reviewedHeadSha":"x","hashedAt":1e500}',
     })
-    expect(
-      await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1),
-    ).toBeNull()
+    expect(await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1)).toBeNull()
   })
 
   it("returns null when reviewedHeadSha is missing (telemetry guard)", async () => {
@@ -129,9 +115,7 @@ describe("readPriorReviewDiffHash", () => {
         hashedAt: 1,
       }),
     })
-    expect(
-      await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1),
-    ).toBeNull()
+    expect(await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1)).toBeNull()
   })
 
   it("returns null when KV throws", async () => {
@@ -142,23 +126,14 @@ describe("readPriorReviewDiffHash", () => {
       put: vi.fn(),
       delete: vi.fn(),
     }
-    expect(
-      await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1),
-    ).toBeNull()
+    expect(await readPriorReviewDiffHash(fakeEnv(stub), "o", "r", 1)).toBeNull()
   })
 })
 
 describe("writePriorReviewDiffHash", () => {
   it("writes a JSON-encoded record with the right key", async () => {
     const { stub, store } = fakeKV()
-    await writePriorReviewDiffHash(
-      fakeEnv(stub),
-      "owner",
-      "repo",
-      42,
-      "abc123",
-      "deadbeef",
-    )
+    await writePriorReviewDiffHash(fakeEnv(stub), "owner", "repo", 42, "abc123", "deadbeef")
     const stored = store["pr-review-diff-hash:owner/repo#42"]
     expect(stored).toBeDefined()
     if (!stored) return
@@ -186,9 +161,7 @@ describe("writePriorReviewDiffHash", () => {
       }),
       delete: vi.fn(),
     }
-    await expect(
-      writePriorReviewDiffHash(fakeEnv(stub), "o", "r", 1, "h", "s"),
-    ).resolves.toBeUndefined()
+    await expect(writePriorReviewDiffHash(fakeEnv(stub), "o", "r", 1, "h", "s")).resolves.toBeUndefined()
   })
 })
 
@@ -241,9 +214,7 @@ describe("recordReviewedDiffHash", () => {
       delete: vi.fn(),
     }
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    await expect(
-      recordReviewedDiffHash(fakeEnv(stub), "o", "r", 1, "diff", "sha"),
-    ).resolves.toBeUndefined()
+    await expect(recordReviewedDiffHash(fakeEnv(stub), "o", "r", 1, "diff", "sha")).resolves.toBeUndefined()
     // The underlying writePriorReviewDiffHash swallows the KV error,
     // so `recordReviewedDiffHash` doesn't need to log here. But the
     // outer try/catch is still load-bearing: if `computeDiffHash`

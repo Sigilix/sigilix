@@ -23,7 +23,13 @@ describe("ensemble-golden serde round-trip", () => {
   it("preserves a flat Map<string, …> (reviewable-like)", () => {
     const input = new Map<string, { line: number; side: string }[]>([
       ["src/a.ts", [{ line: 10, side: "RIGHT" }]],
-      ["src/b.ts", [{ line: 1, side: "RIGHT" }, { line: 2, side: "LEFT" }]],
+      [
+        "src/b.ts",
+        [
+          { line: 1, side: "RIGHT" },
+          { line: 2, side: "LEFT" },
+        ],
+      ],
     ])
     const out = roundTrip(input)
     expect(out).toBeInstanceOf(Map)
@@ -34,7 +40,13 @@ describe("ensemble-golden serde round-trip", () => {
 
   it("preserves a nested Map<string, Map<number, string>> (addedLineTextByLine)", () => {
     const input = new Map<string, Map<number, string>>([
-      ["src/a.ts", new Map<number, string>([[10, "const x = 1"], [11, "return x"]])],
+      [
+        "src/a.ts",
+        new Map<number, string>([
+          [10, "const x = 1"],
+          [11, "return x"],
+        ]),
+      ],
       ["src/b.ts", new Map<number, string>([[1, "import y"]])],
     ])
     const out = roundTrip(input)
@@ -62,9 +74,7 @@ describe("ensemble-golden serde round-trip", () => {
         ["ev-1", { cweId: 89, tags: new Set(["sqli", "high"]) }],
       ]),
       coverageGaps: new Set<string>(["src/x.ts:5"]),
-      findings: [
-        { path: "src/x.ts", line: 5, byLine: new Map<number, string>([[5, "raw sql"]]) },
-      ],
+      findings: [{ path: "src/x.ts", line: 5, byLine: new Map<number, string>([[5, "raw sql"]]) }],
       mode: "shadow",
       count: 3,
       flag: false,
@@ -99,10 +109,7 @@ describe("ensemble-golden serde round-trip", () => {
     out.onDropped("second")
     expect(ret).toBeUndefined()
     expect(realCalled).toBe(false)
-    expect(out.onDropped.calls).toEqual([
-      [{ path: "src/a.ts" }, { reason: "x", dropped: true }],
-      ["second"],
-    ])
+    expect(out.onDropped.calls).toEqual([[{ path: "src/a.ts" }, { reason: "x", dropped: true }], ["second"]])
   })
 
   it("preserves an explicit `undefined` object property through the JSON round-trip", () => {

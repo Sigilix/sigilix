@@ -104,7 +104,9 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
     expect(runRule(`const cp = require("child_process"); const run = cp.exec; run(\`x \${y}\`)`).length).toBe(1)
   })
   it("emits for a comma declarator local alias assigned from a namespace method", () => {
-    expect(runRule(`const cp = require("child_process"); let ignored, run = cp.execSync; run(\`x \${y}\`)`).length).toBe(1)
+    expect(
+      runRule(`const cp = require("child_process"); let ignored, run = cp.execSync; run(\`x \${y}\`)`).length,
+    ).toBe(1)
   })
   it("emits for a reassigned local alias from a namespace method", () => {
     expect(runRule(`const cp = require("child_process"); let run; run = cp.exec; run(\`x \${y}\`)`).length).toBe(1)
@@ -132,16 +134,26 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
     ).toBe(1)
   })
   it("emits for a dynamic import(`child_process`) namespace binding", () => {
-    expect(runRule("async function f(){ const cp = await import(`child_process`); cp.exec(`x ${cmd}`); }").length).toBe(1)
+    expect(runRule("async function f(){ const cp = await import(`child_process`); cp.exec(`x ${cmd}`); }").length).toBe(
+      1,
+    )
   })
   it("emits for a dynamic import('child_process') destructured binding", () => {
-    expect(runRule(`async function f(){ const { exec } = await import("child_process"); exec(\`run \${x}\`); }`).length).toBe(1)
+    expect(
+      runRule(`async function f(){ const { exec } = await import("child_process"); exec(\`run \${x}\`); }`).length,
+    ).toBe(1)
   })
   it("emits for an aliased dynamic import('child_process') destructured binding", () => {
-    expect(runRule(`async function f(){ const { exec: run } = await import("child_process"); run(\`run \${x}\`); }`).length).toBe(1)
+    expect(
+      runRule(`async function f(){ const { exec: run } = await import("child_process"); run(\`run \${x}\`); }`).length,
+    ).toBe(1)
   })
   it("emits for a parenthesized dynamic import('child_process') destructured assignment", () => {
-    expect(runRule(`async function f(){ let execSync; ({ execSync } = await import("child_process")); execSync(\`run \${x}\`); }`).length).toBe(1)
+    expect(
+      runRule(
+        `async function f(){ let execSync; ({ execSync } = await import("child_process")); execSync(\`run \${x}\`); }`,
+      ).length,
+    ).toBe(1)
   })
   it("does NOT treat `export { exec } from 'child_process'` as a local callable binding", () => {
     // Node ESM confirms an indirect re-export is not callable in the same module:
@@ -178,10 +190,14 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
     expect(runRule(`import { exec } from "./my-runner"; exec(\`x \${y}\`)`).length).toBe(0)
   })
   it("does NOT treat an object method as child_process just because it wraps exec", () => {
-    expect(runRule(`const { exec } = require("child_process"); const wrapper = { exec }; wrapper.exec(\`x \${y}\`)`).length).toBe(0)
+    expect(
+      runRule(`const { exec } = require("child_process"); const wrapper = { exec }; wrapper.exec(\`x \${y}\`)`).length,
+    ).toBe(0)
   })
   it("does NOT infer a namespace from an object-literal property named cp", () => {
-    expect(runRule(`const holder = { cp: require("child_process") }; const cp = { exec() {} }; cp.exec(\`x \${y}\`)`).length).toBe(0)
+    expect(
+      runRule(`const holder = { cp: require("child_process") }; const cp = { exec() {} }; cp.exec(\`x \${y}\`)`).length,
+    ).toBe(0)
   })
 })
 

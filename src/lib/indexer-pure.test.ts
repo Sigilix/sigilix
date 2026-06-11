@@ -56,9 +56,7 @@ describe("walkIndexableFiles", () => {
       { path: "src", type: "tree" },
       { path: "src/index.ts", type: "blob", size: 100 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "src/index.ts", size: 100 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "src/index.ts", size: 100 }])
   })
 
   it("drops non-allowlisted extensions", () => {
@@ -67,9 +65,7 @@ describe("walkIndexableFiles", () => {
       { path: "binary.exe", type: "blob", size: 100 },
       { path: "src/index.ts", type: "blob", size: 100 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "src/index.ts", size: 100 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "src/index.ts", size: 100 }])
   })
 
   it("drops blobs above MAX_FILE_BYTES (200KB)", () => {
@@ -77,9 +73,7 @@ describe("walkIndexableFiles", () => {
       { path: "huge.ts", type: "blob", size: 300 * 1024 },
       { path: "ok.ts", type: "blob", size: 100 * 1024 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "ok.ts", size: 100 * 1024 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "ok.ts", size: 100 * 1024 }])
   })
 
   it("drops files inside node_modules / dist / build / .git", () => {
@@ -95,9 +89,7 @@ describe("walkIndexableFiles", () => {
       { path: ".git/config.toml", type: "blob", size: 50 },
       { path: "src/keep.ts", type: "blob", size: 100 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "src/keep.ts", size: 100 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "src/keep.ts", size: 100 }])
   })
 
   it("drops dotfile directories EXCEPT .github (CLI parity)", () => {
@@ -108,9 +100,7 @@ describe("walkIndexableFiles", () => {
       { path: ".github/workflows/test.toml", type: "blob", size: 50 },
     ]
     // .vscode dropped (dotfile dir), .github kept.
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: ".github/workflows/test.toml", size: 50 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: ".github/workflows/test.toml", size: 50 }])
   })
 
   it("treats missing size as 0 and keeps the entry", () => {
@@ -126,9 +116,7 @@ describe("walkIndexableFiles", () => {
       { path: ".env", type: "blob", size: 100 },
       { path: "src/index.ts", type: "blob", size: 100 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "src/index.ts", size: 100 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "src/index.ts", size: 100 }])
   })
 
   it("rejects malformed entries (missing path / non-string path)", () => {
@@ -136,9 +124,7 @@ describe("walkIndexableFiles", () => {
       { type: "blob", size: 100 },
       { path: "src/keep.ts", type: "blob", size: 100 },
     ]
-    expect(walkIndexableFiles(entries)).toEqual([
-      { path: "src/keep.ts", size: 100 },
-    ])
+    expect(walkIndexableFiles(entries)).toEqual([{ path: "src/keep.ts", size: 100 }])
   })
 })
 
@@ -252,9 +238,7 @@ describe("chunkFile", () => {
   })
 
   it("splits the old 30-line drop case (3029 chars) preserving every source line", () => {
-    const lines = Array.from({ length: 30 }, (_, i) =>
-      `${i + 1}:`.padEnd(100, "a"),
-    )
+    const lines = Array.from({ length: 30 }, (_, i) => `${i + 1}:`.padEnd(100, "a"))
     const content = lines.join("\n")
     const chunks = chunkFile("x.ts", content)
     expect(chunks.length).toBeGreaterThan(1)

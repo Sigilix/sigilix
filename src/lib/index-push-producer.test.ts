@@ -16,11 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const {
-  mockGetInstallationToken,
-  mockGetRepository,
-  mockListOpenPullRequests,
-} = vi.hoisted(() => ({
+const { mockGetInstallationToken, mockGetRepository, mockListOpenPullRequests } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockGetRepository: vi.fn(),
   mockListOpenPullRequests: vi.fn(),
@@ -43,10 +39,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import {
-  maybeEnqueuePullRequestBranchIndexJobs,
-  maybeEnqueuePushIndexJob,
-} from "@/src/lib/index-producer"
+import { maybeEnqueuePullRequestBranchIndexJobs, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
@@ -58,26 +51,38 @@ function makeKvStub(): {
 } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
 
-function makeEnv(opts: {
-  sensitive?: string
-  credentials?: boolean
-  trackedBranches?: string
-  sendImpl?: (msg: JobMessage) => Promise<void> | void
-} = {}): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
+function makeEnv(
+  opts: {
+    sensitive?: string
+    credentials?: boolean
+    trackedBranches?: string
+    sendImpl?: (msg: JobMessage) => Promise<void> | void
+  } = {},
+): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
   const haveCreds = opts.credentials ?? true
   const { kv, store } = makeKvStub()
   const sent: JobMessage[] = []
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_JOBS: {
-      send: opts.sendImpl ?? (async (m: JobMessage) => { sent.push(m) }),
+      send:
+        opts.sendImpl ??
+        (async (m: JobMessage) => {
+          sent.push(m)
+        }),
     },
     OPENCLAW_SENSITIVE_REPOS: opts.sensitive,
     OPENCLAW_INDEXER_ENABLED: "on",
@@ -111,10 +116,7 @@ function seedManifest(kv: Map<string, string>, over: Partial<RepoIndexManifestV1
   // these tests). The cross-tenant test overrides the BODY's owner to
   // "different-org" while the record still lives under the read key, so
   // the producer's `manifest.owner !== owner` guard fires.
-  kv.set(
-    repoIndexManifestKey("Sigilix", "sigilix"),
-    JSON.stringify({ ...SAMPLE_MANIFEST, ...over }),
-  )
+  kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify({ ...SAMPLE_MANIFEST, ...over }))
 }
 
 beforeEach(() => {
@@ -142,7 +144,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
   it("skips non-branch refs (tag pushes)", async () => {
     const { env, sent } = makeEnv()
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/tags/v1.0.0",
       after: "b".repeat(40),
     })
@@ -154,7 +157,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
   it("skips when ref is undefined", async () => {
     const { env, sent } = makeEnv()
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: undefined,
       after: "b".repeat(40),
     })
@@ -166,7 +170,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "0000000000000000000000000000000000000000",
     })
@@ -178,24 +183,28 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/feature/remove-me",
       after: "0000000000000000000000000000000000000000",
     })
     expect(outcome).toEqual({ enqueued: true, reason: "branch-delete" })
-    expect(sent).toEqual([{
-      type: "delete-repo-index",
-      owner: "Sigilix",
-      repo: "sigilix",
-      branch: "feature/remove-me",
-      reason: "branch-deleted",
-    }])
+    expect(sent).toEqual([
+      {
+        type: "delete-repo-index",
+        owner: "Sigilix",
+        repo: "sigilix",
+        branch: "feature/remove-me",
+        reason: "branch-deleted",
+      },
+    ])
   })
 
   it("skips sensitive repos before any GitHub I/O", async () => {
     const { env, sent } = makeEnv({ sensitive: "sigilix/sigilix" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -207,7 +216,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
   it("skips when no prior index exists (bootstrap is install-only)", async () => {
     const { env, sent } = makeEnv()
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -220,7 +230,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     const { env, sent, kv } = makeEnv()
     seedManifest(kv, { owner: "different-org" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -233,7 +244,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     const { env, sent, kv } = makeEnv({ credentials: false })
     seedManifest(kv)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -247,7 +259,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     seedManifest(kv)
     mockGetRepository.mockResolvedValue(null)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -268,7 +281,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     seedManifest(kv)
     mockGetRepository.mockRejectedValue(new Error("HTTP 502 Bad Gateway"))
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
@@ -281,7 +295,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/feature-branch",
       after: "b".repeat(40),
     })
@@ -295,19 +310,22 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     mockListOpenPullRequests.mockRejectedValue(new Error("GitHub 502"))
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/feature-branch",
       after: "b".repeat(40),
     })
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
-    expect(sent).toEqual([{
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "push",
-      branch: "feature-branch",
-    }])
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "push",
+        branch: "feature-branch",
+      },
+    ])
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("index-push-open-pr-lookup-failed"))
   })
 })
@@ -318,7 +336,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
     })
@@ -342,7 +361,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       repoId: 808247824,
       ref: "refs/heads/main",
       after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
@@ -370,7 +390,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       repoId: undefined,
       ref: "refs/heads/main",
       after: "b".repeat(40),
@@ -385,7 +406,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "trunk" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/trunk",
       after: "b".repeat(40),
     })
@@ -397,29 +419,31 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/dev",
       after: "b".repeat(40),
     })
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
-    expect(sent).toEqual([{
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "push",
-      branch: "dev",
-    }])
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "push",
+        branch: "dev",
+      },
+    ])
   })
 
   it("enqueues exactly once when a tracked branch also has an open PR", async () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
-    mockListOpenPullRequests.mockResolvedValue([
-      { head: { ref: "dev", repo: { full_name: "Sigilix/sigilix" } } },
-    ])
+    mockListOpenPullRequests.mockResolvedValue([{ head: { ref: "dev", repo: { full_name: "Sigilix/sigilix" } } }])
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/dev",
       after: "b".repeat(40),
     })
@@ -433,7 +457,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     const { env, sent, kv } = makeEnv({ trackedBranches: "release,next" })
     seedManifest(kv)
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/release",
       after: "b".repeat(40),
     })
@@ -448,7 +473,8 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
       { head: { ref: "feature-branch", repo: { full_name: "Sigilix/sigilix" } } },
     ])
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/feature-branch",
       after: "b".repeat(40),
     })
@@ -475,14 +501,16 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
       baseRef: "main",
       merged: false,
     })
-    expect(sent).toEqual([{
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "pull-request",
-      branch: "feature-branch",
-    }])
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "pull-request",
+        branch: "feature-branch",
+      },
+    ])
   })
 
   it("does not index draft PR branches", async () => {
@@ -540,14 +568,16 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
       baseRef: "main",
       merged: true,
     })
-    expect(sent).toEqual([{
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "merged-pr",
-      branch: "main",
-    }])
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "merged-pr",
+        branch: "main",
+      },
+    ])
   })
 
   it("continues to enqueue merged-base refresh and surfaces failure when branch-delete enqueue fails", async () => {
@@ -560,23 +590,27 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
         sent.push(msg)
       },
     })
-    await expect(maybeEnqueuePullRequestBranchIndexJobs({
-      env,
-      ...baseArgs,
-      action: "closed",
-      draft: false,
-      headRef: "feature-branch",
-      baseRef: "main",
-      merged: true,
-    })).rejects.toThrow("pull-request branch enqueue failures")
-    expect(sent).toEqual([{
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "merged-pr",
-      branch: "main",
-    }])
+    await expect(
+      maybeEnqueuePullRequestBranchIndexJobs({
+        env,
+        ...baseArgs,
+        action: "closed",
+        draft: false,
+        headRef: "feature-branch",
+        baseRef: "main",
+        merged: true,
+      }),
+    ).rejects.toThrow("pull-request branch enqueue failures")
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "merged-pr",
+        branch: "main",
+      },
+    ])
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("index-pr-branch-delete-enqueue-failed"))
   })
 })
@@ -590,7 +624,8 @@ describe("maybeEnqueuePushIndexJob — enqueue failure", () => {
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
     const outcome = await maybeEnqueuePushIndexJob({
-      env, ...baseArgs,
+      env,
+      ...baseArgs,
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })

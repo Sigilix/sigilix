@@ -16,12 +16,17 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const LOOP_TYPES: ReadonlySet<string> = new Set([
-  "ForStatement", "ForInStatement", "ForOfStatement",
-  "WhileStatement", "DoWhileStatement",
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
 ])
 const FUNCTION_BOUNDARY_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression",
-  "ArrowFunctionExpression", "MethodDefinition",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "MethodDefinition",
 ])
 
 function sliceEvidence(source: string, node: AstNode): string {
@@ -82,7 +87,8 @@ export const noAwaitInLoop: AstRule = {
     const hits = findAwaitsInLoops(node)
     if (hits.length === 0) return null
     return hits.map(({ node: awaitNode }) => ({
-      message: "`await` inside a loop body executes iterations sequentially. If iterations are independent, use `Promise.all(arr.map(...))` for parallelism.",
+      message:
+        "`await` inside a loop body executes iterations sequentially. If iterations are independent, use `Promise.all(arr.map(...))` for parallelism.",
       evidence: sliceEvidence(ctx.source, awaitNode),
       line: awaitNode.loc?.start?.line ?? 1,
       endLine: awaitNode.loc?.end?.line ?? awaitNode.loc?.start?.line ?? 1,

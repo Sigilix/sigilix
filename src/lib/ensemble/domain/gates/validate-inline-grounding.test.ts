@@ -58,18 +58,13 @@ describe("evaluateInlineGrounding — believability floor + back-compat", () => 
   })
 
   it("ALWAYS keeps a score <= 1 finding even ungrounded with the diff wired (the score-1 advisory path owns it downstream — demoting here would bypass chill suppression)", () => {
-    expect(
-      evaluateInlineGrounding(
-        finding({ score: 1, headline: "vague nit", body: "no refs" }),
-        ev(),
-      ),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 1, headline: "vague nit", body: "no refs" }), ev())).toEqual({
+      keep: true,
+    })
   })
 
   it("ALWAYS keeps when the diff is not wired (addedLineTextByLine undefined)", () => {
-    expect(
-      evaluateInlineGrounding(finding({ score: 1 }), { addedLineTextByLine: undefined }),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 1 }), { addedLineTextByLine: undefined })).toEqual({ keep: true })
     // even an utterly ungrounded sub-4 finding keeps when there's no diff
     // to evaluate against (back-compat / un-threaded caller / tests).
     expect(evaluateInlineGrounding(finding({ score: 2 }), {})).toEqual({ keep: true })
@@ -87,27 +82,25 @@ describe("evaluateInlineGrounding — grounding signals keep a sub-4 finding inl
   })
 
   it("keeps a deletion suggestion (kind delete + empty replacement)", () => {
-    expect(
-      evaluateInlineGrounding(finding({ score: 2, kind: "delete", suggestedReplacement: "" }), ev()),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 2, kind: "delete", suggestedReplacement: "" }), ev())).toEqual({
+      keep: true,
+    })
   })
 
   it("keeps when it carries a repro (failureExample)", () => {
-    expect(
-      evaluateInlineGrounding(finding({ score: 2, failureExample: "throws on empty rows" }), ev()),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 2, failureExample: "throws on empty rows" }), ev())).toEqual({
+      keep: true,
+    })
   })
 
   it("keeps when it carries evidenceRefs", () => {
-    expect(
-      evaluateInlineGrounding(finding({ score: 3, evidenceRefs: ["src/lib/orders.ts:40"] }), ev()),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 3, evidenceRefs: ["src/lib/orders.ts:40"] }), ev())).toEqual({
+      keep: true,
+    })
   })
 
   it("keeps when it carries a real evidenceId", () => {
-    expect(
-      evaluateInlineGrounding(finding({ score: 3, evidenceId: "ast-logic-7" }), ev()),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 3, evidenceId: "ast-logic-7" }), ev())).toEqual({ keep: true })
   })
 
   it("does NOT credit evidenceId === 'NONE' (the SIG-108 authz sentinel)", () => {
@@ -122,12 +115,9 @@ describe("evaluateInlineGrounding — grounding signals keep a sub-4 finding inl
 
   it("keeps when a backticked token resolves to a changed line", () => {
     // `computeTotal` appears on changed line 17.
-    expect(
-      evaluateInlineGrounding(
-        finding({ score: 2, headline: "rename `computeTotal` for clarity" }),
-        ev(),
-      ),
-    ).toEqual({ keep: true })
+    expect(evaluateInlineGrounding(finding({ score: 2, headline: "rename `computeTotal` for clarity" }), ev())).toEqual(
+      { keep: true },
+    )
   })
 })
 
@@ -190,9 +180,9 @@ describe("hasResolvableBacktickedToken", () => {
     expect(hasResolvableBacktickedToken(finding({ headline: "`nope`" }), diff())).toBe(false)
   })
   it("is false for an empty / missing path entry", () => {
-    expect(
-      hasResolvableBacktickedToken(finding({ path: "src/missing.ts", headline: "`computeTotal`" }), diff()),
-    ).toBe(false)
+    expect(hasResolvableBacktickedToken(finding({ path: "src/missing.ts", headline: "`computeTotal`" }), diff())).toBe(
+      false,
+    )
   })
 })
 
@@ -253,7 +243,10 @@ function ungrounded(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   })
 }
 
-function run(findings: PrReviewFinding[], opts: { mode?: "shadow" | "enforce"; onDrop?: (...a: unknown[]) => void } = {}) {
+function run(
+  findings: PrReviewFinding[],
+  opts: { mode?: "shadow" | "enforce"; onDrop?: (...a: unknown[]) => void } = {},
+) {
   return validateForSubmission({
     synthOutput: {
       verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings },
@@ -274,7 +267,10 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     expect(result.droppedForFailedInlineGroundingValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(0)
     expect(result.unanchoredFindings.some((f) => f.headline === "naming is inconsistent here")).toBe(true)
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "ungrounded-inline-finding", dropped: true })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "ungrounded-inline-finding",
+      dropped: true,
+    })
   })
 
   it("SHADOW: counts the would-demote + fires callback dropped:false but KEEPS the finding inline", () => {
@@ -283,7 +279,10 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     expect(result.droppedForFailedInlineGroundingValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(1)
     expect(result.unanchoredFindings).toHaveLength(0)
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "ungrounded-inline-finding", dropped: false })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "ungrounded-inline-finding",
+      dropped: false,
+    })
   })
 
   it("defaults to SHADOW when the mode is omitted", () => {
@@ -294,7 +293,10 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
 
   it("ENFORCE: KEEPS a grounded finding (backticked token on a changed line) inline — counter stays 0", () => {
     const onDrop = vi.fn()
-    const result = run([ungrounded({ headline: "rename `compute` for clarity" })], { mode: "enforce", onDrop })
+    const result = run([ungrounded({ headline: "rename `compute` for clarity" })], {
+      mode: "enforce",
+      onDrop,
+    })
     expect(result.droppedForFailedInlineGroundingValidation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
     expect(onDrop).not.toHaveBeenCalled()
@@ -329,7 +331,12 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     // job, not the line-number heuristic's, post-reversal.
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings: [ungrounded({ line: 1 })] },
+        verdict: {
+          summary: "T",
+          confidence: 3,
+          confidenceReason: "R.",
+          findings: [ungrounded({ line: 1 })],
+        },
         provenance: prov(1),
       },
       reviewable: new Map([[PATH, [{ line: 1, side: "RIGHT" as const, position: 1 }]]]),
@@ -359,7 +366,10 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
 
   it("ordering: a vague-prefix finding is dropped BEFORE the grounding gate (gate counter 0)", () => {
     const onDrop = vi.fn()
-    const result = run([ungrounded({ headline: "Consider renaming this" })], { mode: "enforce", onDrop })
+    const result = run([ungrounded({ headline: "Consider renaming this" })], {
+      mode: "enforce",
+      onDrop,
+    })
     expect(result.droppedForVaguePrefix).toBe(1)
     expect(result.droppedForFailedInlineGroundingValidation).toBe(0)
     expect(onDrop).not.toHaveBeenCalled()

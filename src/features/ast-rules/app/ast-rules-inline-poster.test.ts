@@ -71,7 +71,8 @@ describe("postAstInlineFindings — emission", () => {
       [ERROR_FINDING.astFindingId, { line: 42, side: "RIGHT" }],
     ])
     const r = await postAstInlineFindings({
-      client, ...CTX,
+      client,
+      ...CTX,
       findings: [ERROR_FINDING],
       perFindingPositions: positions,
     })
@@ -91,7 +92,8 @@ describe("postAstInlineFindings — emission", () => {
   it("skips warning-severity findings (only error auto-posts)", async () => {
     const { client, submitReview } = makeClient()
     const r = await postAstInlineFindings({
-      client, ...CTX,
+      client,
+      ...CTX,
       findings: [WARNING_FINDING],
       perFindingPositions: new Map([[WARNING_FINDING.astFindingId, { line: 7, side: "RIGHT" }]]),
     })
@@ -103,7 +105,8 @@ describe("postAstInlineFindings — emission", () => {
   it("skips error finding with no resolved review position", async () => {
     const { client, submitReview } = makeClient()
     const r = await postAstInlineFindings({
-      client, ...CTX,
+      client,
+      ...CTX,
       findings: [ERROR_FINDING],
       perFindingPositions: new Map([[ERROR_FINDING.astFindingId, null]]),
     })
@@ -113,10 +116,13 @@ describe("postAstInlineFindings — emission", () => {
   })
 
   it("submitReview failure is swallowed; result.posted is 0", async () => {
-    const submitReview = vi.fn(async () => { throw new Error("forbidden") })
+    const submitReview = vi.fn(async () => {
+      throw new Error("forbidden")
+    })
     const { client } = makeClient(submitReview)
     const r = await postAstInlineFindings({
-      client, ...CTX,
+      client,
+      ...CTX,
       findings: [ERROR_FINDING],
       perFindingPositions: new Map([[ERROR_FINDING.astFindingId, { line: 42, side: "RIGHT" }]]),
     })
@@ -127,7 +133,8 @@ describe("postAstInlineFindings — emission", () => {
   it("hidden audit marker preserves the astFindingId", async () => {
     const { client, submitReview } = makeClient()
     await postAstInlineFindings({
-      client, ...CTX,
+      client,
+      ...CTX,
       findings: [ERROR_FINDING],
       perFindingPositions: new Map([[ERROR_FINDING.astFindingId, { line: 42, side: "RIGHT" }]]),
     })

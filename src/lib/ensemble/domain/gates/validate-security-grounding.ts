@@ -49,11 +49,7 @@
 
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
-import {
-  deriveSecurityBucket,
-  EVIDENCE_LINE_TOLERANCE,
-  type SecurityBucket,
-} from "./validate-security-finding"
+import { deriveSecurityBucket, EVIDENCE_LINE_TOLERANCE, type SecurityBucket } from "./validate-security-finding"
 import { containsCredentialToken } from "@/src/lib/secret-scan"
 import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "@/src/shared/domain/validate-injection-taint"
 
@@ -73,9 +69,7 @@ export type SecurityGroundingValidatorMode = "off" | "shadow" | "enforce"
  * the cautious default that disables the gate entirely (a security-
  * critical gate must never auto-enable on a typo).
  */
-export function parseSecurityGroundingValidatorMode(
-  raw: string | undefined,
-): SecurityGroundingValidatorMode {
+export function parseSecurityGroundingValidatorMode(raw: string | undefined): SecurityGroundingValidatorMode {
   const v = (raw ?? "").trim().toLowerCase()
   if (v === "shadow") return "shadow"
   if (v === "enforce") return "enforce"
@@ -87,9 +81,7 @@ export type SecurityGroundingDropReason =
   | "secrets-exposure-ungrounded-no-credential-token"
   | "injection-sink-non-attacker-controlled-constant"
 
-export type SecurityGroundingDecision =
-  | { keep: true }
-  | { keep: false; reason: SecurityGroundingDropReason }
+export type SecurityGroundingDecision = { keep: true } | { keep: false; reason: SecurityGroundingDropReason }
 
 /**
  * The categories this gate evaluates, each with its own deterministic,
@@ -98,11 +90,7 @@ export type SecurityGroundingDecision =
  * requires a per-category detector that fails closed to KEEP and a
  * shadow-measured false-negative rate; do NOT add MEDIUM/LOW buckets without one.
  */
-const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>([
-  "secrets-exposure",
-  "xss",
-  "injection",
-])
+const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>(["secrets-exposure", "xss", "injection"])
 
 /** CWE id that a corroborating secret manifest fact carries. */
 const SECRETS_CWE = "CWE-798"
@@ -170,10 +158,7 @@ function collectCitedCode(
  * non-secret fact (dep-vuln / unrelated SARIF) at the same path does NOT
  * corroborate a secrets-exposure claim, so it's excluded.
  */
-function hasCorroboratingSecretFact(
-  finding: PrReviewFinding,
-  manifest: Map<string, SecurityFact>,
-): boolean {
+function hasCorroboratingSecretFact(finding: PrReviewFinding, manifest: Map<string, SecurityFact>): boolean {
   for (const fact of manifest.values()) {
     if (fact.path !== finding.path) continue
     // Normalize the CWE before matching (same trim+upper as
@@ -245,8 +230,7 @@ export function evaluateSecurityGrounding(
     // would suppress a real tainted sink sharing the same multi-line citation
     // (code-reviewer P1).
     const sinkLines = cited.split("\n").filter((l) => extractSinkValueExpr(l) !== null)
-    const allConstant =
-      sinkLines.length > 0 && sinkLines.every((l) => sinkValueIsProvablyConstant(l, fileLines))
+    const allConstant = sinkLines.length > 0 && sinkLines.every((l) => sinkValueIsProvablyConstant(l, fileLines))
     if (allConstant) {
       return { keep: false, reason: "injection-sink-non-attacker-controlled-constant" }
     }

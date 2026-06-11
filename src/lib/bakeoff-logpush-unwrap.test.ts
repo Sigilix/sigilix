@@ -58,7 +58,11 @@ describe("unwrapLogpushEnvelope", () => {
     const envelope = {
       Logs: [
         {
-          Message: JSON.stringify({ event: "shadow-cut-short", role: "synth", ts: "2026-05-15T12:00:00Z" }),
+          Message: JSON.stringify({
+            event: "shadow-cut-short",
+            role: "synth",
+            ts: "2026-05-15T12:00:00Z",
+          }),
         },
       ],
     }
@@ -118,7 +122,15 @@ describe("unwrapLogpushEnvelope", () => {
 
   it("falls back to lowercase `logs` / `message` keys", () => {
     const envelope = {
-      logs: [{ message: JSON.stringify({ event: "shadow-cut-short", role: "synth", ts: "2026-05-15T12:00:00Z" }) }],
+      logs: [
+        {
+          message: JSON.stringify({
+            event: "shadow-cut-short",
+            role: "synth",
+            ts: "2026-05-15T12:00:00Z",
+          }),
+        },
+      ],
     }
     const inner = unwrapLogpushEnvelope(envelope) as Record<string, unknown>
     expect(inner.event).toBe("shadow-cut-short")

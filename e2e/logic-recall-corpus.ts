@@ -657,7 +657,14 @@ export function scoreCase(
 ): CaseResult {
   const onPath = findings.filter((f) => samePath(f.path, c.path) && f.score >= MIN_SCORE)
   if (c.label === "safe") {
-    return { id: c.id, label: c.label, bugClass: c.bugClass, caught: false, falsePositive: onPath.length > 0, nearestLine: onPath[0]?.line ?? null }
+    return {
+      id: c.id,
+      label: c.label,
+      bugClass: c.bugClass,
+      caught: false,
+      falsePositive: onPath.length > 0,
+      nearestLine: onPath[0]?.line ?? null,
+    }
   }
   let nearest: number | null = null
   let caught = false
@@ -666,7 +673,14 @@ export function scoreCase(
     if (nearest === null || dist < Math.abs(nearest - c.buggyLine)) nearest = f.line
     if (dist <= window) caught = true
   }
-  return { id: c.id, label: c.label, bugClass: c.bugClass, caught, falsePositive: false, nearestLine: nearest }
+  return {
+    id: c.id,
+    label: c.label,
+    bugClass: c.bugClass,
+    caught,
+    falsePositive: false,
+    nearestLine: nearest,
+  }
 }
 
 export interface RecallReport {

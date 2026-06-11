@@ -260,7 +260,7 @@ describe("fetchPullRequestContext", () => {
         status: "modified",
         additions: 1,
         deletions: 0,
-      }))
+      })),
     )
 
     const result = await fetchPullRequestContext({
@@ -276,9 +276,7 @@ describe("fetchPullRequestContext", () => {
   })
 
   it("infers state='merged' when REST state='closed' and merged_at is set", async () => {
-    mockMethods.getPullRequest.mockResolvedValue(
-      makeMeta({ state: "closed", merged_at: "2026-04-29T12:00:00Z" })
-    )
+    mockMethods.getPullRequest.mockResolvedValue(makeMeta({ state: "closed", merged_at: "2026-04-29T12:00:00Z" }))
     mockMethods.getPullRequestDiff.mockResolvedValue("d")
     mockMethods.listPullRequestFiles.mockResolvedValue([])
 
@@ -295,7 +293,7 @@ describe("fetchPullRequestContext", () => {
 
   it("normalizes malformed state from REST to a safe enum value", async () => {
     mockMethods.getPullRequest.mockResolvedValue(
-      makeMeta({ state: "weird-thing" as unknown as PullRequestMeta["state"], merged_at: null })
+      makeMeta({ state: "weird-thing" as unknown as PullRequestMeta["state"], merged_at: null }),
     )
     mockMethods.getPullRequestDiff.mockResolvedValue("d")
     mockMethods.listPullRequestFiles.mockResolvedValue([])

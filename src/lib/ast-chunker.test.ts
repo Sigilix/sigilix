@@ -38,7 +38,13 @@ describe("chunkFileAst", () => {
     expect(chunkFileAst("x.ts", "const = = =", ".ts")).toBeNull()
   })
   it("keeps a small function signature + body together", () => {
-    const content = [`import { z } from "./z"`, ``, `export function compute(width: number) {`, `  return width * 0.0144`, `}`].join("\n")
+    const content = [
+      `import { z } from "./z"`,
+      ``,
+      `export function compute(width: number) {`,
+      `  return width * 0.0144`,
+      `}`,
+    ].join("\n")
     const chunks = chunkFileAst("x.ts", content, ".ts")
     assertCoverage(content, chunks)
     const fn = chunks!.find((c) => c.content.includes("function compute"))!
@@ -46,7 +52,19 @@ describe("chunkFileAst", () => {
     expect(fn.content).toContain("return width * 0.0144")
   })
   it("covers multiple declarations, imports, blank gaps", () => {
-    const content = [`import a from "a"`, `import b from "b"`, ``, `export const K = 6`, ``, `function f() {`, `  return K`, `}`, `class C {`, `  m() { return 1 }`, `}`].join("\n")
+    const content = [
+      `import a from "a"`,
+      `import b from "b"`,
+      ``,
+      `export const K = 6`,
+      ``,
+      `function f() {`,
+      `  return K`,
+      `}`,
+      `class C {`,
+      `  m() { return 1 }`,
+      `}`,
+    ].join("\n")
     assertCoverage(content, chunkFileAst("x.ts", content, ".ts"))
   })
   it("line-splits an oversized declaration, still exact coverage, no blank chunks", () => {

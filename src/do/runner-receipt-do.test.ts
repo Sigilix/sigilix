@@ -13,13 +13,27 @@ function makeDo(): RunnerReceiptDO {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
-      async put(): Promise<void> { /* no-op */ },
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
+      async put(): Promise<void> {
+        /* no-op */
+      },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "repo:424242", name: "repo:424242" },
   }
@@ -43,7 +57,9 @@ describe("RunnerReceiptDO.claimReceipt", () => {
   it("first claim is accepted and stored", async () => {
     const d = makeDo()
     expect(await d.claimReceipt(base)).toEqual({ outcome: "accepted" })
-    expect(await d.debugGet("424242", "deadbeef", "100", "1")).toMatchObject({ sarifSha256: "hash-A" })
+    expect(await d.debugGet("424242", "deadbeef", "100", "1")).toMatchObject({
+      sarifSha256: "hash-A",
+    })
   })
 
   it("same key + same hash is an idempotent duplicate", async () => {
@@ -59,13 +75,17 @@ describe("RunnerReceiptDO.claimReceipt", () => {
       outcome: "conflict",
       existingSarifSha256: "hash-A",
     })
-    expect(await d.debugGet("424242", "deadbeef", "100", "1")).toMatchObject({ sarifSha256: "hash-A" })
+    expect(await d.debugGet("424242", "deadbeef", "100", "1")).toMatchObject({
+      sarifSha256: "hash-A",
+    })
   })
 
   it("a re-run (incremented run_attempt) is a NEW accepted receipt", async () => {
     const d = makeDo()
     await d.claimReceipt(base)
-    expect(await d.claimReceipt({ ...base, runAttempt: "2", sarifSha256: "hash-B" })).toEqual({ outcome: "accepted" })
+    expect(await d.claimReceipt({ ...base, runAttempt: "2", sarifSha256: "hash-B" })).toEqual({
+      outcome: "accepted",
+    })
   })
 
   it("different sha / run_id are independent claims", async () => {
@@ -81,13 +101,27 @@ describe("RunnerReceiptDO.claimReceipt", () => {
     const state = {
       storage: {
         sql: sqlStorage,
-        transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-        async get(): Promise<unknown> { return undefined },
-        async put(): Promise<void> { /* no-op */ },
-        async delete(): Promise<boolean> { return false },
-        async setAlarm(t: number): Promise<void> { alarmAt = t },
-        async getAlarm(): Promise<number | null> { return alarmAt },
-        async deleteAlarm(): Promise<void> { alarmAt = null },
+        transactionSync<T>(fn: () => T): T {
+          return sqlStorage.transactionSync(fn)
+        },
+        async get(): Promise<unknown> {
+          return undefined
+        },
+        async put(): Promise<void> {
+          /* no-op */
+        },
+        async delete(): Promise<boolean> {
+          return false
+        },
+        async setAlarm(t: number): Promise<void> {
+          alarmAt = t
+        },
+        async getAlarm(): Promise<number | null> {
+          return alarmAt
+        },
+        async deleteAlarm(): Promise<void> {
+          alarmAt = null
+        },
       },
       id: { toString: () => "x", name: "x" },
     }
@@ -112,8 +146,13 @@ describe("RunnerReceiptDO.queryReceiptByPull (review join)", () => {
     const d = makeDo()
     await d.claimReceipt(base)
     expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({
-      sha: "deadbeef", pullNumber: 7, runId: "100", runAttempt: "1",
-      sarifSha256: "hash-A", scrubbedSha256: "scrub-A", repository: "Sigilix/sigilix",
+      sha: "deadbeef",
+      pullNumber: 7,
+      runId: "100",
+      runAttempt: "1",
+      sarifSha256: "hash-A",
+      scrubbedSha256: "scrub-A",
+      repository: "Sigilix/sigilix",
     })
   })
 
@@ -128,8 +167,26 @@ describe("RunnerReceiptDO.queryReceiptByPull (review join)", () => {
 
   it("returns the MOST RECENT receipt by ingested_at (a re-run supersedes)", async () => {
     const d = makeDo()
-    await d.claimReceipt({ ...base, runAttempt: "1", sha: "merge-old", sarifSha256: "hash-A", scrubbedSha256: "scrub-A", ingestedAtMs: 1000 })
-    await d.claimReceipt({ ...base, runAttempt: "2", sha: "merge-new", sarifSha256: "hash-B", scrubbedSha256: "scrub-B", ingestedAtMs: 2000 })
-    expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({ runAttempt: "2", sha: "merge-new", sarifSha256: "hash-B" })
+    await d.claimReceipt({
+      ...base,
+      runAttempt: "1",
+      sha: "merge-old",
+      sarifSha256: "hash-A",
+      scrubbedSha256: "scrub-A",
+      ingestedAtMs: 1000,
+    })
+    await d.claimReceipt({
+      ...base,
+      runAttempt: "2",
+      sha: "merge-new",
+      sarifSha256: "hash-B",
+      scrubbedSha256: "scrub-B",
+      ingestedAtMs: 2000,
+    })
+    expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({
+      runAttempt: "2",
+      sha: "merge-new",
+      sarifSha256: "hash-B",
+    })
   })
 })

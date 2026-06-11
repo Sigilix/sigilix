@@ -13,10 +13,7 @@ import type { Env } from "@/src/shared/types/env"
 
 export const EMPTY_CONFIG: SigilixConfig = {}
 
-export type DispatcherEnv = Pick<
-  Env,
-  "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE"
->
+export type DispatcherEnv = Pick<Env, "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE">
 
 export function envOff(): DispatcherEnv {
   // `OPENCLAW_DYNAMIC_DISPATCHER_MODE` intentionally omitted — that's

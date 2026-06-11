@@ -5,13 +5,7 @@
 // Touches the session's lastSeenAt as a fire-and-forget side effect so
 // active users keep their sliding 30-day window.
 
-import {
-  getSession,
-  readCookie,
-  SESSION_COOKIE_NAME,
-  type SessionRecord,
-  touchSession,
-} from "./auth-session"
+import { getSession, readCookie, SESSION_COOKIE_NAME, type SessionRecord, touchSession } from "./auth-session"
 
 interface AuthMiddlewareEnv {
   OPENCLAW_STATE: KVNamespace

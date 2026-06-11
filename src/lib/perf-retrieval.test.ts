@@ -17,19 +17,14 @@ import {
 
 describe("extractChangedFunctionNames", () => {
   it("extracts a plain function declaration on an added line", () => {
-    const diff = [
-      "@@ -1,2 +1,3 @@",
-      "+function loadOrders(ids) {",
-      " const x = 1",
-    ].join("\n")
+    const diff = ["@@ -1,2 +1,3 @@", "+function loadOrders(ids) {", " const x = 1"].join("\n")
     expect(extractChangedFunctionNames(diff)).toEqual(["loadOrders"])
   })
 
   it("extracts arrow-assigned consts (async + sync)", () => {
-    const diff = [
-      "+const handleCheckout = async (req) => {",
-      "+const computeTotal = (items) => items.length",
-    ].join("\n")
+    const diff = ["+const handleCheckout = async (req) => {", "+const computeTotal = (items) => items.length"].join(
+      "\n",
+    )
     expect(extractChangedFunctionNames(diff)).toEqual(["handleCheckout", "computeTotal"])
   })
 
@@ -50,11 +45,7 @@ describe("extractChangedFunctionNames", () => {
   })
 
   it("ignores removed and context lines (only added lines count)", () => {
-    const diff = [
-      "-function removedOne() {",
-      " function contextTwo() {",
-      "+function addedThree() {",
-    ].join("\n")
+    const diff = ["-function removedOne() {", " function contextTwo() {", "+function addedThree() {"].join("\n")
     expect(extractChangedFunctionNames(diff)).toEqual(["addedThree"])
   })
 

@@ -14,16 +14,31 @@ function kvStub(initial: Record<string, string> = {}) {
   const store = new Map<string, string>(Object.entries(initial))
   return {
     get: async (k: string) => store.get(k) ?? null,
-    put: async (k: string, v: string) => { store.set(k, v) },
-    delete: async (k: string) => { store.delete(k) },
+    put: async (k: string, v: string) => {
+      store.set(k, v)
+    },
+    delete: async (k: string) => {
+      store.delete(k)
+    },
   }
 }
 
-function manifestJson(prNumber: number, findings: { key: string; path: string; headline: string; score: number; consensus: number }[]) {
+function manifestJson(
+  prNumber: number,
+  findings: { key: string; path: string; headline: string; score: number; consensus: number }[],
+) {
   return JSON.stringify({
-    v: 1, prNumber, baseSha: "b".repeat(7), headSha: "h".repeat(7), mergeBaseSha: null,
-    fileListHash: "sha256:x", promptVersion: "v1", modelId: "m1",
-    target: { kind: "review", reviewId: 1 }, reviewedAt: 1, findings,
+    v: 1,
+    prNumber,
+    baseSha: "b".repeat(7),
+    headSha: "h".repeat(7),
+    mergeBaseSha: null,
+    fileListHash: "sha256:x",
+    promptVersion: "v1",
+    modelId: "m1",
+    target: { kind: "review", reviewId: 1 },
+    reviewedAt: 1,
+    findings,
   })
 }
 
@@ -37,10 +52,21 @@ describe("handleCorpusPrUpsert — verdict derivation → upsert", () => {
         ]),
       }),
       AI: { run: async () => ({ data: [fakeVec()] }) },
-      OPENCLAW_CODE_INDEX: { upsert: async (r: typeof upserts) => { upserts.push(...r); return {} } },
+      OPENCLAW_CODE_INDEX: {
+        upsert: async (r: typeof upserts) => {
+          upserts.push(...r)
+          return {}
+        },
+      },
     } as unknown as Env
 
-    await handleCorpusPrUpsert(env, { owner: "acme", repo: "widgets", prNumber: 234, title: "Fix", body: "x" })
+    await handleCorpusPrUpsert(env, {
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 234,
+      title: "Fix",
+      body: "x",
+    })
     expect(upserts).toHaveLength(1)
     expect(upserts[0]!.namespace).toBe("pr:acme/widgets")
     expect(upserts[0]!.metadata.verdict).toBe("changes_required")
@@ -51,10 +77,21 @@ describe("handleCorpusPrUpsert — verdict derivation → upsert", () => {
     const env = {
       OPENCLAW_STATE: kvStub({}),
       AI: { run: async () => ({ data: [fakeVec()] }) },
-      OPENCLAW_CODE_INDEX: { upsert: async (r: typeof upserts) => { upserts.push(...r); return {} } },
+      OPENCLAW_CODE_INDEX: {
+        upsert: async (r: typeof upserts) => {
+          upserts.push(...r)
+          return {}
+        },
+      },
     } as unknown as Env
 
-    await handleCorpusPrUpsert(env, { owner: "acme", repo: "widgets", prNumber: 9, title: "T", body: "" })
+    await handleCorpusPrUpsert(env, {
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 9,
+      title: "T",
+      body: "",
+    })
     expect(upserts[0]!.metadata.verdict).toBe("") // upsertPrDoc stores "" for absent verdict
   })
 })
@@ -69,11 +106,18 @@ describe("GitHubClient.searchMergedPullRequests", () => {
       1: Array.from({ length: 100 }, (_, i) => ({ number: i + 1, title: `t${i + 1}`, body: "b" })),
       2: [{ number: 101, title: "last", body: "b" }],
     }
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      calls.push(url)
-      const page = Number(new URL(url).searchParams.get("page"))
-      return { ok: true, status: 200, json: async () => ({ items: pages[page] ?? [] }) } as unknown as Response
-    }))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url)
+        const page = Number(new URL(url).searchParams.get("page"))
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ items: pages[page] ?? [] }),
+        } as unknown as Response
+      }),
+    )
 
     const client = new GitHubClient({ token: "t" })
     const out = await client.searchMergedPullRequests("acme", "widgets", "2026-03-03")
@@ -86,10 +130,19 @@ describe("GitHubClient.searchMergedPullRequests", () => {
   })
 
   it("skips items without a numeric PR number", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true, status: 200,
-      json: async () => ({ items: [{ title: "no number" }, { number: 7, title: "ok", body: "" }] }),
-    } as unknown as Response)))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              items: [{ title: "no number" }, { number: 7, title: "ok", body: "" }],
+            }),
+          }) as unknown as Response,
+      ),
+    )
     const client = new GitHubClient({ token: "t" })
     const out = await client.searchMergedPullRequests("a", "b", "2026-01-01")
     expect(out.map((p) => p.number)).toEqual([7])

@@ -115,9 +115,7 @@ describe("getAppActorToken", () => {
     }))
     vi.stubGlobal("fetch", fetchSpy)
 
-    await expect(
-      getAppActorToken(kv as unknown as KVNamespace, "wrong", "wrong")
-    ).rejects.toThrow(/401/)
+    await expect(getAppActorToken(kv as unknown as KVNamespace, "wrong", "wrong")).rejects.toThrow(/401/)
     expect(kv.put).not.toHaveBeenCalled()
   })
 
@@ -129,9 +127,7 @@ describe("getAppActorToken", () => {
     }))
     vi.stubGlobal("fetch", fetchSpy)
 
-    await expect(
-      getAppActorToken(kv as unknown as KVNamespace, "id", "secret")
-    ).rejects.toThrow(/missing fields/)
+    await expect(getAppActorToken(kv as unknown as KVNamespace, "id", "secret")).rejects.toThrow(/missing fields/)
     expect(kv.put).not.toHaveBeenCalled()
   })
 })

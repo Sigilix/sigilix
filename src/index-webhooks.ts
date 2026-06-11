@@ -9,11 +9,7 @@ import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
 import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
 import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
 import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
-import {
-  bodyMentionsBot,
-  getMentionTriggers,
-  isBotHandle,
-} from "@/src/lib/mention"
+import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 
 export interface LinearWebhookPayload {
@@ -60,11 +56,7 @@ export interface LinearWebhookPayload {
   webhookTimestamp: number
 }
 
-export async function handleLinearWebhook(
-  request: Request,
-  env: Env,
-  _ctx: ExecutionContext
-): Promise<Response> {
+export async function handleLinearWebhook(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   const rawBody = await request.text()
   const signature = request.headers.get("linear-signature") ?? ""
 
@@ -91,14 +83,15 @@ export async function handleLinearWebhook(
     (payload.action === "create" || payload.action === "update")
   ) {
     _ctx.waitUntil(
-      env.OPENCLAW_JOBS.send({ type: "corpus-issue-upsert", linearIssueId: payload.data.id })
-        .catch((err) => {
-          console.warn(JSON.stringify({
+      env.OPENCLAW_JOBS.send({ type: "corpus-issue-upsert", linearIssueId: payload.data.id }).catch((err) => {
+        console.warn(
+          JSON.stringify({
             event: "corpus-issue-upsert-enqueue-failed",
             issueId: payload.data.id,
             err: err instanceof Error ? err.message : String(err),
-          }))
-        }),
+          }),
+        )
+      }),
     )
   }
 
@@ -126,8 +119,7 @@ export async function handleLinearWebhook(
   // still require explicit @-mention — we don't fire on every new
   // comment in any Sigilix-touched issue.
   if (payload.type === "Comment" && payload.action === "create") {
-    const author =
-      payload.data.user?.displayName ?? payload.data.user?.name ?? null
+    const author = payload.data.user?.displayName ?? payload.data.user?.name ?? null
 
     // SIG-225 — primary self-filter: the bot stamps every commentId
     // it creates in KV at post-time (see markBotAuthoredComment in
@@ -212,8 +204,7 @@ export async function handleLinearWebhook(
             const parent = await linear.getCommentAuthor(parentId, {
               signal: AbortSignal.timeout(2000),
             })
-            const parentLogin =
-              parent?.user?.displayName ?? parent?.user?.name ?? null
+            const parentLogin = parent?.user?.displayName ?? parent?.user?.name ?? null
             if (isBotHandle(parentLogin)) {
               triggerReason = "thread-followup"
             }
@@ -267,11 +258,7 @@ export async function handleLinearWebhook(
   return new Response("skipped\n", { status: 200 })
 }
 
-export async function handleManualTrigger(
-  request: Request,
-  env: Env,
-  _ctx: ExecutionContext
-): Promise<Response> {
+export async function handleManualTrigger(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   // Manual trigger is gated by a static API key. Auth is intentionally
   // shared with LINEAR_API_KEY so there's no extra secret to manage;
   // the route exists for ad-hoc re-triage during dev.

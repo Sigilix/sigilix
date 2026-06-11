@@ -15,13 +15,25 @@ function makeDo(): GraphExpansionMetricsDO {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -38,22 +50,35 @@ function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 const URL_ = "https://x/metrics/graph-expansion"
 
 function sample(netNew: number, over: Partial<GraphExpansionSample> = {}): GraphExpansionSample {
   return {
-    mode: "shadow", graphAvailable: true,
-    netNewTokens: netNew, controlTokens: 100, totalTokens: 100 + netNew,
-    fetchEnabled: true, fetchFiles: 1, fetchBytes: 500, fetchElapsedMs: 50,
-    budgetExhausted: false, ...over,
+    mode: "shadow",
+    graphAvailable: true,
+    netNewTokens: netNew,
+    controlTokens: 100,
+    totalTokens: 100 + netNew,
+    fetchEnabled: true,
+    fetchFiles: 1,
+    fetchBytes: 500,
+    fetchElapsedMs: 50,
+    budgetExhausted: false,
+    ...over,
   }
 }
 
 describe("handleGraphExpansionMetricsRoute", () => {
   it("503 when the shared metrics token is unset", async () => {
-    expect((await handleGraphExpansionMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({ OPENCLAW_VALIDATION_METRICS_TOKEN: undefined }))).status).toBe(503)
+    expect(
+      (
+        await handleGraphExpansionMetricsRoute(
+          get(URL_, `Bearer ${TOKEN}`),
+          makeEnv({ OPENCLAW_VALIDATION_METRICS_TOKEN: undefined }),
+        )
+      ).status,
+    ).toBe(503)
   })
 
   it("401 on missing / wrong bearer", async () => {
@@ -63,7 +88,9 @@ describe("handleGraphExpansionMetricsRoute", () => {
   })
 
   it("400 on an out-of-range window", async () => {
-    expect((await handleGraphExpansionMetricsRoute(get(`${URL_}?window=99`, `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
+    expect(
+      (await handleGraphExpansionMetricsRoute(get(`${URL_}?window=99`, `Bearer ${TOKEN}`), makeEnv())).status,
+    ).toBe(400)
   })
 
   it("200 with mode, reviews, the netNewTokens median/rates, and the GO/KILL verdict", async () => {
@@ -72,7 +99,8 @@ describe("handleGraphExpansionMetricsRoute", () => {
     const res = await handleGraphExpansionMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({}, do_))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      mode: string; reviews: number
+      mode: string
+      reviews: number
       netNewTokens: { medianEstimate: number; medianBucket: string; crossFileRate: number }
       goKill: { verdict: string }
     }
@@ -84,7 +112,10 @@ describe("handleGraphExpansionMetricsRoute", () => {
   })
 
   it("defaults mode to off when OPENCLAW_GRAPH_EXPANSION is unset", async () => {
-    const res = await handleGraphExpansionMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({ OPENCLAW_GRAPH_EXPANSION: undefined }))
+    const res = await handleGraphExpansionMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_GRAPH_EXPANSION: undefined }),
+    )
     expect(((await res.json()) as { mode: string }).mode).toBe("off")
   })
 })

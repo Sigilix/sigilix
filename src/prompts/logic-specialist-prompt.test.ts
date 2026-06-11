@@ -53,7 +53,7 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
   it("requires a visible contract before flagging substring search UX semantics", () => {
     expect(logic).toContain("SEARCH SEMANTICS NEED A VISIBLE CONTRACT")
     expect(logic).toContain("String.prototype.includes")
-    expect(logic).toContain("includes(\"\")")
+    expect(logic).toContain('includes("")')
     expect(logic).toContain("This carve-out is ONLY for substring search UX preferences")
     expect(logic).toContain("division by zero, null dereference, out-of-bounds")
     expect(logic).toContain("case-insensitive search")

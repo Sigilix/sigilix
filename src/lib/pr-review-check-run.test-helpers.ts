@@ -13,9 +13,15 @@ export function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true
   return {
     OPENCLAW_STATE: {
-      async get(): Promise<string | null> { return null },
-      async put(): Promise<void> { /* no-op */ },
-      async delete(): Promise<void> { /* no-op */ },
+      async get(): Promise<string | null> {
+        return null
+      },
+      async put(): Promise<void> {
+        /* no-op */
+      },
+      async delete(): Promise<void> {
+        /* no-op */
+      },
     },
     GITHUB_APP_ID: haveCreds ? "12345" : undefined,
     GITHUB_PRIVATE_KEY: haveCreds ? "fake-key" : undefined,

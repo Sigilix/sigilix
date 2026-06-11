@@ -5,9 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import {
-  type EnsembleRunCtx,
-} from "@/src/lib/ensemble-perf-telemetry"
+import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import {
   type TokenUsageByModel,
   MODEL_PRICING,
@@ -51,9 +49,7 @@ afterEach(() => {
 
 describe("pricingForModel", () => {
   it("returns the table entry for a known model", () => {
-    expect(pricingForModel("deepseek-v4-pro:cloud")).toBe(
-      MODEL_PRICING["deepseek-v4-pro:cloud"],
-    )
+    expect(pricingForModel("deepseek-v4-pro:cloud")).toBe(MODEL_PRICING["deepseek-v4-pro:cloud"])
   })
 
   it("falls back to DEFAULT_PRICING for an unknown model (never $0)", () => {
@@ -143,9 +139,7 @@ describe("resolveSloTarget", () => {
   })
 
   it("falls back to default for an unknown tier (forward-compat with SIG-41)", () => {
-    expect(resolveSloTarget("enterprise-tier-not-yet-defined")).toBe(
-      SLO_TARGETS[DEFAULT_TIER],
-    )
+    expect(resolveSloTarget("enterprise-tier-not-yet-defined")).toBe(SLO_TARGETS[DEFAULT_TIER])
   })
 })
 

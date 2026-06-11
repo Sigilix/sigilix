@@ -33,8 +33,12 @@ export const noDocumentWriteCall: AstRule = {
     // the variable's name happens to be "write" — the property is
     // dynamic.
     const propName = c.computed
-      ? (prop?.type === "Literal" && typeof prop.value === "string" ? prop.value : null)
-      : (prop?.type === "Identifier" ? prop.name : null)
+      ? prop?.type === "Literal" && typeof prop.value === "string"
+        ? prop.value
+        : null
+      : prop?.type === "Identifier"
+        ? prop.name
+        : null
     if (!propName || !TARGET_METHODS.has(propName)) return null
     return {
       message: `\`document.${propName}()\` is an HTML-injection vector — refactor to DOM APIs (\`textContent\`, \`createElement\`).`,

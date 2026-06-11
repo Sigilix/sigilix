@@ -115,10 +115,7 @@ function isSimpleIdentifier(expr: string): boolean {
  * provable literal. `const NAME = something(...)` / `const NAME = \`${x}\`` →
  * false. Not found → false.
  */
-function identifierResolvesToLiteral(
-  name: string,
-  fileAddedLines: ReadonlyMap<number, string>,
-): boolean {
+function identifierResolvesToLiteral(name: string, fileAddedLines: ReadonlyMap<number, string>): boolean {
   // Anchor to the START of the (optionally `export`-prefixed) line so the
   // `const NAME =` cannot match mid-line inside a comment or string — a
   // commented decoy `// const X = "ok"` must NOT resolve a real

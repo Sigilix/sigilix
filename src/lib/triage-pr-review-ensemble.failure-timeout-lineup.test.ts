@@ -43,7 +43,7 @@ describe("isPermanentFailure", () => {
     "Ollama HTTP 403: forbidden",
     "Ollama HTTP 400: bad request",
     "Ollama HTTP 422: invalid format",
-    "HTTP 451",  // unavailable for legal reasons — still permanent
+    "HTTP 451", // unavailable for legal reasons — still permanent
   ])("returns true for permanent 4xx (%s)", (reason) => {
     expect(isPermanentFailure(reason, PARSE_LABEL)).toBe(true)
   })
@@ -80,8 +80,9 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // this is ever violated; the test is a regression guard so a
     // future constant tweak doesn't accidentally relax it past where
     // the synth would lose budget to pre-flight or stale-head latency.
-    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
-      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS).toBeLessThanOrEqual(
+      ORCHESTRATOR_TIMEOUT_MS,
+    )
   })
 
   it("uses the post-ARC-283 timeouts (synth no-timeout Phase A, Sigilix-PR-#94 fix-up)", () => {
@@ -110,8 +111,9 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // per failed attempt).
     expect(PER_ATTEMPT_TIMEOUT_MS).toBe(60_000)
     // Static invariant 1 — same shape as the module-load check.
-    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
-      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS).toBeLessThanOrEqual(
+      ORCHESTRATOR_TIMEOUT_MS,
+    )
     // Static invariant 2 — Sigilix's PR #94 catch: pre-flight + retry
     // + finalize must all fit inside the headroom envelope. Pre-flight
     // runs INSIDE the orchestrator timer (orchTimer starts before
@@ -121,9 +123,7 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // a future budget bump can't drift the test loose from the
     // runtime guard (per the PR #94 orphan finding).
     expect(
-      RETRIEVAL_PREFLIGHT_TIMEOUT_MS +
-        SYNTHESIZER_RETRY_TIMEOUT_MS +
-        SYNTH_RETRY_FINALIZE_RESERVE_MS,
+      RETRIEVAL_PREFLIGHT_TIMEOUT_MS + SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS,
     ).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
     // Queue consumer ceiling — ORCHESTRATOR must stay strictly under
     // Cloudflare Queues' 900s consumer wall. Phase B (DO-alarm-driven
@@ -278,14 +278,13 @@ describe("SIG-349 — measured model lineup", () => {
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).
-    const perRole = (c: { retries: number; fallback?: string }) =>
-      1 + c.retries + (c.fallback ? 1 : 0)
+    const perRole = (c: { retries: number; fallback?: string }) => 1 + c.retries + (c.fallback ? 1 : 0)
     const expected =
-      perRole(SPECIALIST_CONFIGS.logic)
-      + perRole(SPECIALIST_CONFIGS.security)
-      + perRole(SPECIALIST_CONFIGS.performance)
-      + perRole(SPECIALIST_CONFIGS.tests)
-      + 2 * perRole(SYNTHESIZER_CONFIG) // ARC-278: synth attempt + retry
+      perRole(SPECIALIST_CONFIGS.logic) +
+      perRole(SPECIALIST_CONFIGS.security) +
+      perRole(SPECIALIST_CONFIGS.performance) +
+      perRole(SPECIALIST_CONFIGS.tests) +
+      2 * perRole(SYNTHESIZER_CONFIG) // ARC-278: synth attempt + retry
     expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(expected)
   })
 })
@@ -294,10 +293,13 @@ describe("SIG-349 — measured model lineup", () => {
 
 describe("validateForSubmission — emits cleanFindingProvenance aligned by index (Task 2.5 + 10b prerequisite)", () => {
   const reviewable: ReviewableMap = new Map([
-    ["src/lib/foo.ts", [
-      { line: 42, side: "RIGHT" },
-      { line: 50, side: "RIGHT" },
-    ]],
+    [
+      "src/lib/foo.ts",
+      [
+        { line: 42, side: "RIGHT" },
+        { line: 50, side: "RIGHT" },
+      ],
+    ],
   ])
   const specialistVerdicts = [
     {
@@ -317,7 +319,9 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "ok", confidence: 4, confidenceReason: "...",
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
           findings: [
             { ...baseFinding, line: 42, score: 4 },
             { ...baseFinding, line: 50, score: 3, headline: "second" },
@@ -354,7 +358,9 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "ok", confidence: 4, confidenceReason: "...",
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
           findings: [
             { ...baseFinding, line: 42, score: 4, headline: "kept" },
             { ...baseFinding, line: 50, score: 1, headline: "score-1 demoted" },
@@ -391,23 +397,29 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "ok", confidence: 4, confidenceReason: "...",
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
           findings: [{ ...baseFinding, line: 42, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
-          softened: [{
-            specialist: "logic",
-            sourceFindingId: "logic-0",
-            headline: "off-by-one",
-            reason: "review-memory/logic",
-          }],
+          softened: [
+            {
+              specialist: "logic",
+              sourceFindingId: "logic-0",
+              headline: "off-by-one",
+              reason: "review-memory/logic",
+            },
+          ],
         },
       },
       reviewable,

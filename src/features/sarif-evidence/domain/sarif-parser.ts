@@ -9,11 +9,7 @@
 // `sarif-evidence-parse-failed` or `unsupported-sarif-version`
 // telemetry without doing its own try/catch.
 
-import type {
-  SarifReport,
-  SarifResult,
-  SarifRun,
-} from "./types"
+import type { SarifReport, SarifResult, SarifRun } from "./types"
 
 export type ParseSarifOk = { ok: true; report: SarifReport }
 export type ParseSarifErr = { ok: false; reason: string }
@@ -76,9 +72,7 @@ export function parseSarif(raw: string): ParseSarifResult {
       for (const res of r.results) {
         if (!isObject(res)) continue
         // Drop results with no message text — nothing to render.
-        const messageText = isObject(res.message) && typeof res.message.text === "string"
-          ? res.message.text
-          : null
+        const messageText = isObject(res.message) && typeof res.message.text === "string" ? res.message.text : null
         if (!messageText) continue
         results.push(res as unknown as SarifResult)
       }

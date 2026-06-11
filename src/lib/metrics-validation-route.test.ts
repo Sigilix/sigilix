@@ -14,13 +14,25 @@ function makeDo() {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -40,8 +52,7 @@ function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 
 describe("handleValidationMetricsRoute", () => {
   it("503 when the token secret is unset", async () => {
@@ -53,28 +64,44 @@ describe("handleValidationMetricsRoute", () => {
   it("401 when the bearer token is missing or wrong", async () => {
     const env = makeEnv()
     expect((await handleValidationMetricsRoute(get("https://x/metrics/validation"), env)).status).toBe(401)
-    expect((await handleValidationMetricsRoute(get("https://x/metrics/validation", "Bearer nope"), env)).status).toBe(401)
+    expect((await handleValidationMetricsRoute(get("https://x/metrics/validation", "Bearer nope"), env)).status).toBe(
+      401,
+    )
   })
 
   it("400 on an invalid window param", async () => {
     const env = makeEnv()
-    const res = await handleValidationMetricsRoute(get("https://x/metrics/validation?window=99", `Bearer ${TOKEN}`), env)
+    const res = await handleValidationMetricsRoute(
+      get("https://x/metrics/validation?window=99", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(400)
   })
 
   it("200 with aggregated counts, modes, and head SHAs", async () => {
     const do_ = makeDo()
     await do_.recordBatch({
-      owner: "o", repo: "r", prNumber: 1, headSha: "abc",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "abc",
       events: [
-        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: false,
+        },
         { kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: true },
       ],
     })
     const env = makeEnv({ OPENCLAW_TESTS_VALIDATOR_MODE: "enforce" }, do_)
-    const res = await handleValidationMetricsRoute(get("https://x/metrics/validation?window=14d", `Bearer ${TOKEN}`), env)
+    const res = await handleValidationMetricsRoute(
+      get("https://x/metrics/validation?window=14d", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(200)
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       window: { days: number }
       modes: Record<string, string>
       counts: Record<string, Record<string, { wouldDrop: number; kept: number }>>
@@ -91,16 +118,31 @@ describe("handleValidationMetricsRoute", () => {
   it("200 surfaces the per-category over-fire rollup (byCategory)", async () => {
     const do_ = makeDo()
     await do_.recordBatch({
-      owner: "o", repo: "r", prNumber: 1, headSha: "abc",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "abc",
       events: [
-        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
-        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false, category: "security" },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "no-credential-token",
+          dropped: false,
+          category: "testing",
+        },
+        {
+          kind: "gate-rejection",
+          gate: "security",
+          reason: "fabricated-evidence-id",
+          dropped: false,
+          category: "security",
+        },
       ],
     })
     const env = makeEnv({}, do_)
     const res = await handleValidationMetricsRoute(get("https://x/metrics/validation", `Bearer ${TOKEN}`), env)
     expect(res.status).toBe(200)
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       byCategory: Record<string, Record<string, { wouldDrop: number; kept: number }>>
     }
     expect(body.byCategory.security.testing).toEqual({ wouldDrop: 1, kept: 1 })
@@ -110,7 +152,7 @@ describe("handleValidationMetricsRoute", () => {
   it("defaults to a 7-day window when unspecified", async () => {
     const env = makeEnv()
     const res = await handleValidationMetricsRoute(get("https://x/metrics/validation", `Bearer ${TOKEN}`), env)
-    const body = await res.json() as { window: { days: number } }
+    const body = (await res.json()) as { window: { days: number } }
     expect(body.window.days).toBe(7)
   })
 })

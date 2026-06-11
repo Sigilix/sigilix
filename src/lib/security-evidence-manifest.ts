@@ -127,10 +127,7 @@ export async function buildSecurityFactManifest(args: {
   for (const h of args.secretHits) {
     // Stable fields: rule + path + line + redacted preview. The raw
     // secret never enters the hash input (it never leaves the runner).
-    const hash = await sha256HexPrefix(
-      `secret|${h.ruleId}|${h.path}|${h.line}|${h.redactedPreview}`,
-      CONTENT_HASH_HEX,
-    )
+    const hash = await sha256HexPrefix(`secret|${h.ruleId}|${h.path}|${h.line}|${h.redactedPreview}`, CONTENT_HASH_HEX)
     const evidenceId = `secret:${h.ruleId}:${hash}:${h.line}`
     manifest.set(evidenceId, {
       evidenceId,
@@ -167,20 +164,17 @@ export async function buildSecurityFactManifest(args: {
 
   for (const f of args.sarifFindings) {
     const line = typeof f.line === "number" ? f.line : null
-    const hash = await sha256HexPrefix(
-      `sarif|${f.ruleId}|${f.path}|${line ?? ""}|${f.message}`,
-      CONTENT_HASH_HEX,
-    )
+    const hash = await sha256HexPrefix(`sarif|${f.ruleId}|${f.path}|${line ?? ""}|${f.message}`, CONTENT_HASH_HEX)
     // Path-only SARIF findings render without the trailing `:line`.
-    const evidenceId = line === null
-      ? `sarif:${f.ruleId}:${hash}`
-      : `sarif:${f.ruleId}:${hash}:${line}`
+    const evidenceId = line === null ? `sarif:${f.ruleId}:${hash}` : `sarif:${f.ruleId}:${hash}:${line}`
     manifest.set(evidenceId, {
       evidenceId,
       tool: "sarif",
       path: f.path,
       line,
-      summary: normalizeSummary(`${f.toolName}/${f.ruleId} (${f.category}) at ${f.path}${line === null ? "" : `:${line}`}: ${f.message}`),
+      summary: normalizeSummary(
+        `${f.toolName}/${f.ruleId} (${f.category}) at ${f.path}${line === null ? "" : `:${line}`}: ${f.message}`,
+      ),
     })
   }
 
@@ -221,7 +215,7 @@ function renderManifest(manifest: Map<string, SecurityFact>): string {
   if (manifest.size === 0) return ""
   const lines: string[] = [
     "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
-    "Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
+    'Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding\'s `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: "NONE"` and justify in the body why no deterministic check exists.',
     "",
   ]
   for (const fact of manifest.values()) {

@@ -25,9 +25,7 @@ const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days
 // Schema
 // ---------------------------------------------------------------------
 
-export type ReviewTarget =
-  | { kind: "review"; reviewId: number }
-  | { kind: "issue-comment"; commentId: number }
+export type ReviewTarget = { kind: "review"; reviewId: number } | { kind: "issue-comment"; commentId: number }
 
 /**
  * ARC-271: per-finding record persisted in the review manifest so the
@@ -104,14 +102,17 @@ function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const o = value as Record<string, unknown>
   return (
-    typeof o.key === "string" && o.key.length > 0 &&
-    typeof o.path === "string" && o.path.length > 0 &&
+    typeof o.key === "string" &&
+    o.key.length > 0 &&
+    typeof o.path === "string" &&
+    o.path.length > 0 &&
     // CodeRabbit phase-end catch: require non-empty headline. The
     // delta key is `sha256(path | normalized-headline)`, so an
     // empty headline collapses every same-path finding to the same
     // key, breaking still-open/new classification. Also a semantic
     // invariant — every finding should have a descriptive headline.
-    typeof o.headline === "string" && o.headline.trim().length > 0 &&
+    typeof o.headline === "string" &&
+    o.headline.trim().length > 0 &&
     typeof o.score === "number" &&
     typeof o.consensus === "number"
   )
@@ -149,12 +150,7 @@ function isReviewManifestV1(value: unknown): value is ReviewManifestV1 {
  * Never throws — KV errors degrade to `{kind: "missing"}` so the
  * stale-mark gate fails-closed on read failures.
  */
-export async function readReviewManifest(
-  env: Env,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<ReadResult> {
+export async function readReviewManifest(env: Env, owner: string, repo: string, prNumber: number): Promise<ReadResult> {
   let raw: string | null
   try {
     raw = await env.OPENCLAW_STATE.get(kvKey(owner, repo, prNumber))
@@ -190,11 +186,9 @@ export async function writeReviewManifest(
   manifest: ReviewManifestV1,
 ): Promise<boolean> {
   try {
-    await env.OPENCLAW_STATE.put(
-      kvKey(owner, repo, prNumber),
-      JSON.stringify(manifest),
-      { expirationTtl: TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(kvKey(owner, repo, prNumber), JSON.stringify(manifest), {
+      expirationTtl: TTL_SECONDS,
+    })
     return true
   } catch {
     return false
@@ -241,10 +235,7 @@ function isOverflowSentinel(s: string): boolean {
  * vs normal would mark stale every time a 3000-cap PR shrinks below
  * the cap (and vice versa). Head/base/prompt-version still detect.
  */
-export function detectReviewStale(
-  manifest: ReviewManifestV1,
-  current: CurrentReviewState,
-): StaleResult {
+export function detectReviewStale(manifest: ReviewManifestV1, current: CurrentReviewState): StaleResult {
   if (manifest.headSha === current.headSha) {
     return { stale: false, reasons: [] }
   }
@@ -313,10 +304,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-const STALE_BLOCK_RE = new RegExp(
-  `${escapeRegex(MARKER_START)}[\\s\\S]*?${escapeRegex(MARKER_END)}\\n?`,
-  "m",
-)
+const STALE_BLOCK_RE = new RegExp(`${escapeRegex(MARKER_START)}[\\s\\S]*?${escapeRegex(MARKER_END)}\\n?`, "m")
 
 // SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
 // markers so a stale-block insertion targets the legacy review head
@@ -330,10 +318,7 @@ const SIGILIX_HEAD_RE = /^(<!-- (?:openclaw|sigilix):pr-review -->\n)/
  * Markdown-only (GitHub note callout); only the marker comments are
  * HTML, which GitHub preserves through PATCH round-trips.
  */
-export function renderStaleBlock(
-  manifest: ReviewManifestV1,
-  current: CurrentReviewState,
-): string {
+export function renderStaleBlock(manifest: ReviewManifestV1, current: CurrentReviewState): string {
   const oldHead = manifest.headSha.slice(0, 7)
   const oldBase = manifest.baseSha.slice(0, 7)
   const newHead = current.headSha.slice(0, 7)

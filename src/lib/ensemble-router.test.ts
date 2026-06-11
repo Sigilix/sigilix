@@ -6,20 +6,14 @@ const onEnv = { OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "on" } as const
 
 describe("decideSpecialists — router OFF (Phase 4a default)", () => {
   it("returns ALL FOUR specialists, regardless of paths", () => {
-    const decision = decideSpecialists(
-      { paths: ["src/foo.ts", "tests/foo.test.ts"], totalLinesChanged: 12 },
-      offEnv,
-    )
+    const decision = decideSpecialists({ paths: ["src/foo.ts", "tests/foo.test.ts"], totalLinesChanged: 12 }, offEnv)
     expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
     expect(decision.reason).toBe("router_off_always_fire")
     expect(decision.routerEnabled).toBe(false)
   })
 
   it("returns all four even on docs-only diffs (router off)", () => {
-    const decision = decideSpecialists(
-      { paths: ["README.md"], totalLinesChanged: 3 },
-      offEnv,
-    )
+    const decision = decideSpecialists({ paths: ["README.md"], totalLinesChanged: 3 }, offEnv)
     expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
     expect(decision.routerEnabled).toBe(false)
   })
@@ -56,7 +50,11 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
       "+Just some prose with `inline code`.",
     ].join("\n")
     const decision = decideSpecialists(
-      { paths: ["README.md", "CONTRIBUTING.md", "docs/intro.mdx"], totalLinesChanged: 30, diffText: benignDiff },
+      {
+        paths: ["README.md", "CONTRIBUTING.md", "docs/intro.mdx"],
+        totalLinesChanged: 30,
+        diffText: benignDiff,
+      },
       onEnv,
     )
     expect(decision.specialists).toEqual([])
@@ -68,7 +66,7 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
     // the router falls through to the default-all-four path because
     // it can't verify the markdown doesn't contain executable fences.
     const decision = decideSpecialists(
-      { paths: ["README.md"], totalLinesChanged: 30 },  // no diffText
+      { paths: ["README.md"], totalLinesChanged: 30 }, // no diffText
       onEnv,
     )
     expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
@@ -104,10 +102,7 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
         "+content",
         "+```",
       ].join("\n")
-      const decision = decideSpecialists(
-        { paths: ["docs/x.md"], totalLinesChanged: 3, diffText: diff },
-        onEnv,
-      )
+      const decision = decideSpecialists({ paths: ["docs/x.md"], totalLinesChanged: 3, diffText: diff }, onEnv)
       expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
     },
   )
@@ -122,18 +117,12 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
   })
 
   it("does NOT take docs-only shortcut if any non-doc file is present", () => {
-    const decision = decideSpecialists(
-      { paths: ["README.md", "src/foo.ts"], totalLinesChanged: 10 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["README.md", "src/foo.ts"], totalLinesChanged: 10 }, onEnv)
     expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
   })
 
   it("FORCES security on lockfile changes (even if otherwise docs-only)", () => {
-    const decision = decideSpecialists(
-      { paths: ["package-lock.json", "README.md"], totalLinesChanged: 100 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["package-lock.json", "README.md"], totalLinesChanged: 100 }, onEnv)
     // Lockfile force overrides the docs-only short-circuit.
     expect(decision.specialists).toContain("security")
     expect(decision.reason).toContain("forced")
@@ -153,26 +142,17 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
     "poetry.lock",
     "Gemfile.lock",
   ])("forces security when %s changes", (path) => {
-    const decision = decideSpecialists(
-      { paths: [path], totalLinesChanged: 5 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: [path], totalLinesChanged: 5 }, onEnv)
     expect(decision.specialists).toContain("security")
   })
 
   it("FORCES security when auth/middleware paths touched", () => {
-    const decision = decideSpecialists(
-      { paths: ["src/auth/jwt.ts"], totalLinesChanged: 20 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["src/auth/jwt.ts"], totalLinesChanged: 20 }, onEnv)
     expect(decision.specialists).toContain("security")
   })
 
   it("FORCES security + logic on schema/migration changes", () => {
-    const decision = decideSpecialists(
-      { paths: ["migrations/0042_add_user_table.sql"], totalLinesChanged: 30 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["migrations/0042_add_user_table.sql"], totalLinesChanged: 30 }, onEnv)
     expect(decision.specialists).toContain("security")
     expect(decision.specialists).toContain("logic")
   })
@@ -181,20 +161,14 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
     // Reviewer catch: tests specialist's highest value is catching PRs
     // WITHOUT new tests. Gating on test-file presence would defeat its
     // purpose. PR with no test files should still trigger tests specialist.
-    const decision = decideSpecialists(
-      { paths: ["src/lib/critical-logic.ts"], totalLinesChanged: 100 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["src/lib/critical-logic.ts"], totalLinesChanged: 100 }, onEnv)
     expect(decision.specialists).toContain("tests")
   })
 
   it("treats markdown with auth keywords in path as security-relevant", () => {
     // Codex caveat: docs-only is dangerous when docs touch sensitive
     // paths. We force security via path-name detection.
-    const decision = decideSpecialists(
-      { paths: ["docs/auth/oauth-flow.md"], totalLinesChanged: 50 },
-      onEnv,
-    )
+    const decision = decideSpecialists({ paths: ["docs/auth/oauth-flow.md"], totalLinesChanged: 50 }, onEnv)
     expect(decision.specialists).toContain("security")
   })
 })

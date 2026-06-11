@@ -42,11 +42,7 @@ export async function fetchPrUrl(owner: string, repo: string, pr: number): Promi
  * Fetch every inline review comment on the PR (all pages). The caller filters
  * to the bot logins it cares about — GitHub's API has no author-filter param.
  */
-export async function fetchReviewComments(
-  owner: string,
-  repo: string,
-  pr: number,
-): Promise<RawComment[]> {
+export async function fetchReviewComments(owner: string, repo: string, pr: number): Promise<RawComment[]> {
   // `--slurp` wraps each page's array in an outer array → flatten to one list.
   const pages = await ghJson<RawComment[][]>([
     "api",

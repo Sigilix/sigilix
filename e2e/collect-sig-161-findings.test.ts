@@ -4,14 +4,8 @@
 // `splitConcatenatedJsonArrays` — which are the load-bearing logic.
 
 import { describe, expect, it } from "vitest"
-import {
-  parseFinding,
-  splitConcatenatedJsonArrays,
-} from "@/scripts/collect-sig-161-findings"
-import {
-  formatFindingComment,
-  type PrReviewFinding,
-} from "@/src/lib/triage-pr-review"
+import { parseFinding, splitConcatenatedJsonArrays } from "@/scripts/collect-sig-161-findings"
+import { formatFindingComment, type PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 const baseComment = {
   id: 123456,
@@ -240,7 +234,7 @@ describe("parseFinding (SIG-161)", () => {
     })
     expect(row).not.toBeNull()
     expect(row!.category).toBe("logic") // recovered from the marker
-    expect(row!.score).toBe(3)          // sev:info → 3
+    expect(row!.score).toBe(3) // sev:info → 3
     expect(row!.confidence).toBeUndefined()
     expect(row!.headline).toBeUndefined()
     expect(row!.body).toContain("Body content that the labeler still needs to see")
@@ -260,7 +254,8 @@ describe("parseFinding (SIG-161)", () => {
     const a = parseFinding({ ...baseArgs, comment: { ...baseComment, body } })
     const b = parseFinding({ ...baseArgs, prNumber: 139, comment: { ...baseComment, body } })
     const c = parseFinding({
-      ...baseArgs, repo: "rubberfit",
+      ...baseArgs,
+      repo: "rubberfit",
       comment: { ...baseComment, body },
     })
     expect(a!.findingId).not.toBe(b!.findingId)
@@ -295,16 +290,16 @@ describe("parseFinding (SIG-161)", () => {
 
 describe("splitConcatenatedJsonArrays (SIG-161)", () => {
   it("splits a single array into one element", () => {
-    expect(splitConcatenatedJsonArrays('[1,2,3]')).toEqual(['[1,2,3]'])
+    expect(splitConcatenatedJsonArrays("[1,2,3]")).toEqual(["[1,2,3]"])
   })
 
   it("splits two concatenated arrays", () => {
-    expect(splitConcatenatedJsonArrays('[1,2][3,4]')).toEqual(['[1,2]', '[3,4]'])
+    expect(splitConcatenatedJsonArrays("[1,2][3,4]")).toEqual(["[1,2]", "[3,4]"])
   })
 
   it("handles nested arrays inside top-level arrays", () => {
-    const s = '[[1,2],[3,4]][[5,6]]'
-    expect(splitConcatenatedJsonArrays(s)).toEqual(['[[1,2],[3,4]]', '[[5,6]]'])
+    const s = "[[1,2],[3,4]][[5,6]]"
+    expect(splitConcatenatedJsonArrays(s)).toEqual(["[[1,2],[3,4]]", "[[5,6]]"])
   })
 
   it("ignores brackets inside JSON strings", () => {
@@ -322,7 +317,7 @@ describe("splitConcatenatedJsonArrays (SIG-161)", () => {
   })
 
   it("survives whitespace and newlines between arrays", () => {
-    const s = '[1]\n[2]\n  [3]'
-    expect(splitConcatenatedJsonArrays(s)).toEqual(['[1]', '[2]', '[3]'])
+    const s = "[1]\n[2]\n  [3]"
+    expect(splitConcatenatedJsonArrays(s)).toEqual(["[1]", "[2]", "[3]"])
   })
 })

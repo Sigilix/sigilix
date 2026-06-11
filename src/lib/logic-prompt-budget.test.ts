@@ -21,15 +21,15 @@ import {
 
 describe("parseLogicPromptBudgetMode — env flag parser", () => {
   describe("happy path — recognized values", () => {
-    it("returns \"off\" for exact \"off\"", () => {
+    it('returns "off" for exact "off"', () => {
       expect(parseLogicPromptBudgetMode("off")).toBe("off")
     })
 
-    it("returns \"shadow\" for exact \"shadow\"", () => {
+    it('returns "shadow" for exact "shadow"', () => {
       expect(parseLogicPromptBudgetMode("shadow")).toBe("shadow")
     })
 
-    it("returns \"enforce\" for exact \"enforce\"", () => {
+    it('returns "enforce" for exact "enforce"', () => {
       expect(parseLogicPromptBudgetMode("enforce")).toBe("enforce")
     })
 
@@ -42,16 +42,16 @@ describe("parseLogicPromptBudgetMode — env flag parser", () => {
   })
 
   describe("safety net — default off for everything else", () => {
-    it("returns \"off\" for undefined", () => {
+    it('returns "off" for undefined', () => {
       expect(parseLogicPromptBudgetMode(undefined)).toBe("off")
     })
 
-    it("returns \"off\" for empty / whitespace-only", () => {
+    it('returns "off" for empty / whitespace-only', () => {
       expect(parseLogicPromptBudgetMode("")).toBe("off")
       expect(parseLogicPromptBudgetMode("   ")).toBe("off")
     })
 
-    it("returns \"off\" for typos + unknown values", () => {
+    it('returns "off" for typos + unknown values', () => {
       expect(parseLogicPromptBudgetMode("on")).toBe("off")
       expect(parseLogicPromptBudgetMode("enabled")).toBe("off")
       expect(parseLogicPromptBudgetMode("enforced")).toBe("off")
@@ -135,9 +135,9 @@ describe("measureLogicPrompt — section detection + span counting", () => {
     // second span is from [GRAPH CONTEXT] to end-of-string.
     const prompt =
       "[LOGIC SYMBOL CONTEXT — header]\n" +
-      "x".repeat(40) +  // ~10 tokens (40 chars / 4)
+      "x".repeat(40) + // ~10 tokens (40 chars / 4)
       "\n[GRAPH CONTEXT — header]\n" +
-      "y".repeat(80)    // ~20+ tokens
+      "y".repeat(80) // ~20+ tokens
     const m = measureLogicPrompt(prompt)
     expect(m.sections.symbolRetrieval.present).toBe(true)
     expect(m.sections.graphContext.present).toBe(true)
@@ -153,9 +153,9 @@ describe("measureLogicPrompt — section detection + span counting", () => {
     // to start-of-line via `^...` + `/m`.
     const promptWithMidLineLiterals = [
       "[DIFF]",
-      "+ const fakeRef = \"[GRAPH CONTEXT — embedded in a string literal]\"",
+      '+ const fakeRef = "[GRAPH CONTEXT — embedded in a string literal]"',
       "+ // prose mentioning [DETERMINISTIC CHECKS — in a comment] mid-line",
-      "+ console.log(\"[LOGIC SYMBOL CONTEXT — string literal\")",
+      '+ console.log("[LOGIC SYMBOL CONTEXT — string literal")',
       "+ // edited review-evidence-pack.ts to handle [DYNAMIC REVIEW EVIDENCE",
     ].join("\n")
     const m = measureLogicPrompt(promptWithMidLineLiterals)
@@ -245,7 +245,7 @@ describe("maybeEmitLogicPromptBudget — telemetry side-effect", () => {
     headSha: "deadbeefcafe",
   }
 
-  it("is a no-op when mode === \"off\"", () => {
+  it('is a no-op when mode === "off"', () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
       maybeEmitLogicPromptBudget({ ...baseArgs, mode: "off" })
@@ -255,7 +255,7 @@ describe("maybeEmitLogicPromptBudget — telemetry side-effect", () => {
     }
   })
 
-  it("emits a `logic-prompt-budget` event in shadow mode with mode: \"shadow\"", () => {
+  it('emits a `logic-prompt-budget` event in shadow mode with mode: "shadow"', () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
       maybeEmitLogicPromptBudget({ ...baseArgs, mode: "shadow" })
@@ -277,7 +277,7 @@ describe("maybeEmitLogicPromptBudget — telemetry side-effect", () => {
     }
   })
 
-  it("records mode: \"enforce-pending\" in enforce mode (truncation not yet implemented)", () => {
+  it('records mode: "enforce-pending" in enforce mode (truncation not yet implemented)', () => {
     // Enforce-mode signals an OPS-level expectation but doesn't
     // truncate in this PR. Emitting "enforce-pending" lets the
     // dashboard catch premature flips.
@@ -317,7 +317,12 @@ function section(marker: string, tokens: number): string {
 // A prompt where dropping the lowest-priority sections brings it under `cap`,
 // but the diff + graph + symbol + deterministic checks should survive.
 function buildPrompt(sizes: {
-  diff: number; graph: number; symbol: number; vectorize: number; dynamic: number; det: number
+  diff: number
+  graph: number
+  symbol: number
+  vectorize: number
+  dynamic: number
+  det: number
 }): string {
   return [
     section("[DIFF]", sizes.diff),
@@ -331,9 +336,7 @@ function buildPrompt(sizes: {
 
 describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
   it("documents the drop order (lowest-value first) + never drops diff/graph/AST", () => {
-    expect(LOGIC_PROMPT_DROP_ORDER).toEqual([
-      "dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval",
-    ])
+    expect(LOGIC_PROMPT_DROP_ORDER).toEqual(["dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval"])
     // Mandatory / precision-relevant sections are NOT droppable:
     expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("diff")
     expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("deterministicChecks")
@@ -350,7 +353,14 @@ describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
 
   it("drops only enough low-priority sections to fit, keeping higher-priority ones", () => {
     // total 160 tokens, cap 100. Drop dynamic(40)→120, vectorize(40)→80 ≤100 → stop.
-    const prompt = buildPrompt({ diff: 30, graph: 20, symbol: 20, vectorize: 40, dynamic: 40, det: 10 })
+    const prompt = buildPrompt({
+      diff: 30,
+      graph: 20,
+      symbol: 20,
+      vectorize: 40,
+      dynamic: 40,
+      det: 10,
+    })
     const r = trimLogicPrompt(prompt, 100)
     expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval"])
     expect(r.afterTokens).toBeLessThanOrEqual(100)
@@ -367,7 +377,14 @@ describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
   it("NEVER drops the diff, graph, or deterministic-checks, even if still over cap after all droppables", () => {
     // diff alone (200) blows a tiny cap; every DROPPABLE section is removed but
     // diff + graph + det stay (graph is precision-relevant, not droppable).
-    const prompt = buildPrompt({ diff: 200, graph: 50, symbol: 50, vectorize: 50, dynamic: 50, det: 20 })
+    const prompt = buildPrompt({
+      diff: 200,
+      graph: 50,
+      symbol: 50,
+      vectorize: 50,
+      dynamic: 50,
+      det: 20,
+    })
     const r = trimLogicPrompt(prompt, 100)
     expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval"])
     expect(r.prompt).toContain("[DIFF]")
@@ -398,9 +415,21 @@ describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
 })
 
 describe("applyLogicPromptBudget — mode routing", () => {
-  const big = buildPrompt({ diff: 30, graph: 20, symbol: 20, vectorize: 8000, dynamic: 4000, det: 10 })
+  const big = buildPrompt({
+    diff: 30,
+    graph: 20,
+    symbol: 20,
+    vectorize: 8000,
+    dynamic: 4000,
+    det: 10,
+  })
   const args = (mode: "off" | "shadow" | "enforce") => ({
-    mode, prompt: big, owner: "o", repo: "r", prNumber: 1, headSha: "abcdef0",
+    mode,
+    prompt: big,
+    owner: "o",
+    repo: "r",
+    prNumber: 1,
+    headSha: "abcdef0",
   })
 
   it("off → passthrough (prompt unchanged)", () => {

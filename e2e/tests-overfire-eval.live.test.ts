@@ -129,15 +129,29 @@ async function runCase(
   const postGateFindings = applyCurrentTestGate(c, rawFindings)
   const raw = scoreCase(c, rawFindings)
   const postGate = scoreCase(c, postGateFindings)
-  const rawMark = c.label === "vuln" ? (raw.caught ? "raw caught" : "raw MISSED") : raw.falsePositive ? "raw FP" : "raw clean"
-  const gateMark = c.label === "vuln" ? (postGate.caught ? "gate caught" : "gate MISSED") : postGate.falsePositive ? "gate FP" : "gate clean"
+  const rawMark =
+    c.label === "vuln" ? (raw.caught ? "raw caught" : "raw MISSED") : raw.falsePositive ? "raw FP" : "raw clean"
+  const gateMark =
+    c.label === "vuln"
+      ? postGate.caught
+        ? "gate caught"
+        : "gate MISSED"
+      : postGate.falsePositive
+        ? "gate FP"
+        : "gate clean"
   console.log(`  [${c.label.padEnd(4)}] ${c.id.padEnd(36)} ${rawMark.padEnd(10)} / ${gateMark.padEnd(11)} (${tag})`)
   if (errored && process.env.TESTS_OVERFIRE_DEBUG && shadowResult?.failureRawAnswer) {
     console.log(`      raw-error: ${shadowResult.failureRawAnswer.slice(0, 1200).replace(/\s+/g, " ")}`)
   }
-  if (!errored && process.env.TESTS_OVERFIRE_DEBUG && (raw.falsePositive || (c.label === "vuln" && (!raw.caught || !postGate.caught)))) {
+  if (
+    !errored &&
+    process.env.TESTS_OVERFIRE_DEBUG &&
+    (raw.falsePositive || (c.label === "vuln" && (!raw.caught || !postGate.caught)))
+  ) {
     for (const f of rawFindings) {
-      console.log(`      -> score=${f.score} ${f.category ?? "?"} ${f.path}:${f.line} - ${f.headline ?? ""}${f.body ? ` :: ${String(f.body).slice(0, 200)}` : ""}`)
+      console.log(
+        `      -> score=${f.score} ${f.category ?? "?"} ${f.path}:${f.line} - ${f.headline ?? ""}${f.body ? ` :: ${String(f.body).slice(0, 200)}` : ""}`,
+      )
     }
   }
   return { raw, postGate, errored }
@@ -147,19 +161,49 @@ describe.skipIf(!API_KEY)("tests overfire baseline (LIVE - needs OLLAMA_API_KEY,
   it(
     "measures tests-specialist P0/P1 recall + raw/post-gate FP-rate and precision",
     async () => {
-      const onlyIds = (process.env.TESTS_OVERFIRE_ONLY?.split(",").map((s) => s.trim()).filter(Boolean)) ?? []
+      const onlyIds =
+        process.env.TESTS_OVERFIRE_ONLY?.split(",")
+          .map((s) => s.trim())
+          .filter(Boolean) ?? []
       const cases = onlyIds.length ? TESTS_OVERFIRE_CASES.filter((c) => onlyIds.includes(c.id)) : TESTS_OVERFIRE_CASES
-      const perCase = new Map<string, { rawHits: number; gateHits: number; rawPositive: number; gatePositive: number; runs: number; errors: number }>()
-      for (const c of cases) perCase.set(c.id, { rawHits: 0, gateHits: 0, rawPositive: 0, gatePositive: 0, runs: 0, errors: 0 })
+      const perCase = new Map<
+        string,
+        {
+          rawHits: number
+          gateHits: number
+          rawPositive: number
+          gatePositive: number
+          runs: number
+          errors: number
+        }
+      >()
+      for (const c of cases)
+        perCase.set(c.id, {
+          rawHits: 0,
+          gateHits: 0,
+          rawPositive: 0,
+          gatePositive: 0,
+          runs: 0,
+          errors: 0,
+        })
       for (let k = 0; k < REPEATS; k++) {
         for (const c of cases) {
           const { raw, postGate, errored } = await runCase(c, API_KEY as string)
           const e = perCase.get(c.id)!
-          if (errored) { e.errors++; continue }
+          if (errored) {
+            e.errors++
+            continue
+          }
           e.runs++
           if (c.label === "vuln") {
-            if (raw.caught) { e.rawHits++; e.rawPositive++ }
-            if (postGate.caught) { e.gateHits++; e.gatePositive++ }
+            if (raw.caught) {
+              e.rawHits++
+              e.rawPositive++
+            }
+            if (postGate.caught) {
+              e.gateHits++
+              e.gatePositive++
+            }
           } else {
             if (!raw.falsePositive) e.rawHits++
             else e.rawPositive++
@@ -171,7 +215,8 @@ describe.skipIf(!API_KEY)("tests overfire baseline (LIVE - needs OLLAMA_API_KEY,
       const vuln = cases.filter((c) => c.label === "vuln")
       const safe = cases.filter((c) => c.label === "safe")
       const scored = (cs: typeof vuln): typeof vuln => cs.filter((c) => perCase.get(c.id)!.runs > 0)
-      const sv = scored(vuln), ss = scored(safe)
+      const sv = scored(vuln),
+        ss = scored(safe)
       const rate = (id: string, k: "rawHits" | "gateHits"): number => {
         const e = perCase.get(id)!
         return e.runs ? e[k] / e.runs : 0
@@ -187,7 +232,7 @@ describe.skipIf(!API_KEY)("tests overfire baseline (LIVE - needs OLLAMA_API_KEY,
       const rawFp = ss.reduce((s, c) => s + perCase.get(c.id)!.rawPositive, 0)
       const gateFp = ss.reduce((s, c) => s + perCase.get(c.id)!.gatePositive, 0)
       const totalErrors = [...perCase.values()].reduce((s, e) => s + e.errors, 0)
-      const droppedCases = (vuln.length - sv.length) + (safe.length - ss.length)
+      const droppedCases = vuln.length - sv.length + (safe.length - ss.length)
       const marker = (id: string, k: "rawHits" | "gateHits"): string => {
         const e = perCase.get(id)!
         return e.runs === 0 ? "!" : e[k] === e.runs ? "Y" : e[k] === 0 ? "N" : "~"
@@ -202,19 +247,27 @@ describe.skipIf(!API_KEY)("tests overfire baseline (LIVE - needs OLLAMA_API_KEY,
       ]
       lines.push("")
       lines.push("SPECIALIST RAW OUTPUT (human-labeled oracle):")
-      lines.push(`  recall ${pct(rawRecall)}  clean-on-safe ${pct(rawClean)}  FP-rate ${pct(1 - rawClean)}  precision ${fmtRate(rawTp, rawTp + rawFp)}`)
+      lines.push(
+        `  recall ${pct(rawRecall)}  clean-on-safe ${pct(rawClean)}  FP-rate ${pct(1 - rawClean)}  precision ${fmtRate(rawTp, rawTp + rawFp)}`,
+      )
       lines.push("POST-GATE CURRENT SURFACE (after evaluateTestFinding):")
-      lines.push(`  recall ${pct(gateRecall)}  clean-on-safe ${pct(gateClean)}  FP-rate ${pct(1 - gateClean)}  precision ${fmtRate(gateTp, gateTp + gateFp)}${totalErrors ? `  ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? `  ${droppedCases} case(s) all-errored` : ""}`)
+      lines.push(
+        `  recall ${pct(gateRecall)}  clean-on-safe ${pct(gateClean)}  FP-rate ${pct(1 - gateClean)}  precision ${fmtRate(gateTp, gateTp + gateFp)}${totalErrors ? `  ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? `  ${droppedCases} case(s) all-errored` : ""}`,
+      )
       lines.push("")
       lines.push("per VULN case (caught / runs):")
       for (const c of vuln) {
         const e = perCase.get(c.id)!
-        lines.push(`  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(36)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`)
+        lines.push(
+          `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(36)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
+        )
       }
       lines.push("per SAFE case (clean / runs):")
       for (const c of safe) {
         const e = perCase.get(c.id)!
-        lines.push(`  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(36)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`)
+        lines.push(
+          `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(36)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
+        )
       }
       console.log(lines.join("\n"))
     },

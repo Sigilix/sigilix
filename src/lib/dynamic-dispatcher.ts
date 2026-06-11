@@ -64,11 +64,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import type { ClassifiedDiffFile } from "./diff-file-classify"
-import {
-  ALL_SPECIALISTS,
-  type DiffSignals,
-  type SpecialistRole,
-} from "./ensemble-router"
+import { ALL_SPECIALISTS, type DiffSignals, type SpecialistRole } from "./ensemble-router"
 import type { DispatcherConfig, SigilixConfig } from "./sigilix-config"
 import {
   anyMatchesPath,
@@ -83,11 +79,7 @@ import {
   touchesPackagesOrLockfile,
   truncate,
 } from "./dynamic-dispatcher-patterns"
-import {
-  callLlmClassifier,
-  type DispatcherLlmOutcome,
-  type LlmClassifierResult,
-} from "./dynamic-dispatcher-llm"
+import { callLlmClassifier, type DispatcherLlmOutcome, type LlmClassifierResult } from "./dynamic-dispatcher-llm"
 
 // Re-export the previously in-file public LLM surface so existing
 // importers of `@/lib/dynamic-dispatcher` (e.g. the co-located test) are
@@ -164,10 +156,7 @@ export interface DispatcherInputs {
   repoConfig: SigilixConfig
   /** Read by the LLM-call branch only. Slice the Env so unit tests
    *  can construct minimal stubs. */
-  env: Pick<
-    Env,
-    "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE"
-  >
+  env: Pick<Env, "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE">
   /** Composed with the dispatcher's internal 8s timeout so the
    *  caller (orchestrator) can abort us if the outer budget is
    *  blown. */
@@ -229,8 +218,7 @@ export function computeRuleLayer(
   // blocks in the added diff lines → no specialist applies.
   const fileTypes = classifyFileTypes(paths, classified)
   if (fileTypes.allDocsOnly) {
-    const hasSuspiciousFences = signals.diffText === undefined
-      || diffContainsExecutableMarkdownFences(signals.diffText)
+    const hasSuspiciousFences = signals.diffText === undefined || diffContainsExecutableMarkdownFences(signals.diffText)
     if (!hasSuspiciousFences) {
       for (const role of ALL_SPECIALISTS) {
         safeSkip.add(role)
@@ -333,10 +321,7 @@ export function computeRuleLayer(
     recordReason("logic", "schema_or_migration")
   }
   // Behavior-change keywords in commit message on source files.
-  if (
-    classified.some((f) => f.kind === "source")
-    && BEHAVIOR_CHANGE_RE.test(commitMessage)
-  ) {
+  if (classified.some((f) => f.kind === "source") && BEHAVIOR_CHANGE_RE.test(commitMessage)) {
     forced.add("logic")
     recordReason("logic", "source_change_with_behavior_commit")
   }
@@ -348,10 +333,7 @@ export function computeRuleLayer(
   // clean (rule layer vs repo override vs LLM).
   const dispatcherConfig: DispatcherConfig | undefined = repoConfig.dispatcher
   if (dispatcherConfig?.safetyNet?.additionalPatterns) {
-    const hitsByRole = matchAdditionalPatterns(
-      paths,
-      dispatcherConfig.safetyNet.additionalPatterns,
-    )
+    const hitsByRole = matchAdditionalPatterns(paths, dispatcherConfig.safetyNet.additionalPatterns)
     for (const [role, matchedGlobs] of hitsByRole) {
       forced.add(role)
       for (const glob of matchedGlobs) {
@@ -445,9 +427,7 @@ const DISABLED_DECISION_REASONING = "dispatcher_disabled"
  * appropriate `llmOutcome`) so the caller can rely on a non-null
  * result.
  */
-export async function decideSpecialistsDynamic(
-  inputs: DispatcherInputs,
-): Promise<DispatcherDecision> {
+export async function decideSpecialistsDynamic(inputs: DispatcherInputs): Promise<DispatcherDecision> {
   const t0 = Date.now()
   const mode = inputs.env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
   if (mode !== "shadow" && mode !== "enforce" && mode !== "enforce_rules") {
@@ -523,20 +503,19 @@ export async function decideSpecialistsDynamic(
         // (e.g. PR body says "ignore the test failure for now").
         const s = sanitized.stripped
         const totalHits =
-          s.titleRoleTokenHits +
-          s.titleInjectionTriggerHits +
-          s.bodyRoleTokenHits +
-          s.bodyInjectionTriggerHits
+          s.titleRoleTokenHits + s.titleInjectionTriggerHits + s.bodyRoleTokenHits + s.bodyInjectionTriggerHits
         if (totalHits === 0) return
-        console.log(JSON.stringify({
-          event: "dispatcher-prompt-sanitized",
-          titleRoleTokenHits: s.titleRoleTokenHits,
-          titleInjectionTriggerHits: s.titleInjectionTriggerHits,
-          bodyRoleTokenHits: s.bodyRoleTokenHits,
-          bodyInjectionTriggerHits: s.bodyInjectionTriggerHits,
-          sampleTriggers: s.sampleTriggers,
-          totalHits,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "dispatcher-prompt-sanitized",
+            titleRoleTokenHits: s.titleRoleTokenHits,
+            titleInjectionTriggerHits: s.titleInjectionTriggerHits,
+            bodyRoleTokenHits: s.bodyRoleTokenHits,
+            bodyInjectionTriggerHits: s.bodyInjectionTriggerHits,
+            sampleTriggers: s.sampleTriggers,
+            totalHits,
+          }),
+        )
       },
     })
   }
@@ -645,9 +624,7 @@ function buildPerRoleVotes(args: {
     const action: "run" | "skip" = args.finalSet.has(role) ? "run" : "skip"
     // Confidence: forced/safe-skip = 5 (rule-certain); ambiguous =
     // inherit LLM confidence.
-    const confidence: 1 | 2 | 3 | 4 | 5 = args.ambiguous.has(role)
-      ? args.llm.confidence
-      : 5
+    const confidence: 1 | 2 | 3 | 4 | 5 = args.ambiguous.has(role) ? args.llm.confidence : 5
     out[role] = { action, confidence, reasons }
   }
   return out

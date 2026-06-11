@@ -28,9 +28,7 @@ export const MIN_CLAIM_CONFIDENCE = 0.5
 /** Hard cap on claims kept per finding. */
 export const MAX_CLAIMS_PER_FINDING = 3
 
-const CLAIM_TYPE_SET: ReadonlySet<ReviewMemoryClaimType> = new Set(
-  ALL_REVIEW_MEMORY_CLAIM_TYPES,
-)
+const CLAIM_TYPE_SET: ReadonlySet<ReviewMemoryClaimType> = new Set(ALL_REVIEW_MEMORY_CLAIM_TYPES)
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null
@@ -107,20 +105,12 @@ export function parseClaimExtractionResponse(
   const findings = parsed.findings
   if (!Array.isArray(findings)) return null
 
-  const result: ReviewMemoryClaimMarkerData[][] = Array.from(
-    { length: findingCount },
-    () => [],
-  )
+  const result: ReviewMemoryClaimMarkerData[][] = Array.from({ length: findingCount }, () => [])
 
   for (const entry of findings) {
     if (!isRecord(entry)) continue
     const idx = entry.index
-    if (
-      typeof idx !== "number" ||
-      !Number.isInteger(idx) ||
-      idx < 0 ||
-      idx >= findingCount
-    ) {
+    if (typeof idx !== "number" || !Number.isInteger(idx) || idx < 0 || idx >= findingCount) {
       continue
     }
     const rawClaims = entry.claims
@@ -150,9 +140,10 @@ export function parseClaimExtractionResponse(
  * by index so the response can align back; the system message pins the
  * allowed vocabulary and the omission bias.
  */
-export function buildClaimExtractionPrompt(
-  findings: ReadonlyArray<ClaimExtractionFinding>,
-): { system: string; user: string } {
+export function buildClaimExtractionPrompt(findings: ReadonlyArray<ClaimExtractionFinding>): {
+  system: string
+  user: string
+} {
   const system = [
     "You classify code-review findings into a FIXED vocabulary of claim types.",
     "A claim names the GENERAL pattern a finding asserts so it can generalize across files and PRs.",
@@ -168,9 +159,7 @@ export function buildClaimExtractionPrompt(
   const user = [
     "Findings to classify:",
     "",
-    ...findings.map((f, i) =>
-      [`[${i}] (${f.category}) ${f.headline}`, f.body].filter(Boolean).join("\n"),
-    ),
+    ...findings.map((f, i) => [`[${i}] (${f.category}) ${f.headline}`, f.body].filter(Boolean).join("\n")),
   ].join("\n\n")
 
   return { system, user }

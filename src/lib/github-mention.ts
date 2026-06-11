@@ -26,11 +26,7 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
 import { recordOutcome } from "@/src/features/precision-profile"
-import {
-  parseFindingCategory,
-  parseFindingFingerprint,
-  parseFindingSeverity,
-} from "./pr-finding-markers"
+import { parseFindingCategory, parseFindingFingerprint, parseFindingSeverity } from "./pr-finding-markers"
 export { parseFindingCategory } from "./pr-finding-markers"
 import { type DismissReason } from "./dismiss-reasons"
 import { recordDismissalMetric } from "./validation-metrics-client"
@@ -139,17 +135,21 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     since("dismiss-already-in-progress")
     return
   }
-  const pendingDismissReply = dismissDedupe && typeof dismissDedupe.replyCommentId !== "number"
-    ? dismissDedupe
-    : null
+  const pendingDismissReply = dismissDedupe && typeof dismissDedupe.replyCommentId !== "number" ? dismissDedupe : null
   if (seen && !pendingDismissReply) {
     since("already-replied")
-    console.log(JSON.stringify({
-      event: "github-mention-skipped",
-      dedupe_system: "kv",
-      reason: "already_replied",
-      owner, repo, prNumber, surface, commentId,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "github-mention-skipped",
+        dedupe_system: "kv",
+        reason: "already_replied",
+        owner,
+        repo,
+        prNumber,
+        surface,
+        commentId,
+      }),
+    )
     return
   }
 
@@ -194,9 +194,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   // Fires NOW so the user sees it within ~1s of webhook delivery,
   // before the PR/diff fetch + Ollama call.
   const addReaction =
-    surface === "issue"
-      ? client.addReactionToIssueComment.bind(client)
-      : client.addReactionToReviewComment.bind(client)
+    surface === "issue" ? client.addReactionToIssueComment.bind(client) : client.addReactionToReviewComment.bind(client)
   await addReaction(owner, repo, commentId, "eyes").catch((error: unknown) => {
     console.warn("[gh-mention] eye-reaction failed (non-fatal)", {
       commentId,
@@ -208,9 +206,10 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   // Strip the mention from the body before passing to the model. For
   // implicit-thread fires there's no mention to strip; the body is
   // already the question text.
-  const question = (
-    explicit ? stripMentionFromBody(sourceComment.body, triggers) : sourceComment.body
-  ).slice(0, LIMITS.questionChars)
+  const question = (explicit ? stripMentionFromBody(sourceComment.body, triggers) : sourceComment.body).slice(
+    0,
+    LIMITS.questionChars,
+  )
   if (!question) {
     since("empty-question-after-strip")
     return
@@ -219,17 +218,19 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   const dismissCommand = explicit ? parseDismissCommand(question) : null
   if (dismissCommand) {
     if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
-      console.log(JSON.stringify({
-        event: "gh-mention-dismiss-rejected",
-        reason: "untrusted_author_association",
-        author_association: sourceComment.authorAssociation?.toUpperCase() ?? null,
-        login: sourceComment.author,
-        owner,
-        repo,
-        prNumber,
-        surface,
-        commentId,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "gh-mention-dismiss-rejected",
+          reason: "untrusted_author_association",
+          author_association: sourceComment.authorAssociation?.toUpperCase() ?? null,
+          login: sourceComment.author,
+          owner,
+          repo,
+          prNumber,
+          surface,
+          commentId,
+        }),
+      )
       return
     }
 
@@ -261,24 +262,24 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
             repo,
             prNumber,
           })
-          await env.OPENCLAW_STATE.put(
-            kvKey,
-            serializeReviewDismissDedupeRecord(dismiss, undefined, dismissReason),
-            { expirationTtl: MENTION_DEDUPE_TTL },
-          )
+          await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss, undefined, dismissReason), {
+            expirationTtl: MENTION_DEDUPE_TTL,
+          })
           // SIG-173: count the reason once per successful dismiss attempt
           // (kind === "dismissed"). Failures and not-found don't reflect
           // reviewer intent reliably enough to surface in the rollup.
           // Non-fatal: a metrics failure must never affect the reply.
           if (dismiss.kind === "dismissed") {
             await recordDismissalMetric(env, { reason: dismissReason }).catch((err: unknown) => {
-              console.log(JSON.stringify({
-                event: "dismissal-metrics-record-error",
-                owner,
-                repo,
-                prNumber,
-                error: err instanceof Error ? err.message : String(err),
-              }))
+              console.log(
+                JSON.stringify({
+                  event: "dismissal-metrics-record-error",
+                  owner,
+                  repo,
+                  prNumber,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              )
             })
           }
         } catch (err) {
@@ -297,23 +298,19 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
       body: formatReviewDismissReply(dismiss, dismissReason),
     })
     since("dismiss-reply-posted", { newId, result: dismiss.kind, reason: dismissReason })
-    await env.OPENCLAW_STATE
-      .put(
-        kvKey,
-        serializeReviewDismissDedupeRecord(dismiss, newId, dismissReason),
-        { expirationTtl: MENTION_DEDUPE_TTL },
-      )
-      .catch((err: unknown) => {
-        console.warn("[gh-mention] dismiss reply-id persistence failed", {
-          owner,
-          repo,
-          prNumber,
-          surface,
-          commentId,
-          replyCommentId: newId,
-          err: err instanceof Error ? err.message : String(err),
-        })
+    await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss, newId, dismissReason), {
+      expirationTtl: MENTION_DEDUPE_TTL,
+    }).catch((err: unknown) => {
+      console.warn("[gh-mention] dismiss reply-id persistence failed", {
+        owner,
+        repo,
+        prNumber,
+        surface,
+        commentId,
+        replyCommentId: newId,
+        err: err instanceof Error ? err.message : String(err),
       })
+    })
     return
   }
 
@@ -324,16 +321,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   const [meta, diff, thread] = await Promise.all([
     client.getPullRequest(owner, repo, prNumber),
     client.getPullRequestDiff(owner, repo, prNumber),
-    fetchThread(
-      client,
-      owner,
-      repo,
-      prNumber,
-      surface,
-      commentId,
-      args.threadRootId,
-      cachedReviewComments
-    ),
+    fetchThread(client, owner, repo, prNumber, surface, commentId, args.threadRootId, cachedReviewComments),
   ])
   since("github-fetched", { threadCount: thread.length })
 
@@ -503,15 +491,22 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
           category: parseFindingCategory(originalFindingBody),
           patternHash: contentFingerprint,
           outcome: "dismissed",
-        }).catch(() => { /* non-fatal — telemetry must never break a dismissal */ })
+        }).catch(() => {
+          /* non-fatal — telemetry must never break a dismissal */
+        })
       }
     } else {
-      console.warn(JSON.stringify({
-        event: "review-withdrawal-skip-incomplete-context",
-        owner, repo, pr_number: prNumber, comment_id: newId,
-        has_anchor: inlineAnchor !== null && inlineAnchor.line !== null,
-        has_finding_body: originalFindingBody !== null,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "review-withdrawal-skip-incomplete-context",
+          owner,
+          repo,
+          pr_number: prNumber,
+          comment_id: newId,
+          has_anchor: inlineAnchor !== null && inlineAnchor.line !== null,
+          has_finding_body: originalFindingBody !== null,
+        }),
+      )
     }
   }
 
@@ -551,7 +546,7 @@ async function fetchSourceComment(
   repo: string,
   prNumber: number,
   surface: GhMentionSurface,
-  commentId: number
+  commentId: number,
 ): Promise<SourceComment | null> {
   if (surface === "issue") {
     const all = await client.listIssueComments(owner, repo, prNumber)
@@ -594,7 +589,7 @@ async function fetchThread(
   /** Pre-fetched review comments — avoids re-paginating when the
    * caller already paid for `listPullRequestReviewComments` (e.g.
    * for the implicit-thread chain walk). Ignored for "issue" surface. */
-  prefetchedReviewComments?: ReviewComment[] | null
+  prefetchedReviewComments?: ReviewComment[] | null,
 ): Promise<ThreadEntry[]> {
   if (surface === "issue") {
     const all = await client.listIssueComments(owner, repo, prNumber)
@@ -604,9 +599,7 @@ async function fetchThread(
       .map((c) => issueCommentToEntry(c))
   }
 
-  const all =
-    prefetchedReviewComments ??
-    (await client.listPullRequestReviewComments(owner, repo, prNumber))
+  const all = prefetchedReviewComments ?? (await client.listPullRequestReviewComments(owner, repo, prNumber))
   const byId = new Map<number, ReviewComment>()
   for (const c of all) byId.set(c.id, c)
   // Always walk up from whichever ID we have. The webhook's
@@ -657,11 +650,7 @@ function findThreadRootId(byId: Map<number, ReviewComment>, id: number): number 
   return curId
 }
 
-function descendsTo(
-  byId: Map<number, ReviewComment>,
-  c: ReviewComment,
-  rootId: number
-): boolean {
+function descendsTo(byId: Map<number, ReviewComment>, c: ReviewComment, rootId: number): boolean {
   if (c.id === rootId) return true
   let curId = c.in_reply_to_id
   for (let i = 0; i < 32; i++) {
@@ -720,16 +709,14 @@ function buildPrompt(ctx: PromptCtx): string {
       "[INLINE ANCHOR]",
       `File: ${ctx.inlineAnchor.path}`,
       ctx.inlineAnchor.line ? `Line: ${ctx.inlineAnchor.line}` : "Line: (deleted/multi)",
-      ""
+      "",
     )
   }
 
   sections.push("[ASKER]", `@${ctx.askerHandle}`, "", "[QUESTION]", ctx.question, "")
 
   if (ctx.thread.length > 0) {
-    const block = ctx.thread
-      .map((c) => `[${c.author}] ${truncate(c.body, LIMITS.threadComment)}`)
-      .join("\n\n---\n\n")
+    const block = ctx.thread.map((c) => `[${c.author}] ${truncate(c.body, LIMITS.threadComment)}`).join("\n\n---\n\n")
     sections.push("[THREAD CONTEXT — chronological]", block, "")
   }
 
@@ -739,7 +726,7 @@ function buildPrompt(ctx: PromptCtx): string {
       "Verify each is actually relevant before citing — retrieval can return false positives.",
       "",
       ctx.codebaseChunks,
-      ""
+      "",
     )
   }
 
@@ -766,9 +753,7 @@ export function parseGithubMentionResponse(text: string): GithubMentionVerdict |
   if (!answer) return null
   const confidenceRaw = Number(obj.confidence)
   const confidence =
-    Number.isFinite(confidenceRaw) && confidenceRaw >= 1 && confidenceRaw <= 5
-      ? Math.round(confidenceRaw)
-      : 3
+    Number.isFinite(confidenceRaw) && confidenceRaw >= 1 && confidenceRaw <= 5 ? Math.round(confidenceRaw) : 3
   const abstain = Boolean(obj.abstain)
   // SIG-160 PR3: default to "answer" when missing or invalid. Only
   // explicit "concede" triggers withdrawal persistence — a missing

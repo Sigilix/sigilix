@@ -41,9 +41,7 @@ describe("VERIFIED proof — full datapath: receipt → confirmed → runner-con
 
     // 1. The runner receipt's HEAD scan independently flagged the same rule at
     //    the same path/line (this is what a real corroborating receipt looks like).
-    const receiptIndex = buildReceiptIndex([
-      { path: "src/auth/session.ts", ruleId: "aws-access-key-id", line: 42 },
-    ])
+    const receiptIndex = buildReceiptIndex([{ path: "src/auth/session.ts", ruleId: "aws-access-key-id", line: 42 }])
 
     // 2. The receipt-join verdict — the integration prod never confirms.
     const verdict = verifyFindingAgainstReceipt(finding, receiptIndex)
@@ -68,7 +66,10 @@ describe("VERIFIED proof — full datapath: receipt → confirmed → runner-con
       findings: [finding],
     }
     const body = buildReviewSubmissionWithMetadata({
-      verdict: review, prAuthor: null, headSha: "abc1234", trustLedger: true,
+      verdict: review,
+      prAuthor: null,
+      headSha: "abc1234",
+      trustLedger: true,
     }).submission.body
     expect(body).toContain("**Proof**")
     expect(body.toLowerCase()).toContain("verified")

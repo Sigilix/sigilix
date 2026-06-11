@@ -16,9 +16,7 @@ vi.mock("@/src/lib/retrieval", async () => {
 })
 
 vi.mock("@/src/lib/github-pr-context", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/github-pr-context")>(
-    "@/src/lib/github-pr-context"
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/github-pr-context")>("@/src/lib/github-pr-context")
   return {
     ...actual,
     fetchPullRequestContext: (args: unknown) => mockFetchPullRequestContext(args),
@@ -91,11 +89,7 @@ describe("createAgentTools — surface scoping", () => {
       surface: "github-mention",
       github: makeGithubCtx(),
     })
-    expect(tools.map((t) => t.name).sort()).toEqual([
-      "fetch_pr",
-      "read_file_lines",
-      "retrieve_codebase",
-    ])
+    expect(tools.map((t) => t.name).sort()).toEqual(["fetch_pr", "read_file_lines", "retrieve_codebase"])
   })
 
   it("Linear with no github ctx never exposes fetch_pr / read_file_lines", () => {
@@ -148,11 +142,10 @@ describe("retrieve_codebase", () => {
 
   it("returns recoverable error on missing args (does not throw)", async () => {
     const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
-    const result = (await tool!.execute(
-      { query: "" },
-      new AbortController().signal,
-      new Map(),
-    )) as { ok: boolean; error: string }
+    const result = (await tool!.execute({ query: "" }, new AbortController().signal, new Map())) as {
+      ok: boolean
+      error: string
+    }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/non-empty/)
     expect(mockRetrieveChunks).not.toHaveBeenCalled()
@@ -162,9 +155,7 @@ describe("retrieve_codebase", () => {
     const ctrl = new AbortController()
     ctrl.abort()
     const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
-    await expect(
-      tool!.execute({ query: "x", repo: "y" }, ctrl.signal, new Map()),
-    ).rejects.toThrow(/aborted/)
+    await expect(tool!.execute({ query: "x", repo: "y" }, ctrl.signal, new Map())).rejects.toThrow(/aborted/)
   })
 
   it("rejects out-of-allowedRepos as recoverable (does not throw, includes valid choices)", async () => {
@@ -213,9 +204,7 @@ describe("retrieve_codebase", () => {
       new Map(),
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
-    expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: "sigilix/rubberfit" }),
-    )
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(expect.objectContaining({ teamKey: "sigilix/rubberfit" }))
   })
 
   it("accepts an exact branch-scoped namespace and queries it verbatim (SIG-35)", async () => {
@@ -226,10 +215,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "x", repo: `Sigilix/Sigilix/__branch__/${encodedDev}` },
@@ -237,9 +223,7 @@ describe("retrieve_codebase", () => {
       new Map(),
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
-    expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: branchNs }),
-    )
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(expect.objectContaining({ teamKey: branchNs }))
   })
 
   it("resolves a human branch argument to the encoded branch namespace (SIG-207)", async () => {
@@ -249,10 +233,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "index producer", repo: "sigilix/sigilix", branch: "dev" },
@@ -262,9 +243,7 @@ describe("retrieve_codebase", () => {
 
     expect(result.ok).toBe(true)
     expect(result.repo).toBe(branchNs)
-    expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: branchNs }),
-    )
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(expect.objectContaining({ teamKey: branchNs }))
   })
 
   it("returns branch choices when a requested branch is not indexed (SIG-207)", async () => {
@@ -273,16 +252,17 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "index producer", repo: "sigilix", branch: "release" },
       new AbortController().signal,
       new Map(),
-    )) as { ok: boolean; error: string; availableBranches: Array<{ repo: string; encodedBranch: string; namespace: string }> }
+    )) as {
+      ok: boolean
+      error: string
+      availableBranches: Array<{ repo: string; encodedBranch: string; namespace: string }>
+    }
 
     expect(result.ok).toBe(false)
     expect(result.error).toContain("branch 'release' is not indexed")
@@ -309,10 +289,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "sigilix/sigilix", branch: "My-Branch" },
@@ -322,9 +299,7 @@ describe("retrieve_codebase", () => {
 
     expect(result.ok).toBe(true)
     expect(result.repo).toBe(branchNs)
-    expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: branchNs }),
-    )
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(expect.objectContaining({ teamKey: branchNs }))
   })
 
   it("resolves an ALL-CAPS branch via case-folding fallback (SIG-218)", async () => {
@@ -334,10 +309,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "sigilix/sigilix", branch: "MY-BRANCH" },
@@ -355,10 +327,7 @@ describe("retrieve_codebase", () => {
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
-      allowedRepos: [
-        "sigilix/sigilix",
-        branchNs,
-      ],
+      allowedRepos: ["sigilix/sigilix", branchNs],
     })
     const result = (await tool!.execute(
       { query: "x", repo: "sigilix/sigilix", branch: "Nonexistent-Branch" },
@@ -384,9 +353,7 @@ describe("retrieve_codebase", () => {
       new Map(),
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
-    expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: "sigilix/rubberfit" }),
-    )
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(expect.objectContaining({ teamKey: "sigilix/rubberfit" }))
   })
 
   it("rejects a bare repo that matches more than one allowed namespace (ambiguous)", async () => {
@@ -395,11 +362,10 @@ describe("retrieve_codebase", () => {
       surface: "linear-mention",
       allowedRepos: ["sigilix/api", "acme/api"],
     })
-    const result = (await tool!.execute(
-      { query: "x", repo: "api" },
-      new AbortController().signal,
-      new Map(),
-    )) as { ok: boolean; error: string }
+    const result = (await tool!.execute({ query: "x", repo: "api" }, new AbortController().signal, new Map())) as {
+      ok: boolean
+      error: string
+    }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/'api' is not in the indexed namespace set/)
     expect(mockRetrieveChunks).not.toHaveBeenCalled()
@@ -408,11 +374,9 @@ describe("retrieve_codebase", () => {
   it("accepts any repo when allowedRepos is unset (back-compat with existing GitHub-mention surface)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
-    const result = (await tool!.execute(
-      { query: "x", repo: "anything" },
-      new AbortController().signal,
-      new Map(),
-    )) as { ok: boolean }
+    const result = (await tool!.execute({ query: "x", repo: "anything" }, new AbortController().signal, new Map())) as {
+      ok: boolean
+    }
     expect(result.ok).toBe(true)
     expect(mockRetrieveChunks).toHaveBeenCalledOnce()
   })
@@ -427,11 +391,11 @@ describe("retrieve_codebase", () => {
       surface: "linear-mention",
       allowedRepos: [],
     })
-    const result = (await tool!.execute(
-      { query: "x", repo: "anything" },
-      new AbortController().signal,
-      new Map(),
-    )) as { ok: boolean; error: string; allowedRepos: string[] }
+    const result = (await tool!.execute({ query: "x", repo: "anything" }, new AbortController().signal, new Map())) as {
+      ok: boolean
+      error: string
+      allowedRepos: string[]
+    }
     expect(result.ok).toBe(false)
     expect(result.error).toBe("No indexed repositories are available in the current retrieval scope.")
     expect(result.allowedRepos).toEqual([])
@@ -535,7 +499,13 @@ describe("read_file_lines", () => {
       { owner: "Sigilix", repo: "rubberfit", path: "src/foo.ts", lineStart: 10, lineEnd: 14 },
       new AbortController().signal,
       new Map(),
-    )) as { ok: boolean; content: string; lineStart: number; lineEnd: number; totalLinesInFile: number }
+    )) as {
+      ok: boolean
+      content: string
+      lineStart: number
+      lineEnd: number
+      totalLinesInFile: number
+    }
     expect(result.ok).toBe(true)
     expect(result.content).toBe("line 10\nline 11\nline 12\nline 13\nline 14")
     expect(result.lineStart).toBe(10)

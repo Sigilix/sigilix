@@ -43,21 +43,20 @@ function isValidProfile(v: unknown): v is PrecisionProfile {
  * Load a repo's PrecisionProfile, or `null` on miss / parse failure / KV error.
  * `null` is the safe default — the apply gate treats it as "no signal yet".
  */
-export async function loadPrecisionProfile(
-  env: Env,
-  repoId: string,
-): Promise<PrecisionProfile | null> {
+export async function loadPrecisionProfile(env: Env, repoId: string): Promise<PrecisionProfile | null> {
   try {
     const raw = await env.OPENCLAW_STATE.get(profileKey(repoId))
     if (raw === null) return null
     const parsed = JSON.parse(raw) as unknown
     return isValidProfile(parsed) ? parsed : null
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "precision-profile-load-failed",
-      repo_id: repoId,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "precision-profile-load-failed",
+        repo_id: repoId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return null
   }
 }
@@ -67,11 +66,7 @@ export async function loadPrecisionProfile(
  * Best-effort: returns `false` and logs on any failure, never throws. `nowMs`
  * is injectable for deterministic tests.
  */
-export async function recordOutcome(
-  env: Env,
-  event: OutcomeEvent,
-  nowMs: number = Date.now(),
-): Promise<boolean> {
+export async function recordOutcome(env: Env, event: OutcomeEvent, nowMs: number = Date.now()): Promise<boolean> {
   const nowIso = new Date(nowMs).toISOString()
   try {
     // Read raw HERE rather than via loadPrecisionProfile: that swallows a KV
@@ -95,21 +90,25 @@ export async function recordOutcome(
     await env.OPENCLAW_STATE.put(profileKey(event.repoId), JSON.stringify(updated), {
       expirationTtl: TTL_SECONDS,
     })
-    console.log(JSON.stringify({
-      event: "precision-profile-outcome-recorded",
-      repo_id: event.repoId,
-      category: event.category,
-      outcome: event.outcome,
-      pattern_count: Object.keys(updated.patterns).length,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "precision-profile-outcome-recorded",
+        repo_id: event.repoId,
+        category: event.category,
+        outcome: event.outcome,
+        pattern_count: Object.keys(updated.patterns).length,
+      }),
+    )
     return true
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "precision-profile-record-failed",
-      repo_id: event.repoId,
-      outcome: event.outcome,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "precision-profile-record-failed",
+        repo_id: event.repoId,
+        outcome: event.outcome,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return false
   }
 }

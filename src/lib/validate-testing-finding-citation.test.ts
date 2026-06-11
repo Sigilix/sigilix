@@ -9,10 +9,7 @@
 //      fires with the right structured info.
 
 import { describe, it, expect, vi } from "vitest"
-import {
-  evaluateTestingFindingCitation,
-  validateForSubmission,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { evaluateTestingFindingCitation, validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
@@ -64,26 +61,23 @@ describe("evaluateTestingFindingCitation", () => {
   })
 
   it("keeps when inspectedTestFiles cites a path that IS in the pack", () => {
-    const r = evaluateTestingFindingCitation(
-      finding({ inspectedTestFiles: ["tests/foo.test.ts"] }),
-      pack(),
-    )
+    const r = evaluateTestingFindingCitation(finding({ inspectedTestFiles: ["tests/foo.test.ts"] }), pack())
     expect(r.keep).toBe(true)
   })
 
   // CodeRabbit PR #112 (Major): a fabricated inspected path must NOT
   // pass — the citation is cross-checked against the pack.
   it("DROPS when inspectedTestFiles cites a path NOT in the pack (anti-fabrication)", () => {
-    const r = evaluateTestingFindingCitation(
-      finding({ inspectedTestFiles: ["tests/totally-made-up.test.ts"] }),
-      pack(),
-    )
+    const r = evaluateTestingFindingCitation(finding({ inspectedTestFiles: ["tests/totally-made-up.test.ts"] }), pack())
     expect(r.keep).toBe(false)
   })
 
   it("keeps when evidenceRefs cites a siblingMapping that MATCHES the pack AND is relevant to finding.path", () => {
     const r = evaluateTestingFindingCitation(
-      finding({ path: "src/lib/foo.ts", evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"] }),
+      finding({
+        path: "src/lib/foo.ts",
+        evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"],
+      }),
       pack(),
     )
     expect(r.keep).toBe(true)
@@ -158,10 +152,7 @@ describe("evaluateTestingFindingCitation", () => {
   })
 
   it("keeps when evidenceRefs uses the inspectedTestFile: prefix on a real path", () => {
-    const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["inspectedTestFile:tests/foo.test.ts"] }),
-      pack(),
-    )
+    const r = evaluateTestingFindingCitation(finding({ evidenceRefs: ["inspectedTestFile:tests/foo.test.ts"] }), pack())
     expect(r.keep).toBe(true)
   })
 
@@ -180,18 +171,12 @@ describe("evaluateTestingFindingCitation", () => {
   })
 
   it("drops when inspectedTestFiles is an empty array + no evidenceRefs", () => {
-    const r = evaluateTestingFindingCitation(
-      finding({ inspectedTestFiles: [] }),
-      pack(),
-    )
+    const r = evaluateTestingFindingCitation(finding({ inspectedTestFiles: [] }), pack())
     expect(r.keep).toBe(false)
   })
 
   it("drops when evidenceRefs has an unrecognized-prefix ref that maps to nothing", () => {
-    const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["randomRef:foo", "another:bar"] }),
-      pack(),
-    )
+    const r = evaluateTestingFindingCitation(finding({ evidenceRefs: ["randomRef:foo", "another:bar"] }), pack())
     expect(r.keep).toBe(false)
   })
 
@@ -340,9 +325,7 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
     }
     const result = validateForSubmission({
       synthOutput,
-      reviewable: new Map([
-        ["src/lib/bar.ts", [{ line: 2, side: "RIGHT" as const, position: 1 }]],
-      ]),
+      reviewable: new Map([["src/lib/bar.ts", [{ line: 2, side: "RIGHT" as const, position: 1 }]]]),
       specialistVerdicts: makeSpecialistVerdicts() as never,
       testingEvidence: absencePack,
     })
@@ -384,9 +367,7 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
         summary: "Test",
         confidence: 3,
         confidenceReason: "Reason.",
-        findings: [
-          finding({ headline: "Module ships without tests" }),
-        ],
+        findings: [finding({ headline: "Module ships without tests" })],
       },
       provenance: makeProvenance(1),
     }
@@ -413,8 +394,18 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-          { sourceSpecialists: ["tests"], sourceFindingIds: ["tests-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+          {
+            sourceSpecialists: ["tests"],
+            sourceFindingIds: ["tests-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
         softened: [],

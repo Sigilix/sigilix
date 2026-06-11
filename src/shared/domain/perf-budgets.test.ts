@@ -1,10 +1,7 @@
 // SIG-110 PR B — tests for the zero-LLM perf-budgets hot-path check.
 
 import { describe, expect, it } from "vitest"
-import {
-  runPerfBudgetsCheck,
-  renderPerfBudgetsForPrompt,
-} from "@/src/shared/domain/perf-budgets"
+import { runPerfBudgetsCheck, renderPerfBudgetsForPrompt } from "@/src/shared/domain/perf-budgets"
 
 const baseConfig = {
   p50LatencyBudgetMs: 50,
@@ -28,18 +25,12 @@ describe("runPerfBudgetsCheck", () => {
   })
 
   it("returns null when no changed file matches a hotPaths glob", () => {
-    const out = runPerfBudgetsCheck(
-      ["tests/foo.test.ts", "README.md"],
-      baseConfig,
-    )
+    const out = runPerfBudgetsCheck(["tests/foo.test.ts", "README.md"], baseConfig)
     expect(out).toBeNull()
   })
 
   it("emits a hit when a changed file matches a hotPaths glob", () => {
-    const out = runPerfBudgetsCheck(
-      ["src/lib/api/orders.ts", "src/lib/util.ts"],
-      baseConfig,
-    )
+    const out = runPerfBudgetsCheck(["src/lib/api/orders.ts", "src/lib/util.ts"], baseConfig)
     expect(out).not.toBeNull()
     expect(out!.hotPathFiles).toEqual(["src/lib/api/orders.ts"])
     expect(out!.matchedHotPaths).toEqual(["src/lib/api/**"])
@@ -54,15 +45,8 @@ describe("runPerfBudgetsCheck", () => {
   })
 
   it("reports every matched glob, deduped, when multiple match", () => {
-    const out = runPerfBudgetsCheck(
-      ["src/lib/api/orders.ts", "src/lib/api/users.ts", "src/worker.ts"],
-      baseConfig,
-    )
-    expect(out!.hotPathFiles).toEqual([
-      "src/lib/api/orders.ts",
-      "src/lib/api/users.ts",
-      "src/worker.ts",
-    ])
+    const out = runPerfBudgetsCheck(["src/lib/api/orders.ts", "src/lib/api/users.ts", "src/worker.ts"], baseConfig)
+    expect(out!.hotPathFiles).toEqual(["src/lib/api/orders.ts", "src/lib/api/users.ts", "src/worker.ts"])
     expect(out!.matchedHotPaths).toEqual(["src/lib/api/**", "src/worker.ts"])
   })
 

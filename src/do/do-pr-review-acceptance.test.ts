@@ -29,8 +29,12 @@ const REPO = "sigilix"
 const PR_NUMBER = 7
 const INSTALLATION_ID = 99
 
-interface AlarmState { alarmAt: number | null }
-interface QueueState { sent: JobMessage[] }
+interface AlarmState {
+  alarmAt: number | null
+}
+interface QueueState {
+  sent: JobMessage[]
+}
 interface Harness {
   env: Env
   store: Map<string, unknown>
@@ -51,12 +55,24 @@ function buildHarness(opts: { maxRetries?: number } = {}): Harness {
   const queue: QueueState = { sent: [] }
   const ctx = {
     storage: {
-      async get<T>(k: string): Promise<T | undefined> { return store.get(k) as T | undefined },
-      async put<T>(k: string, v: T): Promise<void> { store.set(k, v) },
-      async delete(k: string): Promise<boolean> { return store.delete(k) },
-      async setAlarm(t: number): Promise<void> { alarms.alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarms.alarmAt },
-      async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
+      async get<T>(k: string): Promise<T | undefined> {
+        return store.get(k) as T | undefined
+      },
+      async put<T>(k: string, v: T): Promise<void> {
+        store.set(k, v)
+      },
+      async delete(k: string): Promise<boolean> {
+        return store.delete(k)
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarms.alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarms.alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarms.alarmAt = null
+      },
     },
     id: { toString: () => `${OWNER}/${REPO}#${PR_NUMBER}`, name: `${OWNER}/${REPO}#${PR_NUMBER}` },
   } as unknown as DurableObjectState
@@ -68,9 +84,8 @@ function buildHarness(opts: { maxRetries?: number } = {}): Harness {
   // is declared below; the closure is fine because JS hoists function
   // bodies and `stubFetch` only fires after `doInstance` exists.
   const stubFetch = async (input: string | Request, init?: RequestInit): Promise<Response> => {
-    const req = typeof input === "string"
-      ? new Request(input, init as RequestInit)
-      : new Request(input, init as RequestInit)
+    const req =
+      typeof input === "string" ? new Request(input, init as RequestInit) : new Request(input, init as RequestInit)
     return doInstance.fetch(req)
   }
   const stub = { fetch: stubFetch } as unknown as DurableObjectStub
@@ -79,7 +94,9 @@ function buildHarness(opts: { maxRetries?: number } = {}): Harness {
 
   const env: Env = {
     OPENCLAW_JOBS: {
-      send: async (message: JobMessage) => { queue.sent.push(message) },
+      send: async (message: JobMessage) => {
+        queue.sent.push(message)
+      },
     } as unknown as Queue<JobMessage>,
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(opts.maxRetries ?? 3),
@@ -98,7 +115,9 @@ function buildHarness(opts: { maxRetries?: number } = {}): Harness {
 
   const doInstance = new PrReviewRunDO(ctx, env)
 
-  const fireAlarm = async () => { await doInstance.alarm() }
+  const fireAlarm = async () => {
+    await doInstance.alarm()
+  }
 
   const drainQueue = async (runEnsemble: () => Promise<void>): Promise<string[]> => {
     const runIds: string[] = []
@@ -223,7 +242,9 @@ describe("ARC-190 acceptance — transient failure → recovery (spec §4.6)", (
     expect(stateAfterRetry.attempts).toBe(2)
 
     // Drain attempt 2: success.
-    await h.drainQueue(async () => { /* success */ })
+    await h.drainQueue(async () => {
+      /* success */
+    })
 
     // Status: done, attempts=2.
     const { status, body } = await h.status()
@@ -355,7 +376,9 @@ describe("ARC-190 acceptance — telemetry tags on enqueue + dedupe + completion
     for (let i = 0; i < 2; i++) {
       await enqueuePrReviewJob(h.env, baseEnqueueArgs)
     }
-    await h.drainQueue(async () => { /* success */ })
+    await h.drainQueue(async () => {
+      /* success */
+    })
 
     const doLines = logged.filter((l) => /"event":"do-review-/.test(l))
     expect(doLines.length).toBeGreaterThan(0)

@@ -9,11 +9,7 @@ import type { NormalizedFinding, Tool } from "./types"
 
 export const SIGILIX_BOT = "sigilix[bot]"
 export const CODERABBIT_BOT = "coderabbitai[bot]"
-export const DEFAULT_GREPTILE_BOTS = [
-  "greptile-apps[bot]",
-  "greptile-app[bot]",
-  "greptile[bot]",
-] as const
+export const DEFAULT_GREPTILE_BOTS = ["greptile-apps[bot]", "greptile-app[bot]", "greptile[bot]"] as const
 
 /** The subset of GitHub's review-comment shape we depend on. */
 export interface RawComment {
@@ -69,12 +65,7 @@ function sigilixCategory(body: string): string | undefined {
   return undefined
 }
 
-function toFinding(
-  tool: Tool,
-  ref: string,
-  comment: RawComment,
-  botCategory: string | undefined,
-): NormalizedFinding {
+function toFinding(tool: Tool, ref: string, comment: RawComment, botCategory: string | undefined): NormalizedFinding {
   const finding: NormalizedFinding = {
     ref,
     tool,
@@ -115,22 +106,14 @@ export function normalizeFindings(
   const sigilixRaw = topLevel
     .filter((c) => c.user?.login === SIGILIX_BOT && SIGILIX_FINDING_MARKER.test(c.body))
     .sort(byCommentId)
-  const coderabbitRaw = topLevel
-    .filter((c) => c.user?.login === CODERABBIT_BOT)
-    .sort(byCommentId)
+  const coderabbitRaw = topLevel.filter((c) => c.user?.login === CODERABBIT_BOT).sort(byCommentId)
   const greptileLogins = new Set(opts.greptileLogins ?? DEFAULT_GREPTILE_BOTS)
   const greptileRaw = topLevel
     .filter((c) => c.user?.login != null && greptileLogins.has(c.user.login))
     .sort(byCommentId)
 
-  const sigilix = sigilixRaw.map((c, i) =>
-    toFinding("sigilix", `s${i + 1}`, c, sigilixCategory(c.body)),
-  )
-  const coderabbit = coderabbitRaw.map((c, i) =>
-    toFinding("coderabbit", `c${i + 1}`, c, undefined),
-  )
-  const greptile = greptileRaw.map((c, i) =>
-    toFinding("greptile", `g${i + 1}`, c, undefined),
-  )
+  const sigilix = sigilixRaw.map((c, i) => toFinding("sigilix", `s${i + 1}`, c, sigilixCategory(c.body)))
+  const coderabbit = coderabbitRaw.map((c, i) => toFinding("coderabbit", `c${i + 1}`, c, undefined))
+  const greptile = greptileRaw.map((c, i) => toFinding("greptile", `g${i + 1}`, c, undefined))
   return { sigilix, coderabbit, greptile }
 }

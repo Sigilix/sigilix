@@ -1,10 +1,7 @@
 // ARC-189 Task 11 — prompt-version stale suppression tests.
 
 import { describe, expect, it } from "vitest"
-import {
-  evaluatePromptVersionSuppression,
-  filterReasonsForSuppression,
-} from "@/src/lib/triage-pr-stale-mark"
+import { evaluatePromptVersionSuppression, filterReasonsForSuppression } from "@/src/lib/triage-pr-stale-mark"
 import type { Env } from "@/src/shared/types/env"
 import type { StaleReason } from "@/src/lib/review-manifest"
 
@@ -16,7 +13,7 @@ function envWith(over: Partial<Env> = {}): Env {
   } as unknown as Env
 }
 
-const NOW = 1_000_000_000_000  // arbitrary fixed clock (UNIX ms)
+const NOW = 1_000_000_000_000 // arbitrary fixed clock (UNIX ms)
 const NOW_SEC = NOW / 1000
 const HOUR_SEC = 3600
 

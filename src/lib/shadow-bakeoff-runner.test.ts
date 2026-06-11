@@ -25,9 +25,7 @@ const VALID_VERDICT_JSON = JSON.stringify({
   summary: "shadow ran",
   confidence: 4,
   confidenceReason: "high",
-  findings: [
-    { path: "src/a.ts", line: 1, score: 3, headline: "x", body: "y", category: "logic" },
-  ],
+  findings: [{ path: "src/a.ts", line: 1, score: 3, headline: "x", body: "y", category: "logic" }],
 })
 
 const VALID_SYNTH_JSON = JSON.stringify({
@@ -36,13 +34,16 @@ const VALID_SYNTH_JSON = JSON.stringify({
     summary: "shadow synth",
     confidence: 4,
     confidenceReason: "high",
-    findings: [
-      { path: "src/a.ts", line: 1, score: 3, headline: "x", body: "y", category: "logic" },
-    ],
+    findings: [{ path: "src/a.ts", line: 1, score: 3, headline: "x", body: "y", category: "logic" }],
   },
   provenance: {
     findings: [
-      { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["logic"],
+        sourceFindingIds: ["logic-1"],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
   },
@@ -65,32 +66,39 @@ function shadowAttemptEvents(): Array<Record<string, unknown>> {
 }
 
 function slowShadowChat(delay: number, content: string) {
-  return (args: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
-    let settled = false
-    const t = setTimeout(() => {
-      if (settled) return
-      settled = true
-      resolve({ message: { role: "assistant", content } })
-    }, delay)
-    args.signal?.addEventListener(
-      "abort",
-      () => {
+  return (args: { signal?: AbortSignal }) =>
+    new Promise((resolve, reject) => {
+      let settled = false
+      const t = setTimeout(() => {
         if (settled) return
         settled = true
-        clearTimeout(t)
-        reject(new DOMException("The operation was aborted", "AbortError"))
-      },
-      { once: true },
-    )
-  })
+        resolve({ message: { role: "assistant", content } })
+      }, delay)
+      args.signal?.addEventListener(
+        "abort",
+        () => {
+          if (settled) return
+          settled = true
+          clearTimeout(t)
+          reject(new DOMException("The operation was aborted", "AbortError"))
+        },
+        { once: true },
+      )
+    })
 }
 
 describe("runShadowSpecialist", () => {
   it("returns the verdict + emits one shadow-model-attempt-completed event on primary success", async () => {
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_VERDICT_JSON },
+    })
     const result = await runShadowSpecialist({
       role: "security",
-      shadowConfig: { primary: "qwen3-coder-next:cloud", retries: 1, fallback: "deepseek-v4-flash:cloud" },
+      shadowConfig: {
+        primary: "qwen3-coder-next:cloud",
+        retries: 1,
+        fallback: "deepseek-v4-flash:cloud",
+      },
       apiKey: "fake",
       systemPrompt: "sys",
       userMessage: "usr",
@@ -116,10 +124,16 @@ describe("runShadowSpecialist", () => {
   it("emits two events + falls back to cross-provider on primary failure", async () => {
     vi.mocked(chat).mockRejectedValueOnce(new Error("503 upstream overload"))
     vi.mocked(chat).mockRejectedValueOnce(new Error("503 again"))
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_VERDICT_JSON },
+    })
     const result = await runShadowSpecialist({
       role: "tests",
-      shadowConfig: { primary: "qwen3-coder-next:cloud", retries: 1, fallback: "deepseek-v4-flash:cloud" },
+      shadowConfig: {
+        primary: "qwen3-coder-next:cloud",
+        retries: 1,
+        fallback: "deepseek-v4-flash:cloud",
+      },
       apiKey: "fake",
       systemPrompt: "sys",
       userMessage: "usr",
@@ -153,7 +167,9 @@ describe("runShadowSpecialist", () => {
   })
 
   it("honors shadowConfig.perAttemptTimeoutMs in attempt telemetry", async () => {
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_VERDICT_JSON },
+    })
     const result = await runShadowSpecialist({
       role: "tests",
       shadowConfig: {
@@ -254,7 +270,9 @@ describe("runShadowSpecialist", () => {
 
 describe("apples-to-apples format constraint", () => {
   it("passes PR_REVIEW_SCHEMA to chat for specialists + undefined for synth", async () => {
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_VERDICT_JSON },
+    })
     await runShadowSpecialist({
       role: "logic",
       shadowConfig: { primary: "deepseek-v4-pro:cloud", retries: 0, fallback: null },
@@ -265,7 +283,9 @@ describe("apples-to-apples format constraint", () => {
       signal: new AbortController().signal,
       perfCtx: CTX,
     })
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_SYNTH_JSON },
+    })
     await runShadowSynth({
       shadowConfig: { primary: "deepseek-v4-flash:cloud", retries: 0, fallback: null },
       apiKey: "fake",
@@ -292,9 +312,15 @@ describe("apples-to-apples format constraint", () => {
 
 describe("runShadowSynth", () => {
   it("returns verdict + findings on synth success", async () => {
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_SYNTH_JSON },
+    })
     const result = await runShadowSynth({
-      shadowConfig: { primary: "deepseek-v4-flash:cloud", retries: 1, fallback: "qwen3-coder-next:cloud" },
+      shadowConfig: {
+        primary: "deepseek-v4-flash:cloud",
+        retries: 1,
+        fallback: "qwen3-coder-next:cloud",
+      },
       apiKey: "fake",
       systemPrompt: "sys",
       userMessage: "usr",
@@ -311,7 +337,9 @@ describe("runShadowSynth", () => {
   })
 
   it("honors shadowConfig.perAttemptTimeoutMs in synth attempt telemetry", async () => {
-    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })
+    vi.mocked(chat).mockResolvedValueOnce({
+      message: { role: "assistant", content: VALID_SYNTH_JSON },
+    })
     const result = await runShadowSynth({
       shadowConfig: {
         primary: "deepseek-v4-flash:cloud",

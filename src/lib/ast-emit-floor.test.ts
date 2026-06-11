@@ -25,7 +25,12 @@ function f(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
   }
 }
 function prov(ids: string[]): FloorProvenanceFinding {
-  return { sourceSpecialists: ["security"], sourceFindingIds: ids, action: "kept", verifiedViaRetrieval: false }
+  return {
+    sourceSpecialists: ["security"],
+    sourceFindingIds: ids,
+    action: "kept",
+    verifiedViaRetrieval: false,
+  }
 }
 function ast(over: Partial<AstEmitCandidate> = {}): AstEmitCandidate {
   return {
@@ -42,7 +47,11 @@ function ast(over: Partial<AstEmitCandidate> = {}): AstEmitCandidate {
 
 describe("injectUnmatchedAstEmits", () => {
   it("INJECTS an uncovered warning emit at score 3, citing the astFindingId", () => {
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast()],
+    })
     expect(r.injected).toHaveLength(1)
     expect(r.findings).toHaveLength(1)
     expect(r.findings[0].score).toBe(3)
@@ -55,7 +64,11 @@ describe("injectUnmatchedAstEmits", () => {
   })
 
   it("scores an info emit at 2", () => {
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast({ severity: "info" })] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast({ severity: "info" })],
+    })
     expect(r.findings[0].score).toBe(2)
   })
 
@@ -69,27 +82,47 @@ describe("injectUnmatchedAstEmits", () => {
   })
 
   it("does NOT inject an emit WITHOUT emitWhenUnmatched", () => {
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast({ emitWhenUnmatched: false })] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast({ emitWhenUnmatched: false })],
+    })
     expect(r.injected).toHaveLength(0)
   })
 
   it("KEEPS (no inject) when a same-category finding already covers the line (±tolerance)", () => {
     const covering = f({ category: "logic", line: 43, score: 4 }) // within ±2 of 42
-    const r = injectUnmatchedAstEmits({ findings: [covering], provenanceFindings: [prov(["logic-0"])], astFindings: [ast()] })
+    const r = injectUnmatchedAstEmits({
+      findings: [covering],
+      provenanceFindings: [prov(["logic-0"])],
+      astFindings: [ast()],
+    })
     expect(r.injected).toHaveLength(0)
     expect(r.findings).toHaveLength(1)
   })
 
   it("INJECTS when a finding on the line is a DIFFERENT category (non-security emit needs same-category cover)", () => {
     const otherCat = f({ category: "performance", line: 42, score: 4 })
-    const r = injectUnmatchedAstEmits({ findings: [otherCat], provenanceFindings: [prov(["perf-0"])], astFindings: [ast()] })
+    const r = injectUnmatchedAstEmits({
+      findings: [otherCat],
+      provenanceFindings: [prov(["perf-0"])],
+      astFindings: [ast()],
+    })
     expect(r.injected).toHaveLength(1) // logic emit not covered by a perf finding
   })
 
   it("a SECURITY emit is covered by ANY finding on the line (any category)", () => {
-    const sec = ast({ roleHint: "security", severity: "warning", astFindingId: "ast/dynamic-html/z/42" })
+    const sec = ast({
+      roleHint: "security",
+      severity: "warning",
+      astFindingId: "ast/dynamic-html/z/42",
+    })
     const anyFinding = f({ category: "logic", line: 42 })
-    const r = injectUnmatchedAstEmits({ findings: [anyFinding], provenanceFindings: [prov(["logic-9"])], astFindings: [sec] })
+    const r = injectUnmatchedAstEmits({
+      findings: [anyFinding],
+      provenanceFindings: [prov(["logic-9"])],
+      astFindings: [sec],
+    })
     expect(r.injected).toHaveLength(0)
   })
 
@@ -136,7 +169,11 @@ describe("injectUnmatchedAstEmits", () => {
   })
 
   it("derives a capped headline from the message's first sentence (no label)", () => {
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast()],
+    })
     expect(r.findings[0].headline).toBe("Cents value `total` rendered as dollars in JSX.")
     expect(r.findings[0].body).toContain("Divide by 100")
   })
@@ -147,7 +184,11 @@ describe("injectUnmatchedAstEmits", () => {
       message:
         "Type-contract drift: this SQL writes `status = 'archived'` to `documents`, but the declared type is the union \"draft\" | \"published\" — 'archived' is not a member.",
     })
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [labeled] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [labeled],
+    })
     expect(r.findings[0].headline).toBe("Type-contract drift")
     // the full hedged prose stays in the body (the preview reads as a finding, not noise).
     expect(r.findings[0].body).toContain("not a member")
@@ -163,7 +204,11 @@ describe("injectUnmatchedAstEmits", () => {
   })
 
   it("omits astEvidence when the candidate carries none", () => {
-    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast()],
+    })
     expect(r.findings[0].astEvidence).toBeUndefined()
   })
 

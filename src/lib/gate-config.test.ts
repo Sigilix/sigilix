@@ -238,27 +238,19 @@ describe("parseGateModel (SIG-161)", () => {
   })
 
   it("rejects when coefs / featureNames lengths mismatch", () => {
-    expect(
-      parseGateModel(JSON.stringify({ ...valid, coefs: [0.5, 0.3] })),
-    ).toBeNull()
+    expect(parseGateModel(JSON.stringify({ ...valid, coefs: [0.5, 0.3] }))).toBeNull()
   })
 
   it("rejects when coefs contains non-numbers", () => {
-    expect(
-      parseGateModel(JSON.stringify({ ...valid, coefs: [0.5, "nope", 0.1, 0.2] })),
-    ).toBeNull()
+    expect(parseGateModel(JSON.stringify({ ...valid, coefs: [0.5, "nope", 0.1, 0.2] }))).toBeNull()
   })
 
   it("rejects when featureNames contains empty strings", () => {
-    expect(
-      parseGateModel(JSON.stringify({ ...valid, featureNames: ["", "b", "c", "d"] })),
-    ).toBeNull()
+    expect(parseGateModel(JSON.stringify({ ...valid, featureNames: ["", "b", "c", "d"] }))).toBeNull()
   })
 
   it("preserves optional calibratedAt timestamp", () => {
     const withTs = { ...valid, calibratedAt: "2026-05-23T16:00:00Z" }
-    expect(parseGateModel(JSON.stringify(withTs))?.calibratedAt).toBe(
-      "2026-05-23T16:00:00Z",
-    )
+    expect(parseGateModel(JSON.stringify(withTs))?.calibratedAt).toBe("2026-05-23T16:00:00Z")
   })
 })

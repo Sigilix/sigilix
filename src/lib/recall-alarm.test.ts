@@ -76,14 +76,9 @@ describe("detectRecallAlarm", () => {
   })
 
   it("can fire BOTH alarms at once (degraded + shutout)", () => {
-    const outcomes = [0, 1, 2, 3, 4].map((i) =>
-      o(30 - i, { logicMissing: true, synthFindingCount: 0 }),
-    )
+    const outcomes = [0, 1, 2, 3, 4].map((i) => o(30 - i, { logicMissing: true, synthFindingCount: 0 }))
     const r = detectRecallAlarm(outcomes)
-    expect(r.alarms.map((a) => a.kind).sort()).toEqual([
-      "logic-degraded-streak",
-      "synth-zero-finding-streak",
-    ])
+    expect(r.alarms.map((a) => a.kind).sort()).toEqual(["logic-degraded-streak", "synth-zero-finding-streak"])
   })
 
   it("respects config overrides", () => {

@@ -341,7 +341,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
       reviewMeta: { event: "APPROVE", findingsCount: 0 },
     })
 
-    await dispatchJob(job, makeEnv())  // job has no checkRunId
+    await dispatchJob(job, makeEnv()) // job has no checkRunId
 
     expect(startInProgressCheckRunMock).toHaveBeenCalledTimes(1)
     expect(attachExistingCheckRunMock).not.toHaveBeenCalled()

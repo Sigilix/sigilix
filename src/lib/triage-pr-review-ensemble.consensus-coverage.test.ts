@@ -7,15 +7,13 @@ import {
   computeFindingKey,
   type SynthesizerProvenance,
 } from "@/src/lib/triage-pr-review-ensemble"
-import {
-  type PrReviewVerdict,
-  type PrReviewFinding,
-} from "@/src/lib/triage-pr-review"
+import { type PrReviewVerdict, type PrReviewFinding } from "@/src/lib/triage-pr-review"
 import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("computeConsensusRanking", () => {
   const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
-    ...baseFinding, ...overrides,
+    ...baseFinding,
+    ...overrides,
   })
   const prov = (specialists: string[]): SynthesizerProvenance["findings"][number] => ({
     sourceSpecialists: specialists as SynthesizerProvenance["findings"][number]["sourceSpecialists"],
@@ -27,10 +25,7 @@ describe("computeConsensusRanking", () => {
   it("ranks 2-specialist findings above 1-specialist findings at the same score", () => {
     const verdict: PrReviewVerdict = {
       ...baseVerdict,
-      findings: [
-        finding({ headline: "single", score: 4 }),
-        finding({ headline: "duo", score: 4 }),
-      ],
+      findings: [finding({ headline: "single", score: 4 }), finding({ headline: "duo", score: 4 })],
     }
     const provenance = [prov(["logic"]), prov(["logic", "security"])]
 
@@ -44,10 +39,7 @@ describe("computeConsensusRanking", () => {
   it("uses score as the tiebreaker when consensus is equal", () => {
     const verdict: PrReviewVerdict = {
       ...baseVerdict,
-      findings: [
-        finding({ headline: "low", score: 2 }),
-        finding({ headline: "high", score: 5 }),
-      ],
+      findings: [finding({ headline: "low", score: 2 }), finding({ headline: "high", score: 5 })],
     }
     const provenance = [prov(["logic"]), prov(["security"])]
 
@@ -96,11 +88,7 @@ describe("computeConsensusRanking", () => {
         finding({ headline: "duo", score: 3 }),
       ],
     }
-    const provenance = [
-      prov(["logic"]),
-      prov(["logic", "security", "tests"]),
-      prov(["logic", "performance"]),
-    ]
+    const provenance = [prov(["logic"]), prov(["logic", "security", "tests"]), prov(["logic", "performance"])]
 
     const out = computeConsensusRanking(verdict, provenance)
 
@@ -111,10 +99,7 @@ describe("computeConsensusRanking", () => {
   it("provenance array is reordered to match the new finding order", () => {
     const verdict: PrReviewVerdict = {
       ...baseVerdict,
-      findings: [
-        finding({ headline: "A" }),
-        finding({ headline: "B" }),
-      ],
+      findings: [finding({ headline: "A" }), finding({ headline: "B" })],
     }
     const provenanceA = prov(["logic"])
     const provenanceB = prov(["logic", "security"])
@@ -219,9 +204,9 @@ describe("computeFindingDelta", () => {
   it("classifies every prior finding correctly across all 4 buckets", () => {
     const currentKeys = new Set(["k-still", "k-new"])
     const priorFindings = [
-      prior("k-still", "src/touched.ts"),  // → still-open
-      prior("k-gone-touched", "src/touched.ts"),  // → likely-fixed
-      prior("k-gone-untouched", "src/untouched.ts"),  // → carried-over
+      prior("k-still", "src/touched.ts"), // → still-open
+      prior("k-gone-touched", "src/touched.ts"), // → likely-fixed
+      prior("k-gone-untouched", "src/untouched.ts"), // → carried-over
     ]
     const changedPaths = new Set(["src/touched.ts"])
 
@@ -246,7 +231,12 @@ describe("computeFindingDelta", () => {
 
   it("returns all zeros when prior had no findings and current is also empty", () => {
     const delta = computeFindingDelta(new Set(), [], new Set())
-    expect(delta).toEqual({ newCount: 0, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })
+    expect(delta).toEqual({
+      newCount: 0,
+      stillOpenCount: 0,
+      likelyFixedCount: 0,
+      carriedOverCount: 0,
+    })
   })
 
   it("treats first-run (no prior findings) as 'all new'", () => {
@@ -318,10 +308,7 @@ describe("computeDegradedCoverage (ARC-277)", () => {
   })
 
   it("splits returned vs missing when some specialists didn't return", () => {
-    const out = computeDegradedCoverage(
-      ["logic", "security", "performance", "tests"],
-      ["logic", "performance"],
-    )
+    const out = computeDegradedCoverage(["logic", "security", "performance", "tests"], ["logic", "performance"])
     expect(out.rolesReturned).toEqual(["logic", "performance"])
     expect(out.rolesMissing).toEqual(["security", "tests"])
   })
@@ -331,14 +318,8 @@ describe("computeDegradedCoverage (ARC-277)", () => {
     // deterministic for any (dispatched, returned) pair so two runs
     // with the same coverage gap produce identical prompt-shape
     // hashes for telemetry.
-    const a = computeDegradedCoverage(
-      ["tests", "logic", "performance", "security"],
-      ["performance", "logic"],
-    )
-    const b = computeDegradedCoverage(
-      ["logic", "security", "performance", "tests"],
-      ["logic", "performance"],
-    )
+    const a = computeDegradedCoverage(["tests", "logic", "performance", "security"], ["performance", "logic"])
+    const b = computeDegradedCoverage(["logic", "security", "performance", "tests"], ["logic", "performance"])
     expect(a).toEqual(b)
   })
 
@@ -346,19 +327,13 @@ describe("computeDegradedCoverage (ARC-277)", () => {
     // Router may dispatch a subset (e.g. CSS-only → ["performance"]).
     // A role that was never dispatched should not appear in either
     // returned or missing.
-    const out = computeDegradedCoverage(
-      ["performance"],
-      ["performance"],
-    )
+    const out = computeDegradedCoverage(["performance"], ["performance"])
     expect(out.rolesReturned).toEqual(["performance"])
     expect(out.rolesMissing).toEqual([])
   })
 
   it("treats `dispatched but none returned` as fully missing (used by the 0/N bail in the orchestrator)", () => {
-    const out = computeDegradedCoverage(
-      ["logic", "security"],
-      [],
-    )
+    const out = computeDegradedCoverage(["logic", "security"], [])
     expect(out.rolesReturned).toEqual([])
     expect(out.rolesMissing).toEqual(["logic", "security"])
   })

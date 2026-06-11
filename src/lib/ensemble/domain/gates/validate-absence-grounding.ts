@@ -51,9 +51,7 @@ export type AbsenceClaimValidatorMode = "off" | "shadow" | "enforce"
  * whitespace-tolerant; any unknown / missing value resolves to `off` —
  * the cautious default that disables the gate entirely.
  */
-export function parseAbsenceClaimValidatorMode(
-  raw: string | undefined,
-): AbsenceClaimValidatorMode {
+export function parseAbsenceClaimValidatorMode(raw: string | undefined): AbsenceClaimValidatorMode {
   const v = (raw ?? "").trim().toLowerCase()
   if (v === "shadow") return "shadow"
   if (v === "enforce") return "enforce"
@@ -63,9 +61,7 @@ export function parseAbsenceClaimValidatorMode(
 /** Single failure shape — an absence-claim the bot couldn't have grounded. */
 export type AbsenceGroundingDropReason = "absence-claim-ungrounded-by-truncation"
 
-export type AbsenceGroundingDecision =
-  | { keep: true }
-  | { keep: false; reason: AbsenceGroundingDropReason }
+export type AbsenceGroundingDecision = { keep: true } | { keep: false; reason: AbsenceGroundingDropReason }
 
 export interface AbsenceGroundingContext {
   /**

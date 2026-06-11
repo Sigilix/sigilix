@@ -31,12 +31,7 @@ import {
 } from "@/src/shared/util/diff-positions"
 export { isContiguousRightRange } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
-import {
-  loadSigilixConfigRaw,
-  parseSigilixConfigDetailed,
-  resolveCommandConfig,
-  EMPTY_CONFIG,
-} from "./sigilix-config"
+import { loadSigilixConfigRaw, parseSigilixConfigDetailed, resolveCommandConfig, EMPTY_CONFIG } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import type { Env } from "@/src/shared/types/env"
 
@@ -47,13 +42,7 @@ const LIMITS = {
   prBody: 4_000,
 }
 
-export type ImproveCategory =
-  | "naming"
-  | "clarity"
-  | "dead-code"
-  | "error-handling"
-  | "style"
-  | "docs"
+export type ImproveCategory = "naming" | "clarity" | "dead-code" | "error-handling" | "style" | "docs"
 
 const IMPROVE_CATEGORIES: ReadonlySet<ImproveCategory> = new Set([
   "naming",
@@ -91,18 +80,24 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-improve] ${label} +${Date.now() - t0}ms`, {
-      owner, repo, prNumber,
+      owner,
+      repo,
+      prNumber,
     })
   }
 
   // Sensitive-repo gate: identical contract to ARC-183 — never fetch
   // the diff or call any model for denylisted repos.
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    console.log(JSON.stringify({
-      event: "pr-improve-skipped",
-      reason: "sensitive_repo",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-improve-skipped",
+        reason: "sensitive_repo",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return
   }
 
@@ -126,12 +121,17 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
   const dedupeKey = `pr-improve:${owner}/${repo}#${prNumber}@${headSha}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
-    console.log(JSON.stringify({
-      event: "pr-improve-skipped",
-      dedupe_system: "kv",
-      reason: "already_ran",
-      owner, repo, prNumber, headSha: headSha.slice(0, 7),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-improve-skipped",
+        dedupe_system: "kv",
+        reason: "already_ran",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+      }),
+    )
     return
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
@@ -156,23 +156,36 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
       if (result.ok) {
         sigilixConfig = result.config
       } else {
-        console.log(JSON.stringify({
-          event: "command-config-parse-error",
-          owner, repo, prNumber,
-          command: "improve",
-          reason: result.reason,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "command-config-parse-error",
+            owner,
+            repo,
+            prNumber,
+            command: "improve",
+            reason: result.reason,
+          }),
+        )
         // Fire-and-forget — never block the user-invoked command.
         postConfigErrorComment({
-          env, client, owner, repo, prNumber, headSha,
+          env,
+          client,
+          owner,
+          repo,
+          prNumber,
+          headSha,
           reason: result.reason,
           raw: result.raw,
         }).catch((err) => {
-          console.error(JSON.stringify({
-            event: "command-config-error-comment-bubbled",
-            err: err instanceof Error ? err.message : String(err),
-            owner, repo, prNumber,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "command-config-error-comment-bubbled",
+              err: err instanceof Error ? err.message : String(err),
+              owner,
+              repo,
+              prNumber,
+            }),
+          )
         })
       }
     }
@@ -180,12 +193,15 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
     // EMPTY_CONFIG (same as loadSigilixConfig's null path).
     const commandConfig = resolveCommandConfig(sigilixConfig, "improve")
 
-    const prompt = buildPrompt({
-      prNumber,
-      title: meta.title,
-      body: meta.body ?? "",
-      diff,
-    }, commandConfig.promptAddendum)
+    const prompt = buildPrompt(
+      {
+        prNumber,
+        title: meta.title,
+        body: meta.body ?? "",
+        diff,
+      },
+      commandConfig.promptAddendum,
+    )
 
     // ARC-185: precedence — sigilix.json `commands.improve.model.primary`
     // > env.OPENCLAW_MODEL > DEFAULT_MODEL. Per-command fallback chain
@@ -200,16 +216,18 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
       commandConfig.modelPrimary !== null ||
       commandConfig.modelFallbacks.override
     ) {
-      console.log(JSON.stringify({
-        event: "command-config-resolved",
-        owner, repo, prNumber,
-        command: "improve",
-        hasPromptAddendum: commandConfig.promptAddendum !== null,
-        modelPrimary: commandConfig.modelPrimary,
-        modelFallbacksCount: commandConfig.modelFallbacks.override
-          ? commandConfig.modelFallbacks.models.length
-          : 0,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "command-config-resolved",
+          owner,
+          repo,
+          prNumber,
+          command: "improve",
+          hasPromptAddendum: commandConfig.promptAddendum !== null,
+          modelPrimary: commandConfig.modelPrimary,
+          modelFallbacksCount: commandConfig.modelFallbacks.override ? commandConfig.modelFallbacks.models.length : 0,
+        }),
+      )
     }
 
     since("ollama-start")
@@ -230,23 +248,35 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
           verdict = parsed
           break
         }
-        console.error(JSON.stringify({
-          event: "pr-improve-parse-failed",
-          owner, repo, prNumber, model: m,
-          responseLength: response.length,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-improve-parse-failed",
+            owner,
+            repo,
+            prNumber,
+            model: m,
+            responseLength: response.length,
+          }),
+        )
       } catch (err) {
         lastErr = err
-        console.error(JSON.stringify({
-          event: "pr-improve-call-failed",
-          owner, repo, prNumber, model: m,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-improve-call-failed",
+            owner,
+            repo,
+            prNumber,
+            model: m,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
     since(`ollama-done (model=${modelUsed})`)
     if (!verdict) {
-      throw new Error(`pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`)
+      throw new Error(
+        `pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`,
+      )
     }
 
     // Split suggestions into applyable inline patches and summary-only
@@ -258,7 +288,12 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
 
     if (valid.length === 0) {
       if (fallback.length > 0) {
-        await client.createIssueComment(owner, repo, prNumber, renderUnpostedImproveBody(verdict.summary, fallback, headSha))
+        await client.createIssueComment(
+          owner,
+          repo,
+          prNumber,
+          renderUnpostedImproveBody(verdict.summary, fallback, headSha),
+        )
         posted = true
         since("unposted-suggestions-comment-posted")
         return
@@ -283,13 +318,17 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
       const submitted = await client.submitReview(owner, repo, prNumber, reviewBody)
       posted = true
       since(`improve-submitted-${submitted.state}`)
-      console.log(JSON.stringify({
-        event: "pr-improve-posted",
-        owner, repo, prNumber,
-        suggestionsRequested: verdict.suggestions.length,
-        suggestionsPosted: valid.length,
-        headSha: headSha.slice(0, 7),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-improve-posted",
+          owner,
+          repo,
+          prNumber,
+          suggestionsRequested: verdict.suggestions.length,
+          suggestionsPosted: valid.length,
+          headSha: headSha.slice(0, 7),
+        }),
+      )
     } catch (err) {
       // 422 fallback (review-team B1). GitHub rejects the entire
       // review on a single un-anchorable comment — even after our
@@ -307,23 +346,31 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
         await client.createIssueComment(owner, repo, prNumber, fallbackBody)
         posted = true
         since("improve-422-fallback-posted")
-        console.log(JSON.stringify({
-          event: "pr-improve-422-fallback",
-          owner, repo, prNumber,
-          suggestionsRequested: verdict.suggestions.length,
-          suggestionsPosted: valid.length,
-          headSha: headSha.slice(0, 7),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-improve-422-fallback",
+            owner,
+            repo,
+            prNumber,
+            suggestionsRequested: verdict.suggestions.length,
+            suggestionsPosted: valid.length,
+            headSha: headSha.slice(0, 7),
+          }),
+        )
         return
       }
       throw err
     }
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-improve-error",
-      err: err instanceof Error ? err.message : String(err),
-      owner, repo, prNumber,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-improve-error",
+        err: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     throw err
   } finally {
     if (!posted) {
@@ -411,9 +458,7 @@ export function parsePrImproveResponse(text: string): PrImproveVerdict | null {
     const line = Number(item.line)
     const headline = typeof item.headline === "string" ? item.headline.trim() : ""
     const body = typeof item.body === "string" ? item.body.trim() : ""
-    const categoryRaw = typeof item.category === "string"
-      ? item.category.trim().toLowerCase()
-      : ""
+    const categoryRaw = typeof item.category === "string" ? item.category.trim().toLowerCase() : ""
     if (!path || !Number.isFinite(line) || line <= 0) continue
     if (!headline || !body) continue
     const category: ImproveCategory = IMPROVE_CATEGORIES.has(categoryRaw as ImproveCategory)
@@ -593,9 +638,10 @@ export function renderUnpostedImproveSuggestions(suggestions: PrImproveSuggestio
     "",
   ]
   for (const s of suggestions) {
-    const range = typeof s.startLine === "number" && s.startLine < s.line
-      ? `${s.path}:${s.startLine}-${s.line}`
-      : `${s.path}:${s.line}`
+    const range =
+      typeof s.startLine === "number" && s.startLine < s.line
+        ? `${s.path}:${s.startLine}-${s.line}`
+        : `${s.path}:${s.line}`
     parts.push(`- **\`${s.category}\`: ${s.headline}** — \`${range}\``)
     parts.push("")
     parts.push(s.body)
@@ -604,11 +650,7 @@ export function renderUnpostedImproveSuggestions(suggestions: PrImproveSuggestio
   return parts.join("\n").trimEnd()
 }
 
-function renderUnpostedImproveBody(
-  summary: string,
-  suggestions: PrImproveSuggestion[],
-  headSha: string,
-): string {
+function renderUnpostedImproveBody(summary: string, suggestions: PrImproveSuggestion[], headSha: string): string {
   return [
     "**Sigilix improve** — suggestions not posted inline.",
     "",
@@ -625,21 +667,13 @@ function renderUnpostedImproveBody(
  * a 422. We can't anchor patches to specific lines anymore, so we
  * inline them as code blocks the reviewer can copy-paste manually.
  */
-export function renderInlineFallbackBody(
-  summary: string,
-  suggestions: PrImproveSuggestion[],
-  headSha: string,
-): string {
-  const parts: string[] = [
-    "**Sigilix improve** — inline fallback (could not anchor to diff).",
-    "",
-    summary,
-    "",
-  ]
+export function renderInlineFallbackBody(summary: string, suggestions: PrImproveSuggestion[], headSha: string): string {
+  const parts: string[] = ["**Sigilix improve** — inline fallback (could not anchor to diff).", "", summary, ""]
   for (const s of suggestions) {
-    const range = typeof s.startLine === "number" && s.startLine < s.line
-      ? `${s.path}:${s.startLine}-${s.line}`
-      : `${s.path}:${s.line}`
+    const range =
+      typeof s.startLine === "number" && s.startLine < s.line
+        ? `${s.path}:${s.startLine}-${s.line}`
+        : `${s.path}:${s.line}`
     parts.push(`### \`${s.category}\`: ${s.headline}`)
     parts.push("")
     parts.push(`Anchor: \`${range}\``)
@@ -647,7 +681,9 @@ export function renderInlineFallbackBody(
     parts.push(s.body)
     parts.push("")
   }
-  parts.push(`<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; apply any included \`\`\`suggestion blocks manually where present, and treat prose-only items as advisory.</sub>`)
+  parts.push(
+    `<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; apply any included \`\`\`suggestion blocks manually where present, and treat prose-only items as advisory.</sub>`,
+  )
   return parts.join("\n")
 }
 

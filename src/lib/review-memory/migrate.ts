@@ -29,17 +29,10 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
-import {
-  getInstallationToken,
-  listInstallationRepoFullNames,
-} from "@/src/shared/adapters/github/github-app"
+import { getInstallationToken, listInstallationRepoFullNames } from "@/src/shared/adapters/github/github-app"
 import { parseFullName } from "@/src/lib/index-producer"
 import { buildRepoIdKey, unionRecords } from "./storage"
-import type {
-  ReviewMemoryCategory,
-  ReviewMemoryRecord,
-  ReviewMemoryStorageScope,
-} from "./types"
+import type { ReviewMemoryCategory, ReviewMemoryRecord, ReviewMemoryStorageScope } from "./types"
 import { ALL_REVIEW_MEMORY_CATEGORIES } from "./types"
 
 const TTL_DAYS = 90
@@ -99,14 +92,9 @@ export interface MigrateMemoryInstallSummary {
   outcomes: MigrateMemoryRepoOutcome[]
 }
 
-async function buildClient(
-  env: Env,
-  installationId: number,
-): Promise<GitHubClient> {
+async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    throw new Error(
-      "migrate-review-memory: GITHUB_APP_ID + GITHUB_PRIVATE_KEY required",
-    )
+    throw new Error("migrate-review-memory: GITHUB_APP_ID + GITHUB_PRIVATE_KEY required")
   }
   const token = await getInstallationToken({
     kv: env.OPENCLAW_STATE,
@@ -138,11 +126,7 @@ interface DiscoveredLegacyRecord {
  * Skips corrupt records (logged + counted as `skipped`, but the
  * migration continues on the remaining records).
  */
-async function discoverLegacyRecords(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<DiscoveredLegacyRecord[]> {
+async function discoverLegacyRecords(env: Env, owner: string, repo: string): Promise<DiscoveredLegacyRecord[]> {
   const prefix = `review-memory:${owner}/${repo}:`
   const discovered: DiscoveredLegacyRecord[] = []
   let cursor: string | undefined
@@ -179,9 +163,7 @@ async function discoverLegacyRecords(
  * for malformed shapes (defensive — `kv.list` only returns keys we
  * wrote, but a manual KV edit could land junk).
  */
-function parseLegacyKey(
-  key: string,
-): ReviewMemoryStorageScope | null {
+function parseLegacyKey(key: string): ReviewMemoryStorageScope | null {
   // review-memory:<owner>/<repo>:cat:<category>
   // review-memory:<owner>/<repo>:path:<sha256>:cat:<category>
   const catMatch = key.match(/:cat:([a-z]+)$/)
@@ -303,11 +285,7 @@ export async function migrateOneRepoReviewMemory(
       signalsCopied: 0,
     }
   }
-  if (
-    typeof repoMeta.id !== "number" ||
-    !Number.isInteger(repoMeta.id) ||
-    repoMeta.id <= 0
-  ) {
+  if (typeof repoMeta.id !== "number" || !Number.isInteger(repoMeta.id) || repoMeta.id <= 0) {
     return {
       owner,
       repo,
@@ -405,9 +383,7 @@ export async function migrateInstallReviewMemoryToRepoId(
   opts: { dryRun: boolean } = { dryRun: false },
 ): Promise<MigrateMemoryInstallSummary> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    throw new Error(
-      "migrate-review-memory: GITHUB_APP_ID + GITHUB_PRIVATE_KEY required",
-    )
+    throw new Error("migrate-review-memory: GITHUB_APP_ID + GITHUB_PRIVATE_KEY required")
   }
 
   const listing = await listInstallationRepoFullNames(
@@ -483,21 +459,23 @@ export async function migrateInstallReviewMemoryToRepoId(
     }
   }
 
-  console.log(JSON.stringify({
-    event: "review-memory-migration-coverage",
-    installation_id: installationId,
-    repos_scanned: fullNames.length,
-    listing_complete: listing.complete,
-    migrated,
-    already_migrated: alreadyMigrated,
-    skipped,
-    failed,
-    legacy_keys_found: legacyKeysFound,
-    records_considered: recordsConsidered,
-    records_written: recordsWritten,
-    signals_copied: signalsCopied,
-    dry_run: opts.dryRun,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "review-memory-migration-coverage",
+      installation_id: installationId,
+      repos_scanned: fullNames.length,
+      listing_complete: listing.complete,
+      migrated,
+      already_migrated: alreadyMigrated,
+      skipped,
+      failed,
+      legacy_keys_found: legacyKeysFound,
+      records_considered: recordsConsidered,
+      records_written: recordsWritten,
+      signals_copied: signalsCopied,
+      dry_run: opts.dryRun,
+    }),
+  )
 
   return {
     installationId,

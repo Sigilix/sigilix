@@ -99,16 +99,11 @@ export function assessApprovalReadiness(args: {
   return {
     event: "REQUEST_CHANGES",
     blockers,
-    bodyOnlyFindings: blockers.slice(0, MAX_RENDERED_BLOCKERS).map((blocker) =>
-      renderApprovalBlockerFinding(blocker),
-    ),
+    bodyOnlyFindings: blockers.slice(0, MAX_RENDERED_BLOCKERS).map((blocker) => renderApprovalBlockerFinding(blocker)),
   }
 }
 
-export function buildApprovalReadinessSummary(
-  decision: ApprovalReadinessDecision,
-  fallbackSummary: string,
-): string {
+export function buildApprovalReadinessSummary(decision: ApprovalReadinessDecision, fallbackSummary: string): string {
   if (decision.blockers.length === 0) return fallbackSummary
   const noun = decision.blockers.length === 1 ? "finding was" : "findings were"
   const blockerNoun = decision.blockers.length === 1 ? "blocker" : "blockers"
@@ -118,9 +113,7 @@ export function buildApprovalReadinessSummary(
   ].join(" ")
 }
 
-function collectAccountedSourceIds(
-  provenance: ApprovalReadinessProvenance | null | undefined,
-): Set<string> {
+function collectAccountedSourceIds(provenance: ApprovalReadinessProvenance | null | undefined): Set<string> {
   const ids = new Set<string>()
   if (!provenance) return ids
 

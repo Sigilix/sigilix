@@ -23,10 +23,7 @@ export async function recordRunnerEvidenceMetric(env: Env, args: RecordRunnerEvi
   await metricsStub(env).record(args)
 }
 
-export function queryRunnerEvidenceMetrics(
-  env: Env,
-  windowDays: number,
-): Promise<RunnerEvidenceMetricsQuery> {
+export function queryRunnerEvidenceMetrics(env: Env, windowDays: number): Promise<RunnerEvidenceMetricsQuery> {
   // Direct return — the DO RPC already returns a Promise; wrapping in `async`
   // would only add a microtask hop. A sync throw from `metricsStub` still
   // surfaces to the caller's try/catch around the awaited call site.

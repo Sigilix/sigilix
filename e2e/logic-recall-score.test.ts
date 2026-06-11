@@ -77,7 +77,7 @@ describe("right-side file reconstruction for post-filtered live evals", () => {
     const c = LOGIC_RECALL_CASES.find((x) => x.id === "safe-literal-substring-filter")!
     const source = buildRightFileByPathFromDiff(c.diff).get("src/search/filter.ts")
     expect(source?.split("\n")[0]).toBe("export function filterRows(rows: Row[], req: Req): Row[] {")
-    expect(source?.split("\n")[1]).toBe("  const needle = String(req.query.q ?? \"\")")
+    expect(source?.split("\n")[1]).toBe('  const needle = String(req.query.q ?? "")')
     expect(source?.split("\n")[2]).toBe("  return rows.filter((r) => r.name.includes(needle))")
   })
 

@@ -5,13 +5,7 @@
 
 export type RunFinalState = "done" | "failed"
 
-export type RunStateLifecycle =
-  | "idle"
-  | "queued"
-  | "running"
-  | "done"
-  | "failed-transient"
-  | "failed"
+export type RunStateLifecycle = "idle" | "queued" | "running" | "done" | "failed-transient" | "failed"
 
 // SIG-329: `liveness` is the running-attempt heartbeat-gap alarm, set at
 // /pickup and re-armed on every /heartbeat. `watchdog` remains the
@@ -187,10 +181,7 @@ export interface HeartbeatRequest {
  * body (CR PR #70 catch — types previously included a `status`
  * field that the body never carried).
  */
-export type PickupBlockedReason =
-  | "duplicate-409"
-  | "terminal-410"
-  | "stale-runId-410"
+export type PickupBlockedReason = "duplicate-409" | "terminal-410" | "stale-runId-410"
 
 export interface PickupResponseOk {
   picked: true

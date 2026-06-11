@@ -55,8 +55,22 @@ describe.skipIf(!FTS5_AVAILABLE)("retrieveChunks — hybrid (flag on)", () => {
     const db = makeD1()
     // Lexical index has the SAME id as a vector hit (shared) plus a lexical-only hit.
     await upsertLexicalChunks(db, [
-      { id: "shared", namespace: "acme/widgets", path: "src/shared.ts", lineStart: 1, lineEnd: 10, content: "retryWithBackoff exponential helper" },
-      { id: "lexonly", namespace: "acme/widgets", path: "src/lex.ts", lineStart: 1, lineEnd: 5, content: "retryWithBackoff lexical only match" },
+      {
+        id: "shared",
+        namespace: "acme/widgets",
+        path: "src/shared.ts",
+        lineStart: 1,
+        lineEnd: 10,
+        content: "retryWithBackoff exponential helper",
+      },
+      {
+        id: "lexonly",
+        namespace: "acme/widgets",
+        path: "src/lex.ts",
+        lineStart: 1,
+        lineEnd: 5,
+        content: "retryWithBackoff lexical only match",
+      },
     ])
     const env = makeEnv({
       hybrid: true,
@@ -79,11 +93,22 @@ describe.skipIf(!FTS5_AVAILABLE)("retrieveChunks — hybrid (flag on)", () => {
   it("degrades to lexical-only when the vector query throws", async () => {
     const db = makeD1()
     await upsertLexicalChunks(db, [
-      { id: "lex1", namespace: "acme/widgets", path: "src/l.ts", lineStart: 1, lineEnd: 3, content: "needle in the lexical haystack" },
+      {
+        id: "lex1",
+        namespace: "acme/widgets",
+        path: "src/l.ts",
+        lineStart: 1,
+        lineEnd: 3,
+        content: "needle in the lexical haystack",
+      },
     ])
     const env = {
       AI: { run: async () => ({ data: [Array(EMBED_DIMS).fill(0.1)] }) },
-      OPENCLAW_CODE_INDEX: { query: async () => { throw new Error("vectorize down") } },
+      OPENCLAW_CODE_INDEX: {
+        query: async () => {
+          throw new Error("vectorize down")
+        },
+      },
       OPENCLAW_LEXICAL_INDEX: db,
       OPENCLAW_RETRIEVAL_HYBRID: "on",
     } as unknown as RetrievalEnv
@@ -95,12 +120,8 @@ describe.skipIf(!FTS5_AVAILABLE)("retrieveChunks — hybrid (flag on)", () => {
 
 describe("fuseRetrieval (pure)", () => {
   it("dedupes by path:line when ids are absent", () => {
-    const vector: RetrievedChunk[] = [
-      { path: "src/x.ts", lineStart: 1, lineEnd: 9, content: "x", score: 0.5 },
-    ]
-    const lexical: LexicalMatch[] = [
-      { id: "", path: "src/x.ts", lineStart: 1, lineEnd: 9, content: "x", score: -1 },
-    ]
+    const vector: RetrievedChunk[] = [{ path: "src/x.ts", lineStart: 1, lineEnd: 9, content: "x", score: 0.5 }]
+    const lexical: LexicalMatch[] = [{ id: "", path: "src/x.ts", lineStart: 1, lineEnd: 9, content: "x", score: -1 }]
     const fused = fuseRetrieval(vector, lexical, "acme/widgets")
     expect(fused).toHaveLength(1)
     expect(fused[0]!.source).toBe("hybrid")

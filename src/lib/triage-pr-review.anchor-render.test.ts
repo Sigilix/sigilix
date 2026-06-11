@@ -192,7 +192,10 @@ describe("provenance footer (ARC-184)", () => {
     // timestamp was dropped (GitHub already shows comment-creation
     // time at the top of the comment header).
     const out = buildReviewSubmission({
-      verdict: verdictWithFinding, prAuthor: "alice", headSha: HEAD, nowMs: NOW,
+      verdict: verdictWithFinding,
+      prAuthor: "alice",
+      headSha: HEAD,
+      nowMs: NOW,
     })
     const body = out.body ?? ""
     expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
@@ -208,8 +211,15 @@ describe("provenance footer (ARC-184)", () => {
     // line is now merged into the single `<sub>` footer. The SHA
     // remains the last identifier in the body.
     const out = buildFallbackBody(
-      verdictWithFinding, [], { headSha: HEAD, nowMs: NOW },
-      undefined, undefined, undefined, undefined, undefined, "REQUEST_CHANGES",
+      verdictWithFinding,
+      [],
+      { headSha: HEAD, nowMs: NOW },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "REQUEST_CHANGES",
     )
     expect(out.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
@@ -243,7 +253,12 @@ describe("provenance footer (ARC-184)", () => {
         },
       ],
     }
-    const out = buildReviewSubmission({ verdict: huge, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
+    const out = buildReviewSubmission({
+      verdict: huge,
+      prAuthor: "alice",
+      headSha: HEAD,
+      nowMs: NOW,
+    })
     const body = out.body ?? ""
     expect(body.length).toBeLessThanOrEqual(65000)
     // Truncation marker is present
@@ -310,17 +325,13 @@ describe("renderFixPlan (ARC-180)", () => {
   })
 
   it("renders multi-line range when startLine is set", () => {
-    const out = renderFixPlan([
-      fnd({ score: 5, path: "a.ts", line: 20, startLine: 15, headline: "h" }),
-    ])!
+    const out = renderFixPlan([fnd({ score: 5, path: "a.ts", line: 20, startLine: 15, headline: "h" })])!
     expect(out).toContain("a.ts:15-20")
     expect(out).not.toContain("a.ts:20 ")
   })
 
   it("uses single-line format when startLine equals line", () => {
-    const out = renderFixPlan([
-      fnd({ score: 5, path: "a.ts", line: 20, startLine: 20, headline: "h" }),
-    ])!
+    const out = renderFixPlan([fnd({ score: 5, path: "a.ts", line: 20, startLine: 20, headline: "h" })])!
     expect(out).toContain("a.ts:20")
     expect(out).not.toContain("a.ts:20-20")
   })
@@ -372,7 +383,7 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges as <a href=\"#\"><img></a> with NO explicit width/height (SIG-238 r9)", () => {
+  it('renders badges as <a href="#"><img></a> with NO explicit width/height (SIG-238 r9)', () => {
     // SIG-238 round-9 pattern. Empirically this combo (a-wrap +
     // missing dimensions) defeats Primer's bubble rule. r4 (drop
     // a-wrap) + r7 (32×32 transparent inset) both lost.
@@ -433,30 +444,71 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       confidenceReason: "narrow surface",
       findings: [{ ...baseFinding, score: 4, trust: { tier: "grounded-model" } }],
     }
-    const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: true })
+    const on = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      trustLedger: true,
+    })
     // the segmented summary: total + the proof breakdown (1 grounded-model finding).
     expect(on.submission.body).toContain("**1 finding**")
     expect(on.submission.body).toContain("**Proof**: 1 grounded")
-    const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: false })
+    const off = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      trustLedger: false,
+    })
     expect(off.submission.body).not.toContain("**Proof**")
     expect(off.submission.body).not.toContain("**1 finding**")
   })
 
   it("PR3b: restructures body findings — collapsed outside-diff dropdown + PR-level section (on only)", () => {
-    const bf = (over: Partial<PrReviewFinding>): PrReviewFinding => ({ ...baseFinding, score: 3, ...over })
-    const verdict: PrReviewVerdict = { summary: "Body findings.", confidence: 4, confidenceReason: "x", findings: [] }
+    const bf = (over: Partial<PrReviewFinding>): PrReviewFinding => ({
+      ...baseFinding,
+      score: 3,
+      ...over,
+    })
+    const verdict: PrReviewVerdict = {
+      summary: "Body findings.",
+      confidence: 4,
+      confidenceReason: "x",
+      findings: [],
+    }
     const unanchored: PrReviewFinding[] = [
-      bf({ headline: "outside the diff", trust: { tier: "grounded-model", surface: "body", demoteReason: "outside-diff" } }),
-      bf({ headline: "no test for this", scope: "pr", trust: { tier: "grounded-model", surface: "body" } }), // genuinely PR-scoped
-      bf({ headline: "ungrounded nit", trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" } }), // → flat list (not pr-scoped)
+      bf({
+        headline: "outside the diff",
+        trust: { tier: "grounded-model", surface: "body", demoteReason: "outside-diff" },
+      }),
+      bf({
+        headline: "no test for this",
+        scope: "pr",
+        trust: { tier: "grounded-model", surface: "body" },
+      }), // genuinely PR-scoped
+      bf({
+        headline: "ungrounded nit",
+        trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" },
+      }), // → flat list (not pr-scoped)
     ]
-    const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
+    const on = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      unanchored,
+      trustLedger: true,
+    }).submission.body
     expect(on).toContain("couldn't be anchored to a specific line") // the collapsed unanchorable dropdown
     expect(on).toContain("<details>")
     expect(on).toContain("**PR-level**")
     expect(on).not.toContain("could not be anchored") // the old generic disclaimer is dropped
     // off → the generic flat section + disclaimer, no dropdown / no PR-level heading.
-    const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: false }).submission.body
+    const off = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      unanchored,
+      trustLedger: false,
+    }).submission.body
     expect(off).not.toContain("couldn't be anchored to a specific line")
     expect(off).not.toContain("**PR-level**")
     expect(off).toContain("could not be anchored")
@@ -468,12 +520,27 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     // when the title wrapped. It belongs with the leading severity+category
     // badges (`trustPill` doc: "append after the category glyph"), matching the
     // inline `formatFindingComment` render.
-    const verdict: PrReviewVerdict = { summary: "Body findings.", confidence: 4, confidenceReason: "x", findings: [] }
+    const verdict: PrReviewVerdict = {
+      summary: "Body findings.",
+      confidence: 4,
+      confidenceReason: "x",
+      findings: [],
+    }
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, score: 3, headline: "evidence rendered without redaction",
-        trust: { tier: "grounded-model", surface: "body", demoteReason: "inline-grounding" } },
+      {
+        ...baseFinding,
+        score: 3,
+        headline: "evidence rendered without redaction",
+        trust: { tier: "grounded-model", surface: "body", demoteReason: "inline-grounding" },
+      },
     ]
-    const body = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
+    const body = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      unanchored,
+      trustLedger: true,
+    }).submission.body
     const pillIdx = body.indexOf("trust-grounded")
     const headlineIdx = body.indexOf("evidence rendered without redaction")
     expect(pillIdx).toBeGreaterThanOrEqual(0)
@@ -507,7 +574,9 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
     expect(on).toContain("Why Sigilix flagged this (6 pieces of evidence)")
     expect(on).toContain("Flagged by: logic, security")
     expect(on).toContain("Did not flag: performance, tests")
-    expect(on).toContain("Deterministic facts: `secret:generic-api-key:abc123:42`, `siblingMapping:src/lib/foo.ts-&gt;NONE`")
+    expect(on).toContain(
+      "Deterministic facts: `secret:generic-api-key:abc123:42`, `siblingMapping:src/lib/foo.ts-&gt;NONE`",
+    )
     expect(on).toContain("Retrieval chunks: `chunk-7`")
     expect(on).toContain("Related prior PRs: `#123`")
     expect(on).toContain("Synth decision: merged")
@@ -517,18 +586,25 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
   })
 
   it("escapes evidence values rendered inside the details block", () => {
-    const body = formatFindingComment({
-      ...baseFinding,
-      evidence: {
-        specialistsThatFlagged: ["logic<script>"],
-        specialistsThatDeclined: ["tests&perf"],
-        deterministicFactIds: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts</script>&"],
-        retrievalChunkIds: ["chunk-`quoted`"],
-        relatedPriorPRs: [],
-        synthDecision: "kept",
-        consensusScore: 1,
+    const body = formatFindingComment(
+      {
+        ...baseFinding,
+        evidence: {
+          specialistsThatFlagged: ["logic<script>"],
+          specialistsThatDeclined: ["tests&perf"],
+          deterministicFactIds: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts</script>&"],
+          retrievalChunkIds: ["chunk-`quoted`"],
+          relatedPriorPRs: [],
+          synthDecision: "kept",
+          consensusScore: 1,
+        },
       },
-    }, 5, undefined, undefined, false, true)
+      5,
+      undefined,
+      undefined,
+      false,
+      true,
+    )
 
     expect(body).toContain("Flagged by: logic&lt;script&gt;")
     expect(body).toContain("Did not flag: tests&amp;perf")

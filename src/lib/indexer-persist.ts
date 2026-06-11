@@ -25,15 +25,8 @@ import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
-import {
-  writeRepoIndexManifest,
-  type RepoIndexManifestV1,
-} from "@/src/lib/repo-index-manifest"
-import {
-  computeMerge,
-  readRepoIndexVectors,
-  writeRepoIndexVectors,
-} from "@/src/lib/repo-index-vectors"
+import { writeRepoIndexManifest, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
+import { computeMerge, readRepoIndexVectors, writeRepoIndexVectors } from "@/src/lib/repo-index-vectors"
 import { readActiveRunId } from "@/src/lib/repo-index-active-run"
 import { CHUNK_LINES, CHUNK_OVERLAP } from "@/src/lib/chunk-core"
 import { walkScopedRuleFiles } from "@/src/lib/scoped-rules"
@@ -98,13 +91,18 @@ export async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Pr
       runId: args.runId,
     },
   })
-  console.log(JSON.stringify({
-    event: "index-shard-enqueued",
-    owner: args.owner, repo: args.repo,
-    installation_id: args.installationId,
-    run_id: args.runId,
-    lo: args.lo, hi: args.hi, total_files: args.totalFiles,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-shard-enqueued",
+      owner: args.owner,
+      repo: args.repo,
+      installation_id: args.installationId,
+      run_id: args.runId,
+      lo: args.lo,
+      hi: args.hi,
+      total_files: args.totalFiles,
+    }),
+  )
 }
 
 interface PersistManifestArgs {
@@ -168,11 +166,7 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
   // message carried it. Conditional spread keeps the manifest shape
   // tight under exactOptionalPropertyTypes. Positive-integer guard
   // matches the type-guard in repo-index-manifest.ts.
-  if (
-    typeof args.githubRepoId === "number" &&
-    Number.isInteger(args.githubRepoId) &&
-    args.githubRepoId > 0
-  ) {
+  if (typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0) {
     manifest.githubRepoId = args.githubRepoId
   }
   try {
@@ -182,11 +176,15 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
     // the queue retries — bootstrap is idempotent (freshness-skips on
     // the next attempt if data already landed; otherwise re-runs the
     // slice with content-addressed vector ids).
-    console.error(JSON.stringify({
-      event: "repo-index-manifest-write-failed",
-      owner: args.owner, repo: args.repo, run_id: args.runId,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "repo-index-manifest-write-failed",
+        owner: args.owner,
+        repo: args.repo,
+        run_id: args.runId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     throw err
   }
 }
@@ -253,11 +251,16 @@ export async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ pr
     // Different run is the current one. Refuse to write — don't
     // corrupt the live vectors record with stale slice data — and
     // signal the caller to skip the manifest/next-shard write.
-    console.warn(JSON.stringify({
-      event: "repo-index-vectors-stale-skip",
-      owner, repo, run_id: runId, existing_run_id: outcome.existingRunId,
-      active_run_id: activeRunId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "repo-index-vectors-stale-skip",
+        owner,
+        repo,
+        run_id: runId,
+        existing_run_id: outcome.existingRunId,
+        active_run_id: activeRunId,
+      }),
+    )
     return { proceed: false }
   }
 
@@ -268,27 +271,41 @@ export async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ pr
   // throw so the queue retries; if the corruption persists, the
   // operator sees the drop instead of silent leak.
   if (outcome.action === "invalid-overwrite" && !isBootstrap) {
-    console.error(JSON.stringify({
-      event: "repo-index-vectors-invalid-mid-chain",
-      owner, repo, run_id: runId,
-      note: "refusing to clobber corrupt record with partial slice; queue retry",
-    }))
+    console.error(
+      JSON.stringify({
+        event: "repo-index-vectors-invalid-mid-chain",
+        owner,
+        repo,
+        run_id: runId,
+        note: "refusing to clobber corrupt record with partial slice; queue retry",
+      }),
+    )
     throw new Error(`repo-index-vectors corrupt mid-chain for ${repo}`)
   }
 
   const ok = await writeRepoIndexVectors(env, outcome.vectors)
   if (!ok) {
-    console.error(JSON.stringify({
-      event: "repo-index-vectors-write-failed",
-      owner, repo, run_id: runId, action: outcome.action,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "repo-index-vectors-write-failed",
+        owner,
+        repo,
+        run_id: runId,
+        action: outcome.action,
+      }),
+    )
     throw new Error(`repo-index-vectors write failed for ${repo}`)
   }
-  console.log(JSON.stringify({
-    event: "repo-index-vectors-write-ok",
-    owner, repo, run_id: runId, action: outcome.action,
-    path_count: Object.keys(outcome.vectors.byPath).length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "repo-index-vectors-write-ok",
+      owner,
+      repo,
+      run_id: runId,
+      action: outcome.action,
+      path_count: Object.keys(outcome.vectors.byPath).length,
+    }),
+  )
   return { proceed: true }
 }
 
@@ -344,11 +361,15 @@ export async function persistScopedRulesManifest(args: PersistScopedRulesArgs): 
     try {
       content = await client.getFileContent(owner, repo, file.path, headSha)
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "scoped-rules-file-fetch-failed",
-        owner, repo, path: file.path,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "scoped-rules-file-fetch-failed",
+          owner,
+          repo,
+          path: file.path,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       continue
     }
     if (content === null) continue
@@ -357,20 +378,27 @@ export async function persistScopedRulesManifest(args: PersistScopedRulesArgs): 
   // SIG-172 M2 (fix-up): lease check immediately before the write so
   // a slow rule-file walk can't outlive its run-id ownership.
   if (!(await leaseAllows(env, owner, stateRepo, runId))) {
-    console.warn(JSON.stringify({
-      event: "scoped-rules-manifest-skip-superseded",
-      owner, repo, run_id: runId,
-      file_count: entries.length,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "scoped-rules-manifest-skip-superseded",
+        owner,
+        repo,
+        run_id: runId,
+        file_count: entries.length,
+      }),
+    )
     return
   }
   const manifest = await writeScopedRulesManifest(env, owner, repo, entries)
-  console.log(JSON.stringify({
-    event: "scoped-rules-manifest-written",
-    owner, repo,
-    head_sha: headSha,
-    file_count: entries.length,
-    per_directory_rules: manifest.perDirectoryRules.length,
-    glob_rules: manifest.globRules.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "scoped-rules-manifest-written",
+      owner,
+      repo,
+      head_sha: headSha,
+      file_count: entries.length,
+      per_directory_rules: manifest.perDirectoryRules.length,
+      glob_rules: manifest.globRules.length,
+    }),
+  )
 }

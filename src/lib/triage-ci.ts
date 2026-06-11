@@ -21,11 +21,7 @@ import { CI_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
 import { CI_TRIAGE_PROMPT } from "@/src/prompts/ci-triage"
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
-import {
-  parseCiSuggestionsMode,
-  planCiSuggestions,
-  submitCiSuggestionReview,
-} from "./ci-suggestions"
+import { parseCiSuggestionsMode, planCiSuggestions, submitCiSuggestionReview } from "./ci-suggestions"
 import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -106,12 +102,18 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   // (different runId) both produce different keys and re-run as expected.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}/run/${runId}`
   if (await env.OPENCLAW_STATE.get(dedupeKey)) {
-    console.log(JSON.stringify({
-      event: "ci-triage-skipped",
-      dedupe_system: "kv",
-      reason: "already_running",
-      owner, repo, prNumber, runId, headSha: headSha.slice(0, 7),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "ci-triage-skipped",
+        dedupe_system: "kv",
+        reason: "already_running",
+        owner,
+        repo,
+        prNumber,
+        runId,
+        headSha: headSha.slice(0, 7),
+      }),
+    )
     return
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
@@ -162,7 +164,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   // doesn't match the PR head, skip rather than post nonsense.
   if (meta.head.sha !== headSha) {
     console.log(
-      `ci-triage stale run on ${owner}/${repo}#${prNumber} — run head ${headSha.slice(0, 7)} != PR head ${meta.head.sha.slice(0, 7)}; skipping`
+      `ci-triage stale run on ${owner}/${repo}#${prNumber} — run head ${headSha.slice(0, 7)} != PR head ${meta.head.sha.slice(0, 7)}; skipping`,
     )
     return
   }
@@ -236,9 +238,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   const draft = buildCiTriageCommentFromModelResponse(response)
   const verdict = draft?.confidence ?? null
   if (draft == null || verdict === "low") {
-    console.log(
-      `Skipping ci-triage post — confidence=${verdict ?? "unparsed"} on ${owner}/${repo}#${prNumber}`
-    )
+    console.log(`Skipping ci-triage post — confidence=${verdict ?? "unparsed"} on ${owner}/${repo}#${prNumber}`)
     return
   }
 
@@ -266,14 +266,12 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   if (existing != null) {
     await client.updateIssueComment(owner, repo, existing, body)
     since("comment-updated")
-    console.log(
-      `ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${verdict})`
-    )
+    console.log(`ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${verdict})`)
   } else {
     const created = await client.createIssueComment(owner, repo, prNumber, body)
     since("comment-created")
     console.log(
-      `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`
+      `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`,
     )
   }
 
@@ -288,16 +286,21 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     if (inlineResult.posted > 0) since(`ci-suggestions-posted-${inlineResult.posted}`)
   }
 
-  console.log(JSON.stringify({
-    event: "ci-suggestions",
-    owner, repo, prNumber, runId,
-    mode: suggestionsMode,
-    sensitive,
-    anchorable: plan.anchorableCount,
-    unanchorable: plan.unanchorableCount,
-    posted: inlineResult.posted,
-    skip: inlineResult.skip,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "ci-suggestions",
+      owner,
+      repo,
+      prNumber,
+      runId,
+      mode: suggestionsMode,
+      sensitive,
+      anchorable: plan.anchorableCount,
+      unanchorable: plan.unanchorableCount,
+      posted: inlineResult.posted,
+      skip: inlineResult.skip,
+    }),
+  )
 }
 
 /**
@@ -308,8 +311,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
  */
 export function extractMentionedFiles(log: string): string[] {
   if (typeof log !== "string" || log.length === 0) return []
-  const pattern =
-    /(?:^|[\s(])((?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|mjs|js|jsx|rs|md|yml|yaml|json|sh)):(\d+)/g
+  const pattern = /(?:^|[\s(])((?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|mjs|js|jsx|rs|md|yml|yaml|json|sh)):(\d+)/g
   const seen = new Set<string>()
   const ordered: string[] = []
   let match: RegExpExecArray | null
@@ -351,9 +353,7 @@ export function parseCiTriageResponse(response: string): CiTriageDiagnosis | nul
   // casing defensively while still rejecting unknown confidence values.
   const confidenceRaw = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : ""
   const confidence =
-    confidenceRaw === "high" || confidenceRaw === "medium" || confidenceRaw === "low"
-      ? confidenceRaw
-      : null
+    confidenceRaw === "high" || confidenceRaw === "medium" || confidenceRaw === "low" ? confidenceRaw : null
   if (confidence == null) return null
 
   const suggestedFix = typeof obj.suggestedFix === "string" ? obj.suggestedFix.trim() : ""
@@ -465,10 +465,7 @@ function normalizeCiTriagePatchPath(path: string): string | null {
 }
 
 function renderMarkdownCodeBlock(content: string): string {
-  const maxBacktickRun = Math.max(
-    0,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0]?.length ?? 0)
-  )
+  const maxBacktickRun = Math.max(0, ...Array.from(content.matchAll(/`+/g), (match) => match[0]?.length ?? 0))
   const fence = "`".repeat(Math.max(3, maxBacktickRun + 1))
   return [fence, content, fence].join("\n")
 }
@@ -541,7 +538,7 @@ function buildPrompt(ctx: PromptCtx): string {
     sections.push(
       "",
       "[RELATED CODEBASE CONTEXT (semantic similarity to the failure)]",
-      "These chunks were retrieved by embedding-based similarity to the failure log + diff. They may or may not be relevant — use them only if they help explain the root cause."
+      "These chunks were retrieved by embedding-based similarity to the failure log + diff. They may or may not be relevant — use them only if they help explain the root cause.",
     )
     let remaining = LIMITS.relatedChunks
     for (const chunk of ctx.relatedChunks) {
@@ -567,7 +564,7 @@ async function listFailedJobs(
   client: GitHubClient,
   owner: string,
   repo: string,
-  runId: number
+  runId: number,
 ): Promise<WorkflowJob[]> {
   const jobs = await client.getWorkflowRunJobs(owner, repo, runId)
   return jobs.filter((j) => j.conclusion === "failure").slice(0, MAX_FAILED_JOBS)
@@ -584,7 +581,7 @@ async function fetchFailedJobLogs(
   client: GitHubClient,
   owner: string,
   repo: string,
-  jobs: WorkflowJob[]
+  jobs: WorkflowJob[],
 ): Promise<string> {
   const blocks: string[] = []
   for (const job of jobs) {
@@ -605,16 +602,14 @@ async function findExistingCiComment(
   client: GitHubClient,
   owner: string,
   repo: string,
-  prNumber: number
+  prNumber: number,
 ): Promise<number | null> {
   const items = await client.listIssueComments(owner, repo, prNumber)
   // SIG-85: bilingual matcher — pick up both `<!-- sigilix:ci-triage -->`
   // and the legacy `<!-- openclaw:ci-triage -->` stickies so legacy
   // stickies get edited in place instead of duplicated.
   const hit = items.find(
-    (c) =>
-      typeof c.body === "string" &&
-      (c.body.includes(CI_MARKER) || c.body.includes(LEGACY_CI_MARKER)),
+    (c) => typeof c.body === "string" && (c.body.includes(CI_MARKER) || c.body.includes(LEGACY_CI_MARKER)),
   )
   return hit ? hit.id : null
 }

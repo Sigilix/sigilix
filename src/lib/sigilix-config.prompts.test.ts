@@ -4,10 +4,7 @@
 // for sigilix.json guidance injection and the [GRAPH CONTEXT] block (SIG-138).
 
 import { describe, it, expect } from "vitest"
-import {
-  buildSpecialistInitialMessage,
-  buildSynthesizerInitialMessage,
-} from "@/src/prompts/pr-review-specialists"
+import { buildSpecialistInitialMessage, buildSynthesizerInitialMessage } from "@/src/prompts/pr-review-specialists"
 
 describe("buildSpecialistInitialMessage — sigilix.json guidance injection", () => {
   const baseCtx = {
@@ -102,7 +99,6 @@ describe("buildSynthesizerInitialMessage — sigilix.json guidance injection", (
     expect(msg.indexOf("PATH-SCOPED REVIEW GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
   })
 })
-
 
 describe("buildSpecialistInitialMessage — [GRAPH CONTEXT] block (SIG-138)", () => {
   const baseCtx = {

@@ -8,7 +8,12 @@ type F = { ruleId: string; astFindingId: string; path: string; line: number }
 
 function makeResult() {
   const findings: F[] = [
-    { ruleId: "no-path-traversal", astFindingId: "ast/no-path-traversal/aaa/10", path: "a.ts", line: 10 },
+    {
+      ruleId: "no-path-traversal",
+      astFindingId: "ast/no-path-traversal/aaa/10",
+      path: "a.ts",
+      line: 10,
+    },
     { ruleId: "no-ssrf", astFindingId: "ast/no-ssrf/bbb/20", path: "b.ts", line: 20 },
   ]
   const perFinding = new Map<string, unknown>([

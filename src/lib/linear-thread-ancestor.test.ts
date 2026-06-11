@@ -6,10 +6,7 @@
 // degrades the webhook trigger in production.
 
 import { describe, expect, it } from "vitest"
-import {
-  commentHasSigilixAncestor,
-  type LinearThreadComment,
-} from "@/src/lib/linear-thread-ancestor"
+import { commentHasSigilixAncestor, type LinearThreadComment } from "@/src/lib/linear-thread-ancestor"
 
 const sigilix = (id: string, parentId: string | null = null): LinearThreadComment => ({
   id,
@@ -101,14 +98,7 @@ describe("commentHasSigilixAncestor", () => {
   })
 
   it("matches every legacy bot-handle alias the cross-platform isBotHandle accepts", () => {
-    const variants = [
-      "sigilix[bot]",
-      "Sigilix[bot]",
-      "arc[bot]",
-      "Arc[bot]",
-      "arc-copilot[bot]",
-      "openclaw[bot]",
-    ]
+    const variants = ["sigilix[bot]", "Sigilix[bot]", "arc[bot]", "Arc[bot]", "arc-copilot[bot]", "openclaw[bot]"]
     for (const displayName of variants) {
       const comments: LinearThreadComment[] = [
         { id: "s1", parentId: null, user: { name: null, displayName } },
@@ -146,10 +136,7 @@ describe("commentHasSigilixAncestor", () => {
   })
 
   it("returns false when an ancestor exists with no user (null user)", () => {
-    const comments: LinearThreadComment[] = [
-      { id: "s1", parentId: null, user: null },
-      human("u2", "s1"),
-    ]
+    const comments: LinearThreadComment[] = [{ id: "s1", parentId: null, user: null }, human("u2", "s1")]
     expect(commentHasSigilixAncestor({ startParentId: "s1", comments })).toBe(false)
   })
 })

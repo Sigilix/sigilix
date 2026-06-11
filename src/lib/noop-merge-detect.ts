@@ -105,11 +105,9 @@ export async function writePriorReviewDiffHash(
     hashedAt: Date.now(),
   }
   try {
-    await env.OPENCLAW_STATE.put(
-      kvKey(owner, repo, prNumber),
-      JSON.stringify(record),
-      { expirationTtl: TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(kvKey(owner, repo, prNumber), JSON.stringify(record), {
+      expirationTtl: TTL_SECONDS,
+    })
   } catch {
     // Swallow — noop-merge detection is an optimization. Next push
     // falls back to dispatch + re-establishes the marker on the
@@ -141,10 +139,15 @@ export async function recordReviewedDiffHash(
     const diffHash = await computeDiffHash(fullPrDiff)
     await writePriorReviewDiffHash(env, owner, repo, prNumber, diffHash, reviewedHeadSha)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-diff-hash-record-failed",
-      owner, repo, prNumber, reviewedHeadSha,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-diff-hash-record-failed",
+        owner,
+        repo,
+        prNumber,
+        reviewedHeadSha,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }

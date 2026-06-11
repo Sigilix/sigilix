@@ -28,10 +28,7 @@ import type { ClaimShadowMode } from "./shadow-match"
 /**
  * Soften is active only in `soften` mode WITH the per-repo opt-in. Pure.
  */
-export function isSoftenActive(
-  mode: ClaimShadowMode,
-  claimSoftening: boolean,
-): boolean {
+export function isSoftenActive(mode: ClaimShadowMode, claimSoftening: boolean): boolean {
   return mode === "soften" && claimSoftening === true
 }
 

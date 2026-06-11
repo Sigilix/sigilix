@@ -94,10 +94,15 @@ export async function enqueueWarmupRerunsForIndex(args: {
   try {
     const already = await env.OPENCLAW_STATE.get(ranKey)
     if (already !== null) {
-      console.log(JSON.stringify({
-        event: "pr-review-warmup-rerun-fanout-already-ran",
-        owner, repo, installation_id: installationId, run_id: runId,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-warmup-rerun-fanout-already-ran",
+          owner,
+          repo,
+          installation_id: installationId,
+          run_id: runId,
+        }),
+      )
       return { enqueued: 0, scanned: 0, skipped: "already-fanned-out" }
     }
   } catch (err) {
@@ -107,11 +112,16 @@ export async function enqueueWarmupRerunsForIndex(args: {
     // retry → re-embed the entire repo). Log + continue with the
     // fan-out; double-fanout on a transient KV blip is strictly
     // less bad than re-embedding 1k files.
-    console.warn(JSON.stringify({
-      event: "pr-review-warmup-rerun-fanout-dedupe-read-failed",
-      owner, repo, installation_id: installationId, run_id: runId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-warmup-rerun-fanout-dedupe-read-failed",
+        owner,
+        repo,
+        installation_id: installationId,
+        run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
   // Write the breadcrumb BEFORE the fan-out so a fail-mid-fanout
   // doesn't trigger a full re-fanout — the rerun handler is idempotent
@@ -124,22 +134,31 @@ export async function enqueueWarmupRerunsForIndex(args: {
       expirationTtl: 7 * 24 * 60 * 60, // 7 days — long enough to outlive queue retry budgets
     })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-warmup-rerun-fanout-dedupe-write-failed",
-      owner, repo, installation_id: installationId, run_id: runId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-warmup-rerun-fanout-dedupe-write-failed",
+        owner,
+        repo,
+        installation_id: installationId,
+        run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 
   let openPrs: Array<{ number: number; head: { sha: string } }>
   try {
     openPrs = await client.listOpenPullRequests(owner, repo)
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-review-warmup-rerun-list-failed",
-      owner, repo, installation_id: installationId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-review-warmup-rerun-list-failed",
+        owner,
+        repo,
+        installation_id: installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { enqueued: 0, scanned: 0 }
   }
 
@@ -152,11 +171,15 @@ export async function enqueueWarmupRerunsForIndex(args: {
     } catch (err) {
       // List-issue-comments failure for one PR shouldn't abort the
       // whole fan-out. Log + skip + continue.
-      console.warn(JSON.stringify({
-        event: "pr-review-warmup-rerun-check-failed",
-        owner, repo, pr_number: pr.number,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-warmup-rerun-check-failed",
+          owner,
+          repo,
+          pr_number: pr.number,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       continue
     }
     if (!needsRerun) continue
@@ -174,21 +197,34 @@ export async function enqueueWarmupRerunsForIndex(args: {
       // every open PR.
       const reviewMessage: JobMessage = {
         type: "pr-review-rerun",
-        owner, repo, prNumber: pr.number, installationId,
+        owner,
+        repo,
+        prNumber: pr.number,
+        installationId,
         silent: true,
       }
       await env.OPENCLAW_JOBS.send(reviewMessage)
       enqueued += 1
-      console.log(JSON.stringify({
-        event: "pr-review-warmup-rerun-enqueued",
-        owner, repo, pr_number: pr.number, installation_id: installationId,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-warmup-rerun-enqueued",
+          owner,
+          repo,
+          pr_number: pr.number,
+          installation_id: installationId,
+        }),
+      )
     } catch (err) {
-      console.error(JSON.stringify({
-        event: "pr-review-warmup-rerun-enqueue-failed",
-        owner, repo, pr_number: pr.number, installation_id: installationId,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-review-warmup-rerun-enqueue-failed",
+          owner,
+          repo,
+          pr_number: pr.number,
+          installation_id: installationId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
     // The overview refresh requires headSha; PRs without one are
     // skipped silently — they'd fail downstream anyway when the
@@ -197,28 +233,47 @@ export async function enqueueWarmupRerunsForIndex(args: {
       try {
         const overviewMessage: JobMessage = {
           type: "pr-overview",
-          owner, repo, prNumber: pr.number, headSha, installationId,
+          owner,
+          repo,
+          prNumber: pr.number,
+          headSha,
+          installationId,
         }
         await env.OPENCLAW_JOBS.send(overviewMessage)
-        console.log(JSON.stringify({
-          event: "pr-overview-warmup-refresh-enqueued",
-          owner, repo, pr_number: pr.number, installation_id: installationId,
-          head_sha: headSha.slice(0, 7),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-overview-warmup-refresh-enqueued",
+            owner,
+            repo,
+            pr_number: pr.number,
+            installation_id: installationId,
+            head_sha: headSha.slice(0, 7),
+          }),
+        )
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-overview-warmup-refresh-enqueue-failed",
-          owner, repo, pr_number: pr.number, installation_id: installationId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-overview-warmup-refresh-enqueue-failed",
+            owner,
+            repo,
+            pr_number: pr.number,
+            installation_id: installationId,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
   }
-  console.log(JSON.stringify({
-    event: "pr-review-warmup-rerun-fanout-done",
-    owner, repo, installation_id: installationId,
-    scanned: openPrs.length, enqueued,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-warmup-rerun-fanout-done",
+      owner,
+      repo,
+      installation_id: installationId,
+      scanned: openPrs.length,
+      enqueued,
+    }),
+  )
   return { enqueued, scanned: openPrs.length }
 }
 
@@ -229,16 +284,10 @@ export async function enqueueWarmupRerunsForIndex(args: {
  * was opened against an un-indexed repo and should get the rerun
  * fan-out when indexing finishes.
  */
-async function prHasWarmupState(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<boolean> {
+async function prHasWarmupState(client: GitHubClient, owner: string, repo: string, prNumber: number): Promise<boolean> {
   const items = await client.listIssueComments(owner, repo, prNumber)
   return items.some(
-    (c) => typeof c.body === "string" && (
-      c.body.includes(WARMUP_CALLOUT_MARKER) || c.body.includes(LEGACY_WARMUP_MARKER)
-    ),
+    (c) =>
+      typeof c.body === "string" && (c.body.includes(WARMUP_CALLOUT_MARKER) || c.body.includes(LEGACY_WARMUP_MARKER)),
   )
 }

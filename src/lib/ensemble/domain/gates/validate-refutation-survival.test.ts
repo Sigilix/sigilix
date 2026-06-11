@@ -54,13 +54,17 @@ describe("parseRefutationSurvivalMode", () => {
 
 describe("evaluateRefutationSurvival", () => {
   it("KEEPS a finding below the severity floor even with no rationale", () => {
-    const r = evaluateRefutationSurvival(finding({ score: REFUTATION_SURVIVAL_MIN_SEVERITY - 1, independentAssessment: undefined }))
+    const r = evaluateRefutationSurvival(
+      finding({ score: REFUTATION_SURVIVAL_MIN_SEVERITY - 1, independentAssessment: undefined }),
+    )
     expect(r.keep).toBe(true)
   })
 
   it("KEEPS a sev>=floor finding that carries a non-empty independentAssessment", () => {
     const r = evaluateRefutationSurvival(
-      finding({ independentAssessment: "source=req.query.url → sink=fetch(url) → type=string; no allowlist." }),
+      finding({
+        independentAssessment: "source=req.query.url → sink=fetch(url) → type=string; no allowlist.",
+      }),
     )
     expect(r.keep).toBe(true)
   })
@@ -91,7 +95,12 @@ function makeSpecialistVerdicts(securityRationale?: string): SpecialistVerdictsA
     {
       role: "security",
       verdict: {
-        findings: [{ id: "security-0", ...(securityRationale ? { independentAssessment: securityRationale } : {}) }],
+        findings: [
+          {
+            id: "security-0",
+            ...(securityRationale ? { independentAssessment: securityRationale } : {}),
+          },
+        ],
       },
     },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
@@ -101,7 +110,12 @@ function makeSpecialistVerdicts(securityRationale?: string): SpecialistVerdictsA
 function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
   return {
     findings: [
-      { sourceSpecialists: ["security"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["security"],
+        sourceFindingIds: [sourceId],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
     softened: [],
@@ -132,7 +146,12 @@ function run(args: {
 }) {
   return validateForSubmission({
     synthOutput: {
-      verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [args.finding] },
+      verdict: {
+        summary: "Test",
+        confidence: 3,
+        confidenceReason: "Reason.",
+        findings: [args.finding],
+      },
       provenance: securityProvenance(),
     },
     reviewable: makeReviewable(),
@@ -204,7 +223,10 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
   it("does NOT gate a TOOL-BACKED security finding (real evidenceId) — that's the SIG-108 gate's job", () => {
     const onDrop = vi.fn()
     const result = run({
-      finding: finding({ evidenceId: "sarif:ssrf:abc123abc123:17", independentAssessment: undefined }),
+      finding: finding({
+        evidenceId: "sarif:ssrf:abc123abc123:17",
+        independentAssessment: undefined,
+      }),
       mode: "enforce",
       securityManifest: secManifest("sarif:ssrf:abc123abc123:17"),
       onDrop,
@@ -225,7 +247,11 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     // and, lacking a rationale, demoted in enforce.
     const onDrop = vi.fn()
     const result = run({
-      finding: finding({ cweId: "CWE-22", evidenceId: "sarif:ssrf:abc123abc123:17", independentAssessment: undefined }),
+      finding: finding({
+        cweId: "CWE-22",
+        evidenceId: "sarif:ssrf:abc123abc123:17",
+        independentAssessment: undefined,
+      }),
       mode: "enforce",
       securityManifest: secManifest("sarif:ssrf:abc123abc123:17"), // fact cwe defaults to CWE-918 → different bucket
       onDrop,
@@ -233,13 +259,20 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
     expect(result.verdict.findings).toHaveLength(0)
-    expect(onDrop.mock.calls[0]![1]).toMatchObject({ reason: "refutation-survival-missing", dropped: true, lens: "security" })
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({
+      reason: "refutation-survival-missing",
+      dropped: true,
+      lens: "security",
+    })
   })
 
   it("CR2: treats a BOGUS non-resolving evidenceId as self-originated — flagged despite a non-empty id", () => {
     const onDrop = vi.fn()
     const result = run({
-      finding: finding({ evidenceId: "sarif:bogus:000000000000:17", independentAssessment: undefined }),
+      finding: finding({
+        evidenceId: "sarif:bogus:000000000000:17",
+        independentAssessment: undefined,
+      }),
       mode: "enforce",
       securityManifest: new Map<string, SecurityFact>(), // empty → the id does NOT resolve
       onDrop,
@@ -251,7 +284,11 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
 
   it("does NOT flag a self-originated finding below the severity floor", () => {
     const onDrop = vi.fn()
-    const result = run({ finding: finding({ score: 3, independentAssessment: undefined }), mode: "enforce", onDrop })
+    const result = run({
+      finding: finding({ score: 3, independentAssessment: undefined }),
+      mode: "enforce",
+      onDrop,
+    })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(0)
     expect(onDrop).not.toHaveBeenCalled()
@@ -264,7 +301,12 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     // security gate must NOT accept it.
     const verdicts = [
       { role: "security", verdict: { findings: [{ id: "security-0" }] } },
-      { role: "logic", verdict: { findings: [{ id: "logic-0", independentAssessment: "no clamp before the array read" }] } },
+      {
+        role: "logic",
+        verdict: {
+          findings: [{ id: "logic-0", independentAssessment: "no clamp before the array read" }],
+        },
+      },
     ] as unknown as SpecialistVerdictsArg
     const provenance: SynthesizerProvenance = {
       findings: [
@@ -308,7 +350,8 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     const onDrop = vi.fn()
     const result = run({
       finding: finding({
-        independentAssessment: "source=req header → sink=fetch(url) → type=string; allowlist absent on the changed path.",
+        independentAssessment:
+          "source=req header → sink=fetch(url) → type=string; allowlist absent on the changed path.",
       }),
       mode: "enforce",
       onDrop, // no sourceRationale → no security source carries the rationale
@@ -339,7 +382,12 @@ function makePerfSpecialistVerdicts(perfRationale?: string): SpecialistVerdictsA
     {
       role: "performance",
       verdict: {
-        findings: [{ id: "performance-0", ...(perfRationale ? { independentAssessment: perfRationale } : {}) }],
+        findings: [
+          {
+            id: "performance-0",
+            ...(perfRationale ? { independentAssessment: perfRationale } : {}),
+          },
+        ],
       },
     },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
@@ -349,7 +397,12 @@ function makePerfSpecialistVerdicts(perfRationale?: string): SpecialistVerdictsA
 function perfProvenance(sourceId = "performance-0"): SynthesizerProvenance {
   return {
     findings: [
-      { sourceSpecialists: ["performance"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["performance"],
+        sourceFindingIds: [sourceId],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
     softened: [],
@@ -364,7 +417,9 @@ function runPerf(args: {
   onDrop?: (f: PrReviewFinding, info: { reason: string; dropped: boolean; lens: string }) => void
 }) {
   const astPerfFindings = args.astHit
-    ? ([{ path: "src/parse/ndjson.ts", line: 17, endLine: 17, roleHint: "performance" }] as unknown as PerfEvidence["astPerfFindings"])
+    ? ([
+        { path: "src/parse/ndjson.ts", line: 17, endLine: 17, roleHint: "performance" },
+      ] as unknown as PerfEvidence["astPerfFindings"])
     : []
   const perfEvidence: PerfEvidence = {
     changedLineTextByPath: new Map([["src/parse/ndjson.ts", ["const key = await importKey(secret)"]]]),
@@ -372,7 +427,12 @@ function runPerf(args: {
   }
   return validateForSubmission({
     synthOutput: {
-      verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [args.finding] },
+      verdict: {
+        summary: "Test",
+        confidence: 3,
+        confidenceReason: "Reason.",
+        findings: [args.finding],
+      },
       provenance: perfProvenance(),
     },
     reviewable: makeReviewable(),
@@ -397,7 +457,11 @@ describe("validateForSubmission — SIG-325 refutation-survival gate (performanc
         trust: expect.objectContaining({ surface: "body", demoteReason: "refutation-survival" }),
       }),
     ])
-    expect(onDrop.mock.calls[0]![1]).toEqual({ reason: "refutation-survival-missing", dropped: true, lens: "performance" })
+    expect(onDrop.mock.calls[0]![1]).toEqual({
+      reason: "refutation-survival-missing",
+      dropped: true,
+      lens: "performance",
+    })
   })
 
   it("does NOT flag a self-originated perf finding whose PERF source carried the cost rationale", () => {

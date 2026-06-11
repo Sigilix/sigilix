@@ -31,12 +31,7 @@ export function activeRunKey(owner: string, repo: string): string {
  * caller is responsible for only claiming when it still owns / is starting the
  * run.
  */
-export async function writeActiveRun(
-  env: Env,
-  owner: string,
-  repo: string,
-  runId: string,
-): Promise<void> {
+export async function writeActiveRun(env: Env, owner: string, repo: string, runId: string): Promise<void> {
   const record: RepoIndexActiveRunV1 = { v: 1, runId, startedAt: new Date().toISOString() }
   await env.OPENCLAW_STATE.put(activeRunKey(owner, repo), JSON.stringify(record), {
     expirationTtl: TTL_SECONDS,

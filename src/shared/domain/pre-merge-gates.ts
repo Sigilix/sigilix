@@ -147,10 +147,7 @@ const TITLE_LENGTH_CAP_FOR_REGEX = 1024
  * `TITLE_LENGTH_CAP_FOR_REGEX`) so even a pathological backtracking
  * pattern can't run unbounded on a malicious PR title.
  */
-export function evaluateTitleFormatGate(
-  title: string,
-  config: ResolvedPreMergeGatesConfig["titleFormat"],
-): GateResult {
+export function evaluateTitleFormatGate(title: string, config: ResolvedPreMergeGatesConfig["titleFormat"]): GateResult {
   const base: Pick<GateResult, "id" | "label" | "severity"> = {
     id: "titleFormat",
     label: "PR title follows convention",
@@ -175,9 +172,7 @@ export function evaluateTitleFormatGate(
   // running the operator-supplied regex. ReDoS attacks need both a
   // pathological pattern AND a long input; capping the input bounds
   // the worst case to a fixed polynomial in 1024.
-  const probedTitle = title.length > TITLE_LENGTH_CAP_FOR_REGEX
-    ? title.slice(0, TITLE_LENGTH_CAP_FOR_REGEX)
-    : title
+  const probedTitle = title.length > TITLE_LENGTH_CAP_FOR_REGEX ? title.slice(0, TITLE_LENGTH_CAP_FOR_REGEX) : title
   if (re.test(probedTitle)) {
     return { ...base, passed: true }
   }
@@ -220,12 +215,9 @@ export function evaluateDescriptionCompletenessGate(
   // matches a `## Summary` template entry. Heading depth is NOT
   // normalized — `### Summary` will not satisfy a `## Summary`
   // template (operators get exactly the depth they declared).
-  const normalize = (s: string): string =>
-    s.trim().toLowerCase().replace(/\s+/g, " ")
+  const normalize = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ")
   if (config.template.length > 0) {
-    const bodyLines = safeBody
-      .split(/\r?\n/)
-      .map(normalize)
+    const bodyLines = safeBody.split(/\r?\n/).map(normalize)
     const missing: string[] = []
     for (const section of config.template) {
       const needle = normalize(section)
@@ -256,7 +248,17 @@ export function evaluateDescriptionCompletenessGate(
  * Sigilix-relevant references (`Closes SIG-N`) use the same keyword
  * with a Linear-issue key in place of `#N`.
  */
-const LINKED_ISSUE_KEYWORDS = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"] as const
+const LINKED_ISSUE_KEYWORDS = [
+  "close",
+  "closes",
+  "closed",
+  "fix",
+  "fixes",
+  "fixed",
+  "resolve",
+  "resolves",
+  "resolved",
+] as const
 
 /**
  * Regex matching a single linked-issue reference:
@@ -308,10 +310,7 @@ export function evaluateLinkedIssueGate(
  * checklist stays stable across pushes. Disabled gates are skipped
  * entirely (not rendered as "passed" — silence).
  */
-export function runPreMergeGates(
-  input: GateInput,
-  config: ResolvedPreMergeGatesConfig,
-): GateResult[] {
+export function runPreMergeGates(input: GateInput, config: ResolvedPreMergeGatesConfig): GateResult[] {
   const results: GateResult[] = []
   if (config.titleFormat.enabled) {
     results.push(evaluateTitleFormatGate(input.prTitle, config.titleFormat))
@@ -340,13 +339,7 @@ export function renderPreMergeGatesSection(results: readonly GateResult[]): stri
   if (results.length === 0) return null
   const lines: string[] = ["### Quality gates", ""]
   for (const r of results) {
-    const glyph = r.passed
-      ? "✅"
-      : r.severity === "error"
-        ? "❌"
-        : r.severity === "warning"
-          ? "⚠️"
-          : "ℹ️"
+    const glyph = r.passed ? "✅" : r.severity === "error" ? "❌" : r.severity === "warning" ? "⚠️" : "ℹ️"
     const detail = r.passed || !r.message ? "" : ` — ${r.message}`
     lines.push(`- ${glyph} ${r.label}${detail}`)
   }

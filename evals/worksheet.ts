@@ -45,9 +45,7 @@ export function buildWorksheet(file: ComparisonFile): string {
   lines.push("")
   lines.push(prUrl)
   lines.push("")
-  lines.push(
-    TOOLS.map((tool) => `${toolDisplayName(tool)} flagged **${findings[tool].length}**`).join("; ") + ".",
-  )
+  lines.push(TOOLS.map((tool) => `${toolDisplayName(tool)} flagged **${findings[tool].length}**`).join("; ") + ".")
   lines.push("")
   lines.push(
     "Label each *real-world issue* once in the table at the bottom. If multiple " +
@@ -154,20 +152,16 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
     // Take the note from the RAW (untrimmed) split past the 3rd cell, so a note
     // containing a literal `|` (e.g. "use a || b") keeps both its text and its
     // internal spacing instead of being truncated at the first pipe.
-    const note = line
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
-      .slice(3)
-      .join("|")
-      .trim()
+    const note = line.replace(/^\|/, "").replace(/\|$/, "").split("|").slice(3).join("|").trim()
 
     const rawFindings = (findingsCell ?? "").trim()
     const noFindingRefs = /^(none|n\/a|-|—)$/i.test(rawFindings)
-    const refs = noFindingRefs ? [] : rawFindings
-      .split(",")
-      .map((r) => r.trim())
-      .filter((r) => r.length > 0)
+    const refs = noFindingRefs
+      ? []
+      : rawFindings
+          .split(",")
+          .map((r) => r.trim())
+          .filter((r) => r.length > 0)
     if (refs.length === 0) {
       if (!noFindingRefs) errors.push(`${where}: no finding refs (use "none" for a missed real bug)`)
     }

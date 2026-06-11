@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  ChatDisabledError,
-  chat,
-  isChatDisabledError,
-} from "@/src/shared/adapters/model/ollama-chat"
+import { ChatDisabledError, chat, isChatDisabledError } from "@/src/shared/adapters/model/ollama-chat"
 
 const FAKE_API_KEY = "test-key"
 const FAKE_MODEL = "glm-5.1:cloud"
@@ -24,7 +20,10 @@ function makeStream(chunks: string[]): ReadableStream<Uint8Array> {
   })
 }
 
-function mockFetchOnce(stream: ReadableStream<Uint8Array> | null, opts: { ok?: boolean; status?: number; text?: string } = {}): void {
+function mockFetchOnce(
+  stream: ReadableStream<Uint8Array> | null,
+  opts: { ok?: boolean; status?: number; text?: string } = {},
+): void {
   const ok = opts.ok ?? true
   const status = opts.status ?? 200
   vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
@@ -62,17 +61,13 @@ describe("chat() — kill switch", () => {
   it("throws ChatDisabledError synchronously when chatEnabled='off' (no network call)", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch")
     await expect(
-      chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [], chatEnabled: "off" })
+      chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [], chatEnabled: "off" }),
     ).rejects.toBeInstanceOf(ChatDisabledError)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it("proceeds normally when chatEnabled='on'", async () => {
-    mockFetchOnce(
-      makeStream([
-        JSON.stringify({ message: { role: "assistant", content: "hi" }, done: true }),
-      ])
-    )
+    mockFetchOnce(makeStream([JSON.stringify({ message: { role: "assistant", content: "hi" }, done: true })]))
     const result = await chat({
       model: FAKE_MODEL,
       apiKey: FAKE_API_KEY,
@@ -83,11 +78,7 @@ describe("chat() — kill switch", () => {
   })
 
   it("proceeds when chatEnabled is undefined (default = enabled)", async () => {
-    mockFetchOnce(
-      makeStream([
-        JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true }),
-      ])
-    )
+    mockFetchOnce(makeStream([JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true })]))
     const result = await chat({
       model: FAKE_MODEL,
       apiKey: FAKE_API_KEY,
@@ -145,7 +136,7 @@ describe("chat() — content accumulation (delta)", () => {
         JSON.stringify({ message: { role: "assistant", content: "Hello" }, done: false }),
         JSON.stringify({ message: { role: "assistant", content: ", " }, done: false }),
         JSON.stringify({ message: { role: "assistant", content: "world!" }, done: true }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -158,11 +149,7 @@ describe("chat() — content accumulation (delta)", () => {
   })
 
   it("returns hasToolCalls=false on content-only response", async () => {
-    mockFetchOnce(
-      makeStream([
-        JSON.stringify({ message: { role: "assistant", content: "answer" }, done: true }),
-      ])
-    )
+    mockFetchOnce(makeStream([JSON.stringify({ message: { role: "assistant", content: "answer" }, done: true })]))
     const result = await chat({
       model: FAKE_MODEL,
       apiKey: FAKE_API_KEY,
@@ -182,8 +169,23 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
           message: {
             role: "assistant",
             content: "",
+            tool_calls: [{ id: "call_partial_1", function: { name: "fetch_pr", arguments: '{"owner":"a"' } }],
+          },
+          done: false,
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "",
             tool_calls: [
-              { id: "call_partial_1", function: { name: "fetch_pr", arguments: '{"owner":"a"' } },
+              {
+                id: "call_partial_2",
+                function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b"' },
+              },
+              {
+                id: "call_partial_3",
+                function: { name: "retrieve_codebase", arguments: '{"query":"x"}' },
+              },
             ],
           },
           done: false,
@@ -193,32 +195,28 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
             role: "assistant",
             content: "",
             tool_calls: [
-              { id: "call_partial_2", function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b"' } },
-              { id: "call_partial_3", function: { name: "retrieve_codebase", arguments: '{"query":"x"}' } },
-            ],
-          },
-          done: false,
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: "",
-            tool_calls: [
-              { id: "final_1", function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b","number":1}' } },
-              { id: "final_2", function: { name: "retrieve_codebase", arguments: '{"query":"clampRange","repo":"x"}' } },
+              {
+                id: "final_1",
+                function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b","number":1}' },
+              },
+              {
+                id: "final_2",
+                function: {
+                  name: "retrieve_codebase",
+                  arguments: '{"query":"clampRange","repo":"x"}',
+                },
+              },
             ],
           },
           done: true,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
       apiKey: FAKE_API_KEY,
       messages: [{ role: "user", content: "do it" }],
-      tools: [
-        { type: "function", function: { name: "fetch_pr", description: "", parameters: {} } },
-      ],
+      tools: [{ type: "function", function: { name: "fetch_pr", description: "", parameters: {} } }],
     })
     expect(result.hasToolCalls).toBe(true)
     expect(result.message.tool_calls).toHaveLength(2)
@@ -234,12 +232,15 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
             role: "assistant",
             content: "",
             tool_calls: [
-              { id: "c1", function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b","number":1}' } },
+              {
+                id: "c1",
+                function: { name: "fetch_pr", arguments: '{"owner":"a","repo":"b","number":1}' },
+              },
             ],
           },
           done: true,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -257,12 +258,15 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
             role: "assistant",
             content: "",
             tool_calls: [
-              { id: "c1", function: { name: "fetch_pr", arguments: { owner: "a", repo: "b", number: 1 } } },
+              {
+                id: "c1",
+                function: { name: "fetch_pr", arguments: { owner: "a", repo: "b", number: 1 } },
+              },
             ],
           },
           done: true,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -270,7 +274,11 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
       messages: [],
     })
     expect(typeof result.message.tool_calls?.[0]?.function.arguments).toBe("object")
-    expect(result.message.tool_calls?.[0]?.function.arguments).toEqual({ owner: "a", repo: "b", number: 1 })
+    expect(result.message.tool_calls?.[0]?.function.arguments).toEqual({
+      owner: "a",
+      repo: "b",
+      number: 1,
+    })
   })
 
   it("does NOT throw on malformed JSON in arguments — passes raw to caller", async () => {
@@ -282,13 +290,11 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
           message: {
             role: "assistant",
             content: "",
-            tool_calls: [
-              { id: "c1", function: { name: "fetch_pr", arguments: "{not valid json" } },
-            ],
+            tool_calls: [{ id: "c1", function: { name: "fetch_pr", arguments: "{not valid json" } }],
           },
           done: true,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -306,7 +312,7 @@ describe("chat() — tool_calls accumulation (snapshot, NOT delta)", () => {
           message: { role: "assistant", content: "", tool_calls: [] },
           done: true,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -324,18 +330,16 @@ describe("chat() — error chunks throw", () => {
       makeStream([
         JSON.stringify({ message: { role: "assistant", content: "partial" }, done: false }),
         JSON.stringify({ error: "model crashed" }),
-      ])
+      ]),
     )
-    await expect(
-      chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [] })
-    ).rejects.toThrow(/Ollama stream error: model crashed/)
+    await expect(chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [] })).rejects.toThrow(
+      /Ollama stream error: model crashed/,
+    )
   })
 
   it("throws on HTTP non-2xx with status code in message", async () => {
     mockFetchOnce(null, { ok: false, status: 503, text: "service unavailable" })
-    await expect(
-      chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [] })
-    ).rejects.toThrow(/Ollama HTTP 503/)
+    await expect(chat({ model: FAKE_MODEL, apiKey: FAKE_API_KEY, messages: [] })).rejects.toThrow(/Ollama HTTP 503/)
   })
 })
 
@@ -358,7 +362,7 @@ describe("chat() — timeout + signal", () => {
         apiKey: FAKE_API_KEY,
         messages: [],
         timeoutMs: 50,
-      })
+      }),
     ).rejects.toThrow(/aborted/)
   })
 
@@ -397,9 +401,7 @@ describe("chat() — request shape", () => {
       return {
         ok: true,
         status: 200,
-        body: makeStream([
-          JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true }),
-        ]),
+        body: makeStream([JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true })]),
         text: async () => "",
       } as unknown as Response
     })
@@ -408,13 +410,19 @@ describe("chat() — request shape", () => {
       apiKey: FAKE_API_KEY,
       messages: [{ role: "user", content: "hi" }],
       tools: [
-        { type: "function", function: { name: "fetch_pr", description: "Get a PR", parameters: { type: "object" } } },
+        {
+          type: "function",
+          function: { name: "fetch_pr", description: "Get a PR", parameters: { type: "object" } },
+        },
       ],
     })
     expect(captured).not.toBeNull()
     const c = captured as Record<string, unknown>
     expect(c.tools).toEqual([
-      { type: "function", function: { name: "fetch_pr", description: "Get a PR", parameters: { type: "object" } } },
+      {
+        type: "function",
+        function: { name: "fetch_pr", description: "Get a PR", parameters: { type: "object" } },
+      },
     ])
     expect(c.stream).toBe(true)
   })
@@ -426,9 +434,7 @@ describe("chat() — request shape", () => {
       return {
         ok: true,
         status: 200,
-        body: makeStream([
-          JSON.stringify({ message: { role: "assistant", content: "final" }, done: true }),
-        ]),
+        body: makeStream([JSON.stringify({ message: { role: "assistant", content: "final" }, done: true })]),
         text: async () => "",
       } as unknown as Response
     })
@@ -451,9 +457,7 @@ describe("chat() — request shape", () => {
       return {
         ok: true,
         status: 200,
-        body: makeStream([
-          JSON.stringify({ message: { role: "assistant", content: "x" }, done: true }),
-        ]),
+        body: makeStream([JSON.stringify({ message: { role: "assistant", content: "x" }, done: true })]),
         text: async () => "",
       } as unknown as Response
     })
@@ -485,7 +489,7 @@ describe("chat() — token usage capture (SIG-212)", () => {
           prompt_eval_count: 1234,
           eval_count: 567,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,
@@ -496,11 +500,7 @@ describe("chat() — token usage capture (SIG-212)", () => {
   })
 
   it("returns empty usage object when token counters are absent (non-Ollama / degenerate response)", async () => {
-    mockFetchOnce(
-      makeStream([
-        JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true }),
-      ])
-    )
+    mockFetchOnce(makeStream([JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true })]))
     const result = await chat({
       model: FAKE_MODEL,
       apiKey: FAKE_API_KEY,
@@ -523,7 +523,7 @@ describe("chat() — token usage capture (SIG-212)", () => {
           done: true,
           prompt_eval_count: 1234,
         }),
-      ])
+      ]),
     )
     const result = await chat({
       model: FAKE_MODEL,

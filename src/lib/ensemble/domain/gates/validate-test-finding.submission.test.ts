@@ -7,23 +7,24 @@ import { finding, pack } from "@/src/lib/ensemble/domain/gates/validate-test-fin
 // ── Integration with validateForSubmission ──────────────────────
 
 function makeReviewable(path = "src/lib/foo.ts"): ReviewableMap {
-  return new Map([
-    [path, [{ line: 17, side: "RIGHT" as const, position: 1 }]],
-  ])
+  return new Map([[path, [{ line: 17, side: "RIGHT" as const, position: 1 }]]])
 }
 
 type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specialistVerdicts"]
 
 function makeSpecialistVerdicts(): SpecialistVerdictsArg {
-  return [
-    { role: "tests", verdict: { findings: [{ id: "tests-0" }] } },
-  ] as unknown as SpecialistVerdictsArg
+  return [{ role: "tests", verdict: { findings: [{ id: "tests-0" }] } }] as unknown as SpecialistVerdictsArg
 }
 
 function testsProvenance(sourceId = "tests-0"): SynthesizerProvenance {
   return {
     findings: [
-      { sourceSpecialists: ["tests"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["tests"],
+        sourceFindingIds: [sourceId],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
     softened: [],
@@ -65,7 +66,10 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     // telemetry.synthesizer.verdict) must NOT be mutated by the score-cap.
     expect(f.score).toBe(4)
     expect(f.trust).toBeUndefined()
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "vague-insufficient-test", dropped: true })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "vague-insufficient-test",
+      dropped: true,
+    })
   })
 
   it("ENFORCE + ledger ON: tags the demoted finding with demoteReason tests-coverage", () => {
@@ -120,7 +124,10 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     })
     expect(result.droppedForFailedTestValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(1) // NOT dropped in shadow
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "vague-insufficient-test", dropped: false })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "vague-insufficient-test",
+      dropped: false,
+    })
   })
 
   it("defaults to SHADOW when testsValidatorMode is omitted", () => {
@@ -146,7 +153,12 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
   it("ENFORCE: keeps a concrete missing-coverage finding citing a real ->NONE mapping", () => {
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: testsProvenance(),
       },
       reviewable: makeReviewable(),
@@ -182,12 +194,22 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ category: "logic", headline: "Off-by-one", evidenceRefs: undefined })],
         },
         provenance: {
-          findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -299,12 +321,29 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({ category: "logic", score: 4, headline: "Off-by-one", evidenceRefs: undefined })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              category: "logic",
+              score: 4,
+              headline: "Off-by-one",
+              evidenceRefs: undefined,
+            }),
+          ],
         },
         provenance: {
-          findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),

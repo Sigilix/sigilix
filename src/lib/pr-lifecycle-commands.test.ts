@@ -94,7 +94,11 @@ function makeEnv(kv: MockKv): { env: Env; fetches: FetchCall[]; responses: MockR
     const method = (init?.method ?? "GET").toUpperCase()
     let body: unknown = undefined
     if (init?.body && typeof init.body === "string") {
-      try { body = JSON.parse(init.body) } catch { body = init.body }
+      try {
+        body = JSON.parse(init.body)
+      } catch {
+        body = init.body
+      }
     }
     const headersRecord: Record<string, string> = {}
     const h = init?.headers
@@ -107,13 +111,16 @@ function makeEnv(kv: MockKv): { env: Env; fetches: FetchCall[]; responses: MockR
     // Installation-token endpoint always returns a fake token so the
     // GitHubClient bootstrap succeeds.
     if (url.includes("/access_tokens")) {
-      return new Response(JSON.stringify({
-        token: "ghs_fake",
-        expires_at: new Date(Date.now() + 3600_000).toISOString(),
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
+      return new Response(
+        JSON.stringify({
+          token: "ghs_fake",
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      )
     }
     // GraphQL + REST responses come from the response queue. Each
     // test push exhausts one slot.
@@ -167,9 +174,7 @@ describe("handlePrPause", () => {
     expect(pauseWrites[0]?.key).toBe(buildPausedKey(args.owner, args.repo, args.prNumber))
     expect(pauseWrites[0]?.ttl).toBe(PR_PAUSE_TTL_SECONDS)
     // The ack comment is a POST to /issues/N/comments.
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
     const ackBody = ackPost?.body as { body?: string }
     expect(ackBody.body?.toLowerCase()).toContain("paused")
@@ -201,9 +206,7 @@ describe("handlePrResume", () => {
     await handlePrResume({ env: envBundle.env, ...args })
     expect(kv.deleteCalls).toContain(buildPausedKey(args.owner, args.repo, args.prNumber))
     expect(kv.deleteCalls).toContain(buildIgnoredKey(args.owner, args.repo, args.prNumber))
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
   })
 
@@ -290,8 +293,12 @@ describe("handlePrResolveThreads", () => {
       },
     })
     // Then: 2 resolve mutations (T1 and T4) + ack comment POST.
-    envBundle.responses.push({ body: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } } })
-    envBundle.responses.push({ body: { data: { resolveReviewThread: { thread: { id: "T4", isResolved: true } } } } })
+    envBundle.responses.push({
+      body: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } },
+    })
+    envBundle.responses.push({
+      body: { data: { resolveReviewThread: { thread: { id: "T4", isResolved: true } } } },
+    })
 
     await handlePrResolveThreads({ env: envBundle.env, ...args })
 
@@ -307,9 +314,7 @@ describe("handlePrResolveThreads", () => {
       .sort()
     expect(resolvedThreadIds).toEqual(["T1", "T4"])
     // Ack comment posted at the end.
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
   })
 
@@ -335,9 +340,7 @@ describe("handlePrResolveThreads", () => {
     })
     expect(graphqlMutations).toHaveLength(0)
     // Ack still posts so the user knows we tried.
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
   })
 
@@ -346,9 +349,7 @@ describe("handlePrResolveThreads", () => {
     // Listing fails with a non-OK status; ack post should still happen.
     envBundle.responses.push({ body: { errors: [{ message: "FORBIDDEN" }] }, status: 200 })
     await handlePrResolveThreads({ env: envBundle.env, ...args })
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
@@ -372,7 +373,7 @@ describe("handlePrCancel", () => {
       fetch: vi.fn(async (input: string | Request, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url
         if (url.endsWith("/cancel")) cancelCalls++
-        void (init?.method)
+        void init?.method
         return new Response(JSON.stringify(opts.body ?? { cancelled: true, runId: "r" }), {
           status: opts.status ?? 200,
           headers: { "content-type": "application/json" },
@@ -382,12 +383,25 @@ describe("handlePrCancel", () => {
     const env = {
       ...base,
       PR_REVIEW_RUN: {
-        idFromName: vi.fn((name: string) => { names.push(name); return { name } as unknown as DurableObjectId }),
+        idFromName: vi.fn((name: string) => {
+          names.push(name)
+          return { name } as unknown as DurableObjectId
+        }),
         get: vi.fn(() => stub),
       } as unknown as DurableObjectNamespace,
     } as unknown as Env
-    return { env, get names() { return names }, get cancelCalls() { return cancelCalls } } as {
-      env: Env; names: string[]; cancelCalls: number
+    return {
+      env,
+      get names() {
+        return names
+      },
+      get cancelCalls() {
+        return cancelCalls
+      },
+    } as {
+      env: Env
+      names: string[]
+      cancelCalls: number
     }
   }
 
@@ -405,9 +419,7 @@ describe("handlePrCancel", () => {
 
     expect(stubbed.cancelCalls).toBe(1)
     expect(stubbed.names).toContain("Sigilix/sigilix#7")
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
     const ackBody = ackPost?.body as { body?: string }
     expect(ackBody.body?.toLowerCase()).toContain("cancel")
@@ -423,9 +435,7 @@ describe("handlePrCancel", () => {
   it("still acks when the DO reports a no-op (no in-flight run)", async () => {
     const stubbed = withDoStub(envBundle.env, { body: { cancelled: false, reason: "no-state" } })
     await handlePrCancel({ env: stubbed.env, ...args })
-    const ackPost = envBundle.fetches.find(
-      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
-    )
+    const ackPost = envBundle.fetches.find((f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"))
     expect(ackPost).toBeDefined()
   })
 })

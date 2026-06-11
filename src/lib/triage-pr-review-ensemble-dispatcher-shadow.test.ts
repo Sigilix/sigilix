@@ -51,7 +51,9 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
+  )
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -246,14 +248,10 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     expect(event).toBeDefined()
     expect(event?.mode).toBe("shadow")
     // Router (legacy, flag off) returns ALL_SPECIALISTS.
-    expect((event?.routerSpecialists as string[]).sort()).toEqual(
-      ["logic", "performance", "security", "tests"]
-    )
+    expect((event?.routerSpecialists as string[]).sort()).toEqual(["logic", "performance", "security", "tests"])
     // Dispatcher computed picks: tests (LLM) + logic + security
     // (protected, consensus-to-skip default). Perf skipped.
-    expect((event?.dispatcherSpecialists as string[]).sort()).toEqual(
-      ["logic", "security", "tests"]
-    )
+    expect((event?.dispatcherSpecialists as string[]).sort()).toEqual(["logic", "security", "tests"])
     expect(event?.perRole).toBeDefined()
     expect(event?.layerVotes).toBeDefined()
     expect((event?.layerVotes as Record<string, unknown>).llmOutcome).toBe("ok")
@@ -362,16 +360,12 @@ index abc1234..def5678 100644
     // Dispatcher's rule-layer decided: docs-only-no-fences → no
     // specialists. Both router.specialists (overwritten) AND
     // dispatcherSpecialists in telemetry are empty.
-    expect((event?.dispatcherSpecialists as string[])).toEqual([])
+    expect(event?.dispatcherSpecialists as string[]).toEqual([])
     // Rule-layer-only path — dispatcher never invoked the LLM.
-    expect((event?.layerVotes as Record<string, unknown>).llmOutcome).toBe(
-      "skipped_rules_only_mode",
-    )
+    expect((event?.layerVotes as Record<string, unknown>).llmOutcome).toBe("skipped_rules_only_mode")
     // No call with the dispatcher's `specialist-dispatcher` system
     // prompt fired (rules-only mode skips the LLM entirely).
-    const dispatcherCalls = mockChat.mock.calls.filter((call) =>
-      isDispatcherCall(call[0]),
-    )
+    const dispatcherCalls = mockChat.mock.calls.filter((call) => isDispatcherCall(call[0]))
     expect(dispatcherCalls).toHaveLength(0)
   })
 
@@ -395,7 +389,11 @@ index abc1234..def5678 100644
       .mockImplementationOnce(async () => ({
         message: {
           role: "assistant",
-          content: JSON.stringify({ specialists: [], reasoning: "no test/perf surface", confidence: 4 }),
+          content: JSON.stringify({
+            specialists: [],
+            reasoning: "no test/perf surface",
+            confidence: 4,
+          }),
         },
         hasToolCalls: false,
       }))

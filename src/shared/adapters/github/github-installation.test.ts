@@ -10,7 +10,7 @@ describe("resolveInstallation", () => {
   it("prefers exact owner/repo over owner-only fallback", () => {
     const map = JSON.stringify({
       "Sigilix/rema-portal": "12345",
-      "Sigilix": "9999",
+      Sigilix: "9999",
     })
     expect(resolveInstallation("Sigilix", "rema-portal", map)).toEqual({
       ok: true,
@@ -19,7 +19,7 @@ describe("resolveInstallation", () => {
   })
 
   it("falls back to owner-only when no exact match", () => {
-    const map = JSON.stringify({ "Sigilix": "9999" })
+    const map = JSON.stringify({ Sigilix: "9999" })
     expect(resolveInstallation("Sigilix", "other-repo", map)).toEqual({
       ok: true,
       installationId: 9999,
@@ -125,9 +125,7 @@ describe("listTeamRepoMappings", () => {
       ARC: { owner: "Sigilix", repo: "rema-portal" },
       BAD: { owner: "only-owner" },
     })
-    expect(listTeamRepoMappings(json)).toEqual([
-      { teamKey: "ARC", owner: "Sigilix", repo: "rema-portal" },
-    ])
+    expect(listTeamRepoMappings(json)).toEqual([{ teamKey: "ARC", owner: "Sigilix", repo: "rema-portal" }])
   })
 })
 
@@ -183,11 +181,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
       "repo-index-manifest:acme/openclaw-worker",
     ])
     const result = await listIndexedRepos(env)
-    expect(result.sort()).toEqual([
-      "acme/openclaw-worker",
-      "sigilix/rubberfit",
-      "sigilix/sigilix-website",
-    ])
+    expect(result.sort()).toEqual(["acme/openclaw-worker", "sigilix/rubberfit", "sigilix/sigilix-website"])
   })
 
   it("filters namespaces to the requested owner case-insensitively (SIG-134)", async () => {
@@ -198,10 +192,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
       "repo-index-manifest:other/sigilix",
     ])
     const result = await listIndexedRepos(env, { owner: "Sigilix" })
-    expect(result.sort()).toEqual([
-      "sigilix/rubberfit",
-      "sigilix/sigilix",
-    ])
+    expect(result.sort()).toEqual(["sigilix/rubberfit", "sigilix/sigilix"])
   })
 
   it("EXCLUDES an orphaned pre-SIG-132 bare-repo key (no owner = bare namespace)", async () => {
@@ -218,10 +209,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
   })
 
   it("dedupes if the same key is somehow listed twice (defensive)", async () => {
-    const env = makeKvStub([
-      "repo-index-manifest:sigilix/rubberfit",
-      "repo-index-manifest:sigilix/rubberfit",
-    ])
+    const env = makeKvStub(["repo-index-manifest:sigilix/rubberfit", "repo-index-manifest:sigilix/rubberfit"])
     expect(await listIndexedRepos(env)).toEqual(["sigilix/rubberfit"])
   })
 
@@ -240,9 +228,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
       "repo-index-manifest:sigilix/sigilix/__branch__/h646576",
       "repo-index-manifest:sigilix/sigilix/__branch__/h666561747572652f5349472d3335",
     ])
-    expect(await listIndexedRepos(env, { owner: "Sigilix" })).toEqual([
-      "sigilix/sigilix",
-    ])
+    expect(await listIndexedRepos(env, { owner: "Sigilix" })).toEqual(["sigilix/sigilix"])
   })
 
   it("can include branch-scoped namespaces for agent tools when explicitly requested (SIG-35)", async () => {
@@ -251,13 +237,12 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
       "repo-index-manifest:sigilix/sigilix/__branch__/h646576",
       "repo-index-manifest:acme/sigilix/__branch__/h646576",
     ])
-    expect(await listIndexedRepos(env, {
-      owner: "Sigilix",
-      includeBranches: true,
-    })).toEqual([
-      "sigilix/sigilix",
-      "sigilix/sigilix/__branch__/h646576",
-    ])
+    expect(
+      await listIndexedRepos(env, {
+        owner: "Sigilix",
+        includeBranches: true,
+      }),
+    ).toEqual(["sigilix/sigilix", "sigilix/sigilix/__branch__/h646576"])
   })
 
   it("ignores keys outside the `repo-index-manifest:` prefix", async () => {
@@ -275,8 +260,9 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
   })
 
   it("paginates correctly across list_complete=false pages", async () => {
-    const allKeys = Array.from({ length: 1500 }, (_, i) =>
-      `repo-index-manifest:acme/repo-${String(i).padStart(4, "0")}`,
+    const allKeys = Array.from(
+      { length: 1500 },
+      (_, i) => `repo-index-manifest:acme/repo-${String(i).padStart(4, "0")}`,
     )
     // Stub list that paginates 1000 at a time via cursor.
     const env = {

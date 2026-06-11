@@ -43,10 +43,7 @@ export interface Chunk {
  * slices, each emitted with `lineStart === lineEnd ===` that line's
  * absolute number. `path` is left empty here and set by the caller.
  */
-export function splitOversizedWindow(
-  lines: ReadonlyArray<string>,
-  windowStartLine: number,
-): Chunk[] {
+export function splitOversizedWindow(lines: ReadonlyArray<string>, windowStartLine: number): Chunk[] {
   const chunks: Chunk[] = []
   let buf = ""
   let bufStartLine = windowStartLine

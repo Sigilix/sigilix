@@ -50,8 +50,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           // references parsePrReviewResponse but NOT coerceVerdictKind → no over-fire
-          "tests/triage-pr-review.test.ts":
-            'it("parses", () => { expect(parsePrReviewResponse(raw)).toBeTruthy() })',
+          "tests/triage-pr-review.test.ts": 'it("parses", () => { expect(parsePrReviewResponse(raw)).toBeTruthy() })',
         },
         helperCoverageBySource: {},
       }),
@@ -87,7 +86,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       finding({
         path: "src/lib/config.ts",
         headline: "`parseConfig` `BadConfig` error path lacks coverage",
-        body: "The changed code throws `new Error(\"BadConfig\")`, but the sibling test only mentions `BadConfig` in a happy-path `toBe` assertion.",
+        body: 'The changed code throws `new Error("BadConfig")`, but the sibling test only mentions `BadConfig` in a happy-path `toBe` assertion.',
         evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
         inspectedTestFiles: ["tests/config.test.ts"],
       }),
@@ -97,7 +96,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
         siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
         inspectedTestFiles: ["tests/config.test.ts"],
         inspectedTestContentByPath: {
-          "tests/config.test.ts": "expect(parseConfig(validConfig).name).toBe(\"BadConfig\")",
+          "tests/config.test.ts": 'expect(parseConfig(validConfig).name).toBe("BadConfig")',
         },
         helperCoverageBySource: {},
       }),

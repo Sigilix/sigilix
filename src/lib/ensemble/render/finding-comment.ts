@@ -78,9 +78,7 @@ export function renderBodyOnlyFindings(
   trustLedger?: boolean,
   showEvidence?: boolean,
 ): string[] {
-  const sorted = [...findings].sort((a, b) =>
-    b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
-  )
+  const sorted = [...findings].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line)
   const lines: string[] = []
   for (const f of sorted) {
     const anchor = formatBodyFindingAnchor(f, linkContext)
@@ -95,7 +93,9 @@ export function renderBodyOnlyFindings(
     // WHERE a body finding is at a glance (CodeRabbit parity) instead of hunting
     // grey <sub> metadata; score/trust collapse into a trailing subscript.
     lines.push("")
-    lines.push(`- ${badge} ${categoryBadge}${pill} **${anchor}**: **${stripAstMarkers(f.headline)}** <sub>score ${f.score}${subTag}${anchorNote}</sub>`)
+    lines.push(
+      `- ${badge} ${categoryBadge}${pill} **${anchor}**: **${stripAstMarkers(f.headline)}** <sub>score ${f.score}${subTag}${anchorNote}</sub>`,
+    )
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -117,49 +117,51 @@ export const CHECK_ANNOTATION_TEXT_LIMIT = 60000
 export const CHECK_ANNOTATION_TITLE_LIMIT = 240
 
 export function buildBodyOnlyCheckAnnotations(findings: PrReviewFinding[]): CheckRunAnnotation[] {
-  const sorted = [...findings].sort((a, b) =>
-    b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
+  const sorted = [...findings].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line)
+  return (
+    sorted
+      // Out-of-PR-scope findings (code not in this PR) must NOT become check
+      // annotations either — a `failure` annotation on an untouched file recreates
+      // the "looks blocking" problem on the checks surface (CodeRabbit #334).
+      // Filtering here covers every call site at once.
+      .filter((f) => !f.outOfPrScope && f.path.trim().length > 0 && Number.isFinite(f.line) && f.line > 0)
+      .map((f) => {
+        const start = Math.max(1, Math.min(f.startLine ?? f.line, f.line))
+        const end = Math.max(start, Math.max(f.startLine ?? f.line, f.line))
+        const category = formatFindingCategory(f)
+        const priority = severityLabelForScore(f.score)
+        const anchor = formatBodyFindingAnchor(f).replace(/`/g, "")
+        const location = formatBodyFindingLocation(f)
+        const title = truncateCheckAnnotationText(
+          `[${priority}] ${category}: ${stripAstMarkers(f.headline)}`,
+          CHECK_ANNOTATION_TITLE_LIMIT,
+        )
+        const message = truncateCheckAnnotationText(
+          [
+            formatFindingBodyMarkdown(f.body),
+            formatFindingStructuredDetailsMarkdown(f),
+            "",
+            `${location} (${formatBodyFindingSeverity(f)}) · ${anchor}${f.anchorNote ? ` · ${f.anchorNote}` : ""}`,
+          ]
+            .filter((s) => s !== "")
+            .join("\n"),
+          CHECK_ANNOTATION_TEXT_LIMIT,
+        )
+        const rawDetails = formatBodyFindingSuggestedChange(f)
+        const annotation: CheckRunAnnotation = {
+          path: f.path,
+          start_line: start,
+          end_line: end,
+          annotation_level: checkAnnotationLevelForScore(f.score),
+          title,
+          message,
+        }
+        if (rawDetails) {
+          annotation.raw_details = truncateCheckAnnotationText(rawDetails, CHECK_ANNOTATION_TEXT_LIMIT)
+        }
+        return annotation
+      })
   )
-  return sorted
-    // Out-of-PR-scope findings (code not in this PR) must NOT become check
-    // annotations either — a `failure` annotation on an untouched file recreates
-    // the "looks blocking" problem on the checks surface (CodeRabbit #334).
-    // Filtering here covers every call site at once.
-    .filter((f) => !f.outOfPrScope && f.path.trim().length > 0 && Number.isFinite(f.line) && f.line > 0)
-    .map((f) => {
-      const start = Math.max(1, Math.min(f.startLine ?? f.line, f.line))
-      const end = Math.max(start, Math.max(f.startLine ?? f.line, f.line))
-      const category = formatFindingCategory(f)
-      const priority = severityLabelForScore(f.score)
-      const anchor = formatBodyFindingAnchor(f).replace(/`/g, "")
-      const location = formatBodyFindingLocation(f)
-      const title = truncateCheckAnnotationText(
-        `[${priority}] ${category}: ${stripAstMarkers(f.headline)}`,
-        CHECK_ANNOTATION_TITLE_LIMIT,
-      )
-      const message = truncateCheckAnnotationText(
-        [
-          formatFindingBodyMarkdown(f.body),
-          formatFindingStructuredDetailsMarkdown(f),
-          "",
-          `${location} (${formatBodyFindingSeverity(f)}) · ${anchor}${f.anchorNote ? ` · ${f.anchorNote}` : ""}`,
-        ].filter((s) => s !== "").join("\n"),
-        CHECK_ANNOTATION_TEXT_LIMIT,
-      )
-      const rawDetails = formatBodyFindingSuggestedChange(f)
-      const annotation: CheckRunAnnotation = {
-        path: f.path,
-        start_line: start,
-        end_line: end,
-        annotation_level: checkAnnotationLevelForScore(f.score),
-        title,
-        message,
-      }
-      if (rawDetails) {
-        annotation.raw_details = truncateCheckAnnotationText(rawDetails, CHECK_ANNOTATION_TEXT_LIMIT)
-      }
-      return annotation
-    })
 }
 
 function checkAnnotationLevelForScore(score: number): CheckRunAnnotation["annotation_level"] {
@@ -388,9 +390,7 @@ export interface ReviewSuggestionEmission {
   startLine?: number
 }
 
-export function renderedSuggestionEmissions(
-  comments: readonly SubmitReviewComment[],
-): ReviewSuggestionEmission[] {
+export function renderedSuggestionEmissions(comments: readonly SubmitReviewComment[]): ReviewSuggestionEmission[] {
   return comments.flatMap((comment) => {
     if (!hasRenderedSuggestionBlock(comment.body)) return []
     if (typeof comment.line !== "number") return []
@@ -428,8 +428,6 @@ function hasRenderedSuggestionBlock(body: string): boolean {
 
 function isClosingMarkdownFence(line: string, fence: MarkdownFence): boolean {
   const closeRe =
-    fence.ch === "`"
-      ? new RegExp("^`{" + fence.len + ",}\\s*$")
-      : new RegExp("^~{" + fence.len + ",}\\s*$")
+    fence.ch === "`" ? new RegExp("^`{" + fence.len + ",}\\s*$") : new RegExp("^~{" + fence.len + ",}\\s*$")
   return closeRe.test(line)
 }

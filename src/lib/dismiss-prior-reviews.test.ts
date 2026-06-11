@@ -80,7 +80,13 @@ function priorReview(opts: {
   body?: string
   user?: { login: string } | null
   commitId?: string | null
-}): { id: number; state: string; user: { login: string } | null; body: string; commitId: string | null } {
+}): {
+  id: number
+  state: string
+  user: { login: string } | null
+  body: string
+  commitId: string | null
+} {
   return {
     id: opts.id,
     state: opts.state,
@@ -88,9 +94,7 @@ function priorReview(opts: {
     user: opts.user === undefined ? { login: "sigilix[bot]" } : opts.user,
     // Default to a non-overlapping 40-char SHA so prior-review SHAs
     // don't collide with `headSha` in tests.
-    commitId: opts.commitId === undefined
-      ? "0000111122223333444455556666777788889999"
-      : opts.commitId,
+    commitId: opts.commitId === undefined ? "0000111122223333444455556666777788889999" : opts.commitId,
   }
 }
 
@@ -159,15 +163,15 @@ describe("dismissPriorSigilixReviews", () => {
       return typeof arg === "string" && arg.includes("pr-review-stale-detected")
     })
     expect(typeof staleCall?.[0]).toBe("string")
-    expect(staleCall?.[0] as string).toContain("\"review_id\":200")
+    expect(staleCall?.[0] as string).toContain('"review_id":200')
     expect(staleCall?.[0] as string).not.toContain(`"review_id":${baseArgs.currentReviewId}`)
   })
 
   it("never touches reviews from other reviewers (body lacks the Sigilix marker)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
-      { id: 100, state: "APPROVED", user: { login: "alice" }, body: "LGTM" },               // human / coderabbit
-      { id: 200, state: "CHANGES_REQUESTED", user: { login: "bob" }, body: "fix this" },     // human
-      priorReview({ id: 300, state: "APPROVED" }),                                            // sigilix prior
+      { id: 100, state: "APPROVED", user: { login: "alice" }, body: "LGTM" }, // human / coderabbit
+      { id: 200, state: "CHANGES_REQUESTED", user: { login: "bob" }, body: "fix this" }, // human
+      priorReview({ id: 300, state: "APPROVED" }), // sigilix prior
     ])
     const client = new GitHubClient({ token: "t" })
 
@@ -200,9 +204,7 @@ describe("dismissPriorSigilixReviews", () => {
   })
 
   it("does NOT flag reviews with a null user (defensive — shouldn't happen in practice)", async () => {
-    mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED", user: null }),
-    ])
+    mockListPullRequestReviews.mockResolvedValue([priorReview({ id: 100, state: "APPROVED", user: null })])
     const client = new GitHubClient({ token: "t" })
 
     await dismissPriorSigilixReviews({ ...baseArgs, client })
@@ -213,10 +215,10 @@ describe("dismissPriorSigilixReviews", () => {
 
   it("skips reviews in non-dismissible states (COMMENTED / PENDING / DISMISSED)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "COMMENTED" }),  // body has marker but state isn't dismissible
+      priorReview({ id: 100, state: "COMMENTED" }), // body has marker but state isn't dismissible
       priorReview({ id: 200, state: "PENDING" }),
       priorReview({ id: 300, state: "DISMISSED" }),
-      priorReview({ id: 400, state: "APPROVED" }),    // this one IS flag-worthy
+      priorReview({ id: 400, state: "APPROVED" }), // this one IS flag-worthy
     ])
     const client = new GitHubClient({ token: "t" })
 
@@ -291,9 +293,7 @@ describe("dismissPriorSigilixReviews", () => {
   })
 
   it("does not log the cap-warning when the list is small", async () => {
-    mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED" }),
-    ])
+    mockListPullRequestReviews.mockResolvedValue([priorReview({ id: 100, state: "APPROVED" })])
     const client = new GitHubClient({ token: "t" })
 
     await dismissPriorSigilixReviews({ ...baseArgs, client })

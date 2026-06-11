@@ -30,10 +30,11 @@ const {
     mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({ head: { sha: "c".repeat(40) } })),
     mockGitHubClient: vi.fn((args: { token: string }) => ({
       token: args.token,
-      getPullRequest: (...getPullRequestArgs: unknown[]) =>
-        mockGetPullRequest(...getPullRequestArgs),
+      getPullRequest: (...getPullRequestArgs: unknown[]) => mockGetPullRequest(...getPullRequestArgs),
     })),
-    mockLoadSigilixConfig: vi.fn(async (..._args: unknown[]) => ({ reviewMemory: { enabled: true } })),
+    mockLoadSigilixConfig: vi.fn(async (..._args: unknown[]) => ({
+      reviewMemory: { enabled: true },
+    })),
     mockResolveReviewMemoryConfig: vi.fn((_config?: unknown) => resolvedReviewMemoryConfig),
     resolvedReviewMemoryConfig,
   }
@@ -52,9 +53,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
-    "@/src/lib/sigilix-config",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
     loadSigilixConfig: (...args: unknown[]) => mockLoadSigilixConfig(...args),
@@ -68,17 +67,12 @@ vi.mock("@/src/lib/review-memory/capture", async () => {
   )
   return {
     ...actual,
-    captureDismissedReviewFeedback: (...args: unknown[]) =>
-      mockCaptureDismissedReviewFeedback(...args),
-    captureTopLevelReviewFeedback: (...args: unknown[]) =>
-      mockCaptureTopLevelReviewFeedback(...args),
+    captureDismissedReviewFeedback: (...args: unknown[]) => mockCaptureDismissedReviewFeedback(...args),
+    captureTopLevelReviewFeedback: (...args: unknown[]) => mockCaptureTopLevelReviewFeedback(...args),
   }
 })
 
-import {
-  dispatchDismissedReviewMemoryCapture,
-  dispatchTopLevelReviewMemoryCapture,
-} from "@/src/index"
+import { dispatchDismissedReviewMemoryCapture, dispatchTopLevelReviewMemoryCapture } from "@/src/index"
 
 function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
   return {
@@ -140,9 +134,13 @@ afterEach(() => {
 
 describe("review-memory dispatch wrappers", () => {
   it("skips top-level capture when the capture flag is off", async () => {
-    await dispatchTopLevelReviewMemoryCapture(topLevelArgs(makeEnv({
-      OPENCLAW_REVIEW_MEMORY_CAPTURE: "off",
-    })))
+    await dispatchTopLevelReviewMemoryCapture(
+      topLevelArgs(
+        makeEnv({
+          OPENCLAW_REVIEW_MEMORY_CAPTURE: "off",
+        }),
+      ),
+    )
 
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(mockLoadSigilixConfig).not.toHaveBeenCalled()
@@ -150,9 +148,13 @@ describe("review-memory dispatch wrappers", () => {
   })
 
   it("skips dismissed-review capture when GitHub app credentials are missing", async () => {
-    await dispatchDismissedReviewMemoryCapture(dismissedArgs(makeEnv({
-      GITHUB_APP_ID: undefined,
-    })))
+    await dispatchDismissedReviewMemoryCapture(
+      dismissedArgs(
+        makeEnv({
+          GITHUB_APP_ID: undefined,
+        }),
+      ),
+    )
 
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(mockLoadSigilixConfig).not.toHaveBeenCalled()
@@ -167,8 +169,9 @@ describe("review-memory dispatch wrappers", () => {
 
     expect(mockLoadSigilixConfig).not.toHaveBeenCalled()
     expect(mockCaptureTopLevelReviewFeedback).not.toHaveBeenCalled()
-    expect(consoleSpy.mock.calls.map((call) => String(call[0])).join("\n"))
-      .toContain("\"signal_source\":\"top-level-explicit\"")
+    expect(consoleSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
+      '"signal_source":"top-level-explicit"',
+    )
   })
 
   it("logs dismissed-review config failures without throwing", async () => {
@@ -178,8 +181,9 @@ describe("review-memory dispatch wrappers", () => {
     await dispatchDismissedReviewMemoryCapture(dismissedArgs(makeEnv()))
 
     expect(mockCaptureDismissedReviewFeedback).not.toHaveBeenCalled()
-    expect(consoleSpy.mock.calls.map((call) => String(call[0])).join("\n"))
-      .toContain("\"signal_source\":\"review-dismissed-stale\"")
+    expect(consoleSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
+      '"signal_source":"review-dismissed-stale"',
+    )
   })
 
   it("delegates top-level capture after resolving config", async () => {
@@ -191,12 +195,14 @@ describe("review-memory dispatch wrappers", () => {
     expect(mockGetPullRequest).toHaveBeenCalledWith("acme", "site", 7)
     expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", "c".repeat(40))
     expect(mockResolveReviewMemoryConfig).toHaveBeenCalledWith({ reviewMemory: { enabled: true } })
-    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      client,
-      comment: args.comment,
-      config: resolvedReviewMemoryConfig,
-      repoId: 555,
-    }))
+    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client,
+        comment: args.comment,
+        config: resolvedReviewMemoryConfig,
+        repoId: 555,
+      }),
+    )
   })
 
   it("falls back to HEAD when top-level PR head lookup fails", async () => {
@@ -218,10 +224,12 @@ describe("review-memory dispatch wrappers", () => {
 
     const client = mockGitHubClient.mock.results[0]?.value
     expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", headSha)
-    expect(mockCaptureDismissedReviewFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      review: args.review,
-      headSha,
-      config: resolvedReviewMemoryConfig,
-    }))
+    expect(mockCaptureDismissedReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        review: args.review,
+        headSha,
+        config: resolvedReviewMemoryConfig,
+      }),
+    )
   })
 })

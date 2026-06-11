@@ -20,11 +20,7 @@
 // for unit value, and Phase 4a ships off-by-default.
 
 import { describe, expect, it } from "vitest"
-import {
-  buildFallbackBody,
-  buildFallbackSubmission,
-  buildReviewSubmission,
-} from "@/src/lib/triage-pr-review"
+import { buildFallbackBody, buildFallbackSubmission, buildReviewSubmission } from "@/src/lib/triage-pr-review"
 import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
@@ -69,10 +65,7 @@ describe("buildFallbackBody", () => {
   })
 
   it("ARC-293: APPROVE path is MARKER-ONLY (no findings sections, no heading, no provenance)", () => {
-    const body = buildFallbackBody(
-      { ...baseVerdict, findings: [] },
-      []
-    )
+    const body = buildFallbackBody({ ...baseVerdict, findings: [] }, [])
     // ARC-293: APPROVE bodies render as just the marker + newline.
     expect(body).toBe("<!-- sigilix:pr-review -->\n")
     // None of the legacy / verbose strings survive.
@@ -128,10 +121,7 @@ describe("buildFallbackBody", () => {
       line: 999,
       headline: "unanchored-finding",
     }
-    const body = buildFallbackBody(
-      { ...baseVerdict, findings: [anchored] },
-      [unanchored]
-    )
+    const body = buildFallbackBody({ ...baseVerdict, findings: [anchored] }, [unanchored])
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
     // SIG-281 PR B (Rec 6): both findings are score 4 (P1) blockers, so
@@ -187,7 +177,7 @@ describe("buildFallbackBody", () => {
         ...baseVerdict,
         findings: [{ ...baseFinding, body: "first line\nsecond line" }],
       },
-      []
+      [],
     )
     expect(body).toContain("  first line")
     expect(body).toContain("  second line")
@@ -264,7 +254,13 @@ describe("buildFallbackSubmission", () => {
 
   it("returns COMMENT when only trivial style/docs unanchored nits exist (anchored empty)", () => {
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, category: "style", score: 3, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
+      {
+        ...baseFinding,
+        category: "style",
+        score: 3,
+        line: 999,
+        headline: "drift-flagged-but-line-out-of-diff",
+      },
     ]
     const submission = buildFallbackSubmission({
       verdict: { ...baseVerdict, findings: [] },
@@ -350,9 +346,7 @@ describe("buildFallbackSubmission", () => {
 describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catch)", () => {
   it("rolls unanchored findings into the body even on the success path", () => {
     const anchored = { ...baseFinding, line: 42, headline: "anchored-here" }
-    const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, line: 999, headline: "unanchored-must-not-be-lost" },
-    ]
+    const unanchored: PrReviewFinding[] = [{ ...baseFinding, line: 999, headline: "unanchored-must-not-be-lost" }]
     const submission = buildReviewSubmission({
       verdict: { ...baseVerdict, findings: [anchored] },
       prAuthor: null,
@@ -369,9 +363,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {
     const anchored = { ...baseFinding, line: 42, headline: "anchored-here" }
-    const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, line: 999, headline: "drift" },
-    ]
+    const unanchored: PrReviewFinding[] = [{ ...baseFinding, line: 999, headline: "drift" }]
     const submission = buildReviewSubmission({
       verdict: { ...baseVerdict, findings: [anchored] },
       prAuthor: null,
@@ -438,12 +430,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
 describe("validateForSubmission populates unanchoredFindings", () => {
   // Two reviewable lines on `src/lib/foo.ts` so the deriveSide() guard
   // is exercised — line 42 valid, line 999 not.
-  const reviewable: ReviewableMap = new Map([
-    [
-      "src/lib/foo.ts",
-      [{ line: 42, side: "RIGHT" as const }],
-    ],
-  ])
+  const reviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 42, side: "RIGHT" as const }]]])
 
   const specialistVerdicts = [
     {
@@ -488,15 +475,18 @@ describe("validateForSubmission populates unanchoredFindings", () => {
     // A genuine finding on the first line of a newly-added file (e.g. a
     // hardcoded secret — observed on the e2e repos) must INLINE, not body-dump.
     // line 1 is RIGHT-reviewable here, so inline-first applies.
-    const reviewableLine1: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [{ line: 1, side: "RIGHT" as const }]],
-    ])
+    const reviewableLine1: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 1, side: "RIGHT" as const }]]])
     const out = validateForSubmission({
       synthOutput: {
         verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 5 }] },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [],
         },
@@ -518,7 +508,12 @@ describe("validateForSubmission populates unanchoredFindings", () => {
         verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 4 }] },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [],
         },

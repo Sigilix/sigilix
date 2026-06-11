@@ -85,12 +85,19 @@ export async function runPrReviewWithDoCallback(
     // so the wrapper does NOT double-emit a sibling event. Unexpected-
     // 4xx ack paths still log a one-liner so the bug is observable.
     if (pickup.status !== 409 && pickup.status !== 410) {
-      console.error(JSON.stringify({
-        event: "do-review-consumer-pickup-unexpected-status",
-        dedupe_system: "do",
-        owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-        runId, consumerId, status: pickup.status, reason: pickup.reason,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "do-review-consumer-pickup-unexpected-status",
+          dedupe_system: "do",
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          runId,
+          consumerId,
+          status: pickup.status,
+          reason: pickup.reason,
+        }),
+      )
     }
     return
   }
@@ -118,22 +125,24 @@ export async function runPrReviewWithDoCallback(
   // return from runEnsemble — it's the queue-handler closure that
   // owns the EnsembleResult.
   const finishedAtMs = Date.now()
-  console.log(JSON.stringify({
-    event: "do-review-run-timing",
-    // ARC-190 contract: every DO-emitted log line carries
-    // dedupe_system=do so the acceptance test can filter all DO
-    // surface output by tag.
-    dedupe_system: "do",
-    owner: job.owner,
-    repo: job.repo,
-    prNumber: job.prNumber,
-    headSha: job.headSha.slice(0, 7),
-    runId,
-    pickedUpAtMs,
-    finishedAtMs,
-    consumerWallMs: finishedAtMs - pickedUpAtMs,
-    finalState: caught !== undefined ? "errored" : "completed",
-  }))
+  console.log(
+    JSON.stringify({
+      event: "do-review-run-timing",
+      // ARC-190 contract: every DO-emitted log line carries
+      // dedupe_system=do so the acceptance test can filter all DO
+      // surface output by tag.
+      dedupe_system: "do",
+      owner: job.owner,
+      repo: job.repo,
+      prNumber: job.prNumber,
+      headSha: job.headSha.slice(0, 7),
+      runId,
+      pickedUpAtMs,
+      finishedAtMs,
+      consumerWallMs: finishedAtMs - pickedUpAtMs,
+      finalState: caught !== undefined ? "errored" : "completed",
+    }),
+  )
 }
 
 // SIG-329: how often the running consumer pings the DO `/heartbeat`
@@ -155,12 +164,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000
  * alarms are the safety net. Uses chained `setTimeout` (not
  * `setInterval`) so a slow round-trip never overlaps the next ping.
  */
-function startHeartbeat(
-  stub: DurableObjectStub,
-  runId: string,
-  consumerId: string,
-  job: PrReviewJob,
-): () => void {
+function startHeartbeat(stub: DurableObjectStub, runId: string, consumerId: string, job: PrReviewJob): () => void {
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -172,36 +176,47 @@ function startHeartbeat(
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ runId, consumerId }),
       })
-      try { await res.json() } catch { /* ignore body */ }
+      try {
+        await res.json()
+      } catch {
+        /* ignore body */
+      }
       if (res.status === 410) {
         // Superseded / cancelled / terminal — stop pinging.
         stopped = true
-        console.log(JSON.stringify({
-          event: "do-review-consumer-heartbeat-stopped",
-          dedupe_system: "do",
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          runId, consumerId, reason: "410",
-        }))
+        console.log(
+          JSON.stringify({
+            event: "do-review-consumer-heartbeat-stopped",
+            dedupe_system: "do",
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            runId,
+            consumerId,
+            reason: "410",
+          }),
+        )
         return
       }
     } catch {
       // Transient DO blip — keep beating; liveness/watchdog is the net.
     }
-    if (!stopped) timer = setTimeout(() => { void tick() }, HEARTBEAT_INTERVAL_MS)
+    if (!stopped)
+      timer = setTimeout(() => {
+        void tick()
+      }, HEARTBEAT_INTERVAL_MS)
   }
 
-  timer = setTimeout(() => { void tick() }, HEARTBEAT_INTERVAL_MS)
+  timer = setTimeout(() => {
+    void tick()
+  }, HEARTBEAT_INTERVAL_MS)
   return () => {
     stopped = true
     if (timer !== undefined) clearTimeout(timer)
   }
 }
 
-async function postPickup(
-  stub: DurableObjectStub,
-  runId: string,
-  consumerId: string,
-): Promise<PickupOutcome> {
+async function postPickup(stub: DurableObjectStub, runId: string, consumerId: string): Promise<PickupOutcome> {
   const res = await stub.fetch(`${DO_BASE_URL}/pickup`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -209,7 +224,11 @@ async function postPickup(
   })
   if (res.status === 200) {
     // Drain the body so the stub doesn't leak.
-    try { await res.json() } catch { /* ignore */ }
+    try {
+      await res.json()
+    } catch {
+      /* ignore */
+    }
     return { kind: "claim", status: 200 }
   }
   if (res.status === 409 || res.status === 410) {
@@ -232,11 +251,7 @@ async function postPickup(
   return { kind: "blocked", status: res.status, reason: "unexpected-status" }
 }
 
-function buildRunResultPayload(
-  runId: string,
-  consumerId: string,
-  caught: unknown,
-): RunResultRequest {
+function buildRunResultPayload(runId: string, consumerId: string, caught: unknown): RunResultRequest {
   if (caught === undefined) {
     return { runId, consumerId, status: "success" }
   }
@@ -268,11 +283,7 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function postRunResult(
-  stub: DurableObjectStub,
-  payload: RunResultRequest,
-  job: PrReviewJob,
-): Promise<void> {
+async function postRunResult(stub: DurableObjectStub, payload: RunResultRequest, job: PrReviewJob): Promise<void> {
   // Best-effort with bounded retry. The DO's watchdog alarm remains
   // the ultimate safety net (spec §4.6a); the retry just shrinks the
   // window where transient DO failures cause unnecessary watchdog-
@@ -303,21 +314,34 @@ async function postRunResult(
 
   // All retries exhausted — log + return. Watchdog catches the run.
   if (lastErr !== undefined) {
-    console.error(JSON.stringify({
-      event: "do-review-consumer-run-result-failed",
-      dedupe_system: "do",
-      owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-      runId: payload.runId, consumerId: payload.consumerId,
-      status: payload.status, attempts: attempt,
-      err: lastErr instanceof Error ? lastErr.message : String(lastErr),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "do-review-consumer-run-result-failed",
+        dedupe_system: "do",
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        runId: payload.runId,
+        consumerId: payload.consumerId,
+        status: payload.status,
+        attempts: attempt,
+        err: lastErr instanceof Error ? lastErr.message : String(lastErr),
+      }),
+    )
   } else {
-    console.error(JSON.stringify({
-      event: "do-review-consumer-run-result-non-ok",
-      dedupe_system: "do",
-      owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-      runId: payload.runId, consumerId: payload.consumerId,
-      status: payload.status, attempts: attempt, doStatus: lastNonOk,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "do-review-consumer-run-result-non-ok",
+        dedupe_system: "do",
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        runId: payload.runId,
+        consumerId: payload.consumerId,
+        status: payload.status,
+        attempts: attempt,
+        doStatus: lastNonOk,
+      }),
+    )
   }
 }

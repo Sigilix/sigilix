@@ -1,11 +1,7 @@
 // ARC-186 — package.json + package-lock.json parser tests.
 
 import { describe, it, expect } from "vitest"
-import {
-  parsePackageJson,
-  parsePackageLock,
-  rootDepNames,
-} from "@/src/features/dep-vulns/domain/manifest-parsers"
+import { parsePackageJson, parsePackageLock, rootDepNames } from "@/src/features/dep-vulns/domain/manifest-parsers"
 
 describe("parsePackageJson", () => {
   it("returns null on invalid JSON", () => {
@@ -25,20 +21,24 @@ describe("parsePackageJson", () => {
   })
 
   it("captures all three dep buckets", () => {
-    const result = parsePackageJson(JSON.stringify({
-      dependencies: { lodash: "^4.0.0" },
-      devDependencies: { vitest: "^2.0.0" },
-      peerDependencies: { react: ">=16" },
-    }))
+    const result = parsePackageJson(
+      JSON.stringify({
+        dependencies: { lodash: "^4.0.0" },
+        devDependencies: { vitest: "^2.0.0" },
+        peerDependencies: { react: ">=16" },
+      }),
+    )
     expect(result?.dependencies).toEqual({ lodash: "^4.0.0" })
     expect(result?.devDependencies).toEqual({ vitest: "^2.0.0" })
     expect(result?.peerDependencies).toEqual({ react: ">=16" })
   })
 
   it("drops non-string version values within a dep bucket", () => {
-    const result = parsePackageJson(JSON.stringify({
-      dependencies: { lodash: "^4.0.0", broken: 42 },
-    }))
+    const result = parsePackageJson(
+      JSON.stringify({
+        dependencies: { lodash: "^4.0.0", broken: 42 },
+      }),
+    )
     expect(result?.dependencies).toEqual({ lodash: "^4.0.0" })
   })
 
@@ -101,8 +101,7 @@ describe("parsePackageLock — npm v6", () => {
 })
 
 describe("parsePackageLock — npm v7+", () => {
-  const v7Lock = (packages: Record<string, { version: string }>) =>
-    JSON.stringify({ lockfileVersion: 3, packages })
+  const v7Lock = (packages: Record<string, { version: string }>) => JSON.stringify({ lockfileVersion: 3, packages })
 
   it("returns versions from packages.node_modules/<name> for root deps only", () => {
     const lock = v7Lock({

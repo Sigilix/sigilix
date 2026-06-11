@@ -20,8 +20,11 @@ import type { OutcomeEvent, PatternStat, PrecisionProfile } from "@/src/features
 import type { Env } from "@/src/shared/types/env"
 
 const TS = "2026-06-04T00:00:00.000Z"
-const ev = (outcome: OutcomeEvent["outcome"], patternHash = "p1", category: OutcomeEvent["category"] = "logic"): OutcomeEvent =>
-  ({ repoId: "r1", category, patternHash, outcome })
+const ev = (
+  outcome: OutcomeEvent["outcome"],
+  patternHash = "p1",
+  category: OutcomeEvent["category"] = "logic",
+): OutcomeEvent => ({ repoId: "r1", category, patternHash, outcome })
 
 // ── EMA rollup ────────────────────────────────────────────────────
 
@@ -78,7 +81,11 @@ describe("prunePatterns", () => {
   it("keeps the MAX_PATTERNS most-recent patterns", () => {
     const patterns: Record<string, PatternStat> = {}
     for (let i = 0; i < MAX_PATTERNS + 10; i++) {
-      patterns[`p${i}`] = { suppress: 0.5, n: 1, lastTs: new Date(1700000000000 + i * 1000).toISOString() }
+      patterns[`p${i}`] = {
+        suppress: 0.5,
+        n: 1,
+        lastTs: new Date(1700000000000 + i * 1000).toISOString(),
+      }
     }
     const pruned = prunePatterns(patterns)
     expect(Object.keys(pruned).length).toBe(MAX_PATTERNS)
@@ -98,10 +105,10 @@ describe("applyPrecisionProfile", () => {
     updatedTs: TS,
   })
   const findings = [
-    { category: "logic" as const, contentFingerprint: "fp1", score: 2 },   // suppressed pattern (P3)
-    { category: "security" as const, contentFingerprint: "fp2", score: 3 },// boosted category
-    { category: "docs" as const, contentFingerprint: "fp3", score: 1 },    // neither
-    { category: "logic" as const, score: 2 },                              // no fingerprint → never suppressed
+    { category: "logic" as const, contentFingerprint: "fp1", score: 2 }, // suppressed pattern (P3)
+    { category: "security" as const, contentFingerprint: "fp2", score: 3 }, // boosted category
+    { category: "docs" as const, contentFingerprint: "fp3", score: 1 }, // neither
+    { category: "logic" as const, score: 2 }, // no fingerprint → never suppressed
   ]
 
   it("enforce drops suppressed patterns; flags boosted categories", () => {
@@ -112,7 +119,11 @@ describe("applyPrecisionProfile", () => {
   })
 
   it("recall-safety: NEVER suppresses a P0/P1 (score 4 or 5) at the floor boundary; a P2 (3) IS suppressed", () => {
-    const hot = (score: number) => ({ category: "logic" as const, contentFingerprint: "fp1", score })
+    const hot = (score: number) => ({
+      category: "logic" as const,
+      contentFingerprint: "fp1",
+      score,
+    })
     // P1 = floor boundary (score === SUPPRESS_FLOOR_TIER) and P0 must both survive.
     expect(applyPrecisionProfile([hot(4)], suppressedProfile(), { enforce: true }).suppressed).toHaveLength(0)
     expect(applyPrecisionProfile([hot(5)], suppressedProfile(), { enforce: true }).suppressed).toHaveLength(0)
@@ -144,8 +155,12 @@ describe("applyPrecisionProfile", () => {
 function makeEnv() {
   const store = new Map<string, string>()
   const kv = {
-    async get(k: string) { return store.get(k) ?? null },
-    async put(k: string, v: string) { store.set(k, v) },
+    async get(k: string) {
+      return store.get(k) ?? null
+    },
+    async put(k: string, v: string) {
+      store.set(k, v)
+    },
   }
   return { OPENCLAW_STATE: kv } as unknown as Env
 }
@@ -179,8 +194,13 @@ describe("recordOutcome / loadPrecisionProfile round-trip", () => {
     let failGet = false
     const env = {
       OPENCLAW_STATE: {
-        async get(k: string) { if (failGet) throw new Error("KV transient"); return store.get(k) ?? null },
-        async put(k: string, v: string) { store.set(k, v) },
+        async get(k: string) {
+          if (failGet) throw new Error("KV transient")
+          return store.get(k) ?? null
+        },
+        async put(k: string, v: string) {
+          store.set(k, v)
+        },
       },
     } as unknown as Env
     for (let i = 0; i < 5; i++) await recordOutcome(env, ev("dismissed"), Date.parse(TS) + i)
@@ -207,15 +227,15 @@ describe("E2E: repeated dismissals suppress a content-equivalent re-fire at the 
     // Next review re-emits the same noisy pattern (new finding ID, same fingerprint)
     // plus an unrelated critical — exactly the gate's input set.
     const findings = [
-      { category: "style" as const, contentFingerprint: "fp-noise", score: 2 },     // repeatedly dismissed P3
-      { category: "style" as const, contentFingerprint: "fp-noise", score: 5 },      // SAME pattern but P0
-      { category: "security" as const, contentFingerprint: "fp-real", score: 4 },    // never dismissed
+      { category: "style" as const, contentFingerprint: "fp-noise", score: 2 }, // repeatedly dismissed P3
+      { category: "style" as const, contentFingerprint: "fp-noise", score: 5 }, // SAME pattern but P0
+      { category: "security" as const, contentFingerprint: "fp-real", score: 4 }, // never dismissed
     ]
     const r = applyPrecisionProfile(findings, profile, { enforce: true })
 
     expect(r.kept.map((f) => f.contentFingerprint + ":" + f.score)).toEqual([
       "fp-noise:5", // P0 kept (recall-safety)
-      "fp-real:4",  // untouched
+      "fp-real:4", // untouched
     ])
     expect(r.suppressed).toHaveLength(1) // only the P3 noise dropped
     expect(r.suppressed[0]!.finding.score).toBe(2)

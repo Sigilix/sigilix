@@ -69,19 +69,7 @@ const SKIP_DIRS = new Set([
   "out",
 ])
 
-const INDEXED_EXTENSIONS = new Set([
-  ".ts",
-  ".tsx",
-  ".mjs",
-  ".js",
-  ".jsx",
-  ".rs",
-  ".sql",
-  ".md",
-  ".py",
-  ".go",
-  ".toml",
-])
+const INDEXED_EXTENSIONS = new Set([".ts", ".tsx", ".mjs", ".js", ".jsx", ".rs", ".sql", ".md", ".py", ".go", ".toml"])
 
 const MAX_FILE_BYTES = 200 * 1024
 const EMBED_BATCH = 16
@@ -184,10 +172,7 @@ export async function computeRunId(args: {
   modelId: string
   chunkerVersion: number
 }): Promise<string> {
-  return sha256HexPrefix(
-    `${args.owner}\0${args.repo}\0${args.headSha}\0${args.modelId}\0${args.chunkerVersion}`,
-    16,
-  )
+  return sha256HexPrefix(`${args.owner}\0${args.repo}\0${args.headSha}\0${args.modelId}\0${args.chunkerVersion}`, 16)
 }
 
 /**

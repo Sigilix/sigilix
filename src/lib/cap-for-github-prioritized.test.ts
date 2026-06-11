@@ -48,7 +48,12 @@ describe("capForGitHubPrioritized — severity-aware 65k cap", () => {
   it("singular marker copy for a single omitted finding", () => {
     const head = "## blockers\n| Critical | XSS |"
     const droppable = "\n### Review Body Findings\n" + "x".repeat(70000)
-    const out = capForGitHubPrioritized({ head, droppable, droppedCountIfOmitted: 1, footer: FOOTER })
+    const out = capForGitHubPrioritized({
+      head,
+      droppable,
+      droppedCountIfOmitted: 1,
+      footer: FOOTER,
+    })
     expect(out).toContain("1 lower-severity body finding omitted")
     expect(out).not.toContain("findings omitted")
     expect(out).toContain("XSS")
@@ -56,7 +61,12 @@ describe("capForGitHubPrioritized — severity-aware 65k cap", () => {
 
   it("pathological: head alone overflows → falls back to a content cut but keeps the footer", () => {
     const head = "## blockers\n" + "B".repeat(70000) // a single huge blocker
-    const out = capForGitHubPrioritized({ head, droppable: "", droppedCountIfOmitted: 0, footer: FOOTER })
+    const out = capForGitHubPrioritized({
+      head,
+      droppable: "",
+      droppedCountIfOmitted: 0,
+      footer: FOOTER,
+    })
     expect(out.length).toBeLessThanOrEqual(CAP)
     expect(out).toContain(FOOTER) // provenance invariant survives even here
     expect(out).toContain("truncated")

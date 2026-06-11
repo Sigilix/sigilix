@@ -38,28 +38,42 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const ROUTE_METHODS: ReadonlySet<string> = new Set([
-  "get", "post", "put", "patch", "delete", "all", "head", "options", "use",
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "all",
+  "head",
+  "options",
+  "use",
 ])
 // Conventional router-object identifiers (mirrors no-sync-io-in-request-path):
 // a `.get`/`.use` call is a route registration only when its object is one of
 // these OR its first argument is a "/"-prefixed string literal — so
 // `cache.get("k", cb)` is never mistaken for a route.
 const ROUTE_OBJECT_NAMES: ReadonlySet<string> = new Set([
-  "app", "router", "server", "route", "api", "apirouter", "approuter", "express",
+  "app",
+  "router",
+  "server",
+  "route",
+  "api",
+  "apirouter",
+  "approuter",
+  "express",
 ])
-const NEXT_HTTP_EXPORTS: ReadonlySet<string> = new Set([
-  "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
-])
+const NEXT_HTTP_EXPORTS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
 // Names that read like an OBJECT HANDLE (an id / tenant key), NOT a
 // pagination/search param. Shared by the request-member regex, the taint-local
 // pre-pass, and the Next route-param binding.
-const OBJECT_HANDLE_RE =
-  /^(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)$/i
+const OBJECT_HANDLE_RE = /^(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)$/i
 // A request-controlled OBJECT HANDLE: req|request|ctx|context.(params|query|
 // body)[?.]<handle>. `context`/`ctx` cover Next `context.params.id`. The
 // optional `?.` covers `req.body?.workspace`.
@@ -79,7 +93,8 @@ const TAINTED_MEMBER_RE =
 // (pagination) and `searchParams.get("q")` (search) never taint.
 const HANDLE_ARG = String.raw`["'\`](?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)["'\`]`
 const TAINTED_CALL_RE = new RegExp(
-  String.raw`(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[\s\S]{0,40}?\.searchParams\.get\()\s*` + HANDLE_ARG,
+  String.raw`(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[\s\S]{0,40}?\.searchParams\.get\()\s*` +
+    HANDLE_ARG,
 )
 /** A request-controlled OBJECT HANDLE in `slice` — member access OR a call source. */
 function sliceIsTainted(slice: string): boolean {
@@ -106,8 +121,19 @@ const AUTHZ_TOKEN_RE =
 // Unambiguous DB read/write verbs. Curated (no bare `find`/`get`/`read`) so an
 // array method (`arr.find`, `rows.map`) is never mistaken for a record lookup.
 const DATA_ACCESS_NAMES: ReadonlySet<string> = new Set([
-  "query", "findbyid", "findbypk", "findone", "findunique", "findfirst",
-  "getbyid", "getbypk", "select", "upsert", "retrieve", "lookup", "raw",
+  "query",
+  "findbyid",
+  "findbypk",
+  "findone",
+  "findunique",
+  "findfirst",
+  "getbyid",
+  "getbypk",
+  "select",
+  "upsert",
+  "retrieve",
+  "lookup",
+  "raw",
 ])
 
 function idName(n: AstNode | undefined): string | null {
@@ -166,8 +192,9 @@ function isRouteShaped(call: AstNode): boolean {
     else break
   }
   const first = (call.arguments ?? [])[0] as AstNode | undefined
-  return !!first && first.type === "Literal" && typeof first.value === "string"
-    && (first.value as string).startsWith("/")
+  return (
+    !!first && first.type === "Literal" && typeof first.value === "string" && (first.value as string).startsWith("/")
+  )
 }
 
 /** Same-file named functions: `function f(){}` and `const f = () => {}`, so a
@@ -188,8 +215,9 @@ function collectNamedFunctions(program: AstNode): Map<string, AstNode> {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -213,15 +241,24 @@ function handlerHasAuthzSignal(body: AstNode): boolean {
       // SIG-313: Hono `c.var.<principal>` (the .var principal namespace).
       else if (prop && CTX_PRINCIPAL_RE.test(prop.toLowerCase()) && isCtxVar(n.object as AstNode)) found = true
       else if (prop && AUTHZ_TOKEN_RE.test(prop.toLowerCase())) found = true
-    } else if (n.type === "CallExpression" && (n.callee as AstNode)?.type === "MemberExpression"
-      && !(n.callee as AstNode).computed) {
+    } else if (
+      n.type === "CallExpression" &&
+      (n.callee as AstNode)?.type === "MemberExpression" &&
+      !(n.callee as AstNode).computed
+    ) {
       // SIG-313: Hono `c.get("user")` principal read.
       const callee = n.callee as AstNode
       const root = idName(callee.object as AstNode)
       const a0 = (n.arguments ?? [])[0] as AstNode | undefined
-      if (idName(callee.property as AstNode) === "get" && root && /^(?:c|ctx|context)$/i.test(root)
-        && a0?.type === "Literal" && typeof a0.value === "string"
-        && CTX_PRINCIPAL_RE.test((a0.value as string).toLowerCase())) found = true
+      if (
+        idName(callee.property as AstNode) === "get" &&
+        root &&
+        /^(?:c|ctx|context)$/i.test(root) &&
+        a0?.type === "Literal" &&
+        typeof a0.value === "string" &&
+        CTX_PRINCIPAL_RE.test((a0.value as string).toLowerCase())
+      )
+        found = true
     } else if (n.type === "Literal" && n.value === 403) {
       found = true
     }
@@ -237,8 +274,11 @@ function collectHandlers(program: AstNode): AstNode[] {
   const named = collectNamedFunctions(program)
   function walk(n: AstNode): void {
     if (!n || typeof n !== "object") return
-    if (n.type === "CallExpression" && (n.callee as AstNode)?.type === "MemberExpression"
-      && !(n.callee as AstNode).computed) {
+    if (
+      n.type === "CallExpression" &&
+      (n.callee as AstNode)?.type === "MemberExpression" &&
+      !(n.callee as AstNode).computed
+    ) {
       const prop = idName((n.callee as AstNode).property as AstNode)
       if (prop && ROUTE_METHODS.has(prop) && isRouteShaped(n)) {
         for (const arg of (n.arguments ?? []) as AstNode[]) {

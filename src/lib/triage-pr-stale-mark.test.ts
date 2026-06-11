@@ -195,7 +195,9 @@ describe("handlePrStaleMark — review-target PATCH", () => {
       overflow: false,
       entries: [{ filename: "src/foo.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetReview.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good." })
+    mockGetReview.mockResolvedValue({
+      body: "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good.",
+    })
 
     await handlePrStaleMark(baseArgs(env, m))
 
@@ -263,7 +265,9 @@ describe("handlePrStaleMark — issue-comment-target PATCH", () => {
       overflow: false,
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetIssueComment.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\n### Sigilix\nbody" })
+    mockGetIssueComment.mockResolvedValue({
+      body: "<!-- sigilix:pr-review -->\n\n### Sigilix\nbody",
+    })
 
     await handlePrStaleMark(baseArgs(env, m))
 

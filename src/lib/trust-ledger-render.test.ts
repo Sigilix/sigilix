@@ -40,8 +40,15 @@ describe("trustPill / trustSubTag — tier → pill (honest wording)", () => {
 describe("renderTrustSummary", () => {
   it("builds the segmented line: counts + Proof + Quiet", () => {
     const inline = [t("runner-confirmed"), t("runner-confirmed"), t("grounded-model")]
-    const body = [t("grounded-model", { demoteReason: "outside-diff" }), t("body-only-ungrounded", { demoteReason: "verification-refuted" })]
-    const out = renderTrustSummary({ inlineFindings: inline, bodyFindings: body, counts: { suppressed: 4, demotedToBody: 2 } })
+    const body = [
+      t("grounded-model", { demoteReason: "outside-diff" }),
+      t("body-only-ungrounded", { demoteReason: "verification-refuted" }),
+    ]
+    const out = renderTrustSummary({
+      inlineFindings: inline,
+      bodyFindings: body,
+      counts: { suppressed: 4, demotedToBody: 2 },
+    })
     // grounded counts ALL grounded-tier findings (the inline grounded-model + the
     // outside-diff body grounded-model) = 2; a finding can be outside-diff AND grounded.
     expect(out).toBe(
@@ -50,17 +57,32 @@ describe("renderTrustSummary", () => {
   })
 
   it("collapses zero segments (no Proof / Quiet when zero)", () => {
-    const out = renderTrustSummary({ inlineFindings: [t("body-only-ungrounded")], bodyFindings: [], counts: { suppressed: 0, demotedToBody: 0 } })
+    const out = renderTrustSummary({
+      inlineFindings: [t("body-only-ungrounded")],
+      bodyFindings: [],
+      counts: { suppressed: 0, demotedToBody: 0 },
+    })
     expect(out).toBe("**1 finding** · 1 inline")
   })
 
   it("returns null on a clean approve (no findings, no quiet)", () => {
-    expect(renderTrustSummary({ inlineFindings: [], bodyFindings: [], counts: { suppressed: 0, demotedToBody: 0 } })).toBeNull()
+    expect(
+      renderTrustSummary({
+        inlineFindings: [],
+        bodyFindings: [],
+        counts: { suppressed: 0, demotedToBody: 0 },
+      }),
+    ).toBeNull()
   })
 
   it("shows the Quiet line even with zero findings (suppressed-only review)", () => {
-    expect(renderTrustSummary({ inlineFindings: [], bodyFindings: [], counts: { suppressed: 3, demotedToBody: 0 } }))
-      .toBe("**0 findings** · **Quiet**: 3 suppressed")
+    expect(
+      renderTrustSummary({
+        inlineFindings: [],
+        bodyFindings: [],
+        counts: { suppressed: 3, demotedToBody: 0 },
+      }),
+    ).toBe("**0 findings** · **Quiet**: 3 suppressed")
   })
 })
 
@@ -70,7 +92,9 @@ describe("renderOutsideDiffDropdown / renderPrLevelSection", () => {
     const out = renderOutsideDiffDropdown([{ id: "A" }, { id: "B" }], row)
     // \n\n between rows — each real row ends with a multi-line body, so a single \n
     // would make B render as loose continuation of A (GFM), not a sibling bullet.
-    expect(out).toBe("<details>\n<summary><b>2 findings</b> in your changes that couldn't be anchored to a specific line</summary>\n\n- A\n\n- B\n\n</details>")
+    expect(out).toBe(
+      "<details>\n<summary><b>2 findings</b> in your changes that couldn't be anchored to a specific line</summary>\n\n- A\n\n- B\n\n</details>",
+    )
   })
   it("renders the non-collapsed PR-level mini-section, rows BLANK-LINE separated", () => {
     expect(renderPrLevelSection([{ id: "X" }], row)).toBe("**PR-level**\n\n- X")

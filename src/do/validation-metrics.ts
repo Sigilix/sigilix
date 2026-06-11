@@ -14,11 +14,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
-import {
-  ALL_DISMISS_REASONS,
-  type DismissReason,
-  isDismissReason,
-} from "@/src/lib/dismiss-reasons"
+import { ALL_DISMISS_REASONS, type DismissReason, isDismissReason } from "@/src/lib/dismiss-reasons"
 // SIG-363: `ValidationRejectionEvent` moved to the ensemble domain leaf so the
 // sink ports + orchestrator reference it without importing this DO. Re-exported
 // here so existing importers (the dispatcher, the god-file) are unchanged. The
@@ -83,10 +79,7 @@ export const DISMISSAL_METRICS_GATE = "dismissal"
  * 2-D `repeat_fp_counts(specialist, reason)` table so `/metrics/repeat-fps` can
  * roll up BOTH per-reason and per-specialist without a second write.
  */
-export type RepeatFpEventKind =
-  | "repeat-fp-detected"
-  | "severity-escalation-attempt"
-  | "dismiss-decay-window-expired"
+export type RepeatFpEventKind = "repeat-fp-detected" | "severity-escalation-attempt" | "dismiss-decay-window-expired"
 
 export const ALL_REPEAT_FP_KINDS: readonly RepeatFpEventKind[] = [
   "repeat-fp-detected",
@@ -210,7 +203,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
                ON CONFLICT(day, gate, reason) DO UPDATE SET
                  would_drop = would_drop + 1,
                  kept = kept + ?`,
-              day, e.gate, e.reason,
+              day,
+              e.gate,
+              e.reason,
               e.dropped ? 0 : 1,
               e.dropped ? 0 : 1,
             )
@@ -228,7 +223,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
                    ON CONFLICT(day, gate, category) DO UPDATE SET
                      would_drop = would_drop + 1,
                      kept = kept + ?`,
-                  day, e.gate, category,
+                  day,
+                  e.gate,
+                  category,
                   e.dropped ? 0 : 1,
                   e.dropped ? 0 : 1,
                 )
@@ -241,7 +238,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
                VALUES (?, ?, ?, 1, 0)
                ON CONFLICT(day, gate, reason) DO UPDATE SET
                  would_drop = would_drop + 1`,
-              day, DISMISSAL_METRICS_GATE, e.reason,
+              day,
+              DISMISSAL_METRICS_GATE,
+              e.reason,
             )
             break
           default: {
@@ -260,7 +259,11 @@ export class ValidationMetricsDO extends DurableObject<Env> {
              head_sha = excluded.head_sha,
              last_seen_at = excluded.last_seen_at
            WHERE excluded.last_seen_at >= last_seen_pr.last_seen_at`,
-          args.owner, args.repo, args.prNumber, args.headSha, at,
+          args.owner,
+          args.repo,
+          args.prNumber,
+          args.headSha,
+          at,
         )
       }
     })
@@ -290,24 +293,38 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       `SELECT gate, reason, SUM(would_drop) AS would_drop, SUM(kept) AS kept
        FROM daily_counts WHERE day >= ? AND day <= ? AND gate != ?
        GROUP BY gate, reason`,
-      startDay, endDay, DISMISSAL_METRICS_GATE,
+      startDay,
+      endDay,
+      DISMISSAL_METRICS_GATE,
     )) {
       ;(counts[row.gate] ??= {})[row.reason] = { wouldDrop: row.would_drop, kept: row.kept }
     }
 
     // SIG-245: per-category over-fire rollup (gate → category → counts).
     const byCategory: ValidationMetricsQuery["byCategory"] = {}
-    for (const row of sql.exec<{ gate: string; category: string; would_drop: number; kept: number }>(
+    for (const row of sql.exec<{
+      gate: string
+      category: string
+      would_drop: number
+      kept: number
+    }>(
       `SELECT gate, category, SUM(would_drop) AS would_drop, SUM(kept) AS kept
        FROM daily_category_counts WHERE day >= ? AND day <= ?
        GROUP BY gate, category`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       ;(byCategory[row.gate] ??= {})[row.category] = { wouldDrop: row.would_drop, kept: row.kept }
     }
 
     const lastSeenPrHeads = [
-      ...sql.exec<{ owner: string; repo: string; pr_number: number; head_sha: string; last_seen_at: string }>(
+      ...sql.exec<{
+        owner: string
+        repo: string
+        pr_number: number
+        head_sha: string
+        last_seen_at: string
+      }>(
         `SELECT owner, repo, pr_number, head_sha, last_seen_at
          FROM last_seen_pr ORDER BY last_seen_at DESC LIMIT ?`,
         MAX_LAST_SEEN,
@@ -320,7 +337,12 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       lastSeenAt: r.last_seen_at,
     }))
 
-    return { counts, byCategory, window: { days: args.windowDays, startDay, endDay }, lastSeenPrHeads }
+    return {
+      counts,
+      byCategory,
+      window: { days: args.windowDays, startDay, endDay },
+      lastSeenPrHeads,
+    }
   }
 
   /**
@@ -344,7 +366,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       `SELECT reason, SUM(would_drop) AS total
        FROM daily_counts WHERE day >= ? AND day <= ? AND gate = ?
        GROUP BY reason`,
-      startDay, endDay, DISMISSAL_METRICS_GATE,
+      startDay,
+      endDay,
+      DISMISSAL_METRICS_GATE,
     )) {
       if (isDismissReason(row.reason)) {
         reasonCounts[row.reason] = row.total
@@ -371,7 +395,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
           `INSERT INTO repeat_fp_counts (day, specialist, reason, count)
            VALUES (?, ?, ?, 1)
            ON CONFLICT(day, specialist, reason) DO UPDATE SET count = count + 1`,
-          day, e.specialist, e.kind,
+          day,
+          e.specialist,
+          e.kind,
         )
       }
     })
@@ -403,7 +429,8 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       `SELECT specialist, reason, SUM(count) AS total
        FROM repeat_fp_counts WHERE day >= ? AND day <= ?
        GROUP BY specialist, reason`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       if ((ALL_REPEAT_FP_KINDS as readonly string[]).includes(row.reason)) {
         byReason[row.reason as RepeatFpEventKind] += row.total
@@ -440,7 +467,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
     const rows = [
       ...sql.exec<{ would_drop: number; kept: number }>(
         "SELECT would_drop, kept FROM daily_counts WHERE day = ? AND gate = ? AND reason = ?",
-        day, gate, reason,
+        day,
+        gate,
+        reason,
       ),
     ]
     const r = rows[0]

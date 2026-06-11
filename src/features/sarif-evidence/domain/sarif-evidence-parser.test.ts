@@ -86,9 +86,7 @@ describe("parseSarif — happy paths", () => {
           tool: {
             driver: {
               name: "Trivy",
-              rules: [
-                { id: "X", properties: { tags: ["Kubernetes", "Misconfiguration"] } },
-              ],
+              rules: [{ id: "X", properties: { tags: ["Kubernetes", "Misconfiguration"] } }],
             },
           },
           results: [
@@ -104,9 +102,7 @@ describe("parseSarif — happy paths", () => {
     const r = parseSarif(JSON.stringify(tagged))
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect(r.report.runs[0]?.tool.driver.rules?.[0]?.properties?.tags).toEqual([
-        "Kubernetes", "Misconfiguration",
-      ])
+      expect(r.report.runs[0]?.tool.driver.rules?.[0]?.properties?.tags).toEqual(["Kubernetes", "Misconfiguration"])
       expect(r.report.runs[0]?.results?.[0]?.taxa?.[0]?.id).toBe("K8S")
     }
   })
@@ -114,7 +110,6 @@ describe("parseSarif — happy paths", () => {
 
 describe("parseSarif — error paths", () => {
   it("rejects non-string input", () => {
-
     const r = parseSarif(123 as any)
     expect(r.ok).toBe(false)
   })
@@ -154,8 +149,8 @@ describe("parseSarif — error paths", () => {
       version: "2.1.0",
       runs: [
         { tool: { driver: { name: "Trivy" } }, results: [{ message: { text: "ok" } }] },
-        { tool: {} },           // missing driver
-        { tool: { driver: {} } },  // missing driver.name
+        { tool: {} }, // missing driver
+        { tool: { driver: {} } }, // missing driver.name
       ],
     }
     const r = parseSarif(JSON.stringify(partial))

@@ -42,23 +42,18 @@ export function makeKvStub(): KvStub {
   return { kv, store, putKeys, failPut, failPutKeys }
 }
 
-export function makeEnv(
-  kv: Env["OPENCLAW_STATE"],
-  captureEnv: "on" | "off" = "on",
-): Env {
+export function makeEnv(kv: Env["OPENCLAW_STATE"], captureEnv: "on" | "off" = "on"): Env {
   return {
     OPENCLAW_STATE: kv,
     OPENCLAW_REVIEW_MEMORY_CAPTURE: captureEnv,
   } as unknown as Env
 }
 
-export function makeConfig(
-  over: Partial<ResolvedReviewMemoryConfig> = {},
-): ResolvedReviewMemoryConfig {
+export function makeConfig(over: Partial<ResolvedReviewMemoryConfig> = {}): ResolvedReviewMemoryConfig {
   return {
     enabled: false,
-    captureOnly: true,  // capture-only by default — testing the
-                        // capture path independently from retrieval
+    captureOnly: true, // capture-only by default — testing the
+    // capture path independently from retrieval
     categories: ["security", "logic", "performance", "tests"],
     maxInjectedMemories: 5,
     minSignalThreshold: 3,
@@ -89,12 +84,10 @@ export function makeClient(
 ): GitHubClient {
   const authorLogin = opts.authorLogin ?? "sigilix[bot]"
   const repoId = opts.repoId ?? 555_000
-  const getPullRequestReviewComment = vi.fn(
-    async (_o: string, _r: string, _id: number) => {
-      if (parentBody === null) return null
-      return { id: 9001, body: parentBody, user: { login: authorLogin } }
-    },
-  )
+  const getPullRequestReviewComment = vi.fn(async (_o: string, _r: string, _id: number) => {
+    if (parentBody === null) return null
+    return { id: 9001, body: parentBody, user: { login: authorLogin } }
+  })
   const getRepository = vi.fn(async (_o: string, _r: string) => ({
     default_branch: "main",
     id: repoId,
@@ -105,10 +98,8 @@ export function makeClient(
   } as unknown as GitHubClient
 }
 
-export const VALID_MARKER =
-  "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
-export const OTHER_VALID_MARKER =
-  "<!-- sigilix:fid:3333333333333333:cat:security:sev:warning:path:444444444444 -->"
+export const VALID_MARKER = "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
+export const OTHER_VALID_MARKER = "<!-- sigilix:fid:3333333333333333:cat:security:sev:warning:path:444444444444 -->"
 export const VALID_FINGERPRINT = "f".repeat(64)
 export const VALID_FINGERPRINT_2 = "a".repeat(64)
 export const PRECISION_FINDING_MARKERS = [

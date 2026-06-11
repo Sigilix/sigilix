@@ -20,27 +20,33 @@ const DEFAULT_CONFIG: ResolvedSarifConfig = {
   disabledCategories: [],
 }
 
-const makeReport = (results: object[], extras: object = {}): string => JSON.stringify({
-  version: "2.1.0",
-  runs: [{
-    tool: { driver: { name: "Trivy" } },
-    results,
-    ...extras,
-  }],
-})
+const makeReport = (results: object[], extras: object = {}): string =>
+  JSON.stringify({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "Trivy" } },
+        results,
+        ...extras,
+      },
+    ],
+  })
 
 const diffWithChange = (path: string, line: number): string =>
   `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -${line},0 +${line},1 @@\n+const x = 1\n`
 
 const fakeClient = (raw: string | null): GitHubClient =>
-  ({ getFileContent: async () => raw } as unknown as GitHubClient)
+  ({ getFileContent: async () => raw }) as unknown as GitHubClient
 
 const fakeEnv = {} as unknown as Env
 
 describe("runSarifEvidence — skip paths", () => {
   it("disabled-config", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(null), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(null),
+      ...CTX,
+      diff: "",
       config: { ...DEFAULT_CONFIG, enabled: false },
     })
     expect(r.skipped).toBe(true)
@@ -49,7 +55,10 @@ describe("runSarifEvidence — skip paths", () => {
 
   it("no-report (404)", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(null), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(null),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(true)
@@ -59,7 +68,10 @@ describe("runSarifEvidence — skip paths", () => {
   it("report-too-large at 8 MB + 1 byte", async () => {
     const big = "x".repeat(8 * 1024 * 1024 + 1)
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(big), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(big),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(true)
@@ -68,7 +80,10 @@ describe("runSarifEvidence — skip paths", () => {
 
   it("parse-failed on malformed JSON", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient("not json"), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient("not json"),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(true)
@@ -78,7 +93,10 @@ describe("runSarifEvidence — skip paths", () => {
   it("unsupported-sarif-version", async () => {
     const bad = JSON.stringify({ version: "2.0.0", runs: [] })
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(bad), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(bad),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(true)
@@ -88,14 +106,25 @@ describe("runSarifEvidence — skip paths", () => {
 
 describe("runSarifEvidence — finding emission", () => {
   it("happy path: 1 IaC finding emitted", async () => {
-    const report = makeReport([{
-      ruleId: "AVD-KSV-0017",
-      level: "error",
-      message: { text: "Privileged container" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "k8s/dep.yaml" }, region: { startLine: 10 } } }],
-    }])
+    const report = makeReport([
+      {
+        ruleId: "AVD-KSV-0017",
+        level: "error",
+        message: { text: "Privileged container" },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: "k8s/dep.yaml" },
+              region: { startLine: 10 },
+            },
+          },
+        ],
+      },
+    ])
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
       diff: diffWithChange("k8s/dep.yaml", 10),
       config: DEFAULT_CONFIG,
     })
@@ -109,14 +138,18 @@ describe("runSarifEvidence — finding emission", () => {
   })
 
   it("path-only fallback for line-less IaC findings", async () => {
-    const report = makeReport([{
-      ruleId: "AVD-KSV-0017",
-      level: "error",
-      message: { text: "x" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "k8s/dep.yaml" } } }],
-    }])
+    const report = makeReport([
+      {
+        ruleId: "AVD-KSV-0017",
+        level: "error",
+        message: { text: "x" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "k8s/dep.yaml" } } }],
+      },
+    ])
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
       diff: diffWithChange("k8s/dep.yaml", 5),
       config: DEFAULT_CONFIG,
     })
@@ -127,12 +160,17 @@ describe("runSarifEvidence — finding emission", () => {
   })
 
   it("drops findings whose path is unchanged", async () => {
-    const report = makeReport([{
-      level: "error", message: { text: "x" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "src/other.ts" } } }],
-    }])
+    const report = makeReport([
+      {
+        level: "error",
+        message: { text: "x" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "src/other.ts" } } }],
+      },
+    ])
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
       diff: diffWithChange("src/touched.ts", 1),
       config: DEFAULT_CONFIG,
     })
@@ -142,13 +180,19 @@ describe("runSarifEvidence — finding emission", () => {
   })
 
   it("drops findings with absolute paths via path normalizer", async () => {
-    const report = makeReport([{
-      level: "error", message: { text: "x" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "/etc/passwd" } } }],
-    }])
+    const report = makeReport([
+      {
+        level: "error",
+        message: { text: "x" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "/etc/passwd" } } }],
+      },
+    ])
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX,
-      diff: "", config: DEFAULT_CONFIG,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(false)
     if (r.skipped) return
@@ -158,26 +202,30 @@ describe("runSarifEvidence — finding emission", () => {
 })
 
 describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MAJOR #1)", () => {
-  const baseReport = (extras: object = {}) => makeReport([
-    {
-      ruleId: "RULE-A",
-      level: "error",
-      message: { text: "vuln-A" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
-      ...extras,
-    },
-    {
-      ruleId: "RULE-B",
-      level: "note",
-      message: { text: "info-B" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
-    },
-  ])
+  const baseReport = (extras: object = {}) =>
+    makeReport([
+      {
+        ruleId: "RULE-A",
+        level: "error",
+        message: { text: "vuln-A" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
+        ...extras,
+      },
+      {
+        ruleId: "RULE-B",
+        level: "note",
+        message: { text: "info-B" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
+      },
+    ])
   const diff = diffWithChange("src/a.ts", 1)
 
   it("disabledRules filters specific rule_id", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(baseReport()), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(baseReport()),
+      ...CTX,
+      diff,
       config: { ...DEFAULT_CONFIG, disabledRules: ["RULE-A"] },
     })
     expect(r.skipped).toBe(false)
@@ -186,18 +234,30 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
   })
 
   it("disabledCategories filters whole class (license)", async () => {
-    const reportWithLicense = makeReport([
+    const reportWithLicense = makeReport(
+      [
+        {
+          ruleId: "LIC-1",
+          level: "warning",
+          message: { text: "GPL-3.0 not allowed" },
+          locations: [
+            {
+              physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } },
+            },
+          ],
+        },
+      ],
       {
-        ruleId: "LIC-1",
-        level: "warning",
-        message: { text: "GPL-3.0 not allowed" },
-        locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
+        tool: {
+          driver: { name: "Trivy", rules: [{ id: "LIC-1", properties: { tags: ["license"] } }] },
+        },
       },
-    ], {
-      tool: { driver: { name: "Trivy", rules: [{ id: "LIC-1", properties: { tags: ["license"] } }] } },
-    })
+    )
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(reportWithLicense), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(reportWithLicense),
+      ...CTX,
+      diff,
       config: { ...DEFAULT_CONFIG, disabledCategories: ["license"] },
     })
     expect(r.skipped).toBe(false)
@@ -207,7 +267,10 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
 
   it("severityThreshold warning drops note-level findings", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(baseReport()), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(baseReport()),
+      ...CTX,
+      diff,
       config: { ...DEFAULT_CONFIG, severityThreshold: "warning" },
     })
     expect(r.skipped).toBe(false)
@@ -219,7 +282,10 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
 
   it("severityThreshold info keeps note-level findings", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(baseReport()), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(baseReport()),
+      ...CTX,
+      diff,
       config: { ...DEFAULT_CONFIG, severityThreshold: "info" },
     })
     expect(r.skipped).toBe(false)
@@ -230,13 +296,19 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
   })
 
   it("level: 'none' is filtered (Kimi MINOR #4)", async () => {
-    const report = makeReport([{
-      ruleId: "X", level: "none",
-      message: { text: "ignore me" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
-    }])
+    const report = makeReport([
+      {
+        ruleId: "X",
+        level: "none",
+        message: { text: "ignore me" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
+      },
+    ])
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff,
       config: { ...DEFAULT_CONFIG, severityThreshold: "info" },
     })
     expect(r.skipped).toBe(false)
@@ -254,7 +326,9 @@ describe("runSarifEvidence — caps", () => {
       locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
     }))
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport(results)), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(makeReport(results)),
+      ...CTX,
       diff: diffWithChange("src/a.ts", 1),
       config: DEFAULT_CONFIG,
     })
@@ -272,7 +346,9 @@ describe("runSarifEvidence — caps", () => {
       locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
     }))
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport(results)), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(makeReport(results)),
+      ...CTX,
       diff: diffWithChange("src/a.ts", 1),
       config: DEFAULT_CONFIG,
     })
@@ -291,7 +367,10 @@ describe("runSarifEvidence — caps", () => {
     })
     expect(new TextEncoder().encode(report).length).toBeLessThanOrEqual(8 * 1024 * 1024)
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     // Should NOT skip with report-too-large (it parses cleanly)
@@ -309,8 +388,12 @@ describe("runSarifEvidence — stale-report telemetry (Codex MINOR #7 + Kimi MAJ
       invocations: [{ endTimeUtc: "2026-04-01T00:00:00Z" }],
     })
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX, diff: "",
-      config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     expect(r.skipped).toBe(false)
     if (r.skipped) return
@@ -322,8 +405,12 @@ describe("runSarifEvidence — stale-report telemetry (Codex MINOR #7 + Kimi MAJ
     const fresh = new Date(NOW - 24 * 60 * 60 * 1000).toISOString()
     const report = makeReport([], { invocations: [{ endTimeUtc: fresh }] })
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX, diff: "",
-      config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     if (r.skipped) return
     expect(r.telemetry.staleReport).toBeUndefined()
@@ -331,8 +418,12 @@ describe("runSarifEvidence — stale-report telemetry (Codex MINOR #7 + Kimi MAJ
 
   it("does NOT fire when endTimeUtc is absent", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport([])), ...CTX, diff: "",
-      config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(makeReport([])),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     if (r.skipped) return
     expect(r.telemetry.staleReport).toBeUndefined()
@@ -340,8 +431,12 @@ describe("runSarifEvidence — stale-report telemetry (Codex MINOR #7 + Kimi MAJ
 
   it("does NOT fire when invocations array is missing entirely", async () => {
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport([])), ...CTX, diff: "",
-      config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(makeReport([])),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     if (r.skipped) return
     expect(r.telemetry.staleReport).toBeUndefined()
@@ -350,15 +445,23 @@ describe("runSarifEvidence — stale-report telemetry (Codex MINOR #7 + Kimi MAJ
   it("7-day boundary: exactly 7 days old → no fire; +1ms → fires", async () => {
     const exactly7d = new Date(NOW - 7 * 24 * 60 * 60 * 1000).toISOString()
     const r1 = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport([], { invocations: [{ endTimeUtc: exactly7d }] })),
-      ...CTX, diff: "", config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(makeReport([], { invocations: [{ endTimeUtc: exactly7d }] })),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     if (!r1.skipped) expect(r1.telemetry.staleReport).toBeUndefined()
 
     const justOver = new Date(NOW - 7 * 24 * 60 * 60 * 1000 - 1).toISOString()
     const r2 = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(makeReport([], { invocations: [{ endTimeUtc: justOver }] })),
-      ...CTX, diff: "", config: DEFAULT_CONFIG, now: () => NOW,
+      env: fakeEnv,
+      client: fakeClient(makeReport([], { invocations: [{ endTimeUtc: justOver }] })),
+      ...CTX,
+      diff: "",
+      config: DEFAULT_CONFIG,
+      now: () => NOW,
     })
     if (!r2.skipped) expect(r2.telemetry.staleReport).toBeDefined()
   })
@@ -371,23 +474,48 @@ describe("runSarifEvidence — multi-runs single file", () => {
       runs: [
         {
           tool: { driver: { name: "Trivy" } },
-          results: [{
-            ruleId: "CVE-1", level: "error", message: { text: "trivy" },
-            locations: [{ physicalLocation: { artifactLocation: { uri: "package.json" }, region: { startLine: 1 } } }],
-          }],
+          results: [
+            {
+              ruleId: "CVE-1",
+              level: "error",
+              message: { text: "trivy" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "package.json" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+            },
+          ],
         },
         {
           tool: { driver: { name: "Kubescape" } },
-          results: [{
-            ruleId: "AVD-KSV-0001", level: "error", message: { text: "kubescape" },
-            locations: [{ physicalLocation: { artifactLocation: { uri: "k8s/dep.yaml" }, region: { startLine: 1 } } }],
-          }],
+          results: [
+            {
+              ruleId: "AVD-KSV-0001",
+              level: "error",
+              message: { text: "kubescape" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "k8s/dep.yaml" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+            },
+          ],
         },
       ],
     })
     const diff = diffWithChange("package.json", 1) + diffWithChange("k8s/dep.yaml", 1)
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(multi), ...CTX, diff,
+      env: fakeEnv,
+      client: fakeClient(multi),
+      ...CTX,
+      diff,
       config: DEFAULT_CONFIG,
     })
     if (r.skipped) return
@@ -399,15 +527,32 @@ describe("runSarifEvidence — multi-runs single file", () => {
 
 describe("runSarifEvidence — license routes to security (NOT logic)", () => {
   it("license finding has roleHint: security", async () => {
-    const report = makeReport([{
-      ruleId: "LIC-1", level: "warning",
-      message: { text: "GPL-3.0 detected" },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "package.json" }, region: { startLine: 1 } } }],
-    }], {
-      tool: { driver: { name: "Trivy", rules: [{ id: "LIC-1", properties: { tags: ["License"] } }] } },
-    })
+    const report = makeReport(
+      [
+        {
+          ruleId: "LIC-1",
+          level: "warning",
+          message: { text: "GPL-3.0 detected" },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: "package.json" },
+                region: { startLine: 1 },
+              },
+            },
+          ],
+        },
+      ],
+      {
+        tool: {
+          driver: { name: "Trivy", rules: [{ id: "LIC-1", properties: { tags: ["License"] } }] },
+        },
+      },
+    )
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX,
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
       diff: diffWithChange("package.json", 1),
       config: DEFAULT_CONFIG,
     })
@@ -422,13 +567,27 @@ describe("runSarifEvidence — SBOM run produces metadata, no findings", () => {
   it("SBOM-flagged run does not contribute findings; sbom.present is true", async () => {
     const report = JSON.stringify({
       version: "2.1.0",
-      runs: [{
-        tool: { driver: { name: "Trivy", properties: { kind: "sbom" } } },
-        artifacts: [{ properties: { name: "lodash", version: "4.17.21", license: "MIT", relationship: "direct" } }],
-      }],
+      runs: [
+        {
+          tool: { driver: { name: "Trivy", properties: { kind: "sbom" } } },
+          artifacts: [
+            {
+              properties: {
+                name: "lodash",
+                version: "4.17.21",
+                license: "MIT",
+                relationship: "direct",
+              },
+            },
+          ],
+        },
+      ],
     })
     const r = await runSarifEvidence({
-      env: fakeEnv, client: fakeClient(report), ...CTX, diff: "",
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: "",
       config: DEFAULT_CONFIG,
     })
     if (r.skipped) return
@@ -450,12 +609,30 @@ describe("runSarifEvidence — push path (rawOverride) parity with pull path (SI
     const diff = diffWithChange("src/a.ts", 5)
 
     // Pull path: the client fetches the SARIF from the repo.
-    const pull = await runSarifEvidence({ env: fakeEnv, client: fakeClient(report), ...CTX, diff, config: DEFAULT_CONFIG })
+    const pull = await runSarifEvidence({
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff,
+      config: DEFAULT_CONFIG,
+    })
 
     // Push path: rawOverride supplies it; the client would 404 — proving NO fetch.
     let fetched = false
-    const noFetchClient = { getFileContent: async () => { fetched = true; return null } } as unknown as GitHubClient
-    const push = await runSarifEvidence({ env: fakeEnv, client: noFetchClient, ...CTX, diff, config: DEFAULT_CONFIG, rawOverride: report })
+    const noFetchClient = {
+      getFileContent: async () => {
+        fetched = true
+        return null
+      },
+    } as unknown as GitHubClient
+    const push = await runSarifEvidence({
+      env: fakeEnv,
+      client: noFetchClient,
+      ...CTX,
+      diff,
+      config: DEFAULT_CONFIG,
+      rawOverride: report,
+    })
 
     expect(fetched).toBe(false) // rawOverride skipped the GitHub fetch
     expect(pull.skipped).toBe(false)

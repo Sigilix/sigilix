@@ -96,9 +96,7 @@ export interface DismissPriorResult {
  *
  * Pure-effect; never throws. List-call failure returns zeros.
  */
-export async function dismissPriorSigilixReviews(
-  args: DismissPriorArgs,
-): Promise<DismissPriorResult> {
+export async function dismissPriorSigilixReviews(args: DismissPriorArgs): Promise<DismissPriorResult> {
   const { client, owner, repo, prNumber, currentReviewId } = args
   let reviews: Array<{
     id: number
@@ -110,11 +108,15 @@ export async function dismissPriorSigilixReviews(
   try {
     reviews = await client.listPullRequestReviews(owner, repo, prNumber)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-dismiss-list-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-dismiss-list-failed",
+        owner,
+        repo,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { dismissed: 0, failed: 0 }
   }
   // code-reviewer H1 catch: the body marker alone could in theory be
@@ -131,23 +133,27 @@ export async function dismissPriorSigilixReviews(
   // matching prior review counts as stale. The `r.id !== null` check
   // is structurally always true in that case (review IDs are always
   // numeric), so the filter naturally skips the exclude.
-  const targets = reviews.filter((r) =>
-    r.id !== currentReviewId &&
-    DISMISSIBLE_STATES.has(r.state) &&
-    r.user?.login === SIGILIX_BOT_LOGIN &&
-    (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
-      r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
+  const targets = reviews.filter(
+    (r) =>
+      r.id !== currentReviewId &&
+      DISMISSIBLE_STATES.has(r.state) &&
+      r.user?.login === SIGILIX_BOT_LOGIN &&
+      (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) || r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
   )
   // code-reviewer M2 catch: when the list returns the 100-item cap,
   // we may be missing older Sigilix reviews. Log a warning so we
   // notice if any real PR ever accumulates that many.
   if (reviews.length >= 100) {
-    console.warn(JSON.stringify({
-      event: "pr-review-dismiss-list-capped",
-      owner, repo, prNumber,
-      review_count: reviews.length,
-      note: "listPullRequestReviews returned >=100 items; older Sigilix reviews may not be detected in this run.",
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-dismiss-list-capped",
+        owner,
+        repo,
+        prNumber,
+        review_count: reviews.length,
+        note: "listPullRequestReviews returned >=100 items; older Sigilix reviews may not be detected in this run.",
+      }),
+    )
   }
   for (const r of targets) {
     // SIG-85: bot-initiated dismissal removed. GitHub's repo-level
@@ -156,11 +162,17 @@ export async function dismissPriorSigilixReviews(
     // dismissal to the commit pusher (instead of sigilix[bot]).
     // Customers must enable this setting; see
     // docs/setup/customer-onboarding.md.
-    console.log(JSON.stringify({
-      event: "pr-review-stale-detected",
-      owner, repo, prNumber, review_id: r.id, prior_state: r.state,
-      commit_id: r.commitId ?? null,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-stale-detected",
+        owner,
+        repo,
+        prNumber,
+        review_id: r.id,
+        prior_state: r.state,
+        commit_id: r.commitId ?? null,
+      }),
+    )
   }
   // `dismissed` always 0; return shape kept for caller back-compat.
   return { dismissed: 0, failed: 0 }

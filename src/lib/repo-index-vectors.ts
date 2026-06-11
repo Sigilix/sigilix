@@ -101,10 +101,9 @@ function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
   if (
     o.githubRepoId !== undefined &&
-    (typeof o.githubRepoId !== "number" ||
-      !Number.isInteger(o.githubRepoId) ||
-      o.githubRepoId <= 0)
-  ) return false
+    (typeof o.githubRepoId !== "number" || !Number.isInteger(o.githubRepoId) || o.githubRepoId <= 0)
+  )
+    return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (!o.byPath || typeof o.byPath !== "object" || Array.isArray(o.byPath)) return false
   for (const [path, ids] of Object.entries(o.byPath as Record<string, unknown>)) {
@@ -117,11 +116,7 @@ function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
   return true
 }
 
-export async function readRepoIndexVectors(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<ReadResult> {
+export async function readRepoIndexVectors(env: Env, owner: string, repo: string): Promise<ReadResult> {
   const raw = await env.OPENCLAW_STATE.get(repoIndexVectorsKey(owner, repo))
   if (raw === null) return { kind: "missing" }
   return parseRepoIndexVectors(raw)
@@ -177,16 +172,11 @@ export function parseRepoIndexVectors(raw: string): ReadResult {
  * adds the namespace-by-repo_id read path; Phase 5 cleanup deletes
  * the legacy KV key.
  */
-export async function writeRepoIndexVectors(
-  env: Env,
-  vectors: RepoIndexVectorsV1,
-): Promise<boolean> {
+export async function writeRepoIndexVectors(env: Env, vectors: RepoIndexVectorsV1): Promise<boolean> {
   try {
-    await env.OPENCLAW_STATE.put(
-      repoIndexVectorsKey(vectors.owner, vectors.repo),
-      JSON.stringify(vectors),
-      { expirationTtl: TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(repoIndexVectorsKey(vectors.owner, vectors.repo), JSON.stringify(vectors), {
+      expirationTtl: TTL_SECONDS,
+    })
     const isDefaultBranchState = !vectors.repo.includes("/__branch__/")
     if (
       isDefaultBranchState &&
@@ -194,17 +184,17 @@ export async function writeRepoIndexVectors(
       Number.isInteger(vectors.githubRepoId) &&
       vectors.githubRepoId > 0
     ) {
-      await env.OPENCLAW_STATE.put(
-        repoVectorsTenantKey(vectors.githubRepoId),
-        JSON.stringify(vectors),
-        { expirationTtl: TTL_SECONDS },
+      await env.OPENCLAW_STATE.put(repoVectorsTenantKey(vectors.githubRepoId), JSON.stringify(vectors), {
+        expirationTtl: TTL_SECONDS,
+      })
+      console.log(
+        JSON.stringify({
+          event: "dual-write-succeeded-vectors",
+          key_legacy: repoIndexVectorsKey(vectors.owner, vectors.repo),
+          key_new: repoVectorsTenantKey(vectors.githubRepoId),
+          github_repo_id: vectors.githubRepoId,
+        }),
       )
-      console.log(JSON.stringify({
-        event: "dual-write-succeeded-vectors",
-        key_legacy: repoIndexVectorsKey(vectors.owner, vectors.repo),
-        key_new: repoVectorsTenantKey(vectors.githubRepoId),
-        github_repo_id: vectors.githubRepoId,
-      }))
     }
     return true
   } catch {
@@ -224,11 +214,7 @@ export async function deleteRepoIndexVectors(
   // alongside the legacy key cleanup. Positive-integer guard mirrors
   // the writer side; callers thread the ID from the manifest they
   // just deleted (see index-delete.ts).
-  if (
-    typeof githubRepoId === "number" &&
-    Number.isInteger(githubRepoId) &&
-    githubRepoId > 0
-  ) {
+  if (typeof githubRepoId === "number" && Number.isInteger(githubRepoId) && githubRepoId > 0) {
     await env.OPENCLAW_STATE.delete(repoVectorsTenantKey(githubRepoId))
   }
 }
@@ -269,7 +255,9 @@ export async function appendVectorCoverage(
     // reintroduce the orphan gap. Throw so the indexer aborts BEFORE upserting
     // and the queue retries — mirrors persistVectorIds' mid-chain corruption
     // handling.
-    throw new Error(`repo-index-vectors coverage write failed for ${repo}: existing record invalid (${existing.reason})`)
+    throw new Error(
+      `repo-index-vectors coverage write failed for ${repo}: existing record invalid (${existing.reason})`,
+    )
   }
   const record: RepoIndexVectorsV1 =
     existing.kind === "ok"
@@ -348,11 +336,7 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
   // Positive-integer guard matches every other producer + writer
   // site (rejects 0 / negative / non-integer / NaN / Infinity).
   const normalizedIncomingRepoId =
-    typeof githubRepoId === "number" &&
-    Number.isInteger(githubRepoId) &&
-    githubRepoId > 0
-      ? githubRepoId
-      : undefined
+    typeof githubRepoId === "number" && Number.isInteger(githubRepoId) && githubRepoId > 0 ? githubRepoId : undefined
   const normalizedExistingRepoId =
     existing.kind === "ok" &&
     typeof existing.vectors.githubRepoId === "number" &&
@@ -361,25 +345,41 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
       ? existing.vectors.githubRepoId
       : undefined
   const effectiveRepoId = normalizedIncomingRepoId ?? normalizedExistingRepoId
-  const repoIdSpread: { githubRepoId?: number } =
-    effectiveRepoId !== undefined ? { githubRepoId: effectiveRepoId } : {}
+  const repoIdSpread: { githubRepoId?: number } = effectiveRepoId !== undefined ? { githubRepoId: effectiveRepoId } : {}
 
   // SIG-136: a lease owned by a DIFFERENT run supersedes this slice — reject
   // BEFORE create/overwrite so a stale run can't clobber a newer run's data.
   if (activeRunId !== null && activeRunId !== runId) {
-    return { action: "stale-skip", existingRunId: existing.kind === "ok" ? existing.vectors.runId : "" }
+    return {
+      action: "stale-skip",
+      existingRunId: existing.kind === "ok" ? existing.vectors.runId : "",
+    }
   }
 
   if (existing.kind === "missing") {
     return {
       action: "created",
-      vectors: { v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId, byPath: sliceByPath },
+      vectors: {
+        v: 1,
+        owner,
+        repo: repo.toLowerCase(),
+        ...repoIdSpread,
+        runId,
+        byPath: sliceByPath,
+      },
     }
   }
   if (existing.kind === "invalid") {
     return {
       action: "invalid-overwrite",
-      vectors: { v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId, byPath: sliceByPath },
+      vectors: {
+        v: 1,
+        owner,
+        repo: repo.toLowerCase(),
+        ...repoIdSpread,
+        runId,
+        byPath: sliceByPath,
+      },
     }
   }
 
@@ -409,7 +409,11 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
     return {
       action: "superseded",
       vectors: {
-        v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId,
+        v: 1,
+        owner,
+        repo: repo.toLowerCase(),
+        ...repoIdSpread,
+        runId,
         byPath: setUnion(cur.byPath, sliceByPath),
       },
     }
@@ -431,10 +435,7 @@ function normalizeByPath(input: Record<string, string[]>): Record<string, string
   return out
 }
 
-function setUnion(
-  a: Record<string, string[]>,
-  b: Record<string, string[]>,
-): Record<string, string[]> {
+function setUnion(a: Record<string, string[]>, b: Record<string, string[]>): Record<string, string[]> {
   const out: Record<string, string[]> = {}
   for (const [path, ids] of Object.entries(a)) {
     out[path] = [...ids]

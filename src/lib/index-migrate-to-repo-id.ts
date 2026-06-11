@@ -18,10 +18,7 @@ import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken, listInstallationRepoFullNames } from "@/src/shared/adapters/github/github-app"
 import { parseFullName } from "./index-producer"
-import {
-  readRepoIndexManifest,
-  writeRepoIndexManifest,
-} from "./repo-index-manifest"
+import { readRepoIndexManifest, writeRepoIndexManifest } from "./repo-index-manifest"
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
@@ -72,10 +69,7 @@ export interface MigrateInstallSummary {
  * (which fires Phase 2's dual-write). Skips repos that already have
  * `githubRepoId` populated. Per-repo errors don't abort the batch.
  */
-export async function migrateInstallToRepoId(
-  env: Env,
-  installationId: number,
-): Promise<MigrateInstallSummary> {
+export async function migrateInstallToRepoId(env: Env, installationId: number): Promise<MigrateInstallSummary> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     throw new Error("migrate-to-repo-id: GITHUB_APP_ID + GITHUB_PRIVATE_KEY required")
   }
@@ -112,7 +106,12 @@ export async function migrateInstallToRepoId(
   for (const fullName of fullNames) {
     const parsed = parseFullName({ full_name: fullName })
     if (!parsed) {
-      outcomes.push({ owner: "", repo: fullName, status: "manifest-invalid", detail: "bad full_name" })
+      outcomes.push({
+        owner: "",
+        repo: fullName,
+        status: "manifest-invalid",
+        detail: "bad full_name",
+      })
       skipped += 1
       continue
     }
@@ -135,16 +134,18 @@ export async function migrateInstallToRepoId(
     }
   }
 
-  console.log(JSON.stringify({
-    event: "migration-coverage",
-    installation_id: installationId,
-    repos_scanned: fullNames.length,
-    listing_complete: listing.complete,
-    migrated,
-    already_migrated: alreadyMigrated,
-    skipped,
-    failed,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "migration-coverage",
+      installation_id: installationId,
+      repos_scanned: fullNames.length,
+      listing_complete: listing.complete,
+      migrated,
+      already_migrated: alreadyMigrated,
+      skipped,
+      failed,
+    }),
+  )
 
   return {
     installationId,
@@ -198,11 +199,7 @@ export async function migrateOneRepo(
   if (repoMeta === null) {
     return { owner, repo, status: "github-404" }
   }
-  if (
-    typeof repoMeta.id !== "number" ||
-    !Number.isInteger(repoMeta.id) ||
-    repoMeta.id <= 0
-  ) {
+  if (typeof repoMeta.id !== "number" || !Number.isInteger(repoMeta.id) || repoMeta.id <= 0) {
     return { owner, repo, status: "github-no-id" }
   }
 

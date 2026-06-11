@@ -22,15 +22,24 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const LOOP_TYPES: ReadonlySet<string> = new Set([
-  "ForStatement", "ForInStatement", "ForOfStatement",
-  "WhileStatement", "DoWhileStatement",
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
 ])
 const FUNCTION_BOUNDARY_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression",
-  "ArrowFunctionExpression", "MethodDefinition",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "MethodDefinition",
 ])
 const INTL_FORMATTERS: ReadonlySet<string> = new Set([
-  "Collator", "NumberFormat", "DateTimeFormat", "RelativeTimeFormat", "ListFormat",
+  "Collator",
+  "NumberFormat",
+  "DateTimeFormat",
+  "RelativeTimeFormat",
+  "ListFormat",
 ])
 
 function sliceEvidence(source: string, node: AstNode): string {
@@ -109,7 +118,8 @@ export const noAllocationInLoop: AstRule = {
     walk(node, 0)
     if (hits.length === 0) return null
     return hits.map((h) => ({
-      message: "This allocation does not depend on the loop and is rebuilt every iteration. Hoist it above the loop and reuse the single instance.",
+      message:
+        "This allocation does not depend on the loop and is rebuilt every iteration. Hoist it above the loop and reuse the single instance.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,

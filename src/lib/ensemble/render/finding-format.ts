@@ -16,11 +16,7 @@
 // byte-identical to their HEAD form in triage-pr-review.ts; only the import paths
 // (canonicalized to `@/…` / the verdict-domain leaf) and the wrapper are new.
 
-import {
-  isContiguousRightRange,
-  deriveSide,
-  type ReviewableMap,
-} from "@/src/shared/util/diff-positions"
+import { isContiguousRightRange, deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {
@@ -78,9 +74,7 @@ export function sanitizeVerdictForGitHub(v: PrReviewVerdict): PrReviewVerdict {
   }
 }
 
-export function sanitizeFindingsForGitHub(
-  findings: ReadonlyArray<PrReviewFinding>,
-): PrReviewFinding[] {
+export function sanitizeFindingsForGitHub(findings: ReadonlyArray<PrReviewFinding>): PrReviewFinding[] {
   return findings.map(sanitizeFindingForGitHub)
 }
 
@@ -105,9 +99,7 @@ export function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | 
   if (value === "pull-request" || value === "pull_request" || value === "review") {
     return "pr"
   }
-  return REVIEW_FINDING_SCOPES.has(value as ReviewFindingScope)
-    ? (value as ReviewFindingScope)
-    : undefined
+  return REVIEW_FINDING_SCOPES.has(value as ReviewFindingScope) ? (value as ReviewFindingScope) : undefined
 }
 
 export function findingScope(finding: PrReviewFinding): ReviewFindingScope {
@@ -137,20 +129,22 @@ export const MAX_SUGGESTED_REPLACEMENT_LINES = 10
 
 function isExplicitRemovedTestCoverageFinding(f: PrReviewFinding): boolean {
   if (f.category !== "testing") return false
-  return Array.isArray(f.evidenceRefs) &&
-    f.evidenceRefs.some((ref) =>
-      typeof ref === "string" && ref.trim().startsWith("testFileChanged:"),
-    )
+  return (
+    Array.isArray(f.evidenceRefs) &&
+    f.evidenceRefs.some((ref) => typeof ref === "string" && ref.trim().startsWith("testFileChanged:"))
+  )
 }
 
 function isMissingSiblingTestingFinding(f: PrReviewFinding): boolean {
   if (f.category !== "testing") return false
-  return Array.isArray(f.evidenceRefs) &&
+  return (
+    Array.isArray(f.evidenceRefs) &&
     f.evidenceRefs.some((ref) => {
       if (typeof ref !== "string") return false
       const trimmed = ref.trim()
       return trimmed.startsWith("siblingMapping:") && trimmed.endsWith("->NONE")
     })
+  )
 }
 
 export function normalizeTestingFindingForFinalPolicy(f: PrReviewFinding): PrReviewFinding {
@@ -190,9 +184,7 @@ function formatBodyFindingLocation(f: PrReviewFinding): string {
     case "comment":
       return "Comment-level"
     case "line":
-      return f.startLine != null && f.startLine !== f.line
-        ? `Lines ${f.startLine}-${f.line}`
-        : `Line ${f.line}`
+      return f.startLine != null && f.startLine !== f.line ? `Lines ${f.startLine}-${f.line}` : `Line ${f.line}`
   }
 }
 
@@ -215,10 +207,7 @@ function formatBodyFindingLocation(f: PrReviewFinding): string {
  *   - `line` with range → `#L<startLine>-L<line>`
  *   - `line` single     → `#L<line>`
  */
-function formatBodyFindingAnchor(
-  f: PrReviewFinding,
-  linkContext?: BodyFindingLinkContext,
-): string {
+function formatBodyFindingAnchor(f: PrReviewFinding, linkContext?: BodyFindingLinkContext): string {
   const scope = findingScope(f)
   const isPrOrFile = scope === "pr" || scope === "file"
   const label = isPrOrFile
@@ -287,11 +276,7 @@ function formatFindingCategory(f: PrReviewFinding): string {
 const MAX_EVIDENCE_VALUES_PER_ROW = 8
 
 function escapeInlineEvidenceValue(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/`/g, "&#96;")
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/`/g, "&#96;")
 }
 
 function formatInlineEvidenceValue(value: string): string {
@@ -341,7 +326,6 @@ function renderFindingEvidenceBlock(finding: PrReviewFinding): string {
   lines.push("", "</details>")
   return lines.join("\n")
 }
-
 
 /**
  * SIG-101: severity badge prefix on inline finding comments. Scores
@@ -424,15 +408,7 @@ export function formatFindingBodyMarkdown(body: string): string {
   const reasoning = clean.slice(breakIdx + 2).trimStart()
   // Degenerate split (empty issue or empty reasoning) → just show the whole body.
   if (main.length === 0 || reasoning.length === 0) return clean.trimEnd()
-  return [
-    main,
-    "",
-    "<details><summary>Detailed reasoning</summary>",
-    "",
-    reasoning,
-    "",
-    "</details>",
-  ].join("\n")
+  return [main, "", "<details><summary>Detailed reasoning</summary>", "", reasoning, "", "</details>"].join("\n")
 }
 
 function formatFenceSection(label: string, content: string, lang: string): string {
@@ -489,12 +465,7 @@ function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
   if (!isReplace || typeof repl !== "string") return ""
   const lang = extensionToFenceLang(finding.path)
   const fence = fenceForContent(repl)
-  return [
-    "**Suggested change:**",
-    fence + lang,
-    repl.replace(/\n$/, ""),
-    fence,
-  ].join("\n")
+  return ["**Suggested change:**", fence + lang, repl.replace(/\n$/, ""), fence].join("\n")
 }
 
 /**
@@ -506,14 +477,13 @@ function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
  *
  * Pure — exported for tests.
  */
-export function resolveFindingConfidence(
-  finding: PrReviewFinding,
-  verdictConfidence: number,
-): number {
-  if (typeof finding.confidence === "number" &&
-      Number.isFinite(finding.confidence) &&
-      finding.confidence >= 1 &&
-      finding.confidence <= 5) {
+export function resolveFindingConfidence(finding: PrReviewFinding, verdictConfidence: number): number {
+  if (
+    typeof finding.confidence === "number" &&
+    Number.isFinite(finding.confidence) &&
+    finding.confidence >= 1 &&
+    finding.confidence <= 5
+  ) {
     return finding.confidence
   }
   // Clamp the fallback defensively in case a caller passes a bad
@@ -527,10 +497,27 @@ export function resolveFindingConfidence(
  * unknown (renders a plain fence). Pure — exported for tests.
  */
 const FENCE_LANG_BY_EXT: Readonly<Record<string, string>> = {
-  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
-  mts: "ts", cts: "ts", json: "json", py: "python", rb: "ruby",
-  go: "go", rs: "rust", java: "java", sh: "bash", yml: "yaml",
-  yaml: "yaml", toml: "toml", css: "css", html: "html", sql: "sql",
+  ts: "ts",
+  tsx: "tsx",
+  js: "js",
+  jsx: "jsx",
+  mjs: "js",
+  cjs: "js",
+  mts: "ts",
+  cts: "ts",
+  json: "json",
+  py: "python",
+  rb: "ruby",
+  go: "go",
+  rs: "rust",
+  java: "java",
+  sh: "bash",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  css: "css",
+  html: "html",
+  sql: "sql",
   md: "markdown",
 }
 export function extensionToFenceLang(path: string): string {
@@ -586,15 +573,11 @@ const SCOPE_MISMATCH_RATIO_THRESHOLD = 0.5
 export function getProposedChangeScopeMismatch(finding: PrReviewFinding): ProposedChangeScopeMismatch | null {
   const repl = finding.suggestedReplacement
   const isReplace =
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" && repl.length > 0
+    (finding.kind === "replace" || finding.kind === undefined) && typeof repl === "string" && repl.length > 0
   if (!isReplace) return null
   if (!referencesMultipleSpecificLines(finding.body)) return null
 
-  const startL =
-    finding.startLine != null && finding.startLine < finding.line
-      ? finding.startLine
-      : finding.line
+  const startL = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
   const anchorLines = Math.max(1, finding.line - startL + 1)
   const replacementLines = countReplacementLines(repl)
   const replacementToAnchorRatio = replacementLines / anchorLines
@@ -642,8 +625,7 @@ export function formatProposedChangeBlock(
   const repl = finding.suggestedReplacement
   const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
   const isReplace =
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" && repl.length > 0
+    (finding.kind === "replace" || finding.kind === undefined) && typeof repl === "string" && repl.length > 0
   if (!isDeletion && !isReplace) return ""
 
   // SIG-179: when a very small replacement is paired with a broad
@@ -657,10 +639,7 @@ export function formatProposedChangeBlock(
   // the finding's range). When the map is absent or doesn't include
   // any of the range lines, we can't render an honest "Current" block
   // — return "" rather than emit a misleading empty fence.
-  const startL =
-    finding.startLine != null && finding.startLine < finding.line
-      ? finding.startLine
-      : finding.line
+  const startL = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
   const endL = finding.line
   const addedLines = addedLineTextByPath?.get(finding.path)
   const currentLines: string[] = []
@@ -703,10 +682,7 @@ export function collectCitedLineText(
   finding: PrReviewFinding,
   addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
 ): string {
-  const startL =
-    finding.startLine != null && finding.startLine < finding.line
-      ? finding.startLine
-      : finding.line
+  const startL = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
   const endL = finding.line
   const addedLines = addedLineTextByPath?.get(finding.path)
   if (!addedLines) return ""
@@ -755,7 +731,6 @@ export function isCommentAnchorable(
   if (startLine === undefined || startLine >= line) return true
   return deriveSide(reviewable, path, startLine) === "RIGHT"
 }
-
 
 /**
  * SIG-216: source-repo coordinates needed to build a GitHub blob

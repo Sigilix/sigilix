@@ -59,9 +59,15 @@ import type { Env } from "@/src/shared/types/env"
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -127,13 +133,11 @@ describe("parseLabelResponse", () => {
   })
 
   it("filters out non-string entries and empty strings", () => {
-    expect(parseLabelResponse('{"labels":["a",1,"","b",null,"  "]}'))
-      .toEqual(["a", "b"])
+    expect(parseLabelResponse('{"labels":["a",1,"","b",null,"  "]}')).toEqual(["a", "b"])
   })
 
   it("trims whitespace around label names", () => {
-    expect(parseLabelResponse('{"labels":["  area:security  "]}'))
-      .toEqual(["area:security"])
+    expect(parseLabelResponse('{"labels":["  area:security  "]}')).toEqual(["area:security"])
   })
 })
 
@@ -141,14 +145,14 @@ describe("handlePrLabels — config gating", () => {
   it("applies repo labels when sigilix.json is missing", async () => {
     mockGetFileContent.mockResolvedValue(null) // no sigilix.json
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "auth refactor", body: "rewrites password hashing",
+      number: 42,
+      title: "auth refactor",
+      body: "rewrites password hashing",
       head: { sha: "a".repeat(40), ref: "feat/auth" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [],
     })
-    mockListRepositoryLabels.mockResolvedValue([
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])
+    mockListRepositoryLabels.mockResolvedValue([{ name: "area:security", description: "Touches auth or secrets" }])
     mockGenerate.mockResolvedValue('{"labels":["area:security"]}')
 
     const { kv } = makeKvStub()
@@ -172,14 +176,14 @@ describe("handlePrLabels — config gating", () => {
   it("no-ops when customLabels array is present but empty", async () => {
     mockGetFileContent.mockResolvedValue(JSON.stringify({ customLabels: [] }))
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "ui polish", body: "updates button layout",
+      number: 42,
+      title: "ui polish",
+      body: "updates button layout",
       head: { sha: "a".repeat(40), ref: "feat/ui" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [],
     })
-    mockListRepositoryLabels.mockResolvedValue([
-      { name: "area:frontend", description: "Touches frontend UI" },
-    ])
+    mockListRepositoryLabels.mockResolvedValue([{ name: "area:frontend", description: "Touches frontend UI" }])
     mockGenerate.mockResolvedValue('{"labels":["area:frontend"]}')
 
     const { kv } = makeKvStub()
@@ -193,7 +197,9 @@ describe("handlePrLabels — config gating", () => {
   it("skips generation when repo-label fallback has no described candidates", async () => {
     mockGetFileContent.mockResolvedValue(null) // no sigilix.json
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "docs update", body: "updates README",
+      number: 42,
+      title: "docs update",
+      body: "updates README",
       head: { sha: "a".repeat(40), ref: "docs/readme" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [],
@@ -236,7 +242,9 @@ describe("handlePrLabels — happy path", () => {
   it("applies labels picked by the model that are in the candidate pool", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "auth refactor", body: "rewrites password hashing",
+      number: 42,
+      title: "auth refactor",
+      body: "rewrites password hashing",
       head: { sha: "a".repeat(40), ref: "feat/auth" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [],
@@ -258,8 +266,12 @@ describe("handlePrLabels — happy path", () => {
   it("drops model hallucinations (labels not in candidate pool)", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y", head: { sha: "a".repeat(40), ref: "x" },
-      base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+      number: 42,
+      title: "x",
+      body: "y",
+      head: { sha: "a".repeat(40), ref: "x" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
     })
     mockListRepositoryLabels.mockResolvedValue([])
     // Model returns a name not in the candidate pool.
@@ -269,15 +281,22 @@ describe("handlePrLabels — happy path", () => {
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     expect(mockAddLabelsToIssue).toHaveBeenCalledWith(
-      "Sigilix", "sigilix", 42, ["area:security"], // fictional-label dropped
+      "Sigilix",
+      "sigilix",
+      42,
+      ["area:security"], // fictional-label dropped
     )
   })
 
   it("uses customLabels as a strict allowlist when configured", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y", head: { sha: "a".repeat(40), ref: "x" },
-      base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+      number: 42,
+      title: "x",
+      body: "y",
+      head: { sha: "a".repeat(40), ref: "x" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
     })
     mockListRepositoryLabels.mockResolvedValue([
       { name: "bug", description: "User-facing regression" },
@@ -288,15 +307,16 @@ describe("handlePrLabels — happy path", () => {
     const { kv } = makeKvStub()
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
-    expect(mockAddLabelsToIssue).toHaveBeenCalledWith(
-      "Sigilix", "sigilix", 42, ["area:security"],
-    )
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Sigilix", "sigilix", 42, ["area:security"])
   })
 
   it("removes only Sigilix-applied labels that the model no longer picks", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y", head: { sha: "a".repeat(40), ref: "x" },
+      number: 42,
+      title: "x",
+      body: "y",
+      head: { sha: "a".repeat(40), ref: "x" },
       base: { sha: "b".repeat(40), ref: "main" },
       // Current labels on the PR: `area:security` (Sigilix-applied last run),
       // `breaking-change` (Sigilix-applied last run), AND `wontfix`
@@ -309,28 +329,25 @@ describe("handlePrLabels — happy path", () => {
 
     const { kv, store } = makeKvStub()
     // Seed the prior applied record.
-    store.set(
-      "sigilix-applied-labels:sigilix/sigilix#42",
-      JSON.stringify(["area:security", "breaking-change"]),
-    )
+    store.set("sigilix-applied-labels:sigilix/sigilix#42", JSON.stringify(["area:security", "breaking-change"]))
 
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     // No add (area:security already on PR), one remove (breaking-change).
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
     expect(mockRemoveLabelFromIssue).toHaveBeenCalledTimes(1)
-    expect(mockRemoveLabelFromIssue).toHaveBeenCalledWith(
-      "Sigilix", "sigilix", 42, "breaking-change",
-    )
+    expect(mockRemoveLabelFromIssue).toHaveBeenCalledWith("Sigilix", "sigilix", 42, "breaking-change")
     // KV updated.
-    expect(JSON.parse(store.get("sigilix-applied-labels:sigilix/sigilix#42")!))
-      .toEqual(["area:security"])
+    expect(JSON.parse(store.get("sigilix-applied-labels:sigilix/sigilix#42")!)).toEqual(["area:security"])
   })
 
   it("never removes labels that aren't in the Sigilix-applied KV record", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y", head: { sha: "a".repeat(40), ref: "x" },
+      number: 42,
+      title: "x",
+      body: "y",
+      head: { sha: "a".repeat(40), ref: "x" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [{ name: "wontfix" }], // ONLY a human-applied label
     })
@@ -347,21 +364,23 @@ describe("handlePrLabels — happy path", () => {
   })
 
   it("warns and filters custom labels that match status/triage labels", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [
-        { name: "wontfix", description: "Maintainer decision state" },
-        { name: "area:security", description: "Touches auth or secrets" },
-      ],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [
+          { name: "wontfix", description: "Maintainer decision state" },
+          { name: "area:security", description: "Touches auth or secrets" },
+        ],
+      }),
+    )
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "auth refactor", body: "rewrites password hashing",
+      number: 42,
+      title: "auth refactor",
+      body: "rewrites password hashing",
       head: { sha: "a".repeat(40), ref: "feat/auth" },
       base: { sha: "b".repeat(40), ref: "main" },
       labels: [],
     })
-    mockListRepositoryLabels.mockResolvedValue([
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])
+    mockListRepositoryLabels.mockResolvedValue([{ name: "area:security", description: "Touches auth or secrets" }])
     mockGenerate.mockResolvedValue('{"labels":["wontfix","area:security"]}')
 
     const { kv } = makeKvStub()
@@ -375,64 +394,67 @@ describe("handlePrLabels — happy path", () => {
 
 describe("buildLabelCandidates", () => {
   it("uses repo labels with descriptions when customLabels is absent", () => {
-    expect(buildLabelCandidates(undefined, [
-      { name: "bug", description: "User-facing regression" },
-      { name: "no-desc-label", description: "" },
-    ])).toEqual([
-      { name: "bug", description: "User-facing regression" },
-    ])
+    expect(
+      buildLabelCandidates(undefined, [
+        { name: "bug", description: "User-facing regression" },
+        { name: "no-desc-label", description: "" },
+      ]),
+    ).toEqual([{ name: "bug", description: "User-facing regression" }])
   })
 
   it("uses customLabels as a strict allowlist when present", () => {
-    expect(buildLabelCandidates(
-      [{ name: "area:security", description: "Touches auth or secrets" }],
-      [{ name: "bug", description: "User-facing regression" }],
-    )).toEqual([
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])
+    expect(
+      buildLabelCandidates(
+        [{ name: "area:security", description: "Touches auth or secrets" }],
+        [{ name: "bug", description: "User-facing regression" }],
+      ),
+    ).toEqual([{ name: "area:security", description: "Touches auth or secrets" }])
   })
 
   it("preserves an explicit empty customLabels allowlist", () => {
-    expect(buildLabelCandidates([], [
-      { name: "bug", description: "User-facing regression" },
-    ])).toEqual([])
+    expect(buildLabelCandidates([], [{ name: "bug", description: "User-facing regression" }])).toEqual([])
   })
 
   it("excludes common status and triage labels", () => {
-    expect(buildLabelCandidates(undefined, [
-      { name: "wontfix", description: "This will not be worked on" },
-      { name: "duplicate", description: "Already tracked elsewhere" },
-      { name: "good first issue", description: "Good for first-time contributors" },
-      { name: "help wanted", description: "Maintainers want help" },
-      { name: "question", description: "Needs more information" },
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])).toEqual([
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])
+    expect(
+      buildLabelCandidates(undefined, [
+        { name: "wontfix", description: "This will not be worked on" },
+        { name: "duplicate", description: "Already tracked elsewhere" },
+        { name: "good first issue", description: "Good for first-time contributors" },
+        { name: "help wanted", description: "Maintainers want help" },
+        { name: "question", description: "Needs more information" },
+        { name: "area:security", description: "Touches auth or secrets" },
+      ]),
+    ).toEqual([{ name: "area:security", description: "Touches auth or secrets" }])
   })
 
   it("normalizes status labels before denylist matching", () => {
-    expect(buildLabelCandidates(undefined, [
-      { name: "wont-fix", description: "This will not be worked on" },
-      { name: "in_progress", description: "Currently being worked on" },
-      { name: "won't-fix", description: "This will not be worked on" },
-      { name: "needs--triage", description: "Needs initial review" },
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])).toEqual([
-      { name: "area:security", description: "Touches auth or secrets" },
-    ])
+    expect(
+      buildLabelCandidates(undefined, [
+        { name: "wont-fix", description: "This will not be worked on" },
+        { name: "in_progress", description: "Currently being worked on" },
+        { name: "won't-fix", description: "This will not be worked on" },
+        { name: "needs--triage", description: "Needs initial review" },
+        { name: "area:security", description: "Touches auth or secrets" },
+      ]),
+    ).toEqual([{ name: "area:security", description: "Touches auth or secrets" }])
   })
 })
 
 describe("handlePrLabels — stale-head guard", () => {
   it("skips when meta.head.sha doesn't match the job's headSha (pre-Ollama)", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y",
+      number: 42,
+      title: "x",
+      body: "y",
       head: { sha: "b".repeat(40), ref: "x" }, // DIFFERENT from baseArgs.headSha
-      base: { sha: "c".repeat(40), ref: "main" }, labels: [],
+      base: { sha: "c".repeat(40), ref: "main" },
+      labels: [],
     })
 
     const { kv } = makeKvStub()
@@ -446,25 +468,33 @@ describe("handlePrLabels — stale-head guard", () => {
   // new commit lands during that window, applying labels from the
   // stale diff would mislabel the PR. Re-check after `generate`.
   it("skips when head moves AFTER Ollama returns (post-Ollama guard)", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "area:security", description: "auth" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "area:security", description: "auth" }],
+      }),
+    )
     let getPRCallCount = 0
     mockGetPullRequest.mockImplementation(async () => {
       getPRCallCount += 1
       if (getPRCallCount === 1) {
         // First call (pre-Ollama): head matches → handler proceeds.
         return {
-          number: 42, title: "x", body: "y",
+          number: 42,
+          title: "x",
+          body: "y",
           head: { sha: "a".repeat(40), ref: "x" },
-          base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+          base: { sha: "b".repeat(40), ref: "main" },
+          labels: [],
         }
       }
       // Second call (post-Ollama re-check): head has drifted.
       return {
-        number: 42, title: "x", body: "y",
+        number: 42,
+        title: "x",
+        body: "y",
         head: { sha: "c".repeat(40), ref: "x" },
-        base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+        base: { sha: "b".repeat(40), ref: "main" },
+        labels: [],
       }
     })
     mockListRepositoryLabels.mockResolvedValue([])
@@ -480,17 +510,22 @@ describe("handlePrLabels — stale-head guard", () => {
   })
 
   it("bails when the post-Ollama re-fetch itself fails (no apply on unverified head)", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     let getPRCallCount = 0
     mockGetPullRequest.mockImplementation(async () => {
       getPRCallCount += 1
       if (getPRCallCount === 1) {
         return {
-          number: 42, title: "x", body: "y",
+          number: 42,
+          title: "x",
+          body: "y",
           head: { sha: "a".repeat(40), ref: "x" },
-          base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+          base: { sha: "b".repeat(40), ref: "main" },
+          labels: [],
         }
       }
       throw new Error("HTTP 502")
@@ -511,9 +546,11 @@ describe("handlePrLabels — error paths", () => {
   // escaped the handler unchecked.
   it("swallows installation-token fetch failures cleanly", async () => {
     mockGetInstallationToken.mockRejectedValueOnce(new Error("token mint failed"))
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     const { kv } = makeKvStub()
     await expect(handlePrLabels({ ...baseArgs, env: makeEnv(kv) })).resolves.toBeUndefined()
     expect(mockGetFileContent).not.toHaveBeenCalled() // bailed before config load
@@ -522,13 +559,18 @@ describe("handlePrLabels — error paths", () => {
   })
 
   it("swallows Ollama failures and exits cleanly", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y",
+      number: 42,
+      title: "x",
+      body: "y",
       head: { sha: "a".repeat(40), ref: "x" },
-      base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
     })
     mockGenerate.mockRejectedValue(new Error("ollama timeout"))
 
@@ -538,9 +580,11 @@ describe("handlePrLabels — error paths", () => {
   })
 
   it("swallows fetch failures (getPullRequest etc.) cleanly", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     mockGetPullRequest.mockRejectedValue(new Error("HTTP 502"))
 
     const { kv } = makeKvStub()
@@ -549,13 +593,18 @@ describe("handlePrLabels — error paths", () => {
   })
 
   it("doesn't break when KV-applied record is corrupt JSON", async () => {
-    mockGetFileContent.mockResolvedValue(JSON.stringify({
-      customLabels: [{ name: "x", description: "y" }],
-    }))
+    mockGetFileContent.mockResolvedValue(
+      JSON.stringify({
+        customLabels: [{ name: "x", description: "y" }],
+      }),
+    )
     mockGetPullRequest.mockResolvedValue({
-      number: 42, title: "x", body: "y",
+      number: 42,
+      title: "x",
+      body: "y",
       head: { sha: "a".repeat(40), ref: "x" },
-      base: { sha: "b".repeat(40), ref: "main" }, labels: [],
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
     })
     mockGenerate.mockResolvedValue('{"labels":["x"]}')
 

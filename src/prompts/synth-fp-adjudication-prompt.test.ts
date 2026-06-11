@@ -12,7 +12,9 @@ import { SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
 describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
   it("requires explicit quoted contradiction before dropping a high-severity source finding", () => {
     expect(SYNTHESIZER_PROMPT).toContain("MECHANISM IMPOSSIBILITY ADJUDICATION")
-    expect(SYNTHESIZER_PROMPT).toContain("Only DETECTED-IMPOSSIBLE with quoted source verdict, diff, or context evidence may be dropped")
+    expect(SYNTHESIZER_PROMPT).toContain(
+      "Only DETECTED-IMPOSSIBLE with quoted source verdict, diff, or context evidence may be dropped",
+    )
     expect(SYNTHESIZER_PROMPT).toContain('provenance.dropped[] with reason: "false positive on diff inspection"')
   })
 
@@ -29,7 +31,7 @@ describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
   it("forbids collapsing distinct mechanisms just because they share a nearby anchor", () => {
     expect(SYNTHESIZER_PROMPT).toContain("Same file/function/line proximity is NOT enough to merge")
     expect(SYNTHESIZER_PROMPT).toContain("different fixes or describe different failure mechanisms")
-    expect(SYNTHESIZER_PROMPT).toContain("\"missing inventory reservation\" and \"idempotency-token race\" are two bugs")
+    expect(SYNTHESIZER_PROMPT).toContain('"missing inventory reservation" and "idempotency-token race" are two bugs')
   })
 
   it("keeps ambiguous score>=4 multi-source findings separate", () => {
@@ -40,12 +42,16 @@ describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
 
   it("anchors the observed impossible-claim classes without making them heuristic drop rules", () => {
     expect(SYNTHESIZER_PROMPT).toContain("SSRF requires an outbound request primitive")
-    expect(SYNTHESIZER_PROMPT).toContain("path traversal requires an attacker-controlled string reaching a filesystem path sink")
+    expect(SYNTHESIZER_PROMPT).toContain(
+      "path traversal requires an attacker-controlled string reaching a filesystem path sink",
+    )
     expect(SYNTHESIZER_PROMPT).toContain("JSON.parse alone does not globally pollute prototypes")
   })
 
   it("trusts an explicit contradiction inside the source finding itself", () => {
-    expect(SYNTHESIZER_PROMPT).toContain('headline "SSRF via Content-Type" but body says the PR only reads local bytes from an object binding')
+    expect(SYNTHESIZER_PROMPT).toContain(
+      'headline "SSRF via Content-Type" but body says the PR only reads local bytes from an object binding',
+    )
     expect(SYNTHESIZER_PROMPT).toContain("Do not search for absent tokens yourself")
   })
 

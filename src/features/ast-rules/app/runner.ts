@@ -42,7 +42,10 @@ import {
   scanSqlEnumDrift,
   ENUM_LITERAL_DRIFT_RULE_ID,
 } from "@/src/features/ast-rules/domain/scan-enum-literal-drift"
-import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "@/src/features/ast-rules/domain/scan-cents-as-dollars"
+import {
+  scanCentsRenderedAsDollars,
+  CENTS_AS_DOLLARS_RULE_ID,
+} from "@/src/features/ast-rules/domain/scan-cents-as-dollars"
 import { scanFractionalCentsMath, FLOAT_CENTS_RULE_ID } from "@/src/features/ast-rules/domain/scan-float-cents"
 
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
@@ -181,9 +184,7 @@ function redactEvidence(raw: string): string {
   // `[\s\S]` to match any character including `\n`.
   const stringRe = /(["'`])((?:\\[\s\S]|(?!\1)[\s\S]){40,})\1/g
   const collapsed = raw.replace(stringRe, (_full, q) => `${q}<redacted-literal>${q}`)
-  return collapsed.length > EVIDENCE_MAX_CHARS
-    ? collapsed.slice(0, EVIDENCE_MAX_CHARS) + "…"
-    : collapsed
+  return collapsed.length > EVIDENCE_MAX_CHARS ? collapsed.slice(0, EVIDENCE_MAX_CHARS) + "…" : collapsed
 }
 
 function emitTelemetry(event: string, fields: Record<string, unknown>): void {

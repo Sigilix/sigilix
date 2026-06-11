@@ -12,12 +12,7 @@ import {
   renderGraphExpansionForPrompt,
 } from "@/src/lib/graph-context-expansion"
 import type { EnrichedGraphContext, GraphBodySnippet } from "@/src/lib/graph-context-expansion"
-import type {
-  GraphContextExpansion,
-  GraphDefinitionRow,
-  GraphCallerRow,
-  GraphImportRow,
-} from "@/src/do/repo-graph"
+import type { GraphContextExpansion, GraphDefinitionRow, GraphCallerRow, GraphImportRow } from "@/src/do/repo-graph"
 
 function expansion(over: Partial<GraphContextExpansion> = {}): GraphContextExpansion {
   return {
@@ -30,14 +25,27 @@ function expansion(over: Partial<GraphContextExpansion> = {}): GraphContextExpan
 }
 
 function defRow(over: Partial<GraphDefinitionRow> = {}): GraphDefinitionRow {
-  return { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", startLine: 1, endLine: 3, ...over }
+  return {
+    symbolId: "src/b.ts function bar 1 0",
+    path: "src/b.ts",
+    name: "bar",
+    kind: "function",
+    startLine: 1,
+    endLine: 3,
+    ...over,
+  }
 }
 
 function callerRow(over: Partial<GraphCallerRow> = {}): GraphCallerRow {
   return {
-    sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
-    startLine: 7, startCol: 2,
-    callerSymbolId: null, callerStartLine: null, callerEndLine: null,
+    sourcePath: "src/b.ts",
+    calleeName: "bar",
+    callKind: "same_file",
+    startLine: 7,
+    startCol: 2,
+    callerSymbolId: null,
+    callerStartLine: null,
+    callerEndLine: null,
     ...over,
   }
 }
@@ -68,7 +76,10 @@ describe("buildGraphContextExpansion — source precedence", () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({ importRows: [importRow()] }),
       filesByPath: new Map(), // src/a.ts NOT present
-      fetchFileContent: async (p) => { fetched.push(p); return SRC_A },
+      fetchFileContent: async (p) => {
+        fetched.push(p)
+        return SRC_A
+      },
     })
     expect(fetched).toEqual(["src/a.ts"])
     expect(result.dependentBodies).toHaveLength(1)
@@ -80,7 +91,7 @@ describe("buildGraphContextExpansion — source precedence", () => {
   it("PR1 (no fetcher): cross-file rows count under missing + dropped.sourceMissing and are skipped", async () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({
-        definitionRows: [defRow()],                 // in filesByPath
+        definitionRows: [defRow()], // in filesByPath
         importRows: [importRow({ sourcePath: "src/a.ts" })], // NOT in filesByPath
       }),
       filesByPath: new Map([["src/b.ts", SRC_B]]),
@@ -111,7 +122,10 @@ describe("buildGraphContextExpansion — source precedence", () => {
         importRows: [importRow({ startLine: 3 }), importRow({ startLine: 9 })],
       }),
       filesByPath: new Map(),
-      fetchFileContent: async () => { calls++; return SRC_A },
+      fetchFileContent: async () => {
+        calls++
+        return SRC_A
+      },
     })
     expect(calls).toBe(1)
     expect(result.dependentBodies).toHaveLength(2)
@@ -138,14 +152,21 @@ describe("buildGraphContextExpansion — snippet windows", () => {
       filesByPath: new Map([["src/b.ts", SRC_B]]),
     })
     const body = result.callerBodies[0]!
-    expect(body.startLine).toBe(2)  // 10 - 8
-    expect(body.endLine).toBe(18)   // 10 + 8
+    expect(body.startLine).toBe(2) // 10 - 8
+    expect(body.endLine).toBe(18) // 10 + 8
   })
 
   it("caller body WITH a resolved caller span uses the whole caller body", async () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({
-        callerRows: [callerRow({ startLine: 12, callerSymbolId: "src/b.ts function useBar 5 0", callerStartLine: 5, callerEndLine: 9 })],
+        callerRows: [
+          callerRow({
+            startLine: 12,
+            callerSymbolId: "src/b.ts function useBar 5 0",
+            callerStartLine: 5,
+            callerEndLine: 9,
+          }),
+        ],
       }),
       filesByPath: new Map([["src/b.ts", SRC_B]]),
     })
@@ -160,8 +181,8 @@ describe("buildGraphContextExpansion — snippet windows", () => {
       filesByPath: new Map([["src/a.ts", SRC_A]]),
     })
     const body = result.dependentBodies[0]!
-    expect(body.startLine).toBe(4)   // 12 - 8
-    expect(body.endLine).toBe(20)    // 12 + 8 → clamped to file length 20
+    expect(body.startLine).toBe(4) // 12 - 8
+    expect(body.endLine).toBe(20) // 12 + 8 → clamped to file length 20
   })
 
   it("clamps windows to file bounds (no out-of-range lines)", async () => {
@@ -170,14 +191,17 @@ describe("buildGraphContextExpansion — snippet windows", () => {
       filesByPath: new Map([["src/a.ts", SRC_A]]),
     })
     const body = result.dependentBodies[0]!
-    expect(body.startLine).toBe(1)   // 1 - 8 → clamped to 1
-    expect(body.endLine).toBe(9)     // 1 + 8
+    expect(body.startLine).toBe(1) // 1 - 8 → clamped to 1
+    expect(body.endLine).toBe(9) // 1 + 8
   })
 })
 
 describe("buildGraphContextExpansion — cap + drop order", () => {
   it("drops import dependents before callers before definitions when the byte cap is tight", async () => {
-    const files = new Map([["src/b.ts", SRC_B], ["src/a.ts", SRC_A]])
+    const files = new Map([
+      ["src/b.ts", SRC_B],
+      ["src/a.ts", SRC_A],
+    ])
     // A maxBytes tight enough to fit ~1 small snippet: definition (highest
     // value) survives, the caller + import (lower value) are dropped.
     const result = await buildGraphContextExpansion({
@@ -221,8 +245,17 @@ describe("buildGraphContextExpansion — telemetry shape + invariants", () => {
     })
     expect(result).toMatchObject({
       graphAvailable: true,
-      bodiesSource: { filesByPath: expect.any(Number), github: expect.any(Number), retrievalChunk: expect.any(Number), missing: expect.any(Number) },
-      dropped: { cap: expect.any(Number), sourceMissing: expect.any(Number), graphRowsCapped: expect.any(Number) },
+      bodiesSource: {
+        filesByPath: expect.any(Number),
+        github: expect.any(Number),
+        retrievalChunk: expect.any(Number),
+        missing: expect.any(Number),
+      },
+      dropped: {
+        cap: expect.any(Number),
+        sourceMissing: expect.any(Number),
+        graphRowsCapped: expect.any(Number),
+      },
     })
     expect(typeof result.totalTokens).toBe("number")
     expect(typeof result.cappedAt).toBe("number")
@@ -258,7 +291,9 @@ describe("buildGraphContextExpansion — telemetry shape + invariants", () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({ importRows: [importRow()] }),
       filesByPath: new Map(),
-      fetchFileContent: async () => { throw new Error("boom") },
+      fetchFileContent: async () => {
+        throw new Error("boom")
+      },
     })
     // SIG-286 PR2: a per-fetch throw is caught soft → null → the row counts
     // missing; the expansion is NOT zeroed (graphAvailable preserved, no throw).
@@ -290,7 +325,7 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
   it("CONTROL vs TREATMENT: control.tokens = filesByPath-only; netNewTokens is the cross-file gain", async () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({
-        definitionRows: [defRow({ startLine: 1, endLine: 6 })],  // in filesByPath (control)
+        definitionRows: [defRow({ startLine: 1, endLine: 6 })], // in filesByPath (control)
         importRows: [importRow({ sourcePath: "src/a.ts", startLine: 10 })], // cross-file (treatment)
       }),
       filesByPath: new Map([["src/b.ts", SRC_B]]),
@@ -318,22 +353,23 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
   it("bounds the fetch to MAX_CROSS_FILE_FETCHES: extra distinct paths → budgetExhausted + dropped", async () => {
     const fetched: string[] = []
     const over = MAX_CROSS_FILE_FETCHES + 3
-    const importRows = Array.from({ length: over }, (_, i) =>
-      importRow({ sourcePath: `src/dep${i}.ts`, startLine: 5 }),
-    )
+    const importRows = Array.from({ length: over }, (_, i) => importRow({ sourcePath: `src/dep${i}.ts`, startLine: 5 }))
     const result = await buildGraphContextExpansion({
       expansion: expansion({ importRows }),
       filesByPath: new Map(),
-      fetchFileContent: async (p) => { fetched.push(p); return SRC_A },
+      fetchFileContent: async (p) => {
+        fetched.push(p)
+        return SRC_A
+      },
     })
     const overBudget = over - MAX_CROSS_FILE_FETCHES
-    expect(fetched).toHaveLength(MAX_CROSS_FILE_FETCHES)            // capped
+    expect(fetched).toHaveLength(MAX_CROSS_FILE_FETCHES) // capped
     expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
     expect(result.fetch.budgetExhausted).toBe(true)
-    expect(result.dropped.budgetExhausted).toBe(overBudget)        // wanted − cap
+    expect(result.dropped.budgetExhausted).toBe(overBudget) // wanted − cap
     expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES) // only fetched resolve
     expect(result.bodiesSource.github).toBe(MAX_CROSS_FILE_FETCHES)
-    expect(result.bodiesSource.missing).toBe(overBudget)           // the over-budget paths
+    expect(result.bodiesSource.missing).toBe(overBudget) // the over-budget paths
   })
 
   it("prioritizes CALLERS over import-dependents when the fetch budget is tight", async () => {
@@ -352,7 +388,7 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       filesByPath: new Map(),
       fetchFileContent: async () => SRC_A,
     })
-    expect(result.callerBodies).toHaveLength(numCallers)                       // callers prioritized
+    expect(result.callerBodies).toHaveLength(numCallers) // callers prioritized
     expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES - numCallers) // imports fill the rest
     expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
     expect(result.dropped.budgetExhausted).toBe(numCallers + numImports - MAX_CROSS_FILE_FETCHES)
@@ -369,9 +405,9 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       filesByPath: new Map(),
       fetchFileContent: async (p) => (p === "src/bad.ts" ? null : SRC_A),
     })
-    expect(result.dependentBodies).toHaveLength(1)  // good resolves
+    expect(result.dependentBodies).toHaveLength(1) // good resolves
     expect(result.bodiesSource.github).toBe(1)
-    expect(result.bodiesSource.missing).toBe(1)     // bad → null → missing
+    expect(result.bodiesSource.missing).toBe(1) // bad → null → missing
   })
 
   it("a THROWING fetch in a multi-path batch is soft-failed; the others survive (no throw)", async () => {
@@ -384,14 +420,14 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       }),
       filesByPath: new Map(),
       fetchFileContent: async (p) => {
-        if (p === "src/throws.ts") throw new Error("rate limited")  // getFileContent re-throws non-404s
+        if (p === "src/throws.ts") throw new Error("rate limited") // getFileContent re-throws non-404s
         return SRC_A
       },
     })
-    expect(result.graphAvailable).toBe(true)        // not zeroed
-    expect(result.dependentBodies).toHaveLength(1)  // good survives
+    expect(result.graphAvailable).toBe(true) // not zeroed
+    expect(result.dependentBodies).toHaveLength(1) // good survives
     expect(result.bodiesSource.github).toBe(1)
-    expect(result.bodiesSource.missing).toBe(1)     // throw → soft-failed → missing
+    expect(result.bodiesSource.missing).toBe(1) // throw → soft-failed → missing
     expect(result.fetch.files).toBe(1)
   })
 
@@ -402,7 +438,10 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
     await buildGraphContextExpansion({
       expansion: expansion({ importRows: [importRow()] }),
       filesByPath: new Map(),
-      fetchFileContent: async () => { called += 1; return SRC_A },
+      fetchFileContent: async () => {
+        called += 1
+        return SRC_A
+      },
       signal: ctrl.signal,
     })
     expect(called).toBe(0)

@@ -34,7 +34,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -52,12 +54,16 @@ const REQUEST_ROOT_RE = /^(?:c|req|request|ctx|context)$/
 // entry points (node-postgres, mysql2, better-sqlite3). `run`/`all`/`get`/`each`
 // are EXCLUDED — they're job-runner / cache / sqlite-bind-param methods that take
 // values, not SQL, and were the dominant prose-false-positive surface.
-const SQL_GENERIC_METHODS: ReadonlySet<string> = new Set([
-  "query", "execute", "exec", "prepare", "raw",
-])
+const SQL_GENERIC_METHODS: ReadonlySet<string> = new Set(["query", "execute", "exec", "prepare", "raw"])
 // Raw-SQL-named methods — the name alone is sufficient (Prisma unsafe, knex raw).
 const SQL_RAW_METHODS: ReadonlySet<string> = new Set([
-  "queryrawunsafe", "executerawunsafe", "whereraw", "havingraw", "orderbyraw", "joinraw", "groupbyraw",
+  "queryrawunsafe",
+  "executerawunsafe",
+  "whereraw",
+  "havingraw",
+  "orderbyraw",
+  "joinraw",
+  "groupbyraw",
 ])
 // Does the static text read like an actual SQL STATEMENT (not prose that merely
 // contains SQL keywords)? Anchored to statement start, with real structure: a
@@ -93,8 +99,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -130,7 +137,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
       // tainted if the init reaches a request source / tainted local, OR aliases a
       // bare request root (`const r = req`) — `r.query.id` then carries taint.
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
-      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (aliasesRoot || carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -152,15 +162,19 @@ function collectConstInits(program: AstNode): Map<string, AstNode> {
         const name = idName(d.id as AstNode)
         if (!name || !d.init) continue
         if (ambiguous.has(name)) continue
-        if (consts.has(name)) { consts.delete(name); ambiguous.add(name) } // re-declared → drop
+        if (consts.has(name)) {
+          consts.delete(name)
+          ambiguous.add(name)
+        } // re-declared → drop
         else consts.set(name, d.init as AstNode)
       }
     }
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -207,8 +221,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -244,12 +259,17 @@ export const noSqlInjection: AstRule = {
 
     const fns = collectFunctions(node)
     const consts = collectConstInits(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const escapeCache = new Map<AstNode, boolean>()
     const isEscaped = (f: AstNode): boolean => {
       let v = escapeCache.get(f)
-      if (v === undefined) { v = hasEscapeSignal((f.body as AstNode) ?? f); escapeCache.set(f, v) }
+      if (v === undefined) {
+        v = hasEscapeSignal((f.body as AstNode) ?? f)
+        escapeCache.set(f, v)
+      }
       return v
     }
     // Per-scope tainted locals + a combined def map (consts ∪ tainted-local inits)
@@ -258,12 +278,19 @@ export const noSqlInjection: AstRule = {
     const defsCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
     const defsOf = (scope: AstNode): Map<string, AstNode> => {
       let d = defsCache.get(scope)
-      if (!d) { d = new Map(consts); for (const [k, v] of taintLocalsOf(scope)) d.set(k, v); defsCache.set(scope, d) }
+      if (!d) {
+        d = new Map(consts)
+        for (const [k, v] of taintLocalsOf(scope)) d.set(k, v)
+        defsCache.set(scope, d)
+      }
       return d
     }
 
@@ -309,8 +336,9 @@ export const noSqlInjection: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

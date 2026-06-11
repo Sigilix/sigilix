@@ -76,15 +76,22 @@ describe("evaluateSecurityGrounding — bucket scope", () => {
     // only fires on a provably-constant JS sink — a concatenated SQL string is
     // not one, so it keeps (the real injection is untouched).
     const f = finding({ cweId: "CWE-89", headline: "SQL injection via `id`" })
-    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({
+      keep: true,
+    })
   })
 
   it("SIG-292: DEMOTES an XSS finding (CWE-79) citing a sink fed a same-file const literal (the BANNER_HTML trap)", () => {
     const f = finding({ cweId: "CWE-79", line: 17, headline: "XSS via dangerouslySetInnerHTML" })
-    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
-      [5, `const BANNER_HTML = "<div class=\\"banner\\">Welcome</div>";`],
-      [17, `      <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />`],
-    ])]])
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([
+      [
+        PATH,
+        new Map([
+          [5, `const BANNER_HTML = "<div class=\\"banner\\">Welcome</div>";`],
+          [17, `      <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />`],
+        ]),
+      ],
+    ])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({
       keep: false,
       reason: "injection-sink-non-attacker-controlled-constant",
@@ -93,48 +100,61 @@ describe("evaluateSecurityGrounding — bucket scope", () => {
 
   it("SIG-292: KEEPS an XSS finding citing a sink fed attacker-controlled data (props/member access)", () => {
     const f = finding({ cweId: "CWE-79", line: 17, headline: "stored XSS in bio" })
-    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
-      [17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`],
-    ])]])
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([
+      [PATH, new Map([[17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`]])],
+    ])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
   it("SIG-292: KEEPS an XSS finding when the cited sink value can't be proven constant (unresolved identifier)", () => {
     const f = finding({ cweId: "CWE-79", line: 17 })
-    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
-      [17, `      el.innerHTML = serverHtml;`],
-    ])]])
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([
+      [PATH, new Map([[17, `      el.innerHTML = serverHtml;`]])],
+    ])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
   it("SIG-292 (CR P1): KEEPS when the cited multi-line range mixes a constant sink AND a tainted sink", () => {
     const f = finding({ cweId: "CWE-79", startLine: 16, line: 17 })
-    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
-      [16, `      <div dangerouslySetInnerHTML={{ __html: "<b>ok</b>" }} />`],
-      [17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`],
-    ])]])
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([
+      [
+        PATH,
+        new Map([
+          [16, `      <div dangerouslySetInnerHTML={{ __html: "<b>ok</b>" }} />`],
+          [17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`],
+        ]),
+      ],
+    ])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
   it("SIG-292: DEMOTES a CWE-94 finding citing eval of a literal; KEEPS eval of an interpolated body", () => {
     const constEval = finding({ cweId: "CWE-94", line: 17, headline: "eval of dynamic code" })
     expect(
-      evaluateSecurityGrounding(constEval, { addedLineTextByLine: new Map([[PATH, new Map([[17, `  const r = eval("1 + 1");`]])]]) }),
+      evaluateSecurityGrounding(constEval, {
+        addedLineTextByLine: new Map([[PATH, new Map([[17, `  const r = eval("1 + 1");`]])]]),
+      }),
     ).toEqual({ keep: false, reason: "injection-sink-non-attacker-controlled-constant" })
     const taintedEval = finding({ cweId: "CWE-94", line: 17 })
     expect(
-      evaluateSecurityGrounding(taintedEval, { addedLineTextByLine: new Map([[PATH, new Map([[17, "  const r = eval(`run(${userExpr})`);"]])]]) }),
+      evaluateSecurityGrounding(taintedEval, {
+        addedLineTextByLine: new Map([[PATH, new Map([[17, "  const r = eval(`run(${userExpr})`);"]])]]),
+      }),
     ).toEqual({ keep: true })
   })
 
   it("KEEPS an authn bucket (CWE-862) — absence category, never gated", () => {
     const f = finding({ cweId: "CWE-862", headline: "missing access check" })
-    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({
+      keep: true,
+    })
   })
 
   it("KEEPS an unbucketed finding (bare 'security', no usable cweId)", () => {
     const f = finding({ cweId: undefined })
-    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({
+      keep: true,
+    })
   })
 })
 
@@ -162,7 +182,15 @@ describe("evaluateSecurityGrounding — credential-token predicate (secrets-expo
 
   it("multi-line finding: credential on ANY line of [startLine, line] → keep", () => {
     const f = finding({ startLine: 16, line: 17 })
-    const map = new Map([[PATH, new Map([[16, CLEAN_LINE], [17, CREDENTIAL_LINE]])]])
+    const map = new Map([
+      [
+        PATH,
+        new Map([
+          [16, CLEAN_LINE],
+          [17, CREDENTIAL_LINE],
+        ]),
+      ],
+    ])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
@@ -178,12 +206,16 @@ describe("evaluateSecurityGrounding — credential-token predicate (secrets-expo
 
 describe("evaluateSecurityGrounding — UNKNOWN always keeps (zero false-negatives)", () => {
   it("KEEPS when no diff is wired (addedLineTextByLine undefined)", () => {
-    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: undefined })).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: undefined })).toEqual({
+      keep: true,
+    })
   })
 
   it("KEEPS when the cited line isn't an added line (path absent in the map)", () => {
     expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE, 17, "other/file.ts") }),
+      evaluateSecurityGrounding(finding(), {
+        addedLineTextByLine: added(CLEAN_LINE, 17, "other/file.ts"),
+      }),
     ).toEqual({ keep: true })
   })
 
@@ -201,48 +233,59 @@ describe("evaluateSecurityGrounding — UNKNOWN always keeps (zero false-negativ
 describe("evaluateSecurityGrounding — manifest corroboration = ground truth", () => {
   it("KEEPS a clean-cited-line finding when a SECRET fact corroborates within +/-10 lines", () => {
     const manifest = new Map([["k", secretFact({ line: 20 })]]) // 3 lines from finding.line 17
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: true,
+    })
   })
 
   it("KEEPS via a non-secret-tool fact tagged a differently-cased CWE ('cwe-798') — normalized match", () => {
     const manifest = new Map([
       ["k", secretFact({ tool: "sarif", cwe: "  cwe-798 ", line: 17, evidenceId: "sarif:rule:..:17" })],
     ])
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: true,
+    })
   })
 
   it("KEEPS on a path-only secret fact (line === null)", () => {
     const manifest = new Map([["k", secretFact({ line: null })]])
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: true })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: true,
+    })
   })
 
   it("SUPPRESSES when the only manifest fact is non-secret (dep-vuln) — doesn't corroborate a secrets claim", () => {
     const manifest = new Map([
-      ["k", secretFact({ tool: "depvuln", cwe: undefined, line: 17, evidenceId: "depvuln:lodash:..:17" })],
+      [
+        "k",
+        secretFact({
+          tool: "depvuln",
+          cwe: undefined,
+          line: 17,
+          evidenceId: "depvuln:lodash:..:17",
+        }),
+      ],
     ])
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: false, reason: "secrets-exposure-ungrounded-no-credential-token" })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: false,
+      reason: "secrets-exposure-ungrounded-no-credential-token",
+    })
   })
 
   it("SUPPRESSES when a secret fact is on the SAME path but >10 lines away", () => {
     const manifest = new Map([["k", secretFact({ line: 40 })]]) // 23 lines from finding.line 17
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: false, reason: "secrets-exposure-ungrounded-no-credential-token" })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: false,
+      reason: "secrets-exposure-ungrounded-no-credential-token",
+    })
   })
 
   it("does NOT corroborate from a secret fact on a DIFFERENT path", () => {
     const manifest = new Map([["k", secretFact({ path: "other/file.ts", line: 17 })]])
-    expect(
-      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
-    ).toEqual({ keep: false, reason: "secrets-exposure-ungrounded-no-credential-token" })
+    expect(evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest })).toEqual({
+      keep: false,
+      reason: "secrets-exposure-ungrounded-no-credential-token",
+    })
   })
 })
 
@@ -364,7 +407,12 @@ describe("validateForSubmission — SIG-293 security-grounding gate", () => {
   it("ENFORCE: KEEPS a clean-cited-line finding corroborated by a manifest secret fact — counter 0", () => {
     const onDrop = vi.fn()
     const manifest = new Map([["k", secretFact({ line: 17 })]])
-    const result = run([secretsFinding()], { mode: "enforce", citedLine: CLEAN_LINE, manifest, onDrop })
+    const result = run([secretsFinding()], {
+      mode: "enforce",
+      citedLine: CLEAN_LINE,
+      manifest,
+      onDrop,
+    })
     expect(result.droppedForFailedSecurityGroundingValidation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
     expect(onDrop).not.toHaveBeenCalled()

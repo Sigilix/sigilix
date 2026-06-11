@@ -39,7 +39,7 @@ const HEADER = [
   "Reviewers have repeatedly dismissed these finding classes. For each",
   "matching finding, emit it at its TRUE severity and full body, and FLAG",
   "it by adding an entry to `provenance.softened[]` with",
-  "`reason: \"review-memory/<category>[/<pathSha12>]\"`. Do NOT lower the",
+  '`reason: "review-memory/<category>[/<pathSha12>]"`. Do NOT lower the',
   "score or shorten the body yourself — the orchestrator applies any soften.",
 ].join("\n")
 
@@ -60,9 +60,8 @@ function truncateToTokenCap(s: string, tokenCap: number): string {
 
 function renderRecord(memory: ReviewMemoryFinding): string {
   const datePrefix = memory.lastSignalTs.slice(0, 10) // YYYY-MM-DD
-  const scopePart = memory.scope === "path-category" && memory.pathSha12
-    ? `scope=path:${memory.pathSha12}`
-    : "scope=repo"
+  const scopePart =
+    memory.scope === "path-category" && memory.pathSha12 ? `scope=path:${memory.pathSha12}` : "scope=repo"
   const raw = `- category=${memory.category}, ${scopePart}, signals=${memory.signalCount}, last=${datePrefix} → ${memory.suggestedAction}`
   return truncateToTokenCap(raw, PER_RECORD_TOKEN_CAP)
 }
@@ -71,9 +70,7 @@ function renderRecord(memory: ReviewMemoryFinding): string {
  * Render the [REVIEW MEMORY] block for the synth prompt. Empty
  * string when memories is empty.
  */
-export function renderReviewMemoryForPrompt(
-  memories: readonly ReviewMemoryFinding[],
-): string {
+export function renderReviewMemoryForPrompt(memories: readonly ReviewMemoryFinding[]): string {
   if (memories.length === 0) return ""
 
   // Header always lands first; budget remaining tokens for records.

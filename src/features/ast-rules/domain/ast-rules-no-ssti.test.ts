@@ -44,7 +44,9 @@ describe("no-ssti — FIRES on request-controlled template source", () => {
     expect(runRule(`app.post("/r", (req, res) => { const t = req.body.tpl; ejs.render(t, data); });`).length).toBe(1)
   })
   it("destructured binding: const { tpl } = req.query; handlebars.compile(tpl) (CodeRabbit)", () => {
-    expect(runRule(`app.get("/r", (req, res) => { const { tpl } = req.query; handlebars.compile(tpl); });`).length).toBe(1)
+    expect(
+      runRule(`app.get("/r", (req, res) => { const { tpl } = req.query; handlebars.compile(tpl); });`).length,
+    ).toBe(1)
   })
   it("Hono: hbs.compile(c.req.query('tpl'))", () => {
     const src = `
@@ -57,10 +59,16 @@ app.get("/r", (c) => { return hbs.compile(c.req.query("tpl")); });`
 
 describe("no-ssti — FP-safety: does NOT fire on safe templating", () => {
   it("constant template + tainted DATA is safe (taint in arg 1, not the template)", () => {
-    expect(runRule(`app.get("/r", (req, res) => { ejs.render("<h1><%= name %></h1>", { name: req.query.name }); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/r", (req, res) => { ejs.render("<h1><%= name %></h1>", { name: req.query.name }); });`).length,
+    ).toBe(0)
   })
   it("handlebars.compile with a constant template never fires", () => {
-    expect(runRule(`app.get("/r", (req, res) => { const tpl = handlebars.compile("Hi {{name}}"); tpl({ name: req.query.n }); });`).length).toBe(0)
+    expect(
+      runRule(
+        `app.get("/r", (req, res) => { const tpl = handlebars.compile("Hi {{name}}"); tpl({ name: req.query.n }); });`,
+      ).length,
+    ).toBe(0)
   })
   it("Express res.render(viewName, data) is NOT a template sink (view name, not source)", () => {
     expect(runRule(`app.get("/r", (req, res) => { res.render("profile", { user: req.query.u }); });`).length).toBe(0)

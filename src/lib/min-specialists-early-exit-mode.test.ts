@@ -11,22 +11,19 @@
 // — these unit tests just pin the parser invariants.
 
 import { describe, expect, it } from "vitest"
-import {
-  parseMinSpecialistsEarlyExitMode,
-  decideEarlyExitAction,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { parseMinSpecialistsEarlyExitMode, decideEarlyExitAction } from "@/src/lib/triage-pr-review-ensemble"
 
 describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
   describe("happy path — recognized values", () => {
-    it("returns \"off\" for exact \"off\"", () => {
+    it('returns "off" for exact "off"', () => {
       expect(parseMinSpecialistsEarlyExitMode("off")).toBe("off")
     })
 
-    it("returns \"shadow\" for exact \"shadow\"", () => {
+    it('returns "shadow" for exact "shadow"', () => {
       expect(parseMinSpecialistsEarlyExitMode("shadow")).toBe("shadow")
     })
 
-    it("returns \"on\" for exact \"on\"", () => {
+    it('returns "on" for exact "on"', () => {
       expect(parseMinSpecialistsEarlyExitMode("on")).toBe("on")
     })
 
@@ -45,11 +42,11 @@ describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
   })
 
   describe("safety net — default off for everything else", () => {
-    it("returns \"off\" when the flag is undefined", () => {
+    it('returns "off" when the flag is undefined', () => {
       expect(parseMinSpecialistsEarlyExitMode(undefined)).toBe("off")
     })
 
-    it("returns \"off\" when the flag is null (defensive — Cloudflare typing should rule this out but framework adapters could pass null)", () => {
+    it('returns "off" when the flag is null (defensive — Cloudflare typing should rule this out but framework adapters could pass null)', () => {
       // Cast through `as unknown as` to bypass the `string | undefined`
       // declared signature — production code won't trigger this path,
       // but the parser's `?? ""` coalesce + `.trim().toLowerCase()` chain
@@ -58,15 +55,15 @@ describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
       expect(parseMinSpecialistsEarlyExitMode(null as unknown as undefined)).toBe("off")
     })
 
-    it("returns \"off\" for empty string", () => {
+    it('returns "off" for empty string', () => {
       expect(parseMinSpecialistsEarlyExitMode("")).toBe("off")
     })
 
-    it("returns \"off\" for whitespace-only", () => {
+    it('returns "off" for whitespace-only', () => {
       expect(parseMinSpecialistsEarlyExitMode("   ")).toBe("off")
     })
 
-    it("returns \"off\" for typos / unknown values", () => {
+    it('returns "off" for typos / unknown values', () => {
       // Typos should NOT silently degrade to a more-aggressive mode.
       expect(parseMinSpecialistsEarlyExitMode("enabled")).toBe("off")
       expect(parseMinSpecialistsEarlyExitMode("yes")).toBe("off")
@@ -95,20 +92,25 @@ describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
 })
 
 describe("decideEarlyExitAction — SIG-236 protected-role early-exit gate", () => {
-  const base = { succeededCount: 3, quorumThreshold: 3, pendingCount: 1, logicProtectedPending: false }
+  const base = {
+    succeededCount: 3,
+    quorumThreshold: 3,
+    pendingCount: 1,
+    logicProtectedPending: false,
+  }
 
   describe("quorum gate", () => {
-    it("returns \"none\" below the quorum threshold (keep awaiting)", () => {
+    it('returns "none" below the quorum threshold (keep awaiting)', () => {
       expect(decideEarlyExitAction({ ...base, mode: "on", succeededCount: 2 })).toBe("none")
       expect(decideEarlyExitAction({ ...base, mode: "shadow", succeededCount: 2 })).toBe("none")
     })
 
-    it("returns \"none\" when nothing is pending (quorum met but all settled)", () => {
+    it('returns "none" when nothing is pending (quorum met but all settled)', () => {
       expect(decideEarlyExitAction({ ...base, mode: "on", pendingCount: 0 })).toBe("none")
     })
   })
 
-  describe("mode \"on\"", () => {
+  describe('mode "on"', () => {
     it("CANCELS the laggards when no protected (logic) role is pending", () => {
       expect(decideEarlyExitAction({ ...base, mode: "on", logicProtectedPending: false })).toBe("cancel")
     })
@@ -118,15 +120,15 @@ describe("decideEarlyExitAction — SIG-236 protected-role early-exit gate", () 
     })
   })
 
-  describe("mode \"shadow\" — records the would-fire, never cancels", () => {
-    it("returns \"shadow-mark\" regardless of whether logic is pending", () => {
+  describe('mode "shadow" — records the would-fire, never cancels', () => {
+    it('returns "shadow-mark" regardless of whether logic is pending', () => {
       expect(decideEarlyExitAction({ ...base, mode: "shadow", logicProtectedPending: false })).toBe("shadow-mark")
       expect(decideEarlyExitAction({ ...base, mode: "shadow", logicProtectedPending: true })).toBe("shadow-mark")
     })
   })
 
-  describe("mode \"off\" — gate is inert", () => {
-    it("returns \"none\" even at quorum with a pending role", () => {
+  describe('mode "off" — gate is inert', () => {
+    it('returns "none" even at quorum with a pending role', () => {
       expect(decideEarlyExitAction({ ...base, mode: "off", logicProtectedPending: true })).toBe("none")
       expect(decideEarlyExitAction({ ...base, mode: "off", logicProtectedPending: false })).toBe("none")
     })

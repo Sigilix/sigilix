@@ -56,24 +56,27 @@ interface SuppressionCount {
   suppressionRate: number
 }
 
-function project(
-  counts: Record<string, { wouldDrop: number; kept: number }>,
-): { entries: Record<string, SuppressionCount>; totalWouldDrop: number; totalKept: number } {
+function project(counts: Record<string, { wouldDrop: number; kept: number }>): {
+  entries: Record<string, SuppressionCount>
+  totalWouldDrop: number
+  totalKept: number
+} {
   const entries: Record<string, SuppressionCount> = {}
   let totalWouldDrop = 0
   let totalKept = 0
   for (const [key, c] of Object.entries(counts)) {
-    entries[key] = { wouldDrop: c.wouldDrop, kept: c.kept, suppressionRate: suppressionRate(c.wouldDrop, c.kept) }
+    entries[key] = {
+      wouldDrop: c.wouldDrop,
+      kept: c.kept,
+      suppressionRate: suppressionRate(c.wouldDrop, c.kept),
+    }
     totalWouldDrop += c.wouldDrop
     totalKept += c.kept
   }
   return { entries, totalWouldDrop, totalKept }
 }
 
-export async function handleTestSuppressionsMetricsRoute(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+export async function handleTestSuppressionsMetricsRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_VALIDATION_METRICS_TOKEN
   if (!token) {
     return json({ error: "metrics_endpoint_not_configured" }, 503)

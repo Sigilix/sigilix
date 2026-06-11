@@ -7,20 +7,12 @@
 
 const encoder = new TextEncoder()
 
-export async function verifyLinearWebhook(
-  rawBody: string,
-  signature: string,
-  secret: string
-): Promise<boolean> {
+export async function verifyLinearWebhook(rawBody: string, signature: string, secret: string): Promise<boolean> {
   if (!signature || !secret) return false
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody))
   const expected = bufferToHex(digest)
 

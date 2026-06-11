@@ -62,7 +62,8 @@ export const noSelfAssignment: AstRule = {
     if (right === null) return null
     if (left !== right) return null
     return {
-      message: "Self-assignment is a no-op — the left and right sides reference the same thing. Remove it, or assign the value you actually intended.",
+      message:
+        "Self-assignment is a no-op — the left and right sides reference the same thing. Remove it, or assign the value you actually intended.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       endLine: node.loc?.end?.line ?? node.loc?.start?.line ?? 1,

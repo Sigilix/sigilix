@@ -72,11 +72,7 @@ export {
 export type { MinSpecialistsEarlyExitMode, EarlyExitAction } from "./ensemble/domain/policy"
 
 // SIG-318 (PR 8) / SIG-360: the post-synthesis VALIDATION domain.
-export {
-  VAGUE_PREFIXES,
-  hasVaguePrefix,
-  evaluateTestingFindingCitation,
-} from "./ensemble/domain/validation"
+export { VAGUE_PREFIXES, hasVaguePrefix, evaluateTestingFindingCitation } from "./ensemble/domain/validation"
 export type { ValidatedOutput, SynthesizerProvenance } from "./ensemble/domain/validation"
 
 // SIG-318 (PR 12c/12d): the SYNTH-input + synth-outcome domain.
@@ -141,17 +137,10 @@ export {
   isPermanentFailure,
   parseSynthAnswer,
 } from "./ensemble/adapters/model-provider"
-export type {
-  SpecialistRunArgs,
-  AttemptCallbackInfo,
-  SynthesizerRunArgs,
-} from "./ensemble/adapters/model-provider"
+export type { SpecialistRunArgs, AttemptCallbackInfo, SynthesizerRunArgs } from "./ensemble/adapters/model-provider"
 
 // SIG-318 (PR 12e/12f): the submission-affordance cluster + the SESSION contract.
-export {
-  prepareSubmissionAffordance,
-  buildSuggestionEmissionLogEvents,
-} from "./ensemble/app/affordances"
+export { prepareSubmissionAffordance, buildSuggestionEmissionLogEvents } from "./ensemble/app/affordances"
 export type {
   SubmissionAffordance,
   SuggestionEmissionLogContext,

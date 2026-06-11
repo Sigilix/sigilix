@@ -45,7 +45,10 @@ const SECRET_PATTERNS: RegExp[] = [
 const BEARER_RE = /^Bearer\s+(.+)$/
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
 }
 
 // Scrub secrets ONLY — do NOT truncate. A byte-truncated SARIF is invalid JSON,
@@ -135,17 +138,20 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
 
   // (3) Verify the token (cached JWKS). On `unknown-kid`, retry ONCE forcing a
   // (throttled) JWKS refetch so a freshly-rotated GitHub key isn't a 401.
-  let verified = await verifyGitHubOidcToken(token, { expectedAudience, fetchJwks: makeCachedFetchJwks() })
+  let verified = await verifyGitHubOidcToken(token, {
+    expectedAudience,
+    fetchJwks: makeCachedFetchJwks(),
+  })
   if (!verified.ok && verified.reason === "unknown-kid") {
     if (!forcedRefetchAvailable()) {
       // A forced JWKS refresh is cooling down (recent forced refetch). The kid
       // may be a freshly-rotated GitHub key our cache hasn't picked up — tell the
       // runner to RETRY rather than hard-fail a legit run (a genuinely unknown
       // kid will still 401 on a later retry once the cooldown elapses).
-      return new Response(
-        JSON.stringify({ error: "jwks-refresh-throttled", reason: "retry" }),
-        { status: 503, headers: { "content-type": "application/json", "retry-after": "60" } },
-      )
+      return new Response(JSON.stringify({ error: "jwks-refresh-throttled", reason: "retry" }), {
+        status: 503,
+        headers: { "content-type": "application/json", "retry-after": "60" },
+      })
     }
     verified = await verifyGitHubOidcToken(token, {
       expectedAudience,
@@ -163,7 +169,13 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   const runId = typeof claims.run_id === "string" ? claims.run_id : ""
   const runAttempt = typeof claims.run_attempt === "string" ? claims.run_attempt : ""
   if (!repositoryId || !tokenRepository || !tokenSha || !runId || !runAttempt) {
-    return json({ error: "missing-claim", reason: "token lacks repository_id/repository/sha/run_id/run_attempt" }, 400)
+    return json(
+      {
+        error: "missing-claim",
+        reason: "token lacks repository_id/repository/sha/run_id/run_attempt",
+      },
+      400,
+    )
   }
 
   // (5) Now read the body (post-auth) with a real BYTE cap enforced as the
@@ -265,14 +277,29 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       runnerEnvironment: typeof claims.runner_environment === "string" ? claims.runner_environment : "",
     })
   } catch (err) {
-    console.error(JSON.stringify({ event: "runner-evidence-receipt-do-error", repositoryId, sha: tokenSha, error: String(err) }))
+    console.error(
+      JSON.stringify({
+        event: "runner-evidence-receipt-do-error",
+        repositoryId,
+        sha: tokenSha,
+        error: String(err),
+      }),
+    )
     return json({ error: "receipt-store-unavailable" }, 503)
   }
 
   // A DIFFERENT SARIF for the same run is a conflict (409); an identical one is
   // an idempotent CI retry (200, so a lost-response re-POST is safe).
   if (claim.outcome === "conflict") {
-    console.warn(JSON.stringify({ event: "runner-evidence-receipt-conflict", repositoryId, sha: tokenSha, runId, runAttempt }))
+    console.warn(
+      JSON.stringify({
+        event: "runner-evidence-receipt-conflict",
+        repositoryId,
+        sha: tokenSha,
+        runId,
+        runAttempt,
+      }),
+    )
     return json({ error: "receipt-conflict", reason: "a different SARIF was already received for this run" }, 409)
   }
 
@@ -308,21 +335,30 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       }
     } catch (err) {
       // Non-fatal — the single-use record + defensible receipt already committed.
-      console.warn(JSON.stringify({ event: "runner-evidence-receipt-kv-error", repositoryId, sha: tokenSha, error: String(err) }))
+      console.warn(
+        JSON.stringify({
+          event: "runner-evidence-receipt-kv-error",
+          repositoryId,
+          sha: tokenSha,
+          error: String(err),
+        }),
+      )
     }
   }
 
-  console.log(JSON.stringify({
-    event: "runner-evidence-received",
-    repositoryId,
-    repository: tokenRepository,
-    sha: tokenSha,
-    runId,
-    runAttempt,
-    outcome: claim.outcome,
-    sarifSha256,
-    runnerEnvironment: claims.runner_environment,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "runner-evidence-received",
+      repositoryId,
+      repository: tokenRepository,
+      sha: tokenSha,
+      runId,
+      runAttempt,
+      outcome: claim.outcome,
+      sarifSha256,
+      runnerEnvironment: claims.runner_environment,
+    }),
+  )
 
   return json(
     {

@@ -287,14 +287,20 @@ describe("parsePrReviewResponse", () => {
     expect(comment).toContain("value includes ``` inside")
   })
 
-  it("caps findings at 8", () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({
+  // SIG-392: the parser must NOT truncate findings. The old `>= 8` break
+  // silently capped every specialist AND synth verdict at 8 findings,
+  // which was the per-PR recall ceiling on dense PRs (union 16-17/20
+  // bugs → 8 findings posted). Finding-count discipline belongs to the
+  // prompts and downstream gates, not the wire parser.
+  it("does not cap findings (SIG-392 — the 8-finding parser truncation is removed)", () => {
+    const many = Array.from({ length: 24 }, (_, i) => ({
       ...baseFinding,
       headline: `f${i}`,
       line: 10 + i,
     }))
     const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: many }))
-    expect(out?.findings).toHaveLength(8)
+    expect(out?.findings).toHaveLength(24)
+    expect(out?.findings[23]?.headline).toBe("f23")
   })
 })
 

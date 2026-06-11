@@ -18,28 +18,21 @@
 // (incl. the relocated graph-context-format + ast-scan-gate domains). It never
 // imports the orchestrator god-file.
 
-import type { Env } from "@/src/shared/types/env"
-import { GitHubClient } from "@/src/shared/adapters/github"
-import type { CheckRunAnnotation } from "@/src/shared/types/github"
-import type { RetrievedChunk } from "@/src/lib/retrieval"
 import { extractChangedSymbols } from "@/src/lib/symbol-retrieval"
 import { buildChangedLines } from "@/src/features/ast-rules"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import {
-  resolveAstRulesConfig,
   resolveDocsReviewConfig,
   resolveCoverageConfig,
   resolvePerfBudgetsConfig,
   resolveSarifEvidenceConfig,
-  type SigilixConfig,
 } from "@/src/lib/sigilix-config"
-import { runAstRules, type AstCache } from "@/src/features/ast-rules"
+import { runAstRules } from "@/src/features/ast-rules"
 import { runDocsCoverageCheck, type DocsCoverageHit } from "@/src/lib/docs-coverage-check"
 import { runPerfBudgetsCheck, type PerfBudgetsHit } from "@/src/shared/domain/perf-budgets"
 import { ingestCoverage } from "@/src/lib/coverage-ingest"
 import {
   runSarifEvidence,
-  type SarifFinding,
   parseSarif,
   normalizeSarifPath,
   renderSarifFindingsForPrompt,
@@ -63,14 +56,11 @@ import {
   renderGraphExpansionForPrompt,
   netNewCrossFileBodies,
 } from "@/src/lib/graph-context-expansion"
-import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
-import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
 import { graphExpansionMode, injectArm } from "@/src/lib/graph-expansion-mode"
 import type { GraphContextNode } from "@/src/do/repo-graph"
 import { edgeWeight, hopDecay } from "@/src/lib/graph-scoring"
 import { withTimeout } from "@/src/shared/util/with-timeout"
 import { GRAPH_EXPANSION_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
-import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   GRAPH_BLAST_PROMPT_CAP,
   formatGraphContext,
@@ -79,92 +69,13 @@ import {
 } from "@/src/lib/ensemble/domain/graph-context-format"
 import { applyAstScanGate } from "@/src/lib/ensemble/domain/ast-scan-gate"
 
-type AstResult = Awaited<ReturnType<typeof runAstRules>>
-type AstRulesConfig = ReturnType<typeof resolveAstRulesConfig>
-type SarifResult = Awaited<ReturnType<typeof runSarifEvidence>>
-type CoverageResult = Awaited<ReturnType<typeof ingestCoverage>>
-type ReviewableMap = Parameters<typeof runAstRules>[0]["reviewable"]
-type SplitFile = { path: string }
-
-/**
- * The telemetry slice `gatherGraphEvidence` writes by reference: the SIG-286
- * graph-expansion A/B arm, the AST-rules rollup, and the SARIF-evidence rollup.
- * The orchestrator's telemetry object satisfies it.
- */
-export interface GatherGraphTelemetry {
-  graphExpansionAb?: { arm: "treatment" | "control" }
-  astRules?:
-    | {
-        scanned: true
-        filesScanned: number
-        filesSkippedLarge: number
-        filesParseFailed: number
-        findingsCount: number
-        durationMs: number
-      }
-    | { scanned: false; skipReason?: string; findingsCount: number }
-  sarifEvidence?:
-    | {
-        skipped: true
-        reason: import("@/src/features/sarif-evidence").ScanSkipReason
-        findingsCount: number
-      }
-    | { skipped: false; findingsCount: number; truncatedCount: number; durationMs: number }
-}
-
-export interface GatherGraphArgs {
-  env: Env
-  client: GitHubClient
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-  /** SIG-184 PR 3 / SIG-285 v2 PR1: the immutable repo.id keying the receipt lookup. */
-  repoId?: number
-  ensembleConfig: EnsembleConfig
-  meta: { merge_commit_sha?: string | null }
-  sigilixConfig: SigilixConfig
-  diff: string
-  fullDiff: string
-  wasTruncated: boolean
-  reviewable: ReviewableMap
-  filePaths: string[]
-  splitFiles: SplitFile[]
-  /** From gather-evidence: the merged shared hit set seeding the graph BFS. */
-  sharedChunksForOverlap: RetrievedChunk[]
-  astFilesByPath: Map<string, string>
-  astCache: AstCache
-  astRulesConfig: AstRulesConfig
-  orchCtrl: AbortController
-  /** SIG-152: the dispatcher's single-sample graph-retrieval sink. */
-  graphMetricsSink?: GraphRetrievalSample[]
-  /** SIG-286 PR2.5: the dispatcher's single-sample graph-expansion sink. */
-  graphExpansionMetricsSink?: GraphExpansionSample[]
-  /** Mutated by reference: graphExpansionAb / astRules / sarifEvidence writes. */
-  telemetry: GatherGraphTelemetry
-}
-
-export interface GatherGraphResult {
-  graphContextNodesForEvidence: GraphContextNode[]
-  graphBlastCallerPaths: string[]
-  graphBlastDependentPaths: string[]
-  graphCtxForPrompt: string
-  astResult: AstResult
-  sarifFindings: readonly SarifFinding[]
-  sarifResult: SarifResult
-  sarifBlock: string
-  /** The orchestrator's pre-try `runnerEvidenceBadge` let is reassigned to this. */
-  runnerEvidenceBadge: "verified" | "evidence-pending" | undefined
-  /** The orchestrator's pre-try `deterministicCheckAnnotations` let is reassigned to this. */
-  deterministicCheckAnnotations: CheckRunAnnotation[] | undefined
-  receiptScanIndex: Map<string, ReceiptScanResult[]> | null
-  docsCoverageHit: DocsCoverageHit | null
-  perfBudgetsHit: PerfBudgetsHit | null
-  coverageResult: CoverageResult
-  coverageGapSet: Set<string>
-  /** The SIG-285 v2 receipt-join mode the orchestral verify-and-build call still reads. */
-  receiptJoinMode: EnsembleConfig["flags"]["receiptJoinMode"]
-}
+// SIG-318 / SIG-366: the seam's type aliases + the `GatherGraphTelemetry` slice +
+// the `GatherGraphArgs` / `GatherGraphResult` interfaces moved to the
+// `./gather-graph-types` leaf so this file stays under the 1k cap. The three
+// interfaces are imported here for the function signature and re-exported so the
+// gather-graph public surface is byte-identical.
+import type { GatherGraphArgs, GatherGraphResult } from "./gather-graph-types"
+export type { GatherGraphTelemetry, GatherGraphArgs, GatherGraphResult } from "./gather-graph-types"
 
 export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGraphResult> {
   const {

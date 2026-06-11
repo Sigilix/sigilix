@@ -17,6 +17,7 @@ import { parseSlashCommand, renderSlashCommandAck, isAuthorAllowedForSlashComman
 import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
 import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
+import { isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
 import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
@@ -695,4 +696,60 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     }),
   )
   return new Response("queued\n", { status: 202 })
+}
+
+/**
+ * SIG-318 / SIG-366: ARC-237 / SIG-35 push-driven re-index sub-handler — the
+ * `event === "push"` branch of the webhook router, lifted out of
+ * `handleGitHubWebhook` (verbatim — only the closed-over `env` / `owner` / `repo` /
+ * `installationId` / `payload` become params) so the entry-adjacent
+ * `index-github-webhook.ts` stays under the 1k cap. Mirrors `queueGithubMention`
+ * (an IO sub-handler returning a Response). The producer refreshes the default
+ * branch, configured long-lived branches, and active same-repo PR branches on
+ * already-indexed repos; push-storm coalescing falls out of ARC-235's freshness check.
+ */
+export async function handlePushEvent(args: {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  payload: GitHubWebhookPayload
+}): Promise<Response> {
+  const { env, owner, repo, installationId, payload } = args
+  if (!isIndexerEnabled(env)) {
+    return new Response("push event ignored (indexer off)\n", { status: 200 })
+  }
+  const outcome = await maybeEnqueuePushIndexJob({
+    env,
+    owner,
+    repo,
+    // SIG-243 Phase 1: capture the immutable repo ID from the push
+    // payload and thread it to the producer. The producer attaches
+    // it to the queue message; the consumer persists it on the
+    // manifest. Falls back to `undefined` (treated as legacy) if a
+    // webhook arrives without the field. GitHub repo IDs are strictly
+    // positive integers; the guard rejects 0 / negative / non-integer
+    // / NaN / Infinity at the entry point so a spoofed or malformed
+    // payload can't land an invalid `repo-tenant:0` key downstream.
+    repoId:
+      typeof payload.repository?.id === "number" && Number.isInteger(payload.repository.id) && payload.repository.id > 0
+        ? payload.repository.id
+        : undefined,
+    installationId,
+    ref: typeof payload.ref === "string" ? payload.ref : undefined,
+    after: typeof payload.after === "string" ? payload.after : undefined,
+  })
+  if ("enqueued" in outcome && outcome.enqueued) {
+    return new Response("push indexed\n", { status: 202 })
+  }
+  if ("failed" in outcome) {
+    // Producer threw on OPENCLAW_JOBS.send (binding broken /
+    // backpressure). Surface 503 so GitHub redelivers — the
+    // enqueue is the only side-effect, idempotent on the consumer
+    // side because chunk ids are content-addressed.
+    return new Response("push enqueue failed\n", { status: 503 })
+  }
+  // Any other `{skipped: ...}` outcome is a deliberate no-op (the
+  // producer logged the specific reason).
+  return new Response("push skipped\n", { status: 200 })
 }

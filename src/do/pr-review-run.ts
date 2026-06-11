@@ -1,11 +1,8 @@
-// ARC-190: PrReviewRunDO class + pure decision helpers + route
-// dispatch.
+// ARC-190: PrReviewRunDO class + route dispatch. The pure decision helpers + the
+// IO-free history helpers live in `./pr-review-run-internals` (the class delegates).
 //
 // Spec: docs/superpowers/specs/2026-05-07-arc-190-durable-objects-webhook-ingest-design.md
 // Plan: docs/superpowers/plans/2026-05-07-arc-190-durable-objects-webhook-ingest.md
-//
-// Task 5 lands the route handlers (/enqueue, /pickup, /run-result,
-// /status). Task 6 lands the alarm() handler.
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
@@ -34,6 +31,8 @@ import {
 // `@/do/pr-review-run` — including the co-located helpers test — is unchanged.
 // The leaf imports only `./types` (no cycle: it never imports this DO).
 import {
+  buildRunRecord,
+  collectHistoryRecords,
   decideEnqueueAction,
   decidePickupAction,
   decideRunResultAction,
@@ -44,6 +43,7 @@ import {
   normalizeRepoId,
   nowIso,
   pruneHistoryRecords,
+  pruneHistoryStorage,
 } from "./pr-review-run-internals"
 export {
   decideEnqueueAction,
@@ -115,15 +115,12 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // Archive only if existing was non-idle; idle state has no
       // material history to keep.
       if (existing.state !== "idle") {
-        const record: RunRecord = {
-          runId: existing.runId,
-          headSha: existing.headSha,
+        const record = buildRunRecord({
+          state: existing,
           finalState: existing.state === "done" ? "done" : "failed",
-          attempts: existing.attempts,
-          startedAt: existing.startedAt,
           finishedAt: existing.finishedAt ?? nowIso(),
           ...(existing.lastError ? { lastError: existing.lastError } : {}),
-        }
+        })
         await this.ctx.storage.put(`run:${existing.runId}`, record)
       }
       emit("do-review-superseded", {
@@ -136,35 +133,15 @@ export class PrReviewRunDO extends DurableObject<Env> {
       })
     }
 
-    // SIG-220: create the customer-visible "Sigilix · In progress"
-    // check synchronously, BEFORE persisting RunState + enqueueing.
-    // Pre-SIG-220 the dispatcher did this after the consumer dequeued
-    // → check appeared in the GitHub UI 5–30s after push. Now it
-    // appears within the webhook-ack window (~1–2s).
-    //
-    // Codex architecture review on PR #178 follow-up:
-    //   - Creating HERE (post-decideEnqueueAction = create | supersede)
-    //     is strictly better than creating in the worker fetch handler:
-    //     dedupe paths never produce orphan checks, pause/ignore
-    //     never produce orphan checks (those branches don't reach
-    //     this code path).
-    //   - sensitive-repo skip is dispatcher-side — the dispatcher's
-    //     skip branch now closes the check it doesn't own. Watchdog
-    //     terminal failure also closes via `attachExistingCheckRun`.
-    //
-    // Sigilix bot P2 PERF catch on PR #179: wrap the create call in a
-    // `Promise.race` with a 3s timeout. The webhook awaits `/enqueue`
-    // (see `src/do/webhook-enqueue.ts:123`) so an unbounded GitHub
-    // API hang here would couple the webhook ack to GitHub's
-    // latency and could approach the 10s redelivery threshold under
-    // degradation. A timeout resolves to `null`, which the existing
-    // dispatcher-side fallback (`startInProgressCheckRun`) handles
-    // exactly like a creds-missing / 5xx outcome.
-    //
-    // Best-effort: a null result (creds missing, GitHub 5xx, timeout,
-    // etc.) leaves `checkRunId` undefined on RunState; the dispatcher
-    // falls back to its own `startInProgressCheckRun` exactly like
-    // legacy queue messages.
+    // SIG-220: create the customer-visible "Sigilix · In progress" check
+    // synchronously, BEFORE persisting RunState + enqueueing, so it appears in the
+    // GitHub UI within the webhook-ack window (~1–2s) rather than 5–30s after push.
+    // Reached only on the create | supersede branches (dedupe/pause/ignore don't
+    // produce orphan checks). Sigilix bot P2 PERF catch on PR #179: wrap the create
+    // in a `Promise.race` with a 3s timeout — the webhook awaits `/enqueue`, so an
+    // unbounded GitHub hang could approach the 10s redelivery threshold. Best-effort:
+    // a null result (creds missing / 5xx / timeout) leaves `checkRunId` undefined and
+    // the dispatcher falls back to its own `startInProgressCheckRun`.
     const CHECK_RUN_CREATE_TIMEOUT_MS = 3_000
     // CodeRabbit catch on PR #179 fixup: capture the timer handle so we
     // can clear it after `startInProgressCheckRun` wins the race.
@@ -427,27 +404,16 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
     if (decision.transition === "done" || decision.transition === "failed") {
       // Append to history.
-      const record: RunRecord = {
-        runId: existing.runId,
-        headSha: existing.headSha,
+      const record = buildRunRecord({
+        state: existing,
         finalState: decision.transition,
-        attempts: existing.attempts,
-        startedAt: existing.startedAt,
         finishedAt: updated.finishedAt!,
         ...(body.error ? { lastError: body.error } : {}),
-      }
+      })
       await this.ctx.storage.put(`run:${existing.runId}`, record)
-      // Prune history to limit.
-      const allHistory = await this.collectHistory()
-      const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-      if (pruned.evicted > 0) {
-        // Rewrite kept records + remove evicted.
-        for (const key of Object.keys(allHistory)) {
-          if (!Object.hasOwn(pruned.kept, key)) {
-            await this.ctx.storage.delete(key)
-          }
-        }
-      }
+      // Prune history to limit (SIG-366: pruneHistoryRecords + evict-delete loop
+      // extracted to `pruneHistoryStorage` in ./pr-review-run-internals).
+      await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
       emit("do-review-completed", {
         owner: existing.owner,
         repo: existing.repo,
@@ -582,25 +548,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, updated)
 
     // Archive + prune history (mirrors the watchdog-terminal path).
-    const record: RunRecord = {
-      runId: existing.runId,
-      headSha: existing.headSha,
-      finalState: "failed",
-      attempts: existing.attempts,
-      startedAt: existing.startedAt,
-      finishedAt,
-      lastError,
-    }
+    const record = buildRunRecord({ state: existing, finalState: "failed", finishedAt, lastError })
     await this.ctx.storage.put(`run:${existing.runId}`, record)
-    const allHistory = await this.collectHistory()
-    const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-    if (pruned.evicted > 0) {
-      for (const key of Object.keys(allHistory)) {
-        if (!Object.hasOwn(pruned.kept, key)) {
-          await this.ctx.storage.delete(key)
-        }
-      }
-    }
+    await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
 
     // Close the upstream check as `skipped` (wire `neutral`): the bot
     // did not complete a review. `cancelled` is intentionally not a
@@ -929,26 +879,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
         lastError,
       }
       await this.ctx.storage.put(STATE_KEY, updated)
-      const record: RunRecord = {
-        runId: state.runId,
-        headSha: state.headSha,
-        finalState: "failed",
-        attempts: state.attempts,
-        startedAt: state.startedAt,
-        finishedAt,
-        lastError,
-      }
+      const record = buildRunRecord({ state, finalState: "failed", finishedAt, lastError })
       await this.ctx.storage.put(`run:${state.runId}`, record)
-      // Prune history to limit (mirrors /run-result terminal path).
-      const allHistory = await this.collectHistory()
-      const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
-      if (pruned.evicted > 0) {
-        for (const key of Object.keys(allHistory)) {
-          if (!Object.hasOwn(pruned.kept, key)) {
-            await this.ctx.storage.delete(key)
-          }
-        }
-      }
+      // Prune history to limit (mirrors /run-result terminal path; SIG-366: extracted
+      // to `pruneHistoryStorage` in ./pr-review-run-internals).
+      await pruneHistoryStorage(this.ctx.storage, await this.collectHistory(), config.historyLimit)
       // SIG-220: terminal failure ⇒ the consumer never reported result,
       // so the upstream-created check is still `in_progress`. Close it as
       // `failure` (wire-mapped to `neutral` per the SIG-216 advisory-bot
@@ -1031,37 +966,10 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
   // ── helpers ─────────────────────────────────────────────────
 
+  // SIG-366: the body moved (verbatim) to `collectHistoryRecords` in
+  // `./pr-review-run-internals` (the only change: `this.ctx` becomes a param);
+  // the method delegates so its signature + every call site is unchanged.
   private async collectHistory(): Promise<Record<string, RunRecord>> {
-    // Workers DO doesn't expose a `list()` method on storage in all
-    // runtimes. Iterate by enumerating known prefixes via a stored
-    // index — but we don't maintain one. As a v1 simplification,
-    // tests provide a shim that exposes `store: Map<string, unknown>`
-    // for direct enumeration. Production runtime: each `run:<runId>`
-    // record is small, and we keep at most `historyLimit` of them
-    // (default 10), so a transactional scan during prune is
-    // affordable. v1: rely on the test stub's direct Map access; in
-    // production the prune step uses storage.list({ prefix: "run:" }).
-    const out: Record<string, RunRecord> = {}
-    const storage = this.ctx.storage as {
-      list?: (opts: { prefix: string }) => Promise<Map<string, unknown>>
-    }
-    if (typeof storage.list === "function") {
-      const items = await storage.list({ prefix: "run:" })
-      for (const [key, value] of items.entries()) {
-        out[key] = value as RunRecord
-      }
-      return out
-    }
-    // Test-only fallback: read the Map directly via the stub's
-    // exposed `store` property.
-    const stub = this.ctx as unknown as { store?: Map<string, unknown> }
-    if (stub.store instanceof Map) {
-      for (const [key, value] of stub.store.entries()) {
-        if (key.startsWith("run:")) {
-          out[key] = value as RunRecord
-        }
-      }
-    }
-    return out
+    return collectHistoryRecords(this.ctx)
   }
 }

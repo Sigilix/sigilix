@@ -25,7 +25,6 @@ import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
   maybeEnqueuePullRequestBranchIndexJobs,
-  maybeEnqueuePushIndexJob,
   type IndexJobReason,
 } from "@/src/lib/index-producer"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
@@ -35,6 +34,7 @@ import {
   type GitHubWebhookPayload,
   decidePullRequestJobs,
   queueGithubMention,
+  handlePushEvent,
   dispatchReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
@@ -966,51 +966,11 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     })
   }
 
-  // ARC-237 / SIG-35: push-driven re-index. Fires on every push to a branch
-  // ref. The producer refreshes the default branch, configured long-lived
-  // branches, and active same-repo PR branches on already-indexed repos
-  // (bootstrap stays install-driven). Push storm coalescing falls out of
-  // ARC-235's freshness check — 10 pushes in 60s become 1 actual re-walk
-  // + 9 cheap skips.
+  // ARC-237 / SIG-35: push-driven re-index. Fires on every push to a branch ref.
+  // SIG-366: the sub-handler body lives in `handlePushEvent` (index-internals); the
+  // entry router just dispatches to it.
   if (event === "push") {
-    if (!isIndexerEnabled(env)) {
-      return new Response("push event ignored (indexer off)\n", { status: 200 })
-    }
-    const outcome = await maybeEnqueuePushIndexJob({
-      env,
-      owner,
-      repo,
-      // SIG-243 Phase 1: capture the immutable repo ID from the push
-      // payload and thread it to the producer. The producer attaches
-      // it to the queue message; the consumer persists it on the
-      // manifest. Falls back to `undefined` (treated as legacy) if a
-      // webhook arrives without the field. GitHub repo IDs are strictly
-      // positive integers; the guard rejects 0 / negative / non-integer
-      // / NaN / Infinity at the entry point so a spoofed or malformed
-      // payload can't land an invalid `repo-tenant:0` key downstream.
-      repoId:
-        typeof payload.repository?.id === "number" &&
-        Number.isInteger(payload.repository.id) &&
-        payload.repository.id > 0
-          ? payload.repository.id
-          : undefined,
-      installationId,
-      ref: typeof payload.ref === "string" ? payload.ref : undefined,
-      after: typeof payload.after === "string" ? payload.after : undefined,
-    })
-    if ("enqueued" in outcome && outcome.enqueued) {
-      return new Response("push indexed\n", { status: 202 })
-    }
-    if ("failed" in outcome) {
-      // Producer threw on OPENCLAW_JOBS.send (binding broken /
-      // backpressure). Surface 503 so GitHub redelivers — the
-      // enqueue is the only side-effect, idempotent on the consumer
-      // side because chunk ids are content-addressed.
-      return new Response("push enqueue failed\n", { status: 503 })
-    }
-    // Any other `{skipped: ...}` outcome is a deliberate no-op (the
-    // producer logged the specific reason).
-    return new Response("push skipped\n", { status: 200 })
+    return handlePushEvent({ env, owner, repo, installationId, payload })
   }
 
   return new Response("skipped\n", { status: 200 })

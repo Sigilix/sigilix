@@ -176,3 +176,96 @@ export function pruneHistoryRecords(
   for (const [k, v] of keep) kept[k] = v
   return { kept, evicted: all.length - keep.length }
 }
+
+// ─── History storage helpers (SIG-366) ────────────────────────
+//
+// Lifted out of the `PrReviewRunDO` methods (verbatim bodies, only the
+// `this.ctx` / `this.ctx.storage` references become parameters) so the DO
+// file stays under the 1,000-line budget. The class methods delegate to
+// these; the RPC/handler surface is unchanged. These touch storage but
+// stay leaf-pure of the DO class — no `this`, no cycle.
+
+/** Minimal `DurableObjectState` shape the history helpers read. */
+type HistoryCtx = {
+  storage: {
+    list?: (opts: { prefix: string }) => Promise<Map<string, unknown>>
+    delete: (key: string) => Promise<boolean> | Promise<void> | unknown
+  }
+}
+
+/**
+ * SIG-366 (was `PrReviewRunDO.collectHistory`): enumerate the `run:<runId>`
+ * history records. Workers DO doesn't expose a `list()` method on storage in
+ * all runtimes — tests provide a shim exposing `store: Map<string, unknown>`
+ * for direct enumeration; production uses `storage.list({ prefix: "run:" })`.
+ */
+export async function collectHistoryRecords(ctx: HistoryCtx): Promise<Record<string, RunRecord>> {
+  const out: Record<string, RunRecord> = {}
+  const storage = ctx.storage as {
+    list?: (opts: { prefix: string }) => Promise<Map<string, unknown>>
+  }
+  if (typeof storage.list === "function") {
+    const items = await storage.list({ prefix: "run:" })
+    for (const [key, value] of items.entries()) {
+      out[key] = value as RunRecord
+    }
+    return out
+  }
+  // Test-only fallback: read the Map directly via the stub's
+  // exposed `store` property.
+  const stub = ctx as unknown as { store?: Map<string, unknown> }
+  if (stub.store instanceof Map) {
+    for (const [key, value] of stub.store.entries()) {
+      if (key.startsWith("run:")) {
+        out[key] = value as RunRecord
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * SIG-366: prune the history map to `historyLimit` and delete the evicted
+ * `run:<runId>` keys from storage — the byte-identical `pruneHistoryRecords` +
+ * evict-delete loop that ran inline at the three DO terminal paths (run-result,
+ * cancel, watchdog). No-op when nothing is evicted.
+ */
+export async function pruneHistoryStorage(
+  storage: HistoryCtx["storage"],
+  allHistory: Record<string, RunRecord>,
+  historyLimit: number,
+): Promise<void> {
+  const pruned = pruneHistoryRecords(allHistory, historyLimit)
+  if (pruned.evicted > 0) {
+    for (const key of Object.keys(allHistory)) {
+      if (!Object.hasOwn(pruned.kept, key)) {
+        await storage.delete(key)
+      }
+    }
+  }
+}
+
+/**
+ * SIG-366: build the archived `RunRecord` snapshot from a settling run. Pure —
+ * the byte-identical `{ runId, headSha, finalState, attempts, startedAt,
+ * finishedAt, ...lastError }` shape the four DO terminal paths (supersede,
+ * run-result, cancel, watchdog) each constructed inline. `lastError` is spread
+ * only when present, matching `RunRecord`'s optional field.
+ */
+export function buildRunRecord(args: {
+  state: Pick<RunState, "runId" | "headSha" | "attempts" | "startedAt">
+  finalState: RunRecord["finalState"]
+  finishedAt: string
+  lastError?: { stage: string; message: string }
+}): RunRecord {
+  const { state, finalState, finishedAt, lastError } = args
+  return {
+    runId: state.runId,
+    headSha: state.headSha,
+    finalState,
+    attempts: state.attempts,
+    startedAt: state.startedAt,
+    finishedAt,
+    ...(lastError ? { lastError } : {}),
+  }
+}

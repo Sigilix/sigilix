@@ -59,7 +59,7 @@ import { decideEarlyExitAction, computeDegradedCoverage } from "@/src/lib/ensemb
 import { assignStableFindingIds, type PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
 import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
-import { buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
+import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { runResweepPhase } from "./resweep"
@@ -863,6 +863,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
+    leverOrigins: buildLeverOrigins(resweep.resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }

@@ -61,6 +61,7 @@ describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
   })
 
   it("bumps PROMPT_VERSION so stale reviews re-run with the adjudication contract", () => {
-    expect(PROMPT_VERSION).toBe("29")
+    // v30 = SIG-392 lever-recovered protection (rides on the same version rail).
+    expect(PROMPT_VERSION).toBe("30")
   })
 })

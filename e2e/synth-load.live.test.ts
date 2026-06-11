@@ -31,6 +31,7 @@ import {
   renderSpecialistVerdictsForSynth,
 } from "@/src/prompts/pr-review-specialists"
 import { buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
+import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
 import { scoreFixture } from "@/evals/scorer"
 import { shadowFindingsToFixtureFindings, type LocalRawFinding } from "@/evals/local-adapter"
 import type { FixtureFinding, FixtureGroundTruth } from "@/evals/fixture-types"
@@ -76,17 +77,27 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
       // vs present in the synth OUTPUT, across all runs.
       const inputCaught = new Map<string, number>()
       const outputCaught = new Map<string, number>()
+      const flooredCaught = new Map<string, number>()
       let totalRuns = 0
+      let attempted = 0
+      let aborted = 0
       const fpInputs: number[] = []
       const fpOutputs: number[] = []
+      const fpFloored: number[] = []
 
       for (const inputName of INPUTS) {
         const captured = JSON.parse(readFileSync(join(OUT_DIR, inputName), "utf8")) as FixtureFinding[]
-        const specialistVerdicts = rebuildSpecialistVerdicts(captured)
+        const { verdicts: specialistVerdicts, leverOrigins } = rebuildSpecialistVerdicts(captured)
         const synthInputVerdicts = buildSynthInputVerdicts(
           specialistVerdicts as Parameters<typeof buildSynthInputVerdicts>[0],
         )
-        const verdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
+        // SIG-392: stamp lever origins into the synth-visible JSON exactly as
+        // prod does in promoted mode (set SYNTH_LOAD_NO_ORIGINS=1 to A/B the
+        // pre-marker input shape).
+        const verdictBlock = renderSpecialistVerdictsForSynth(
+          synthInputVerdicts,
+          process.env.SYNTH_LOAD_NO_ORIGINS === "1" ? undefined : leverOrigins,
+        )
         const synthMessage = buildSynthesizerInitialMessage({
           prNumber: 0,
           diff,
@@ -113,22 +124,45 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
                 }
               : {}),
           })
+          attempted += 1
           if (r.verdict === null) {
+            aborted += 1
             lines.push(`${inputName} #${repeat}: SYNTH FAILED (${r.failureReason ?? "?"})`)
             continue
           }
           const outFindings = synthFindingsToFixture(r.verdict as { findings: ReadonlyArray<LocalRawFinding> })
           const outScore = scoreFixture(truth, "sigilix", outFindings)
+          // SIG-392: prod applies the SIG-351 source-finding floor AFTER the
+          // synth (recall-floors.ts) — score>=4 source rows neither kept in
+          // provenance nor proof-dropped are restored before validation. Raw
+          // synth retention alone UNDERSTATES the prod pipeline; score both.
+          const floored = applySynthSourceFindingFloor({
+            findings: r.verdict.findings,
+            provenanceFindings: r.provenance?.findings ?? [],
+            provenanceDropped: r.provenance?.dropped ?? [],
+            specialists: synthInputVerdicts
+              .filter((v) => v.verdict !== null)
+              .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+          })
+          const flooredFindings = synthFindingsToFixture(floored as { findings: ReadonlyArray<LocalRawFinding> })
+          const flooredScore = scoreFixture(truth, "sigilix", flooredFindings)
+          const leverProofDrops = (r.provenance?.dropped ?? [])
+            .filter((d) => leverOrigins.has(d.sourceFindingId))
+            .map((d) => `${d.sourceFindingId}(${d.reason.slice(0, 40)})`)
           totalRuns += 1
           fpInputs.push(inputScore.highSevFalsePositives.length)
           fpOutputs.push(outScore.highSevFalsePositives.length)
+          fpFloored.push(flooredScore.highSevFalsePositives.length)
           for (const id of inputScore.overall.caughtIds) inputCaught.set(id, (inputCaught.get(id) ?? 0) + 1)
           for (const id of outScore.overall.caughtIds) outputCaught.set(id, (outputCaught.get(id) ?? 0) + 1)
-          const dropped = inputScore.overall.caughtIds.filter((id) => !outScore.overall.caughtIds.includes(id))
+          for (const id of flooredScore.overall.caughtIds) flooredCaught.set(id, (flooredCaught.get(id) ?? 0) + 1)
+          const dropped = inputScore.overall.caughtIds.filter((id) => !flooredScore.overall.caughtIds.includes(id))
           const line =
             `${inputName} #${repeat}: input ${inputScore.overall.caught}/20 (FP ${inputScore.highSevFalsePositives.length}) → ` +
-            `synth ${outScore.overall.caught}/20 (FP ${outScore.highSevFalsePositives.length}) | ` +
-            `findings ${captured.length}→${r.verdict.findings.length} | dropped rows: ${dropped.join(",") || "none"}`
+            `synth ${outScore.overall.caught}/20 (FP ${outScore.highSevFalsePositives.length}) → ` +
+            `floored ${flooredScore.overall.caught}/20 (FP ${flooredScore.highSevFalsePositives.length}, +${floored.restored.length} restored) | ` +
+            `findings ${captured.length}→${r.verdict.findings.length}→${floored.findings.length} | ` +
+            `post-floor dropped rows: ${dropped.join(",") || "none"} | lever proof-drops: ${leverProofDrops.join("; ") || "none"}`
           lines.push(line)
           console.log(`[synth-load] ${line}`)
         }
@@ -136,20 +170,27 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
 
       // Per-row retention table: a row at input K/K that drops to <K/K in
       // output is a synth-under-load loss (the SIG-317 pattern).
-      const rows = [...new Set([...inputCaught.keys(), ...outputCaught.keys()])].sort()
+      const rows = [...new Set([...inputCaught.keys(), ...outputCaught.keys(), ...flooredCaught.keys()])].sort()
+      // Abort-inclusive stratum (Kimi rev-2 condition): per-row counts below
+      // are conditioned on VALID runs; the attempted/aborted split is reported
+      // so retry-until-K-valid protocols can't silently paint rosier retention
+      // than operational reality.
       const report = [
-        `## SIG-392 synth-under-lever-load — ${FIXTURE} (${totalRuns} synth runs over ${INPUTS.length} input(s))`,
+        `## SIG-392 synth-under-lever-load — ${FIXTURE} (${totalRuns} valid synth runs over ${INPUTS.length} input(s))`,
+        "",
+        `attempts: ${attempted} | valid: ${totalRuns} | aborted: ${aborted} (abort-inclusive retention = per-row counts ÷ ${attempted})`,
         "",
         ...lines.map((l) => `- ${l}`),
         "",
-        "### per-row retention (input present → synth-output present, counts)",
+        "### per-row retention (input → raw synth → floored, counts; floored = prod truth)",
         ...rows.map((id) => {
           const i = inputCaught.get(id) ?? 0
           const o = outputCaught.get(id) ?? 0
-          return `${id}: input ${i} → synth ${o}${o < i ? "  ⚠️ synth drop" : ""}`
+          const fl = flooredCaught.get(id) ?? 0
+          return `${id}: input ${i} → synth ${o} → floored ${fl}${fl < i ? "  ⚠️ post-floor drop" : ""}`
         }),
         "",
-        `high-sev FP: input mean ${mean(fpInputs).toFixed(1)} → synth mean ${mean(fpOutputs).toFixed(1)}`,
+        `high-sev FP: input mean ${mean(fpInputs).toFixed(1)} → synth mean ${mean(fpOutputs).toFixed(1)} → floored mean ${mean(fpFloored).toFixed(1)}`,
       ].join("\n")
       writeFileSync(join(OUT_DIR, "synth-load.report.md"), report + "\n")
       console.log(report)

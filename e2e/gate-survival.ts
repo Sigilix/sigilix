@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     const captured = JSON.parse(readFileSync(input, "utf8")) as FixtureFinding[]
     // Rebuild per-role specialist verdicts with REAL stable ids so the
     // hallucination guard's provenance check sees traceable sources.
-    const specialistVerdicts = rebuildSpecialistVerdicts(captured)
+    const { verdicts: specialistVerdicts } = rebuildSpecialistVerdicts(captured)
     const synthFindings = specialistVerdicts.flatMap((v) => v.verdict!.findings)
     const provenance: SynthesizerProvenance = {
       findings: synthFindings.map((f) => ({

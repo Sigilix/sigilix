@@ -685,6 +685,29 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
 # schema change, no migration. Default-off in dev/test (the env var
 # is unset there).
 OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
+# SIG-393 — region re-sweep (dense-PR recall lever). Three-state rollout:
+#   "off"     — phase is inert: no gate evaluation, no model calls, no
+#               telemetry; specialist verdicts pass through by reference
+#               (the pinned zero-change default in code).
+#   "shadow"  — the deterministic effort gate + the scoped per-region
+#               second pass RUN on qualifying PRs and emit
+#               `resweep-gate-decision` / `resweep-shadow-summary`
+#               telemetry, but candidates are NEVER merged — zero
+#               posted-output change. Costs ~90-170s of the ~895s orch
+#               wall when the gate fires (dense/high-risk PRs only;
+#               small PRs structurally cannot fire). SHIPPING IN THIS
+#               STATE FIRST to measure gate fire-rate + post-gate
+#               candidate survival before enforcement.
+#   "on"      — re-sweep candidates merge into the role verdicts
+#               pre-synth (pass-1 finding ids unchanged) and flow
+#               through the UNCHANGED validation/grounding/verification
+#               gates — no gate bypass, no new posting surface.
+#
+# Rollout: shadow soak → promotion to "on" gated on the frozen-fixture
+# clone delta (`evals score --pr --baseline`), post-gate high-sev FP
+# flat, default-lane p50 unmoved. Rollback = flip back to "shadow"
+# (telemetry only) or "off" (inert); both are safe one-line changes.
+OPENCLAW_RESWEEP_MODE = "shadow"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

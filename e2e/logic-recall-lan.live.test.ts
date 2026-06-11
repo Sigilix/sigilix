@@ -61,7 +61,6 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
     }))
     tag = `${findings.length}f${verdict ? "" : " · UNPARSEABLE"}`
     if (!verdict && process.env.LOGIC_RECALL_DEBUG) {
-      // eslint-disable-next-line no-console
       console.log(`    RAW[${c.id}] len=${content.length}: ${content.slice(0, 900).replace(/\n/g, " ")}`)
     }
   } catch (e) {
@@ -70,7 +69,6 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
   const result = scoreCase(c, findings)
   const mark =
     c.label === "vuln" ? (result.caught ? "✓ caught" : "✗ MISSED") : result.falsePositive ? "✗ FALSE-POS" : "✓ clean"
-  // eslint-disable-next-line no-console
   console.log(`  [${c.label.padEnd(4)}] ${c.id.padEnd(26)} ${mark.padEnd(11)} (${tag})`)
   return result
 }
@@ -124,7 +122,6 @@ describe.skipIf(!URL)("subtle-logic recall baseline (LIVE via direct Ollama)", (
         )
       }
       lines.push("└──────────────────────────────────────────────────────────┘")
-      // eslint-disable-next-line no-console
       console.log(lines.join("\n"))
     },
     LOGIC_RECALL_CASES.length * REPEATS * 180_000 + 60_000,

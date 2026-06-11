@@ -1,0 +1,13 @@
+# Bulk mechanical rewrites — ignored by `git blame` so authorship points at
+# the real last logical change, not the capstone sweep. GitHub applies this
+# file automatically; locally run once:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only pure, reviewed, zero-behavior rewrites belong here.
+
+# SIG-366 #465 — `@/` path-alias codemod (universal root-anchored import rewrite)
+71bde7bbe92096b78b5bc2bd2f8cc47cc133ca57
+
+# SIG-366 #469 — Prettier one-shot format (+ the 6 budget-split extractions)
+1bee43a09a617474d42d2fcd71ddd4f38c52c5ca

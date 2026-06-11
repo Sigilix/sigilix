@@ -4,5 +4,6 @@
 // stay private behind this re-export. No logic here.
 
 export { runDepVulnScan } from "./app/scanner"
-export type { DepVulnFinding, ScanResult, ScanSkipReason, RunDepVulnScanArgs } from "./app/scanner"
+export type { ScanResult, ScanSkipReason, RunDepVulnScanArgs } from "./app/scanner"
+export type { DepVulnFinding } from "./domain/finding"
 export { renderDepVulnFindingsForPrompt } from "./render/render"

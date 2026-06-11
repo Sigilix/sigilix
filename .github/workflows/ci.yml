@@ -21,6 +21,15 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
 
+      - name: ESLint (size budget, ../ ban, no warnings)
+        run: npm run lint
+
+      - name: Prettier format check
+        run: npm run format:check
+
+      - name: Dependency rules (inward-only, barrel-only)
+        run: npm run depcruise
+
       - name: Unit tests
         run: npm test
 

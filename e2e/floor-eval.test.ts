@@ -109,7 +109,6 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
       `OVERALL: ${TP} TP · ${FN} FN · ${FP} FP · ${TN} TN  →  precision ${pct(precision)} · recall ${pct(recall)} · FP-rate ${pct(fpRate)}`,
     )
     lines.push("└─────────────────────────────────────────────────────────────────────────────┘")
-    // eslint-disable-next-line no-console
     console.log(lines.join("\n"))
     expect(results.length).toBe(10)
   })

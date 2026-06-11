@@ -126,7 +126,6 @@ async function runCase(
       : result.falsePositive
         ? "✗ FALSE-POS"
         : "✓ clean"
-  // eslint-disable-next-line no-console
   console.log(`  [${c.label.padEnd(4)}] ${c.id.padEnd(26)} ${mark.padEnd(11)} (${tag})`)
   // LOGIC_RECALL_DEBUG_FP: dump the actual finding TEXT on the failure modes —
   // a safe case that over-fired, or a vuln that was missed-but-still-flagged — so we
@@ -138,7 +137,6 @@ async function runCase(
     ((c.label === "safe" && result.falsePositive) || (c.label === "vuln" && !result.caught && rawFindings.length))
   ) {
     for (const f of rawFindings) {
-      // eslint-disable-next-line no-console
       console.log(
         `      ↳ ${c.label === "safe" ? "FP" : "OFF-TARGET"} score=${f.score} ${f.path}:${f.line} — ${f.headline ?? ""}${f.body ? ` :: ${String(f.body).slice(0, 200)}` : ""}`,
       )
@@ -220,7 +218,6 @@ describe.skipIf(!API_KEY)("subtle-logic recall baseline (LIVE — needs OLLAMA_A
         lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`)
       }
       lines.push("└──────────────────────────────────────────────────────────┘")
-      // eslint-disable-next-line no-console
       console.log(lines.join("\n"))
     },
     LOGIC_RECALL_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,

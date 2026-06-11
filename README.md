@@ -155,7 +155,7 @@ New GitHub App installs and repository-added events enqueue `index-repo` jobs au
 ```bash
 curl -X POST \
   -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \
-  "https://<worker-host>/admin/index-repo?owner=Arc-and-Anchor&repo=sigilix"
+  "https://<worker-host>/admin/index-repo?owner=Sigilix&repo=sigilix"
 
 curl -X POST \
   -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \
@@ -188,7 +188,7 @@ npx wrangler secret put OLLAMA_API_KEY
 ```bash
 npx wrangler secret put GITHUB_APP_ID
 # Numeric App ID from
-# https://github.com/organizations/Arc-and-Anchor/settings/apps/<your-app>
+# https://github.com/organizations/Sigilix/settings/apps/<your-app>
 
 npx wrangler secret put GITHUB_PRIVATE_KEY
 # PEM-encoded RSA private key from "Generate a private key" on the App
@@ -219,7 +219,7 @@ npx wrangler secret put OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT  # 1..100, default 1
 
 ### 5b. Create + install the GitHub App
 
-Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New GitHub App**.
+Go to <https://github.com/organizations/Sigilix/settings/apps> → **New GitHub App**.
 
 **Required permissions** (Repository):
 - **Actions**: Read (CI run jobs + logs)

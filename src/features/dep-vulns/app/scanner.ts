@@ -13,27 +13,13 @@
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
-import { loadAdvisoryDb, type AdvisoryRecord } from "@/src/features/dep-vulns/domain/advisory-db"
+import { loadAdvisoryDb } from "@/src/features/dep-vulns/domain/advisory-db"
 import { parsePackageJson, parsePackageLock, rootDepNames } from "@/src/features/dep-vulns/domain/manifest-parsers"
 import { matchVersion } from "@/src/features/dep-vulns/domain/version-matcher"
+import type { DepVulnFinding } from "@/src/features/dep-vulns/domain/finding"
 
 const PACKAGE_JSON_PATH = "package.json"
 const PACKAGE_LOCK_PATH = "package-lock.json"
-
-export interface DepVulnFinding {
-  ecosystem: "npm"
-  package_name: string
-  version: string
-  source_path: string
-  advisory_id: string
-  advisory_source: AdvisoryRecord["source"]
-  vulnerable_range: string
-  patched_in: string
-  severity: AdvisoryRecord["severity_class"]
-  summary: string
-  fix_guidance: string | null
-  match_type: "range-vulnerable"
-}
 
 export type ScanSkipReason = "disabled-config" | "missing-package-json" | "missing-lockfile" | "parse-failed"
 

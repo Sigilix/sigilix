@@ -3,7 +3,7 @@
 // the empty string so callers can compose prompts with falsy
 // short-circuits (consistent with ARC-187 secret-scan behavior).
 
-import type { DepVulnFinding } from "@/src/features/dep-vulns/app/scanner"
+import type { DepVulnFinding } from "@/src/features/dep-vulns/domain/finding"
 
 /**
  * Render dep-vuln findings as a `[DEPENDENCY VULNERABILITIES — pre-LLM]`

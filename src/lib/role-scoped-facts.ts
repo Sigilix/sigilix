@@ -20,14 +20,15 @@
 
 import type { SpecialistRole } from "./ensemble-router"
 import { renderAstFindingsForPrompt, type AstFinding } from "@/src/features/ast-rules"
+import { renderSarifFindingsForPrompt, type SarifFinding } from "@/src/features/sarif-evidence"
 
 export interface RoleScopedFactInputs {
   /** ARC-187 secret-scan hits block (security). */
   secretScanBlock: string
   /** ARC-186 dependency-vulnerability block (security). */
   depVulnBlock: string
-  /** ARC-188 SARIF evidence block (security). */
-  sarifBlock: string
+  /** ARC-188 SARIF evidence findings, split here by `roleHints ?? [roleHint]`. */
+  sarifFindings: readonly SarifFinding[]
   /** ARC-193 regex deterministic-checks block (logic). */
   deterministicBlock: string
   /** ARC-272 docs-coverage block (tests). */
@@ -59,17 +60,30 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
   const join = (blocks: string[]): string => blocks.filter((s) => s.length > 0).join("\n\n")
   const astBlock = (role: AstFinding["roleHint"]): string =>
     renderAstFindingsForPrompt(inputs.astFindings.filter((f) => f.roleHint === role))
+  const sarifBlock = (role: SpecialistRole): string =>
+    renderSarifFindingsForPrompt(
+      inputs.sarifFindings.filter((f) => {
+        const roles = f.roleHints ?? [f.roleHint]
+        return roles.includes(role)
+      }),
+    )
 
   return {
     security: join([
       inputs.secretScanBlock,
       inputs.depVulnBlock,
       astBlock("security"),
-      inputs.sarifBlock,
+      sarifBlock("security"),
       inputs.securityManifestBlock,
     ]),
-    logic: join([astBlock("logic"), inputs.deterministicBlock, inputs.asymmetryBlock ?? "", inputs.toctouBlock ?? ""]),
-    performance: join([astBlock("performance"), inputs.perfBudgetBlock]),
-    tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
+    logic: join([
+      astBlock("logic"),
+      sarifBlock("logic"),
+      inputs.deterministicBlock,
+      inputs.asymmetryBlock ?? "",
+      inputs.toctouBlock ?? "",
+    ]),
+    performance: join([astBlock("performance"), sarifBlock("performance"), inputs.perfBudgetBlock]),
+    tests: join([sarifBlock("tests"), inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }
 }

@@ -188,6 +188,14 @@ export interface SigilixConfig {
   }
 
   /**
+   * SIG-107: per-repo enablement for deterministic linter tools run
+   * by the runner workflow. All known tools default enabled at
+   * resolution time; repo config can explicitly disable individual
+   * tools with `{ enabled: false }` or strict boolean shorthand.
+   */
+  linters?: Partial<Record<LinterId, LinterConfig>>
+
+  /**
    * SIG-118: per-repo configuration for coverage-diff ingestion. Reads
    * an LCOV coverage artifact from the PR head's GitHub Actions run,
    * intersects uncovered lines with the PR's added lines, and feeds the
@@ -445,6 +453,14 @@ export interface DispatcherConfig {
 export interface DispatcherSafetyNetPattern {
   glob: string
   role: SpecialistRole
+}
+
+export const LINTER_IDS = ["semgrep", "eslint", "ruff", "actionlint", "shellcheck"] as const
+
+export type LinterId = (typeof LINTER_IDS)[number]
+
+export interface LinterConfig {
+  enabled?: boolean
 }
 
 /**

@@ -11,7 +11,7 @@
 //
 // Spec: docs/superpowers/specs/2026-05-06-arc-186-dep-vulns-design.md
 
-import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { GitHubFileReaderPort } from "@/src/shared/ports/github"
 import type { Env } from "@/src/shared/types/env"
 import { loadAdvisoryDb } from "@/src/features/dep-vulns/domain/advisory-db"
 import { parsePackageJson, parsePackageLock, rootDepNames } from "@/src/features/dep-vulns/domain/manifest-parsers"
@@ -29,7 +29,7 @@ export type ScanResult =
 
 export interface RunDepVulnScanArgs {
   env: Env
-  client: GitHubClient
+  client: GitHubFileReaderPort
   owner: string
   repo: string
   prNumber: number
@@ -189,7 +189,7 @@ export async function runDepVulnScan(args: RunDepVulnScanArgs): Promise<ScanResu
 }
 
 async function safeFetch(
-  client: GitHubClient,
+  client: GitHubFileReaderPort,
   owner: string,
   repo: string,
   path: string,

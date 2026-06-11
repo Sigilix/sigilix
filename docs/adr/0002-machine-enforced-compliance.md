@@ -34,11 +34,11 @@ Machine-enforce the `COMPLIANCE.md` rules in CI, so a violation is a red build. 
    - **the inward rule (§1)** — `domain`/`app`/`ports`/`adapters`/`render` layering. The rule is
      scoped by its *source* (only a migrated-unit layer is held to it) but its *target* is global,
      so a cross-unit escape (`features/a/app → shared/adapters`, `features/a/domain →
-     features/b/app`) is caught, not just same-unit edges. Type vs value is judged per layer:
-     `domain` and `render` are fully strict (no outer reference, even a type — §1 names `render`
-     type-explicitly); `app` is the wiring layer, so it may hold an injected adapter's *type* but
-     may not *value*-import a concrete adapter; `ports` are type-only seams (every import out of a
-     port must be `import type`).
+     features/b/app`) is caught, not just same-unit edges. `domain`, `app`, and `render` are
+     fully strict (no reference to a concrete adapter or an outer layer, even a type — adapters
+     are injected at the composition root and an app layer names them only by a **port** in
+     `src/shared/ports/`); `ports` are type-only seams (every import out of a port must be
+     `import type`).
    - **barrel-only cross-feature imports (§2)** — a feature is reached only through its `index.ts`,
      enforced for both external (non-feature) callers and other features.
    - **no new `feature → src/lib` god-file edges**, with an explicit allowlist for the two

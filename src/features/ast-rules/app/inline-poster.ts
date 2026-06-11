@@ -8,12 +8,12 @@
 // marker so re-review tooling can identify the deterministic
 // supersession path (Kimi MINOR #5).
 
-import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { GitHubReviewSinkPort } from "@/src/shared/ports/github"
 import type { SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
 import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 export interface PostAstInlineArgs {
-  client: GitHubClient
+  client: GitHubReviewSinkPort
   owner: string
   repo: string
   prNumber: number

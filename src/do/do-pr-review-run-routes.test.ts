@@ -714,3 +714,46 @@ describe("PrReviewRunDO lastActivityAt invariant", () => {
     vi.useRealTimers()
   })
 })
+
+// ─── SIG-374 — queue-wait + attempt attribution on queue sends ──────
+
+describe("PrReviewRunDO — SIG-374 enqueuedAtMs + attempt on every OPENCLAW_JOBS.send", () => {
+  it("/enqueue stamps enqueuedAtMs (send-time) and attempt=1 on the queue message", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance } = makeDo(env)
+    const before = Date.now()
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+    expect(queue.sent).toHaveLength(1)
+    const msg = queue.sent[0]!.message as { enqueuedAtMs?: number; attempt?: number; type: string }
+    expect(msg.type).toBe("pr-review")
+    expect(typeof msg.enqueuedAtMs).toBe("number")
+    expect(msg.enqueuedAtMs!).toBeGreaterThanOrEqual(before)
+    expect(msg.enqueuedAtMs!).toBeLessThanOrEqual(Date.now())
+    expect(msg.attempt).toBe(1)
+  })
+
+  it("the retry-alarm requeue stamps a fresh enqueuedAtMs and the incremented attempt", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+    const runId = (state.store.get("state") as RunState).runId
+    await postJson(instance, "/pickup", { runId, consumerId: "c-1" })
+    // Transient failure schedules the retry alarm; firing it is the
+    // single increment point for attempts and re-sends the job.
+    await postJson(instance, "/run-result", {
+      runId,
+      consumerId: "c-1",
+      status: "transient",
+      error: { stage: "test", message: "boom" },
+    })
+    const firstEnqueuedAtMs = (queue.sent[0]!.message as { enqueuedAtMs: number }).enqueuedAtMs
+    await instance.alarm()
+    expect(queue.sent).toHaveLength(2)
+    const retryMsg = queue.sent[1]!.message as { enqueuedAtMs?: number; attempt?: number }
+    expect(typeof retryMsg.enqueuedAtMs).toBe("number")
+    expect(retryMsg.enqueuedAtMs!).toBeGreaterThanOrEqual(firstEnqueuedAtMs)
+    expect(retryMsg.attempt).toBe(2)
+  })
+})

@@ -714,6 +714,21 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         payload.repository.id > 0
           ? payload.repository.id
           : undefined
+      // SIG-374: webhook-arrival anchor for the queue-wait decomposition.
+      // Joins do-review-enqueued (same deliveryId) so the monitor can
+      // split webhook→enqueue from enqueue→pickup. Emitted only on the
+      // pr-review enqueue path — not per webhook delivery.
+      console.log(
+        JSON.stringify({
+          event: "pr-review-webhook-arrived",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          deliveryId: request.headers.get("x-github-delivery"),
+          arrivedAtMs: Date.now(),
+        }),
+      )
       const enq = await enqueuePrReviewJob(env, {
         owner,
         repo,

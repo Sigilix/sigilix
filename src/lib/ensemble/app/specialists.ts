@@ -339,8 +339,42 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         prodSpecialistAbortControllers.delete(role)
       })
       .then(
-        (value): PromiseSettledResult<SpecialistRunResult> => ({ status: "fulfilled", value }),
-        (reason): PromiseSettledResult<SpecialistRunResult> => ({ status: "rejected", reason }),
+        (value): PromiseSettledResult<SpecialistRunResult> => {
+          // SIG-374: per-role timing histogram. `specialist-fanout-summary`
+          // names only the slowest role; this gives the full distribution
+          // (which role is the long pole, and how often).
+          console.log(
+            JSON.stringify({
+              event: "specialist-role-completed",
+              owner,
+              repo,
+              prNumber,
+              headSha: headSha.slice(0, 7),
+              role,
+              elapsedMs: value.elapsedMs,
+              verdictOk: value.verdict !== null,
+              modelUsed: value.modelUsed,
+              attemptsUsed: value.attemptsUsed,
+            }),
+          )
+          return { status: "fulfilled", value }
+        },
+        (reason): PromiseSettledResult<SpecialistRunResult> => {
+          console.log(
+            JSON.stringify({
+              event: "specialist-role-completed",
+              owner,
+              repo,
+              prNumber,
+              headSha: headSha.slice(0, 7),
+              role,
+              elapsedMs: Date.now() - fanoutStartMs,
+              verdictOk: false,
+              failed: true,
+            }),
+          )
+          return { status: "rejected", reason }
+        },
       )
     return { role, ctrl, promise }
   })

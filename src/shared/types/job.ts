@@ -118,6 +118,25 @@ export type JobMessage =
        * before invoking the review pipeline.
        */
       repoId?: number
+      /**
+       * SIG-374: `Date.now()` stamped by the DO immediately before
+       * `OPENCLAW_JOBS.send` — on BOTH the /enqueue send and the
+       * retry-alarm send — so the consumer can emit
+       * `queueWaitMs = pickedUpAtMs − enqueuedAtMs`. Optional: absent
+       * on in-flight messages from before this deploy and on
+       * slash-command raw-sends; the consumer guards with a typeof
+       * check and reports `queueWaitMs: null` when absent.
+       */
+      enqueuedAtMs?: number
+      /**
+       * SIG-374: `RunState.attempts` at send time (1-indexed; the
+       * retry alarm is the single increment point). The source of
+       * truth for attempts-per-checkrun in latency telemetry —
+       * counting enqueue events would miss watchdog/retry-alarm
+       * requeues. Optional for the same legacy-message reasons as
+       * `enqueuedAtMs`.
+       */
+      attempt?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that

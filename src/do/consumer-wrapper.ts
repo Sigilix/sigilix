@@ -141,6 +141,16 @@ export async function runPrReviewWithDoCallback(
       finishedAtMs,
       consumerWallMs: finishedAtMs - pickedUpAtMs,
       finalState: caught !== undefined ? "errored" : "completed",
+      // SIG-374: queue wait + attempt attribution. Both fields are
+      // optional on JobMessage (absent on in-flight pre-deploy
+      // messages and slash-command raw-sends) — typeof-guarded so a
+      // missing field reports null instead of NaN. queueWaitMs crosses
+      // isolates (DO Date.now() vs consumer Date.now(), and CF advances
+      // clocks on IO only) — sub-10ms or slightly negative samples are
+      // clock noise; consume as p50/p95 aggregates, never row-by-row.
+      enqueuedAtMs: typeof job.enqueuedAtMs === "number" ? job.enqueuedAtMs : null,
+      queueWaitMs: typeof job.enqueuedAtMs === "number" ? pickedUpAtMs - job.enqueuedAtMs : null,
+      attempt: typeof job.attempt === "number" ? job.attempt : null,
     }),
   )
 }

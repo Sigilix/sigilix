@@ -24,7 +24,7 @@ import { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import { passesLabelGate } from "@/src/lib/sigilix-config"
 import { handleStaleHead } from "@/src/lib/stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "@/src/lib/merge-guard"
-import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { type EnsembleRunCtx, emitPhaseCompleted, emitGithubFileFetchSummary } from "@/src/lib/ensemble-perf-telemetry"
 import { type TokenUsageByModel, makeTokenRecorder } from "@/src/lib/ensemble-slo-telemetry"
 import { type ShadowRunResult } from "@/src/lib/shadow-bakeoff-runner"
 import { ORCHESTRATOR_TIMEOUT_MS, SHADOW_FINALIZE_GRACE_MS } from "@/src/lib/ensemble/domain/budget"
@@ -48,6 +48,7 @@ import { publishReviewSubmission } from "./publish"
 import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -104,6 +105,10 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   // Lifted out of the try block so the finally cleanup can read cache
   // stats into telemetry on every exit path (success, failure, throw).
   let cache: ReturnType<typeof createRetrievalCache> | null = null
+
+  // SIG-374: lifted like `cache` so the finally can emit the per-review
+  // GitHub fetch-overlap summary (sizes SIG-371/372) on every exit path.
+  let clientForFetchSummary: GitHubClient | null = null
 
   // SIG-184: runner-evidence trust state for the check-run badge, set once the
   // receipt is consulted (the SARIF-evidence section, below) and read by every
@@ -177,6 +182,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 
   try {
     const client = await buildClient(env, installationId)
+    clientForFetchSummary = client
 
     // SIG-366: the ARC-280 skip-notice bail moved (verbatim) to
     // `runBailWithSkipNotice` in `./orchestrator-helpers`; this thin closure threads
@@ -820,6 +826,10 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // the submission build) lives in ensemble/app/verify-and-build. It mutates
     // `submissionVerdict.findings` + `renderableUnanchoredForSubmission` by reference
     // on the refuted-demote path; the reassigned `findingMarkers` is re-bound here.
+    // SIG-374: `post_validation` was in the phase enum but never emitted —
+    // this span (gate shadow + verification + receipt-join + trust ledger +
+    // submission build) is part of the dark middle being decomposed.
+    const postValidationStartedAtMs = Date.now()
     const {
       primaryEvent,
       primaryAffordance,
@@ -866,6 +876,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       findingMarkers,
     })
     findingMarkers = findingMarkersAfterBuild
+    emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)
     // SIG-318 (PR 12f): the PUBLISH phase — inline PR-overview render + post-overview
     // stale-head guard (#3), pre-submit dismiss, the submit + 4-level fallback ladder
     // (inline → comment-fallback / 422 → anchorless → comment-fallback), and per-path
@@ -945,6 +956,14 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       prNumber,
       headSha,
     })
+    // SIG-374: per-review GitHub fetch-overlap rollup — the adapter only
+    // counts; the app layer owns the emit (dependency rule). Every exit
+    // path, so failed reviews report their fetch profile too. Duck-typed:
+    // test doubles of `buildClient` don't implement the counter and skip
+    // the summary instead of throwing in the finally.
+    if (clientForFetchSummary !== null && typeof clientForFetchSummary.fetchOverlapSummary === "function") {
+      emitGithubFileFetchSummary(perfCtx, clientForFetchSummary.fetchOverlapSummary())
+    }
   }
 }
 

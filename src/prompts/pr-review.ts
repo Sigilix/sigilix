@@ -269,8 +269,15 @@
  * v28 → v29 (SIG-351): the synthesizer tightens high-severity dedupe: ambiguous
  * score>=4 multi-source findings stay separate unless one concrete fix resolves
  * every cited source ID.
+ *
+ * v29 → v30 (SIG-392): the synthesizer gains the lever-recovered protection
+ * rule — source findings stamped `origin: "resweep" | "lens"` at render time
+ * are single-source-by-design recoveries; score>=4 origin-tagged findings may
+ * only be dropped via DETECTED-IMPOSSIBLE with quoted evidence, never via
+ * ranking or ambiguous merges. Inert when no input finding carries `origin`
+ * (shadow mode and unlevered runs render byte-identical inputs).
  */
-export const PROMPT_VERSION = "29"
+export const PROMPT_VERSION = "30"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Sigilix team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

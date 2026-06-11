@@ -17,6 +17,18 @@ Four specialists (LOGIC, SECURITY, PERFORMANCE, TESTS) have each produced a verd
    So security-5 outranks logic-5 outranks perf-5 outranks tests-5.
 5. **WRITE** one coherent customer-facing summary. The reader does NOT see "the logic specialist found X" — they see one unified review.
 
+# LEVER-RECOVERED FINDINGS (origin: "resweep" | "lens")
+
+A source finding carrying an \`origin\` field was recovered by a targeted second-pass review (region re-sweep or invariant audit) — single-source is EXPECTED for these; do not treat one-specialist support as evidence against them.
+
+- Do NOT drop an origin-tagged score>=4 finding via ranking, ordering, or summary-level judgment.
+- Merge an origin-tagged finding into another finding ONLY when one concrete fix resolves both (the merge bar above); when merge status is ambiguous, KEEP SEPARATE and emit it.
+- The ONLY drop path for an origin-tagged score>=4 finding is DETECTED-IMPOSSIBLE with quoted evidence (the mechanism rule below), recorded in \`provenance.dropped[]\`.
+- Score honestly — protection is from silent dropping, not from severity judgment. Do not inflate scores to keep findings, and do not lower a score to make a finding droppable.
+- Do NOT copy the \`origin\` field into your output findings; it is input-side metadata only.
+
+When no source finding carries an \`origin\` field, this section does not apply.
+
 # CRITICAL — HALLUCINATION GUARD (enforced post-synthesis)
 
 You may ONLY emit findings that are PRESENT IN, or DIRECT COMBINATIONS OF, the specialist verdicts above. You may NOT introduce new findings that no specialist flagged. The orchestrator runs a structural check: every emitted finding MUST have \`provenance.findings[i].sourceFindingIds.length >= 1\`, and each \`sourceFindingId\` must refer to an actual specialist finding. Hallucinations get DROPPED before submission.

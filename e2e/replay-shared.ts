@@ -51,18 +51,37 @@ export function toPrFinding(f: FixtureFinding): PrReviewFinding {
   }
 }
 
+/** Lever origin of a captured finding, from its ref prefix; null for pass-1. */
+export function originOf(ref: string): "resweep" | "lens" | null {
+  if (ref.startsWith("resweep-")) return "resweep"
+  if (ref.startsWith("inv-")) return "lens"
+  return null
+}
+
 /**
  * Group captured lever-loaded findings back into per-role specialist
  * verdicts with REAL stable ids (so the hallucination guard's provenance
- * check and the synth verdict block see traceable sources).
+ * check and the synth verdict block see traceable sources). Also returns
+ * the SIG-392 `leverOrigins` map (rebuilt stable id → origin) so replays
+ * can stamp the same synth-visible `origin` markers prod stamps in
+ * promoted mode.
  */
-export function rebuildSpecialistVerdicts(captured: readonly FixtureFinding[]): CollectedVerdict[] {
+export function rebuildSpecialistVerdicts(captured: readonly FixtureFinding[]): {
+  verdicts: CollectedVerdict[]
+  leverOrigins: ReadonlyMap<string, "resweep" | "lens">
+} {
   const byRole = new Map<SpecialistRole, PrReviewFinding[]>()
+  const leverOrigins = new Map<string, "resweep" | "lens">()
   for (const f of captured) {
     const role = roleOf(f.ref)
-    byRole.set(role, [...(byRole.get(role) ?? []), toPrFinding(f)])
+    const findings = byRole.get(role) ?? []
+    const origin = originOf(f.ref)
+    // Stable ids are positional per role — the index this finding lands at
+    // is exactly the id assignStableFindingIds will mint below.
+    if (origin) leverOrigins.set(`${role}-${findings.length}`, origin)
+    byRole.set(role, [...findings, toPrFinding(f)])
   }
-  return [...byRole.entries()].map(([role, findings]) => ({
+  const verdicts = [...byRole.entries()].map(([role, findings]) => ({
     role,
     verdict: assignStableFindingIds(role, {
       summary: "replay",
@@ -72,6 +91,7 @@ export function rebuildSpecialistVerdicts(captured: readonly FixtureFinding[]): 
     } as PrReviewVerdict),
     elapsedMs: 0,
   }))
+  return { verdicts, leverOrigins }
 }
 
 /** Parse `OPENCLAW_*` string vars out of wrangler.toml [vars] → an env object. */

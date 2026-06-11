@@ -78,8 +78,8 @@ describe("toPrFinding", () => {
 })
 
 describe("rebuildSpecialistVerdicts", () => {
-  it("groups findings by role and assigns role-prefixed stable ids", () => {
-    const verdicts = rebuildSpecialistVerdicts([
+  it("groups findings by role, assigns role-prefixed stable ids, and maps lever origins to those ids", () => {
+    const { verdicts, leverOrigins } = rebuildSpecialistVerdicts([
       fixture({ ref: "logic-1" }),
       fixture({
         ref: "resweep-logic-1",
@@ -100,5 +100,12 @@ describe("rebuildSpecialistVerdicts", () => {
     // stable ids exist and carry the owning role (the provenance contract)
     expect(logic.findings.map((f) => f.id)).toEqual(["logic-0", "logic-1", "logic-2"])
     expect(security.findings.map((f) => f.id)).toEqual(["security-0"])
+    // SIG-392: the leverOrigins map keys are the REBUILT stable ids — the
+    // re-sweep finding landed at logic-1 and the lens finding at logic-2;
+    // pass-1 rows are absent from the map
+    expect([...leverOrigins.entries()].sort()).toEqual([
+      ["logic-1", "resweep"],
+      ["logic-2", "lens"],
+    ])
   })
 })

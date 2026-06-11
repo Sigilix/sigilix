@@ -110,7 +110,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // UNKNOWN mechanism status must be retained).
     // SIG-351 v29 28→29 (synth dedupe-tightening: score>=4 ambiguous merge →
     // KEEP SEPARATE, one provenance row per source ID — anti over-merge).
-    expect(PROMPT_VERSION).toBe("29")
+    // SIG-392 29→30 (synth lever-recovered protection: origin-tagged score>=4
+    // findings only droppable via DETECTED-IMPOSSIBLE with quoted evidence).
+    expect(PROMPT_VERSION).toBe("30")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

@@ -287,6 +287,16 @@ describe("parsePrReviewResponse", () => {
     expect(comment).toContain("value includes ``` inside")
   })
 
+  // SIG-392: if a model ever echoes the synth-input-only `origin` marker
+  // back in its output, the parser must ignore it — no crash, no
+  // propagation into the parsed verdict (the marker is render-time
+  // input metadata; nothing downstream may key on it).
+  it("ignores an `origin` field echoed by the model (SIG-392 negative test)", () => {
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, origin: "resweep" }] }))
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.findings[0]).not.toHaveProperty("origin")
+  })
+
   // SIG-392: the parser must NOT truncate findings. The old `>= 8` break
   // silently capped every specialist AND synth verdict at 8 findings,
   // which was the per-PR recall ceiling on dense PRs (union 16-17/20

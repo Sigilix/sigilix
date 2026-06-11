@@ -36,6 +36,22 @@ export interface ApprovalReadinessSourceVerdict {
   verdict: (PrReviewVerdict & { findings: Array<PrReviewFinding & { id: string }> }) | null
 }
 
+/**
+ * SIG-392: lever-recovered finding ids → origin, for the render-time
+ * synth-input `origin` marker (see `renderSpecialistVerdictsForSynth`).
+ * Pure; shadow mode passes empty id lists → empty map → byte-identical
+ * synth input.
+ */
+export function buildLeverOrigins(
+  resweepFindingIds: readonly string[],
+  lensFindingIds: readonly string[],
+): ReadonlyMap<string, "resweep" | "lens"> {
+  const out = new Map<string, "resweep" | "lens">()
+  for (const id of resweepFindingIds) out.set(id, "resweep")
+  for (const id of lensFindingIds) out.set(id, "lens")
+  return out
+}
+
 export function buildSynthInputVerdicts<T extends ApprovalReadinessSourceVerdict>(
   sourceVerdicts: ReadonlyArray<T>,
   maxTokens: number = SPECIALIST_VERDICT_TOKEN_CAP,

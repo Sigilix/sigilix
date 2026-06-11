@@ -140,6 +140,9 @@ export interface SynthesizeArgs<R> {
   degradedCoverage: { rolesReturned: SpecialistRole[]; rolesMissing: SpecialistRole[] } | null
   /** Hoisted out of the orchestrator so both the bypass + synth branches read the same truncated verdicts. */
   synthInputVerdicts: SynthInputVerdict[]
+  /** SIG-392: finding id → lever origin for merged re-sweep/lens findings; stamped
+   *  into the synth-visible verdict JSON at render time only. Empty in shadow mode. */
+  leverOrigins: ReadonlyMap<string, "resweep" | "lens">
   /** SIG-375: the parsed `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"` flag, threaded
    *  from `EnsembleConfig.flags` so the bypass gate no longer reads env. */
   synthBypassEnabled: EnsembleConfig["flags"]["synthBypassEnabled"]
@@ -282,7 +285,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     synthStartMs = Date.now()
 
     // ─── Synthesizer ───────────────────────────────────────────
-    const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
+    const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts, a.leverOrigins)
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber,
       diff,

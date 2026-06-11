@@ -77,16 +77,24 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
       const inputCaught = new Map<string, number>()
       const outputCaught = new Map<string, number>()
       let totalRuns = 0
+      let attempted = 0
+      let aborted = 0
       const fpInputs: number[] = []
       const fpOutputs: number[] = []
 
       for (const inputName of INPUTS) {
         const captured = JSON.parse(readFileSync(join(OUT_DIR, inputName), "utf8")) as FixtureFinding[]
-        const specialistVerdicts = rebuildSpecialistVerdicts(captured)
+        const { verdicts: specialistVerdicts, leverOrigins } = rebuildSpecialistVerdicts(captured)
         const synthInputVerdicts = buildSynthInputVerdicts(
           specialistVerdicts as Parameters<typeof buildSynthInputVerdicts>[0],
         )
-        const verdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
+        // SIG-392: stamp lever origins into the synth-visible JSON exactly as
+        // prod does in promoted mode (set SYNTH_LOAD_NO_ORIGINS=1 to A/B the
+        // pre-marker input shape).
+        const verdictBlock = renderSpecialistVerdictsForSynth(
+          synthInputVerdicts,
+          process.env.SYNTH_LOAD_NO_ORIGINS === "1" ? undefined : leverOrigins,
+        )
         const synthMessage = buildSynthesizerInitialMessage({
           prNumber: 0,
           diff,
@@ -113,7 +121,9 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
                 }
               : {}),
           })
+          attempted += 1
           if (r.verdict === null) {
+            aborted += 1
             lines.push(`${inputName} #${repeat}: SYNTH FAILED (${r.failureReason ?? "?"})`)
             continue
           }
@@ -137,8 +147,14 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
       // Per-row retention table: a row at input K/K that drops to <K/K in
       // output is a synth-under-load loss (the SIG-317 pattern).
       const rows = [...new Set([...inputCaught.keys(), ...outputCaught.keys()])].sort()
+      // Abort-inclusive stratum (Kimi rev-2 condition): per-row counts below
+      // are conditioned on VALID runs; the attempted/aborted split is reported
+      // so retry-until-K-valid protocols can't silently paint rosier retention
+      // than operational reality.
       const report = [
-        `## SIG-392 synth-under-lever-load — ${FIXTURE} (${totalRuns} synth runs over ${INPUTS.length} input(s))`,
+        `## SIG-392 synth-under-lever-load — ${FIXTURE} (${totalRuns} valid synth runs over ${INPUTS.length} input(s))`,
+        "",
+        `attempts: ${attempted} | valid: ${totalRuns} | aborted: ${aborted} (abort-inclusive retention = per-row counts ÷ ${attempted})`,
         "",
         ...lines.map((l) => `- ${l}`),
         "",

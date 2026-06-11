@@ -388,11 +388,42 @@ export function buildSynthesizerInitialMessage(ctx: SynthesizerInitialMessageCtx
  * etc.) — this is the key the synthesizer references in
  * `provenance.findings[i].sourceFindingIds`.
  */
-export function renderSpecialistVerdictsForSynth(verdicts: Array<{ role: SpecialistRole; verdict: unknown }>): string {
+export function renderSpecialistVerdictsForSynth(
+  verdicts: Array<{ role: SpecialistRole; verdict: unknown }>,
+  leverOrigins?: ReadonlyMap<string, "resweep" | "lens">,
+): string {
   return verdicts
     .map(({ role, verdict }) => {
       const upper = role.toUpperCase()
-      return `=== ${upper} ===\n${JSON.stringify(verdict, null, 2)}`
+      return `=== ${upper} ===\n${JSON.stringify(annotateLeverOrigins(verdict, leverOrigins), null, 2)}`
     })
     .join("\n\n")
+}
+
+/**
+ * SIG-392: stamp `origin: "resweep" | "lens"` onto lever-recovered findings in
+ * the SYNTH-VISIBLE JSON only. The synth systematically merges-away
+ * single-source lever candidates because nothing in its input distinguishes
+ * them from pass-1 findings (both carry plain positional `role-i` ids after
+ * the merge re-assignment); the marker gives the SYNTHESIZER_PROMPT's
+ * lever-recovered protection rule something structural to key on. Annotation
+ * happens at render time on copies, so `origin` exists nowhere outside the
+ * rendered string — no domain type, telemetry, or posting path carries it.
+ * Empty/absent map → the input object is returned untouched (byte-identical
+ * render for shadow-mode and unlevered runs).
+ */
+function annotateLeverOrigins(verdict: unknown, leverOrigins?: ReadonlyMap<string, "resweep" | "lens">): unknown {
+  if (!leverOrigins || leverOrigins.size === 0 || verdict === null || typeof verdict !== "object") return verdict
+  const v = verdict as { findings?: unknown }
+  if (!Array.isArray(v.findings)) return verdict
+  let touched = false
+  const findings = v.findings.map((f) => {
+    if (f === null || typeof f !== "object") return f
+    const id = (f as { id?: unknown }).id
+    const origin = typeof id === "string" ? leverOrigins.get(id) : undefined
+    if (!origin) return f
+    touched = true
+    return { ...(f as Record<string, unknown>), origin }
+  })
+  return touched ? { ...v, findings } : verdict
 }

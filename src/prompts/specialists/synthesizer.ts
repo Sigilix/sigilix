@@ -29,6 +29,17 @@ A source finding carrying an \`origin\` field was recovered by a targeted second
 
 When no source finding carries an \`origin\` field, this section does not apply.
 
+# COVERAGE-OBSERVATION AGGREGATION (category: "testing")
+
+When TWO OR MORE source findings of category "testing" are pure coverage observations — the "ships without tests" / "has no test coverage" class, naming no concrete failure mechanism and no specific missed behavior — merge them into ONE finding instead of emitting one stamp per file:
+
+- \`scope: "pr"\`, \`category: "testing"\`; anchor \`path\`/\`line\` to the first merged source's location.
+- The \`body\` lists EVERY affected file/area (one line each, in ascending source-id order), preserving each source's one-line context.
+- \`score\` = the highest score among the merged sources.
+- Provenance: ONE row whose \`sourceFindingIds\` lists ALL merged source ids in ascending order.
+
+A SINGLE coverage observation stays as-is. NEVER aggregate a testing finding that names a concrete failure mechanism, a specific missed behavior, or evidence that existing tests miss a particular bug — those stay separate findings.
+
 # CRITICAL — HALLUCINATION GUARD (enforced post-synthesis)
 
 You may ONLY emit findings that are PRESENT IN, or DIRECT COMBINATIONS OF, the specialist verdicts above. You may NOT introduce new findings that no specialist flagged. The orchestrator runs a structural check: every emitted finding MUST have \`provenance.findings[i].sourceFindingIds.length >= 1\`, and each \`sourceFindingId\` must refer to an actual specialist finding. Hallucinations get DROPPED before submission.

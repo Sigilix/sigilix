@@ -75,3 +75,16 @@ describe("SIG-392 protected-recovery prompt rule", () => {
     expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(30)
   })
 })
+
+describe("SIG-392 coverage-observation aggregation prompt rule", () => {
+  it("merges 2+ pure coverage stamps into one pr-scope finding, never mechanism-naming ones", () => {
+    expect(SYNTHESIZER_PROMPT).toContain('COVERAGE-OBSERVATION AGGREGATION (category: "testing")')
+    expect(SYNTHESIZER_PROMPT).toContain("merge them into ONE finding instead of emitting one stamp per file")
+    // determinism (Kimi addendum sign-off conditions): stable ordering + tiebreak
+    expect(SYNTHESIZER_PROMPT).toContain("lists ALL merged source ids in ascending order")
+    expect(SYNTHESIZER_PROMPT).toContain("`score` = the highest score among the merged sources")
+    // the guardrails: singletons untouched, mechanism-naming findings never absorbed
+    expect(SYNTHESIZER_PROMPT).toContain("A SINGLE coverage observation stays as-is")
+    expect(SYNTHESIZER_PROMPT).toContain("NEVER aggregate a testing finding that names a concrete failure mechanism")
+  })
+})

@@ -275,7 +275,10 @@
  * are single-source-by-design recoveries; score>=4 origin-tagged findings may
  * only be dropped via DETECTED-IMPOSSIBLE with quoted evidence, never via
  * ranking or ambiguous merges. Inert when no input finding carries `origin`
- * (shadow mode and unlevered runs render byte-identical inputs).
+ * (shadow mode and unlevered runs render byte-identical inputs). Also adds
+ * coverage-observation aggregation: 2+ pure "no test coverage" stamps merge
+ * into one scope:"pr" finding listing every affected file (posted-noise fix;
+ * probe #27 posted four separate stamps).
  */
 export const PROMPT_VERSION = "30"
 

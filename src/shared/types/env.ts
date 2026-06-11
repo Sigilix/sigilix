@@ -376,6 +376,10 @@ export interface Env {
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.
   OPENCLAW_ADMIN_TOKEN?: string
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
+  /** SIG-393: region re-sweep mode — "off" (default) | "shadow" | "on". */
+  OPENCLAW_RESWEEP_MODE?: string
+  /** SIG-393: max regions per re-sweep (default 6). */
+  OPENCLAW_RESWEEP_MAX_REGIONS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
   // SIG-329: max tolerated gap (ms) between runner heartbeats before the

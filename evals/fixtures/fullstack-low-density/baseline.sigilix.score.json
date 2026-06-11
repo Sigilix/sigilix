@@ -1,0 +1,98 @@
+{
+  "fixture": "fullstack-low-density",
+  "tool": "sigilix",
+  "overall": {
+    "caught": 2,
+    "total": 5,
+    "recall": 0.4,
+    "caughtIds": [
+      "r1",
+      "r2"
+    ],
+    "missedIds": [
+      "r3",
+      "r4",
+      "r5"
+    ]
+  },
+  "highSeverity": {
+    "caught": 0,
+    "total": 2,
+    "recall": 0,
+    "caughtIds": [],
+    "missedIds": [
+      "r3",
+      "r4"
+    ]
+  },
+  "byTier": {
+    "EASY": {
+      "caught": 1,
+      "total": 1,
+      "recall": 1,
+      "caughtIds": [
+        "r1"
+      ],
+      "missedIds": []
+    },
+    "MEDIUM": {
+      "caught": 1,
+      "total": 3,
+      "recall": 0.3333333333333333,
+      "caughtIds": [
+        "r2"
+      ],
+      "missedIds": [
+        "r3",
+        "r4"
+      ]
+    },
+    "UNGODLY": {
+      "caught": 0,
+      "total": 1,
+      "recall": 0,
+      "caughtIds": [],
+      "missedIds": [
+        "r5"
+      ]
+    },
+    "LOW": {
+      "caught": 0,
+      "total": 0,
+      "recall": null,
+      "caughtIds": [],
+      "missedIds": []
+    }
+  },
+  "precision": 1,
+  "precisionNumerator": 2,
+  "precisionDenominator": 2,
+  "highSevFalsePositives": [],
+  "trapFlags": [],
+  "unmatched": [],
+  "outOfScope": [],
+  "findings": [
+    {
+      "ref": "s1",
+      "path": "server/webhooks.ts",
+      "line": 1,
+      "excerpt": "**New webhook handler ships without tests**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "r1"
+      }
+    },
+    {
+      "ref": "s2",
+      "path": "server/webhooks.ts",
+      "line": null,
+      "excerpt": "**Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**",
+      "severity": "P2",
+      "verdict": {
+        "kind": "bug",
+        "id": "r2"
+      }
+    }
+  ]
+}

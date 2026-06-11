@@ -6,6 +6,7 @@
 // `github.ts` does the fetching and hands the arrays here.
 
 import type { NormalizedFinding, Tool } from "./types"
+import type { FixtureFinding, Severity } from "./fixture-types"
 
 export const SIGILIX_BOT = "sigilix[bot]"
 export const CODERABBIT_BOT = "coderabbitai[bot]"
@@ -31,6 +32,10 @@ const SIGILIX_FINDING_MARKER = /<!--\s*sigilix:pr-review-finding\s*-->/
 // marker's `cat:` field — mirror the two shapes the collector parser reads.
 const SIGILIX_CATEGORY_MARKER = /<!--\s*sigilix:category:([a-z-]+)\s*-->/
 const SIGILIX_FID_CATEGORY = /<!--\s*sigilix:fid:[0-9a-f]+:cat:([a-z-]+):/
+// SIG-397: the hidden numeric severity marker (same shape pr-finding-markers.ts
+// parses engine-side). Score → label mapping mirrors the renderer
+// (`finding-format.ts`): 5 → P0, 4 → P1, 3 → P2, 1-2 → P3.
+const SIGILIX_SEVERITY_MARKER = /<!--\s*sigilix:severity:(\d+)\s*-->/
 
 const EXCERPT_MAX = 280
 
@@ -55,6 +60,30 @@ export function summarizeBody(body: string): string {
     return chars.length > EXCERPT_MAX ? chars.slice(0, EXCERPT_MAX - 1).join("") + "…" : line
   }
   return "(no text)"
+}
+
+/** Full body for keyword matching: HTML comment markers dropped, everything else kept. */
+export function matchableBody(body: string): string {
+  return body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r/g, "")
+    .trim()
+}
+
+/**
+ * Parse the hidden Sigilix severity score into a P-label; null for other
+ * tools, no marker, or a score outside the engine's 1-5 scale (an invalid
+ * score must not masquerade as P0/P3 and distort high-sev-FP metrics).
+ */
+export function sigilixSeverity(body: string): Severity | null {
+  const m = SIGILIX_SEVERITY_MARKER.exec(body)
+  if (!m) return null
+  const score = Number(m[1])
+  if (score === 5) return "P0"
+  if (score === 4) return "P1"
+  if (score === 3) return "P2"
+  if (score === 2 || score === 1) return "P3"
+  return null
 }
 
 function sigilixCategory(body: string): string | undefined {
@@ -116,4 +145,36 @@ export function normalizeFindings(
   const coderabbit = coderabbitRaw.map((c, i) => toFinding("coderabbit", `c${i + 1}`, c, undefined))
   const greptile = greptileRaw.map((c, i) => toFinding("greptile", `g${i + 1}`, c, undefined))
   return { sigilix, coderabbit, greptile }
+}
+
+/**
+ * SIG-397: the fixture variant of `normalizeFindings` — identical filtering,
+ * sorting, and ref assignment, but each finding also carries the full
+ * matchable body and the parsed severity, which the scorer's equivalence
+ * rules need (the capped excerpt is too short for keyword matching).
+ */
+export function normalizeFixtureFindings(
+  comments: RawComment[],
+  opts: { greptileLogins?: readonly string[] } = {},
+): {
+  sigilix: FixtureFinding[]
+  coderabbit: FixtureFinding[]
+  greptile: FixtureFinding[]
+} {
+  const byId = new Map(comments.map((c) => [c.id, c]))
+  const enrich = (finding: NormalizedFinding): FixtureFinding => {
+    const raw = byId.get(finding.commentId)
+    const body = raw?.body ?? ""
+    return {
+      ...finding,
+      bodyText: matchableBody(body),
+      severity: finding.tool === "sigilix" ? sigilixSeverity(body) : null,
+    }
+  }
+  const base = normalizeFindings(comments, opts)
+  return {
+    sigilix: base.sigilix.map(enrich),
+    coderabbit: base.coderabbit.map(enrich),
+    greptile: base.greptile.map(enrich),
+  }
 }

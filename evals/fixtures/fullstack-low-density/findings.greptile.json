@@ -1,0 +1,57 @@
+[
+  {
+    "ref": "g1",
+    "tool": "greptile",
+    "commentId": 3346369602,
+    "path": "server/webhooks.ts",
+    "line": 45,
+    "excerpt": "**Router never mounted — endpoint unreachable**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346369602",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Router never mounted — endpoint unreachable**\n\nThe `webhooks` Router is exported but never imported or mounted in `server/api.ts` (the only file that creates the Express `app`). A `POST /api/webhooks/github` request will receive a 404 because the route is never registered with the application. `app.use(webhooks)` (or equivalent) needs to be added in `api.ts`.",
+    "severity": null
+  },
+  {
+    "ref": "g2",
+    "tool": "greptile",
+    "commentId": 3346369700,
+    "path": "server/webhooks.ts",
+    "line": 45,
+    "excerpt": "**No HMAC signature verification**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346369700",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> <a href=\"#\"><img alt=\"security\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/Security.svg?v=2\" align=\"top\"></a> **No HMAC signature verification**\n\nGitHub App webhooks attach an `X-Hub-Signature-256` header containing an HMAC-SHA256 digest of the raw request body, keyed with the webhook secret. This handler accepts any POST request without verifying that header, so any HTTP client can send a forged payload and have it treated as a legitimate GitHub event. The raw body must be read before JSON parsing and the `crypto.timingSafeEqual` comparison must pass before processing any action.",
+    "severity": null
+  },
+  {
+    "ref": "g3",
+    "tool": "greptile",
+    "commentId": 3346369755,
+    "path": "server/webhooks.ts",
+    "line": 42,
+    "excerpt": "**`void` expressions are no-ops — feature logic is unimplemented**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346369755",
+    "bodyText": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **`void` expressions are no-ops — feature logic is unimplemented**\n\n`void oauthRedirectAllowlist` and `void ENABLED_ACTIONS` evaluate the expressions and discard the result; they are equivalent to a no-op and exist only to suppress unused-variable linting errors. Neither the redirect allowlist nor the per-action feature toggles are actually consulted anywhere in the handler, so the PR description's claims (\"reads OAuth2 redirect allowlist\", \"per-action feature toggles\") describe behaviour that isn't present in this diff.\n\nNote: If this suggestion doesn't match your team's coding style, reply to this and let me know. I'll remember it for next time!",
+    "severity": null
+  },
+  {
+    "ref": "g4",
+    "tool": "greptile",
+    "commentId": 3346369828,
+    "path": "server/webhooks.ts",
+    "line": null,
+    "excerpt": "`handled` is rebuilt as a new array on every request. Hoist it to a module-level constant so the split runs once at startup.",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346369828",
+    "bodyText": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> `handled` is rebuilt as a new array on every request. Hoist it to a module-level constant so the split runs once at startup.\n\n```suggestion\nconst HANDLED_ACTIONS = \"opened/synchronize/reopened/ready_for_review\".split(\"/\");\n\nwebhooks.post(\"/api/webhooks/github\", (req, res) => {\n  const action = String((req.body as { action?: string })?.action ?? \"\");\n```\n\nNote: If this suggestion doesn't match your team's coding style, reply to this and let me know. I'll remember it for next time!",
+    "severity": null
+  },
+  {
+    "ref": "g5",
+    "tool": "greptile",
+    "commentId": 3352917722,
+    "path": "server/webhooks.ts",
+    "line": 43,
+    "excerpt": "**`req.body` is always `undefined` — every webhook silently returns 200 ignored**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3352917722",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **`req.body` is always `undefined` — every webhook silently returns 200 ignored**\n\n`api.ts` creates the Express `app` without registering `express.json()` (or any body-parsing middleware). Without it, Express leaves `req.body` as `undefined`, so `(req.body as { action?: string })?.action` always evaluates to `undefined`, `action` is coerced to `\"\"`, and `decideWebhookResponse(\"\")` always returns `{ status: 200, body: { ignored: true } }`. Even after the router is mounted, every real `pull_request` event will be silently dropped instead of queued with a 202.",
+    "severity": null
+  }
+]

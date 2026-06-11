@@ -45,6 +45,23 @@ export function parseTarget(input: { repo?: string; pr?: string }): {
 }
 
 /**
+ * SIG-397: resolve the `score` command's optional live-PR target from the
+ * CLI inputs. Accepts a repo (`--repo` or positional, `OWNER/REPO[#N]`,
+ * optionally paired with a numeric `--pr`) or `--pr OWNER/REPO#N` alone.
+ * A numeric `--pr` with no repo is an error — silently falling back to the
+ * frozen snapshot would score the wrong thing.
+ */
+export function scoreTargetFromArgs(repo: string | undefined, pr: string | undefined): string | undefined {
+  if (repo) return pr ? `${repo}#${pr}` : repo
+  if (pr === undefined || pr === "") return undefined
+  if (pr.includes("/")) return pr
+  throw new Error(
+    `--pr ${JSON.stringify(pr)} without --repo / a positional OWNER/REPO — ` +
+      `pass OWNER/REPO#N (or add --repo) for a live re-collect, or drop --pr to score the frozen snapshot`,
+  )
+}
+
+/**
  * Build the comparison record for a freshly-collected PR, preserving any
  * labels the reviewer already recorded on a prior collect. Findings are always
  * taken from the fresh fetch (the bot may have edited its review); `items` are

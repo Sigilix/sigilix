@@ -1,0 +1,826 @@
+{
+  "schemaVersion": 1,
+  "fixture": "fullstack-pr20-dense",
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 20,
+  "headSha": "2a3bc30",
+  "bugs": [
+    {
+      "id": "b1",
+      "title": "SQL injection \u2014 event.invoiceId string-interpolated into the webhook UPDATE",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "EASY",
+      "category": "security",
+      "severity": "P0",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "sql injection",
+              "webhook"
+            ],
+            "notKeywords": [
+              "idsparam",
+              "in clause"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "sql",
+              "event.invoiceid"
+            ],
+            "notKeywords": [
+              "idsparam"
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "b2",
+      "title": "Charge accounting broken: INSERT not awaited (fire-and-forget) and paidCents double-counts on top of the SUM",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "insert",
+              "not awaited"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "missing `await`",
+              "insert"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "missing await",
+              "insert"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "paidcents",
+              "insert"
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "b3",
+      "title": "N+1 \u2014 await inside for...of enriching each payment with refunds",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "EASY",
+      "category": "perf",
+      "severity": "P3",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "n+1"
+            ]
+          },
+          {
+            "allKeywords": [
+              "refunds one payment at a time"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b4",
+      "title": "Invoice-not-found returns default 200 (missing .status(404))",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "EASY",
+      "category": "logic",
+      "severity": "P2",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "200",
+              "not found"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection",
+              "balance",
+              "customer_id"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "status(404)"
+            ],
+            "notKeywords": [
+              "authorization",
+              "balance"
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "b5",
+      "title": "No try/catch + no error middleware \u2014 DB error becomes unhandled rejection/hang",
+      "paths": [
+        "server/payments.ts",
+        "server/api.ts"
+      ],
+      "tier": "EASY",
+      "category": "logic",
+      "severity": "P2",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "unhandled rejection"
+            ]
+          },
+          {
+            "allKeywords": [
+              "error middleware"
+            ]
+          },
+          {
+            "allKeywords": [
+              "try/catch"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b6",
+      "title": "Refund amount treated as dollars *100 (float, no rounding) against the cents-on-the-wire contract",
+      "paths": [
+        "server/refunds.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "dollars",
+              "cents"
+            ]
+          },
+          {
+            "allKeywords": [
+              "floating-point"
+            ]
+          },
+          {
+            "allKeywords": [
+              "float"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b7",
+      "title": "Pagination OFFSET page*limit \u2014 page 1 skips the first page",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "pagination",
+              "offset"
+            ]
+          },
+          {
+            "allKeywords": [
+              "page * limit"
+            ]
+          },
+          {
+            "allKeywords": [
+              "off-by-one",
+              "page"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b8",
+      "title": "Raw snake_case rows cast as unknown as Payment[] \u2014 wire contract is camelCase",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "snake_case"
+            ]
+          },
+          {
+            "allKeywords": [
+              "camelcase"
+            ]
+          },
+          {
+            "allKeywords": [
+              "as unknown as payment"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b9",
+      "title": "IDOR \u2014 charge looks up invoice by :id only, never scopes to req.auth.customerId",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "security",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "charge",
+              "customer_id"
+            ],
+            "notKeywords": [
+              "refund endpoint"
+            ]
+          },
+          {
+            "allKeywords": [
+              "charge",
+              "authorization"
+            ],
+            "notKeywords": [
+              "refund endpoint"
+            ]
+          },
+          {
+            "allKeywords": [
+              "charge",
+              "idor"
+            ],
+            "notKeywords": [
+              "refund endpoint"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b10",
+      "title": "Over-refund \u2014 alreadyRefunded read but never used to cap the refund",
+      "paths": [
+        "server/refunds.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "alreadyrefunded"
+            ]
+          },
+          {
+            "allKeywords": [
+              "over-refund"
+            ]
+          },
+          {
+            "allKeywords": [
+              "exceed",
+              "refund"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b11",
+      "title": "Webhook idempotency violation \u2014 event.id never stored/checked; retry double-applies",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "idempoten",
+              "event.id"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "dedup",
+              "event.id"
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "b12",
+      "title": "Refund read-modify-write race \u2014 SELECT SUM then INSERT without txn/lock",
+      "paths": [
+        "server/refunds.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "race"
+            ]
+          },
+          {
+            "allKeywords": [
+              "concurrent"
+            ]
+          },
+          {
+            "allKeywords": [
+              "transaction"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b13",
+      "title": "Wrong paid predicate \u2014 flips invoice to paid when paidCents>0 instead of >= amount_cents",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "paidcents > 0"
+            ],
+            "notKeywords": [
+              "not awaited",
+              "missing await"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "partial payment"
+            ],
+            "notKeywords": [
+              "not awaited",
+              "missing await"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "unconditionally",
+              "paid"
+            ],
+            "notKeywords": [
+              "not awaited",
+              "missing await"
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "b14",
+      "title": "Hardcoded fallback secret whsec_test_placeholder does not fail closed \u2014 forgeable signature",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "security",
+      "severity": "P0",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "whsec_test_placeholder"
+            ],
+            "notKeywords": [
+              "sql",
+              "idempoten"
+            ]
+          },
+          {
+            "allKeywords": [
+              "fallback",
+              "secret"
+            ],
+            "notKeywords": [
+              "sql",
+              "idempoten"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b15",
+      "title": "IDOR \u2014 refund endpoint never scopes invoice/payment to req.auth.customerId; paymentId unchecked against :id",
+      "paths": [
+        "server/payments.ts",
+        "server/refunds.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "security",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "refund",
+              "idor"
+            ],
+            "notKeywords": [
+              "charge endpoint",
+              "charge looks"
+            ]
+          },
+          {
+            "allKeywords": [
+              "refund",
+              "customer_id"
+            ],
+            "notKeywords": [
+              "charge"
+            ]
+          },
+          {
+            "allKeywords": [
+              "refund",
+              "authorization"
+            ],
+            "notKeywords": [
+              "charge"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b16",
+      "title": "IDOR \u2014 /api/payments lists ALL customers' payments; ?ids= fetches arbitrary payments",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "security",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "lists all",
+              "payments"
+            ],
+            "notKeywords": [
+              "sql"
+            ]
+          },
+          {
+            "allKeywords": [
+              "list",
+              "customer scoping"
+            ],
+            "notKeywords": [
+              "sql"
+            ]
+          },
+          {
+            "allKeywords": [
+              "all customers",
+              "payments"
+            ],
+            "notKeywords": [
+              "sql"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b17",
+      "title": "amountCents from body unvalidated \u2014 NaN/negative/float writes",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P2",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "amountcents",
+              "unvalidated"
+            ]
+          },
+          {
+            "allKeywords": [
+              "amountcents",
+              "validation"
+            ]
+          },
+          {
+            "allKeywords": [
+              "amountcents",
+              "negative"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b18",
+      "title": "Refund response {refundId, refundedCents} matches no declared wire type",
+      "paths": [
+        "server/payments.ts",
+        "server/refunds.ts"
+      ],
+      "tier": "LOW",
+      "category": "logic",
+      "severity": "P3",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "refundid"
+            ]
+          },
+          {
+            "allKeywords": [
+              "refundedcents"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b19",
+      "title": "Webhook ignores event.type \u2014 refund.succeeded wrongly marks the invoice paid",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "event.type"
+            ],
+            "notKeywords": [
+              "idempoten",
+              "dedup"
+            ]
+          },
+          {
+            "allKeywords": [
+              "refund.succeeded"
+            ],
+            "notKeywords": [
+              "idempoten",
+              "dedup"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "b20",
+      "title": "Webhook HMAC computed over JSON.stringify(req.body) \u2014 re-serialized JSON, not raw bytes",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "security",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "re-serial"
+            ]
+          },
+          {
+            "allKeywords": [
+              "reserial"
+            ]
+          },
+          {
+            "allKeywords": [
+              "hmac",
+              "raw bytes"
+            ]
+          },
+          {
+            "allKeywords": [
+              "stringify(req.body)",
+              "signature"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "traps": [
+    {
+      "id": "t1",
+      "title": "String-built IN (...) that is actually fully parameterized ($1,$2,... placeholders)",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "whySafe": "placeholders are $1,$2,... generated from array index; ids are bound as parameters",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "sql injection",
+              "idsparam"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "sql injection",
+              "in clause"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "sql injection",
+              "in ("
+            ],
+            "scope": "excerpt"
+          }
+        ]
+      }
+    },
+    {
+      "id": "t2",
+      "title": "Balance endpoint flagged as IDOR despite correct customer_id scoping",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "whySafe": "query IS scoped WHERE id=$1 AND customer_id=$2 with req.auth.customerId; 404 if not owned",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "balance",
+              "idor"
+            ],
+            "notKeywords": [
+              "charge"
+            ]
+          },
+          {
+            "allKeywords": [
+              "balance",
+              "authorization"
+            ],
+            "notKeywords": [
+              "charge"
+            ]
+          },
+          {
+            "allKeywords": [
+              "balance",
+              "customer_id"
+            ],
+            "notKeywords": [
+              "charge"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "t3",
+      "title": "Balance arithmetic flagged as float-money bug despite integer cents throughout",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "whySafe": "outstanding kept in integer cents (amount - paid + refunded); no float involved",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "balance",
+              "float"
+            ]
+          },
+          {
+            "allKeywords": [
+              "balance",
+              "overflow"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "t4",
+      "title": "limit/page Number() coercion flagged unsafe despite Number.isInteger + 1..100 guard",
+      "paths": [
+        "server/payments.ts"
+      ],
+      "whySafe": "Number.isInteger && 1<=n<=100 guard returns 400 otherwise; fully validated",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "limit",
+              "coercion"
+            ]
+          },
+          {
+            "allKeywords": [
+              "limit",
+              "nan"
+            ],
+            "notKeywords": [
+              "amountcents"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "outOfScope": [
+    {
+      "id": "testing-coverage",
+      "title": "True 'ships without tests' coverage observations \u2014 not rows in the hand-scored bug table",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "tests"
+            ],
+            "botCategories": [
+              "testing"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -19,15 +19,19 @@ import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { greptileLoginsFromEnv } from "./env"
 import { fetchPrUrl, fetchReviewComments } from "./github"
-import { comparisonBasename, mergeComparison, parseTarget } from "./io"
-import { normalizeFindings } from "./normalize"
+import { comparisonBasename, mergeComparison, parseTarget, scoreTargetFromArgs } from "./io"
+import { normalizeFindings, normalizeFixtureFindings } from "./normalize"
+import { formatDeltaMarkdown, formatScoreMarkdown, scoreFixture } from "./scorer"
 import { formatSummaryMarkdown, summarize } from "./summary"
 import { buildWorksheet, parseWorksheet } from "./worksheet"
-import type { ComparisonFile } from "./types"
+import type { FixtureFinding, FixtureGroundTruth, FixtureScore } from "./fixture-types"
+import type { ComparisonFile, Tool } from "./types"
+import { TOOLS } from "./types"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_DATA_DIR = join(HERE, "data")
 const DEFAULT_REPORT = join(HERE, "REPORT.md")
+const FIXTURES_DIR = join(HERE, "fixtures")
 
 function die(msg: string): never {
   console.error(`error: ${msg}`)
@@ -160,6 +164,75 @@ async function cmdSummary(opts: { out?: string; dataDir: string }): Promise<void
   console.log(md)
 }
 
+// ─── score (SIG-397) ─────────────────────────────────────────────
+
+async function readJson<T>(path: string, what: string): Promise<T> {
+  let raw: string
+  try {
+    raw = await readFile(path, "utf8")
+  } catch {
+    die(`no ${what} at ${path}`)
+  }
+  return JSON.parse(raw) as T
+}
+
+function isTool(s: string): s is Tool {
+  return (TOOLS as readonly string[]).includes(s)
+}
+
+/**
+ * Score a tool's findings against a frozen fixture's ground truth.
+ * Default input is the committed snapshot; `--pr` re-collects live from
+ * GitHub (the re-runnable path used to A/B a SIG-392 lever after the
+ * fixture PR is re-reviewed); `--findings` scores an arbitrary saved file.
+ */
+async function cmdScore(opts: {
+  fixture?: string
+  tool: string
+  pr?: string
+  findingsPath?: string
+  baseline?: string
+  label?: string
+  out?: string
+  saveFindings?: string
+}): Promise<void> {
+  if (!opts.fixture) die("score requires --fixture <name> (a directory under evals/fixtures/)")
+  if (!isTool(opts.tool)) die(`--tool must be one of ${TOOLS.join(", ")} (got ${JSON.stringify(opts.tool)})`)
+  const fixtureDir = join(FIXTURES_DIR, opts.fixture)
+  const truth = await readJson<FixtureGroundTruth>(join(fixtureDir, "ground-truth.json"), "ground truth")
+
+  let findings: FixtureFinding[]
+  if (opts.pr) {
+    const { owner, repo, pr } = parseTarget({ repo: opts.pr, pr: "" })
+    console.error(`[score] fetching live review comments for ${owner}/${repo}#${pr}…`)
+    const comments = await fetchReviewComments(owner, repo, pr)
+    findings = normalizeFixtureFindings(comments, {
+      greptileLogins: greptileLoginsFromEnv(process.env, console.warn),
+    })[opts.tool]
+    if (opts.saveFindings) {
+      await writeFile(opts.saveFindings, JSON.stringify(findings, null, 2) + "\n", "utf8")
+      console.error(`[score] saved findings → ${opts.saveFindings}`)
+    }
+  } else if (opts.findingsPath) {
+    findings = await readJson<FixtureFinding[]>(resolve(opts.findingsPath), "findings file")
+  } else {
+    findings = await readJson<FixtureFinding[]>(join(fixtureDir, `findings.${opts.tool}.json`), "frozen snapshot")
+  }
+
+  const score = scoreFixture(truth, opts.tool, findings)
+  let md = formatScoreMarkdown(score)
+  if (opts.baseline) {
+    const baseline = await readJson<FixtureScore>(resolve(opts.baseline), "baseline score")
+    md += "\n\n" + formatDeltaMarkdown(baseline, score, opts.label ?? "(unlabeled run)")
+  }
+  if (opts.out) {
+    const outPath = resolve(opts.out)
+    await writeFile(outPath, JSON.stringify(score, null, 2) + "\n", "utf8")
+    console.error(`[score] full score JSON → ${outPath}`)
+  }
+  console.log(md)
+}
+
 // ─── entry ───────────────────────────────────────────────────────
 
 const USAGE = `evals — reviewer head-to-head
@@ -167,6 +240,12 @@ const USAGE = `evals — reviewer head-to-head
   collect  --repo OWNER/REPO --pr N    fetch tool findings + write a worksheet
   label    --repo OWNER/REPO --pr N    parse the filled worksheet into the JSON
   summary  [--out path.md]             aggregate all data/*.json into a report
+  score    --fixture NAME [--tool sigilix]   score against a frozen fixture (SIG-397)
+           [--pr OWNER/REPO#N]               …re-collect live instead of the frozen snapshot
+           [--findings path.json]            …or score a saved findings file
+           [--baseline score.json --label x] emit a Δ block vs a baseline score
+           [--out score.json]                write the full score JSON
+           [--save-findings path.json]       with --pr: persist the fetched findings
 
   --data-dir <path>   override the data directory (default: evals/data)
 
@@ -180,6 +259,12 @@ async function main(): Promise<void> {
       pr: { type: "string" },
       out: { type: "string" },
       "data-dir": { type: "string" },
+      fixture: { type: "string" },
+      tool: { type: "string", default: "sigilix" },
+      findings: { type: "string" },
+      baseline: { type: "string" },
+      label: { type: "string" },
+      "save-findings": { type: "string" },
       help: { type: "boolean", default: false },
     },
     strict: true,
@@ -206,6 +291,19 @@ async function main(): Promise<void> {
     case "summary":
       await cmdSummary({ out: values.out ?? "", dataDir })
       break
+    case "score": {
+      const scoreOpts: Parameters<typeof cmdScore>[0] = { tool: values.tool ?? "sigilix" }
+      if (values.fixture) scoreOpts.fixture = values.fixture
+      const target = scoreTargetFromArgs(repo, values.pr)
+      if (target) scoreOpts.pr = target
+      if (values.findings) scoreOpts.findingsPath = values.findings
+      if (values.baseline) scoreOpts.baseline = values.baseline
+      if (values.label) scoreOpts.label = values.label
+      if (values.out) scoreOpts.out = values.out
+      if (values["save-findings"]) scoreOpts.saveFindings = values["save-findings"]
+      await cmdScore(scoreOpts)
+      break
+    }
     default:
       console.error(USAGE)
       die(`unknown command "${command}"`)

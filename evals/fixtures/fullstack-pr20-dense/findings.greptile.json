@@ -1,0 +1,101 @@
+[
+  {
+    "ref": "g1",
+    "tool": "greptile",
+    "commentId": 3386170252,
+    "path": "server/payments.ts",
+    "line": 180,
+    "excerpt": "**SQL Injection via template literal in webhook handler**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170252",
+    "bodyText": "<a href=\"#\"><img alt=\"P0\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p0.svg?v=9\" align=\"top\"></a> <a href=\"#\"><img alt=\"security\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/Security.svg?v=2\" align=\"top\"></a> **SQL Injection via template literal in webhook handler**\n\n`event.invoiceId` is derived directly from the parsed request body and is interpolated into the SQL string without parameterisation. Even with the HMAC check in front, a valid-signed payload with a crafted `invoiceId` (e.g. `'; DROP TABLE invoices; --`) would execute arbitrary SQL. Every other query in this file correctly uses `$1` placeholders — this one was accidentally left as a template literal and must be converted to a parameterised call.\n\n```suggestion\n  await pool.query(\n    \"UPDATE invoices SET status = 'paid' WHERE id = $1\",\n    [event.invoiceId],\n  );\n```",
+    "severity": null
+  },
+  {
+    "ref": "g2",
+    "tool": "greptile",
+    "commentId": 3386170373,
+    "path": "server/payments.ts",
+    "line": 48,
+    "excerpt": "Missing `await` on the payment INSERT means the subsequent `SUM` query runs before the row is visible. The code compensates by adding `amountCents` manually, but under concurrent requests both calls would read the same stale sum and independently add the same amount — double-cou…",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170373",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> Missing `await` on the payment INSERT means the subsequent `SUM` query runs before the row is visible. The code compensates by adding `amountCents` manually, but under concurrent requests both calls would read the same stale sum and independently add the same amount — double-counting the payment. The INSERT failure also goes completely unhandled.\n\n```suggestion\n    await pool.query(\n      \"INSERT INTO payments (invoice_id, amount_cents) VALUES ($1, $2)\",\n      [invoiceId, amountCents],\n    );\n\n    const paidRes = await pool.query(\n      \"SELECT COALESCE(SUM(amount_cents), 0)::int AS paid FROM payments WHERE invoice_id = $1\",\n      [invoiceId],\n    );\n    const paidCents: number = paidRes.rows[0].paid;\n```",
+    "severity": null
+  },
+  {
+    "ref": "g3",
+    "tool": "greptile",
+    "commentId": 3386170502,
+    "path": "server/payments.ts",
+    "line": 141,
+    "excerpt": "Wrong pagination offset for 1-based pages. With the current formula `page * limit`, page 1 gives offset 20, page 2 gives offset 40 — so the first page of results is always skipped.",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170502",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> Wrong pagination offset for 1-based pages. With the current formula `page * limit`, page 1 gives offset 20, page 2 gives offset 40 — so the first page of results is always skipped.\n\n```suggestion\n    const offset = (page - 1) * limit;\n```",
+    "severity": null
+  },
+  {
+    "ref": "g4",
+    "tool": "greptile",
+    "commentId": 3386170635,
+    "path": "server/payments.ts",
+    "line": 54,
+    "excerpt": "An invoice is flipped to `paid` as soon as `paidCents > 0`, meaning a single-cent partial payment settles the full invoice regardless of its `amount_cents`. The condition should require the running total to reach or exceed the invoice face value.",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170635",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> An invoice is flipped to `paid` as soon as `paidCents > 0`, meaning a single-cent partial payment settles the full invoice regardless of its `amount_cents`. The condition should require the running total to reach or exceed the invoice face value.\n\n```suggestion\n    if (paidCents >= invoice.amount_cents) {\n      await pool.query(\"UPDATE invoices SET status = 'paid' WHERE id = $1\", [\n        invoiceId,\n      ]);\n    }\n```",
+    "severity": null
+  },
+  {
+    "ref": "g5",
+    "tool": "greptile",
+    "commentId": 3386170746,
+    "path": "server/refunds.ts",
+    "line": 8,
+    "excerpt": "**Refund API accepts dollars; charge API accepts cents**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170746",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Refund API accepts dollars; charge API accepts cents**\n\n`computeRefundCents` multiplies by 100, so `POST /api/invoices/:id/refund` treats the `amount` field as a *dollar* value. But `POST /api/invoices/:id/charge` takes `amountCents` (integer cents), and the PR description states \"Money stays in integer cents on the wire.\" A caller following the stated convention and sending `500` for a $5.00 refund would actually refund $500 (50 000 cents).",
+    "severity": null
+  },
+  {
+    "ref": "g6",
+    "tool": "greptile",
+    "commentId": 3386170830,
+    "path": "server/payments.ts",
+    "line": 166,
+    "excerpt": "**Webhook HMAC is over re-serialised JSON, not raw bytes**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170830",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Webhook HMAC is over re-serialised JSON, not raw bytes**\n\n`JSON.stringify(req.body)` re-serialises the already-parsed body. Any provider that signs the original request bytes (standard practice — Stripe, Svix, etc.) will produce a signature over a byte sequence that may differ in whitespace or key order, causing every legitimate webhook to fail verification. The raw body should be captured before `express.json()` parses it via a `verify` callback or `rawBody` middleware.",
+    "severity": null
+  },
+  {
+    "ref": "g7",
+    "tool": "greptile",
+    "commentId": 3386170951,
+    "path": "server/payments.ts",
+    "line": 36,
+    "excerpt": "**Charge endpoint does not scope by `customer_id`**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170951",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> <a href=\"#\"><img alt=\"security\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/Security.svg?v=2\" align=\"top\"></a> **Charge endpoint does not scope by `customer_id`**\n\nThe balance endpoint correctly filters with `WHERE id = $1 AND customer_id = $2`, but the charge endpoint fetches the invoice by `id` alone. Any authenticated caller can charge an invoice belonging to a different customer by knowing (or guessing) its UUID.",
+    "severity": null
+  },
+  {
+    "ref": "g8",
+    "tool": "greptile",
+    "commentId": 3386171075,
+    "path": "server/payments.ts",
+    "line": 36,
+    "excerpt": "The charge endpoint returns HTTP 200 with an error body when the invoice is not found. Clients relying on the HTTP status code won't see the failure.",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386171075",
+    "bodyText": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> The charge endpoint returns HTTP 200 with an error body when the invoice is not found. Clients relying on the HTTP status code won't see the failure.\n\n```suggestion\n    if (rows.length === 0) {\n      return res.status(404).json({ error: \"invoice not found\" });\n    }\n```",
+    "severity": null
+  },
+  {
+    "ref": "g9",
+    "tool": "greptile",
+    "commentId": 3386171235,
+    "path": "server/payments.ts",
+    "line": 180,
+    "excerpt": "**Webhook idempotency is not actually enforced by `event.id`**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386171235",
+    "bodyText": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Webhook idempotency is not actually enforced by `event.id`**\n\nThe comment says \"Idempotent on event.id\", but `event.id` is never stored or checked. Re-delivering the same event just re-runs the UPDATE (safe here only because it sets a static status), but any future handler that credits an account or triggers a workflow would double-apply. The standard fix is an `INSERT INTO processed_events (event_id) … ON CONFLICT DO NOTHING` guard at the top.",
+    "severity": null
+  }
+]

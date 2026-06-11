@@ -98,6 +98,46 @@ The current JSON schema is `schemaVersion: 2`. Older v1 files are rejected
 instead of silently treating Greptile as absent; migrate them by converting
 `label` to `outcome`, `bot` to `tool`, and adding `findings.greptile`.
 
+## Frozen recall fixtures + scorer (SIG-397)
+
+`fixtures/` freezes benchmark PRs as **regression fixtures**: a hand-verified
+`ground-truth.json` (bug rows + traps, each with an encoded equivalence rule)
+plus per-tool snapshots of the actually-posted findings. The `score` command
+maps findings to rows mechanically — no eyeballing — and emits the three
+metrics every SIG-392 recall lever must report before enforcement:
+**recall** (overall + P0/P1 + per-tier), **precision**, and
+**high-severity false positives**.
+
+- `fullstack-pr20-dense` — sigilix-e2e-fullstack#20 (head `pr/11-payments-refunds`,
+  20 bugs + 4 traps): the multi-bug saturation regime in a bottle. Baseline:
+  Sigilix 8/20, 90.9% precision, 1 soft P0 trap flag; Greptile 9/20, 100%;
+  CodeRabbit empty (cooldown).
+- `fullstack-low-density` — sigilix-e2e-fullstack#17 (5 labeled rows): the
+  control. Confirms recall climbs back toward per-fixture levels when bugs
+  don't compete, and guards against overfitting levers to the dense fixture.
+  Caveat: its truth is the Jun-6 labeling; Greptile re-reviewed later, so its
+  post-label findings score as unmatched there.
+
+```bash
+# Score the frozen Sigilix snapshot against the dense fixture
+npm run evals -- score --fixture fullstack-pr20-dense
+
+# A/B a recall lever: re-review the fixture PR (clone/reopen), then
+npm run evals -- score --fixture fullstack-pr20-dense Sigilix/sigilix-e2e-fullstack#NN \
+  --save-findings /tmp/lever-run.json \
+  --baseline evals/fixtures/fullstack-pr20-dense/baseline.sigilix.score.json \
+  --label sig-393-l1-shadow
+# → emits the Δ block (Δrecall, ΔP0/P1, ΔUNGODLY, Δprecision, Δhigh-sev-FP)
+#   that the lever's PR description pastes.
+```
+
+Equivalence rules are **calibration-pinned**: `scorer.test.ts` asserts the
+committed rules reproduce the original hand scoring of both fixtures exactly,
+ref by ref. If a rule edit shifts any mapping, the suite fails. Ambiguity is a
+hard error — a finding matching two rows means the rules must be tightened
+(`notKeywords`, `scope: "excerpt"`), never tie-broken. Denominators (20 rows /
+15 P0+P1 / 7 UNGODLY) are always derived from the loaded JSON, never prose.
+
 ## Operational: move CodeRabbit to advisory (non-blocking)
 
 SIG-70 also calls for taking CodeRabbit off the required-checks list in branch

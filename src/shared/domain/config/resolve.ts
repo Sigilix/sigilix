@@ -8,7 +8,9 @@ import type { ResolvedPerfBudgets } from "@/src/shared/domain/perf-budgets"
 import { DEFAULT_PRE_MERGE_GATES_CONFIG, type ResolvedPreMergeGatesConfig } from "@/src/shared/domain/pre-merge-gates"
 import { pathMatchesAny } from "@/src/shared/util/path-glob"
 import {
+  LINTER_IDS,
   SPECIALIST_ROLES,
+  type LinterId,
   type MatchedSigilixPathInstruction,
   type ReviewMemoryCategoryRef,
   type SarifFindingCategoryRef,
@@ -375,6 +377,22 @@ export function resolveSarifEvidenceConfig(config: SigilixConfig | null): {
     disabledRules: cfg?.disabledRules ?? [],
     disabledCategories: cfg?.disabledCategories ?? [],
   }
+}
+
+export type ResolvedLintersConfig = Record<LinterId, { enabled: boolean }>
+
+/**
+ * SIG-107: resolve linter enablement to a complete known-tool map.
+ * Default-on: only an explicit `enabled: false` disables a tool.
+ */
+export function resolveLintersConfig(config: SigilixConfig | null): ResolvedLintersConfig {
+  const cfg = config?.linters
+  const out = {} as ResolvedLintersConfig
+  for (const id of LINTER_IDS) {
+    // Missing entries, including invalid entries dropped by the parser, default on.
+    out[id] = { enabled: cfg?.[id]?.enabled !== false }
+  }
+  return out
 }
 
 /**

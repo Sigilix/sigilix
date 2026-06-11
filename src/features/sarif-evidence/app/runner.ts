@@ -20,6 +20,7 @@ import type { Env } from "@/src/shared/types/env"
 import { parseSarif } from "@/src/features/sarif-evidence/domain/sarif-parser"
 import { normalizeSarifPath } from "@/src/features/sarif-evidence/domain/path-normalize"
 import { resolveTaxonomy } from "@/src/features/sarif-evidence/domain/taxonomy"
+import { parseRunnerMetadata } from "@/src/features/sarif-evidence/domain/runner-metadata"
 import { buildSbomSummary } from "@/src/features/sarif-evidence/domain/sbom-summary"
 import { buildChangedLines, nodeOverlapsChanged } from "@/src/features/sarif-evidence/domain/diff-lines"
 import type {
@@ -136,6 +137,18 @@ function normalizeWhitespace(s: string): string {
 function resolveRule(rules: SarifRule[] | undefined, ruleId: string | undefined): SarifRule | null {
   if (!rules || !ruleId) return null
   return rules.find((r) => r.id === ruleId) ?? null
+}
+
+function resolveDroppedResultsForRun(
+  properties: unknown,
+  resultCount: number,
+): SarifFinding["droppedResults"] | undefined {
+  const parsed = parseRunnerMetadata(properties)
+  if (!parsed.ok) return undefined
+  const droppedResults = parsed.metadata.droppedResults
+  if (droppedResults === undefined) return undefined
+  if (droppedResults.keptCount !== undefined && droppedResults.keptCount !== resultCount) return undefined
+  return droppedResults
 }
 
 function findStaleReportAgeMs(report: SarifReport, nowMs: number): number | null {
@@ -284,8 +297,12 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
     const rules = run.tool?.driver?.rules
     const runTaxa = run.taxonomies?.flatMap((t) => t.taxa ?? []) ?? []
     const toolName = run.tool?.driver?.name ?? "unknown"
+    const toolDriverProperties = run.tool?.driver?.properties
+    const results = run.results ?? []
+    const droppedResults = resolveDroppedResultsForRun(toolDriverProperties, results.length)
+    let droppedResultsAttached = false
 
-    for (const result of run.results ?? []) {
+    for (const result of results) {
       resultsConsidered++
 
       // Severity mapping
@@ -301,7 +318,13 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
 
       // Rule + taxonomy
       const rule = resolveRule(rules, result.ruleId)
-      const taxonomy = resolveTaxonomy({ result, rule, runTaxa, toolName })
+      const taxonomy = resolveTaxonomy({
+        result,
+        rule,
+        runTaxa,
+        toolName,
+        ...(toolDriverProperties !== undefined ? { toolDriverProperties } : {}),
+      })
       if (taxonomy.isSbom) continue // SBOM is metadata, not a finding
 
       // Config-driven filter (disabledRules + disabledCategories)
@@ -365,6 +388,14 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
         path,
         message: messageText,
         toolName,
+      }
+      if (taxonomy.roleHints !== undefined) finding.roleHints = taxonomy.roleHints
+      if (taxonomy.toolId !== undefined) finding.toolId = taxonomy.toolId
+      if (taxonomy.source !== undefined) finding.source = taxonomy.source
+      if (taxonomy.schemaWarning !== undefined) finding.schemaWarning = taxonomy.schemaWarning
+      if (droppedResults !== undefined && !droppedResultsAttached) {
+        finding.droppedResults = droppedResults
+        droppedResultsAttached = true
       }
       if (typeof startLine === "number") finding.line = startLine
       if (rule?.name) finding.ruleName = rule.name

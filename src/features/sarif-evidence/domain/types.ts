@@ -10,6 +10,13 @@ export type Severity = "info" | "warning" | "error"
 export type SarifFindingCategory = "iac" | "misconfiguration" | "vulnerability" | "license" | "secret" | "other"
 
 export type RoleHint = "security" | "logic" | "performance" | "tests"
+export type SarifEvidenceSource = "deterministic-tool"
+
+export interface SarifDroppedResults {
+  toolId: string
+  droppedCount: number
+  keptCount?: number
+}
 
 /** Run-level taxonomy table. SARIF puts the canonical taxonomy
  *  identifiers (e.g. CWE, OWASP, Trivy's misconfiguration registry)
@@ -137,7 +144,17 @@ export interface SarifFinding {
   ruleId: string
   severity: Severity
   roleHint: RoleHint
+  /** Multi-role deterministic routing; `roleHint` is the primary role. */
+  roleHints?: RoleHint[]
   category: SarifFindingCategory
+  /** Stable Sigilix runner tool id when SARIF carries valid runner metadata. */
+  toolId?: string
+  /** Deterministic source marker when SARIF carries valid runner metadata. */
+  source?: SarifEvidenceSource
+  /** Non-fatal metadata warning; legacy taxonomy fallback still applies. */
+  schemaWarning?: string
+  /** Compact run-level summary of deterministic results withheld before SARIF emission. */
+  droppedResults?: SarifDroppedResults
   /** Post-normalization repo-relative path (spec §4.4). */
   path: string
   /** 1-based start line. Some IaC findings have no line — runner

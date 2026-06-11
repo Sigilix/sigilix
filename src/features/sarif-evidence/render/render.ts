@@ -39,10 +39,45 @@ function applyPerFileCap(findings: readonly SarifFinding[]): SarifFinding[] {
   return out
 }
 
+function formatSourceLabel(finding: SarifFinding): string | null {
+  if (finding.source === undefined || finding.toolId === undefined) return null
+  return `${finding.source}/${finding.toolId}`
+}
+
+function formatDroppedResults(finding: SarifFinding): string | null {
+  const dropped = finding.droppedResults
+  if (dropped === undefined) return null
+  const kept = typeof dropped.keptCount === "number" ? `, ${dropped.keptCount} kept` : ""
+  return `${dropped.droppedCount} dropped${kept}`
+}
+
+function formatDroppedResultsSummary(finding: SarifFinding): string | null {
+  const dropped = finding.droppedResults
+  if (dropped === undefined) return null
+  const droppedResults = formatDroppedResults(finding)
+  if (droppedResults === null) return null
+  return `${dropped.toolId}: ${droppedResults}`
+}
+
+function collectCapExcludedDroppedResults(sorted: readonly SarifFinding[], capped: readonly SarifFinding[]): string[] {
+  const cappedFindings = new Set(capped)
+  const seen = new Set<string>()
+  const summaries: string[] = []
+  for (const finding of sorted) {
+    if (finding.droppedResults === undefined || cappedFindings.has(finding)) continue
+    const summary = formatDroppedResultsSummary(finding)
+    if (summary === null || seen.has(summary)) continue
+    seen.add(summary)
+    summaries.push(summary)
+  }
+  return summaries
+}
+
 export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]): string {
   if (findings.length === 0) return ""
   const sorted = sortBySeverityThenPath(findings)
   const capped = applyPerFileCap(sorted)
+  const capExcludedDroppedResults = collectCapExcludedDroppedResults(sorted, capped)
   const lines: string[] = []
   lines.push("[SARIF EVIDENCE — pre-LLM]")
   const droppedByCap = sorted.length - capped.length
@@ -51,6 +86,9 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
       ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
       : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
   lines.push(summary)
+  for (const droppedResults of capExcludedDroppedResults) {
+    lines.push(`dropped_results: ${droppedResults}`)
+  }
   lines.push("")
   for (const f of capped) {
     lines.push(`- rule_id: ${f.ruleId}`)
@@ -58,6 +96,10 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
     lines.push(`  category: ${f.category}`)
     lines.push(`  role_hint: ${f.roleHint}`)
     lines.push(`  tool: ${f.toolName}`)
+    const sourceLabel = formatSourceLabel(f)
+    if (sourceLabel !== null) lines.push(`  source: ${sourceLabel}`)
+    const droppedResults = formatDroppedResults(f)
+    if (droppedResults !== null) lines.push(`  dropped_results: ${droppedResults}`)
     lines.push(`  path: ${f.path}${typeof f.line === "number" ? `:${f.line}` : ""}`)
     lines.push(`  message: ${f.message}`)
     if (f.evidence) lines.push(`  evidence: ${f.evidence}`)
@@ -83,6 +125,17 @@ export function renderSarifFindingsAsJsonForSynth(findings: readonly SarifFindin
       }
       if (typeof f.line === "number") out.line = f.line
       if (f.evidence) out.evidence = f.evidence
+      if (f.source !== undefined) out.source = f.source
+      if (f.toolId !== undefined) out.tool_id = f.toolId
+      if (f.roleHints !== undefined) out.role_hints = f.roleHints
+      if (f.schemaWarning !== undefined) out.schema_warning = f.schemaWarning
+      if (f.droppedResults !== undefined) {
+        out.dropped_results = {
+          tool_id: f.droppedResults.toolId,
+          dropped_count: f.droppedResults.droppedCount,
+          ...(f.droppedResults.keptCount !== undefined ? { kept_count: f.droppedResults.keptCount } : {}),
+        }
+      }
       return out
     })
   }

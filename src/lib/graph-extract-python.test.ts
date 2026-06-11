@@ -14,7 +14,13 @@ describe("extractPythonFileGraph — symbols", () => {
   it("extracts a top-level def as an exported function", () => {
     const syms = extractPythonFileGraph("m.py", "def add(a, b):\n    return a + b\n").symbols
     expect(syms).toHaveLength(1)
-    expect(syms[0]).toMatchObject({ kind: "function", name: "add", exported: true, startLine: 1, startCol: 0 })
+    expect(syms[0]).toMatchObject({
+      kind: "function",
+      name: "add",
+      exported: true,
+      startLine: 1,
+      startCol: 0,
+    })
     expect(syms[0]!.symbolId).toBe("m.py function add 1 0")
   })
 
@@ -35,9 +41,7 @@ describe("extractPythonFileGraph — symbols", () => {
   it("handles async def and decorators", () => {
     const src = "@app.route('/x')\nasync def handler():\n    return 1\n"
     const syms = extractPythonFileGraph("m.py", src).symbols
-    expect(syms).toEqual([
-      expect.objectContaining({ kind: "function", name: "handler", exported: true, startLine: 2 }),
-    ])
+    expect(syms).toEqual([expect.objectContaining({ kind: "function", name: "handler", exported: true, startLine: 2 })])
   })
 
   it("does not extract keywords inside a triple-quoted docstring", () => {
@@ -60,28 +64,18 @@ describe("extractPythonFileGraph — symbols", () => {
   it("a lone triple-quote inside a # comment does not swallow later defs", () => {
     // Regression: triple-quote detection must run on the comment-stripped
     // line, else this stray `"""` flips string state and drops `real`.
-    const src = [
-      'x = 1  # a stray """ in a comment',
-      "def real():",
-      "    return 2",
-    ].join("\n")
+    const src = ['x = 1  # a stray """ in a comment', "def real():", "    return 2"].join("\n")
     expect(names(src)).toEqual(["function:real:true"])
   })
 
   it("a triple delimiter inside an ordinary string literal does not swallow the file", () => {
     // CodeRabbit catch: `x = '"""'` must not enter triple-string state.
-    const src = ["x = '\"\"\"'", "def real():", "    return 2"].join("\n")
+    const src = ['x = \'"""\'', "def real():", "    return 2"].join("\n")
     expect(names(src)).toEqual(["function:real:true"])
   })
 
   it("skips a ''' docstring as well as a \"\"\" one", () => {
-    const src = [
-      "def real():",
-      "    '''",
-      "    def fake_in_doc():",
-      "    '''",
-      "    return 1",
-    ].join("\n")
+    const src = ["def real():", "    '''", "    def fake_in_doc():", "    '''", "    return 1"].join("\n")
     expect(names(src)).toEqual(["function:real:true"])
   })
 })
@@ -90,8 +84,18 @@ describe("extractPythonFileGraph — import edges", () => {
   it("plain import and dotted import-as", () => {
     const edges = extractPythonFileGraph("m.py", "import os\nimport a.b as c\n").fileEdgesRaw
     expect(edges).toEqual([
-      expect.objectContaining({ edgeKind: "import", specifier: "os", importedName: null, localName: "os" }),
-      expect.objectContaining({ edgeKind: "import", specifier: "a.b", importedName: null, localName: "c" }),
+      expect.objectContaining({
+        edgeKind: "import",
+        specifier: "os",
+        importedName: null,
+        localName: "os",
+      }),
+      expect.objectContaining({
+        edgeKind: "import",
+        specifier: "a.b",
+        importedName: null,
+        localName: "c",
+      }),
     ])
   })
 
@@ -110,7 +114,11 @@ describe("extractPythonFileGraph — import edges", () => {
 
   it("relative from-import", () => {
     const edges = extractPythonFileGraph("m.py", "from . import helpers\n").fileEdgesRaw
-    expect(edges[0]).toMatchObject({ specifier: ".", importedName: "helpers", localName: "helpers" })
+    expect(edges[0]).toMatchObject({
+      specifier: ".",
+      importedName: "helpers",
+      localName: "helpers",
+    })
   })
 
   it("parenthesized single-line from-import", () => {
@@ -148,6 +156,10 @@ describe("extractFileGraph — extension router (SIG-146)", () => {
   })
 
   it("returns an empty graph for an unsupported extension", () => {
-    expect(extractFileGraph("notes.txt", "def add(): pass")).toEqual({ symbols: [], fileEdgesRaw: [], callEdges: [] })
+    expect(extractFileGraph("notes.txt", "def add(): pass")).toEqual({
+      symbols: [],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
   })
 })

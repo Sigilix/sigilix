@@ -31,15 +31,7 @@
  * prompt and the orchestrator code know these as a closed set; the
  * attacker has no other way to refer to them.
  */
-const ROLE_TOKENS = [
-  "logic",
-  "security",
-  "performance",
-  "tests",
-  "specialist",
-  "specialists",
-  "dispatcher",
-] as const
+const ROLE_TOKENS = ["logic", "security", "performance", "tests", "specialist", "specialists", "dispatcher"] as const
 
 /**
  * Instruction-changing trigger phrases. These are the high-leverage
@@ -127,9 +119,7 @@ const FLEX_SEPARATOR_RE = /[\s*_`~]+/g
  *    here + in addSample, drift would silently break canonicalization)
  */
 function compileTrigger(phrase: string): string {
-  const inner = phrase
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/ /g, FLEX_SEPARATOR_CLASS)
+  const inner = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, FLEX_SEPARATOR_CLASS)
   // `(?<!\w)` requires the char before the match (if any) to be a
   // non-word char (whitespace, punctuation, start-of-string). `(?!\w)`
   // requires the char after the match (if any) to be a non-word char.
@@ -137,10 +127,7 @@ function compileTrigger(phrase: string): string {
   // trigger ending in `:` (which `\b` would mishandle).
   return `(?<!\\w)${inner}(?!\\w)`
 }
-const INJECTION_TRIGGER_RE = new RegExp(
-  `(${INJECTION_TRIGGERS.map(compileTrigger).join("|")})`,
-  "gi",
-)
+const INJECTION_TRIGGER_RE = new RegExp(`(${INJECTION_TRIGGERS.map(compileTrigger).join("|")})`, "gi")
 
 const REDACT_MARKER = "[REDACTED]"
 
@@ -169,10 +156,7 @@ export interface SanitizedMetadata {
  * the returned `title` and `body` inside `<pr_metadata>` tags before
  * passing to `chat()`.
  */
-export function sanitizeDispatcherMetadata(args: {
-  title: string
-  body: string
-}): SanitizedMetadata {
+export function sanitizeDispatcherMetadata(args: { title: string; body: string }): SanitizedMetadata {
   // Coerce inputs defensively — GitHub returns string|null for body.
   const rawTitle = typeof args.title === "string" ? args.title : ""
   const rawBody = typeof args.body === "string" ? args.body : ""
@@ -191,10 +175,7 @@ export function sanitizeDispatcherMetadata(args: {
     // field contains ONLY the literal phrase shape, never raw user
     // input. Dashboard sees `"ignore previous"` regardless of how
     // the attacker formatted it.
-    const canonical = match
-      .toLowerCase()
-      .replace(FLEX_SEPARATOR_RE, " ")
-      .trim()
+    const canonical = match.toLowerCase().replace(FLEX_SEPARATOR_RE, " ").trim()
     sampleSet.add(canonical)
   }
 
@@ -225,9 +206,7 @@ export function sanitizeDispatcherMetadata(args: {
     // PASS 2: role-token redaction (gated on trigger hits in THIS
     // field). Per-field gating, not global — a clean title shouldn't
     // be penalized for an attack-y body, and vice versa.
-    const triggerHitsInThisField = isTitle
-      ? titleInjectionTriggerHits
-      : bodyInjectionTriggerHits
+    const triggerHitsInThisField = isTitle ? titleInjectionTriggerHits : bodyInjectionTriggerHits
     if (triggerHitsInThisField > 0) {
       out = out.replace(ROLE_TOKEN_RE, () => {
         if (isTitle) titleRoleTokenHits += 1
@@ -266,20 +245,13 @@ export function sanitizeDispatcherMetadata(args: {
  * concrete: even if an attacker bypasses the regex sanitizer, they
  * can't break out of the `<body>` envelope without obvious tokens.
  */
-export function wrapInPrMetadata(args: {
-  title: string
-  body: string
-}): string {
+export function wrapInPrMetadata(args: { title: string; body: string }): string {
   // We only emit element CONTENT (no attributes), so XML attribute-
   // value escapes for `'` (apostrophe) and `` ` `` are not needed.
   // If a future contributor adds an attribute to this envelope (e.g.
   // `<pr_metadata version="1">`), revisit this escape table.
   const esc = (s: string): string =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
   return [
     "<pr_metadata>",
     `  <title>${esc(args.title)}</title>`,
@@ -293,10 +265,10 @@ export function wrapInPrMetadata(args: {
  * `buildLlmMessages` calls this and passes the result verbatim into
  * the user message.
  */
-export function buildSanitizedMetadataBlock(args: {
-  title: string
-  body: string
-}): { block: string; sanitized: SanitizedMetadata } {
+export function buildSanitizedMetadataBlock(args: { title: string; body: string }): {
+  block: string
+  sanitized: SanitizedMetadata
+} {
   const sanitized = sanitizeDispatcherMetadata(args)
   const block = wrapInPrMetadata({ title: sanitized.title, body: sanitized.body })
   return { block, sanitized }

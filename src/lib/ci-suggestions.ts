@@ -41,9 +41,7 @@ export const CI_SUGGESTION_MARKER = "<!-- sigilix:ci-suggestion -->"
  * Used to dedup: a re-run of the same failure must not append a second set
  * of inline suggestions.
  */
-export function hasExistingCiSuggestion(
-  bodies: ReadonlyArray<string | null | undefined>,
-): boolean {
+export function hasExistingCiSuggestion(bodies: ReadonlyArray<string | null | undefined>): boolean {
   return bodies.some((b) => typeof b === "string" && b.includes(CI_SUGGESTION_MARKER))
 }
 
@@ -74,10 +72,7 @@ function isSuggestionSafe(replacement: string): boolean {
  * line don't produce conflicting suggestions (the first wins; the rest
  * fall back). Pure.
  */
-export function partitionCiPatches(
-  patches: readonly CiTriagePatch[],
-  reviewable: ReviewableMap,
-): PartitionedCiPatches {
+export function partitionCiPatches(patches: readonly CiTriagePatch[], reviewable: ReviewableMap): PartitionedCiPatches {
   const anchorable: CiTriagePatch[] = []
   const unanchorable: CiTriagePatch[] = []
   const seen = new Set<string>()
@@ -89,10 +84,7 @@ export function partitionCiPatches(
     // would just add a conflicting entry for a line already covered).
     if (seen.has(key)) continue
     seen.add(key)
-    if (
-      isSuggestionSafe(patch.replacement) &&
-      deriveSide(reviewable, patch.path, patch.line) === "RIGHT"
-    ) {
+    if (isSuggestionSafe(patch.replacement) && deriveSide(reviewable, patch.path, patch.line) === "RIGHT") {
       anchorable.push(patch)
     } else {
       unanchorable.push(patch)
@@ -150,14 +142,9 @@ export function buildCiSuggestionReview(
  * line isn't in the PR's diff is shown (copy-paste-able) rather than
  * silently dropped. Returns "" when there are none. Pure.
  */
-export function renderUnanchorableCiPatches(
-  unanchorable: readonly CiTriagePatch[],
-): string {
+export function renderUnanchorableCiPatches(unanchorable: readonly CiTriagePatch[]): string {
   if (unanchorable.length === 0) return ""
-  const parts: string[] = [
-    "🔧 **Suggested edits** (apply manually — these lines aren't in this PR's diff):",
-    "",
-  ]
+  const parts: string[] = ["🔧 **Suggested edits** (apply manually — these lines aren't in this PR's diff):", ""]
   for (const patch of unanchorable) {
     parts.push(`\`${patch.path}:${patch.line}\``, fencedBlock(patch.replacement), "")
   }
@@ -172,10 +159,7 @@ export function renderUnanchorableCiPatches(
  * here rather than inline.)
  */
 function fencedBlock(content: string): string {
-  const longestRun = Math.max(
-    0,
-    ...Array.from(content.matchAll(/`+/g), (m) => m[0]?.length ?? 0),
-  )
+  const longestRun = Math.max(0, ...Array.from(content.matchAll(/`+/g), (m) => m[0]?.length ?? 0))
   const fence = "`".repeat(Math.max(3, longestRun + 1))
   return `${fence}\n${content}\n${fence}`
 }
@@ -213,10 +197,7 @@ export function planCiSuggestions(args: {
   const { anchorable, unanchorable } = partitionCiPatches(patches, reviewable)
   const inlineEnabled = mode === "enforce" && !sensitive
   return {
-    stickySuffix:
-      inlineEnabled && unanchorable.length > 0
-        ? `\n\n${renderUnanchorableCiPatches(unanchorable)}`
-        : "",
+    stickySuffix: inlineEnabled && unanchorable.length > 0 ? `\n\n${renderUnanchorableCiPatches(unanchorable)}` : "",
     review: inlineEnabled ? buildCiSuggestionReview(anchorable, headSha) : null,
     anchorableCount: anchorable.length,
     unanchorableCount: unanchorable.length,
@@ -228,17 +209,8 @@ export function planCiSuggestions(args: {
  * `GitHubClient` satisfies it structurally; tests pass a small fake.
  */
 export interface CiSuggestionClient {
-  listPullRequestReviewComments(
-    owner: string,
-    repo: string,
-    prNumber: number,
-  ): Promise<ReadonlyArray<{ body: string }>>
-  submitReview(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    review: SubmitReviewBody,
-  ): Promise<unknown>
+  listPullRequestReviewComments(owner: string, repo: string, prNumber: number): Promise<ReadonlyArray<{ body: string }>>
+  submitReview(owner: string, repo: string, prNumber: number, review: SubmitReviewBody): Promise<unknown>
 }
 
 export interface CiSuggestionPostResult {
@@ -273,11 +245,15 @@ export async function submitCiSuggestionReview(
   try {
     prior = await client.listPullRequestReviewComments(owner, repo, prNumber)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "ci-suggestions-dedup-check-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "ci-suggestions-dedup-check-failed",
+        owner,
+        repo,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { posted: 0, skip: "dedup-check-failed" }
   }
   if (hasExistingCiSuggestion(prior.map((c) => c.body))) {
@@ -298,15 +274,17 @@ export async function submitCiSuggestionReview(
     // body), so gate on that + the status. Everything else fails fast — the
     // sticky already carries the diagnosis.
     const isAnchorValidation =
-      err instanceof GitHubHttpError &&
-      err.status === 422 &&
-      /validation failed/i.test(err.message)
+      err instanceof GitHubHttpError && err.status === 422 && /validation failed/i.test(err.message)
     if (!isAnchorValidation) {
-      console.warn(JSON.stringify({
-        event: "ci-suggestions-submit-failed",
-        owner, repo, prNumber,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "ci-suggestions-submit-failed",
+          owner,
+          repo,
+          prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       return { posted: 0, skip: "submit-failed" }
     }
 
@@ -329,15 +307,19 @@ export async function submitCiSuggestionReview(
         return
       }
       const comment = comments[i]
-      console.warn(JSON.stringify({
-        event: "ci-suggestion-anchor-unpostable",
-        owner, repo, prNumber,
-        path: comment?.path, line: comment?.line,
-        err: res.reason instanceof Error ? res.reason.message : String(res.reason),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "ci-suggestion-anchor-unpostable",
+          owner,
+          repo,
+          prNumber,
+          path: comment?.path,
+          line: comment?.line,
+          err: res.reason instanceof Error ? res.reason.message : String(res.reason),
+        }),
+      )
     })
-    const skip =
-      posted === 0 ? "submit-failed" : posted === comments.length ? "split-recovered" : "partial"
+    const skip = posted === 0 ? "submit-failed" : posted === comments.length ? "split-recovered" : "partial"
     return { posted, skip }
   }
 }

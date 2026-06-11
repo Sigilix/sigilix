@@ -7,10 +7,7 @@ import {
   SHADOW_DISTINCT_PR_FLOOR,
   type ShadowMatchFinding,
 } from "@/src/lib/review-memory/shadow-match"
-import type {
-  ReviewMemoryFinding,
-  ReviewMemoryShadowClaim,
-} from "@/src/lib/review-memory/types"
+import type { ReviewMemoryFinding, ReviewMemoryShadowClaim } from "@/src/lib/review-memory/types"
 
 function shadowClaim(
   over: Partial<ReviewMemoryShadowClaim> & { type: ReviewMemoryShadowClaim["type"] },
@@ -87,9 +84,7 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
   })
 
   it("SIG-280: every emitted row carries the finding's fid + severityTier (tier 1/2)", () => {
-    const memories = [
-      pathMemory("logic", "aaaaaaaaaaaa", [shadowClaim({ type: "structural-glue-not-test-target" })]),
-    ]
+    const memories = [pathMemory("logic", "aaaaaaaaaaaa", [shadowClaim({ type: "structural-glue-not-test-target" })])]
     const out = shadowMatchReviewMemoryClaims({
       memories,
       findings: [finding({ fid: "ffff0000ffff0000", severityTier: "P0" })],
@@ -177,7 +172,10 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
 
   it("emits nothing when neither category nor path memory applies", () => {
     const memories = [catMemory("security", [shadowClaim({ type: "auth-gate-is-boundary" })])]
-    const out = shadowMatchReviewMemoryClaims({ memories, findings: [finding({ category: "logic" })] })
+    const out = shadowMatchReviewMemoryClaims({
+      memories,
+      findings: [finding({ category: "logic" })],
+    })
     expect(out).toEqual([])
   })
 
@@ -194,12 +192,26 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
 
   it("wouldSoftenAtFloor reflects distinctPrCount vs the floor", () => {
     const below = shadowMatchReviewMemoryClaims({
-      memories: [pathMemory("logic", "aaaaaaaaaaaa", [shadowClaim({ type: "structural-glue-not-test-target", distinctPrCount: SHADOW_DISTINCT_PR_FLOOR - 1 })])],
+      memories: [
+        pathMemory("logic", "aaaaaaaaaaaa", [
+          shadowClaim({
+            type: "structural-glue-not-test-target",
+            distinctPrCount: SHADOW_DISTINCT_PR_FLOOR - 1,
+          }),
+        ]),
+      ],
       findings: [finding()],
     })
     expect(below[0]!.wouldSoftenAtFloor).toBe(false)
     const at = shadowMatchReviewMemoryClaims({
-      memories: [pathMemory("logic", "aaaaaaaaaaaa", [shadowClaim({ type: "structural-glue-not-test-target", distinctPrCount: SHADOW_DISTINCT_PR_FLOOR })])],
+      memories: [
+        pathMemory("logic", "aaaaaaaaaaaa", [
+          shadowClaim({
+            type: "structural-glue-not-test-target",
+            distinctPrCount: SHADOW_DISTINCT_PR_FLOOR,
+          }),
+        ]),
+      ],
       findings: [finding()],
     })
     expect(at[0]!.wouldSoftenAtFloor).toBe(true)
@@ -218,9 +230,17 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
       ],
     })
     const ALLOWED = new Set([
-      "fid", "severityTier", "claimType", "matchedTier", "distinctPrCount",
-      "signalCount", "lastSignalTs", "categoryOnlyWouldAlsoFire",
-      "wouldSoftenAtFloor", "version_mismatch", "rawConfidences",
+      "fid",
+      "severityTier",
+      "claimType",
+      "matchedTier",
+      "distinctPrCount",
+      "signalCount",
+      "lastSignalTs",
+      "categoryOnlyWouldAlsoFire",
+      "wouldSoftenAtFloor",
+      "version_mismatch",
+      "rawConfidences",
     ])
     expect(out.length).toBeGreaterThan(0)
     for (const row of out) {
@@ -230,8 +250,11 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
 
   it("treats a memory with undefined shadowClaims as a non-match (defensive)", () => {
     const mem: ReviewMemoryFinding = {
-      scope: "category", category: "logic", signalCount: 3,
-      lastSignalTs: new Date().toISOString(), suggestedAction: "soften",
+      scope: "category",
+      category: "logic",
+      signalCount: 3,
+      lastSignalTs: new Date().toISOString(),
+      suggestedAction: "soften",
       // shadowClaims intentionally absent
     }
     const out = shadowMatchReviewMemoryClaims({ memories: [mem], findings: [finding()] })

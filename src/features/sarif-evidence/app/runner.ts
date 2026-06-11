@@ -112,11 +112,16 @@ function emit(event: string, fields: Record<string, unknown>): void {
 
 function levelToSeverity(level: SarifResult["level"]): Severity | "skipped" {
   switch (level) {
-    case "error": return "error"
-    case "warning": return "warning"
-    case "note": return "info"
-    case "none": return "skipped"
-    default: return "warning" // SARIF default when omitted
+    case "error":
+      return "error"
+    case "warning":
+      return "warning"
+    case "note":
+      return "info"
+    case "none":
+      return "skipped"
+    default:
+      return "warning" // SARIF default when omitted
   }
 }
 
@@ -195,7 +200,11 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
   }
 
   const emptySbom: SbomSummary = {
-    text: "", present: false, packageCount: 0, directDepCount: 0, licenseCounts: {},
+    text: "",
+    present: false,
+    packageCount: 0,
+    directDepCount: 0,
+    licenseCounts: {},
   }
 
   if (!config.enabled) {
@@ -210,7 +219,8 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
 
   // Push path (a verified receipt) supplies the SARIF directly — skip the repo
   // pull. Pull path (legacy/dogfood) fetches `config.path` from the head.
-  const raw = args.rawOverride !== undefined ? args.rawOverride : await fetchReportRaw(client, owner, repo, config.path, headSha)
+  const raw =
+    args.rawOverride !== undefined ? args.rawOverride : await fetchReportRaw(client, owner, repo, config.path, headSha)
   if (raw === null) {
     emit("sarif-evidence-scan-skipped", { ...ctx, reason: "no-report", path: config.path })
     return {
@@ -225,7 +235,11 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
   // length, to match the cap unit.
   const reportBytes = new TextEncoder().encode(raw).length
   if (reportBytes > REPORT_SIZE_CAP_BYTES) {
-    emit("sarif-evidence-scan-skipped", { ...ctx, reason: "report-too-large", sizeBytes: reportBytes })
+    emit("sarif-evidence-scan-skipped", {
+      ...ctx,
+      reason: "report-too-large",
+      sizeBytes: reportBytes,
+    })
     return {
       skipped: true,
       reason: "report-too-large",
@@ -240,7 +254,8 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
       ? "unsupported-sarif-version"
       : "parse-failed"
     emit(reason === "unsupported-sarif-version" ? "unsupported-sarif-version" : "sarif-evidence-parse-failed", {
-      ...ctx, errMessage: parsed.reason,
+      ...ctx,
+      errMessage: parsed.reason,
     })
     return {
       skipped: true,
@@ -339,9 +354,8 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
 
       const messageText = normalizeWhitespace(result.message?.text ?? "")
       const evidenceRaw = loc?.region?.snippet?.text
-      const evidence = typeof evidenceRaw === "string"
-        ? clampString(normalizeWhitespace(evidenceRaw), EVIDENCE_MAX_CHARS)
-        : undefined
+      const evidence =
+        typeof evidenceRaw === "string" ? clampString(normalizeWhitespace(evidenceRaw), EVIDENCE_MAX_CHARS) : undefined
 
       const finding: SarifFinding = {
         ruleId: result.ruleId ?? "unknown-rule",
@@ -373,7 +387,11 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
   }
 
   if (truncatedCount > 0) {
-    emit("sarif-evidence-truncated", { ...ctx, droppedCount: truncatedCount, cap: MAX_FINDINGS_PER_SCAN })
+    emit("sarif-evidence-truncated", {
+      ...ctx,
+      droppedCount: truncatedCount,
+      cap: MAX_FINDINGS_PER_SCAN,
+    })
   }
 
   const durationMs = Date.now() - t0

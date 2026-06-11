@@ -11,7 +11,12 @@ const JWK: Jwk = { kid: "k1", kty: "RSA", n: "n", e: "AQAB", alg: "RS256", use: 
 const T0 = 1_700_000_000_000
 
 function stubJwksFetch(): ReturnType<typeof vi.fn> {
-  const f = vi.fn(async () => new Response(JSON.stringify({ keys: [JWK] }), { headers: { "content-type": "application/json" } }))
+  const f = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ keys: [JWK] }), {
+        headers: { "content-type": "application/json" },
+      }),
+  )
   vi.stubGlobal("fetch", f)
   return f
 }
@@ -59,12 +64,21 @@ describe("makeCachedFetchJwks", () => {
 
   it("coalesces concurrent cold calls into a single fetch (single-flight)", async () => {
     let resolve!: (r: Response) => void
-    const f = vi.fn(() => new Promise<Response>((r) => { resolve = r }))
+    const f = vi.fn(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+    )
     vi.stubGlobal("fetch", f)
     const now = () => T0
     const p1 = makeCachedFetchJwks({ now })()
     const p2 = makeCachedFetchJwks({ now })()
-    resolve(new Response(JSON.stringify({ keys: [JWK] }), { headers: { "content-type": "application/json" } }))
+    resolve(
+      new Response(JSON.stringify({ keys: [JWK] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    )
     expect(await p1).toEqual([JWK])
     expect(await p2).toEqual([JWK])
     expect(f).toHaveBeenCalledTimes(1)
@@ -72,12 +86,21 @@ describe("makeCachedFetchJwks", () => {
 
   it("a forced refetch coalesces with an in-flight normal fetch (single-flight preserved)", async () => {
     let resolve!: (r: Response) => void
-    const f = vi.fn(() => new Promise<Response>((r) => { resolve = r }))
+    const f = vi.fn(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+    )
     vi.stubGlobal("fetch", f)
     const now = () => T0
     const p1 = makeCachedFetchJwks({ now })() // cold normal fetch → pending
     const p2 = makeCachedFetchJwks({ now, forceRefetch: true })() // forced — must coalesce
-    resolve(new Response(JSON.stringify({ keys: [JWK] }), { headers: { "content-type": "application/json" } }))
+    resolve(
+      new Response(JSON.stringify({ keys: [JWK] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    )
     expect(await p1).toEqual([JWK])
     expect(await p2).toEqual([JWK])
     expect(f).toHaveBeenCalledTimes(1)
@@ -95,11 +118,24 @@ describe("makeCachedFetchJwks", () => {
   })
 
   it("a fetch failure rejects (verify maps it) and clears the cache so the next call retries", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network") }))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network")
+      }),
+    )
     const now = () => T0
     await expect(makeCachedFetchJwks({ now })()).rejects.toThrow()
     // cache cleared → a fresh fetch succeeds
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ keys: [JWK] }), { headers: { "content-type": "application/json" } })))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ keys: [JWK] }), {
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    )
     expect(await makeCachedFetchJwks({ now })()).toEqual([JWK])
   })
 })

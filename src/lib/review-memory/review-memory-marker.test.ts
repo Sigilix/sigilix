@@ -165,38 +165,32 @@ describe("extractSigilixMarker — rejection paths", () => {
   })
 
   it("returns null when fid is the wrong length (15 hex)", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890de:cat:security:sev:error:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:abc1234567890de:cat:security:sev:error:path:d4e5f6a7b8c9 -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
   it("returns null when path-hash is the wrong length (11 hex)", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:security:sev:error:path:d4e5f6a7b8c -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:security:sev:error:path:d4e5f6a7b8c -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
   it("returns null when fid contains non-hex chars", () => {
-    const body =
-      "<!-- sigilix:fid:zzzzzzzzzzzzzzzz:cat:security:sev:error:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:zzzzzzzzzzzzzzzz:cat:security:sev:error:path:d4e5f6a7b8c9 -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
   it("returns null when category is unknown", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:bogus:sev:error:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:bogus:sev:error:path:d4e5f6a7b8c9 -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
   it("returns null when severity is unknown", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:security:sev:critical:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:security:sev:critical:path:d4e5f6a7b8c9 -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
   it("returns null when a field is missing", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:security:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:security:path:d4e5f6a7b8c9 -->"
     expect(extractSigilixMarker(body)).toBeNull()
   })
 
@@ -219,9 +213,7 @@ describe("SIG-276 — claims marker segment (build + round-trip)", () => {
   it("appends a :claims: segment when claims are provided", async () => {
     const m = await buildSigilixMarker({
       ...base,
-      claims: [
-        { type: "structural-glue-not-test-target", confidence: 0.85, extractorVersion: 1 },
-      ],
+      claims: [{ type: "structural-glue-not-test-target", confidence: 0.85, extractorVersion: 1 }],
     })
     expect(m).toContain(":claims:structural-glue-not-test-target~85~1")
     expect(m.endsWith(" -->")).toBe(true)
@@ -235,14 +227,10 @@ describe("SIG-276 — claims marker segment (build + round-trip)", () => {
   it("round-trips a single claim through build → extract", async () => {
     const m = await buildSigilixMarker({
       ...base,
-      claims: [
-        { type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 },
-      ],
+      claims: [{ type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 }],
     })
     const parsed = extractSigilixMarker(m)
-    expect(parsed?.claims).toEqual([
-      { type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 },
-    ])
+    expect(parsed?.claims).toEqual([{ type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 }])
   })
 
   it("round-trips multiple claims preserving order", async () => {
@@ -278,20 +266,15 @@ describe("SIG-276 — claims marker segment (build + round-trip)", () => {
     const m = await buildSigilixMarker({
       ...base,
       loc: "inline",
-      claims: [
-        { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
-      ],
+      claims: [{ type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 }],
     })
     const parsed = extractSigilixMarker(m)
     expect(parsed?.loc).toBe("inline")
-    expect(parsed?.claims).toEqual([
-      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
-    ])
+    expect(parsed?.claims).toEqual([{ type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 }])
   })
 
   it("legacy marker (no claims) parses WITHOUT a claims key", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:performance:sev:warning:path:d4e5f6a7b8c9 -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:performance:sev:warning:path:d4e5f6a7b8c9 -->"
     const parsed = extractSigilixMarker(body)
     expect(parsed).toEqual({
       fid: "abc1234567890def",
@@ -306,14 +289,11 @@ describe("SIG-276 — claims marker segment (build + round-trip)", () => {
     const body =
       "<!-- sigilix:fid:abc1234567890def:cat:tests:sev:warning:path:d4e5f6a7b8c9:claims:future-claim-not-yet-known~80~3,auth-gate-is-boundary~70~1 -->"
     const parsed = extractSigilixMarker(body)
-    expect(parsed?.claims).toEqual([
-      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
-    ])
+    expect(parsed?.claims).toEqual([{ type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 }])
   })
 
   it("drops the whole claims key when every entry is malformed", () => {
-    const body =
-      "<!-- sigilix:fid:abc1234567890def:cat:tests:sev:warning:path:d4e5f6a7b8c9:claims:bogus~zz~q -->"
+    const body = "<!-- sigilix:fid:abc1234567890def:cat:tests:sev:warning:path:d4e5f6a7b8c9:claims:bogus~zz~q -->"
     const parsed = extractSigilixMarker(body)
     expect(parsed).not.toBeNull()
     expect(parsed).not.toHaveProperty("claims")
@@ -419,27 +399,49 @@ describe("SIG-276 PR B — claim id hydration", () => {
   })
 
   it("computeClaimId is stable for the same type+version and ignores confidence", async () => {
-    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
-    const b = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.2, extractorVersion: 1 })
+    const a = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.8,
+      extractorVersion: 1,
+    })
+    const b = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.2,
+      extractorVersion: 1,
+    })
     expect(a).toBe(b)
   })
 
   it("computeClaimId differs by type", async () => {
-    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
-    const b = await computeClaimId({ type: "rethrowing-catch-not-swallowed", confidence: 0.8, extractorVersion: 1 })
+    const a = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.8,
+      extractorVersion: 1,
+    })
+    const b = await computeClaimId({
+      type: "rethrowing-catch-not-swallowed",
+      confidence: 0.8,
+      extractorVersion: 1,
+    })
     expect(a).not.toBe(b)
   })
 
   it("computeClaimId differs by extractorVersion", async () => {
-    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
-    const b = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 2 })
+    const a = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.8,
+      extractorVersion: 1,
+    })
+    const b = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.8,
+      extractorVersion: 2,
+    })
     expect(a).not.toBe(b)
   })
 
   it("hydrateClaimIds adds a 16-hex id and preserves the other fields", async () => {
-    const out = await hydrateClaimIds([
-      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
-    ])
+    const out = await hydrateClaimIds([{ type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 }])
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({
       type: "auth-gate-is-boundary",

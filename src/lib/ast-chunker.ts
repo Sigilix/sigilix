@@ -8,9 +8,7 @@
 import { type Chunk, MAX_CHUNK_CHARS, splitOversizedWindow } from "./chunk-core"
 import { parseSource, type SourceExt } from "@/src/features/ast-rules"
 
-const JS_TS_EXTS: ReadonlySet<string> = new Set([
-  ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
-])
+const JS_TS_EXTS: ReadonlySet<string> = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"])
 
 /** The JS/TS SourceExt for a path, or null (non-JS/TS → line-window fallback). */
 export function jsTsExtOf(path: string): SourceExt | null {
@@ -36,7 +34,9 @@ export function chunkFileAst(path: string, content: string, ext: SourceExt): Chu
     if (!Array.isArray(body)) return null
 
     const intervals: Array<[number, number]> = []
-    for (const node of body as Array<{ loc?: { start?: { line?: unknown }; end?: { line?: unknown } } }>) {
+    for (const node of body as Array<{
+      loc?: { start?: { line?: unknown }; end?: { line?: unknown } }
+    }>) {
       const s = node?.loc?.start?.line
       const e = node?.loc?.end?.line
       if (typeof s !== "number" || typeof e !== "number") continue
@@ -45,7 +45,7 @@ export function chunkFileAst(path: string, content: string, ext: SourceExt): Chu
     }
 
     // Coalesce: sort by start, merge overlapping OR adjacent ranges.
-    intervals.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+    intervals.sort((a, b) => a[0] - b[0] || a[1] - b[1])
     const merged: Array<[number, number]> = []
     for (const [s, e] of intervals) {
       const last = merged[merged.length - 1]

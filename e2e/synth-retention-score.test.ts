@@ -23,12 +23,14 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [],
-        dropped: [{
-          specialist: "logic",
-          sourceFindingId: "logic-0",
-          headline: "Missing tenant authorization before returning an order",
-          reason: "duplicate",
-        }],
+        dropped: [
+          {
+            specialist: "logic",
+            sourceFindingId: "logic-0",
+            headline: "Missing tenant authorization before returning an order",
+            reason: "duplicate",
+          },
+        ],
       },
       elapsedMs: 12_000,
       modelUsed: "gpt-oss:120b-cloud",
@@ -47,25 +49,34 @@ describe("synth-retention oracle", () => {
         summary: "One issue.",
         confidence: 4,
         confidenceReason: "The authz finding is real.",
-        findings: [{
-          path: "src/api/orders.ts",
-          line: 5,
-          score: 4,
-          category: "logic",
-          headline: "Missing tenant authorization before returning an order",
-          body: "The handler returns arbitrary orders without checking the caller's `tenantId`.",
-        }],
+        findings: [
+          {
+            path: "src/api/orders.ts",
+            line: 5,
+            score: 4,
+            category: "logic",
+            headline: "Missing tenant authorization before returning an order",
+            body: "The handler returns arbitrary orders without checking the caller's `tenantId`.",
+          },
+        ],
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
-        dropped: [{
-          specialist: "security",
-          sourceFindingId: "security-0",
-          headline: "SSRF via Content-Type",
-          reason: "false positive on diff inspection",
-        }],
+        dropped: [
+          {
+            specialist: "security",
+            sourceFindingId: "security-0",
+            headline: "SSRF via Content-Type",
+            reason: "false positive on diff inspection",
+          },
+        ],
       },
       elapsedMs: 12_000,
       modelUsed: "gpt-oss:120b-cloud",
@@ -88,12 +99,14 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [],
-        dropped: [{
-          specialist: "logic",
-          sourceFindingId: "logic-0",
-          headline: "Missing tenant authorization before returning an order",
-          reason: "impossible per diff analysis",
-        }],
+        dropped: [
+          {
+            specialist: "logic",
+            sourceFindingId: "logic-0",
+            headline: "Missing tenant authorization before returning an order",
+            reason: "impossible per diff analysis",
+          },
+        ],
       },
       elapsedMs: 12_000,
       modelUsed: "gpt-oss:120b-cloud",
@@ -133,8 +146,18 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-          { sourceSpecialists: ["security"], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+          {
+            sourceSpecialists: ["security"],
+            sourceFindingIds: ["security-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -168,7 +191,12 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: [], sourceFindingIds: [], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: [],
+            sourceFindingIds: [],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -222,7 +250,12 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: [], sourceFindingIds: [], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: [],
+            sourceFindingIds: [],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -256,7 +289,12 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -290,7 +328,12 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "rewritten", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "rewritten",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -327,7 +370,12 @@ describe("synth-retention oracle", () => {
       },
       provenance: {
         findings: [
-          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
         ],
         dropped: [],
       },
@@ -429,17 +477,19 @@ describe("synth-retention oracle", () => {
       mustKeep: [{ ...cleanCase.mustKeep[0]!, requiredTokens: [] }],
     }
 
-    expect(() => scoreSynthRetentionCase(invalidCase, {
-      verdict: {
-        summary: "No issues.",
-        confidence: 4,
-        confidenceReason: "Clean.",
-        findings: [],
-      },
-      provenance: { findings: [], dropped: [] },
-      elapsedMs: 1_000,
-      modelUsed: "gpt-oss:120b-cloud",
-    })).toThrow(/requiredTokens/)
+    expect(() =>
+      scoreSynthRetentionCase(invalidCase, {
+        verdict: {
+          summary: "No issues.",
+          confidence: 4,
+          confidenceReason: "Clean.",
+          findings: [],
+        },
+        provenance: { findings: [], dropped: [] },
+        elapsedMs: 1_000,
+        modelUsed: "gpt-oss:120b-cloud",
+      }),
+    ).toThrow(/requiredTokens/)
   })
 })
 
@@ -464,7 +514,12 @@ describe("synth-retention summary", () => {
         },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [
             {
@@ -504,8 +559,18 @@ describe("synth-retention summary", () => {
         },
         provenance: {
           findings: [
-            { sourceSpecialists: [], sourceFindingIds: ["security-99"], action: "kept", verifiedViaRetrieval: false },
-            { sourceSpecialists: ["security"], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: [],
+              sourceFindingIds: ["security-99"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+            {
+              sourceSpecialists: ["security"],
+              sourceFindingIds: ["security-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [],
         },

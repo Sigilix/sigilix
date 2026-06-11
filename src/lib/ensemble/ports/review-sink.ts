@@ -22,12 +22,7 @@ export interface ReviewSinkPort {
   ): Promise<{ id: number; state: string }>
 
   /** Post a top-level issue/PR-conversation comment — the fallback + overview poster. */
-  createIssueComment(
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    body: string,
-  ): Promise<{ id: number }>
+  createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ id: number }>
 
   /** Reply to an existing inline review comment (threaded under the parent). */
   replyToReviewComment(
@@ -39,20 +34,8 @@ export interface ReviewSinkPort {
   ): Promise<{ id: number }>
 
   /** Dismiss a prior (APPROVED / CHANGES_REQUESTED) review when a new commit lands. */
-  dismissReview(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    reviewId: number,
-    message: string,
-  ): Promise<void>
+  dismissReview(owner: string, repo: string, prNumber: number, reviewId: number, message: string): Promise<void>
 
   /** PATCH a prior review body in place (e.g. prepend a stale-notice block). */
-  updateReviewBody(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    reviewId: number,
-    body: string,
-  ): Promise<void>
+  updateReviewBody(owner: string, repo: string, prNumber: number, reviewId: number, body: string): Promise<void>
 }

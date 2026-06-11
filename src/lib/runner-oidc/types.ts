@@ -62,9 +62,7 @@ export interface GitHubOidcClaims {
 }
 
 /** Result of cryptographic + standard-claim verification (NOT provenance). */
-export type OidcVerifyResult =
-  | { ok: true; claims: GitHubOidcClaims }
-  | { ok: false; reason: OidcVerifyFailure }
+export type OidcVerifyResult = { ok: true; claims: GitHubOidcClaims } | { ok: false; reason: OidcVerifyFailure }
 
 export type OidcVerifyFailure =
   | "malformed-token"

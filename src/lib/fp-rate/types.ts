@@ -27,10 +27,7 @@ export type { SpecialistRole }
 export type DismissBucket = "hard" | "soft" | "unlabeled"
 
 /** Reasons that mean "the finding itself was wrong" → hard FP. */
-const HARD_FP_REASONS: ReadonlySet<DismissReason> = new Set<DismissReason>([
-  "not-a-bug",
-  "wrong-context",
-])
+const HARD_FP_REASONS: ReadonlySet<DismissReason> = new Set<DismissReason>(["not-a-bug", "wrong-context"])
 
 /** Reasons where the finding was arguably valid but not worth posting → soft. */
 const SOFT_FP_REASONS: ReadonlySet<DismissReason> = new Set<DismissReason>([

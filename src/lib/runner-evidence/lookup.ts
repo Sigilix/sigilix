@@ -94,13 +94,17 @@ export function validateRunnerSarifConsistency(
   } catch {
     return { ok: false, reason: "sarif-parse" }
   }
-  const runs = report && typeof report === "object" && Array.isArray((report as { runs?: unknown }).runs)
-    ? (report as { runs: unknown[] }).runs
-    : []
+  const runs =
+    report && typeof report === "object" && Array.isArray((report as { runs?: unknown }).runs)
+      ? (report as { runs: unknown[] }).runs
+      : []
   const boundSha = bound.sha.toLowerCase()
   const boundRepo = bound.repository.toLowerCase()
   for (const run of runs) {
-    const vcsList = run && typeof run === "object" ? (run as { versionControlProvenance?: unknown }).versionControlProvenance : undefined
+    const vcsList =
+      run && typeof run === "object"
+        ? (run as { versionControlProvenance?: unknown }).versionControlProvenance
+        : undefined
     if (!Array.isArray(vcsList)) continue
     for (const v of vcsList) {
       if (!v || typeof v !== "object") continue
@@ -179,7 +183,10 @@ export async function lookupRunnerEvidence(
   }
 
   // Believability boundary: SARIF-internal consistency with the bound merge/repo.
-  const consistency = validateRunnerSarifConsistency(body.sarif, { sha: row.sha, repository: row.repository })
+  const consistency = validateRunnerSarifConsistency(body.sarif, {
+    sha: row.sha,
+    repository: row.repository,
+  })
   if (!consistency.ok) {
     return { state: "evidence-pending", reason: `sarif-inconsistent:${consistency.reason}` }
   }

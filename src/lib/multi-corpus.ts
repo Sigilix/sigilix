@@ -49,9 +49,7 @@ export function multiCorpusEnabled(env: { OPENCLAW_MULTICORPUS_RETRIEVAL?: strin
  * Sigilix review), so the corpus doc omits the verdict rather than asserting a
  * false "approved". This label is a coarse RETRIEVAL signal, not the live gate.
  */
-export function deriveVerdictLabel(
-  findings: ReadonlyArray<{ score: number }> | undefined,
-): string | undefined {
+export function deriveVerdictLabel(findings: ReadonlyArray<{ score: number }> | undefined): string | undefined {
   if (findings === undefined) return undefined
   if (findings.length === 0) return "approved"
   return findings.some((f) => f.score >= 4) ? "changes_required" : "commented"
@@ -83,12 +81,14 @@ interface VectorizeIndex {
     vector: number[],
     options: { topK?: number; namespace?: string; returnMetadata?: "all" | "indexed" },
   ): Promise<{ matches: VectorizeMatch[] }>
-  upsert(records: Array<{
-    id: string
-    values: number[]
-    namespace: string
-    metadata: Record<string, string | number>
-  }>): Promise<unknown>
+  upsert(
+    records: Array<{
+      id: string
+      values: number[]
+      namespace: string
+      metadata: Record<string, string | number>
+    }>,
+  ): Promise<unknown>
 }
 
 interface AiBinding {
@@ -173,25 +173,31 @@ export async function upsertPrDoc(env: MultiCorpusEnv, doc: PrCorpusDoc): Promis
   try {
     const text = buildPrCorpusText(doc)
     const values = await embedText(env.AI, text)
-    await env.OPENCLAW_CODE_INDEX.upsert([{
-      id: prDocId(doc),
-      values,
-      namespace: prNamespace(doc.owner, doc.repo),
-      metadata: {
-        kind: "pr",
-        ref: `#${doc.number}`,
-        title: doc.title,
-        verdict: doc.verdict ?? "",
-        content: text,
+    await env.OPENCLAW_CODE_INDEX.upsert([
+      {
+        id: prDocId(doc),
+        values,
+        namespace: prNamespace(doc.owner, doc.repo),
+        metadata: {
+          kind: "pr",
+          ref: `#${doc.number}`,
+          title: doc.title,
+          verdict: doc.verdict ?? "",
+          content: text,
+        },
       },
-    }])
+    ])
     return true
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "multicorpus-pr-upsert-failed",
-      owner: doc.owner, repo: doc.repo, number: doc.number,
-      err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "multicorpus-pr-upsert-failed",
+        owner: doc.owner,
+        repo: doc.repo,
+        number: doc.number,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return false
   }
 }
@@ -201,25 +207,31 @@ export async function upsertIssueDoc(env: MultiCorpusEnv, doc: IssueCorpusDoc): 
   try {
     const text = buildIssueCorpusText(doc)
     const values = await embedText(env.AI, text)
-    await env.OPENCLAW_CODE_INDEX.upsert([{
-      id: issueDocId(doc),
-      values,
-      namespace: issueNamespace(doc.owner, doc.repo),
-      metadata: {
-        kind: "issue",
-        ref: doc.identifier,
-        title: doc.title,
-        status: doc.status ?? "",
-        content: text,
+    await env.OPENCLAW_CODE_INDEX.upsert([
+      {
+        id: issueDocId(doc),
+        values,
+        namespace: issueNamespace(doc.owner, doc.repo),
+        metadata: {
+          kind: "issue",
+          ref: doc.identifier,
+          title: doc.title,
+          status: doc.status ?? "",
+          content: text,
+        },
       },
-    }])
+    ])
     return true
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "multicorpus-issue-upsert-failed",
-      owner: doc.owner, repo: doc.repo, identifier: doc.identifier,
-      err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "multicorpus-issue-upsert-failed",
+        owner: doc.owner,
+        repo: doc.repo,
+        identifier: doc.identifier,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return false
   }
 }
@@ -266,10 +278,14 @@ export async function retrieveMultiCorpus(
   try {
     queryVector = await embedText(env.AI, trimmed.slice(0, 4_000))
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "multicorpus-embed-failed",
-      owner, repo, err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "multicorpus-embed-failed",
+        owner,
+        repo,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return { pr: [], issue: [] }
   }
 
@@ -278,16 +294,19 @@ export async function retrieveMultiCorpus(
     queryCorpus(env, issueNamespace(owner, repo), queryVector, topK, "issue"),
   ])
 
-  console.log(JSON.stringify({
-    event: "pr-review-retrieval-multicorpus",
-    owner, repo,
-    prNumber: opts.prNumber,
-    headSha: opts.headSha,
-    namespaces: {
-      pr: { matches: pr.length, topScore: pr[0]?.score ?? null },
-      issue: { matches: issue.length, topScore: issue[0]?.score ?? null },
-    },
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-retrieval-multicorpus",
+      owner,
+      repo,
+      prNumber: opts.prNumber,
+      headSha: opts.headSha,
+      namespaces: {
+        pr: { matches: pr.length, topScore: pr[0]?.score ?? null },
+        issue: { matches: issue.length, topScore: issue[0]?.score ?? null },
+      },
+    }),
+  )
 
   return { pr, issue }
 }
@@ -303,19 +322,27 @@ async function queryCorpus(
   try {
     res = await env.OPENCLAW_CODE_INDEX.query(vector, { topK, namespace, returnMetadata: "all" })
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "multicorpus-query-failed",
-      namespace, err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "multicorpus-query-failed",
+        namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return []
   }
   const out: CorpusHit[] = []
   for (const m of res.matches ?? []) {
     const md = m.metadata
     if (!md || typeof md.content !== "string" || typeof md.ref !== "string") continue
-    const label = kind === "pr"
-      ? (typeof md.verdict === "string" ? md.verdict : "")
-      : (typeof md.status === "string" ? md.status : "")
+    const label =
+      kind === "pr"
+        ? typeof md.verdict === "string"
+          ? md.verdict
+          : ""
+        : typeof md.status === "string"
+          ? md.status
+          : ""
     out.push({ kind, ref: md.ref, label, content: md.content, score: m.score })
   }
   return out
@@ -338,9 +365,10 @@ export function formatMultiCorpusForPrompt(result: MultiCorpusResult): string | 
   const blocks: string[] = []
   let total = 0
   for (const h of [...result.pr, ...result.issue]) {
-    const header = h.kind === "pr"
-      ? `--- past PR ${h.ref}${h.label ? ` (verdict: ${h.label})` : ""} ---`
-      : `--- Linear issue ${h.ref}${h.label ? ` (status: ${h.label})` : ""} ---`
+    const header =
+      h.kind === "pr"
+        ? `--- past PR ${h.ref}${h.label ? ` (verdict: ${h.label})` : ""} ---`
+        : `--- Linear issue ${h.ref}${h.label ? ` (status: ${h.label})` : ""} ---`
     const body = h.content.length > MAX_BLOCK_CHARS ? h.content.slice(0, MAX_BLOCK_CHARS) : h.content
     const block = `${header}\n${body}`
     if (total + block.length > MAX_TOTAL_CHARS) break

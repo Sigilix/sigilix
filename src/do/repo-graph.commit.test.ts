@@ -23,14 +23,22 @@ function makeSqliteState(name: string = "test-instance") {
         return undefined
       },
       async put<T>(key: string, value: T): Promise<void> {
-        void key; void value
+        void key
+        void value
       },
       async delete(key: string): Promise<boolean> {
-        void key; return false
+        void key
+        return false
       },
-      async setAlarm(timestamp: number): Promise<void> { void timestamp },
-      async getAlarm(): Promise<number | null> { return null },
-      async deleteAlarm(): Promise<void> { /* no-op */ },
+      async setAlarm(timestamp: number): Promise<void> {
+        void timestamp
+      },
+      async getAlarm(): Promise<number | null> {
+        return null
+      },
+      async deleteAlarm(): Promise<void> {
+        /* no-op */
+      },
     },
     id: { toString: () => name, name },
   }
@@ -147,7 +155,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // c.ts defines 'baz', but NOT 'missing'.
     await do_.upsertFileGraph({
-      runId: "r-amb", headSha: "sha", path: "src/c.ts",
+      runId: "r-amb",
+      headSha: "sha",
+      path: "src/c.ts",
       symbols: [
         {
           symbolId: "src/c.ts function baz 1 0",
@@ -155,7 +165,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "baz",
           kind: "function",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 1, endCol: 5,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
         },
       ],
       fileEdgesRaw: [],
@@ -164,7 +177,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // importer.ts imports 'missing' from './c' — path resolves but symbol does not.
     await do_.upsertFileGraph({
-      runId: "r-amb", headSha: "sha", path: "src/importer.ts",
+      runId: "r-amb",
+      headSha: "sha",
+      path: "src/importer.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -174,7 +189,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "missing",
           localName: "missing",
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -197,7 +213,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // Only register importer.ts — no file at the specifier target.
     await do_.upsertFileGraph({
-      runId: "r-unres", headSha: "sha", path: "src/importer.ts",
+      runId: "r-unres",
+      headSha: "sha",
+      path: "src/importer.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -207,7 +225,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "ghost",
           localName: "ghost",
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -230,7 +249,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // y.ts defines 'X'; barrel.ts re-exports 'X' from './y'.
     await do_.upsertFileGraph({
-      runId: "r-reex", headSha: "sha", path: "src/y.ts",
+      runId: "r-reex",
+      headSha: "sha",
+      path: "src/y.ts",
       symbols: [
         {
           symbolId: "src/y.ts class X 1 0",
@@ -238,7 +259,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "X",
           kind: "class",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 10, endCol: 1,
+          startLine: 1,
+          startCol: 0,
+          endLine: 10,
+          endCol: 1,
         },
       ],
       fileEdgesRaw: [],
@@ -246,7 +270,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     })
 
     await do_.upsertFileGraph({
-      runId: "r-reex", headSha: "sha", path: "src/barrel.ts",
+      runId: "r-reex",
+      headSha: "sha",
+      path: "src/barrel.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -256,7 +282,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "X",
           localName: null,
           exportedName: "X",
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -279,7 +306,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // all.ts defines 'thing'; reexporter.ts does 'export * from ./all'.
     await do_.upsertFileGraph({
-      runId: "r-star", headSha: "sha", path: "src/all.ts",
+      runId: "r-star",
+      headSha: "sha",
+      path: "src/all.ts",
       symbols: [
         {
           symbolId: "src/all.ts function thing 1 0",
@@ -287,7 +316,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "thing",
           kind: "function",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 1, endCol: 5,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
         },
       ],
       fileEdgesRaw: [],
@@ -295,7 +327,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     })
 
     await do_.upsertFileGraph({
-      runId: "r-star", headSha: "sha", path: "src/reexporter.ts",
+      runId: "r-star",
+      headSha: "sha",
+      path: "src/reexporter.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -305,7 +339,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: null,
           localName: null,
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -344,7 +379,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "stale",
           kind: "function",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 1, endCol: 10,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 10,
         },
       ],
       fileEdgesRaw: [],
@@ -368,7 +406,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "fresh",
           kind: "function",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 1, endCol: 10,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 10,
         },
       ],
       fileEdgesRaw: [],
@@ -406,7 +447,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "helper",
           kind: "function",
           exported: false,
-          startLine: 1, startCol: 0, endLine: 3, endCol: 1,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
         },
         {
           symbolId: "src/a.ts function bar 5 0",
@@ -414,7 +458,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "bar",
           kind: "function",
           exported: true,
-          startLine: 5, startCol: 0, endLine: 7, endCol: 1,
+          startLine: 5,
+          startCol: 0,
+          endLine: 7,
+          endCol: 1,
         },
       ],
       fileEdgesRaw: [],
@@ -435,7 +482,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "helper",
           localName: "helper",
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
         {
           sourcePath: "src/b.ts",
@@ -444,7 +492,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "bar",
           localName: "bar",
           exportedName: null,
-          startLine: 2, startCol: 0,
+          startLine: 2,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -485,7 +534,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "y",
           kind: "function",
           exported: true,
-          startLine: 1, startCol: 0, endLine: 3, endCol: 1,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
         },
       ],
       fileEdgesRaw: [],
@@ -506,7 +558,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "y",
           localName: "y",
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -536,7 +589,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // barrel.ts: no symbols, only a re-export edge (side-effect barrel pattern).
     await do_.upsertFileGraph({
-      runId: "r-barrel", headSha: "sha", path: "src/barrel.ts",
+      runId: "r-barrel",
+      headSha: "sha",
+      path: "src/barrel.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -546,7 +601,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: null,
           localName: null,
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -554,7 +610,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // consumer.ts imports from './barrel' (which has NO symbols).
     await do_.upsertFileGraph({
-      runId: "r-barrel", headSha: "sha", path: "src/consumer.ts",
+      runId: "r-barrel",
+      headSha: "sha",
+      path: "src/consumer.ts",
       symbols: [],
       fileEdgesRaw: [
         {
@@ -564,7 +622,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           importedName: "something",
           localName: "something",
           exportedName: null,
-          startLine: 1, startCol: 0,
+          startLine: 1,
+          startCol: 0,
         },
       ],
       callEdges: [],
@@ -590,7 +649,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 
     // helper.ts defines 'localFn'; inside that file a call edge references it.
     await do_.upsertFileGraph({
-      runId: "r-call", headSha: "sha", path: "src/helper.ts",
+      runId: "r-call",
+      headSha: "sha",
+      path: "src/helper.ts",
       symbols: [
         {
           symbolId: "src/helper.ts function localFn 1 0",
@@ -598,7 +659,10 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           name: "localFn",
           kind: "function",
           exported: false,
-          startLine: 1, startCol: 0, endLine: 5, endCol: 1,
+          startLine: 1,
+          startCol: 0,
+          endLine: 5,
+          endCol: 1,
         },
       ],
       fileEdgesRaw: [],
@@ -607,7 +671,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           sourcePath: "src/helper.ts",
           calleeName: "localFn",
           callKind: "same_file",
-          startLine: 10, startCol: 2,
+          startLine: 10,
+          startCol: 2,
         },
         // imported_binding with NO resolvable import binding stays null — a
         // same-file lookup must never resolve a cross-file callee (SIG-286
@@ -616,7 +681,8 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           sourcePath: "src/helper.ts",
           calleeName: "externalFn",
           callKind: "imported_binding",
-          startLine: 11, startCol: 2,
+          startLine: 11,
+          startCol: 2,
         },
       ],
     })
@@ -641,32 +707,96 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     // `baz as qux` (aliased), and calls both via imported bindings. a.ts also
     // calls `missing` with no import edge → stays null.
     await do_.upsertFileGraph({
-      runId: "rx", headSha: "h", path: "src/b.ts",
+      runId: "rx",
+      headSha: "h",
+      path: "src/b.ts",
       symbols: [
-        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     })
     await do_.upsertFileGraph({
-      runId: "rx", headSha: "h", path: "src/c.ts",
+      runId: "rx",
+      headSha: "h",
+      path: "src/c.ts",
       symbols: [
-        { symbolId: "src/c.ts function baz 1 0", path: "src/c.ts", name: "baz", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        {
+          symbolId: "src/c.ts function baz 1 0",
+          path: "src/c.ts",
+          name: "baz",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 3,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     })
     await do_.upsertFileGraph({
-      runId: "rx", headSha: "h", path: "src/a.ts",
+      runId: "rx",
+      headSha: "h",
+      path: "src/a.ts",
       symbols: [],
       fileEdgesRaw: [
-        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./b", importedName: "bar", localName: "bar", exportedName: null, startLine: 1, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
         // aliased: `import { baz as qux } from "./c"` — local name is `qux`.
-        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./c", importedName: "baz", localName: "qux", exportedName: null, startLine: 2, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./c",
+          importedName: "baz",
+          localName: "qux",
+          exportedName: null,
+          startLine: 2,
+          startCol: 0,
+        },
       ],
       callEdges: [
-        { sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding", startLine: 5, startCol: 0 },
-        { sourcePath: "src/a.ts", calleeName: "qux", callKind: "imported_binding", startLine: 6, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "bar",
+          callKind: "imported_binding",
+          startLine: 5,
+          startCol: 0,
+        },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "qux",
+          callKind: "imported_binding",
+          startLine: 6,
+          startCol: 0,
+        },
         // no import edge for `missing` → unresolved → stays null.
-        { sourcePath: "src/a.ts", calleeName: "missing", callKind: "imported_binding", startLine: 7, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "missing",
+          callKind: "imported_binding",
+          startLine: 7,
+          startCol: 0,
+        },
       ],
     })
 
@@ -685,13 +815,30 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     // a.ts imports from './ghost' which has no symbols in the graph → the import
     // edge is unresolved (target_symbol_id null) → the call stays null.
     await do_.upsertFileGraph({
-      runId: "rg", headSha: "h", path: "src/a.ts",
+      runId: "rg",
+      headSha: "h",
+      path: "src/a.ts",
       symbols: [],
       fileEdgesRaw: [
-        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./ghost", importedName: "gone", localName: "gone", exportedName: null, startLine: 1, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./ghost",
+          importedName: "gone",
+          localName: "gone",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
       ],
       callEdges: [
-        { sourcePath: "src/a.ts", calleeName: "gone", callKind: "imported_binding", startLine: 4, startCol: 0 },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "gone",
+          callKind: "imported_binding",
+          startLine: 4,
+          startCol: 0,
+        },
       ],
     })
     await do_.commitGraphVersion("rg")
@@ -701,4 +848,3 @@ describe("RepoGraphDO.commitGraphVersion", () => {
 })
 
 // ─── blastRadius tests ───────────────────────────────────────────
-

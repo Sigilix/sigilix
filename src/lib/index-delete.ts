@@ -47,10 +47,7 @@ import {
   repoTenantKey,
   indexNamespace,
 } from "./repo-index-manifest"
-import {
-  flattenIds,
-  repoVectorsTenantKey,
-} from "./repo-index-vectors"
+import { flattenIds, repoVectorsTenantKey } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
 import { deleteLexicalNamespace } from "./lexical-index"
 import { deleteGraph } from "./repo-graph-client"
@@ -67,11 +64,7 @@ import {
   resolveVectors,
   purgeLegacyVectorsOrphan,
 } from "./index-delete-resolve"
-import type {
-  DeleteReason,
-  DeleteResult,
-  DeleteRepoIndexArgs,
-} from "./index-delete-resolve"
+import type { DeleteReason, DeleteResult, DeleteRepoIndexArgs } from "./index-delete-resolve"
 
 export type { DeleteReason, DeleteResult, DeleteRepoIndexArgs }
 
@@ -96,10 +89,14 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     errors: [],
   }
 
-  console.log(JSON.stringify({
-    event: "index-delete-started",
-    owner, repo, reason,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-delete-started",
+      owner,
+      repo,
+      reason,
+    }),
+  )
 
   // Cross-tenant guard. SIG-132 made `<owner>/<repo>` the namespace, so
   // newly-indexed repos no longer collide. But the cross-tenant guard is
@@ -132,10 +129,8 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     keyName: vectorsKeyName,
     extraOwnerSafeKey: vectorsLegacyOrphanKey,
   } = await resolveVectors(env, owner, repo)
-  const manifestOwnerMismatch =
-    manifestRead.kind === "ok" && manifestRead.manifest.owner !== owner
-  const vectorsOwnerMismatch =
-    vectorsRead.kind === "ok" && vectorsRead.vectors.owner !== owner
+  const manifestOwnerMismatch = manifestRead.kind === "ok" && manifestRead.manifest.owner !== owner
+  const vectorsOwnerMismatch = vectorsRead.kind === "ok" && vectorsRead.vectors.owner !== owner
   const safeToTouchRepoOnlyState = !manifestOwnerMismatch && !vectorsOwnerMismatch
 
   // SIG-247 Phase 1 PR B: extract the immutable repo.id for review-
@@ -158,7 +153,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
   const reviewMemoryRepoId =
     !safeToTouchRepoOnlyState || isBranchScopedStateForReviewMemory
       ? undefined
-      : (manifestRead.kind === "ok" &&
+      : ((manifestRead.kind === "ok" &&
         typeof manifestRead.manifest.githubRepoId === "number" &&
         Number.isInteger(manifestRead.manifest.githubRepoId) &&
         manifestRead.manifest.githubRepoId > 0
@@ -169,17 +164,19 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         Number.isInteger(vectorsRead.vectors.githubRepoId) &&
         vectorsRead.vectors.githubRepoId > 0
           ? vectorsRead.vectors.githubRepoId
-          : undefined)
+          : undefined))
 
   if (!safeToTouchRepoOnlyState) {
-    console.warn(JSON.stringify({
-      event: "index-delete-owner-mismatch-skip-repo-only",
-      owner, repo, reason,
-      manifest_owner:
-        manifestRead.kind === "ok" ? manifestRead.manifest.owner : null,
-      vectors_owner:
-        vectorsRead.kind === "ok" ? vectorsRead.vectors.owner : null,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-delete-owner-mismatch-skip-repo-only",
+        owner,
+        repo,
+        reason,
+        manifest_owner: manifestRead.kind === "ok" ? manifestRead.manifest.owner : null,
+        vectors_owner: vectorsRead.kind === "ok" ? vectorsRead.vectors.owner : null,
+      }),
+    )
   }
 
   if (safeToTouchRepoOnlyState) {
@@ -202,27 +199,41 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`vectorize.deleteByIds: ${message}`)
           vectorizeDeleteFailed = true
-          console.error(JSON.stringify({
-            event: "index-delete-vectorize-batch-failed",
-            owner, repo, batch_start: i, batch_size: batch.length,
-            err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-vectorize-batch-failed",
+              owner,
+              repo,
+              batch_start: i,
+              batch_size: batch.length,
+              err: message,
+            }),
+          )
         }
       }
     } else if (vectorsRead.kind === "invalid") {
-      console.warn(JSON.stringify({
-        event: "index-delete-vectors-kv-invalid",
-        owner, repo, reason, kv_reason: vectorsRead.reason,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-delete-vectors-kv-invalid",
+          owner,
+          repo,
+          reason,
+          kv_reason: vectorsRead.reason,
+        }),
+      )
     } else {
       // missing: pre-PR3 indexes have no vectors record. Vector data
       // leaks until natural re-index churn populates the record.
       // Documented limitation in the design v1.1 addendum.
-      console.warn(JSON.stringify({
-        event: "index-delete-no-vectors-record",
-        owner, repo, reason,
-        note: "pre-PR3 index — vector deletion not possible; KV cleanup proceeds",
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-delete-no-vectors-record",
+          owner,
+          repo,
+          reason,
+          note: "pre-PR3 index — vector deletion not possible; KV cleanup proceeds",
+        }),
+      )
     }
 
     // Steps 2 + 3: KV deletes for repo-index-vectors:* and
@@ -232,10 +243,14 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     // the leaked batches. Idempotency holds because deleteByIds is
     // idempotent.
     if (vectorizeDeleteFailed) {
-      console.warn(JSON.stringify({
-        event: "index-delete-kv-cleanup-deferred-pending-vectorize-retry",
-        owner, repo, reason,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-delete-kv-cleanup-deferred-pending-vectorize-retry",
+          owner,
+          repo,
+          reason,
+        }),
+      )
     } else {
       if ((vectorsRead.kind === "ok" || vectorsRead.kind === "invalid") && vectorsKeyName) {
         try {
@@ -246,10 +261,15 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(repo-index-vectors): ${message}`)
-          console.error(JSON.stringify({
-            event: "index-delete-kv-vectors-failed",
-            owner, repo, key: vectorsKeyName, err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-kv-vectors-failed",
+              owner,
+              repo,
+              key: vectorsKeyName,
+              err: message,
+            }),
+          )
         }
       }
       if (manifestKeyName) {
@@ -260,10 +280,15 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(repo-index-manifest): ${message}`)
-          console.error(JSON.stringify({
-            event: "index-delete-kv-manifest-failed",
-            owner, repo, key: manifestKeyName, err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-kv-manifest-failed",
+              owner,
+              repo,
+              key: manifestKeyName,
+              err: message,
+            }),
+          )
         }
       }
 
@@ -290,12 +315,12 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         (vectorsRead.kind === "ok" && vectorsRead.vectors.repo.includes("/__branch__/"))
       const tenantRepoId = isBranchScopedState
         ? null
-        : (manifestRead.kind === "ok" && typeof manifestRead.manifest.githubRepoId === "number"
+        : ((manifestRead.kind === "ok" && typeof manifestRead.manifest.githubRepoId === "number"
             ? manifestRead.manifest.githubRepoId
             : null) ??
           (vectorsRead.kind === "ok" && typeof vectorsRead.vectors.githubRepoId === "number"
             ? vectorsRead.vectors.githubRepoId
-            : null)
+            : null))
       if (typeof tenantRepoId === "number" && Number.isInteger(tenantRepoId) && tenantRepoId > 0) {
         const newManifestKey = repoTenantKey(tenantRepoId)
         const newVectorsKey = repoVectorsTenantKey(tenantRepoId)
@@ -304,20 +329,30 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(repo-tenant): ${message}`)
-          console.error(JSON.stringify({
-            event: "index-delete-kv-tenant-manifest-failed",
-            owner, repo, key: newManifestKey, err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-kv-tenant-manifest-failed",
+              owner,
+              repo,
+              key: newManifestKey,
+              err: message,
+            }),
+          )
         }
         try {
           await env.OPENCLAW_STATE.delete(newVectorsKey)
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(repo-vectors): ${message}`)
-          console.error(JSON.stringify({
-            event: "index-delete-kv-tenant-vectors-failed",
-            owner, repo, key: newVectorsKey, err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-kv-tenant-vectors-failed",
+              owner,
+              repo,
+              key: newVectorsKey,
+              err: message,
+            }),
+          )
         }
       }
 
@@ -331,10 +366,15 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         result.errors.push(`kv.delete(repo-index-active-run): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-kv-active-run-failed",
-          owner, repo, key: activeRunKey(owner, repo), err: message,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-kv-active-run-failed",
+            owner,
+            repo,
+            key: activeRunKey(owner, repo),
+            err: message,
+          }),
+        )
       }
 
       // SIG-132: purge any leftover same-owner LEGACY KV keys that
@@ -354,14 +394,18 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(legacy-manifest-orphan): ${message}`)
-          console.error(JSON.stringify({
-            event: "index-delete-kv-legacy-manifest-orphan-failed",
-            owner, repo, key: manifestLegacyOrphanKey, err: message,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "index-delete-kv-legacy-manifest-orphan-failed",
+              owner,
+              repo,
+              key: manifestLegacyOrphanKey,
+              err: message,
+            }),
+          )
         }
       }
     }
-
   }
 
   // SIG-138 T8: wipe the repo's DO-backed code graph (SQLite). The
@@ -377,17 +421,24 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
   // idempotent (deleteRepoGraph wipes all rows, so re-calling is safe).
   try {
     await deleteGraph(env, owner, repo)
-    console.log(JSON.stringify({
-      event: "index-delete-graph-deleted",
-      owner, repo,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "index-delete-graph-deleted",
+        owner,
+        repo,
+      }),
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     result.errors.push(`graph.delete(repo-graph): ${message}`)
-    console.error(JSON.stringify({
-      event: "index-delete-graph-failed",
-      owner, repo, err: message,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "index-delete-graph-failed",
+        owner,
+        repo,
+        err: message,
+      }),
+    )
   }
 
   // SIG-45: purge the repo's lexical (D1 FTS5) rows. Keyed by
@@ -399,21 +450,26 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
   // still surface a thrown failure so a partial delete is visible.
   if (env.OPENCLAW_LEXICAL_INDEX != null) {
     try {
-      result.lexicalRows += await deleteLexicalNamespace(
-        env.OPENCLAW_LEXICAL_INDEX,
-        indexNamespace(owner, repo),
+      result.lexicalRows += await deleteLexicalNamespace(env.OPENCLAW_LEXICAL_INDEX, indexNamespace(owner, repo))
+      console.log(
+        JSON.stringify({
+          event: "index-delete-lexical-deleted",
+          owner,
+          repo,
+          rows: result.lexicalRows,
+        }),
       )
-      console.log(JSON.stringify({
-        event: "index-delete-lexical-deleted",
-        owner, repo, rows: result.lexicalRows,
-      }))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       result.errors.push(`lexical.delete(namespace): ${message}`)
-      console.error(JSON.stringify({
-        event: "index-delete-lexical-failed",
-        owner, repo, err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-lexical-failed",
+          owner,
+          repo,
+          err: message,
+        }),
+      )
     }
   }
 
@@ -470,10 +526,14 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     result.errors.push(`kv.delete(repo-index-rules): ${message}`)
-    console.error(JSON.stringify({
-      event: "index-delete-kv-scoped-rules-failed",
-      owner, repo, err: message,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "index-delete-kv-scoped-rules-failed",
+        owner,
+        repo,
+        err: message,
+      }),
+    )
   }
 
   if (result.errors.length > 0) {
@@ -487,18 +547,22 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     result.status = "no-state"
   }
 
-  console.log(JSON.stringify({
-    event: "index-deleted",
-    owner, repo, reason,
-    status: result.status,
-    vector_ids: result.vectorIds,
-    pr_review_manifests: result.prReviewManifests,
-    pr_review_dedupe_keys: result.prReviewDedupeKeys,
-    manifest_deleted: result.manifestDeleted,
-    vectors_kv_deleted: result.vectorsKvDeleted,
-    review_memory_keys: result.reviewMemoryKeys,
-    error_count: result.errors.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-deleted",
+      owner,
+      repo,
+      reason,
+      status: result.status,
+      vector_ids: result.vectorIds,
+      pr_review_manifests: result.prReviewManifests,
+      pr_review_dedupe_keys: result.prReviewDedupeKeys,
+      manifest_deleted: result.manifestDeleted,
+      vectors_kv_deleted: result.vectorsKvDeleted,
+      review_memory_keys: result.reviewMemoryKeys,
+      error_count: result.errors.length,
+    }),
+  )
 
   return result
 }
@@ -511,29 +575,28 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
  * Errors are captured in the caller's `errors[]` to drive the
  * webhook 503 on partial failure (Codex v1 B5).
  */
-async function deleteKvPrefix(
-  env: Env,
-  prefix: string,
-  errors: string[],
-  label: string,
-): Promise<number> {
+async function deleteKvPrefix(env: Env, prefix: string, errors: string[], label: string): Promise<number> {
   let deleted = 0
   let cursor: string | undefined
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     try {
-      page = await env.OPENCLAW_STATE.list({
+      page = (await env.OPENCLAW_STATE.list({
         prefix,
         limit: KV_LIST_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
-      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+      })) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       errors.push(`kv.list(${label}): ${message}`)
-      console.error(JSON.stringify({
-        event: "index-delete-kv-list-failed",
-        label, prefix, err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-kv-list-failed",
+          label,
+          prefix,
+          err: message,
+        }),
+      )
       return deleted
     }
     for (const key of page.keys) {
@@ -543,20 +606,27 @@ async function deleteKvPrefix(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         errors.push(`kv.delete(${label}:${key.name}): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-kv-key-failed",
-          label, key: key.name, err: message,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-kv-key-failed",
+            label,
+            key: key.name,
+            err: message,
+          }),
+        )
       }
     }
     if (page.list_complete) break
     if (!page.cursor) {
       // Defensive: list_complete false but no cursor returned. Avoid
       // an infinite loop; log and stop.
-      console.error(JSON.stringify({
-        event: "index-delete-kv-list-no-cursor",
-        label, prefix,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-kv-list-no-cursor",
+          label,
+          prefix,
+        }),
+      )
       errors.push(`kv.list(${label}): missing cursor on incomplete page`)
       break
     }
@@ -579,18 +649,22 @@ async function listBranchStateReposForRepo(args: {
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     try {
-      page = await env.OPENCLAW_STATE.list({
+      page = (await env.OPENCLAW_STATE.list({
         prefix: keyPrefix,
         limit: KV_LIST_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
-      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+      })) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       errors.push(`kv.list(repo-index-branch-manifest): ${message}`)
-      console.error(JSON.stringify({
-        event: "index-delete-branch-manifest-list-failed",
-        owner, repo, err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-branch-manifest-list-failed",
+          owner,
+          repo,
+          err: message,
+        }),
+      )
       break
     }
     for (const key of page.keys) {
@@ -600,10 +674,15 @@ async function listBranchStateReposForRepo(args: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         errors.push(`kv.get(branch-manifest:${key.name}): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-branch-manifest-get-failed",
-          owner, repo, key: key.name, err: message,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "index-delete-branch-manifest-get-failed",
+            owner,
+            repo,
+            key: key.name,
+            err: message,
+          }),
+        )
         continue
       }
       if (raw === null) continue
@@ -653,11 +732,13 @@ export async function handleInstallReposRemoved(
   for (const entry of repositories) {
     const parsed = parseFullName(entry)
     if (!parsed) {
-      console.warn(JSON.stringify({
-        event: "index-delete-skip-invalid-payload",
-        installation_id: installationId,
-        full_name: typeof entry.full_name === "string" ? entry.full_name : null,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-delete-skip-invalid-payload",
+          installation_id: installationId,
+          full_name: typeof entry.full_name === "string" ? entry.full_name : null,
+        }),
+      )
       continue
     }
     const branchState = await listBranchStateReposForRepo({
@@ -669,7 +750,9 @@ export async function handleInstallReposRemoved(
     const stateRepos = [parsed.repo, ...branchState.repos]
     for (const repo of stateRepos) {
       const r = await deleteRepoIndex({
-        env, owner: parsed.owner, repo,
+        env,
+        owner: parsed.owner,
+        repo,
         reason: "install-repos-removed",
       })
       results.push(r)
@@ -724,11 +807,13 @@ export async function handleInstallationDeleted(
     for (const entry of repositoriesFromPayload) {
       const parsed = parseFullName(entry)
       if (!parsed) {
-        console.warn(JSON.stringify({
-          event: "index-delete-installation-skip-invalid-payload-entry",
-          installation_id: installationId,
-          full_name: typeof entry.full_name === "string" ? entry.full_name : null,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "index-delete-installation-skip-invalid-payload-entry",
+            installation_id: installationId,
+            full_name: typeof entry.full_name === "string" ? entry.full_name : null,
+          }),
+        )
         continue
       }
       reposToDelete.set(parsed.repo, parsed.owner)
@@ -743,18 +828,21 @@ export async function handleInstallationDeleted(
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     try {
-      page = await env.OPENCLAW_STATE.list({
+      page = (await env.OPENCLAW_STATE.list({
         prefix: "repo-index-manifest:",
         limit: KV_LIST_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
-      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+      })) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       errors.push(`kv.list(repo-index-manifest): ${message}`)
-      console.error(JSON.stringify({
-        event: "index-delete-installation-list-failed",
-        installation_id: installationId, err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-installation-list-failed",
+          installation_id: installationId,
+          err: message,
+        }),
+      )
       break
     }
     for (const key of page.keys) {
@@ -788,31 +876,37 @@ export async function handleInstallationDeleted(
     cursor = page.cursor
   }
 
-  console.log(JSON.stringify({
-    event: "index-delete-installation-scan-done",
-    installation_id: installationId,
-    owner_login: ownerLogin,
-    matching_repos: reposToDelete.size,
-    discovery_payload_count: repositoriesFromPayload?.length ?? 0,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-delete-installation-scan-done",
+      installation_id: installationId,
+      owner_login: ownerLogin,
+      matching_repos: reposToDelete.size,
+      discovery_payload_count: repositoriesFromPayload?.length ?? 0,
+    }),
+  )
 
   const results: DeleteResult[] = []
   let anyError = errors.length > 0
   for (const [repo, owner] of reposToDelete.entries()) {
     const r = await deleteRepoIndex({
-      env, owner, repo,
+      env,
+      owner,
+      repo,
       reason: "install-deleted",
     })
     results.push(r)
     if (r.status === "partial") anyError = true
   }
   if (anyError && errors.length > 0) {
-    console.error(JSON.stringify({
-      event: "index-delete-installation-errors",
-      installation_id: installationId,
-      error_count: errors.length,
-      errors: errors.slice(0, 5), // bound the log line
-    }))
+    console.error(
+      JSON.stringify({
+        event: "index-delete-installation-errors",
+        installation_id: installationId,
+        error_count: errors.length,
+        errors: errors.slice(0, 5), // bound the log line
+      }),
+    )
   }
   return { results, anyError }
 }

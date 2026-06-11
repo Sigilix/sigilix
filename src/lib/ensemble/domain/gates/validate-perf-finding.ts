@@ -52,9 +52,7 @@ export function parsePerfValidatorMode(raw: string | undefined): PerfValidatorMo
 /** Co-location tolerance for an AST perf hit relative to the finding line. */
 export const AST_COLOCATION_TOLERANCE = 5
 
-export type PerfFindingDecision =
-  | { keep: true }
-  | { keep: false; reason: PerfDropReason }
+export type PerfFindingDecision = { keep: true } | { keep: false; reason: PerfDropReason }
 
 export type PerfDropReason =
   | "missing-path" // sev>=4 perf finding with no concrete path to anchor
@@ -87,7 +85,16 @@ function backtickedTokens(finding: PrReviewFinding): string[] {
  *  chars, keep tokens >=3 chars containing a letter. HTTP-verb words are
  *  dropped (too generic to anchor on). */
 const HOT_PATH_STOPWORDS: ReadonlySet<string> = new Set([
-  "get", "post", "put", "patch", "delete", "head", "options", "api", "the", "and",
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "head",
+  "options",
+  "api",
+  "the",
+  "and",
 ])
 function hotPathTokens(finding: PrReviewFinding): string[] {
   const raw = finding.hotPathIdentifier
@@ -168,10 +175,7 @@ export function perfFindingIsSelfOriginated(finding: PrReviewFinding, evidence: 
  *   - changed path AND (co-located AST hit OR anchor token) → keep.
  *   - changed path but neither → `unanchored-perf-claim`.
  */
-export function evaluatePerfFinding(
-  finding: PrReviewFinding,
-  evidence: PerfEvidence,
-): PerfFindingDecision {
+export function evaluatePerfFinding(finding: PrReviewFinding, evidence: PerfEvidence): PerfFindingDecision {
   if (finding.score < 4) return { keep: true }
 
   const path = typeof finding.path === "string" ? finding.path.trim() : ""
@@ -220,8 +224,10 @@ function addedLinesForFindingPath(
 ): ReadonlyMap<number, string> | undefined {
   const path = normalizeFindingPath(rawPath)
   if (path.length === 0) return undefined
-  return addedLineTextByLine.get(path)
-    ?? (typeof rawPath === "string" && path !== rawPath ? addedLineTextByLine.get(rawPath) : undefined)
+  return (
+    addedLineTextByLine.get(path) ??
+    (typeof rawPath === "string" && path !== rawPath ? addedLineTextByLine.get(rawPath) : undefined)
+  )
 }
 
 /**
@@ -268,7 +274,8 @@ export function clampTrivialSyncIoSeverity(
 // severity ceiling, not a drop: a reviewer may still see a P2 note, but it
 // cannot block as a production perf regression.
 const LIVE_EVAL_TEST_PATH_RE = /(?:^|\/)tests\/[^/]+\.live\.test\.tsx?$/
-const LIVE_EVAL_INTENT_RE = /\b(?:sequential\s+by\s+design|stable\s+(?:benchmark|eval|evaluation|metrics|order)|avoid\s+provider\s+bursts?|provider\s+(?:politeness|rate\s+limit)|rate\s+limits?)\b/i
+const LIVE_EVAL_INTENT_RE =
+  /\b(?:sequential\s+by\s+design|stable\s+(?:benchmark|eval|evaluation|metrics|order)|avoid\s+provider\s+bursts?|provider\s+(?:politeness|rate\s+limit)|rate\s+limits?)\b/i
 const LIVE_EVAL_MARKER_RE = /\b(?:runCase|repeats?|cases|apiKey|OLLAMA_API_KEY|live[-\s]?model|benchmark|eval)\b/i
 const SERIAL_WORD_RE = /\b(?:serial|sequential)\b/i
 const EVAL_LOOP_WORD_RE = /\b(?:runCase|cases?|eval(?:uation)?|benchmark|harness|loop|parallel|Promise\.all)\b/i
@@ -284,11 +291,7 @@ interface MutablePerfFindingForClamp {
   hotPathIdentifier?: string
 }
 
-function nearbyAddedLines(
-  lines: ReadonlyMap<number, string>,
-  line: number,
-  radius: number,
-): string {
+function nearbyAddedLines(lines: ReadonlyMap<number, string>, line: number, radius: number): string {
   const out: string[] = []
   for (let l = line - radius; l <= line + radius; l++) {
     const text = lines.get(l)
@@ -298,12 +301,9 @@ function nearbyAddedLines(
 }
 
 function findingTextForClamp(f: MutablePerfFindingForClamp): string {
-  return [
-    f.headline,
-    f.body,
-    f.complexityEstimate,
-    f.hotPathIdentifier,
-  ].filter((x): x is string => typeof x === "string" && x.length > 0).join("\n")
+  return [f.headline, f.body, f.complexityEstimate, f.hotPathIdentifier]
+    .filter((x): x is string => typeof x === "string" && x.length > 0)
+    .join("\n")
 }
 
 function isSerialEvalLoopClaim(text: string): boolean {

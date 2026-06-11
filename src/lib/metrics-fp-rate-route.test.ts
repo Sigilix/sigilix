@@ -37,8 +37,7 @@ function makeEnv(records: Record<string, unknown> = {}, overrides: Partial<Env> 
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 
 describe("handleFpRateMetricsRoute", () => {
   it("503 when the token secret is unset", async () => {
@@ -49,24 +48,50 @@ describe("handleFpRateMetricsRoute", () => {
 
   it("401 on missing / wrong bearer token", async () => {
     expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=o/r"), makeEnv())).status).toBe(401)
-    expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=o/r", "Bearer nope"), makeEnv())).status).toBe(401)
+    expect(
+      (await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=o/r", "Bearer nope"), makeEnv())).status,
+    ).toBe(401)
   })
 
   it("400 on missing / malformed repo", async () => {
-    expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
-    expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=notarepo", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
+    expect(
+      (await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate", `Bearer ${TOKEN}`), makeEnv())).status,
+    ).toBe(400)
+    expect(
+      (await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=notarepo", `Bearer ${TOKEN}`), makeEnv()))
+        .status,
+    ).toBe(400)
   })
 
   it("400 on invalid window or maturity>=window", async () => {
-    expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=o/r&window=999", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
-    expect((await handleFpRateMetricsRoute(get("https://x/metrics/fp-rate?repo=o/r&window=10&maturity=10", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
+    expect(
+      (
+        await handleFpRateMetricsRoute(
+          get("https://x/metrics/fp-rate?repo=o/r&window=999", `Bearer ${TOKEN}`),
+          makeEnv(),
+        )
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await handleFpRateMetricsRoute(
+          get("https://x/metrics/fp-rate?repo=o/r&window=10&maturity=10", `Bearer ${TOKEN}`),
+          makeEnv(),
+        )
+      ).status,
+    ).toBe(400)
   })
 
   it("computes the per-specialist rate over the KV binding and returns JSON", async () => {
     const now = Date.now()
     const reverseTs = REVERSE_TS_BASE - (now - DAY) // posted ~1 day ago
     const finding = { path: "a.ts", line: 10, headline: "bug", score: 5 }
-    const fid = await computeFid({ ruleId: null, path: finding.path, line: finding.line, headline: finding.headline })
+    const fid = await computeFid({
+      ruleId: null,
+      path: finding.path,
+      line: finding.line,
+      headline: finding.headline,
+    })
     const records: Record<string, unknown> = {
       [`ensemble-review-telemetry:${reverseTs}:Sigilix/sigilix#100`]: {
         owner: "Sigilix",
@@ -82,7 +107,14 @@ describe("handleFpRateMetricsRoute", () => {
         category: "logic",
         lastUpdatedTs: new Date(now).toISOString(),
         signals: [
-          { ts: new Date(now).toISOString(), prNumber: 100, commentId: 555, fid, kind: "dismissed-textual", dismissReason: "not-a-bug" },
+          {
+            ts: new Date(now).toISOString(),
+            prNumber: 100,
+            commentId: 555,
+            fid,
+            kind: "dismissed-textual",
+            dismissReason: "not-a-bug",
+          },
         ],
       },
     }
@@ -101,7 +133,14 @@ describe("handleFpRateMetricsRoute", () => {
       scanCapped: boolean
       failedFetches: number
       note: string
-      rows: Array<{ role: string; postedN: number; hard: number; soft: number; unlabeled: number; hardFpRate: number | null }>
+      rows: Array<{
+        role: string
+        postedN: number
+        hard: number
+        soft: number
+        unlabeled: number
+        hardFpRate: number | null
+      }>
     }
     // Echoed params + run metadata.
     expect(body.repo).toBe("sigilix/sigilix")
@@ -146,7 +185,10 @@ describe("handleFpRateMetricsRoute", () => {
       makeEnv(records),
     )
     const body = (await res.json()) as {
-      reviewsScanned: number; maturityExcludedReviews: number; maturityRelaxed: boolean; effectiveMaturityDays: number
+      reviewsScanned: number
+      maturityExcludedReviews: number
+      maturityRelaxed: boolean
+      effectiveMaturityDays: number
     }
     expect(body.reviewsScanned).toBe(1) // only the mature one counts
     expect(body.maturityExcludedReviews).toBe(1) // the recent one is held back + surfaced
@@ -163,8 +205,11 @@ describe("handleFpRateMetricsRoute", () => {
       makeEnv(records),
     )
     const body = (await res.json()) as {
-      reviewsScanned: number; maturityExcludedReviews: number; maturityRelaxed: boolean
-      maturityDays: number; effectiveMaturityDays: number
+      reviewsScanned: number
+      maturityExcludedReviews: number
+      maturityRelaxed: boolean
+      maturityDays: number
+      effectiveMaturityDays: number
     }
     // Instead of a misleading reviewsScanned:0, the gate relaxes to admit the
     // review, and the relaxation is flagged.
@@ -184,7 +229,11 @@ describe("handleFpRateMetricsRoute", () => {
       get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=3&min-n=1", `Bearer ${TOKEN}`),
       makeEnv(records),
     )
-    const body = (await res.json()) as { reviewsScanned: number; maturityRelaxed: boolean; effectiveMaturityDays: number }
+    const body = (await res.json()) as {
+      reviewsScanned: number
+      maturityRelaxed: boolean
+      effectiveMaturityDays: number
+    }
     expect(body.reviewsScanned).toBe(1)
     expect(body.maturityRelaxed).toBe(true)
     expect(body.effectiveMaturityDays).toBe(0)
@@ -197,7 +246,11 @@ describe("handleFpRateMetricsRoute", () => {
       get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
       makeEnv(records),
     )
-    const body = (await res.json()) as { reviewsScanned: number; maturityRelaxed: boolean; effectiveMaturityDays: number }
+    const body = (await res.json()) as {
+      reviewsScanned: number
+      maturityRelaxed: boolean
+      effectiveMaturityDays: number
+    }
     expect(body.reviewsScanned).toBe(1)
     expect(body.maturityRelaxed).toBe(false) // maturity=0 already admits everything → no relax
     expect(body.effectiveMaturityDays).toBe(0)
@@ -217,7 +270,12 @@ describe("handleFpRateMetricsRoute", () => {
     const now = Date.now()
     const reverseTs = REVERSE_TS_BASE - (now - DAY)
     const finding = { path: "a.ts", line: 10, headline: "bug", score: 5 }
-    const fid = await computeFid({ ruleId: null, path: finding.path, line: finding.line, headline: finding.headline })
+    const fid = await computeFid({
+      ruleId: null,
+      path: finding.path,
+      line: finding.line,
+      headline: finding.headline,
+    })
     const records: Record<string, unknown> = {
       // Review recorded BEFORE the rename → keyed under arc-and-anchor/sigilix.
       [`ensemble-review-telemetry:${reverseTs}:Arc-and-Anchor/sigilix#100`]: {
@@ -235,7 +293,14 @@ describe("handleFpRateMetricsRoute", () => {
         category: "logic",
         lastUpdatedTs: new Date(now).toISOString(),
         signals: [
-          { ts: new Date(now).toISOString(), prNumber: 100, commentId: 555, fid, kind: "dismissed-textual", dismissReason: "not-a-bug" },
+          {
+            ts: new Date(now).toISOString(),
+            prNumber: 100,
+            commentId: 555,
+            fid,
+            kind: "dismissed-textual",
+            dismissReason: "not-a-bug",
+          },
         ],
       },
     }
@@ -274,7 +339,10 @@ describe("handleFpRateMetricsRoute", () => {
 
   it("accepts the repeated ?repo= param form (not just comma-separated)", async () => {
     const res = await handleFpRateMetricsRoute(
-      get("https://x/metrics/fp-rate?repo=sigilix/sigilix&repo=arc-and-anchor/sigilix&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+      get(
+        "https://x/metrics/fp-rate?repo=sigilix/sigilix&repo=arc-and-anchor/sigilix&window=60&maturity=0&min-n=1",
+        `Bearer ${TOKEN}`,
+      ),
       makeEnv(),
     )
     expect(res.status).toBe(200)
@@ -289,7 +357,7 @@ describe("handleFpRateMetricsRoute", () => {
         makeEnv(),
       )
       expect(res.status, `repo=${repo}`).toBe(400)
-      expect((await res.json() as { error: string }).error, `repo=${repo}`).toBe("invalid_repo")
+      expect(((await res.json()) as { error: string }).error, `repo=${repo}`).toBe("invalid_repo")
     }
   })
 
@@ -301,10 +369,13 @@ describe("handleFpRateMetricsRoute", () => {
       makeEnv(),
     )
     expect(res.status).toBe(400)
-    expect((await res.json() as { error: string }).error).toBe("alias_repo_mismatch")
+    expect(((await res.json()) as { error: string }).error).toBe("alias_repo_mismatch")
     // Same repo name across differing owners (a transfer/rename) is allowed.
     const ok = await handleFpRateMetricsRoute(
-      get("https://x/metrics/fp-rate?repo=arc-and-anchor/sigilix,sigilix/sigilix&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+      get(
+        "https://x/metrics/fp-rate?repo=arc-and-anchor/sigilix,sigilix/sigilix&window=60&maturity=0&min-n=1",
+        `Bearer ${TOKEN}`,
+      ),
       makeEnv(),
     )
     expect(ok.status).toBe(200)

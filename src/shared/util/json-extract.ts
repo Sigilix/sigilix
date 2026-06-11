@@ -26,9 +26,7 @@ export function extractJsonObjectCandidates(text: string): string[] {
 
   const candidates: string[] = []
   candidates.push(trimmed)
-  candidates.push(
-    trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
-  )
+  candidates.push(trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, ""))
   const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
   if (fenceMatch?.[1]) candidates.push(fenceMatch[1].trim())
 
@@ -187,7 +185,7 @@ function canFollowCommaInJson(s: string, commaIndex: number): boolean {
   const idx = nextNonWhitespaceIndex(s, commaIndex + 1)
   if (idx === -1) return false
   const ch = s.charAt(idx)
-  if (ch === "\"" || ch === "{" || ch === "[") return true
+  if (ch === '"' || ch === "{" || ch === "[") return true
   if (s.startsWith("true", idx)) return isJsonValueBoundary(s, idx + 4)
   if (s.startsWith("false", idx)) return isJsonValueBoundary(s, idx + 5)
   if (s.startsWith("null", idx)) return isJsonValueBoundary(s, idx + 4)
@@ -245,7 +243,7 @@ function hasLikelyUnescapedStringQuote(candidate: string): boolean {
       else if (ch === "[") containers.push("array")
       else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
       else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
-      if (ch === "\"") {
+      if (ch === '"') {
         const prevIdx = previousNonWhitespaceIndex(candidate, i)
         const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
         stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
@@ -262,7 +260,7 @@ function hasLikelyUnescapedStringQuote(candidate: string): boolean {
       escape = true
       continue
     }
-    if (ch === "\"") {
+    if (ch === '"') {
       if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
         inString = false
         stringCanTerminateKey = false
@@ -287,7 +285,7 @@ function escapeLikelyUnescapedStringQuotes(candidate: string): string {
       else if (ch === "[") containers.push("array")
       else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
       else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
-      if (ch === "\"") {
+      if (ch === '"') {
         const prevIdx = previousNonWhitespaceIndex(candidate, i)
         const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
         stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
@@ -307,13 +305,13 @@ function escapeLikelyUnescapedStringQuotes(candidate: string): string {
       out += ch
       continue
     }
-    if (ch === "\"") {
+    if (ch === '"') {
       if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
         inString = false
         stringCanTerminateKey = false
         out += ch
       } else {
-        out += "\\\""
+        out += '\\"'
       }
       continue
     }

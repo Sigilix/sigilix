@@ -59,10 +59,7 @@ interface StateRecord {
   redirectAfter?: string
 }
 
-export async function handleGitHubAuthKickoff(
-  request: Request,
-  env: AuthOauthEnv,
-): Promise<Response> {
+export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEnv): Promise<Response> {
   const misconfigured = isMisconfigured(env)
   if (misconfigured) {
     console.error("github oauth kickoff misconfigured", { missing: misconfigured })
@@ -117,10 +114,7 @@ interface GitHubUserResponse {
   email?: string | null
 }
 
-export async function handleGitHubAuthCallback(
-  request: Request,
-  env: AuthOauthEnv,
-): Promise<Response> {
+export async function handleGitHubAuthCallback(request: Request, env: AuthOauthEnv): Promise<Response> {
   const misconfigured = isMisconfigured(env)
   if (misconfigured) {
     console.error("github oauth callback misconfigured", { missing: misconfigured })
@@ -156,10 +150,7 @@ export async function handleGitHubAuthCallback(
   // 2. KV nonce check. Read-then-delete (single-use, best-effort under KV
   //    eventual consistency — browser-binding above protects against the
   //    multi-region race).
-  const stateRaw = (await env.OPENCLAW_STATE.get(
-    `${STATE_KV_PREFIX}${state}`,
-    "json",
-  )) as StateRecord | null
+  const stateRaw = (await env.OPENCLAW_STATE.get(`${STATE_KV_PREFIX}${state}`, "json")) as StateRecord | null
   if (!stateRaw) {
     await writeAuthEvent(env.OPENCLAW_STATE, {
       kind: "callback_failed",
@@ -315,12 +306,7 @@ export function safeRedirectAfter(raw: string | undefined, baseUrlStr: string): 
   if (!raw) return fallback
   // Reject scheme-relative URLs (`//evil.com`), backslash variants, NUL,
   // and absolute URLs (`https://...`, `javascript:...`).
-  if (
-    raw.startsWith("//") ||
-    raw.includes("\\") ||
-    raw.includes("\0") ||
-    !raw.startsWith("/")
-  ) {
+  if (raw.startsWith("//") || raw.includes("\\") || raw.includes("\0") || !raw.startsWith("/")) {
     return fallback
   }
   // Reject encoded slashes / backslashes / NUL — middleware in front of
@@ -361,17 +347,10 @@ export type AuthEvent =
   | { kind: "logout"; sessionId: string; ts: number }
 
 export async function writeAuthEvent(kv: KVNamespace, event: AuthEvent): Promise<void> {
-  const sessionId =
-    event.kind === "callback_success"
-      ? event.sessionId
-      : event.kind === "logout"
-        ? event.sessionId
-        : ""
+  const sessionId = event.kind === "callback_success" ? event.sessionId : event.kind === "logout" ? event.sessionId : ""
   // Reverse-timestamp key prefix so newest entries list first under
   // wrangler kv key list (same convention as ensemble-review-telemetry).
-  const reverseTs = base64urlEncode(
-    new TextEncoder().encode(String(Number.MAX_SAFE_INTEGER - event.ts)),
-  )
+  const reverseTs = base64urlEncode(new TextEncoder().encode(String(Number.MAX_SAFE_INTEGER - event.ts)))
   const key = `${AUTH_EVENT_KV_PREFIX}${reverseTs}:${sessionId}`
   try {
     await kv.put(key, JSON.stringify(event), { expirationTtl: AUTH_EVENT_TTL_SECONDS })
@@ -383,11 +362,7 @@ export async function writeAuthEvent(kv: KVNamespace, event: AuthEvent): Promise
 
 // ─── /auth/logout ───────────────────────────────────────────────────
 
-export async function handleLogout(
-  _request: Request,
-  _env: AuthOauthEnv,
-  sessionId: string | null,
-): Promise<Response> {
+export async function handleLogout(_request: Request, _env: AuthOauthEnv, sessionId: string | null): Promise<Response> {
   if (sessionId) {
     try {
       await _env.OPENCLAW_STATE.delete(`auth_session:${sessionId}`)
@@ -404,14 +379,7 @@ export async function handleLogout(
     status: 302,
     headers: {
       location: "/",
-      "set-cookie": [
-        `__Host-sigilix_session=`,
-        "Path=/",
-        "HttpOnly",
-        "Secure",
-        "SameSite=Lax",
-        "Max-Age=0",
-      ].join("; "),
+      "set-cookie": [`__Host-sigilix_session=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; "),
     },
   })
 }

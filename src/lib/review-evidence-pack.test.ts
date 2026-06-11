@@ -42,7 +42,7 @@ describe("buildDynamicReviewEvidencePack", () => {
         [
           "export function parseFinalAnswer(response: string): string {",
           "  const match = response.match(/FINAL\\((.*)\\)/)",
-          "  return match?.[1] ?? \"\"",
+          '  return match?.[1] ?? ""',
           "}",
         ].join("\n"),
       ],
@@ -53,20 +53,24 @@ describe("buildDynamicReviewEvidencePack", () => {
       filesByPath,
       changedLines,
       reviewablePaths: ["src/parser.ts"],
-      retrievalChunks: [{
-        path: "src/repl.ts",
-        lineStart: 10,
-        lineEnd: 18,
-        score: 0.82,
-        content: "const answer = parseFinalAnswer(response)\nreturn answer",
-      }],
-      graphNodes: [{
-        path: "src/repl.ts",
-        symbolId: null,
-        name: null,
-        hop: 1,
-        edgeKind: "import",
-      }],
+      retrievalChunks: [
+        {
+          path: "src/repl.ts",
+          lineStart: 10,
+          lineEnd: 18,
+          score: 0.82,
+          content: "const answer = parseFinalAnswer(response)\nreturn answer",
+        },
+      ],
+      graphNodes: [
+        {
+          path: "src/repl.ts",
+          symbolId: null,
+          name: null,
+          hop: 1,
+          edgeKind: "import",
+        },
+      ],
       blastCallerPaths: ["src/runner.ts"],
       blastDependentPaths: [],
       testingEvidence,
@@ -81,9 +85,7 @@ describe("buildDynamicReviewEvidencePack", () => {
       { path: "src/runner.ts", relation: "blast/caller" },
     ])
     expect(pack.cards[0]?.retrievalRefs[0]?.reason).toBe("mentions changed symbol + graph-related")
-    expect(pack.cards[0]?.testingContext.siblingRefs).toEqual([
-      "siblingMapping:src/parser.ts->tests/parser.test.ts",
-    ])
+    expect(pack.cards[0]?.testingContext.siblingRefs).toEqual(["siblingMapping:src/parser.ts->tests/parser.test.ts"])
 
     const rendered = renderDynamicReviewEvidenceBlock(pack)
     expect(rendered).toContain("[DYNAMIC REVIEW EVIDENCE")
@@ -98,12 +100,7 @@ describe("buildDynamicReviewEvidencePack", () => {
     const filesByPath = new Map([
       [
         "src/large-symbol.ts",
-        [
-          "export function largeSymbol(): number {",
-          ...bodyLines,
-          "  return value15",
-          "}",
-        ].join("\n"),
+        ["export function largeSymbol(): number {", ...bodyLines, "  return value15", "}"].join("\n"),
       ],
     ])
     const changedRange = Array.from({ length: 15 }, (_, i) => i + 2)
@@ -128,12 +125,7 @@ describe("buildDynamicReviewEvidencePack", () => {
     const filesByPath = new Map([
       [
         "src/wide-symbol.ts",
-        [
-          "export function wideSymbol(): number {",
-          ...bodyLines,
-          "  return value40",
-          "}",
-        ].join("\n"),
+        ["export function wideSymbol(): number {", ...bodyLines, "  return value40", "}"].join("\n"),
       ],
     ])
     const changedLines: ChangedLines = new Map([["src/wide-symbol.ts", new Set([20, 21])]])
@@ -154,14 +146,7 @@ describe("buildDynamicReviewEvidencePack", () => {
 
   it("uses longer fences when snippets or excerpts contain backticks", () => {
     const filesByPath = new Map([
-      [
-        "src/fences.ts",
-        [
-          "export function renderFence(): string {",
-          "  return \"```\"",
-          "}",
-        ].join("\n"),
-      ],
+      ["src/fences.ts", ["export function renderFence(): string {", '  return "```"', "}"].join("\n")],
     ])
     const changedLines: ChangedLines = new Map([["src/fences.ts", new Set([2])]])
 
@@ -169,13 +154,15 @@ describe("buildDynamicReviewEvidencePack", () => {
       filesByPath,
       changedLines,
       reviewablePaths: ["src/fences.ts"],
-      retrievalChunks: [{
-        path: "src/fence-consumer.ts",
-        lineStart: 1,
-        lineEnd: 3,
-        score: 0.75,
-        content: "renderFence()\nconst literal = \"```\"",
-      }],
+      retrievalChunks: [
+        {
+          path: "src/fence-consumer.ts",
+          lineStart: 1,
+          lineEnd: 3,
+          score: 0.75,
+          content: 'renderFence()\nconst literal = "```"',
+        },
+      ],
     })
 
     const rendered = renderDynamicReviewEvidenceBlock(pack)
@@ -185,14 +172,7 @@ describe("buildDynamicReviewEvidencePack", () => {
 
   it("does not attach unrelated inspected tests to a source card", () => {
     const filesByPath = new Map([
-      [
-        "src/no-map.ts",
-        [
-          "export function changed(): number {",
-          "  return 1",
-          "}",
-        ].join("\n"),
-      ],
+      ["src/no-map.ts", ["export function changed(): number {", "  return 1", "}"].join("\n")],
     ])
     const changedLines: ChangedLines = new Map([["src/no-map.ts", new Set([2])]])
 
@@ -235,23 +215,24 @@ describe("buildDynamicReviewEvidencePack", () => {
       filesByPath,
       changedLines,
       reviewablePaths: ["src/dollar-symbols.ts"],
-      graphNodes: [{
-        path: "src/dollar-consumer.ts",
-        symbolId: null,
-        name: null,
-        hop: 1,
-        edgeKind: "import",
-      }],
-      retrievalChunks: [{
-        path: "src/dollar-consumer.ts",
-        lineStart: 20,
-        lineEnd: 24,
-        score: 0.9,
-        content: [
-          "const parsed = $parse(source)",
-          "const rendered = render$(parsed)",
-        ].join("\n"),
-      }],
+      graphNodes: [
+        {
+          path: "src/dollar-consumer.ts",
+          symbolId: null,
+          name: null,
+          hop: 1,
+          edgeKind: "import",
+        },
+      ],
+      retrievalChunks: [
+        {
+          path: "src/dollar-consumer.ts",
+          lineStart: 20,
+          lineEnd: 24,
+          score: 0.9,
+          content: ["const parsed = $parse(source)", "const rendered = render$(parsed)"].join("\n"),
+        },
+      ],
     })
 
     const bySymbol = new Map(pack.cards.map((card) => [card.symbolName, card]))
@@ -272,11 +253,7 @@ describe("buildDynamicReviewEvidencePack", () => {
     const filesByPath = new Map([
       [
         "src/unicode-boundary.ts",
-        [
-          "export function parse(input: string): string {",
-          "  return input.trim()",
-          "}",
-        ].join("\n"),
+        ["export function parse(input: string): string {", "  return input.trim()", "}"].join("\n"),
       ],
     ])
     const changedLines: ChangedLines = new Map([["src/unicode-boundary.ts", new Set([2])]])
@@ -285,13 +262,15 @@ describe("buildDynamicReviewEvidencePack", () => {
       filesByPath,
       changedLines,
       reviewablePaths: ["src/unicode-boundary.ts"],
-      graphNodes: [{
-        path: "src/unicode-neighbor.ts",
-        symbolId: null,
-        name: null,
-        hop: 1,
-        edgeKind: "import",
-      }],
+      graphNodes: [
+        {
+          path: "src/unicode-neighbor.ts",
+          symbolId: null,
+          name: null,
+          hop: 1,
+          edgeKind: "import",
+        },
+      ],
       retrievalChunks: [
         {
           path: "src/unicode-neighbor.ts",
@@ -316,9 +295,7 @@ describe("buildDynamicReviewEvidencePack", () => {
   })
 
   it("falls back to a changed file-region card when no symbol is available", () => {
-    const filesByPath = new Map([
-      ["src/constants.ts", ["const one = 1", "const two = 2"].join("\n")],
-    ])
+    const filesByPath = new Map([["src/constants.ts", ["const one = 1", "const two = 2"].join("\n")]])
     const changedLines: ChangedLines = new Map([["src/constants.ts", new Set([2])]])
 
     const pack = buildDynamicReviewEvidencePack({

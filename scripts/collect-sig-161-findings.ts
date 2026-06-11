@@ -60,22 +60,17 @@ function parseCli(argv: string[]): CliArgs {
 
   const repoFlags = (values.repo as string[] | undefined) ?? []
   if (repoFlags.length === 0) {
-    throw new Error(
-      "at least one --repo OWNER/REPO:N flag is required (e.g. --repo Sigilix/sigilix:60)",
-    )
+    throw new Error("at least one --repo OWNER/REPO:N flag is required (e.g. --repo Sigilix/sigilix:60)")
   }
   const repos = repoFlags.map((flag) => {
     const m = /^([^/]+)\/([^:]+):(\d+)$/.exec(flag)
     if (!m) {
-      throw new Error(
-        `--repo flag must match OWNER/REPO:N; got ${JSON.stringify(flag)}`,
-      )
+      throw new Error(`--repo flag must match OWNER/REPO:N; got ${JSON.stringify(flag)}`)
     }
     return { owner: m[1]!, repo: m[2]!, limit: Number(m[3]!) }
   })
 
-  const out = (values.out as string | undefined) ??
-    ".claude/research/sig-161-labeling/findings-source.jsonl"
+  const out = (values.out as string | undefined) ?? ".claude/research/sig-161-labeling/findings-source.jsonl"
 
   return { repos, out: resolve(out), verbose: !!values.verbose }
 }
@@ -92,9 +87,7 @@ async function ghJson<T>(args: string[]): Promise<T> {
   try {
     return JSON.parse(raw) as T
   } catch (err) {
-    throw new Error(
-      `gh ${args.join(" ")} returned non-JSON output: ${(err as Error).message}`,
-    )
+    throw new Error(`gh ${args.join(" ")} returned non-JSON output: ${(err as Error).message}`)
   }
 }
 
@@ -169,8 +162,7 @@ const FINDING_MARKER = /<!--\s*sigilix:pr-review-finding\s*-->/
 // Severity badge varies (`🔴 P0`, `🟠 P1`, `🟡 P2`, `🟢 P3`, sometimes
 // just `**cat:**`). The regex captures category, headline, and
 // confidence; severity is read from the badge separately if needed.
-const HEADING_RE =
-  /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
+const HEADING_RE = /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
 
 // SIG-15: previous renderer shape. Headline is first-class and category
 // moved into the metadata line:
@@ -192,22 +184,17 @@ const HEADING_V2_RE =
 // Same SIG-234 follow-up: anchor wrap is independently optional so
 // both pre-2026-05-26 (anchor-wrapped) and post-2026-05-26 (bare
 // <img>) comment shapes round-trip through the parser.
-const HEADING_V3_RE =
-  /^(?:(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?\s*)+?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
+const HEADING_V3_RE = /^(?:(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?\s*)+?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
 
-const CATEGORY_MARKER_RE =
-  /<!--\s*sigilix:category:([a-z-]+)\s*-->/
+const CATEGORY_MARKER_RE = /<!--\s*sigilix:category:([a-z-]+)\s*-->/
 
-const SEVERITY_MARKER_RE =
-  /<!--\s*sigilix:severity:([1-5])\s*-->/
+const SEVERITY_MARKER_RE = /<!--\s*sigilix:severity:([1-5])\s*-->/
 
-const CONFIDENCE_MARKER_RE =
-  /<!--\s*sigilix:confidence:([1-5])\s*-->/
+const CONFIDENCE_MARKER_RE = /<!--\s*sigilix:confidence:([1-5])\s*-->/
 
 // Parse the embedded marker, e.g.
 //   <!-- sigilix:fid:6133bdb79f7b71af:cat:tests:sev:warning:path:a2a171449d86 -->
-const MARKER_RE =
-  /<!--\s*sigilix:fid:([0-9a-f]+):cat:([a-z-]+):sev:([a-z]+):path:([0-9a-f]+)\s*-->/
+const MARKER_RE = /<!--\s*sigilix:fid:([0-9a-f]+):cat:([a-z-]+):sev:([a-z]+):path:([0-9a-f]+)\s*-->/
 
 const SEVERITY_TO_SCORE: Record<string, number> = {
   critical: 5,
@@ -240,10 +227,7 @@ function parseFinding(args: {
   const severityMarkerMatch = SEVERITY_MARKER_RE.exec(comment.body)
   const confidenceMarkerMatch = CONFIDENCE_MARKER_RE.exec(comment.body)
 
-  const findingId = createHash("sha256")
-    .update(`${owner}|${repo}|${prNumber}|${comment.id}`)
-    .digest("hex")
-    .slice(0, 16)
+  const findingId = createHash("sha256").update(`${owner}|${repo}|${prNumber}|${comment.id}`).digest("hex").slice(0, 16)
 
   const row: FindingRow = {
     findingId,
@@ -313,12 +297,7 @@ function parseFinding(args: {
 
 // ─── Per-repo fetcher ────────────────────────────────────────────
 
-async function listPrs(
-  owner: string,
-  repo: string,
-  limit: number,
-  verbose: boolean,
-): Promise<GhPrSummary[]> {
+async function listPrs(owner: string, repo: string, limit: number, verbose: boolean): Promise<GhPrSummary[]> {
   // `gh pr list` returns the most recent PRs by default; use --state all
   // so we pick up MERGED PRs (the bulk of the labeling corpus is
   // already-merged dogfood).
@@ -341,19 +320,11 @@ async function listPrs(
   return out
 }
 
-async function listPrComments(
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<GhReviewComment[]> {
+async function listPrComments(owner: string, repo: string, prNumber: number): Promise<GhReviewComment[]> {
   // `gh api --paginate` walks every page; we want all review comments
   // from sigilix[bot] (filter post-fetch — the GitHub API doesn't
   // support a user-filter param).
-  const raw = await gh([
-    "api",
-    "--paginate",
-    `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
-  ])
+  const raw = await gh(["api", "--paginate", `repos/${owner}/${repo}/pulls/${prNumber}/comments`])
   // `--paginate` concatenates JSON arrays as separate top-level array
   // tokens; merge them into one array.
   const merged: GhReviewComment[] = []
@@ -402,9 +373,12 @@ export function splitConcatenatedJsonArrays(s: string): string[] {
 
 // ─── Main ────────────────────────────────────────────────────────
 
-async function collectFromRepo(
-  args: { owner: string; repo: string; limit: number; verbose: boolean },
-): Promise<FindingRow[]> {
+async function collectFromRepo(args: {
+  owner: string
+  repo: string
+  limit: number
+  verbose: boolean
+}): Promise<FindingRow[]> {
   const { owner, repo, limit, verbose } = args
   const prs = await listPrs(owner, repo, limit, verbose)
   const all: FindingRow[] = []
@@ -414,7 +388,11 @@ async function collectFromRepo(
       let kept = 0
       for (const c of comments) {
         const row = parseFinding({
-          owner, repo, prNumber: pr.number, prUrl: pr.url, headSha: pr.headRefOid,
+          owner,
+          repo,
+          prNumber: pr.number,
+          prUrl: pr.url,
+          headSha: pr.headRefOid,
           comment: c,
         })
         if (row) {
@@ -426,9 +404,7 @@ async function collectFromRepo(
         console.error(`[collect]   ${owner}/${repo}#${pr.number}: ${kept} findings`)
       }
     } catch (err) {
-      console.error(
-        `[collect]   ${owner}/${repo}#${pr.number}: skipped — ${(err as Error).message}`,
-      )
+      console.error(`[collect]   ${owner}/${repo}#${pr.number}: skipped — ${(err as Error).message}`)
     }
   }
   return all

@@ -110,10 +110,15 @@ describe("computeAbReport decision", () => {
   it("ships hybrid when relative F1 lift ≥ 10% and N ≥ minPrs", () => {
     // 4 PRs, minPrs=4. Vector finds 2/4 (recall .5, precision 1 → F1 .667).
     // Hybrid finds 4/4 (F1 1.0) → ~50% lift → ship.
-    const v = findings([["0", "vector", "a.ts", 10], ["1", "vector", "a.ts", 10]])
+    const v = findings([
+      ["0", "vector", "a.ts", 10],
+      ["1", "vector", "a.ts", 10],
+    ])
     const h = findings([
-      ["0", "hybrid", "a.ts", 10], ["1", "hybrid", "a.ts", 10],
-      ["2", "hybrid", "a.ts", 10], ["3", "hybrid", "a.ts", 10],
+      ["0", "hybrid", "a.ts", 10],
+      ["1", "hybrid", "a.ts", 10],
+      ["2", "hybrid", "a.ts", 10],
+      ["3", "hybrid", "a.ts", 10],
     ])
     const r = computeAbReport([...v, ...h], truthFor(4), { minPrs: 4 })
     expect(r.decision.shipHybrid).toBe(true)
@@ -122,10 +127,18 @@ describe("computeAbReport decision", () => {
 
   it("keeps behind flag when lift is below the bar", () => {
     // Identical arms → 0% lift → no ship.
-    const v = findings([["0", "vector", "a.ts", 10], ["1", "vector", "a.ts", 10],
-      ["2", "vector", "a.ts", 10], ["3", "vector", "a.ts", 10]])
-    const h = findings([["0", "hybrid", "a.ts", 10], ["1", "hybrid", "a.ts", 10],
-      ["2", "hybrid", "a.ts", 10], ["3", "hybrid", "a.ts", 10]])
+    const v = findings([
+      ["0", "vector", "a.ts", 10],
+      ["1", "vector", "a.ts", 10],
+      ["2", "vector", "a.ts", 10],
+      ["3", "vector", "a.ts", 10],
+    ])
+    const h = findings([
+      ["0", "hybrid", "a.ts", 10],
+      ["1", "hybrid", "a.ts", 10],
+      ["2", "hybrid", "a.ts", 10],
+      ["3", "hybrid", "a.ts", 10],
+    ])
     const r = computeAbReport([...v, ...h], truthFor(4), { minPrs: 4 })
     expect(r.decision.shipHybrid).toBe(false)
     expect(r.decision.relativeLift).toBe(0)
@@ -133,7 +146,10 @@ describe("computeAbReport decision", () => {
 
   it("flags underpowered and refuses to ship below minPrs even with a lift", () => {
     const v = findings([["0", "vector", "a.ts", 10]])
-    const h = findings([["0", "hybrid", "a.ts", 10], ["1", "hybrid", "a.ts", 10]])
+    const h = findings([
+      ["0", "hybrid", "a.ts", 10],
+      ["1", "hybrid", "a.ts", 10],
+    ])
     const r = computeAbReport([...v, ...h], truthFor(2), { minPrs: 30 })
     expect(r.decision.underpowered).toBe(true)
     expect(r.decision.shipHybrid).toBe(false)

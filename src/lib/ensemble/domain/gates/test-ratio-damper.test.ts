@@ -7,9 +7,7 @@ import {
   TEST_RATIO_DAMPER_THRESHOLD,
 } from "@/src/lib/ensemble/domain/gates/test-ratio-damper"
 
-function diffMap(
-  byPath: Record<string, string[]>,
-): Map<string, Map<number, string>> {
+function diffMap(byPath: Record<string, string[]>): Map<string, Map<number, string>> {
   const out = new Map<string, Map<number, string>>()
   for (const [path, lines] of Object.entries(byPath)) {
     const lm = new Map<number, string>()
@@ -41,9 +39,7 @@ describe("computeTestToSourceAddedRatio", () => {
   })
 
   it("returns 0 when the diff adds no test lines", () => {
-    const ratio = computeTestToSourceAddedRatio(
-      diffMap({ "src/lib/foo.ts": ["const x = 1", "const y = 2"] }),
-    )
+    const ratio = computeTestToSourceAddedRatio(diffMap({ "src/lib/foo.ts": ["const x = 1", "const y = 2"] }))
     expect(ratio).toBe(0)
   })
 

@@ -64,19 +64,20 @@ const THREE_MISSING: CoverageRoles = {
 }
 
 function stack(parentNumber: number | null): StackContext {
-  const parent: StackPr | null = parentNumber === null
-    ? null
-    : {
-        number: parentNumber,
-        title: `PR #${parentNumber}`,
-        headSha: "1234567",
-        baseSha: "0000000",
-        baseRef: "main",
-        headRef: `feature-${parentNumber}`,
-        author: "alice",
-        state: "open" as const,
-        isDraft: false,
-      }
+  const parent: StackPr | null =
+    parentNumber === null
+      ? null
+      : {
+          number: parentNumber,
+          title: `PR #${parentNumber}`,
+          headSha: "1234567",
+          baseSha: "0000000",
+          baseRef: "main",
+          headRef: `feature-${parentNumber}`,
+          author: "alice",
+          state: "open" as const,
+          isDraft: false,
+        }
   return {
     isStacked: parentNumber !== null,
     position: parentNumber === null ? 1 : 2,
@@ -97,9 +98,7 @@ describe("renderCoverageLine (ARC-281)", () => {
   })
 
   it("renders the full coverage line when succeeded == dispatched", () => {
-    expect(renderCoverageLine(FULL)).toBe(
-      "**Coverage:** logic · security · performance · tests",
-    )
+    expect(renderCoverageLine(FULL)).toBe("**Coverage:** logic · security · performance · tests")
   })
 
   it("renders the inline degraded line when 1 role is missing", () => {
@@ -109,27 +108,25 @@ describe("renderCoverageLine (ARC-281)", () => {
   })
 
   it("renders the inline degraded line when 2 roles are missing", () => {
-    expect(renderCoverageLine({
-      dispatched: ["logic", "security", "performance", "tests"],
-      succeeded: ["logic", "tests"],
-    })).toBe(
-      "**Coverage:** logic · tests — _security, performance specialists unavailable_",
-    )
+    expect(
+      renderCoverageLine({
+        dispatched: ["logic", "security", "performance", "tests"],
+        succeeded: ["logic", "tests"],
+      }),
+    ).toBe("**Coverage:** logic · tests — _security, performance specialists unavailable_")
   })
 
   it("renders the count-only summary when 3+ roles are missing (caller may swap to <details>)", () => {
-    expect(renderCoverageLine(THREE_MISSING)).toBe(
-      "**Coverage:** logic — _3 specialists unavailable_",
-    )
+    expect(renderCoverageLine(THREE_MISSING)).toBe("**Coverage:** logic — _3 specialists unavailable_")
   })
 
   it("falls back to `_none_` when zero succeeded but dispatched > 0", () => {
-    expect(renderCoverageLine({
-      dispatched: ["logic", "security"],
-      succeeded: [],
-    })).toBe(
-      "**Coverage:** _none_ — _logic, security specialists unavailable_",
-    )
+    expect(
+      renderCoverageLine({
+        dispatched: ["logic", "security"],
+        succeeded: [],
+      }),
+    ).toBe("**Coverage:** _none_ — _logic, security specialists unavailable_")
   })
 })
 
@@ -137,35 +134,63 @@ describe("renderCoverageLine (ARC-281)", () => {
 
 describe("renderDeltaBadge (ARC-281)", () => {
   it("returns null when every count is zero", () => {
-    expect(renderDeltaBadge({
-      newCount: 0, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0,
-    })).toBeNull()
+    expect(
+      renderDeltaBadge({
+        newCount: 0,
+        stillOpenCount: 0,
+        likelyFixedCount: 0,
+        carriedOverCount: 0,
+      }),
+    ).toBeNull()
   })
 
   it("formats the four parts in order: new · still-open · likely-fixed · carried-over", () => {
-    expect(renderDeltaBadge({
-      newCount: 2, stillOpenCount: 1, likelyFixedCount: 3, carriedOverCount: 1,
-    })).toBe("**Changes:** +2 new · 1 still-open · 3 likely-fixed · 1 carried-over")
+    expect(
+      renderDeltaBadge({
+        newCount: 2,
+        stillOpenCount: 1,
+        likelyFixedCount: 3,
+        carriedOverCount: 1,
+      }),
+    ).toBe("**Changes:** +2 new · 1 still-open · 3 likely-fixed · 1 carried-over")
   })
 
   it("skips zero parts cleanly", () => {
-    expect(renderDeltaBadge({
-      newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
-    })).toBe("**Changes:** +2 new · 3 likely-fixed")
+    expect(
+      renderDeltaBadge({
+        newCount: 2,
+        stillOpenCount: 0,
+        likelyFixedCount: 3,
+        carriedOverCount: 0,
+      }),
+    ).toBe("**Changes:** +2 new · 3 likely-fixed")
   })
 
   it("renders only-fixed and only-new variants", () => {
-    expect(renderDeltaBadge({
-      newCount: 0, stillOpenCount: 0, likelyFixedCount: 4, carriedOverCount: 0,
-    })).toBe("**Changes:** 4 likely-fixed")
-    expect(renderDeltaBadge({
-      newCount: 3, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0,
-    })).toBe("**Changes:** +3 new")
+    expect(
+      renderDeltaBadge({
+        newCount: 0,
+        stillOpenCount: 0,
+        likelyFixedCount: 4,
+        carriedOverCount: 0,
+      }),
+    ).toBe("**Changes:** 4 likely-fixed")
+    expect(
+      renderDeltaBadge({
+        newCount: 3,
+        stillOpenCount: 0,
+        likelyFixedCount: 0,
+        carriedOverCount: 0,
+      }),
+    ).toBe("**Changes:** +3 new")
   })
 
   it("does NOT emit the Δ triangle glyph (rebrand 2026-05-23)", () => {
     const out = renderDeltaBadge({
-      newCount: 2, stillOpenCount: 1, likelyFixedCount: 3, carriedOverCount: 1,
+      newCount: 2,
+      stillOpenCount: 1,
+      likelyFixedCount: 3,
+      carriedOverCount: 1,
     })
     expect(out).not.toContain("Δ")
     expect(out).toContain("Changes")
@@ -267,19 +292,21 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toBe([
-      "<!-- sigilix:pr-review -->",
-      "",
-      "**1 high-severity finding** · coverage: logic · security · performance · tests",
-      "",
-      "The PR adds a feature flag and a test.",
-      "",
-      "| Severity | Location | Issue |",
-      "|:---|:---|:---|",
-      "| **Critical (5)** | `src/foo.ts:42` | `logic`: broken test |",
-      "",
-      "<sub>Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context) · Re-run: `/sigilix review` · `abcdef1`</sub>",
-    ].join("\n"))
+    expect(body).toBe(
+      [
+        "<!-- sigilix:pr-review -->",
+        "",
+        "**1 high-severity finding** · coverage: logic · security · performance · tests",
+        "",
+        "The PR adds a feature flag and a test.",
+        "",
+        "| Severity | Location | Issue |",
+        "|:---|:---|:---|",
+        "| **Critical (5)** | `src/foo.ts:42` | `logic`: broken test |",
+        "",
+        "<sub>Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context) · Re-run: `/sigilix review` · `abcdef1`</sub>",
+      ].join("\n"),
+    )
   })
 
   it("out-of-PR-scope: renders in 'Outside your changes', NOT the Fix Plan; lead counts only in-scope (inlines-only)", () => {
@@ -287,7 +314,13 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       verdict: verdict({
         findings: [
           finding({ score: 5, headline: "real in-PR blocker" }), // in-scope, inline
-          finding({ score: 5, scope: "file", outOfPrScope: true, headline: "issue in another file", body: "Not in this PR." }),
+          finding({
+            score: 5,
+            scope: "file",
+            outOfPrScope: true,
+            headline: "issue in another file",
+            body: "Not in this PR.",
+          }),
         ],
       }),
       coverage: FULL,
@@ -304,11 +337,16 @@ describe("renderRequestChangesBody (ARC-281)", () => {
   })
 
   it("renderApproveBody: marker-only on a clean approve; posts 'Outside your changes' + reconciliation when out-of-scope findings exist", () => {
-    const clean = renderApproveBody({ verdict: verdict({ findings: [] }), prov: { headSha: HEAD, nowMs: NOW } })
+    const clean = renderApproveBody({
+      verdict: verdict({ findings: [] }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
     expect(clean).not.toContain("Outside your changes")
 
     const withNote = renderApproveBody({
-      verdict: verdict({ findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })] }),
+      verdict: verdict({
+        findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })],
+      }),
       prov: { headSha: HEAD, nowMs: NOW },
     })
     expect(withNote).toContain("**Approved**")
@@ -359,7 +397,10 @@ describe("renderRequestChangesBody (ARC-281)", () => {
 
   it("Variant E — REQUEST_CHANGES with delta badge appends ` · since last review` to heading", () => {
     const delta: DeltaBadgeCounts = {
-      newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
+      newCount: 2,
+      stillOpenCount: 0,
+      likelyFixedCount: 3,
+      carriedOverCount: 0,
     }
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 4 }), finding({ line: 99, score: 4 })] }),
@@ -475,9 +516,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // bodyOnlyFindings with score>=4 in highOrCriticalCount.
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [] }),
-      unanchored: [
-        finding({ path: "src/bar.ts", line: 99, headline: "unanchored critical", score: 5 }),
-      ],
+      unanchored: [finding({ path: "src/bar.ts", line: 99, headline: "unanchored critical", score: 5 })],
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
@@ -545,7 +584,9 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       verdict: verdict({ findings: [finding()] }),
       coverage: FULL,
     })
-    expect(body).toContain("Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context)")
+    expect(body).toContain(
+      "Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context)",
+    )
     expect(body).not.toMatch(/✅|🎉|🤖|🪄/)
   })
 
@@ -612,7 +653,10 @@ describe("renderRequestChangesBody (ARC-281)", () => {
 
     it("summary precedes Fix Plan with delta badge present", () => {
       const delta: DeltaBadgeCounts = {
-        newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
+        newCount: 2,
+        stillOpenCount: 0,
+        likelyFixedCount: 3,
+        carriedOverCount: 0,
       }
       const body = renderRequestChangesBody({
         verdict: verdict({ findings: [finding({ score: 5 }), finding({ line: 99, score: 4 })] }),
@@ -670,7 +714,10 @@ describe("renderRequestChangesBody (ARC-281)", () => {
 
     it("summary precedes Fix Plan with all four variants combined", () => {
       const delta: DeltaBadgeCounts = {
-        newCount: 1, stillOpenCount: 1, likelyFixedCount: 0, carriedOverCount: 0,
+        newCount: 1,
+        stillOpenCount: 1,
+        likelyFixedCount: 0,
+        carriedOverCount: 0,
       }
       const body = renderRequestChangesBody({
         verdict: verdict({ findings: [finding({ score: 5 })] }),

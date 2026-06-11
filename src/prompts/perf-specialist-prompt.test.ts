@@ -32,8 +32,7 @@ describe("perf-examples.json", () => {
   it("good score>=4 exemplars carry an evidence field (complexityEstimate or hotPathIdentifier)", () => {
     for (const ex of perfExamples.examples) {
       if (ex.emit && ex.finding && ex.finding.score >= 4) {
-        const hasEvidence =
-          "complexityEstimate" in ex.finding || "hotPathIdentifier" in ex.finding
+        const hasEvidence = "complexityEstimate" in ex.finding || "hotPathIdentifier" in ex.finding
         expect(hasEvidence, `exemplar ${ex.id} lacks perf evidence field`).toBe(true)
       }
     }

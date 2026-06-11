@@ -73,15 +73,17 @@ describe("reciprocalRankFusion", () => {
     expect(fused.map((f) => f.item).sort()).toEqual(["a", "b", "c"])
   })
   it("dedupes by key (no duplicate output rows)", () => {
-    const fused = reciprocalRankFusion([
-      [{ key: "x", item: 1 }],
-      [{ key: "x", item: 99 }],
-    ])
+    const fused = reciprocalRankFusion([[{ key: "x", item: 1 }], [{ key: "x", item: 99 }]])
     expect(fused).toHaveLength(1)
     expect(fused[0]!.item).toBe(1) // first-seen payload wins
   })
   it("breaks score ties by first-seen order", () => {
-    const fused = reciprocalRankFusion([[{ key: "p", item: "p" }, { key: "q", item: "q" }]])
+    const fused = reciprocalRankFusion([
+      [
+        { key: "p", item: "p" },
+        { key: "q", item: "q" },
+      ],
+    ])
     expect(fused.map((f) => f.item)).toEqual(["p", "q"])
   })
 })
@@ -92,9 +94,18 @@ describe.skipIf(!FTS5_AVAILABLE)("lexical D1 round-trip (FTS5/BM25)", () => {
   it("writes chunks and retrieves them by BM25 relevance, scoped to namespace", async () => {
     const db = makeD1()
     const ok = await upsertLexicalChunks(db, [
-      chunk({ id: "1", path: "src/retry.ts", content: "export function retryWithBackoff(fn) { /* exponential */ }" }),
+      chunk({
+        id: "1",
+        path: "src/retry.ts",
+        content: "export function retryWithBackoff(fn) { /* exponential */ }",
+      }),
       chunk({ id: "2", path: "src/log.ts", content: "console.log('unrelated logging helper')" }),
-      chunk({ id: "3", namespace: "other/repo", path: "x.ts", content: "retryWithBackoff in another repo" }),
+      chunk({
+        id: "3",
+        namespace: "other/repo",
+        path: "x.ts",
+        content: "retryWithBackoff in another repo",
+      }),
     ])
     expect(ok).toBe(true)
 

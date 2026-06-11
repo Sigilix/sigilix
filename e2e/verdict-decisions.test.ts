@@ -19,10 +19,7 @@ import {
   type AuthoredItem,
   type PrReviewFinding,
 } from "@/src/lib/triage-pr-review"
-import {
-  resolveReviewEventOverride,
-  LOW_CONFIDENCE_COMMENT_THRESHOLD,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { resolveReviewEventOverride, LOW_CONFIDENCE_COMMENT_THRESHOLD } from "@/src/lib/triage-pr-review-ensemble"
 import { severityTierForScore } from "./_golden/validation-matrix-cases"
 
 const baseFinding: PrReviewFinding = {
@@ -45,23 +42,17 @@ const humanItem: AuthoredItem = { user: { login: "alice" } }
 // ─── 1) chooseReviewEventForRenderedFindings ───────────────────────────
 describe("chooseReviewEventForRenderedFindings (final rendered-surface gate)", () => {
   it("APPROVE when nothing renders", () => {
-    expect(
-      chooseReviewEventForRenderedFindings({ inlineFindings: [], bodyOnlyFindings: [] }),
-    ).toBe("APPROVE")
+    expect(chooseReviewEventForRenderedFindings({ inlineFindings: [], bodyOnlyFindings: [] })).toBe("APPROVE")
   })
 
   it("APPROVE when the only findings are out-of-PR-scope (informational)", () => {
     const outside = f({ score: 5, outOfPrScope: true })
-    expect(
-      chooseReviewEventForRenderedFindings({ inlineFindings: [], bodyOnlyFindings: [outside] }),
-    ).toBe("APPROVE")
+    expect(chooseReviewEventForRenderedFindings({ inlineFindings: [], bodyOnlyFindings: [outside] })).toBe("APPROVE")
   })
 
   it("COMMENT when the only in-scope findings are testing-category, even at score 5", () => {
     const testing = f({ category: "testing", score: 5 })
-    expect(
-      chooseReviewEventForRenderedFindings({ inlineFindings: [testing], bodyOnlyFindings: [] }),
-    ).toBe("COMMENT")
+    expect(chooseReviewEventForRenderedFindings({ inlineFindings: [testing], bodyOnlyFindings: [] })).toBe("COMMENT")
   })
 
   it("COMMENT for a truly trivial style/docs nit below P0/P1", () => {
@@ -129,7 +120,10 @@ describe("chooseReviewEventForRenderedFindings (final rendered-surface gate)", (
 
 // ─── 2) chooseRenderedEventWithOverride ─────────────────────────────────
 describe("chooseRenderedEventWithOverride (override discipline)", () => {
-  const clean = { inlineFindings: [] as PrReviewFinding[], bodyOnlyFindings: [] as PrReviewFinding[] }
+  const clean = {
+    inlineFindings: [] as PrReviewFinding[],
+    bodyOnlyFindings: [] as PrReviewFinding[],
+  }
   const blocking = { inlineFindings: [f({ category: "logic", score: 4 })], bodyOnlyFindings: [] }
 
   it("REQUEST_CHANGES override always wins (even over a clean base)", () => {
@@ -179,45 +173,67 @@ describe("chooseReviewEventWithGate (thresholded gate)", () => {
   })
 
   it("APPROVE on empty findings + empty open items", () => {
-    expect(
-      chooseReviewEventWithGate({ findings: [], threshold: 0.85, missingScorePolicy: "permit" }),
-    ).toBe("APPROVE")
+    expect(chooseReviewEventWithGate({ findings: [], threshold: 0.85, missingScorePolicy: "permit" })).toBe("APPROVE")
   })
 
   it("REQUEST_CHANGES when a finite gateScore clears the threshold", () => {
     expect(
-      chooseReviewEventWithGate({ findings: [fg(0.95)], threshold: 0.85, missingScorePolicy: "permit" }),
+      chooseReviewEventWithGate({
+        findings: [fg(0.95)],
+        threshold: 0.85,
+        missingScorePolicy: "permit",
+      }),
     ).toBe("REQUEST_CHANGES")
   })
 
   it("COMMENT when a finite gateScore is below threshold (finding present, none blocking)", () => {
     expect(
-      chooseReviewEventWithGate({ findings: [fg(0.7)], threshold: 0.85, missingScorePolicy: "permit" }),
+      chooseReviewEventWithGate({
+        findings: [fg(0.7)],
+        threshold: 0.85,
+        missingScorePolicy: "permit",
+      }),
     ).toBe("COMMENT")
   })
 
   it("threshold boundary is inclusive: gateScore === threshold blocks", () => {
     expect(
-      chooseReviewEventWithGate({ findings: [fg(0.85)], threshold: 0.85, missingScorePolicy: "permit" }),
+      chooseReviewEventWithGate({
+        findings: [fg(0.85)],
+        threshold: 0.85,
+        missingScorePolicy: "permit",
+      }),
     ).toBe("REQUEST_CHANGES")
   })
 
   describe("missing gateScore × policy", () => {
     it("block: treats missing as 1.0 → REQUEST_CHANGES", () => {
       expect(
-        chooseReviewEventWithGate({ findings: [fg(undefined)], threshold: 0.85, missingScorePolicy: "block" }),
+        chooseReviewEventWithGate({
+          findings: [fg(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
       ).toBe("REQUEST_CHANGES")
     })
 
     it("permit: treats missing as 0.0 → COMMENT (finding present, non-blocking)", () => {
       expect(
-        chooseReviewEventWithGate({ findings: [fg(undefined)], threshold: 0.85, missingScorePolicy: "permit" }),
+        chooseReviewEventWithGate({
+          findings: [fg(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
       ).toBe("COMMENT")
     })
 
     it("throw: a missing gateScore is a pipeline-invariant failure", () => {
       expect(() =>
-        chooseReviewEventWithGate({ findings: [fg(undefined)], threshold: 0.85, missingScorePolicy: "throw" }),
+        chooseReviewEventWithGate({
+          findings: [fg(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "throw",
+        }),
       ).toThrow()
     })
   })
@@ -225,7 +241,11 @@ describe("chooseReviewEventWithGate (thresholded gate)", () => {
   describe("non-finite gateScore is treated as missing (routes through policy)", () => {
     it("NaN under block → REQUEST_CHANGES", () => {
       expect(
-        chooseReviewEventWithGate({ findings: [fg(Number.NaN)], threshold: 0.85, missingScorePolicy: "block" }),
+        chooseReviewEventWithGate({
+          findings: [fg(Number.NaN)],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
       ).toBe("REQUEST_CHANGES")
     })
 
@@ -241,7 +261,11 @@ describe("chooseReviewEventWithGate (thresholded gate)", () => {
 
     it("NaN under throw → throws", () => {
       expect(() =>
-        chooseReviewEventWithGate({ findings: [fg(Number.NaN)], threshold: 0.85, missingScorePolicy: "throw" }),
+        chooseReviewEventWithGate({
+          findings: [fg(Number.NaN)],
+          threshold: 0.85,
+          missingScorePolicy: "throw",
+        }),
       ).toThrow()
     })
   })
@@ -264,10 +288,12 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
     // conf rescale: 1→0.10, 2→0.30, 3→0.50, 4→0.75, 5→0.90; logic evidence +0.10;
     // score 3 severity +0; 1 spec agreement +0.
     const at = (confidence: number) =>
-      computeGateScore(f({ confidence, score: 3, category: "logic" }), { sourceSpecialists: ["logic"] })
-    expect(at(1)).toBeCloseTo(0.20, 5)
-    expect(at(2)).toBeCloseTo(0.40, 5)
-    expect(at(3)).toBeCloseTo(0.60, 5)
+      computeGateScore(f({ confidence, score: 3, category: "logic" }), {
+        sourceSpecialists: ["logic"],
+      })
+    expect(at(1)).toBeCloseTo(0.2, 5)
+    expect(at(2)).toBeCloseTo(0.4, 5)
+    expect(at(3)).toBeCloseTo(0.6, 5)
     expect(at(4)).toBeCloseTo(0.85, 5)
     expect(at(5)).toBeCloseTo(1.0, 5)
   })
@@ -283,7 +309,7 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
       sourceSpecialists: ["logic"],
     })
     expect(missing).toBeCloseTo(explicit, 5)
-    expect(missing).toBeCloseTo(0.60, 5)
+    expect(missing).toBeCloseTo(0.6, 5)
   })
 
   it("evidence presence adds exactly +0.10 (testing category)", () => {
@@ -291,15 +317,22 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
       sourceSpecialists: ["tests"],
     })
     const withEv = computeGateScore(
-      f({ confidence: 3, score: 3, category: "testing", inspectedTestFiles: ["tests/foo.test.ts"] }),
+      f({
+        confidence: 3,
+        score: 3,
+        category: "testing",
+        inspectedTestFiles: ["tests/foo.test.ts"],
+      }),
       { sourceSpecialists: ["tests"] },
     )
-    expect(withEv - noEv).toBeCloseTo(0.10, 5)
+    expect(withEv - noEv).toBeCloseTo(0.1, 5)
   })
 
   it("agreement adds +0.05 per extra specialist, capped at +0.10", () => {
     const at = (specialists: string[]) =>
-      computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), { sourceSpecialists: specialists })
+      computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+        sourceSpecialists: specialists,
+      })
     expect(at(["logic", "security"]) - at(["logic"])).toBeCloseTo(0.05, 5)
     expect(at(["logic", "security", "performance"]) - at(["logic", "security"])).toBeCloseTo(0.05, 5)
     // beyond two extra specialists, no further boost (cap)
@@ -311,13 +344,15 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
 
   it("severity contributes score 1→-0.10 … 5→+0.10 (logic, conf 3, 1 spec)", () => {
     const at = (score: number) =>
-      computeGateScore(f({ confidence: 3, score, category: "logic" }), { sourceSpecialists: ["logic"] })
+      computeGateScore(f({ confidence: 3, score, category: "logic" }), {
+        sourceSpecialists: ["logic"],
+      })
     // base conf 3 (0.50) + logic evidence (0.10) = 0.60 before severity
-    expect(at(1)).toBeCloseTo(0.50, 5)
+    expect(at(1)).toBeCloseTo(0.5, 5)
     expect(at(2)).toBeCloseTo(0.55, 5)
-    expect(at(3)).toBeCloseTo(0.60, 5)
+    expect(at(3)).toBeCloseTo(0.6, 5)
     expect(at(4)).toBeCloseTo(0.65, 5)
-    expect(at(5)).toBeCloseTo(0.70, 5)
+    expect(at(5)).toBeCloseTo(0.7, 5)
   })
 
   it("clamps to [0, 1]", () => {
@@ -327,7 +362,9 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
       }),
     ).toBe(1.0)
     expect(
-      computeGateScore(f({ confidence: 1, score: 1, category: "testing" }), { sourceSpecialists: ["tests"] }),
+      computeGateScore(f({ confidence: 1, score: 1, category: "testing" }), {
+        sourceSpecialists: ["tests"],
+      }),
     ).toBe(0.0)
   })
 })
@@ -336,25 +373,41 @@ describe("computeGateScore (deterministic 0-1 blend)", () => {
 describe("resolveReviewEventOverride (incomplete/blocker override resolution)", () => {
   it("a blocker escalates to REQUEST_CHANGES (beats incomplete + dropped)", () => {
     expect(
-      resolveReviewEventOverride({ hasApprovalBlocker: true, reviewIncomplete: true, filesDroppedCount: 3 }),
+      resolveReviewEventOverride({
+        hasApprovalBlocker: true,
+        reviewIncomplete: true,
+        filesDroppedCount: 3,
+      }),
     ).toBe("REQUEST_CHANGES")
   })
 
   it("reviewIncomplete downgrades to COMMENT", () => {
     expect(
-      resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: true, filesDroppedCount: 0 }),
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: true,
+        filesDroppedCount: 0,
+      }),
     ).toBe("COMMENT")
   })
 
   it("dropped files (count > 0) downgrade to COMMENT", () => {
     expect(
-      resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 1 }),
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: false,
+        filesDroppedCount: 1,
+      }),
     ).toBe("COMMENT")
   })
 
   it("a clean, complete review returns undefined (no override)", () => {
     expect(
-      resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 0 }),
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: false,
+        filesDroppedCount: 0,
+      }),
     ).toBeUndefined()
   })
 

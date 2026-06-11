@@ -37,11 +37,7 @@ import {
 // id-list exceeded 100. Batch at the documented limit.
 export const VECTORIZE_DELETE_BATCH = 100
 
-export type DeleteReason =
-  | "install-deleted"
-  | "install-repos-removed"
-  | "branch-deleted"
-  | "pr-branch-closed"
+export type DeleteReason = "install-deleted" | "install-repos-removed" | "branch-deleted" | "pr-branch-closed"
 
 export interface DeleteResult {
   /** Summary status — drives the webhook HTTP response. */
@@ -107,9 +103,7 @@ export async function resolveManifest(
   if (newRead.kind !== "missing") {
     // New record found. Probe the legacy key for a same-owner orphan to
     // sweep alongside it (different-owner orphans are someone else's).
-    const extra = newKey !== legacyKey
-      ? await probeLegacyManifestOrphanKey(env, legacyKey, owner)
-      : null
+    const extra = newKey !== legacyKey ? await probeLegacyManifestOrphanKey(env, legacyKey, owner) : null
     return { read: newRead, keyName: newKey, extraOwnerSafeKey: extra }
   }
   if (legacyKey === newKey) {
@@ -145,9 +139,7 @@ export async function resolveVectors(
   const legacyKey = legacyRepoIndexVectorsKey(repo)
   const newRead = await readRepoIndexVectors(env, owner, repo)
   if (newRead.kind !== "missing") {
-    const extra = newKey !== legacyKey
-      ? await probeLegacyVectorsOrphanKey(env, legacyKey, owner)
-      : null
+    const extra = newKey !== legacyKey ? await probeLegacyVectorsOrphanKey(env, legacyKey, owner) : null
     return { read: newRead, keyName: newKey, extraOwnerSafeKey: extra }
   }
   if (legacyKey === newKey) {
@@ -170,11 +162,7 @@ export async function resolveVectors(
  * orphan that coexists with a new-shape record. A record owned by a
  * DIFFERENT tenant (or an unparseable one) is left untouched.
  */
-async function probeLegacyManifestOrphanKey(
-  env: Env,
-  legacyKey: string,
-  owner: string,
-): Promise<string | null> {
+async function probeLegacyManifestOrphanKey(env: Env, legacyKey: string, owner: string): Promise<string | null> {
   const raw = await env.OPENCLAW_STATE.get(legacyKey)
   if (raw === null) return null
   const parsed = parseRepoIndexManifest(raw)
@@ -183,11 +171,7 @@ async function probeLegacyManifestOrphanKey(
 }
 
 /** Vectors-record equivalent of `probeLegacyManifestOrphanKey`. */
-async function probeLegacyVectorsOrphanKey(
-  env: Env,
-  legacyKey: string,
-  owner: string,
-): Promise<string | null> {
+async function probeLegacyVectorsOrphanKey(env: Env, legacyKey: string, owner: string): Promise<string | null> {
   const raw = await env.OPENCLAW_STATE.get(legacyKey)
   if (raw === null) return null
   const parsed = parseRepoIndexVectors(raw)
@@ -233,10 +217,16 @@ export async function purgeLegacyVectorsOrphan(
       const message = err instanceof Error ? err.message : String(err)
       result.errors.push(`vectorize.deleteByIds(legacy-orphan): ${message}`)
       vectorizeFailed = true
-      console.error(JSON.stringify({
-        event: "index-delete-legacy-orphan-vectorize-failed",
-        owner, repo, batch_start: i, batch_size: batch.length, err: message,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "index-delete-legacy-orphan-vectorize-failed",
+          owner,
+          repo,
+          batch_start: i,
+          batch_size: batch.length,
+          err: message,
+        }),
+      )
     }
   }
   if (vectorizeFailed) return // keep the KV id-list for redelivery retry

@@ -55,10 +55,10 @@ describe("no-insecure-random-token — FIRES on Math.random() minting a secret",
   it("an object-method credential factory { generateToken() { return Math.random() } } fires", () => {
     expect(runRule(`const f = { generateToken() { return Math.random().toString(36); } };`).length).toBe(1)
   })
-  it("quoted object key { \"apiKey\": Math.random() } fires (CodeRabbit #346)", () => {
+  it('quoted object key { "apiKey": Math.random() } fires (CodeRabbit #346)', () => {
     expect(runRule(`const c = { "apiKey": Math.random().toString(36) };`).length).toBe(1)
   })
-  it("computed member assignment obj[\"resetToken\"] = Math.random() fires (CodeRabbit #346)", () => {
+  it('computed member assignment obj["resetToken"] = Math.random() fires (CodeRabbit #346)', () => {
     expect(runRule(`obj["resetToken"] = Math.random().toString(36);`).length).toBe(1)
   })
   it("class method credential factory fires (CodeRabbit #346)", () => {
@@ -74,7 +74,11 @@ describe("no-insecure-random-token — FP-safety: does NOT fire on safe / non-se
     expect(runRule(`const jitter = Math.random() * 100; const index = Math.floor(Math.random() * 10);`).length).toBe(0)
   })
   it("generic 'key' suffixes are NOT credential names (cacheKey, sortKey, publicKey)", () => {
-    expect(runRule(`const cacheKey = Math.random().toString(36); const sortKey = Math.random(); const publicKey = Math.random();`).length).toBe(0)
+    expect(
+      runRule(
+        `const cacheKey = Math.random().toString(36); const sortKey = Math.random(); const publicKey = Math.random();`,
+      ).length,
+    ).toBe(0)
   })
   it("non-secret 'token' cursors do NOT fire (cancelToken, nextToken, cancellationToken, pageToken)", () => {
     const src = `
@@ -85,13 +89,17 @@ const pageToken = Math.random();`
     expect(runRule(src).length).toBe(0)
   })
   it("chemistry/culinary words ending in 'salt' do NOT fire (basalt, seaSalt, rockSalt)", () => {
-    expect(runRule(`const basalt = Math.random(); const seaSalt = Math.random(); const rockSalt = Math.random();`).length).toBe(0)
+    expect(
+      runRule(`const basalt = Math.random(); const seaSalt = Math.random(); const rockSalt = Math.random();`).length,
+    ).toBe(0)
   })
   it("plural 'tokens' (a collection, not a single secret) does not fire", () => {
     expect(runRule(`const tokens = pick(list, Math.random());`).length).toBe(0)
   })
   it("a CSPRNG token (no Math.random) never fires", () => {
-    expect(runRule(`const token = crypto.randomUUID(); const secret = crypto.getRandomValues(new Uint8Array(16));`).length).toBe(0)
+    expect(
+      runRule(`const token = crypto.randomUUID(); const secret = crypto.getRandomValues(new Uint8Array(16));`).length,
+    ).toBe(0)
   })
   it("a credential-named function with NO Math.random in its return does not fire", () => {
     // a lexer's nextToken() — name ends 'token' but no weak randomness

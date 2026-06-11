@@ -28,7 +28,11 @@ function bodyHasAwait(body: AstNode): boolean {
   // nested scope. (Sigilix-bot caught this on PR #67: the previous
   // `body !== arguments[0]` guard was always false because in every
   // call frame `arguments[0]` is the same as `body`.)
-  if (body.type === "FunctionDeclaration" || body.type === "FunctionExpression" || body.type === "ArrowFunctionExpression") {
+  if (
+    body.type === "FunctionDeclaration" ||
+    body.type === "FunctionExpression" ||
+    body.type === "ArrowFunctionExpression"
+  ) {
     return false
   }
   for (const k of Object.keys(body)) {
@@ -57,7 +61,8 @@ export const noAsyncWithoutAwait: AstRule = {
     if (!node.body) return null
     if (bodyHasAwait(node.body)) return null
     return {
-      message: "`async` function with no `await` — the wrapping is unnecessary microtask overhead. Drop `async` or add the missing `await`.",
+      message:
+        "`async` function with no `await` — the wrapping is unnecessary microtask overhead. Drop `async` or add the missing `await`.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       // Pass the full function body span so the runner's diff-line

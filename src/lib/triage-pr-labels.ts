@@ -69,11 +69,13 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   const tag = { owner, repo, pr_number: prNumber, head_sha: headSha.slice(0, 7) }
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "missing-creds",
-      ...tag,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "missing-creds",
+        ...tag,
+      }),
+    )
     return
   }
 
@@ -93,12 +95,14 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     })
     client = new GitHubClient({ token })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "token-fetch-failed",
-      ...tag,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "token-fetch-failed",
+        ...tag,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
 
@@ -107,11 +111,13 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   const config = await loadSigilixConfig(client, owner, repo, headSha)
   const customLabels = config.customLabels
   if (!isPrLabelsEnabled(config)) {
-    console.log(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "labels-disabled",
-      ...tag,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "labels-disabled",
+        ...tag,
+      }),
+    )
     return
   }
 
@@ -120,17 +126,19 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   //    so we don't need a separate list call.
   let meta, diff, repoLabels: Array<{ name: string; description: string }>
   try {
-    [meta, diff, repoLabels] = await Promise.all([
+    ;[meta, diff, repoLabels] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
       client.listRepositoryLabels(owner, repo),
     ])
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-fetch-failed",
-      ...tag,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-fetch-failed",
+        ...tag,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
 
@@ -139,12 +147,14 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   // the new head. Re-running here would apply labels based on a
   // diff that no longer represents the current PR state.
   if (meta.head?.sha && meta.head.sha !== headSha) {
-    console.log(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "stale-head",
-      ...tag,
-      current_head: meta.head.sha.slice(0, 7),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "stale-head",
+        ...tag,
+        current_head: meta.head.sha.slice(0, 7),
+      }),
+    )
     return
   }
 
@@ -154,11 +164,13 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   //    excluded in either mode so Sigilix doesn't apply triage state.
   const candidates = buildLabelCandidates(customLabels, repoLabels)
   if (candidates.length === 0) {
-    console.log(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "no-candidate-labels",
-      ...tag,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "no-candidate-labels",
+        ...tag,
+      }),
+    )
     return
   }
 
@@ -174,21 +186,25 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     const repoLabelNames = new Set(repoLabels.map((r) => r.name))
     for (const cl of customLabels) {
       if (isStatusLabel(cl.name)) {
-        console.warn(JSON.stringify({
-          event: "pr-labels-custom-label-denied",
-          ...tag,
-          label: cl.name,
-          note: "Status/triage labels are not auto-applied by Sigilix.",
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-labels-custom-label-denied",
+            ...tag,
+            label: cl.name,
+            note: "Status/triage labels are not auto-applied by Sigilix.",
+          }),
+        )
         continue
       }
       if (!repoLabelNames.has(cl.name)) {
-        console.warn(JSON.stringify({
-          event: "pr-labels-custom-label-not-in-repo",
-          ...tag,
-          label: cl.name,
-          note: "Label doesn't exist on the repo yet; GitHub will auto-create on first apply. Confirm the name isn't a typo of an existing label.",
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-labels-custom-label-not-in-repo",
+            ...tag,
+            label: cl.name,
+            note: "Label doesn't exist on the repo yet; GitHub will auto-create on first apply. Confirm the name isn't a typo of an existing label.",
+          }),
+        )
       }
     }
   }
@@ -210,21 +226,25 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
       format: PR_LABEL_SCHEMA as unknown as Record<string, unknown>,
     }))
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-ollama-failed",
-      ...tag,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-ollama-failed",
+        ...tag,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
 
   const picked = parseLabelResponse(response)
   if (picked === null) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-parse-failed",
-      ...tag,
-      response_length: response.length,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-parse-failed",
+        ...tag,
+        response_length: response.length,
+      }),
+    )
     return
   }
 
@@ -236,23 +256,27 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   try {
     const fresh = await client.getPullRequest(owner, repo, prNumber)
     if (fresh.head?.sha && fresh.head.sha !== headSha) {
-      console.log(JSON.stringify({
-        event: "pr-labels-skipped",
-        reason: "stale-head-post-ollama",
-        ...tag,
-        current_head: fresh.head.sha.slice(0, 7),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-labels-skipped",
+          reason: "stale-head-post-ollama",
+          ...tag,
+          current_head: fresh.head.sha.slice(0, 7),
+        }),
+      )
       return
     }
   } catch (err) {
     // Re-fetch failure: bail out rather than applying labels with
     // unverified head state. The next push will re-fire pr-labels.
-    console.warn(JSON.stringify({
-      event: "pr-labels-skipped",
-      reason: "stale-head-recheck-failed",
-      ...tag,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-skipped",
+        reason: "stale-head-recheck-failed",
+        ...tag,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
 
@@ -279,16 +303,22 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     try {
       await client.addLabelsToIssue(owner, repo, prNumber, toAdd)
       addedSuccessfully.push(...toAdd)
-      console.log(JSON.stringify({
-        event: "pr-labels-applied", ...tag, labels: toAdd,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-labels-applied",
+          ...tag,
+          labels: toAdd,
+        }),
+      )
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-labels-apply-failed",
-        ...tag,
-        labels: toAdd,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-labels-apply-failed",
+          ...tag,
+          labels: toAdd,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
   const removedSuccessfully: string[] = []
@@ -297,17 +327,24 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
       await client.removeLabelFromIssue(owner, repo, prNumber, name)
       removedSuccessfully.push(name)
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-labels-remove-failed",
-        ...tag, label: name,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-labels-remove-failed",
+          ...tag,
+          label: name,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
   if (removedSuccessfully.length > 0) {
-    console.log(JSON.stringify({
-      event: "pr-labels-removed", ...tag, labels: removedSuccessfully,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-labels-removed",
+        ...tag,
+        labels: removedSuccessfully,
+      }),
+    )
   }
 
   // 8. Update KV applied-labels record.
@@ -332,15 +369,11 @@ function buildLabelPrompt(ctx: {
   diff: string
   candidates: ReadonlyArray<{ name: string; description: string }>
 }): string {
-  const candidatesBlock = ctx.candidates
-    .map((c) => `- \`${c.name}\`: ${c.description}`)
-    .join("\n")
-  const truncatedBody = ctx.body.length > PROMPT_BODY_LIMIT
-    ? ctx.body.slice(0, PROMPT_BODY_LIMIT - 12) + "\n[…truncated]"
-    : ctx.body
-  const truncatedDiff = ctx.diff.length > PROMPT_DIFF_LIMIT
-    ? ctx.diff.slice(0, PROMPT_DIFF_LIMIT - 12) + "\n[…truncated]"
-    : ctx.diff
+  const candidatesBlock = ctx.candidates.map((c) => `- \`${c.name}\`: ${c.description}`).join("\n")
+  const truncatedBody =
+    ctx.body.length > PROMPT_BODY_LIMIT ? ctx.body.slice(0, PROMPT_BODY_LIMIT - 12) + "\n[…truncated]" : ctx.body
+  const truncatedDiff =
+    ctx.diff.length > PROMPT_DIFF_LIMIT ? ctx.diff.slice(0, PROMPT_DIFF_LIMIT - 12) + "\n[…truncated]" : ctx.diff
   return [
     "[SYSTEM INSTRUCTIONS]",
     PR_LABEL_PROMPT.trim(),
@@ -401,12 +434,7 @@ function appliedLabelsKey(owner: string, repo: string, prNumber: number): string
   return `${APPLIED_LABELS_KEY_PREFIX}:${owner.toLowerCase()}/${repo.toLowerCase()}#${prNumber}`
 }
 
-async function readAppliedLabels(
-  env: Env,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<string[]> {
+async function readAppliedLabels(env: Env, owner: string, repo: string, prNumber: number): Promise<string[]> {
   try {
     const raw = await env.OPENCLAW_STATE.get(appliedLabelsKey(owner, repo, prNumber))
     if (raw === null) return []
@@ -429,16 +457,18 @@ async function writeAppliedLabels(
   labels: ReadonlyArray<string>,
 ): Promise<void> {
   try {
-    await env.OPENCLAW_STATE.put(
-      appliedLabelsKey(owner, repo, prNumber),
-      JSON.stringify(labels),
-      { expirationTtl: APPLIED_LABELS_TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(appliedLabelsKey(owner, repo, prNumber), JSON.stringify(labels), {
+      expirationTtl: APPLIED_LABELS_TTL_SECONDS,
+    })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-labels-kv-write-failed",
-      owner, repo, pr_number: prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-labels-kv-write-failed",
+        owner,
+        repo,
+        pr_number: prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }

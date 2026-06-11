@@ -30,10 +30,7 @@
 //   - Stripping markdown blockquotes + fenced code blocks is the
 //     caller's responsibility (mirrors `bodyMentionsBot`'s contract)
 
-export type DescribeMode =
-  | "pr-description"
-  | "internal-changelog"
-  | "external-changelog"
+export type DescribeMode = "pr-description" | "internal-changelog" | "external-changelog"
 
 export type SlashCommand =
   | { cmd: "review" }
@@ -60,10 +57,10 @@ export type SlashCommand =
   // CURRENT run in the DO and closes its check without waiting on the
   // watchdog.
   | { cmd: "cancel" }
-  // Reserved shape (parser doesn't return this yet — adding the
-  // type when handlers exist will surface missed dispatch cases via
-  // the exhaustive switch in renderSlashCommandAck):
-  // | { cmd: "ask"; query: string }
+// Reserved shape (parser doesn't return this yet — adding the
+// type when handlers exist will surface missed dispatch cases via
+// the exhaustive switch in renderSlashCommandAck):
+// | { cmd: "ask"; query: string }
 
 /**
  * Map the trailing arg of `/sigilix describe <arg>` to a canonical mode.
@@ -74,10 +71,7 @@ export type SlashCommand =
  * audience boundary between internal/external is too important to
  * swallow user typos).
  */
-function parseDescribeMode(rawArg: string | undefined):
-  | { mode: DescribeMode }
-  | { mode: "unknown"; rawArg: string }
-{
+function parseDescribeMode(rawArg: string | undefined): { mode: DescribeMode } | { mode: "unknown"; rawArg: string } {
   if (rawArg === undefined || rawArg.length === 0) {
     return { mode: "pr-description" }
   }
@@ -170,7 +164,11 @@ export function parseSlashCommand(body: string): SlashCommand | null {
       // they wanted apply-mode. Now treated as `mode=unknown` so
       // the usage comment surfaces the intended `apply <mode>`
       // shape instead of silently doing the wrong thing.
-      const tokens = after.slice(head.length).trim().split(/\s+/).filter((t) => t.length > 0)
+      const tokens = after
+        .slice(head.length)
+        .trim()
+        .split(/\s+/)
+        .filter((t) => t.length > 0)
       let apply = false
       let modeRaw: string | undefined = tokens[0]
       if (modeRaw !== undefined && modeRaw.toLowerCase() === "apply") {
@@ -324,9 +322,7 @@ export function renderHelpBody(): string {
  */
 const ALLOWED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
 
-export function isAuthorAllowedForSlashCommand(
-  association: string | null | undefined,
-): boolean {
+export function isAuthorAllowedForSlashCommand(association: string | null | undefined): boolean {
   if (typeof association !== "string" || association.length === 0) return false
   return ALLOWED_AUTHOR_ASSOCIATIONS.has(association.toUpperCase())
 }

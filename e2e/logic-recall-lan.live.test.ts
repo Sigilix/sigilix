@@ -10,12 +10,7 @@
 //   (override the model via LOGIC_RECALL_MODEL; defaults to the logic primary)
 
 import { describe, it } from "vitest"
-import {
-  LOGIC_RECALL_CASES,
-  scoreCase,
-  type CaseResult,
-  type ScoredFinding,
-} from "./logic-recall-corpus"
+import { LOGIC_RECALL_CASES, scoreCase, type CaseResult, type ScoredFinding } from "./logic-recall-corpus"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
@@ -30,7 +25,12 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
   // Minimal context (diff only) — omits the optional graph/retrieval/guidance
   // blocks prod also passes, so this is a LOWER BOUND on prod recall (CodeRabbit #358).
   const userMessage = buildSpecialistInitialMessage({
-    prNumber: 0, title: c.id, body: "", diff: c.diff, retrievalSnapshot: "", namespace: "eval",
+    prNumber: 0,
+    title: c.id,
+    body: "",
+    diff: c.diff,
+    retrievalSnapshot: "",
+    namespace: "eval",
   })
   let findings: ScoredFinding[] = []
   let tag = ""
@@ -54,7 +54,11 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
     const json = (await res.json()) as { message?: { content?: string } }
     const content = json.message?.content ?? ""
     const verdict = parsePrReviewResponse(content)
-    findings = (verdict?.findings ?? []).map((f) => ({ path: f.path, line: f.line, score: f.score }))
+    findings = (verdict?.findings ?? []).map((f) => ({
+      path: f.path,
+      line: f.line,
+      score: f.score,
+    }))
     tag = `${findings.length}f${verdict ? "" : " · UNPARSEABLE"}`
     if (!verdict && process.env.LOGIC_RECALL_DEBUG) {
       // eslint-disable-next-line no-console
@@ -64,7 +68,8 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
     tag = `ERROR ${e instanceof Error ? e.message : String(e)}`
   }
   const result = scoreCase(c, findings)
-  const mark = c.label === "vuln" ? (result.caught ? "✓ caught" : "✗ MISSED") : result.falsePositive ? "✗ FALSE-POS" : "✓ clean"
+  const mark =
+    c.label === "vuln" ? (result.caught ? "✓ caught" : "✗ MISSED") : result.falsePositive ? "✗ FALSE-POS" : "✓ clean"
   // eslint-disable-next-line no-console
   console.log(`  [${c.label.padEnd(4)}] ${c.id.padEnd(26)} ${mark.padEnd(11)} (${tag})`)
   return result
@@ -74,7 +79,10 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
 // a single pass over N=16 is too noisy to tune against. Repeat each case K times
 // (LOGIC_RECALL_REPEATS, default 1) and report the CATCH-RATE per case — a stable
 // per-case signal that separates real weak spots from run-to-run variance.
-const REPEATS = (() => { const n = Number(process.env.LOGIC_RECALL_REPEATS ?? 1); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 })()
+const REPEATS = (() => {
+  const n = Number(process.env.LOGIC_RECALL_REPEATS ?? 1)
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1
+})()
 
 describe.skipIf(!URL)("subtle-logic recall baseline (LIVE via direct Ollama)", () => {
   it(
@@ -93,15 +101,28 @@ describe.skipIf(!URL)("subtle-logic recall baseline (LIVE via direct Ollama)", (
       }
       const vuln = LOGIC_RECALL_CASES.filter((c) => c.label === "vuln")
       const safe = LOGIC_RECALL_CASES.filter((c) => c.label === "safe")
-      const rate = (id: string): number => { const e = perCase.get(id)!; return e.runs ? e.hits / e.runs : 0 }
+      const rate = (id: string): number => {
+        const e = perCase.get(id)!
+        return e.runs ? e.hits / e.runs : 0
+      }
       const meanRecall = vuln.reduce((s, c) => s + rate(c.id), 0) / (vuln.length || 1)
       const meanClean = safe.reduce((s, c) => s + rate(c.id), 0) / (safe.length || 1)
       const lines: string[] = ["", `┌─ SUBTLE-LOGIC RECALL · ${MODEL} · ${REPEATS}×/case ─────────────┐`]
       lines.push(`MEAN: recall ${pct(meanRecall)}  ·  clean-on-safe ${pct(meanClean)}  (FP-rate ${pct(1 - meanClean)})`)
       lines.push("per VULN case (caught / runs):")
-      for (const c of vuln) { const e = perCase.get(c.id)!; lines.push(`  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`) }
+      for (const c of vuln) {
+        const e = perCase.get(c.id)!
+        lines.push(
+          `  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`,
+        )
+      }
       lines.push("per SAFE case (clean / runs):")
-      for (const c of safe) { const e = perCase.get(c.id)!; lines.push(`  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`) }
+      for (const c of safe) {
+        const e = perCase.get(c.id)!
+        lines.push(
+          `  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`,
+        )
+      }
       lines.push("└──────────────────────────────────────────────────────────┘")
       // eslint-disable-next-line no-console
       console.log(lines.join("\n"))

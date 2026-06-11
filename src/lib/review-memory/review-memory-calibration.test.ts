@@ -88,14 +88,18 @@ describe("parseCalibrationBlob", () => {
     )
     expect(blob).not.toBeNull()
     expect(blob?.["auth-gate-is-boundary"]).toBeDefined()
-    expect(
-      (blob as Record<string, unknown>)["some-future-claim-type"],
-    ).toBeUndefined()
+    expect((blob as Record<string, unknown>)["some-future-claim-type"]).toBeUndefined()
   })
   it("drops entries with the wrong field types (→ that type vetoes)", () => {
     const blob = parseCalibrationBlob(
       JSON.stringify({
-        "auth-gate-is-boundary": { lowerBound: "high", n: 140, s: 130, trustworthyN: true, cold: false },
+        "auth-gate-is-boundary": {
+          lowerBound: "high",
+          n: 140,
+          s: 130,
+          trustworthyN: true,
+          cold: false,
+        },
         "rethrowing-catch-not-swallowed": usable,
       }),
     )
@@ -107,9 +111,21 @@ describe("parseCalibrationBlob", () => {
       // lowerBound > 1 with trustworthy+warm would otherwise pass shouldKeepSoften
       "auth-gate-is-boundary": { lowerBound: 2, n: 200, s: 200, trustworthyN: true, cold: false },
       // successes exceed denominator → impossible → drop
-      "structural-glue-not-test-target": { lowerBound: 0.9, n: 100, s: 999, trustworthyN: true, cold: false },
+      "structural-glue-not-test-target": {
+        lowerBound: 0.9,
+        n: 100,
+        s: 999,
+        trustworthyN: true,
+        cold: false,
+      },
       // negative / non-integer counts
-      "globally-unique-id-is-tenant-isolation": { lowerBound: 0.9, n: -5, s: 0, trustworthyN: true, cold: false },
+      "globally-unique-id-is-tenant-isolation": {
+        lowerBound: 0.9,
+        n: -5,
+        s: 0,
+        trustworthyN: true,
+        cold: false,
+      },
       // a valid control that must SURVIVE
       "rethrowing-catch-not-swallowed": usable,
     }
@@ -128,9 +144,7 @@ describe("readCalibrationParams — fail-safe KV read", () => {
   it("reads + parses the blob from the configured key", async () => {
     const kv = {
       get: async (key: string) =>
-        key === CALIBRATION_PARAMS_KV_KEY
-          ? JSON.stringify({ "auth-gate-is-boundary": usable })
-          : null,
+        key === CALIBRATION_PARAMS_KV_KEY ? JSON.stringify({ "auth-gate-is-boundary": usable }) : null,
     }
     const blob = await readCalibrationParams(kv)
     expect(blob?.["auth-gate-is-boundary"]).toBeDefined()
@@ -139,7 +153,11 @@ describe("readCalibrationParams — fail-safe KV read", () => {
     expect(await readCalibrationParams({ get: async () => null })).toBeNull()
   })
   it("returns null when the KV get throws (never propagates onto the review path)", async () => {
-    const kv = { get: async () => { throw new Error("kv down") } }
+    const kv = {
+      get: async () => {
+        throw new Error("kv down")
+      },
+    }
     expect(await readCalibrationParams(kv)).toBeNull()
   })
 })
@@ -172,7 +190,9 @@ describe("decideWarmSoftenSurvival — believability-dominant per-finding veto",
   it("VETOES when matched types are only cold or low-bound", () => {
     const decisions = decideWarmSoftenSurvival({
       candidates: [
-        cand({ matchedTypes: ["structural-glue-not-test-target", "rethrowing-catch-not-swallowed"] }),
+        cand({
+          matchedTypes: ["structural-glue-not-test-target", "rethrowing-catch-not-swallowed"],
+        }),
       ],
       blob,
     })
@@ -181,9 +201,7 @@ describe("decideWarmSoftenSurvival — believability-dominant per-finding veto",
 
   it("keeps when ANY matched type is trustworthy (mixed cold + warm)", () => {
     const decisions = decideWarmSoftenSurvival({
-      candidates: [
-        cand({ matchedTypes: ["structural-glue-not-test-target", "auth-gate-is-boundary"] }),
-      ],
+      candidates: [cand({ matchedTypes: ["structural-glue-not-test-target", "auth-gate-is-boundary"] })],
       blob,
     })
     expect(decisions[0]?.kept).toBe(true)

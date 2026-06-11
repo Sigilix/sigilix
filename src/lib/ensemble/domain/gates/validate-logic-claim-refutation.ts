@@ -61,9 +61,7 @@ export type LogicClaimDropReason =
   | "unused-claim-refuted-identifier-is-referenced"
   | "missing-return-type-claim-refuted-annotation-present"
 
-export type LogicClaimRefutationDecision =
-  | { keep: true }
-  | { keep: false; reason: LogicClaimDropReason }
+export type LogicClaimRefutationDecision = { keep: true } | { keep: false; reason: LogicClaimDropReason }
 
 export interface LogicClaimRefutationContext {
   /** Full source of changed files (same map the AST floors use). */
@@ -149,11 +147,7 @@ function spans(node: Node, line: number): boolean {
   )
 }
 
-const FUNCTION_TYPES = new Set([
-  "FunctionDeclaration",
-  "FunctionExpression",
-  "ArrowFunctionExpression",
-])
+const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"])
 
 /** Recursively visit every node, calling cb(node). Arrays + nested nodes only. */
 function eachNode(node: Node, cb: (n: Node) => void): void {
@@ -178,7 +172,7 @@ function enclosingFunctions(ast: Node, line: number): Node[] {
     if (!spans(n, line)) return
     matches.push(n)
   })
-  matches.sort((a, b) => (a.loc.end.line - a.loc.start.line) - (b.loc.end.line - b.loc.start.line))
+  matches.sort((a, b) => a.loc.end.line - a.loc.start.line - (b.loc.end.line - b.loc.start.line))
   return matches
 }
 
@@ -311,9 +305,15 @@ function containsConflictingCall(node: Node, findingIds: Set<string>): boolean {
     let callee = n.callee
     // unwrap a member chain: res.status(403).end() → collect res/status/end.
     while (callee) {
-      if (callee.type === "Identifier" && findingIds.has(callee.name)) { hit = true; return }
+      if (callee.type === "Identifier" && findingIds.has(callee.name)) {
+        hit = true
+        return
+      }
       if (callee.type === "MemberExpression") {
-        if (callee.property?.type === "Identifier" && findingIds.has(callee.property.name)) { hit = true; return }
+        if (callee.property?.type === "Identifier" && findingIds.has(callee.property.name)) {
+          hit = true
+          return
+        }
         callee = callee.object
       } else if (callee.type === "CallExpression") {
         callee = callee.callee
@@ -366,13 +366,15 @@ function refutesSyncRace(fn: Node, line: number): boolean {
     if (blocked) return
     if (n === fn) return
     if (n.type === "AwaitExpression" || n.type === "YieldExpression") blocked = true
-    else if (FUNCTION_TYPES.has(n.type)) blocked = true // a nested closure could defer the write
+    else if (FUNCTION_TYPES.has(n.type))
+      blocked = true // a nested closure could defer the write
     else if (n.type === "CallExpression" && n.callee?.type === "MemberExpression") {
       const prop = n.callee.property?.name
       if (prop === "then" || prop === "catch" || prop === "finally") blocked = true
     } else if (n.type === "CallExpression" && n.callee?.type === "Identifier") {
       const name = n.callee.name
-      if (name === "setTimeout" || name === "setInterval" || name === "setImmediate" || name === "queueMicrotask") blocked = true
+      if (name === "setTimeout" || name === "setInterval" || name === "setImmediate" || name === "queueMicrotask")
+        blocked = true
     } else if (n.type === "Identifier" && (n.name === "Atomics" || n.name === "SharedArrayBuffer")) {
       blocked = true
     }
@@ -402,11 +404,7 @@ function refutesSyncRace(fn: Node, line: number): boolean {
     if (n.type !== "IfStatement") return
     if (n.loc.start.line >= line) return // must precede the write
     eachNode(n.test, (t: Node) => {
-      if (
-        t.type === "MemberExpression" &&
-        t.object?.name === objName &&
-        t.property?.name === propName
-      ) {
+      if (t.type === "MemberExpression" && t.object?.name === objName && t.property?.name === propName) {
         sawCheck = true
       }
     })
@@ -564,12 +562,18 @@ function lineContainsAnyIdentifier(lines: readonly string[], line: number, ids: 
   return [...ids].some((id) => new RegExp(`\\b${escapeRegExp(id)}\\b`).test(text))
 }
 
-function candidateLinesWhenUnanchored(fn: Node, line: number, lines: readonly string[], finding: PrReviewFinding): number[] {
+function candidateLinesWhenUnanchored(
+  fn: Node,
+  line: number,
+  lines: readonly string[],
+  finding: PrReviewFinding,
+): number[] {
   const ids = new Set(extractCitedIdentifiers(findingText(finding)))
   const spanning = statementsSpanningLine(fn, line)
   if (spanning.some((stmt) => lineContainsAnyIdentifier(lines, stmt.loc.end.line, ids))) return [line]
-  return candidateLines(line)
-    .filter((candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, ids))
+  return candidateLines(line).filter(
+    (candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, ids),
+  )
 }
 
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
@@ -700,7 +704,12 @@ function functionPassesQuotedIdentifierToUnknownCall(fn: Node, quoted: ReadonlyS
   // `rows.filter((r) => r.name.includes(needle))`, and any sibling callback
   // that sends the same quoted value to a non-substring callee must fail open.
   eachNode(fn.body ?? fn, (n) => {
-    if (!hit && (callPassesQuotedIdentifierToUnknownCallee(n, quoted) || taggedTemplatePassesQuotedIdentifierToUnknownTag(n, quoted))) hit = true
+    if (
+      !hit &&
+      (callPassesQuotedIdentifierToUnknownCallee(n, quoted) ||
+        taggedTemplatePassesQuotedIdentifierToUnknownTag(n, quoted))
+    )
+      hit = true
   })
   return hit
 }
@@ -750,7 +759,12 @@ function functionContainsRegexSurface(fn: Node): boolean {
  * match, text claiming another location, or any actual regex surface in the
  * enclosing function all KEEP.
  */
-function refutesRegexSubstringClaim(fnChain: readonly Node[], line: number, finding: PrReviewFinding, lines: string[]): boolean {
+function refutesRegexSubstringClaim(
+  fnChain: readonly Node[],
+  line: number,
+  finding: PrReviewFinding,
+  lines: string[],
+): boolean {
   const text = findingText(finding)
   if (!REGEX_SUBSTRING_CLAIM_RE.test(text)) return false
   if (REGEX_ELSEWHERE_CLAIM_RE.test(text)) return false
@@ -780,8 +794,14 @@ function refutesMissingReturnType(fn: Node): boolean {
 }
 
 const SOURCE_EXTS: Record<string, SourceExt> = {
-  ts: ".ts", tsx: ".tsx", mts: ".mts", cts: ".cts",
-  js: ".js", jsx: ".jsx", mjs: ".mjs", cjs: ".cjs",
+  ts: ".ts",
+  tsx: ".tsx",
+  mts: ".mts",
+  cts: ".cts",
+  js: ".js",
+  jsx: ".jsx",
+  mjs: ".mjs",
+  cjs: ".cjs",
 }
 
 function extOf(path: string): SourceExt | null {
@@ -812,14 +832,8 @@ export function evaluateLogicClaimRefutation(
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
   const isRegexSubstring = REGEX_SUBSTRING_CLAIM_RE.test(text)
-  if (
-    !isControlFlow &&
-    !isSyncRace &&
-    !isIdempotencyRetry &&
-    !isUnused &&
-    !isMissingReturnType &&
-    !isRegexSubstring
-  ) return { keep: true }
+  if (!isControlFlow && !isSyncRace && !isIdempotencyRetry && !isUnused && !isMissingReturnType && !isRegexSubstring)
+    return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
   if (typeof source !== "string" || source.length === 0) return { keep: true }
@@ -827,9 +841,7 @@ export function evaluateLogicClaimRefutation(
   if (!ext) return { keep: true }
   // SIG-336: parse via the per-review cache when present (parse-once + size
   // guard); fall back to a direct parse when called without a cache.
-  const parsed = context.astCache
-    ? context.astCache.get(finding.path, source, ext)
-    : parseSource(source, ext)
+  const parsed = context.astCache ? context.astCache.get(finding.path, source, ext) : parseSource(source, ext)
   if (!parsed.ok) return { keep: true }
 
   const line = finding.line

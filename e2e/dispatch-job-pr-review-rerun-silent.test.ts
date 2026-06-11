@@ -8,11 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const {
-  mockGetInstallationToken,
-  mockCreateIssueComment,
-  mockGetPullRequest,
-} = vi.hoisted(() => ({
+const { mockGetInstallationToken, mockCreateIssueComment, mockGetPullRequest } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
   mockCreateIssueComment: vi.fn(async (..._args: unknown[]) => undefined),
   mockGetPullRequest: vi.fn(async (..._args: unknown[]) => ({
@@ -48,11 +44,17 @@ function makeEnv(): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
   const env = {
     OPENCLAW_STATE: {
       get: async (k: string) => store.get(k) ?? null,
-      put: async (k: string, v: string) => { store.set(k, v) },
-      delete: async (k: string) => { store.delete(k) },
+      put: async (k: string, v: string) => {
+        store.set(k, v)
+      },
+      delete: async (k: string) => {
+        store.delete(k)
+      },
     } as unknown as KVNamespace,
     OPENCLAW_JOBS: {
-      send: async (m: JobMessage) => { sent.push(m) },
+      send: async (m: JobMessage) => {
+        sent.push(m)
+      },
     } as unknown as Queue<unknown>,
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
@@ -146,9 +148,11 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
 // `OPENCLAW_JOBS.send` that bypassed both the DO and the consumer-
 // wrapper's runId check, producing duplicate ensemble runs (PR #96).
 
-function makeEnvWithDo(args: {
-  doResponse?: { deduped: boolean; runId: string; action: string }
-} = {}): { env: Env; sent: JobMessage[]; doCalls: Array<{ url: string; body: unknown }> } {
+function makeEnvWithDo(
+  args: {
+    doResponse?: { deduped: boolean; runId: string; action: string }
+  } = {},
+): { env: Env; sent: JobMessage[]; doCalls: Array<{ url: string; body: unknown }> } {
   const sent: JobMessage[] = []
   const doCalls: Array<{ url: string; body: unknown }> = []
   const stub = {
@@ -156,10 +160,10 @@ function makeEnvWithDo(args: {
       const url = typeof input === "string" ? input : input.url
       const body = init?.body && typeof init.body === "string" ? JSON.parse(init.body) : undefined
       doCalls.push({ url, body })
-      return new Response(
-        JSON.stringify(args.doResponse ?? { deduped: false, runId: "rid", action: "create" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      )
+      return new Response(JSON.stringify(args.doResponse ?? { deduped: false, runId: "rid", action: "create" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
     }),
   } as unknown as DurableObjectStub
   const env = {
@@ -169,7 +173,9 @@ function makeEnvWithDo(args: {
       delete: async () => {},
     } as unknown as KVNamespace,
     OPENCLAW_JOBS: {
-      send: async (m: JobMessage) => { sent.push(m) },
+      send: async (m: JobMessage) => {
+        sent.push(m)
+      },
     } as unknown as Queue<unknown>,
     PR_REVIEW_RUN: {
       idFromName: vi.fn((name: string) => ({ name }) as unknown as DurableObjectId),
@@ -288,13 +294,15 @@ describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
     const { env, sent, doCalls } = makeEnvWithDo()
     // Reach into the env's KV (makeEnvWithDo's KV always returns
     // null) and replace it with a stub that returns a pause flag.
-    const kv = new Map<string, string>([
-      ["pr-paused:Sigilix/sigilix#237", String(Date.now())],
-    ])
+    const kv = new Map<string, string>([["pr-paused:Sigilix/sigilix#237", String(Date.now())]])
     ;(env as { OPENCLAW_STATE: KVNamespace }).OPENCLAW_STATE = {
       get: async (k: string) => kv.get(k) ?? null,
-      put: async (k: string, v: string) => { kv.set(k, v) },
-      delete: async (k: string) => { kv.delete(k) },
+      put: async (k: string, v: string) => {
+        kv.set(k, v)
+      },
+      delete: async (k: string) => {
+        kv.delete(k)
+      },
     } as unknown as KVNamespace
     const job: JobMessage = {
       type: "pr-review-rerun",

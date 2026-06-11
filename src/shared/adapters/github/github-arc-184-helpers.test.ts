@@ -29,9 +29,7 @@ const newClient = () => new GitHubClient({ token: "ghs_test_token" })
 
 describe("getReview", () => {
   it("returns the review body on 200", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResp({ id: 42, body: "hello body" }),
-    )
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 42, body: "hello body" }))
     const c = newClient()
     const r = await c.getReview("o", "r", 7, 42)
     expect(r).toEqual({ body: "hello body" })
@@ -54,13 +52,12 @@ describe("getReview", () => {
 
 describe("updateReviewBody", () => {
   it("PATCHes the review body endpoint with the right shape", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResp({ id: 42, body: "new" }),
-    )
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 42, body: "new" }))
     const c = newClient()
     await c.updateReviewBody("o", "r", 7, 42, "new")
     const call = fetchSpy.mock.calls[0]
-    const url = typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
+    const url =
+      typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
     const init = call[1] as RequestInit | undefined
     expect(url).toContain("/repos/o/r/pulls/7/reviews/42")
     expect(init?.method).toBe("PATCH")
@@ -70,9 +67,7 @@ describe("updateReviewBody", () => {
 
 describe("getIssueComment", () => {
   it("returns the comment body on 200", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResp({ id: 99, body: "issue body" }),
-    )
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 99, body: "issue body" }))
     const c = newClient()
     const r = await c.getIssueComment("o", "r", 99)
     expect(r).toEqual({ body: "issue body" })
@@ -110,9 +105,7 @@ describe("listPullFilesForManifest", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       page += 1
       return jsonResp(
-        page === 1
-          ? new Array(100).fill(null).map((_, i) => ({ filename: `f${i}.ts`, status: "modified" }))
-          : [],
+        page === 1 ? new Array(100).fill(null).map((_, i) => ({ filename: `f${i}.ts`, status: "modified" })) : [],
       )
     })
     const c = newClient()
@@ -164,9 +157,7 @@ describe("listPullFilesForManifest", () => {
 
 describe("getMergeBase", () => {
   it("returns merge_base_commit.sha on 200", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResp({ merge_base_commit: { sha: "abc1234" } }),
-    )
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ merge_base_commit: { sha: "abc1234" } }))
     const c = newClient()
     const out = await c.getMergeBase("o", "r", "main", "feat/x")
     expect(out).toBe("abc1234")

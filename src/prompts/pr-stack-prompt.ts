@@ -69,10 +69,7 @@ When uncertain, default to "current-pr". The \`stackOrigin\` field is optional a
  *
  * Format is plain-text, no Markdown — the model treats it as context.
  */
-export function renderStackPromptBlock(
-  ctx: StackContext,
-  overlap?: FileOverlap,
-): string {
+export function renderStackPromptBlock(ctx: StackContext, overlap?: FileOverlap): string {
   if (!ctx.isStacked) return ""
 
   const lines: string[] = []
@@ -80,12 +77,8 @@ export function renderStackPromptBlock(
   // CodeRabbit PR #72 minor: depth is a lower bound when the upstack
   // forks (we only walk the primary child chain). Render "at least Y"
   // so the model + reviewer aren't told an inflated certainty.
-  const depthCopy = ctx.hasUpstackFork
-    ? `at least ${ctx.depth}`
-    : `${ctx.depth}`
-  lines.push(
-    `This PR is position ${ctx.position} of ${depthCopy} in a Graphite-style stack.`,
-  )
+  const depthCopy = ctx.hasUpstackFork ? `at least ${ctx.depth}` : `${ctx.depth}`
+  lines.push(`This PR is position ${ctx.position} of ${depthCopy} in a Graphite-style stack.`)
 
   if (ctx.parent) {
     const authorTag = ctx.parent.author ? ` by @${ctx.parent.author}` : ""
@@ -107,9 +100,7 @@ export function renderStackPromptBlock(
   }
 
   if (ctx.children.length > 0) {
-    const childList = ctx.children
-      .map((c) => `#${c.number} "${sanitizeInlinePromptValue(c.title)}"`)
-      .join(", ")
+    const childList = ctx.children.map((c) => `#${c.number} "${sanitizeInlinePromptValue(c.title)}"`).join(", ")
     lines.push(`- Children (upstack): ${childList}`)
   } else {
     lines.push("- Children: none (this PR is the top of the stack)")
@@ -120,21 +111,16 @@ export function renderStackPromptBlock(
   }
 
   if (overlap && (overlap.sharedCount > 0 || overlap.parentOnlyCount > 0)) {
-    const total =
-      overlap.sharedCount + overlap.currentOnlyCount
+    const total = overlap.sharedCount + overlap.currentOnlyCount
     const shareFraction = total > 0 ? `${overlap.sharedCount} of ${total}` : "0 of 0"
-    lines.push(
-      `- File overlap with parent: ${shareFraction} changed files shared with parent`,
-    )
+    lines.push(`- File overlap with parent: ${shareFraction} changed files shared with parent`)
     if (overlap.sharedFiles.length > 0) {
       // CodeRabbit PR #72 major: filenames are repo-controlled and
       // can contain newlines / brackets / quotes that would break
       // out of the [STACK CONTEXT] block. Sanitize each, allowing a
       // longer cap (200) since legitimate file paths can be long.
       lines.push(
-        `  Shared files: ${overlap.sharedFiles
-          .map((file) => sanitizeInlinePromptValue(file, 200))
-          .join(", ")}`,
+        `  Shared files: ${overlap.sharedFiles.map((file) => sanitizeInlinePromptValue(file, 200)).join(", ")}`,
       )
     }
   }
@@ -163,9 +149,7 @@ export function renderStackContextSummary(ctx: StackContext): string {
   const lines: string[] = ["### Stack context", ""]
   // CodeRabbit PR #72 minor: same depth-is-a-lower-bound caveat as
   // the prompt block. "at least N" reads cleanly in Markdown.
-  const summaryDepth = ctx.hasUpstackFork
-    ? `at least ${ctx.depth}`
-    : `${ctx.depth}`
+  const summaryDepth = ctx.hasUpstackFork ? `at least ${ctx.depth}` : `${ctx.depth}`
   lines.push(`This PR is **#${ctx.position} of ${summaryDepth}** in a stack.`)
   lines.push("")
 

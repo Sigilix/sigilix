@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest"
-import {
-  validateForSubmission,
-  type SynthesizerProvenance,
-} from "@/src/lib/triage-pr-review-ensemble"
-import {
-  type PrReviewFinding,
-} from "@/src/lib/triage-pr-review"
+import { validateForSubmission, type SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
+import { type PrReviewFinding } from "@/src/lib/triage-pr-review"
 import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 
 describe("validateForSubmission — hallucination guard + line validity + score-1 handling", () => {
   const reviewable: ReviewableMap = new Map([
-    ["src/lib/foo.ts", [
-      { line: 42, side: "RIGHT" },
-      { line: 50, side: "RIGHT" },
-    ]],
+    [
+      "src/lib/foo.ts",
+      [
+        { line: 42, side: "RIGHT" },
+        { line: 50, side: "RIGHT" },
+      ],
+    ],
   ])
 
   const specialistVerdicts = [
@@ -42,12 +40,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 42, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -64,12 +64,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     const floored = applySynthSourceFindingFloor({
       findings: [],
       provenanceFindings: [],
-      provenanceDropped: [{
-        specialist: "logic",
-        sourceFindingId: "logic-0",
-        headline: "off-by-one in `clampIndex`",
-        reason: "duplicate",
-      }],
+      provenanceDropped: [
+        {
+          specialist: "logic",
+          sourceFindingId: "logic-0",
+          headline: "off-by-one in `clampIndex`",
+          reason: "duplicate",
+        },
+      ],
       specialists: specialistVerdicts.map((v) => ({ role: v.role, findings: v.verdict!.findings })),
     })
 
@@ -116,26 +118,28 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         findings: [{ ...securityFinding }],
       },
       provenance: {
-        findings: [{
-          sourceSpecialists: ["security"],
-          sourceFindingIds: ["security-0"],
-          action: "kept" as const,
-          verifiedViaRetrieval: false,
-        }],
+        findings: [
+          {
+            sourceSpecialists: ["security"],
+            sourceFindingIds: ["security-0"],
+            action: "kept" as const,
+            verifiedViaRetrieval: false,
+          },
+        ],
         dropped: [],
       },
     })
-    const securityVerdicts = [{
-      role: "security" as const,
-      verdict: {
-        ...baseVerdict,
-        findings: [{ ...securityFinding, id: "security-0" }],
+    const securityVerdicts = [
+      {
+        role: "security" as const,
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...securityFinding, id: "security-0" }],
+        },
+        elapsedMs: 100,
       },
-      elapsedMs: 100,
-    }]
-    const securityReviewable: ReviewableMap = new Map([
-      [path, [{ line: 10, side: "RIGHT" }]],
-    ])
+    ]
+    const securityReviewable: ReviewableMap = new Map([[path, [{ line: 10, side: "RIGHT" }]]])
     const addedLineTextByLine = new Map<string, Map<number, string>>([
       [path, new Map([[10, "  for (const re of HTML_WRITE_SINK_EXTRACTORS) { re.exec(line); }"]])],
     ])
@@ -178,22 +182,26 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           summary: "ok",
           confidence: 4,
           confidenceReason: "...",
-          findings: [{
-            ...baseFinding,
-            line: 42,
-            score: 4,
-            confidence: 4,
-            evidenceId: "freeform-model-id",
-            evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE", "freeform:<script>"],
-          }],
+          findings: [
+            {
+              ...baseFinding,
+              line: 42,
+              score: 4,
+              confidence: 4,
+              evidenceId: "freeform-model-id",
+              evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE", "freeform:<script>"],
+            },
+          ],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0", "security-0", astId],
-            action: "merged",
-            verifiedViaRetrieval: true,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0", "security-0", astId],
+              action: "merged",
+              verifiedViaRetrieval: true,
+            },
+          ],
           dropped: [],
         },
       },
@@ -204,13 +212,15 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           role: "security" as const,
           verdict: {
             ...baseVerdict,
-            findings: [{
-              ...baseFinding,
-              id: "security-0",
-              line: 42,
-              score: 4,
-              evidenceId: "secret:generic-api-key:abc123:42",
-            }],
+            findings: [
+              {
+                ...baseFinding,
+                id: "security-0",
+                line: 42,
+                score: 4,
+                evidenceId: "secret:generic-api-key:abc123:42",
+              },
+            ],
           },
           elapsedMs: 100,
         },
@@ -234,11 +244,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(finding?.evidence).toEqual({
       specialistsThatFlagged: ["logic", "security"],
       specialistsThatDeclined: ["performance"],
-      deterministicFactIds: [
-        "secret:generic-api-key:abc123:42",
-        "siblingMapping:src/lib/foo.ts->NONE",
-        astId,
-      ],
+      deterministicFactIds: ["secret:generic-api-key:abc123:42", "siblingMapping:src/lib/foo.ts->NONE", astId],
       retrievalChunkIds: [],
       relatedPriorPRs: [],
       synthDecision: "merged",
@@ -257,12 +263,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 42, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["security"],
-            sourceFindingIds: [astId],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["security"],
+              sourceFindingIds: [astId],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -294,12 +302,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 42, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: [astId],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: [astId],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -323,12 +333,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 42, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "split" as unknown as SynthesizerProvenance["findings"][number]["action"],
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "split" as unknown as SynthesizerProvenance["findings"][number]["action"],
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -343,18 +355,42 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "ok", confidence: 4, confidenceReason: "...",
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
           findings: [
             // a finding about code in a file NOT in this PR's diff → out-of-PR-scope
-            { ...baseFinding, path: "src/other-unchanged.ts", line: 5, score: 5, headline: "in another file" },
+            {
+              ...baseFinding,
+              path: "src/other-unchanged.ts",
+              line: 5,
+              score: 5,
+              headline: "in another file",
+            },
             // a real finding on the CHANGED file but a non-reviewable line (mis-anchored) → NOT out-of-scope
-            { ...baseFinding, path: "src/lib/foo.ts", line: 999, score: 5, headline: "mis-anchored blocker" },
+            {
+              ...baseFinding,
+              path: "src/lib/foo.ts",
+              line: 999,
+              score: 5,
+              headline: "mis-anchored blocker",
+            },
           ],
         },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [],
         },
@@ -376,12 +412,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 42, score: 4, headline: "FAKE FINDING" }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-99"],  // doesn't exist!
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-99"], // doesn't exist!
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -397,12 +435,14 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       synthOutput: {
         verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 42, score: 4 }] },
         provenance: {
-          findings: [{
-            sourceSpecialists: [],
-            sourceFindingIds: [],  // empty!
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: [],
+              sourceFindingIds: [], // empty!
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -416,14 +456,19 @@ describe("validateForSubmission — hallucination guard + line validity + score-
   it("DROPS score-1 findings with empty sourceFindingIds before advisory provenance recording", () => {
     const out = validateForSubmission({
       synthOutput: {
-        verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 42, score: 1, headline: "tiny nit" }] },
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 42, score: 1, headline: "tiny nit" }],
+        },
         provenance: {
-          findings: [{
-            sourceSpecialists: [],
-            sourceFindingIds: [],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: [],
+              sourceFindingIds: [],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -441,15 +486,17 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       synthOutput: {
         verdict: {
           ...baseVerdict,
-          findings: [{ ...baseFinding, line: 999, score: 4 }],  // line 999 not in diff
+          findings: [{ ...baseFinding, line: 999, score: 4 }], // line 999 not in diff
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
@@ -468,22 +515,27 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 47, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable,
       specialistVerdicts,
       addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([
-          [42, "  const idx = clampIndex(i)"],
-          [50, "  return result"],
-        ])],
+        [
+          "src/lib/foo.ts",
+          new Map([
+            [42, "  const idx = clampIndex(i)"],
+            [50, "  return result"],
+          ]),
+        ],
       ]),
     })
     expect(out.verdict.findings).toHaveLength(1)
@@ -496,10 +548,13 @@ describe("validateForSubmission — hallucination guard + line validity + score-
 
   it("skips closer LEFT-only candidates and repairs to a farther RIGHT-side line", () => {
     const sideAwareReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 46, side: "LEFT" },
-        { line: 50, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 46, side: "LEFT" },
+          { line: 50, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: {
@@ -508,22 +563,27 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 47, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable: sideAwareReviewable,
       specialistVerdicts,
       addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([
-          [46, "  oldOnlyCandidate()"],
-          [50, "  return result"],
-        ])],
+        [
+          "src/lib/foo.ts",
+          new Map([
+            [46, "  oldOnlyCandidate()"],
+            [50, "  return result"],
+          ]),
+        ],
       ]),
     })
     expect(out.verdict.findings).toHaveLength(1)
@@ -540,22 +600,27 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 46, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable,
       specialistVerdicts,
       addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([
-          [42, "  const idx = clampIndex(i)"],
-          [50, "  return result"],
-        ])],
+        [
+          "src/lib/foo.ts",
+          new Map([
+            [42, "  const idx = clampIndex(i)"],
+            [50, "  return result"],
+          ]),
+        ],
       ]),
     })
     expect(out.verdict.findings).toHaveLength(1)
@@ -565,10 +630,13 @@ describe("validateForSubmission — hallucination guard + line validity + score-
 
   it("does not repair when every substantive candidate is outside the repair window", () => {
     const distantReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 87, side: "RIGHT" },
-        { line: 113, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 87, side: "RIGHT" },
+          { line: 113, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: {
@@ -577,22 +645,27 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 100, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable: distantReviewable,
       specialistVerdicts,
       addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([
-          [87, "  beforeWindow()"],
-          [113, "  afterWindow()"],
-        ])],
+        [
+          "src/lib/foo.ts",
+          new Map([
+            [87, "  beforeWindow()"],
+            [113, "  afterWindow()"],
+          ]),
+        ],
       ]),
     })
     expect(out.verdict.findings).toHaveLength(0)
@@ -606,29 +679,31 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       synthOutput: {
         verdict: {
           ...baseVerdict,
-          findings: [{
-            ...baseFinding,
-            line: 47,
-            score: 4,
-            kind: "replace",
-            suggestedReplacement: "  return safeResult",
-          }],
+          findings: [
+            {
+              ...baseFinding,
+              line: 47,
+              score: 4,
+              kind: "replace",
+              suggestedReplacement: "  return safeResult",
+            },
+          ],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable,
       specialistVerdicts,
-      addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([[50, "  return result"]])],
-      ]),
+      addedLineTextByLine: new Map([["src/lib/foo.ts", new Map([[50, "  return result"]])]]),
     })
     expect(out.verdict.findings).toHaveLength(0)
     expect(out.droppedForInvalidLine).toBe(1)
@@ -644,20 +719,20 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, startLine: 44, line: 47, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable,
       specialistVerdicts,
-      addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([[50, "  return result"]])],
-      ]),
+      addedLineTextByLine: new Map([["src/lib/foo.ts", new Map([[50, "  return result"]])]]),
     })
     expect(out.verdict.findings).toHaveLength(0)
     expect(out.droppedForInvalidLine).toBe(1)
@@ -667,9 +742,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
   })
 
   it("keeps header-line findings body-only instead of repairing them", () => {
-    const lineOneReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]],
-    ])
+    const lineOneReviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]]])
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -677,20 +750,20 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 1, score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable: lineOneReviewable,
       specialistVerdicts,
-      addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([[2, "export const value = 1"]])],
-      ]),
+      addedLineTextByLine: new Map([["src/lib/foo.ts", new Map([[2, "export const value = 1"]])]]),
     })
     expect(out.verdict.findings).toHaveLength(0)
     expect(out.droppedForInvalidLine).toBe(1)
@@ -705,26 +778,24 @@ describe("validateForSubmission — hallucination guard + line validity + score-
   // `if (trustLedgerEnabled) annotateFindingTrust(...)` mechanism with their own
   // reason string. Guards against a silent regression in the threading.
   describe("trust-ledger demote-reason threading", () => {
-    const lineOneReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]],
-    ])
+    const lineOneReviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]]])
     // Fresh per call — the line-1 demote site annotates the finding object IN
     // PLACE, so a shared fixture would leak the mutation between the two tests.
     const mkSynthOutput = () => ({
       verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 4 }] },
       provenance: {
-        findings: [{
-          sourceSpecialists: ["logic"],
-          sourceFindingIds: ["logic-0"],
-          action: "kept" as const,
-          verifiedViaRetrieval: false,
-        }],
+        findings: [
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept" as const,
+            verifiedViaRetrieval: false,
+          },
+        ],
         dropped: [],
       },
     })
-    const addedLineTextByLine = new Map([
-      ["src/lib/foo.ts", new Map([[2, "export const value = 1"]])],
-    ])
+    const addedLineTextByLine = new Map([["src/lib/foo.ts", new Map([[2, "export const value = 1"]])]])
 
     it("tags a line-1 body-routed finding with demoteReason outside-diff when enabled", () => {
       const out = validateForSubmission({
@@ -767,20 +838,20 @@ describe("validateForSubmission — hallucination guard + line validity + score-
           findings: [{ ...baseFinding, line: 47, scope: "file", score: 4 }],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["logic"],
-            sourceFindingIds: ["logic-0"],
-            action: "kept",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
         },
       },
       reviewable,
       specialistVerdicts,
-      addedLineTextByLine: new Map([
-        ["src/lib/foo.ts", new Map([[50, "  return result"]])],
-      ]),
+      addedLineTextByLine: new Map([["src/lib/foo.ts", new Map([[50, "  return result"]])]]),
     })
     expect(out.verdict.findings).toHaveLength(0)
     expect(out.droppedForInvalidLine).toBe(1)
@@ -801,8 +872,18 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-1"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-1"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
           ],
           dropped: [],
         },
@@ -811,7 +892,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       specialistVerdicts,
       profile: "chill",
     })
-    expect(out.verdict.findings).toHaveLength(0)  // score-1 never goes inline
+    expect(out.verdict.findings).toHaveLength(0) // score-1 never goes inline
     expect(out.demotedScore1).toBe(2)
     expect(out.verdict.summary).not.toContain("Advisory nits:")
     expect(out.verdict.summary).not.toContain("first nit")
@@ -876,8 +957,18 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         },
         provenance: {
           findings: [
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
-            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-99"], action: "kept", verifiedViaRetrieval: false },  // index 1 = bad source
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-99"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            }, // index 1 = bad source
           ],
           dropped: [],
         },

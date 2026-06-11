@@ -35,9 +35,7 @@ import { type DismissReason, parseDismissReason } from "@/src/lib/dismiss-reason
  */
 type ParsedDismissal = Pick<ReviewMemorySignal, "kind" | "dismissReason">
 
-export type ParsedReviewFeedback =
-  | ({ outcome: "dismissed" } & ParsedDismissal)
-  | { outcome: "accepted" }
+export type ParsedReviewFeedback = ({ outcome: "dismissed" } & ParsedDismissal) | { outcome: "accepted" }
 
 const PREFIX_KEYWORDS = [
   "not relevant",
@@ -50,10 +48,7 @@ const PREFIX_KEYWORDS = [
   "wontfix",
 ] as const
 
-const PREFIX_KEYWORD_REGEX = new RegExp(
-  `(?:${PREFIX_KEYWORDS.map(escapeRegex).join("|")})`,
-  "i",
-)
+const PREFIX_KEYWORD_REGEX = new RegExp(`(?:${PREFIX_KEYWORDS.map(escapeRegex).join("|")})`, "i")
 
 /** Regex for bare-`nit` reply (entire trimmed body is exactly nit/nit./nit!). */
 const BARE_NIT_REGEX = /^nit[.!]?$/i
@@ -110,9 +105,7 @@ function extractDismissReason(trimmed: string): DismissReason | undefined {
 
 function attachReason(trimmed: string): ParsedDismissal {
   const dismissReason = extractDismissReason(trimmed)
-  return dismissReason
-    ? { kind: "dismissed-textual", dismissReason }
-    : { kind: "dismissed-textual" }
+  return dismissReason ? { kind: "dismissed-textual", dismissReason } : { kind: "dismissed-textual" }
 }
 
 /**
@@ -148,9 +141,7 @@ export function parseDismissalSignal(body: unknown): ParsedDismissal | null {
  * already proved the comment is responding to a Sigilix finding. Dismissal
  * wins mixed prose so "good catch, but false positive" never records acceptance.
  */
-export function parseReviewFeedbackSignal(
-  body: unknown,
-): ParsedReviewFeedback | null {
+export function parseReviewFeedbackSignal(body: unknown): ParsedReviewFeedback | null {
   const dismissal = parseDismissalSignal(body)
   if (dismissal) return { outcome: "dismissed", ...dismissal }
   if (typeof body !== "string") return null

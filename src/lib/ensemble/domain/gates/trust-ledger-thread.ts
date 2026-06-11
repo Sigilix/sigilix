@@ -44,9 +44,7 @@ const TIER_RANK: Record<FindingTrustTier, number> = {
  * of input order. Null/undefined signals are ignored (a site can pass them
  * without a guard). No positive signal → `body-only-ungrounded`.
  */
-export function resolveTier(
-  signals: ReadonlyArray<FindingTrustSignal | null | undefined>,
-): FindingTrustTier {
+export function resolveTier(signals: ReadonlyArray<FindingTrustSignal | null | undefined>): FindingTrustTier {
   let best: FindingTrustTier = "body-only-ungrounded"
   for (const s of signals) {
     if (s && TIER_RANK[s] > TIER_RANK[best]) best = s
@@ -79,10 +77,7 @@ function nextTrust(prev: FindingTrust | undefined, patch: FindingTrustPatch): Fi
  * where a fresh clone is wanted; use `annotateFindingTrust` where object identity
  * must be preserved.
  */
-export function mergeFindingTrust(
-  finding: PrReviewFinding,
-  patch: FindingTrustPatch,
-): PrReviewFinding {
+export function mergeFindingTrust(finding: PrReviewFinding, patch: FindingTrustPatch): PrReviewFinding {
   return { ...finding, trust: nextTrust(finding.trust, patch) }
 }
 
@@ -113,9 +108,7 @@ export interface TrustTierCounts {
 
 /** Count findings by trust tier. A finding with no `trust` counts as
  *  `body-only-ungrounded` (the renderer's MODEL pill) — the honest default. */
-export function countTrustTiers(
-  findings: ReadonlyArray<Pick<PrReviewFinding, "trust">>,
-): TrustTierCounts {
+export function countTrustTiers(findings: ReadonlyArray<Pick<PrReviewFinding, "trust">>): TrustTierCounts {
   const counts: TrustTierCounts = {
     runnerConfirmed: 0,
     deterministicGrounded: 0,

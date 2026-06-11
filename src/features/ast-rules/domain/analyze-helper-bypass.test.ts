@@ -23,7 +23,10 @@ const SIBLING_USES = `app.get("/refundable", async (req, res) => { res.json({ x:
 
 describe("analyzeHelperBypass", () => {
   it("HINTS a mutator of T that bypasses the aggregation helper over T used elsewhere", () => {
-    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["billing.ts", HELPER + MUTATOR_BYPASS],
+      ["api.ts", SIBLING_USES],
+    ])
     const hints = analyzeHelperBypass(m)
     expect(hints).toHaveLength(1)
     expect(hints[0]!.fn).toBe("refundCharge")
@@ -35,7 +38,10 @@ describe("analyzeHelperBypass", () => {
       const prior = refundsTotal(id);
       pool.query("INSERT INTO refunds (charge_id, amount_cents) VALUES ($1, $2)", [id, amt - prior]);
     }`
-    const m = new Map([["b.ts", HELPER + good], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + good],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
@@ -46,24 +52,36 @@ describe("analyzeHelperBypass", () => {
 
   it("does NOT hint when there is no aggregation helper (no SUM/COUNT/COALESCE)", () => {
     const plain = `function getRefund(id) { return pool.query("SELECT amount_cents FROM refunds WHERE id = $1", [id]); }`
-    const m = new Map([["b.ts", plain + MUTATOR_BYPASS], ["api.ts", `getRefund(x)`]])
+    const m = new Map([
+      ["b.ts", plain + MUTATOR_BYPASS],
+      ["api.ts", `getRefund(x)`],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
   it("does NOT hint a mutator of a DIFFERENT table than the helper aggregates", () => {
     const other = `function touchOther(id) { pool.query("UPDATE charges SET status = 'x' WHERE id = $1", [id]); }`
-    const m = new Map([["b.ts", HELPER + other], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + other],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0) // touchOther mutates charges, helper aggregates refunds
   })
 
   it("does NOT hint a commented-out mutator", () => {
     const commented = `/* function refundCharge(id) { pool.query("INSERT INTO refunds (charge_id) VALUES ($1)", [id]); } */`
-    const m = new Map([["b.ts", HELPER + commented], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + commented],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
   it("does NOT flag the helper itself as a bypasser", () => {
-    const m = new Map([["b.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + MUTATOR_BYPASS],
+      ["api.ts", SIBLING_USES],
+    ])
     const hints = analyzeHelperBypass(m)
     expect(hints.every((h) => h.fn !== "refundsTotal")).toBe(true)
   })
@@ -76,31 +94,46 @@ describe("analyzeHelperBypass", () => {
   // nudges the model). The COLUMN MATCH is what keeps these quiet.
   it("does NOT hint a status-only UPDATE (writes a DIFFERENT column than the sum)", () => {
     const status = `function markProcessed(id) { pool.query("UPDATE refunds SET status = 'processed' WHERE id = $1", [id]); }`
-    const m = new Map([["b.ts", HELPER + status], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + status],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0) // doesn't write amount_cents → safe
   })
 
   it("does NOT hint an audit-log INSERT (writes a different column than the sum)", () => {
     const audit = `function logRefund(id) { pool.query("INSERT INTO refunds (charge_id, note) VALUES ($1, 'x')", [id]); }`
-    const m = new Map([["b.ts", HELPER + audit], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + audit],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0) // writes note/charge_id, not amount_cents
   })
 
   it("does NOT treat a scalar COALESCE (no SUM/COUNT) as an aggregation helper", () => {
     const scalar = `function refundsLabel(id) { return pool.query("SELECT COALESCE(note, '?') AS s FROM refunds WHERE id = $1", [id]); }`
-    const m = new Map([["b.ts", scalar + MUTATOR_BYPASS], ["api.ts", `refundsLabel(x)`]])
+    const m = new Map([
+      ["b.ts", scalar + MUTATOR_BYPASS],
+      ["api.ts", `refundsLabel(x)`],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
   it("does NOT treat a JOIN/UNION aggregate as a helper (ambiguous table)", () => {
     const joined = `function combined(id) { return pool.query("SELECT SUM(amount_cents) AS s FROM refunds JOIN charges ON x WHERE id = $1", [id]); }`
-    const m = new Map([["b.ts", joined + MUTATOR_BYPASS], ["api.ts", `combined(x)`]])
+    const m = new Map([
+      ["b.ts", joined + MUTATOR_BYPASS],
+      ["api.ts", `combined(x)`],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
   it("FLAGS via a COUNT helper (not just SUM)", () => {
     const countHelper = `function refundCount(id) { return pool.query("SELECT COUNT(amount_cents) AS s FROM refunds WHERE charge_id = $1", [id]); }`
-    const m = new Map([["b.ts", countHelper + MUTATOR_BYPASS], ["api.ts", `refundCount(x)`]])
+    const m = new Map([
+      ["b.ts", countHelper + MUTATOR_BYPASS],
+      ["api.ts", `refundCount(x)`],
+    ])
     const hints = analyzeHelperBypass(m)
     expect(hints).toHaveLength(1)
     expect(hints[0]!.fn).toBe("refundCharge")
@@ -108,7 +141,10 @@ describe("analyzeHelperBypass", () => {
 
   it("FLAGS an UPDATE that writes the aggregated column", () => {
     const updateMutator = `function bumpRefund(id, n) { pool.query("UPDATE refunds SET amount_cents = amount_cents + $1 WHERE id = $2", [n, id]); }`
-    const m = new Map([["b.ts", HELPER + updateMutator], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + updateMutator],
+      ["api.ts", SIBLING_USES],
+    ])
     const hints = analyzeHelperBypass(m)
     expect(hints).toHaveLength(1)
     expect(hints[0]!.fn).toBe("bumpRefund")
@@ -118,7 +154,10 @@ describe("analyzeHelperBypass", () => {
     // `$write` DOES call refundsTotal → the `(?<![\\w$])` boundary must detect the
     // call (a `\\b` boundary would miss it) so $write is NOT flagged.
     const safe = `function $write(id) { const p = refundsTotal(id); pool.query("INSERT INTO refunds (charge_id, amount_cents) VALUES ($1, $2)", [id, amt - p]); }`
-    const m = new Map([["b.ts", HELPER + safe], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["b.ts", HELPER + safe],
+      ["api.ts", SIBLING_USES],
+    ])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
@@ -126,7 +165,10 @@ describe("analyzeHelperBypass", () => {
     // norm() strips underscores/casing for MATCHING (amount_cents -> amountcents);
     // the hint TEXT the model reads must keep the real `amount_cents` / `refunds`
     // names, else the model distrusts a hint that cites a column that doesn't exist.
-    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["billing.ts", HELPER + MUTATOR_BYPASS],
+      ["api.ts", SIBLING_USES],
+    ])
     const [hint] = analyzeHelperBypass(m)
     expect(hint!.message).toContain("`amount_cents`")
     expect(hint!.message).toContain("`refunds`")
@@ -139,7 +181,10 @@ describe("analyzeHelperBypass", () => {
     // Two consensus clauses (re-validation Workflow): the append-only / recurring-
     // grant safe-branch (an event-ledger is MEANT to accumulate) and the positive
     // anti-reclassification clause (can't deflect onto idempotency/validation/scope).
-    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const m = new Map([
+      ["billing.ts", HELPER + MUTATOR_BYPASS],
+      ["api.ts", SIBLING_USES],
+    ])
     const [hint] = analyzeHelperBypass(m)
     expect(hint!.message).toContain("MEANT to accumulate")
     expect(hint!.message).toContain("do not defer it as")

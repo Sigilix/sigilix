@@ -219,7 +219,8 @@ const CONTENT_SECURITY_PATTERNS: readonly RegExp[] = [
   /^\+.*\b(PRIVATE\s*KEY|PASSWORD|SECRET|API_KEY)\b/m,
 ]
 
-const BEHAVIOR_CHANGE_RE = /\b(fix|fixes|fixed|change|changes|changed|break|breaking|behavior|behaviour|refactor|rewrite|migrate|deprecat\w*)\b/i
+const BEHAVIOR_CHANGE_RE =
+  /\b(fix|fixes|fixed|change|changes|changed|break|breaking|behavior|behaviour|refactor|rewrite|migrate|deprecat\w*)\b/i
 
 export function anyMatchesPath(lowerPaths: readonly string[], patterns: readonly RegExp[]): boolean {
   for (const path of lowerPaths) {
@@ -259,18 +260,37 @@ export function touchesMigrationsOrSchema(lowerPaths: readonly string[]): boolea
 }
 
 const SUSPICIOUS_FENCE_LANGUAGES = new Set([
-  "sh", "bash", "shell", "zsh", "fish", "powershell", "ps", "ps1",
-  "yaml", "yml", "json",
-  "dockerfile", "docker",
-  "hcl", "tf", "terraform",
+  "sh",
+  "bash",
+  "shell",
+  "zsh",
+  "fish",
+  "powershell",
+  "ps",
+  "ps1",
+  "yaml",
+  "yml",
+  "json",
+  "dockerfile",
+  "docker",
+  "hcl",
+  "tf",
+  "terraform",
   "groovy",
-  "ts", "typescript", "js", "javascript",
-  "py", "python",
-  "rb", "ruby",
+  "ts",
+  "typescript",
+  "js",
+  "javascript",
+  "py",
+  "python",
+  "rb",
+  "ruby",
   "go",
-  "rs", "rust",
+  "rs",
+  "rust",
   "sql",
-  "nginx", "apache",
+  "nginx",
+  "apache",
 ])
 
 export function diffContainsExecutableMarkdownFences(diff: string): boolean {
@@ -325,9 +345,4 @@ export function truncate(s: string, maxChars: number): string {
   return s.length <= maxChars ? s : `${s.slice(0, maxChars - 1)}…`
 }
 
-export {
-  GLOBAL_SECURITY_PATH_PATTERNS,
-  GLOBAL_LOGIC_PATH_PATTERNS,
-  CONTENT_SECURITY_PATTERNS,
-  BEHAVIOR_CHANGE_RE,
-}
+export { GLOBAL_SECURITY_PATH_PATTERNS, GLOBAL_LOGIC_PATH_PATTERNS, CONTENT_SECURITY_PATTERNS, BEHAVIOR_CHANGE_RE }

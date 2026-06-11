@@ -75,12 +75,7 @@ interface BakedGlyph {
   readonly height: number
 }
 
-function bakeGlyph(
-  font: opentype.Font,
-  label: string,
-  containerWidth: number,
-  containerHeight: number,
-): BakedGlyph {
+function bakeGlyph(font: opentype.Font, label: string, containerWidth: number, containerHeight: number): BakedGlyph {
   // Build at origin; opentype.js places the baseline at y=0 with
   // ascenders going to negative y. The path's bounding box describes
   // the inked rect.
@@ -137,7 +132,10 @@ export const BADGE_GLYPH_PATHS: Record<string, BadgeGlyphPath> = {
 `
 
   const body = entries
-    .map(([label, g]) => `  ${JSON.stringify(label)}: { d: ${JSON.stringify(g.d)}, width: ${g.width}, height: ${g.height} },`)
+    .map(
+      ([label, g]) =>
+        `  ${JSON.stringify(label)}: { d: ${JSON.stringify(g.d)}, width: ${g.width}, height: ${g.height} },`,
+    )
     .join("\n")
 
   const footer = `
@@ -182,12 +180,12 @@ async function main(): Promise<void> {
   await writeFile(OUTPUT_PATH, out, "utf8")
 
   const totalBytes = entries.reduce((sum, [, g]) => sum + g.d.length, 0)
-  process.stdout.write(
-    `generated ${entries.length} glyphs → ${OUTPUT_PATH} (path-data total: ${totalBytes} bytes)\n`,
-  )
+  process.stdout.write(`generated ${entries.length} glyphs → ${OUTPUT_PATH} (path-data total: ${totalBytes} bytes)\n`)
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`generate-badge-glyph-paths failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+  process.stderr.write(
+    `generate-badge-glyph-paths failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+  )
   process.exit(1)
 })

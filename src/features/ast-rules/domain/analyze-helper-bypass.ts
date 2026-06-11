@@ -40,15 +40,18 @@ export interface AsymmetryHint {
  *  … FROM table`. Requires a plain column arg + a single `FROM` with NO JOIN/UNION
  *  (an ambiguous multi-table aggregate could mis-attribute — code-review M2). Null
  *  when the body isn't such a helper. */
-function aggregateTarget(
-  body: string,
-): { table: string; column: string; tableRaw: string; columnRaw: string } | null {
+function aggregateTarget(body: string): { table: string; column: string; tableRaw: string; columnRaw: string } | null {
   const agg = /\b(?:sum|count)\s*\(\s*(?:distinct\s+)?([A-Za-z_$][\w$.]*)\s*\)/i.exec(body)
   if (!agg) return null
   if (/\bjoin\b|\bunion\b/i.test(body)) return null
   const from = /\bfrom\s+([A-Za-z_$][\w$.]*)/i.exec(body)
   if (!from) return null
-  return { table: norm(from[1]!), column: norm(agg[1]!), tableRaw: display(from[1]!), columnRaw: display(agg[1]!) }
+  return {
+    table: norm(from[1]!),
+    column: norm(agg[1]!),
+    tableRaw: display(from[1]!),
+    columnRaw: display(agg[1]!),
+  }
 }
 
 /** Does `body` WRITE `column` into `table` — `INSERT INTO table (… column …)` or

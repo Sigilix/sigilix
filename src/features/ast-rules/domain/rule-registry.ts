@@ -122,11 +122,7 @@ export interface ResolvedAstRulesConfig {
  * line-scan pseudo rule (CodeRabbit #296) so it honors `severityThreshold`, not
  * just the disabled list, exactly like a registry rule.
  */
-export function ruleEnabledByConfig(
-  config: ResolvedAstRulesConfig,
-  id: string,
-  severity: Severity,
-): boolean {
+export function ruleEnabledByConfig(config: ResolvedAstRulesConfig, id: string, severity: Severity): boolean {
   return !config.disabledRules.includes(id) && SEVERITY_RANK[severity] >= SEVERITY_RANK[config.severityThreshold]
 }
 

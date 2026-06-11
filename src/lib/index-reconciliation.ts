@@ -51,10 +51,7 @@ export interface ReconciliationSummary {
   enumerationIncomplete: boolean
 }
 
-export async function runIndexReconciliation(
-  env: Env,
-  opts: { dryRun: boolean },
-): Promise<ReconciliationSummary> {
+export async function runIndexReconciliation(env: Env, opts: { dryRun: boolean }): Promise<ReconciliationSummary> {
   const summary: ReconciliationSummary = {
     installations: 0,
     reposChecked: 0,
@@ -86,11 +83,13 @@ export async function runIndexReconciliation(
         installationId,
       )
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "index-reconcile-repos-list-error",
-        installation_id: installationId,
-        error: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-reconcile-repos-list-error",
+          installation_id: installationId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
       summary.enumerationIncomplete = true
       continue
     }
@@ -105,11 +104,13 @@ export async function runIndexReconciliation(
       // `missing` that the producer would silently reject (false positive).
       const parsed = parseFullName({ full_name: fullName })
       if (parsed === null) {
-        console.warn(JSON.stringify({
-          event: "index-reconcile-skip-invalid-fullname",
-          installation_id: installationId,
-          full_name: fullName,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "index-reconcile-skip-invalid-fullname",
+            installation_id: installationId,
+            full_name: fullName,
+          }),
+        )
         continue
       }
       const { owner, repo } = parsed
@@ -120,13 +121,15 @@ export async function runIndexReconciliation(
         // KV read transient. Skipping (NOT enqueueing) avoids spamming
         // jobs for repos that may already be fresh; flag incomplete so
         // the next tick retries the read.
-        console.warn(JSON.stringify({
-          event: "index-reconcile-manifest-read-error",
-          installation_id: installationId,
-          owner,
-          repo,
-          error: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "index-reconcile-manifest-read-error",
+            installation_id: installationId,
+            owner,
+            repo,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
         summary.enumerationIncomplete = true
         continue
       }
@@ -159,11 +162,13 @@ export async function runIndexReconciliation(
       summary.perRepoFailed += res.perRepoFailed
     } catch (err) {
       // Match backfill semantics: per-installation throw is fail-soft.
-      console.warn(JSON.stringify({
-        event: "index-reconcile-enqueue-error",
-        installation_id: installationId,
-        error: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-reconcile-enqueue-error",
+          installation_id: installationId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
       summary.enumerationIncomplete = true
     }
   }
@@ -183,11 +188,15 @@ async function graphMissingForManifest(
   try {
     activeGraphVersion = await debugActiveGraphVersion(env, owner, repo)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "index-reconcile-graph-read-error",
-      owner, repo, run_id: runId,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "index-reconcile-graph-read-error",
+        owner,
+        repo,
+        run_id: runId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { missing: false, readError: true }
   }
   return { missing: activeGraphVersion !== runId, readError: false }

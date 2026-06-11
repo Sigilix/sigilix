@@ -51,7 +51,9 @@ const cfApiToken = process.env.CLOUDFLARE_API_TOKEN
 const missing = [
   ["CLOUDFLARE_ACCOUNT_ID", cfAccountId],
   ["CLOUDFLARE_API_TOKEN", cfApiToken],
-].filter(([, v]) => !v).map(([k]) => k)
+]
+  .filter(([, v]) => !v)
+  .map(([k]) => k)
 if (missing.length > 0) {
   console.error(`error: missing required env var(s): ${missing.join(", ")}`)
   process.exit(1)
@@ -107,10 +109,14 @@ for (const key of shadowKeys) {
     prNumber,
     createdMs,
     rows: value.matches
-      .filter((m: unknown): m is { fid: string; claimType?: unknown } =>
-        !!m && typeof (m as { fid?: unknown }).fid === "string",
+      .filter(
+        (m: unknown): m is { fid: string; claimType?: unknown } =>
+          !!m && typeof (m as { fid?: unknown }).fid === "string",
       )
-      .map((m: { fid: string; claimType?: unknown }) => ({ fid: m.fid, claimType: (m.claimType ?? null) as CalibrationShadowRecord["rows"][number]["claimType"] })),
+      .map((m: { fid: string; claimType?: unknown }) => ({
+        fid: m.fid,
+        claimType: (m.claimType ?? null) as CalibrationShadowRecord["rows"][number]["claimType"],
+      })),
   })
 }
 console.log(`[calibrate] ${shadowRecords.length} shadow record(s) for ${args.repo}`)
@@ -170,8 +176,7 @@ if (args.write) {
 } else {
   console.log("[calibrate] dry run — to publish:")
   console.log(
-    `  wrangler kv key put --namespace-id=${KV_NAMESPACE_ID} ` +
-      `'${CALIBRATION_PARAMS_KV_KEY}' '${blobJson}'`,
+    `  wrangler kv key put --namespace-id=${KV_NAMESPACE_ID} ` + `'${CALIBRATION_PARAMS_KV_KEY}' '${blobJson}'`,
   )
   console.log("  (or re-run with --write)")
 }
@@ -187,7 +192,10 @@ interface ParsedArgs {
 function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { repo: null, write: false, out: null }
   for (const arg of argv) {
-    if (arg === "--write") { out.write = true; continue }
+    if (arg === "--write") {
+      out.write = true
+      continue
+    }
     if (!arg.startsWith("--") || !arg.includes("=")) {
       throw new Error(`invalid argument '${arg}' — expected --key=value or --write`)
     }
@@ -240,7 +248,10 @@ async function getKvJson(key: string): Promise<any | null> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), KV_REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(url, { headers: { authorization: `Bearer ${cfApiToken}` }, signal: ctrl.signal })
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${cfApiToken}` },
+      signal: ctrl.signal,
+    })
     if (res.status === 404) return null
     if (!res.ok) throw new Error(`KV get HTTP ${res.status} on ${key}`)
     return JSON.parse(await res.text())

@@ -32,14 +32,7 @@ import {
 } from "@/src/lib/retrieval-ab/eval"
 
 const VALID_FORMATS: ReadonlySet<string> = new Set(["csv", "md", "both"])
-const ALLOWED_ARGS: ReadonlySet<string> = new Set([
-  "findings",
-  "truth",
-  "format",
-  "out",
-  "line-tolerance",
-  "min-prs",
-])
+const ALLOWED_ARGS: ReadonlySet<string> = new Set(["findings", "truth", "format", "out", "line-tolerance", "min-prs"])
 
 function die(msg: string): never {
   console.error(`error: ${msg}`)

@@ -81,7 +81,10 @@ describe("GitHubClient.downloadArtifactZip", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       calls.push({ url: String(url), init })
       if (calls.length === 1) {
-        return new Response(null, { status: 302, headers: new Headers({ location: "https://signed.example/a.zip" }) })
+        return new Response(null, {
+          status: 302,
+          headers: new Headers({ location: "https://signed.example/a.zip" }),
+        })
       }
       // No body, no content-length → must reject (don't buffer-then-check).
       return new Response(null, { status: 200 })

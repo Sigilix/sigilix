@@ -32,7 +32,12 @@ export function bucketIndex(netNewTokens: number): number {
     // netNewTokens is a computed token count, so a non-finite value should be
     // impossible. Surface it instead of silently bucketing as zero, so an
     // upstream measurement bug is visible rather than masked (Sigilix #256).
-    console.warn(JSON.stringify({ event: "graph-expansion-metrics-nonfinite-netnew", value: String(netNewTokens) }))
+    console.warn(
+      JSON.stringify({
+        event: "graph-expansion-metrics-nonfinite-netnew",
+        value: String(netNewTokens),
+      }),
+    )
     return 0
   }
   for (let i = BUCKET_COUNT - 1; i >= 0; i--) {
@@ -232,18 +237,37 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
            sum_fetch_files = sum_fetch_files + ?,
            sum_fetch_bytes = sum_fetch_bytes + ?,
            sum_fetch_elapsed = sum_fetch_elapsed + ?`,
-        day, ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, fetchFiles, fetchBytes, fetchElapsedMs,
-        ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, fetchFiles, fetchBytes, fetchElapsedMs,
+        day,
+        ga,
+        fe,
+        be,
+        s.netNewTokens,
+        s.controlTokens,
+        s.totalTokens,
+        fetchFiles,
+        fetchBytes,
+        fetchElapsedMs,
+        ga,
+        fe,
+        be,
+        s.netNewTokens,
+        s.controlTokens,
+        s.totalTokens,
+        fetchFiles,
+        fetchBytes,
+        fetchElapsedMs,
       )
       sql.exec(
         `INSERT INTO daily_expansion_hist (day, bucket, count) VALUES (?, ?, 1)
          ON CONFLICT(day, bucket) DO UPDATE SET count = count + 1`,
-        day, bucketIndex(s.netNewTokens),
+        day,
+        bucketIndex(s.netNewTokens),
       )
       sql.exec(
         `INSERT INTO daily_expansion_mode (day, mode, reviews) VALUES (?, ?, 1)
          ON CONFLICT(day, mode) DO UPDATE SET reviews = reviews + 1`,
-        day, s.mode,
+        day,
+        s.mode,
       )
     })
 
@@ -261,9 +285,16 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
 
     const agg = [
       ...sql.exec<{
-        reviews: number; graph_available: number; fetch_reviews: number; budget_exhausted: number
-        sum_netnew: number; sum_control: number; sum_total: number
-        sum_fetch_files: number; sum_fetch_bytes: number; sum_fetch_elapsed: number
+        reviews: number
+        graph_available: number
+        fetch_reviews: number
+        budget_exhausted: number
+        sum_netnew: number
+        sum_control: number
+        sum_total: number
+        sum_fetch_files: number
+        sum_fetch_bytes: number
+        sum_fetch_elapsed: number
       }>(
         `SELECT
            COALESCE(SUM(reviews), 0) AS reviews,
@@ -277,11 +308,20 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
            COALESCE(SUM(sum_fetch_bytes), 0) AS sum_fetch_bytes,
            COALESCE(SUM(sum_fetch_elapsed), 0) AS sum_fetch_elapsed
          FROM daily_expansion WHERE day >= ? AND day <= ?`,
-        startDay, endDay,
+        startDay,
+        endDay,
       ),
     ][0] ?? {
-      reviews: 0, graph_available: 0, fetch_reviews: 0, budget_exhausted: 0,
-      sum_netnew: 0, sum_control: 0, sum_total: 0, sum_fetch_files: 0, sum_fetch_bytes: 0, sum_fetch_elapsed: 0,
+      reviews: 0,
+      graph_available: 0,
+      fetch_reviews: 0,
+      budget_exhausted: 0,
+      sum_netnew: 0,
+      sum_control: 0,
+      sum_total: 0,
+      sum_fetch_files: 0,
+      sum_fetch_bytes: 0,
+      sum_fetch_elapsed: 0,
     }
 
     const reviews = agg.reviews
@@ -295,7 +335,8 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
     for (const row of sql.exec<{ bucket: number; count: number }>(
       `SELECT bucket, SUM(count) AS count FROM daily_expansion_hist
        WHERE day >= ? AND day <= ? GROUP BY bucket`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       if (row.bucket >= 0 && row.bucket < BUCKET_COUNT) hist[row.bucket] = (hist[row.bucket] ?? 0) + row.count
     }
@@ -315,7 +356,8 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
     for (const row of sql.exec<{ mode: string; reviews: number }>(
       `SELECT mode, SUM(reviews) AS reviews FROM daily_expansion_mode
        WHERE day >= ? AND day <= ? GROUP BY mode`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       modeReviews[row.mode] = row.reviews
     }
@@ -324,12 +366,21 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
       if (reviews === 0) return { verdict: "NO_DATA", rationale: "no graph-expansion samples in window" }
       const pct = `${Math.round(crossFileRate * 100)}%`
       if (medianEstimate >= 800 && crossFileRate > 0.4) {
-        return { verdict: "GO", rationale: `median netNewTokens ${medianEstimate} ≥ 800 AND cross-file context on ${pct} of reviews (> 40%)` }
+        return {
+          verdict: "GO",
+          rationale: `median netNewTokens ${medianEstimate} ≥ 800 AND cross-file context on ${pct} of reviews (> 40%)`,
+        }
       }
       if (medianEstimate < 500) {
-        return { verdict: "KILL", rationale: `median netNewTokens ${medianEstimate} < 500 — cross-file fetch adds little context` }
+        return {
+          verdict: "KILL",
+          rationale: `median netNewTokens ${medianEstimate} < 500 — cross-file fetch adds little context`,
+        }
       }
-      return { verdict: "BORDERLINE", rationale: `median netNewTokens ${medianEstimate}, cross-file rate ${pct} — neither GO (≥ 800 & > 40%) nor KILL (< 500)` }
+      return {
+        verdict: "BORDERLINE",
+        rationale: `median netNewTokens ${medianEstimate}, cross-file rate ${pct} — neither GO (≥ 800 & > 40%) nor KILL (< 500)`,
+      }
     })()
 
     return {

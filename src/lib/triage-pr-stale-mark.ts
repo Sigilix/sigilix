@@ -67,10 +67,7 @@ export interface PromptVersionSuppressionResult {
  * disables stale-marking — the worst case is over-firing, never
  * under-firing.
  */
-export function evaluatePromptVersionSuppression(
-  env: Env,
-  nowMs: number,
-): PromptVersionSuppressionResult {
+export function evaluatePromptVersionSuppression(env: Env, nowMs: number): PromptVersionSuppressionResult {
   if (env.OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE !== "on") {
     return { applies: false, reason: "off", ageHours: NaN }
   }
@@ -91,8 +88,7 @@ export function evaluatePromptVersionSuppression(
   if (ageHours > SUPPRESSION_FAIL_SAFE_HOURS) {
     return { applies: false, reason: "set-at-stale", ageHours }
   }
-  const heartbeatLevel: "info" | "warn" =
-    ageHours >= SUPPRESSION_HEARTBEAT_WARN_HOURS ? "warn" : "info"
+  const heartbeatLevel: "info" | "warn" = ageHours >= SUPPRESSION_HEARTBEAT_WARN_HOURS ? "warn" : "info"
   return { applies: true, reason: "applies", ageHours, heartbeatLevel }
 }
 
@@ -142,12 +138,16 @@ async function emitSuppressionHeartbeatIfDue(
     // case: a duplicate heartbeat).
   }
   if (nowSec - lastEmitSec < HEARTBEAT_DEDUPE_HOURS * 3600) return
-  console.log(JSON.stringify({
-    event: "review-stale-prompt-version-suppressed-heartbeat",
-    owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber,
-    ageHours: result.ageHours,
-    level: result.heartbeatLevel,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "review-stale-prompt-version-suppressed-heartbeat",
+      owner: ctx.owner,
+      repo: ctx.repo,
+      prNumber: ctx.prNumber,
+      ageHours: result.ageHours,
+      level: result.heartbeatLevel,
+    }),
+  )
   try {
     await env.OPENCLAW_STATE.put(HEARTBEAT_THROTTLE_KEY, String(nowSec), {
       expirationTtl: HEARTBEAT_THROTTLE_TTL_SECONDS,
@@ -178,10 +178,8 @@ const MAX_EMPTY_FILELIST_RETRIES = 3
 const EMPTY_FILELIST_BACKOFF_MS = 1000
 
 export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
-  const {
-    env, owner, repo, prNumber, installationId,
-    manifestSnapshot, newHeadSha, newBaseSha, currentPromptVersion,
-  } = args
+  const { env, owner, repo, prNumber, installationId, manifestSnapshot, newHeadSha, newBaseSha, currentPromptVersion } =
+    args
 
   if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED === "off") {
     console.log(JSON.stringify({ event: "review-stale-skipped-disabled", owner, repo, prNumber }))
@@ -198,27 +196,43 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
     return
   }
   if (result.kind === "invalid") {
-    console.log(JSON.stringify({
-      event: "review-manifest-invalid",
-      owner, repo, prNumber,
-      reason: result.reason,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-manifest-invalid",
+        owner,
+        repo,
+        prNumber,
+        reason: result.reason,
+      }),
+    )
     return
   }
   const manifest = result.manifest
   if (manifest.reviewedAt > manifestSnapshot.reviewedAt) {
-    console.log(JSON.stringify({ event: "review-stale-superseded", dedupe_system: "kv", owner, repo, prNumber }))
+    console.log(
+      JSON.stringify({
+        event: "review-stale-superseded",
+        dedupe_system: "kv",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return
   }
 
   // Build a GitHub client. Token fetch is best-effort; on failure we
   // log and exit since no further work is possible.
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.error(JSON.stringify({
-      event: "review-stale-mark-failed",
-      owner, repo, prNumber,
-      err: "missing GITHUB_APP_ID or GITHUB_PRIVATE_KEY",
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-stale-mark-failed",
+        owner,
+        repo,
+        prNumber,
+        err: "missing GITHUB_APP_ID or GITHUB_PRIVATE_KEY",
+      }),
+    )
     return
   }
   const token = await getInstallationToken({
@@ -236,20 +250,29 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
   for (let attempt = 1; attempt <= MAX_EMPTY_FILELIST_RETRIES; attempt += 1) {
     files = await client.listPullFilesForManifest(owner, repo, prNumber)
     if (files.entries.length > 0) break
-    console.log(JSON.stringify({
-      event: "review-stale-current-state-empty-retry",
-      owner, repo, prNumber, attempt,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-stale-current-state-empty-retry",
+        owner,
+        repo,
+        prNumber,
+        attempt,
+      }),
+    )
     if (attempt < MAX_EMPTY_FILELIST_RETRIES) {
       await new Promise((r) => setTimeout(r, EMPTY_FILELIST_BACKOFF_MS))
     }
   }
   if (!files || files.entries.length === 0) {
-    console.error(JSON.stringify({
-      event: "review-stale-mark-failed",
-      owner, repo, prNumber,
-      err: "empty-files-after-retry",
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-stale-mark-failed",
+        owner,
+        repo,
+        prNumber,
+        err: "empty-files-after-retry",
+      }),
+    )
     return
   }
   const fileListHash = await computeFileListHash(files)
@@ -271,50 +294,68 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
   // ONLY the "prompt-version" reason out of staleResult.reasons[];
   // other drift (head/base/file-list) is preserved.
   const suppression = evaluatePromptVersionSuppression(env, Date.now())
-  if (suppression.reason === "set-at-missing"
-    || suppression.reason === "set-at-malformed"
-    || suppression.reason === "set-at-future") {
-    console.log(JSON.stringify({
-      event: "review-stale-prompt-version-suppress-misconfig",
-      owner, repo, prNumber,
-      reason: suppression.reason,
-    }))
+  if (
+    suppression.reason === "set-at-missing" ||
+    suppression.reason === "set-at-malformed" ||
+    suppression.reason === "set-at-future"
+  ) {
+    console.log(
+      JSON.stringify({
+        event: "review-stale-prompt-version-suppress-misconfig",
+        owner,
+        repo,
+        prNumber,
+        reason: suppression.reason,
+      }),
+    )
   } else if (suppression.reason === "set-at-stale") {
-    console.log(JSON.stringify({
-      event: "review-stale-prompt-version-suppressed-stale",
-      owner, repo, prNumber,
-      ageHours: suppression.ageHours,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-stale-prompt-version-suppressed-stale",
+        owner,
+        repo,
+        prNumber,
+        ageHours: suppression.ageHours,
+      }),
+    )
   }
   if (suppression.applies) {
     await emitSuppressionHeartbeatIfDue(env, Date.now(), suppression, {
-      owner, repo, prNumber,
+      owner,
+      repo,
+      prNumber,
     })
   }
-  const filteredReasons = filterReasonsForSuppression(
-    staleResult.reasons, suppression.applies,
-  )
+  const filteredReasons = filterReasonsForSuppression(staleResult.reasons, suppression.applies)
   if (filteredReasons.length === 0) {
     // Only "prompt-version" was the reason and suppression applies →
     // skip stale-mark entirely. Other branches (env off, misconfig,
     // fail-safe) leave the original reasons in place.
-    console.log(JSON.stringify({
-      event: "review-stale-prompt-version-suppressed",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-stale-prompt-version-suppressed",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return
   }
-  console.log(JSON.stringify({
-    event: "review-stale-detected",
-    owner, repo, prNumber,
-    reasons: filteredReasons,
-    manifestHeadSha: manifest.headSha,
-    currentHeadSha: newHeadSha,
-    manifestBaseSha: manifest.baseSha,
-    currentBaseSha: newBaseSha,
-    manifestPromptVersion: manifest.promptVersion,
-    currentPromptVersion,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "review-stale-detected",
+      owner,
+      repo,
+      prNumber,
+      reasons: filteredReasons,
+      manifestHeadSha: manifest.headSha,
+      currentHeadSha: newHeadSha,
+      manifestBaseSha: manifest.baseSha,
+      currentBaseSha: newBaseSha,
+      manifestPromptVersion: manifest.promptVersion,
+      currentPromptVersion,
+    }),
+  )
 
   // Fetch the prior body, locate / replace the stale block, PATCH.
   const target = manifest.target
@@ -329,51 +370,72 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
     if (target.kind === "review") {
       const review = await client.getReview(owner, repo, prNumber, target.reviewId)
       if (review === null) {
-        console.log(JSON.stringify({
-          event: "review-stale-target-missing",
-          owner, repo, prNumber,
-          target: { kind: "review", id: target.reviewId },
-        }))
+        console.log(
+          JSON.stringify({
+            event: "review-stale-target-missing",
+            owner,
+            repo,
+            prNumber,
+            target: { kind: "review", id: target.reviewId },
+          }),
+        )
         return
       }
       const newBody = applyStaleBlock(review.body, block)
       await client.updateReviewBody(owner, repo, prNumber, target.reviewId, newBody)
-      console.log(JSON.stringify({
-        event: "review-stale-marked",
-        owner, repo, prNumber,
-        target: { kind: "review", id: target.reviewId },
-        reasons: filteredReasons,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "review-stale-marked",
+          owner,
+          repo,
+          prNumber,
+          target: { kind: "review", id: target.reviewId },
+          reasons: filteredReasons,
+        }),
+      )
     } else {
       const comment = await client.getIssueComment(owner, repo, target.commentId)
       if (comment === null) {
-        console.log(JSON.stringify({
-          event: "review-stale-target-missing",
-          owner, repo, prNumber,
-          target: { kind: "issue-comment", id: target.commentId },
-        }))
+        console.log(
+          JSON.stringify({
+            event: "review-stale-target-missing",
+            owner,
+            repo,
+            prNumber,
+            target: { kind: "issue-comment", id: target.commentId },
+          }),
+        )
         return
       }
       const newBody = applyStaleBlock(comment.body, block)
       await client.updateIssueComment(owner, repo, target.commentId, newBody)
-      console.log(JSON.stringify({
-        event: "review-stale-marked",
-        owner, repo, prNumber,
-        target: { kind: "issue-comment", id: target.commentId },
-        reasons: filteredReasons,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "review-stale-marked",
+          owner,
+          repo,
+          prNumber,
+          target: { kind: "issue-comment", id: target.commentId },
+          reasons: filteredReasons,
+        }),
+      )
     }
   } catch (err) {
     const status = err instanceof GitHubHttpError ? err.status : undefined
-    console.error(JSON.stringify({
-      event: "review-stale-mark-failed",
-      owner, repo, prNumber,
-      target: target.kind === "review"
-        ? { kind: "review", id: target.reviewId }
-        : { kind: "issue-comment", id: target.commentId },
-      err: err instanceof Error ? err.message : String(err),
-      ...(status !== undefined ? { status } : {}),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-stale-mark-failed",
+        owner,
+        repo,
+        prNumber,
+        target:
+          target.kind === "review"
+            ? { kind: "review", id: target.reviewId }
+            : { kind: "issue-comment", id: target.commentId },
+        err: err instanceof Error ? err.message : String(err),
+        ...(status !== undefined ? { status } : {}),
+      }),
+    )
     // 5xx → bubble for queue retry. Anything else (4xx, including
     // 403 permission gap) → swallow; retry won't help.
     if (status !== undefined && status >= 500) throw err

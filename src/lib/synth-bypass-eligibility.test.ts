@@ -26,17 +26,19 @@ function envWith(flag: string | undefined): Env {
 }
 
 function findings(...scores: number[]) {
-  return [{
-    verdict: { findings: scores.map((score) => ({ score })) },
-  }]
+  return [
+    {
+      verdict: { findings: scores.map((score) => ({ score })) },
+    },
+  ]
 }
 
 describe("isSynthBypassEnabled — env flag parsing", () => {
-  it("returns true for the exact \"on\" value", () => {
+  it('returns true for the exact "on" value', () => {
     expect(isSynthBypassEnabled(envWith("on"))).toBe(true)
   })
 
-  it("accepts case-insensitive + whitespace-tolerant \"on\"", () => {
+  it('accepts case-insensitive + whitespace-tolerant "on"', () => {
     expect(isSynthBypassEnabled(envWith("ON"))).toBe(true)
     expect(isSynthBypassEnabled(envWith("  on  "))).toBe(true)
     expect(isSynthBypassEnabled(envWith("On"))).toBe(true)
@@ -46,7 +48,7 @@ describe("isSynthBypassEnabled — env flag parsing", () => {
     expect(isSynthBypassEnabled(envWith(undefined))).toBe(false)
   })
 
-  it("returns false for \"off\" / any non-\"on\" value", () => {
+  it('returns false for "off" / any non-"on" value', () => {
     expect(isSynthBypassEnabled(envWith("off"))).toBe(false)
     expect(isSynthBypassEnabled(envWith("shadow"))).toBe(false)
     expect(isSynthBypassEnabled(envWith("true"))).toBe(false)
@@ -77,7 +79,7 @@ describe("isSynthBypassEligible — bypass gate semantics", () => {
       expect(isSynthBypassEligible(envWith(undefined), 1, findings(1, 2, 3))).toBe(false)
     })
 
-    it("returns false when the flag is \"off\"", () => {
+    it('returns false when the flag is "off"', () => {
       expect(isSynthBypassEligible(envWith("off"), 1, findings(1, 2))).toBe(false)
     })
 
@@ -92,19 +94,23 @@ describe("isSynthBypassEligible — bypass gate semantics", () => {
     })
 
     it("returns false when dispatched=2 + 2 succeeded (legitimate multi-specialist)", () => {
-      expect(isSynthBypassEligible(envWith("on"), 2, [
-        { verdict: { findings: [{ score: 2 }] } },
-        { verdict: { findings: [{ score: 3 }] } },
-      ])).toBe(false)
+      expect(
+        isSynthBypassEligible(envWith("on"), 2, [
+          { verdict: { findings: [{ score: 2 }] } },
+          { verdict: { findings: [{ score: 3 }] } },
+        ]),
+      ).toBe(false)
     })
 
     it("returns false when dispatched=4 + 4 succeeded (full fan-out)", () => {
-      expect(isSynthBypassEligible(envWith("on"), 4, [
-        { verdict: { findings: [{ score: 1 }] } },
-        { verdict: { findings: [{ score: 2 }] } },
-        { verdict: { findings: [{ score: 3 }] } },
-        { verdict: { findings: [] } },
-      ])).toBe(false)
+      expect(
+        isSynthBypassEligible(envWith("on"), 4, [
+          { verdict: { findings: [{ score: 1 }] } },
+          { verdict: { findings: [{ score: 2 }] } },
+          { verdict: { findings: [{ score: 3 }] } },
+          { verdict: { findings: [] } },
+        ]),
+      ).toBe(false)
     })
   })
 

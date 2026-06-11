@@ -14,9 +14,7 @@ import {
 
 describe("wrapInlineHtmlTags", () => {
   it("returns the input unchanged when there are no angle brackets", () => {
-    expect(wrapInlineHtmlTags("clean prose, no tags here")).toBe(
-      "clean prose, no tags here",
-    )
+    expect(wrapInlineHtmlTags("clean prose, no tags here")).toBe("clean prose, no tags here")
   })
 
   it("returns the input unchanged on empty string", () => {
@@ -24,51 +22,39 @@ describe("wrapInlineHtmlTags", () => {
   })
 
   it("wraps a bare HTML tag in backticks", () => {
-    expect(wrapInlineHtmlTags("uses <kbd> elements")).toBe(
-      "uses `<kbd>` elements",
-    )
+    expect(wrapInlineHtmlTags("uses <kbd> elements")).toBe("uses `<kbd>` elements")
   })
 
   it("wraps a JSX-style PascalCase tag", () => {
-    expect(wrapInlineHtmlTags("converts to <Link> components")).toBe(
-      "converts to `<Link>` components",
-    )
+    expect(wrapInlineHtmlTags("converts to <Link> components")).toBe("converts to `<Link>` components")
   })
 
   it("wraps closing tags", () => {
-    expect(wrapInlineHtmlTags("after </div> the layout breaks")).toBe(
-      "after `</div>` the layout breaks",
-    )
+    expect(wrapInlineHtmlTags("after </div> the layout breaks")).toBe("after `</div>` the layout breaks")
   })
 
   it("wraps tags with attributes", () => {
-    expect(wrapInlineHtmlTags('uses <details open> for the disclosure')).toBe(
-      'uses `<details open>` for the disclosure',
+    expect(wrapInlineHtmlTags("uses <details open> for the disclosure")).toBe(
+      "uses `<details open>` for the disclosure",
     )
   })
 
   it("wraps multiple tags in one string", () => {
-    expect(
-      wrapInlineHtmlTags("converts <Link> and <kbd> per-key boxes"),
-    ).toBe("converts `<Link>` and `<kbd>` per-key boxes")
+    expect(wrapInlineHtmlTags("converts <Link> and <kbd> per-key boxes")).toBe(
+      "converts `<Link>` and `<kbd>` per-key boxes",
+    )
   })
 
   it("skips tags that are already wrapped in backticks", () => {
-    expect(wrapInlineHtmlTags("uses `<Link>` per docs")).toBe(
-      "uses `<Link>` per docs",
-    )
+    expect(wrapInlineHtmlTags("uses `<Link>` per docs")).toBe("uses `<Link>` per docs")
   })
 
   it("does not match math-like comparisons (1 < 2)", () => {
-    expect(wrapInlineHtmlTags("when n < 2, return early")).toBe(
-      "when n < 2, return early",
-    )
+    expect(wrapInlineHtmlTags("when n < 2, return early")).toBe("when n < 2, return early")
   })
 
   it("does not match `<3` heart-like tokens (no `>` close)", () => {
-    expect(wrapInlineHtmlTags("the team votes <3 for this")).toBe(
-      "the team votes <3 for this",
-    )
+    expect(wrapInlineHtmlTags("the team votes <3 for this")).toBe("the team votes <3 for this")
   })
 
   it("does not greedily span across newlines / multiple `<`", () => {
@@ -78,10 +64,8 @@ describe("wrapInlineHtmlTags", () => {
   })
 
   it("reproduces the rubberfit PR #232 fix on the actual broken summary", () => {
-    const broken =
-      "redesigns cmdk shortcuts with per-key <kbd> boxes plus in-input chord capture."
-    const fixed =
-      "redesigns cmdk shortcuts with per-key `<kbd>` boxes plus in-input chord capture."
+    const broken = "redesigns cmdk shortcuts with per-key <kbd> boxes plus in-input chord capture."
+    const fixed = "redesigns cmdk shortcuts with per-key `<kbd>` boxes plus in-input chord capture."
     expect(wrapInlineHtmlTags(broken)).toBe(fixed)
   })
 })

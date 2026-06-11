@@ -9,10 +9,7 @@
 
 import { describe, expect, it } from "vitest"
 import { computeRuleLayer } from "@/src/lib/dynamic-dispatcher"
-import {
-  EMPTY_CONFIG,
-  classifiedFor,
-} from "@/src/lib/dynamic-dispatcher.test-helpers"
+import { EMPTY_CONFIG, classifiedFor } from "@/src/lib/dynamic-dispatcher.test-helpers"
 
 // ─── Pure rule layer ──────────────────────────────────────────────────
 
@@ -29,9 +26,7 @@ describe("computeRuleLayer — docs-only shortcut", () => {
       repoConfig: EMPTY_CONFIG,
     })
     expect(result.forcedRoles.size).toBe(0)
-    expect([...result.safeSkipRoles].sort()).toEqual(
-      ["logic", "performance", "security", "tests"]
-    )
+    expect([...result.safeSkipRoles].sort()).toEqual(["logic", "performance", "security", "tests"])
     // Per-role reason attribution: docs-only-no-fences fires on every
     // role. Code-review M1 fix: reasons are tracked per role now,
     // not in a global shared list.
@@ -185,7 +180,14 @@ describe("computeRuleLayer — SIG-227a new safe-skip shortcuts", () => {
           paths: ["src/types/auth-types.d.ts"],
           totalLinesChanged: 4,
         },
-        classified: [{ path: "src/types/auth-types.d.ts", kind: "config", testsSibling: null, sourceSibling: null }],
+        classified: [
+          {
+            path: "src/types/auth-types.d.ts",
+            kind: "config",
+            testsSibling: null,
+            sourceSibling: null,
+          },
+        ],
         commitMessage: "types: auth-related types",
         repoConfig: EMPTY_CONFIG,
       })
@@ -282,8 +284,18 @@ describe("computeRuleLayer — SIG-227a new safe-skip shortcuts", () => {
           totalLinesChanged: 30,
         },
         classified: [
-          { path: "src/lib/foo.ts", kind: "source", testsSibling: "tests/foo.test.ts", sourceSibling: null },
-          { path: "tests/foo.test.ts", kind: "test", testsSibling: null, sourceSibling: "src/lib/foo.ts" },
+          {
+            path: "src/lib/foo.ts",
+            kind: "source",
+            testsSibling: "tests/foo.test.ts",
+            sourceSibling: null,
+          },
+          {
+            path: "tests/foo.test.ts",
+            kind: "test",
+            testsSibling: null,
+            sourceSibling: "src/lib/foo.ts",
+          },
         ],
         commitMessage: "feat: foo with tests",
         repoConfig: EMPTY_CONFIG,
@@ -521,7 +533,14 @@ describe("computeRuleLayer — per-repo dispatcher config", () => {
         paths: ["src/custom-auth/login.ts"],
         totalLinesChanged: 5,
       },
-      classified: [{ path: "src/custom-auth/login.ts", kind: "source", testsSibling: null, sourceSibling: null }],
+      classified: [
+        {
+          path: "src/custom-auth/login.ts",
+          kind: "source",
+          testsSibling: null,
+          sourceSibling: null,
+        },
+      ],
       commitMessage: "feat: custom auth flow",
       repoConfig: {
         dispatcher: {
@@ -576,4 +595,3 @@ describe("computeRuleLayer — per-repo dispatcher config", () => {
     expect(securityReasons.some((r) => r.includes("repo_additional_pattern="))).toBe(false)
   })
 })
-

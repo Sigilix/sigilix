@@ -33,12 +33,19 @@ export const noDisabledTlsRejectUnauthorized: AstRule = {
     // "rejectUnauthorized" — the key is dynamic, not a literal property
     // named "rejectUnauthorized".
     const keyName = node.computed
-      ? (k?.type === "Literal" && typeof k.value === "string" ? k.value : null)
-      : (k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null))
+      ? k?.type === "Literal" && typeof k.value === "string"
+        ? k.value
+        : null
+      : k?.type === "Identifier"
+        ? k.name
+        : k?.type === "Literal"
+          ? k.value
+          : null
     if (keyName !== "rejectUnauthorized") return null
     if (v?.type !== "Literal" || v.value !== false) return null
     return {
-      message: "`rejectUnauthorized: false` disables TLS certificate validation — exposes the connection to man-in-the-middle. Provide a `ca` bundle or use the system trust store.",
+      message:
+        "`rejectUnauthorized: false` disables TLS certificate validation — exposes the connection to man-in-the-middle. Provide a `ca` bundle or use the system trust store.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       column: node.loc?.start?.column ?? 0,

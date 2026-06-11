@@ -22,11 +22,7 @@ import { readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import {
-  ALL_BADGE_NAMES,
-  BADGE_ASSET_VERSION,
-  getBadgeSvg,
-} from "@/src/lib/badge-assets"
+import { ALL_BADGE_NAMES, BADGE_ASSET_VERSION, getBadgeSvg } from "@/src/lib/badge-assets"
 
 const REPO_ROOT = (() => {
   // tests/ live at the repo root → __dirname here is `<root>/tests`.
@@ -37,28 +33,22 @@ const REPO_ROOT = (() => {
 const VERSION_DIR = join(REPO_ROOT, "assets", "badges", BADGE_ASSET_VERSION)
 
 describe(`badge assets — local mirror parity for ${BADGE_ASSET_VERSION}`, () => {
-  it.each(ALL_BADGE_NAMES)(
-    "%s.svg exists at assets/badges/<version>/",
-    (name) => {
-      const path = join(VERSION_DIR, `${name}.svg`)
-      const stat = statSync(path)
-      expect(stat.isFile()).toBe(true)
-      expect(stat.size).toBeGreaterThan(0)
-    },
-  )
+  it.each(ALL_BADGE_NAMES)("%s.svg exists at assets/badges/<version>/", (name) => {
+    const path = join(VERSION_DIR, `${name}.svg`)
+    const stat = statSync(path)
+    expect(stat.isFile()).toBe(true)
+    expect(stat.size).toBeGreaterThan(0)
+  })
 
-  it.each(ALL_BADGE_NAMES)(
-    "%s.svg on disk matches runtime getBadgeSvg() byte-for-byte",
-    (name) => {
-      // Stronger contract than just "file exists" — the committed file
-      // MUST be the exact output of `generate-static-badges` at the
-      // current `BADGE_ASSET_VERSION`. If someone bumps the version
-      // and re-runs the generator but commits stale bytes (e.g. a
-      // partial commit), this catches the drift before the version
-      // ships pointing at a tag that has the wrong shape.
-      const path = join(VERSION_DIR, `${name}.svg`)
-      const onDisk = readFileSync(path, "utf8")
-      expect(onDisk).toBe(getBadgeSvg(name))
-    },
-  )
+  it.each(ALL_BADGE_NAMES)("%s.svg on disk matches runtime getBadgeSvg() byte-for-byte", (name) => {
+    // Stronger contract than just "file exists" — the committed file
+    // MUST be the exact output of `generate-static-badges` at the
+    // current `BADGE_ASSET_VERSION`. If someone bumps the version
+    // and re-runs the generator but commits stale bytes (e.g. a
+    // partial commit), this catches the drift before the version
+    // ships pointing at a tag that has the wrong shape.
+    const path = join(VERSION_DIR, `${name}.svg`)
+    const onDisk = readFileSync(path, "utf8")
+    expect(onDisk).toBe(getBadgeSvg(name))
+  })
 })

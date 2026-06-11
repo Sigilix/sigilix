@@ -51,13 +51,7 @@ async function importAesKey(keyB64url: string): Promise<CryptoKey> {
   if (raw.length !== 32) {
     throw new Error("OPENCLAW_SESSION_ENCRYPTION_KEY must decode to exactly 32 bytes (AES-256)")
   }
-  return crypto.subtle.importKey(
-    "raw",
-    raw,
-    { name: "AES-GCM" },
-    /* extractable */ false,
-    ["encrypt", "decrypt"],
-  )
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, /* extractable */ false, ["encrypt", "decrypt"])
 }
 
 // Encode a UTF-8 string into an ArrayBuffer-backed Uint8Array. We copy into a
@@ -103,11 +97,7 @@ export async function decryptAccessToken(
   const key = await importAesKey(keyB64url)
   const ct = base64urlDecode(record.encryptedAccessToken)
   const iv = base64urlDecode(record.iv)
-  const pt = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv, additionalData: aadFor(sessionId) },
-    key,
-    ct,
-  )
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aadFor(sessionId) }, key, ct)
   return new TextDecoder().decode(pt)
 }
 
@@ -148,19 +138,12 @@ export async function createSession(args: {
   return record
 }
 
-export async function getSession(args: {
-  kv: KVNamespace
-  sessionId: string
-}): Promise<SessionRecord | null> {
+export async function getSession(args: { kv: KVNamespace; sessionId: string }): Promise<SessionRecord | null> {
   const raw = await args.kv.get(`${SESSION_KV_PREFIX}${args.sessionId}`, "json")
   return (raw as SessionRecord) ?? null
 }
 
-export async function touchSession(args: {
-  kv: KVNamespace
-  sessionId: string
-  record: SessionRecord
-}): Promise<void> {
+export async function touchSession(args: { kv: KVNamespace; sessionId: string; record: SessionRecord }): Promise<void> {
   // Sliding 30-day TTL — refresh lastSeenAt + KV TTL on each authenticated
   // request so an active user never gets logged out at exactly day 30.
   // Done as fire-and-forget from the request path; the race-window
@@ -171,10 +154,7 @@ export async function touchSession(args: {
   })
 }
 
-export async function deleteSession(args: {
-  kv: KVNamespace
-  sessionId: string
-}): Promise<void> {
+export async function deleteSession(args: { kv: KVNamespace; sessionId: string }): Promise<void> {
   await args.kv.delete(`${SESSION_KV_PREFIX}${args.sessionId}`)
 }
 
@@ -202,36 +182,15 @@ export function setSessionCookie(sessionId: string): string {
 }
 
 export function clearSessionCookie(): string {
-  return [
-    `${SESSION_COOKIE}=`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    "Max-Age=0",
-  ].join("; ")
+  return [`${SESSION_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; ")
 }
 
 export function setStateCookie(nonce: string): string {
-  return [
-    `${STATE_COOKIE}=${nonce}`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    "Max-Age=600",
-  ].join("; ")
+  return [`${STATE_COOKIE}=${nonce}`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=600"].join("; ")
 }
 
 export function clearStateCookie(): string {
-  return [
-    `${STATE_COOKIE}=`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    "Max-Age=0",
-  ].join("; ")
+  return [`${STATE_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; ")
 }
 
 export const SESSION_COOKIE_NAME = SESSION_COOKIE

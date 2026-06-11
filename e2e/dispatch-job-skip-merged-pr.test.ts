@@ -7,33 +7,28 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const {
-  mockGetInstallationToken,
-  mockGetPullRequest,
-  mockEnsemble,
-  mockAttachCheckRun,
-  mockCompleteCheckRun,
-} = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
-  mockGetPullRequest: vi.fn(
-    async (
-      ..._args: unknown[]
-    ): Promise<{
-      head: { sha: string }
-      base: { sha: string }
-      state: string
-      merged_at: string | null
-    }> => ({
-      head: { sha: "a".repeat(40) },
-      base: { sha: "b".repeat(40) },
-      state: "open",
-      merged_at: null,
-    }),
-  ),
-  mockEnsemble: vi.fn(async (..._args: unknown[]) => undefined),
-  mockAttachCheckRun: vi.fn(async (_args?: unknown) => ({ checkRunId: 1 })),
-  mockCompleteCheckRun: vi.fn(async (_args?: unknown) => undefined),
-}))
+const { mockGetInstallationToken, mockGetPullRequest, mockEnsemble, mockAttachCheckRun, mockCompleteCheckRun } =
+  vi.hoisted(() => ({
+    mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
+    mockGetPullRequest: vi.fn(
+      async (
+        ..._args: unknown[]
+      ): Promise<{
+        head: { sha: string }
+        base: { sha: string }
+        state: string
+        merged_at: string | null
+      }> => ({
+        head: { sha: "a".repeat(40) },
+        base: { sha: "b".repeat(40) },
+        state: "open",
+        merged_at: null,
+      }),
+    ),
+    mockEnsemble: vi.fn(async (..._args: unknown[]) => undefined),
+    mockAttachCheckRun: vi.fn(async (_args?: unknown) => ({ checkRunId: 1 })),
+    mockCompleteCheckRun: vi.fn(async (_args?: unknown) => undefined),
+  }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -50,18 +45,14 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/lib/triage-pr-review-ensemble", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/src/lib/triage-pr-review-ensemble")>(
-      "@/src/lib/triage-pr-review-ensemble",
-    )
+  const actual = await vi.importActual<typeof import("@/src/lib/triage-pr-review-ensemble")>(
+    "@/src/lib/triage-pr-review-ensemble",
+  )
   return { ...actual, handlePrReviewEnsemble: (...args: unknown[]) => mockEnsemble(...args) }
 })
 
 vi.mock("@/src/lib/pr-review-check-run", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/src/lib/pr-review-check-run")>(
-      "@/src/lib/pr-review-check-run",
-    )
+  const actual = await vi.importActual<typeof import("@/src/lib/pr-review-check-run")>("@/src/lib/pr-review-check-run")
   return {
     ...actual,
     attachExistingCheckRun: (args: unknown) => mockAttachCheckRun(args),
@@ -168,9 +159,7 @@ describe("dispatchJob pr-review — skip when the PR is no longer open", () => {
     await dispatchJob(prReviewJob({ checkRunId: 4242 }), makeEnv())
     expect(mockEnsemble).not.toHaveBeenCalled()
     expect(mockAttachCheckRun).toHaveBeenCalledTimes(1)
-    expect(mockCompleteCheckRun).toHaveBeenCalledWith(
-      expect.objectContaining({ conclusion: "skipped" }),
-    )
+    expect(mockCompleteCheckRun).toHaveBeenCalledWith(expect.objectContaining({ conclusion: "skipped" }))
   })
 
   it("SKIPS the ensemble when the PR is closed-unmerged", async () => {

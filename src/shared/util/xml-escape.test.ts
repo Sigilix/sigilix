@@ -29,9 +29,7 @@ describe("escapeXmlText", () => {
 
 describe("escapeXmlAttribute", () => {
   it("escapes double-quote so a value can't close the attribute", () => {
-    expect(escapeXmlAttribute('merged" injected="yes')).toBe(
-      "merged&quot; injected=&quot;yes"
-    )
+    expect(escapeXmlAttribute('merged" injected="yes')).toBe("merged&quot; injected=&quot;yes")
   })
 
   it("inherits text-node escaping (lt, gt, amp)", () => {

@@ -47,7 +47,9 @@ describe("evaluateLogicRefutation", () => {
   it("KEEPS a sev>=4 logic finding that states why no guard prevents it", () => {
     expect(
       evaluateLogicRefutation(
-        finding({ independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard." }),
+        finding({
+          independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard.",
+        }),
       ).keep,
     ).toBe(true)
   })

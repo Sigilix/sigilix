@@ -63,12 +63,7 @@ export function buildChangedLines(diff: string): ChangedLines {
   return out
 }
 
-export function nodeOverlapsChanged(
-  changed: ChangedLines,
-  path: string,
-  startLine: number,
-  endLine: number,
-): boolean {
+export function nodeOverlapsChanged(changed: ChangedLines, path: string, startLine: number, endLine: number): boolean {
   const set = changed.get(path)
   if (!set || set.size === 0) return false
   for (let l = startLine; l <= endLine; l++) {

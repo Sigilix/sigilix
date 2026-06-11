@@ -2,11 +2,7 @@
 // post-synthesis line-validity check. Pure parser tests, no I/O.
 
 import { describe, expect, it } from "vitest"
-import {
-  parseDiffToReviewablePositions,
-  isPositionReviewable,
-  deriveSide,
-} from "@/src/shared/util/diff-positions"
+import { parseDiffToReviewablePositions, isPositionReviewable, deriveSide } from "@/src/shared/util/diff-positions"
 
 describe("parseDiffToReviewablePositions", () => {
   it("parses a simple added-line hunk", () => {
@@ -46,7 +42,7 @@ describe("parseDiffToReviewablePositions", () => {
     const pos = parseDiffToReviewablePositions(diff).get("src/foo.ts")
     expect(pos).toEqual([
       { line: 10, side: "RIGHT" }, // context line at new line 10
-      { line: 11, side: "LEFT" },  // deleted line at OLD line 11
+      { line: 11, side: "LEFT" }, // deleted line at OLD line 11
       { line: 11, side: "RIGHT" }, // context line at new line 11
     ])
   })
@@ -175,10 +171,7 @@ describe("parseDiffToReviewablePositions", () => {
   })
 
   it("returns empty positions when only headers are present (binary diffs)", () => {
-    const diff = [
-      "diff --git a/img.png b/img.png",
-      "Binary files a/img.png and b/img.png differ",
-    ].join("\n")
+    const diff = ["diff --git a/img.png b/img.png", "Binary files a/img.png and b/img.png differ"].join("\n")
     const map = parseDiffToReviewablePositions(diff)
     // No `+++ b/...` line → no path tracked.
     expect(map.size).toBe(0)
@@ -190,7 +183,7 @@ describe("parseDiffToReviewablePositions", () => {
       "--- a/foo.ts",
       "+++ b/foo.ts",
       "@@ THIS IS NOT A VALID HUNK HEADER @@",
-      "+x",  // would-be addition, but no hunk context
+      "+x", // would-be addition, but no hunk context
       "@@ -10,1 +10,1 @@",
       "+y",
     ].join("\n")
@@ -202,10 +195,13 @@ describe("parseDiffToReviewablePositions", () => {
 
 describe("isPositionReviewable", () => {
   const map = new Map([
-    ["a.ts", [
-      { line: 5, side: "RIGHT" as const },
-      { line: 10, side: "LEFT" as const },
-    ]],
+    [
+      "a.ts",
+      [
+        { line: 5, side: "RIGHT" as const },
+        { line: 10, side: "LEFT" as const },
+      ],
+    ],
   ])
 
   it("returns true for an exact match", () => {
@@ -227,10 +223,13 @@ describe("isPositionReviewable", () => {
 describe("deriveSide", () => {
   it("prefers RIGHT when both sides exist at the same line", () => {
     const map = new Map([
-      ["a.ts", [
-        { line: 42, side: "LEFT" as const },
-        { line: 42, side: "RIGHT" as const },
-      ]],
+      [
+        "a.ts",
+        [
+          { line: 42, side: "LEFT" as const },
+          { line: 42, side: "RIGHT" as const },
+        ],
+      ],
     ])
     // Most findings comment on added/changed code; RIGHT is the
     // default unless only LEFT is reviewable.
@@ -238,16 +237,12 @@ describe("deriveSide", () => {
   })
 
   it("returns LEFT when only LEFT is reviewable", () => {
-    const map = new Map([
-      ["a.ts", [{ line: 42, side: "LEFT" as const }]],
-    ])
+    const map = new Map([["a.ts", [{ line: 42, side: "LEFT" as const }]]])
     expect(deriveSide(map, "a.ts", 42)).toBe("LEFT")
   })
 
   it("returns null when no match at all", () => {
-    const map = new Map([
-      ["a.ts", [{ line: 5, side: "RIGHT" as const }]],
-    ])
+    const map = new Map([["a.ts", [{ line: 5, side: "RIGHT" as const }]]])
     expect(deriveSide(map, "a.ts", 999)).toBeNull()
     expect(deriveSide(map, "missing.ts", 5)).toBeNull()
   })
@@ -263,9 +258,7 @@ describe("isContiguousRightRange (moved from improve, SIG-125)", () => {
     expect(isContiguousRightRange(m, "x.ts", 1, 3)).toBe(true)
   })
   it("false when a line in the range is not reviewable", () => {
-    const m = parseDiffToReviewablePositions(
-      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1,1 @@\n+a\n",
-    )
+    const m = parseDiffToReviewablePositions("diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1,1 @@\n+a\n")
     expect(isContiguousRightRange(m, "x.ts", 1, 3)).toBe(false)
   })
 })

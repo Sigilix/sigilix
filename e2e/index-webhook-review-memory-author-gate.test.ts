@@ -8,17 +8,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Env } from "@/src/shared/types/env"
 
-const {
-  mockCaptureTopLevelReviewFeedback,
-  mockGetInstallationToken,
-  mockGetPullRequest,
-  mockLoadSigilixConfig,
-} = vi.hoisted(() => ({
-  mockCaptureTopLevelReviewFeedback: vi.fn((..._args: unknown[]) => undefined),
-  mockGetInstallationToken: vi.fn((_args?: unknown) => "test-token"),
-  mockGetPullRequest: vi.fn((..._args: unknown[]) => ({ head: { sha: "c".repeat(40) } })),
-  mockLoadSigilixConfig: vi.fn((..._args: unknown[]) => ({ reviewMemory: { enabled: true } })),
-}))
+const { mockCaptureTopLevelReviewFeedback, mockGetInstallationToken, mockGetPullRequest, mockLoadSigilixConfig } =
+  vi.hoisted(() => ({
+    mockCaptureTopLevelReviewFeedback: vi.fn((..._args: unknown[]) => undefined),
+    mockGetInstallationToken: vi.fn((_args?: unknown) => "test-token"),
+    mockGetPullRequest: vi.fn((..._args: unknown[]) => ({ head: { sha: "c".repeat(40) } })),
+    mockLoadSigilixConfig: vi.fn((..._args: unknown[]) => ({ reviewMemory: { enabled: true } })),
+  }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -35,9 +31,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
-    "@/src/lib/sigilix-config",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
     loadSigilixConfig: (...args: unknown[]) => mockLoadSigilixConfig(...args),
@@ -50,24 +44,18 @@ vi.mock("@/src/lib/review-memory/capture", async () => {
   )
   return {
     ...actual,
-    captureTopLevelReviewFeedback: (...args: unknown[]) =>
-      mockCaptureTopLevelReviewFeedback(...args),
+    captureTopLevelReviewFeedback: (...args: unknown[]) => mockCaptureTopLevelReviewFeedback(...args),
   }
 })
 
 const SECRET = "test-webhook-secret"
 const encoder = new TextEncoder()
-const VALID_MARKER =
-  "<!-- sigilix:fid:a1b2c3d4e5f6a7b8:cat:performance:sev:warning:path:ffaabbccddee -->"
+const VALID_MARKER = "<!-- sigilix:fid:a1b2c3d4e5f6a7b8:cat:performance:sev:warning:path:ffaabbccddee -->"
 
 async function signBody(body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(body))
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -115,10 +103,7 @@ function makeIssueCommentPayload(login: string) {
   }
 }
 
-async function postIssueCommentWebhook(
-  payload: unknown,
-  waitUntilPromises: Promise<unknown>[],
-): Promise<Response> {
+async function postIssueCommentWebhook(payload: unknown, waitUntilPromises: Promise<unknown>[]): Promise<Response> {
   const body = JSON.stringify(payload)
   const sig = await signBody(body)
   const worker = (await import("@/src/index")).default
@@ -135,7 +120,9 @@ async function postIssueCommentWebhook(
     }),
     makeEnv(),
     {
-      waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise)
+      },
       passThroughOnException: () => {},
     } as unknown as ExecutionContext,
   )
@@ -152,10 +139,7 @@ describe("issue_comment webhook review-memory author gate", () => {
   it("does not schedule top-level review-memory capture for copied markers from humans", async () => {
     const waitUntilPromises: Promise<unknown>[] = []
 
-    const res = await postIssueCommentWebhook(
-      makeIssueCommentPayload("human-reviewer"),
-      waitUntilPromises,
-    )
+    const res = await postIssueCommentWebhook(makeIssueCommentPayload("human-reviewer"), waitUntilPromises)
 
     expect(res.status).toBe(200)
     expect(waitUntilPromises).toHaveLength(0)
@@ -169,25 +153,24 @@ describe("issue_comment webhook review-memory author gate", () => {
   it("still schedules top-level review-memory capture for Sigilix-authored markers", async () => {
     const waitUntilPromises: Promise<unknown>[] = []
 
-    const res = await postIssueCommentWebhook(
-      makeIssueCommentPayload("sigilix[bot]"),
-      waitUntilPromises,
-    )
+    const res = await postIssueCommentWebhook(makeIssueCommentPayload("sigilix[bot]"), waitUntilPromises)
     await Promise.all(waitUntilPromises)
 
     expect(res.status).toBe(200)
     expect(waitUntilPromises).toHaveLength(1)
     expect(mockGetInstallationToken).toHaveBeenCalledOnce()
     expect(mockGetPullRequest).toHaveBeenCalledWith("acme", "site", 7)
-    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      owner: "acme",
-      repo: "site",
-      prNumber: 7,
-      repoId: 555,
-      comment: {
-        id: 123,
-        body: `${VALID_MARKER}\n\nfalse positive`,
-      },
-    }))
+    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "acme",
+        repo: "site",
+        prNumber: 7,
+        repoId: 555,
+        comment: {
+          id: 123,
+          body: `${VALID_MARKER}\n\nfalse positive`,
+        },
+      }),
+    )
   })
 })

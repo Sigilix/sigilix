@@ -58,7 +58,7 @@ export function commentHasSigilixAncestor(args: {
   while (typeof curId === "string" && curId.length > 0 && !seen.has(curId)) {
     seen.add(curId)
     const cur = byId.get(curId)
-    if (!cur) return false  // walked past our snapshot — fail closed
+    if (!cur) return false // walked past our snapshot — fail closed
     const login = cur.user?.displayName ?? cur.user?.name ?? null
     if (isBotHandle(login)) return true
     curId = cur.parentId ?? null

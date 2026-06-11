@@ -23,8 +23,14 @@ describe("classifyHtmlSinkValue — FLAG (untrusted dynamic)", () => {
     expect(classifyHtmlSinkValue("c?.bodyHtml")).toEqual({ flag: true, reason: "member" })
   })
   it("flags a raw interpolated template", () => {
-    expect(classifyHtmlSinkValue("`<b>${userInput}</b>`")).toEqual({ flag: true, reason: "interpolation" })
-    expect(classifyHtmlSinkValue("`<div>${row.bio}</div>`")).toEqual({ flag: true, reason: "interpolation" })
+    expect(classifyHtmlSinkValue("`<b>${userInput}</b>`")).toEqual({
+      flag: true,
+      reason: "interpolation",
+    })
+    expect(classifyHtmlSinkValue("`<div>${row.bio}</div>`")).toEqual({
+      flag: true,
+      reason: "interpolation",
+    })
   })
   it("still flags `unsafeHtml` / `uncleanHtml` — the safe-marker is token-anchored (CodeRabbit #296)", () => {
     expect(classifyHtmlSinkValue("c.unsafeHtml")).toEqual({ flag: true, reason: "member" })

@@ -25,9 +25,7 @@
 // one definition with `src/lib/index-branch.ts` (no inline drift hazard).
 import { BRANCH_STATE_SEGMENT } from "@/src/shared/domain/index-keys"
 
-export type InstallationLookup =
-  | { ok: true; installationId: number }
-  | { ok: false; reason: "no_installation" }
+export type InstallationLookup = { ok: true; installationId: number } | { ok: false; reason: "no_installation" }
 
 interface InstallationMap {
   [key: string]: string | number
@@ -58,11 +56,7 @@ function coerceId(value: string | number | undefined): number | null {
   return Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
-export function resolveInstallation(
-  owner: string,
-  repo: string,
-  mapJson: string | undefined
-): InstallationLookup {
+export function resolveInstallation(owner: string, repo: string, mapJson: string | undefined): InstallationLookup {
   const map = parseMap(mapJson)
   if (!map) return { ok: false, reason: "no_installation" }
 
@@ -80,7 +74,7 @@ export function resolveInstallation(
  * by env-validate to verify each is resolvable in the installation map.
  */
 export function listTeamRepoMappings(
-  teamRepoMapJson: string | undefined
+  teamRepoMapJson: string | undefined,
 ): Array<{ teamKey: string; owner: string; repo: string }> {
   if (!teamRepoMapJson) return []
   let parsed: unknown
@@ -130,9 +124,12 @@ export function listTeamRepoMappings(
  * layer suggested in the ARC-239 spec is therefore deferred —
  * KV's built-in caching is sufficient at our scale.
  */
-export async function listIndexedRepos(env: {
-  OPENCLAW_STATE: KVNamespace
-}, opts: { owner?: string | null; includeBranches?: boolean } = {}): Promise<string[]> {
+export async function listIndexedRepos(
+  env: {
+    OPENCLAW_STATE: KVNamespace
+  },
+  opts: { owner?: string | null; includeBranches?: boolean } = {},
+): Promise<string[]> {
   const PREFIX = "repo-index-manifest:"
   const out = new Set<string>()
   const ownerFilter = opts.owner?.toLowerCase() ?? null
@@ -141,21 +138,23 @@ export async function listIndexedRepos(env: {
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     try {
-      page = await env.OPENCLAW_STATE.list({
+      page = (await env.OPENCLAW_STATE.list({
         prefix: PREFIX,
         limit: 1000,
         ...(cursor ? { cursor } : {}),
-      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+      })) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
     } catch (err) {
       // Symmetry with `deleteKvPrefix` in src/lib/index-delete.ts:
       // transient KV.list errors become a partial-result + log; the
       // queue handler retries the whole job. Returning the partial
       // set keeps the agent loop from blowing up on a momentary blip.
-      console.error(JSON.stringify({
-        event: "list-indexed-repos-failed",
-        err: err instanceof Error ? err.message : String(err),
-        partial_count: out.size,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "list-indexed-repos-failed",
+          err: err instanceof Error ? err.message : String(err),
+          partial_count: out.size,
+        }),
+      )
       break
     }
     for (const key of page.keys) {
@@ -194,10 +193,12 @@ export async function listIndexedRepos(env: {
       // SDK violation guard: `list_complete: false` with no cursor is
       // unreachable per Cloudflare KV's contract, but log if it ever
       // happens so we notice instead of silently truncating.
-      console.warn(JSON.stringify({
-        event: "list-indexed-repos-truncated-no-cursor",
-        partial_count: out.size,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "list-indexed-repos-truncated-no-cursor",
+          partial_count: out.size,
+        }),
+      )
       break
     }
     cursor = page.cursor
@@ -212,7 +213,7 @@ export async function listIndexedRepos(env: {
  */
 export function parseTeamGithubRepo(
   teamRepoMapJson: string | undefined,
-  teamKey: string | null
+  teamKey: string | null,
 ): { owner: string; repo: string } | null {
   if (!teamRepoMapJson || !teamKey) return null
   let parsed: unknown

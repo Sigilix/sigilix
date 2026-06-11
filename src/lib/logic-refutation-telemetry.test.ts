@@ -23,7 +23,7 @@ describe("PR_REVIEW_SCHEMA — clearedLogicCandidates surface", () => {
   })
 
   it("does not make clearedLogicCandidates required (optional, logic-only)", () => {
-    expect((PR_REVIEW_SCHEMA.required as readonly string[])).not.toContain("clearedLogicCandidates")
+    expect(PR_REVIEW_SCHEMA.required as readonly string[]).not.toContain("clearedLogicCandidates")
   })
 })
 

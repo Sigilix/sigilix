@@ -54,9 +54,7 @@ describe("renderPrContext — happy path", () => {
   })
 
   it("renders [timeout] / [error] / [truncated] sentinels as self-closing tags with status", () => {
-    const out = renderPrContext(
-      basePr({ diff: "[timeout]", filesChanged: "[error]" })
-    )
+    const out = renderPrContext(basePr({ diff: "[timeout]", filesChanged: "[error]" }))
     expect(out).toContain('<pr_diff status="timeout" />')
     expect(out).toContain('<pr_files_changed status="error" />')
   })
@@ -96,7 +94,7 @@ describe("renderPrContext — adversarial XML injection", () => {
           items: ["src/<script>.ts", "src/a&b.ts"],
           total: 2,
         },
-      })
+      }),
     )
     expect(out).toContain("src/&lt;script&gt;.ts")
     expect(out).toContain("src/a&amp;b.ts")
@@ -105,16 +103,14 @@ describe("renderPrContext — adversarial XML injection", () => {
     const filesBlockMatch = out.match(/<pr_files_changed[^>]*>([\s\S]*?)<\/pr_files_changed>/)
     expect(filesBlockMatch).toBeTruthy()
     const filesBlock = filesBlockMatch?.[1] ?? ""
-    expect(filesBlock).not.toMatch(/[^&]&[^a-z#]/)  // no bare ampersand
+    expect(filesBlock).not.toMatch(/[^&]&[^a-z#]/) // no bare ampersand
   })
 
   it("escapes attribute injection: payload state cannot inject siblings", () => {
     // Defensive: in real code, normalizeState() prevents arbitrary
     // strings from reaching state. But if it ever did, the attribute
     // escape stops `merged" injected="yes` from creating a sibling.
-    const out = renderPrContext(
-      basePr({ state: 'merged" injected="yes' as PrContext["state"] })
-    )
+    const out = renderPrContext(basePr({ state: 'merged" injected="yes' as PrContext["state"] }))
     expect(out).not.toContain('injected="yes"')
     expect(out).toContain('state="merged&quot; injected=&quot;yes"')
   })
@@ -126,9 +122,7 @@ describe("renderPrContext — adversarial XML injection", () => {
   })
 
   it("escapes attribute injection in owner / repo", () => {
-    const out = renderPrContext(
-      basePr({ owner: 'evil" extra="1', repo: 'r" extra2="2' })
-    )
+    const out = renderPrContext(basePr({ owner: 'evil" extra="1', repo: 'r" extra2="2' }))
     expect(out).not.toContain('extra="1"')
     expect(out).not.toContain('extra2="2"')
   })
@@ -147,28 +141,18 @@ describe("renderPrUnavailable — failed-fetch placeholder", () => {
 
   it("renders a self-closing tag with owner/repo/number/reason", () => {
     const out = renderPrUnavailable(failure())
-    expect(out).toBe(
-      '<pr_unavailable owner="Sigilix" repo="rema-portal" number="162" reason="not_found" />'
-    )
+    expect(out).toBe('<pr_unavailable owner="Sigilix" repo="rema-portal" number="162" reason="not_found" />')
   })
 
   it("escapes attribute injection in owner/repo (defensive — these come from extracted refs)", () => {
-    const out = renderPrUnavailable(
-      failure({ owner: 'evil" extra="1', repo: 'r" extra2="2' })
-    )
+    const out = renderPrUnavailable(failure({ owner: 'evil" extra="1', repo: 'r" extra2="2' }))
     expect(out).not.toContain('extra="1"')
     expect(out).not.toContain('extra2="2"')
     expect(out).toContain("&quot;")
   })
 
   it("renders each known reason verbatim", () => {
-    const reasons: LinkedPrFailure["reason"][] = [
-      "no_installation",
-      "not_found",
-      "forbidden",
-      "timeout",
-      "error",
-    ]
+    const reasons: LinkedPrFailure["reason"][] = ["no_installation", "not_found", "forbidden", "timeout", "error"]
     for (const reason of reasons) {
       const out = renderPrUnavailable(failure({ reason }))
       expect(out).toContain(`reason="${reason}"`)
@@ -233,11 +217,7 @@ describe("resolveLinearAgentRepoScope", () => {
     expect(scope).toEqual({
       repo: "sigilix/sigilix",
       mappedRepo: "sigilix/sigilix",
-      availableRepos: [
-        "sigilix/rubberfit",
-        "sigilix/sigilix",
-        branchRepo,
-      ],
+      availableRepos: ["sigilix/rubberfit", "sigilix/sigilix", branchRepo],
       status: "mapped_indexed",
     })
   })
@@ -296,10 +276,12 @@ describe("resolveLinearAgentRepoScope", () => {
   it("keeps tenant repos available but clears the default when it is not indexed", async () => {
     const env = makeEnv(["repo-index-manifest:sigilix/rubberfit"])
 
-    await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Sigilix",
-      repo: "sigilix",
-    })).resolves.toEqual({
+    await expect(
+      resolveLinearAgentRepoScope(env, {
+        owner: "Sigilix",
+        repo: "sigilix",
+      }),
+    ).resolves.toEqual({
       repo: null,
       mappedRepo: "sigilix/sigilix",
       availableRepos: ["sigilix/rubberfit"],
@@ -333,10 +315,12 @@ describe("resolveLinearAgentRepoScope", () => {
       } as unknown as KVNamespace,
     }
 
-    await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Sigilix",
-      repo: "sigilix",
-    })).resolves.toMatchObject({
+    await expect(
+      resolveLinearAgentRepoScope(env, {
+        owner: "Sigilix",
+        repo: "sigilix",
+      }),
+    ).resolves.toMatchObject({
       repo: "sigilix/sigilix",
       mappedRepo: "sigilix/sigilix",
       availableRepos: ["sigilix/sigilix"],
@@ -372,10 +356,12 @@ describe("resolveLinearAgentRepoScope", () => {
       } as unknown as KVNamespace,
     }
 
-    await expect(resolveLinearAgentRepoScope(env, {
-      owner: "Sigilix",
-      repo: "sigilix",
-    })).resolves.toMatchObject({
+    await expect(
+      resolveLinearAgentRepoScope(env, {
+        owner: "Sigilix",
+        repo: "sigilix",
+      }),
+    ).resolves.toMatchObject({
       repo: "sigilix/sigilix",
       mappedRepo: "sigilix/sigilix",
       availableRepos: ["sigilix/sigilix"],
@@ -386,10 +372,12 @@ describe("resolveLinearAgentRepoScope", () => {
 
 describe("linearRetrievalTeamKey", () => {
   it("uses the owner/repo mapping for retrieval when configured", () => {
-    expect(linearRetrievalTeamKey({
-      owner: "Sigilix",
-      repo: "sigilix",
-    })).toBe("sigilix/sigilix")
+    expect(
+      linearRetrievalTeamKey({
+        owner: "Sigilix",
+        repo: "sigilix",
+      }),
+    ).toBe("sigilix/sigilix")
   })
 
   it("returns null when no explicit team repo mapping exists", () => {
@@ -401,56 +389,80 @@ describe("renderCodebaseRetrievalStatus", () => {
   it("distinguishes every repo-scope status branch", () => {
     // SIG-221: unmapped + no indexed repos no longer claims "no access" —
     // surface a softer "indexing may be in progress" framing.
-    const unmappedEmpty = renderCodebaseRetrievalStatus({
-      repo: null,
-      mappedRepo: null,
-      availableRepos: [],
-      status: "unmapped",
-    }, 0)
+    const unmappedEmpty = renderCodebaseRetrievalStatus(
+      {
+        repo: null,
+        mappedRepo: null,
+        availableRepos: [],
+        status: "unmapped",
+      },
+      0,
+    )
     expect(unmappedEmpty).toContain("No indexed repos are available")
     expect(unmappedEmpty).not.toContain("No GitHub repo mapping")
 
     // SIG-221: unmapped + indexed repos available — agent can still pick.
-    const unmappedWithRepos = renderCodebaseRetrievalStatus({
-      repo: null,
-      mappedRepo: null,
-      availableRepos: ["sigilix/sigilix", "sigilix/docs"],
-      status: "unmapped",
-    }, 0)
+    const unmappedWithRepos = renderCodebaseRetrievalStatus(
+      {
+        repo: null,
+        mappedRepo: null,
+        availableRepos: ["sigilix/sigilix", "sigilix/docs"],
+        status: "unmapped",
+      },
+      0,
+    )
     expect(unmappedWithRepos).toContain("2 indexed repo(s) available")
     expect(unmappedWithRepos).toContain("'sigilix/sigilix'")
     expect(unmappedWithRepos).not.toContain("No GitHub repo mapping")
 
     // SIG-221: mapped but neither default nor other repos indexed — soft framing.
-    const mappedNothingIndexed = renderCodebaseRetrievalStatus({
-      repo: null,
-      mappedRepo: "sigilix/sigilix",
-      availableRepos: [],
-      status: "mapped_not_indexed",
-    }, 0)
+    const mappedNothingIndexed = renderCodebaseRetrievalStatus(
+      {
+        repo: null,
+        mappedRepo: "sigilix/sigilix",
+        availableRepos: [],
+        status: "mapped_not_indexed",
+      },
+      0,
+    )
     expect(mappedNothingIndexed).toContain("no indexed repos are available")
     expect(mappedNothingIndexed).not.toContain("does not have an index manifest yet")
 
-    expect(renderCodebaseRetrievalStatus({
-      repo: null,
-      mappedRepo: "sigilix/sigilix",
-      availableRepos: ["sigilix/docs"],
-      status: "mapped_default_not_indexed",
-    }, 0)).toContain("not indexed yet")
+    expect(
+      renderCodebaseRetrievalStatus(
+        {
+          repo: null,
+          mappedRepo: "sigilix/sigilix",
+          availableRepos: ["sigilix/docs"],
+          status: "mapped_default_not_indexed",
+        },
+        0,
+      ),
+    ).toContain("not indexed yet")
 
-    expect(renderCodebaseRetrievalStatus({
-      repo: "sigilix/sigilix",
-      mappedRepo: "sigilix/sigilix",
-      availableRepos: ["sigilix/sigilix"],
-      status: "mapped_indexed",
-    }, 0)).toContain("retrieval returned no relevant chunks")
+    expect(
+      renderCodebaseRetrievalStatus(
+        {
+          repo: "sigilix/sigilix",
+          mappedRepo: "sigilix/sigilix",
+          availableRepos: ["sigilix/sigilix"],
+          status: "mapped_indexed",
+        },
+        0,
+      ),
+    ).toContain("retrieval returned no relevant chunks")
 
-    expect(renderCodebaseRetrievalStatus({
-      repo: "sigilix/sigilix",
-      mappedRepo: "sigilix/sigilix",
-      availableRepos: ["sigilix/sigilix"],
-      status: "mapped_indexed",
-    }, 3)).toContain("Retrieved 3 relevant codebase chunk(s)")
+    expect(
+      renderCodebaseRetrievalStatus(
+        {
+          repo: "sigilix/sigilix",
+          mappedRepo: "sigilix/sigilix",
+          availableRepos: ["sigilix/sigilix"],
+          status: "mapped_indexed",
+        },
+        3,
+      ),
+    ).toContain("Retrieved 3 relevant codebase chunk(s)")
   })
 })
 
@@ -512,31 +524,28 @@ describe("buildAgentInitialUserMessage", () => {
       ...base,
       repo: "sigilix/sigilix",
       mappedRepo: "sigilix/sigilix",
-      availableRepos: [
-        "sigilix/rubberfit",
-        "sigilix/sigilix",
-        branchRepo,
-      ],
+      availableRepos: ["sigilix/rubberfit", "sigilix/sigilix", branchRepo],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'sigilix/rubberfit', 'sigilix/sigilix', 'sigilix/sigilix' (non-default branch index)")
+    expect(out).toContain(
+      "[INDEXED REPOS] 'sigilix/rubberfit', 'sigilix/sigilix', 'sigilix/sigilix' (non-default branch index)",
+    )
     expect(out).toContain("[DEFAULT REPO] sigilix/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("The default for this Linear team is 'sigilix/sigilix'")
     // SIG-221: default is a soft prior — agent picks a different repo when
     // the question is about one.
     expect(out).toContain("pick a different repo from the list when the question is about one")
-    expect(out).toContain("For entries marked '(non-default branch index)', never pass the internal __branch__ namespace")
+    expect(out).toContain(
+      "For entries marked '(non-default branch index)', never pass the internal __branch__ namespace",
+    )
     expect(out).toContain("only pass a human branch name if the user explicitly provides one")
     expect(out).not.toContain(`__branch__/${encodedDev}`)
   })
 
   it("caps the prompt-visible namespace list without dropping the default repo", () => {
-    const availableRepos = Array.from(
-      { length: 52 },
-      (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`,
-    )
+    const availableRepos = Array.from({ length: 52 }, (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`)
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "sigilix/repo-00",
@@ -553,10 +562,7 @@ describe("buildAgentInitialUserMessage", () => {
   })
 
   it("keeps the default repo visible when it falls after the namespace cap", () => {
-    const availableRepos = Array.from(
-      { length: 52 },
-      (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`,
-    )
+    const availableRepos = Array.from({ length: 52 }, (_, i) => `sigilix/repo-${String(i).padStart(2, "0")}`)
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "sigilix/repo-51",
@@ -577,10 +583,7 @@ describe("buildAgentInitialUserMessage", () => {
       ...base,
       repo: null,
       mappedRepo: null,
-      availableRepos: [
-        "sigilix/rubberfit",
-        "sigilix/sigilix",
-      ],
+      availableRepos: ["sigilix/rubberfit", "sigilix/sigilix"],
       repoStatus: "unmapped",
     })
 

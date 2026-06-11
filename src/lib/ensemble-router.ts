@@ -114,8 +114,7 @@ export function decideSpecialists(
   // contains suspicious fenced content. Fail closed: when diffText
   // isn't passed, treat as "might contain fences" → don't shortcut.
   if (fileTypes.allDocsOnly && forced.size === 0) {
-    const hasSuspiciousFences = signals.diffText === undefined
-      || diffContainsExecutableMarkdownFences(signals.diffText)
+    const hasSuspiciousFences = signals.diffText === undefined || diffContainsExecutableMarkdownFences(signals.diffText)
     if (!hasSuspiciousFences) {
       return {
         specialists: [],
@@ -244,18 +243,37 @@ function touchesPackagesOrLockfile(paths: string[]): boolean {
  * deploy/auth/security implications.
  */
 const SUSPICIOUS_FENCE_LANGUAGES = new Set([
-  "sh", "bash", "shell", "zsh", "fish", "powershell", "ps", "ps1",
-  "yaml", "yml", "json",
-  "dockerfile", "docker",
-  "hcl", "tf", "terraform",
-  "groovy",  // Jenkins
-  "ts", "typescript", "js", "javascript",
-  "py", "python",
-  "rb", "ruby",
+  "sh",
+  "bash",
+  "shell",
+  "zsh",
+  "fish",
+  "powershell",
+  "ps",
+  "ps1",
+  "yaml",
+  "yml",
+  "json",
+  "dockerfile",
+  "docker",
+  "hcl",
+  "tf",
+  "terraform",
+  "groovy", // Jenkins
+  "ts",
+  "typescript",
+  "js",
+  "javascript",
+  "py",
+  "python",
+  "rb",
+  "ruby",
   "go",
-  "rs", "rust",
+  "rs",
+  "rust",
   "sql",
-  "nginx", "apache",
+  "nginx",
+  "apache",
 ])
 
 function diffContainsExecutableMarkdownFences(diff: string): boolean {

@@ -31,18 +31,9 @@ vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
   }
 })
 
-import {
-  runSpecialist,
-  SPECIALIST_CONFIGS,
-} from "@/src/lib/triage-pr-review-ensemble"
-import {
-  SPECIALIST_PROMPTS,
-  buildSpecialistInitialMessage,
-} from "@/src/prompts/pr-review-specialists"
-import {
-  classifyDiffFiles,
-  renderDiffFileClassificationBlock,
-} from "@/src/lib/diff-file-classify"
+import { runSpecialist, SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import { classifyDiffFiles, renderDiffFileClassificationBlock } from "@/src/lib/diff-file-classify"
 
 beforeEach(() => {
   mockChat.mockReset()
@@ -86,10 +77,7 @@ function buildDiff(files: readonly string[]): string {
 
 describe("classifyDiffFiles", () => {
   it("classifies tests/<name>.test.ts as test with sibling to src/lib/<name>.ts", () => {
-    const result = classifyDiffFiles([
-      "src/lib/foo.ts",
-      "tests/foo.test.ts",
-    ])
+    const result = classifyDiffFiles(["src/lib/foo.ts", "tests/foo.test.ts"])
     expect(result).toHaveLength(2)
     const source = result.find((r) => r.path === "src/lib/foo.ts")
     const test = result.find((r) => r.path === "tests/foo.test.ts")
@@ -103,10 +91,7 @@ describe("classifyDiffFiles", () => {
     // candidateSources() only enumerates src, src/lib, app, lib, workers — so
     // tests/repo-graph.test.ts never paired with src/do/repo-graph.ts, yielding
     // a false "no test coverage" on the SIG-138 PR. Basename-stem fallback fixes it.
-    const result = classifyDiffFiles([
-      "src/do/repo-graph.ts",
-      "tests/repo-graph.test.ts",
-    ])
+    const result = classifyDiffFiles(["src/do/repo-graph.ts", "tests/repo-graph.test.ts"])
     const source = result.find((r) => r.path === "src/do/repo-graph.ts")
     const test = result.find((r) => r.path === "tests/repo-graph.test.ts")
     expect(source?.testsSibling).toBe("tests/repo-graph.test.ts")
@@ -114,10 +99,7 @@ describe("classifyDiffFiles", () => {
   })
 
   it("recognizes __tests__ directory siblings", () => {
-    const result = classifyDiffFiles([
-      "src/lib/foo.ts",
-      "src/lib/__tests__/foo.test.ts",
-    ])
+    const result = classifyDiffFiles(["src/lib/foo.ts", "src/lib/__tests__/foo.test.ts"])
     const source = result.find((r) => r.path === "src/lib/foo.ts")
     const test = result.find((r) => r.path === "src/lib/__tests__/foo.test.ts")
     expect(source?.testsSibling).toBe("src/lib/__tests__/foo.test.ts")
@@ -130,53 +112,24 @@ describe("classifyDiffFiles", () => {
     // resolved to its source sibling. Pin both shapes (bare-root
     // source + src/-rooted source) so the optional-parent branch
     // can't regress.
-    const bareRoot = classifyDiffFiles([
-      "foo.ts",
-      "__tests__/foo.test.ts",
-    ])
-    expect(bareRoot.find((r) => r.path === "foo.ts")?.testsSibling).toBe(
-      "__tests__/foo.test.ts",
-    )
-    expect(
-      bareRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling,
-    ).toBe("foo.ts")
+    const bareRoot = classifyDiffFiles(["foo.ts", "__tests__/foo.test.ts"])
+    expect(bareRoot.find((r) => r.path === "foo.ts")?.testsSibling).toBe("__tests__/foo.test.ts")
+    expect(bareRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling).toBe("foo.ts")
 
-    const srcRoot = classifyDiffFiles([
-      "src/foo.ts",
-      "__tests__/foo.test.ts",
-    ])
-    expect(srcRoot.find((r) => r.path === "src/foo.ts")?.testsSibling).toBe(
-      "__tests__/foo.test.ts",
-    )
-    expect(
-      srcRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling,
-    ).toBe("src/foo.ts")
+    const srcRoot = classifyDiffFiles(["src/foo.ts", "__tests__/foo.test.ts"])
+    expect(srcRoot.find((r) => r.path === "src/foo.ts")?.testsSibling).toBe("__tests__/foo.test.ts")
+    expect(srcRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling).toBe("src/foo.ts")
 
-    const srcLibRoot = classifyDiffFiles([
-      "src/lib/foo.ts",
-      "__tests__/foo.test.ts",
-    ])
-    expect(srcLibRoot.find((r) => r.path === "src/lib/foo.ts")?.testsSibling).toBe(
-      "__tests__/foo.test.ts",
-    )
+    const srcLibRoot = classifyDiffFiles(["src/lib/foo.ts", "__tests__/foo.test.ts"])
+    expect(srcLibRoot.find((r) => r.path === "src/lib/foo.ts")?.testsSibling).toBe("__tests__/foo.test.ts")
 
-    const libRoot = classifyDiffFiles([
-      "lib/foo.ts",
-      "__tests__/foo.test.ts",
-    ])
-    expect(libRoot.find((r) => r.path === "lib/foo.ts")?.testsSibling).toBe(
-      "__tests__/foo.test.ts",
-    )
+    const libRoot = classifyDiffFiles(["lib/foo.ts", "__tests__/foo.test.ts"])
+    expect(libRoot.find((r) => r.path === "lib/foo.ts")?.testsSibling).toBe("__tests__/foo.test.ts")
   })
 
   it("recognizes co-located .spec.ts sibling", () => {
-    const result = classifyDiffFiles([
-      "src/lib/foo.ts",
-      "src/lib/foo.spec.ts",
-    ])
-    expect(result.find((r) => r.path === "src/lib/foo.ts")?.testsSibling).toBe(
-      "src/lib/foo.spec.ts",
-    )
+    const result = classifyDiffFiles(["src/lib/foo.ts", "src/lib/foo.spec.ts"])
+    expect(result.find((r) => r.path === "src/lib/foo.ts")?.testsSibling).toBe("src/lib/foo.spec.ts")
   })
 
   it("classifies source files without a sibling test in the diff as testsSibling:null", () => {
@@ -216,16 +169,12 @@ describe("classifyDiffFiles", () => {
 
 describe("renderDiffFileClassificationBlock", () => {
   it("returns empty string when the diff has no source or test files", () => {
-    const block = renderDiffFileClassificationBlock(
-      classifyDiffFiles(["README.md", "package.json"]),
-    )
+    const block = renderDiffFileClassificationBlock(classifyDiffFiles(["README.md", "package.json"]))
     expect(block).toBe("")
   })
 
   it("renders the labeled block with explicit pairing for source + sibling test", () => {
-    const block = renderDiffFileClassificationBlock(
-      classifyDiffFiles(["src/lib/foo.ts", "tests/foo.test.ts"]),
-    )
+    const block = renderDiffFileClassificationBlock(classifyDiffFiles(["src/lib/foo.ts", "tests/foo.test.ts"]))
     expect(block).toContain("[DIFF FILE CLASSIFICATION")
     expect(block).toContain("`src/lib/foo.ts`")
     expect(block).toContain("`tests/foo.test.ts`")
@@ -234,17 +183,13 @@ describe("renderDiffFileClassificationBlock", () => {
   })
 
   it("flags source files with no sibling test in the diff explicitly", () => {
-    const block = renderDiffFileClassificationBlock(
-      classifyDiffFiles(["src/lib/lonely.ts"]),
-    )
+    const block = renderDiffFileClassificationBlock(classifyDiffFiles(["src/lib/lonely.ts"]))
     expect(block).toContain("`src/lib/lonely.ts`")
     expect(block).toContain("no sibling test file in this diff")
   })
 
   it("instructs the model not to flag covered sources as missing tests", () => {
-    const block = renderDiffFileClassificationBlock(
-      classifyDiffFiles(["src/lib/foo.ts", "tests/foo.test.ts"]),
-    )
+    const block = renderDiffFileClassificationBlock(classifyDiffFiles(["src/lib/foo.ts", "tests/foo.test.ts"]))
     expect(block).toContain("module ships without tests")
     expect(block).toContain("ONLY admissible")
   })
@@ -300,9 +245,7 @@ describe("tests specialist receives the sibling classification + diff", () => {
       diffFileClassificationBlock,
     })
 
-    mockChat.mockResolvedValueOnce(
-      ok(JSON.stringify({ summary: "no findings", confidence: 5, findings: [] })),
-    )
+    mockChat.mockResolvedValueOnce(ok(JSON.stringify({ summary: "no findings", confidence: 5, findings: [] })))
 
     await runSpecialist({
       role: "tests",
@@ -315,9 +258,7 @@ describe("tests specialist receives the sibling classification + diff", () => {
     })
 
     expect(mockChat).toHaveBeenCalledOnce()
-    const callArg = mockChat.mock.calls[0]?.[0] as
-      | { messages: Array<{ role: string; content: string }> }
-      | undefined
+    const callArg = mockChat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> } | undefined
     expect(callArg).toBeDefined()
     const userMessage = callArg?.messages.find((m) => m.role === "user")?.content
     expect(userMessage).toBeDefined()
@@ -437,9 +378,7 @@ describe("SIG-91 historical regression — false-positive PRs", () => {
         "PR #98": ["src/index.ts", "src/lib/triage-pr-review-ensemble.ts"],
         "PR #100": ["src/lib/triage-pr-review-ensemble.ts"],
       }
-      expect(uncovered.map((s) => s.path).sort()).toEqual(
-        [...(expectedUncoveredPerPr[label] ?? [])].sort(),
-      )
+      expect(uncovered.map((s) => s.path).sort()).toEqual([...(expectedUncoveredPerPr[label] ?? [])].sort())
     })
 
     it(`${label}: classification block names every test file by path`, () => {

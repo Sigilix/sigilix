@@ -102,10 +102,7 @@ export function isMemoryActive(
  * Order: `(lastSignalTs desc, signalCount desc, category asc)`. The
  * three-key sort guarantees a stable output for the same input set.
  */
-export function selectTopMemories(
-  findings: readonly ReviewMemoryFinding[],
-  maxN: number,
-): ReviewMemoryFinding[] {
+export function selectTopMemories(findings: readonly ReviewMemoryFinding[], maxN: number): ReviewMemoryFinding[] {
   const copy = [...findings]
   copy.sort((a, b) => {
     const tsA = Date.parse(a.lastSignalTs)
@@ -131,9 +128,7 @@ export function selectTopMemories(
  * MUST stay here (over `record.signals`) — `ReviewMemoryFinding` does
  * not carry `signals[]` forward, so this cannot move to the match site.
  */
-export function aggregateShadowClaims(
-  recent: readonly ReviewMemorySignal[],
-): ReviewMemoryShadowClaim[] {
+export function aggregateShadowClaims(recent: readonly ReviewMemorySignal[]): ReviewMemoryShadowClaim[] {
   interface Bucket {
     prNumbers: Set<number>
     signalCount: number
@@ -202,9 +197,7 @@ function pickLastSignalTs(record: ReviewMemoryRecord): string {
   return bestTs
 }
 
-function categoriesActive(
-  config: ResolvedReviewMemoryConfig,
-): ReadonlySet<ReviewMemoryCategory> {
+function categoriesActive(config: ResolvedReviewMemoryConfig): ReadonlySet<ReviewMemoryCategory> {
   if (config.categories.length === 0) {
     return new Set(ALL_REVIEW_MEMORY_CATEGORIES)
   }
@@ -221,7 +214,10 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   // Gate: env-level retrieval flag
   if (env.OPENCLAW_REVIEW_MEMORY_ENABLED !== "on") {
     emitTelemetry("review-memory-lookup-skipped", {
-      owner, repo, prNumber, reason: "retrieval-disabled-env",
+      owner,
+      repo,
+      prNumber,
+      reason: "retrieval-disabled-env",
     })
     return { skipped: true, reason: "retrieval-disabled-env", findings: [] }
   }
@@ -229,13 +225,19 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   // imply retrieval. Per spec §5.2 truth table.
   if (!config.enabled) {
     emitTelemetry("review-memory-lookup-skipped", {
-      owner, repo, prNumber, reason: "retrieval-disabled-config",
+      owner,
+      repo,
+      prNumber,
+      reason: "retrieval-disabled-config",
     })
     return { skipped: true, reason: "retrieval-disabled-config", findings: [] }
   }
   if (paths.length === 0) {
     emitTelemetry("review-memory-lookup-skipped", {
-      owner, repo, prNumber, reason: "no-paths-to-query",
+      owner,
+      repo,
+      prNumber,
+      reason: "no-paths-to-query",
     })
     return { skipped: true, reason: "no-paths-to-query", findings: [] }
   }
@@ -261,17 +263,13 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   const catLookups: ReviewMemoryCategory[] = []
   for (const cat of ALL_REVIEW_MEMORY_CATEGORIES) {
     if (!activeCats.has(cat)) continue
-    catReads.push(
-      readMemory(env, owner, repo, { kind: "category", category: cat }, repoId),
-    )
+    catReads.push(readMemory(env, owner, repo, { kind: "category", category: cat }, repoId))
     catLookups.push(cat)
   }
 
   // Path-category reads (paths × active categories)
   // Hash each path once up-front and reuse across the cat fan-out.
-  const pathHashes = await Promise.all(
-    paths.map((p) => computePathSha256(p)),
-  )
+  const pathHashes = await Promise.all(paths.map((p) => computePathSha256(p)))
   const pathReads: Promise<ReviewMemoryRecord | null>[] = []
   const pathLookups: Array<{ category: ReviewMemoryCategory; pathSha256: string }> = []
   for (let i = 0; i < paths.length; i++) {
@@ -280,20 +278,23 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
     for (const cat of ALL_REVIEW_MEMORY_CATEGORIES) {
       if (!activeCats.has(cat)) continue
       pathReads.push(
-        readMemory(env, owner, repo, {
-          kind: "path-category",
-          category: cat,
-          pathSha256: sha,
-        }, repoId),
+        readMemory(
+          env,
+          owner,
+          repo,
+          {
+            kind: "path-category",
+            category: cat,
+            pathSha256: sha,
+          },
+          repoId,
+        ),
       )
       pathLookups.push({ category: cat, pathSha256: sha })
     }
   }
 
-  const [catSettled, pathSettled] = await Promise.all([
-    Promise.allSettled(catReads),
-    Promise.allSettled(pathReads),
-  ])
+  const [catSettled, pathSettled] = await Promise.all([Promise.allSettled(catReads), Promise.allSettled(pathReads)])
 
   const nowMs = Date.now()
 
@@ -318,9 +319,7 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
       signalCount: recent.length,
       lastSignalTs: pickLastSignalTs(record),
       suggestedAction: "soften",
-      ...(claimShadowEnabled
-        ? { shadowClaims: aggregateShadowClaims(recent) }
-        : {}),
+      ...(claimShadowEnabled ? { shadowClaims: aggregateShadowClaims(recent) } : {}),
     })
   }
 
@@ -346,16 +345,16 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
       signalCount: recent.length,
       lastSignalTs: pickLastSignalTs(record),
       suggestedAction: "soften",
-      ...(claimShadowEnabled
-        ? { shadowClaims: aggregateShadowClaims(recent) }
-        : {}),
+      ...(claimShadowEnabled ? { shadowClaims: aggregateShadowClaims(recent) } : {}),
     })
   }
 
   const top = selectTopMemories(findings, config.maxInjectedMemories)
   const durationMs = Date.now() - t0
   emitTelemetry("review-memory-lookup-ran", {
-    owner, repo, prNumber,
+    owner,
+    repo,
+    prNumber,
     memoriesFound: findings.length,
     memoriesInjected: top.length,
     durationMs,

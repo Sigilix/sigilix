@@ -54,7 +54,10 @@ const DEFAULT_MIN_N = 30
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
 }
 
 function parseIntParam(raw: string | null, fallback: number): number | null {
@@ -64,7 +67,6 @@ function parseIntParam(raw: string | null, fallback: number): number | null {
   const n = Number(m[1])
   return Number.isInteger(n) ? n : null
 }
-
 
 export async function handleFpRateMetricsRoute(request: Request, env: Env): Promise<Response> {
   // Shares the validator-metrics bearer token (same ops surface as /metrics/validation).
@@ -94,7 +96,8 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
     return json(
       {
         error: "invalid_repo",
-        detail: "?repo=owner/repo is required (rate is per-repo; pass repeated or comma-separated ?repo= for rename aliases of the same repo)",
+        detail:
+          "?repo=owner/repo is required (rate is per-repo; pass repeated or comma-separated ?repo= for rename aliases of the same repo)",
       },
       400,
     )
@@ -174,8 +177,10 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   // Dismissals: the legacy owner/repo keyspace is repo-scoped + dual-written.
   const memoryKeys = memoryMatched.slice(0, MAX_MEMORY_FETCH)
   const rawSignals = (
-    await mapWithConcurrency(memoryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateDismissal[]> =>
-      mapSignalRecord(await getJson(key)),
+    await mapWithConcurrency(
+      memoryKeys,
+      FETCH_CONCURRENCY,
+      async (key): Promise<FpRateDismissal[]> => mapSignalRecord(await getJson(key)),
     )
   ).flat()
   const dismissals = dedupeDismissals(rawSignals)

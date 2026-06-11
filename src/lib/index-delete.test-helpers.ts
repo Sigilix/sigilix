@@ -2,12 +2,8 @@
 // Not a `*.test.ts` file, so vitest does not treat it as a suite (the
 // vitest `include` glob is `src/**/*.test.ts`).
 
-import {
-  type RepoIndexManifestV1,
-} from "@/src/lib/repo-index-manifest"
-import {
-  type RepoIndexVectorsV1,
-} from "@/src/lib/repo-index-vectors"
+import { type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
+import { type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
 
@@ -27,28 +23,41 @@ export function makeKvStub(): {
   let listImpl: ((opts: { prefix?: string; limit?: number; cursor?: string }) => KvListPage) | null = null
   const defaultList = (opts: { prefix?: string; limit?: number; cursor?: string }): KvListPage => {
     const prefix = opts.prefix ?? ""
-    const all = Array.from(store.keys()).filter((k) => k.startsWith(prefix)).sort()
+    const all = Array.from(store.keys())
+      .filter((k) => k.startsWith(prefix))
+      .sort()
     return { keys: all.map((name) => ({ name })), list_complete: true }
   }
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
     async list(opts: { prefix?: string; limit?: number; cursor?: string }): Promise<KvListPage> {
       return (listImpl ?? defaultList)(opts)
     },
   } as unknown as Env["OPENCLAW_STATE"]
   return {
-    kv, store,
-    setListImpl: (impl) => { listImpl = impl },
+    kv,
+    store,
+    setListImpl: (impl) => {
+      listImpl = impl
+    },
   }
 }
 
-export function makeEnv(opts: {
-  kv?: Env["OPENCLAW_STATE"]
-  deleteByIdsImpl?: (ids: string[]) => Promise<unknown>
-  graphDeleteImpl?: (namespace: string) => Promise<void>
-} = {}): { env: Env; deletedBatches: string[][]; graphDeletedNamespaces: string[] } {
+export function makeEnv(
+  opts: {
+    kv?: Env["OPENCLAW_STATE"]
+    deleteByIdsImpl?: (ids: string[]) => Promise<unknown>
+    graphDeleteImpl?: (namespace: string) => Promise<void>
+  } = {},
+): { env: Env; deletedBatches: string[][]; graphDeletedNamespaces: string[] } {
   const kv = opts.kv ?? makeKvStub().kv
   const deletedBatches: string[][] = []
   const graphDeletedNamespaces: string[] = []
@@ -70,8 +79,12 @@ export function makeEnv(opts: {
           }
         },
         // Stub remaining RPC methods — not called by the delete path.
-        async upsertFileGraph(): Promise<void> { /* no-op */ },
-        async commitGraphVersion(): Promise<void> { /* no-op */ },
+        async upsertFileGraph(): Promise<void> {
+          /* no-op */
+        },
+        async commitGraphVersion(): Promise<void> {
+          /* no-op */
+        },
       }
     },
   }
@@ -79,10 +92,12 @@ export function makeEnv(opts: {
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_CODE_INDEX: {
-      deleteByIds: opts.deleteByIdsImpl ?? (async (ids: string[]) => {
-        deletedBatches.push([...ids])
-        return { ids, count: ids.length }
-      }),
+      deleteByIds:
+        opts.deleteByIdsImpl ??
+        (async (ids: string[]) => {
+          deletedBatches.push([...ids])
+          return { ids, count: ids.length }
+        }),
     },
     REPO_GRAPH_DO: repoGraphDO,
   } as unknown as Env
@@ -96,12 +111,15 @@ export function manifest(over: Partial<RepoIndexManifestV1> = {}): RepoIndexMani
     owner: "Sigilix",
     headSha: "a".repeat(40),
     runId: "0123456789abcdef",
-    fileCount: 1, chunkCount: 1, shardCount: 1,
+    fileCount: 1,
+    chunkCount: 1,
+    shardCount: 1,
     indexedAt: "2026-05-17T00:00:00.000Z",
     modelId: EMBEDDING_MODEL,
     embeddingDim: EMBEDDING_DIMENSIONS,
     chunkerVersion: 1,
-    windowLines: 30, overlapLines: 10,
+    windowLines: 30,
+    overlapLines: 10,
     ...over,
   }
 }

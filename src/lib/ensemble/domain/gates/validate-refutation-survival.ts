@@ -67,9 +67,7 @@ export const REFUTATION_SURVIVAL_MIN_SEVERITY = 4
 /** Single failure shape — a high-sev self-originated finding with no survival rationale. */
 export type RefutationSurvivalDropReason = "refutation-survival-missing"
 
-export type RefutationSurvivalDecision =
-  | { keep: true }
-  | { keep: false; reason: RefutationSurvivalDropReason }
+export type RefutationSurvivalDecision = { keep: true } | { keep: false; reason: RefutationSurvivalDropReason }
 
 /**
  * Evaluate one finding the caller has ALREADY determined is self-originated for
@@ -83,8 +81,7 @@ export type RefutationSurvivalDecision =
  */
 export function evaluateRefutationSurvival(finding: PrReviewFinding): RefutationSurvivalDecision {
   if (finding.score < REFUTATION_SURVIVAL_MIN_SEVERITY) return { keep: true }
-  const rationale =
-    typeof finding.independentAssessment === "string" ? finding.independentAssessment.trim() : ""
+  const rationale = typeof finding.independentAssessment === "string" ? finding.independentAssessment.trim() : ""
   if (rationale.length > 0) return { keep: true }
   return { keep: false, reason: "refutation-survival-missing" }
 }

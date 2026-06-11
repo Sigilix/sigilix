@@ -18,13 +18,7 @@
 // `./pr-review-run`, so there is no cycle — the DO internals lifted out stay
 // a pure leaf below the DO class.
 
-import type {
-  EnqueueAction,
-  EnqueueRequest,
-  RunRecord,
-  RunResultRequest,
-  RunState,
-} from "./types"
+import type { EnqueueAction, EnqueueRequest, RunRecord, RunResultRequest, RunState } from "./types"
 
 /**
  * SIG-247 Phase 1 (CodeRabbit CR-1): defense-in-depth normalization
@@ -35,11 +29,7 @@ import type {
  * every persist + queue.send through this helper.
  */
 export function normalizeRepoId(repoId: number | undefined): number | undefined {
-  return typeof repoId === "number" &&
-    Number.isInteger(repoId) &&
-    repoId > 0
-    ? repoId
-    : undefined
+  return typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0 ? repoId : undefined
 }
 
 export function emit(event: string, fields: Record<string, unknown>): void {
@@ -87,11 +77,7 @@ export function decideEnqueueAction(
   return { action: "dedupe-terminal", reason: `same-sha-terminal-${state.state}` }
 }
 
-export type PickupActionKind =
-  | "claim"
-  | "stale-runId-410"
-  | "terminal-410"
-  | "duplicate-409"
+export type PickupActionKind = "claim" | "stale-runId-410" | "terminal-410" | "duplicate-409"
 
 /**
  * Spec §4.3 + §4.5 pickup decision tree (pure).

@@ -117,9 +117,7 @@ describe("handleReviewStatusRoute — DO transport failure", () => {
   })
 
   it("503 when DO returns non-2xx", async () => {
-    const fetchMock = vi.fn(
-      async () => new Response("oops", { status: 500 }),
-    )
+    const fetchMock = vi.fn(async () => new Response("oops", { status: 500 }))
     const stub = { fetch: fetchMock }
     const env = {
       PR_REVIEW_RUN: {
@@ -148,9 +146,13 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
   // bubble out as 200. Now: validate via type-narrowing predicate;
   // return 503 for shapes that don't match the spec.
   function makeMalformedEnv(payload: unknown): Env {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), {
-      status: 200, headers: { "content-type": "application/json" },
-    }))
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    )
     const stub = { fetch: fetchMock }
     return {
       PR_REVIEW_RUN: {
@@ -175,7 +177,13 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
   it("503 when DO returns kind=found without history", async () => {
     const env = makeMalformedEnv({
       kind: "found",
-      current: { runId: "r", headSha: "a".repeat(40), state: "queued", attempts: 1, startedAt: "x" },
+      current: {
+        runId: "r",
+        headSha: "a".repeat(40),
+        state: "queued",
+        attempts: 1,
+        startedAt: "x",
+      },
     })
     const res = await handleReviewStatusRoute(env, "Sigilix", "sigilix", 7)
     expect(res.status).toBe(503)
@@ -197,9 +205,11 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
     const env = makeMalformedEnv({
       kind: "found",
       current: {
-        runId: "r", headSha: "a".repeat(40),
+        runId: "r",
+        headSha: "a".repeat(40),
         state: "bogus-state-label",
-        attempts: 1, startedAt: "2026-05-07T06:00:00.000Z",
+        attempts: 1,
+        startedAt: "2026-05-07T06:00:00.000Z",
       },
       history: [],
     })
@@ -208,7 +218,9 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
   })
 
   it("transport-error response body does NOT leak the underlying error message", async () => {
-    const fetchMock = vi.fn(async () => { throw new Error("internal-secret-leak: kv://node-3-internal") })
+    const fetchMock = vi.fn(async () => {
+      throw new Error("internal-secret-leak: kv://node-3-internal")
+    })
     const stub = { fetch: fetchMock }
     const env = {
       PR_REVIEW_RUN: {
@@ -229,9 +241,7 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
 })
 
 describe("handleReviewStatusRoute — state shapes", () => {
-  for (const stateLabel of [
-    "idle", "queued", "running", "done", "failed-transient", "failed",
-  ] as const) {
+  for (const stateLabel of ["idle", "queued", "running", "done", "failed-transient", "failed"] as const) {
     it(`returns 200 with state=${stateLabel}`, async () => {
       const env = makeEnv({
         response: {

@@ -29,7 +29,12 @@ function finding(id: string, score: number, over: Partial<PrReviewFinding> = {})
 }
 
 function prov(...ids: string[]): FloorProvenanceFinding {
-  return { sourceSpecialists: ["logic"], sourceFindingIds: ids, action: "kept", verifiedViaRetrieval: false }
+  return {
+    sourceSpecialists: ["logic"],
+    sourceFindingIds: ids,
+    action: "kept",
+    verifiedViaRetrieval: false,
+  }
 }
 
 function dropped(id: string, reason: string) {
@@ -43,9 +48,7 @@ describe("applyDegradedCoverageFindingFloor", () => {
 
   it("re-injects a returned specialist finding the synth dropped (the #218 perf case)", () => {
     // Synth emitted 0 findings; performance returned a score-2 finding.
-    const specialists: DegradedFloorSpecialist[] = [
-      { role: "performance", findings: [finding("performance-0", 2)] },
-    ]
+    const specialists: DegradedFloorSpecialist[] = [{ role: "performance", findings: [finding("performance-0", 2)] }]
     const r = applyDegradedCoverageFindingFloor({
       findings: [],
       provenanceFindings: [],
@@ -54,7 +57,9 @@ describe("applyDegradedCoverageFindingFloor", () => {
     expect(r.findings).toHaveLength(1)
     expect(r.provenanceFindings).toHaveLength(1)
     expect(r.findings.length).toBe(r.provenanceFindings.length) // index-parallel
-    expect(r.restored).toEqual([{ role: "performance", id: "performance-0", score: 2, headline: "finding performance-0" }])
+    expect(r.restored).toEqual([
+      { role: "performance", id: "performance-0", score: 2, headline: "finding performance-0" },
+    ])
     expect(r.provenanceFindings[0]).toMatchObject({
       sourceSpecialists: ["performance"],
       sourceFindingIds: ["performance-0"],
@@ -171,14 +176,23 @@ describe("applySynthSourceFindingFloor", () => {
 
   it("keeps a represented blocker when the synth row preserves its distinctive source token", () => {
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        body: "The handler still returns another tenant's order without checking `tenantId`.",
-      })],
+      findings: [
+        finding("synth-0", 4, {
+          body: "The handler still returns another tenant's order without checking `tenantId`.",
+        }),
+      ],
       provenanceFindings: [prov("logic-0")],
       provenanceDropped: [],
-      specialists: [{ role: "logic", findings: [finding("logic-0", 4, {
-        body: "The handler reads an arbitrary order ID and returns it without checking the caller's `tenantId`.",
-      })] }],
+      specialists: [
+        {
+          role: "logic",
+          findings: [
+            finding("logic-0", 4, {
+              body: "The handler reads an arbitrary order ID and returns it without checking the caller's `tenantId`.",
+            }),
+          ],
+        },
+      ],
     })
     expect(r.findings).toHaveLength(1)
     expect(r.restored).toHaveLength(0)
@@ -190,10 +204,12 @@ describe("applySynthSourceFindingFloor", () => {
       body: "The handler reads an arbitrary order ID and returns it without checking the caller's `tenantId`.",
     })
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        headline: "Order lookup is too broad",
-        body: "The handler returns arbitrary orders without an ownership check.",
-      })],
+      findings: [
+        finding("synth-0", 4, {
+          headline: "Order lookup is too broad",
+          body: "The handler returns arbitrary orders without an ownership check.",
+        }),
+      ],
       provenanceFindings: [prov("logic-0")],
       provenanceDropped: [],
       specialists: [{ role: "logic", findings: [source] }],
@@ -212,11 +228,13 @@ describe("applySynthSourceFindingFloor", () => {
       body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
     })
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        category: "security",
-        headline: "Redirect handling is unsafe",
-        body: "The handler follows attacker-controlled redirects without validating the destination.",
-      })],
+      findings: [
+        finding("synth-0", 4, {
+          category: "security",
+          headline: "Redirect handling is unsafe",
+          body: "The handler follows attacker-controlled redirects without validating the destination.",
+        }),
+      ],
       provenanceFindings: [prov("security-0")],
       provenanceDropped: [],
       specialists: [{ role: "security", findings: [source] }],
@@ -234,11 +252,13 @@ describe("applySynthSourceFindingFloor", () => {
       body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
     })
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        category: "security",
-        headline: "Untrusted URL can be fetched",
-        body: "The handler fetches an attacker-controlled `url` without destination validation.",
-      })],
+      findings: [
+        finding("synth-0", 4, {
+          category: "security",
+          headline: "Untrusted URL can be fetched",
+          body: "The handler fetches an attacker-controlled `url` without destination validation.",
+        }),
+      ],
       provenanceFindings: [prov("security-0")],
       provenanceDropped: [],
       specialists: [{ role: "security", findings: [source] }],
@@ -255,11 +275,13 @@ describe("applySynthSourceFindingFloor", () => {
       body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
     })
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        category: "security",
-        headline: "Redirect URL is handled",
-        body: "The `url` value is sanitized before redirect handling, so the risk is not described.",
-      })],
+      findings: [
+        finding("synth-0", 4, {
+          category: "security",
+          headline: "Redirect URL is handled",
+          body: "The `url` value is sanitized before redirect handling, so the risk is not described.",
+        }),
+      ],
       provenanceFindings: [prov("security-0")],
       provenanceDropped: [],
       specialists: [{ role: "security", findings: [source] }],
@@ -278,15 +300,19 @@ describe("applySynthSourceFindingFloor", () => {
       body: "The `seenToken` check happens before `markTokenSeen`, so concurrent retries with the same token can double-charge.",
     })
     const r = applySynthSourceFindingFloor({
-      findings: [finding("synth-0", 4, {
-        body: "Checkout can oversell because it never calls `reserveInventory` before charging.",
-      })],
-      provenanceFindings: [{
-        sourceSpecialists: ["logic", "performance"],
-        sourceFindingIds: ["logic-0", "performance-0"],
-        action: "merged",
-        verifiedViaRetrieval: false,
-      }],
+      findings: [
+        finding("synth-0", 4, {
+          body: "Checkout can oversell because it never calls `reserveInventory` before charging.",
+        }),
+      ],
+      provenanceFindings: [
+        {
+          sourceSpecialists: ["logic", "performance"],
+          sourceFindingIds: ["logic-0", "performance-0"],
+          action: "merged",
+          verifiedViaRetrieval: false,
+        },
+      ],
       provenanceDropped: [],
       specialists: [
         { role: "logic", findings: [logic] },
@@ -463,12 +489,14 @@ describe("applySynthSourceFindingFloor", () => {
     })
     const r = applySynthSourceFindingFloor({
       findings: [ast],
-      provenanceFindings: [{
-        sourceSpecialists: ["logic"],
-        sourceFindingIds: ["logic-0", "ast/cents-as-dollars/abc/12"],
-        action: "merged",
-        verifiedViaRetrieval: true,
-      }],
+      provenanceFindings: [
+        {
+          sourceSpecialists: ["logic"],
+          sourceFindingIds: ["logic-0", "ast/cents-as-dollars/abc/12"],
+          action: "merged",
+          verifiedViaRetrieval: true,
+        },
+      ],
       provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
       specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
       astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
@@ -482,12 +510,14 @@ describe("applySynthSourceFindingFloor", () => {
   it("does NOT re-inject a source finding explicitly superseded by a REAL AST finding", () => {
     const r = applySynthSourceFindingFloor({
       findings: [finding("ast/cents-as-dollars/abc/12", 4)],
-      provenanceFindings: [{
-        sourceSpecialists: ["logic"],
-        sourceFindingIds: ["ast/cents-as-dollars/abc/12"],
-        action: "kept",
-        verifiedViaRetrieval: false,
-      }],
+      provenanceFindings: [
+        {
+          sourceSpecialists: ["logic"],
+          sourceFindingIds: ["ast/cents-as-dollars/abc/12"],
+          action: "kept",
+          verifiedViaRetrieval: false,
+        },
+      ],
       provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
       specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
       astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
@@ -570,14 +600,21 @@ describe("applySynthSourceFindingFloor", () => {
       provenanceDropped: [],
       specialists: [
         { role: "logic", findings: [finding("dup-0", 4, { headline: "low severity duplicate" })] },
-        { role: "security", findings: [finding("dup-0", 5, { headline: "high severity duplicate" })] },
+        {
+          role: "security",
+          findings: [finding("dup-0", 5, { headline: "high severity duplicate" })],
+        },
       ],
     })
     expect(r.findings).toHaveLength(2)
     expect(r.provenanceFindings).toHaveLength(2)
     expect(r.findings.length).toBe(r.provenanceFindings.length)
     expect(r.restored.map((x) => x.id)).toEqual(["dup-0"])
-    expect(r.restored[0]).toMatchObject({ role: "security", score: 5, headline: "high severity duplicate" })
+    expect(r.restored[0]).toMatchObject({
+      role: "security",
+      score: 5,
+      headline: "high severity duplicate",
+    })
     expect(r.findings[1]?.headline).toBe("high severity duplicate")
   })
 
@@ -593,7 +630,11 @@ describe("applySynthSourceFindingFloor", () => {
     })
     expect(r.findings).toHaveLength(2)
     expect(r.restored).toHaveLength(1)
-    expect(r.restored[0]).toMatchObject({ role: "security", score: 4, headline: "security duplicate" })
+    expect(r.restored[0]).toMatchObject({
+      role: "security",
+      score: 4,
+      headline: "security duplicate",
+    })
     expect(r.findings[1]?.headline).toBe("security duplicate")
   })
 
@@ -644,7 +685,11 @@ describe("recoverTruncatedSynthFindings", () => {
   it("returns inputs unchanged when verdict isn't truncated (provenance <= verdict)", () => {
     const findings = [finding("security-0", 5), finding("logic-0", 4)]
     const provenance = [prov("security-0"), prov("logic-0")]
-    const out = recoverTruncatedSynthFindings({ findings, provenanceFindings: provenance, sourceById: srcMap() })
+    const out = recoverTruncatedSynthFindings({
+      findings,
+      provenanceFindings: provenance,
+      sourceById: srcMap(),
+    })
     expect(out.recovered).toHaveLength(0)
     expect(out.findings).toHaveLength(2)
     expect(out.provenanceFindings).toHaveLength(2)
@@ -654,15 +699,22 @@ describe("recoverTruncatedSynthFindings", () => {
     // synth wrote 2 verdict findings, but provenance accounts for 5 (3 orphans).
     const findings = [finding("security-0", 5), finding("security-1", 5)]
     const provenance = [
-      prov("security-0"), prov("security-1"),
-      prov("performance-0"), prov("logic-1"), prov("tests-4"), // truncated tail
+      prov("security-0"),
+      prov("security-1"),
+      prov("performance-0"),
+      prov("logic-1"),
+      prov("tests-4"), // truncated tail
     ]
     const sources = srcMap(
       finding("performance-0", 5, { category: "performance", headline: "N+1 in computeBalance" }),
       finding("logic-1", 4, { category: "logic", headline: "floating promise in refundCharge" }),
       finding("tests-4", 3, { category: "testing", headline: "refundCharge over-refund" }),
     )
-    const out = recoverTruncatedSynthFindings({ findings, provenanceFindings: provenance, sourceById: sources })
+    const out = recoverTruncatedSynthFindings({
+      findings,
+      provenanceFindings: provenance,
+      sourceById: sources,
+    })
     expect(out.recovered.map((r) => r.id)).toEqual(["performance-0", "logic-1", "tests-4"])
     // alignment is load-bearing: findings and provenance stay 1:1.
     expect(out.findings).toHaveLength(5)
@@ -677,7 +729,11 @@ describe("recoverTruncatedSynthFindings", () => {
     const findings = [finding("security-0", 5)]
     const provenance = [prov("security-0"), prov("style-0")]
     const sources = srcMap(finding("style-0", 1, { category: "style" }))
-    const out = recoverTruncatedSynthFindings({ findings, provenanceFindings: provenance, sourceById: sources })
+    const out = recoverTruncatedSynthFindings({
+      findings,
+      provenanceFindings: provenance,
+      sourceById: sources,
+    })
     expect(out.recovered).toHaveLength(0)
     // dropping a sub-min orphan must not break alignment.
     expect(out.findings.length).toBe(out.provenanceFindings.length)
@@ -686,7 +742,11 @@ describe("recoverTruncatedSynthFindings", () => {
   it("skips an orphan whose source is absent from the map (preserves alignment)", () => {
     const findings = [finding("security-0", 5)]
     const provenance = [prov("security-0"), prov("ghost-9")]
-    const out = recoverTruncatedSynthFindings({ findings, provenanceFindings: provenance, sourceById: srcMap() })
+    const out = recoverTruncatedSynthFindings({
+      findings,
+      provenanceFindings: provenance,
+      sourceById: srcMap(),
+    })
     expect(out.recovered).toHaveLength(0)
     expect(out.findings.length).toBe(out.provenanceFindings.length)
   })
@@ -696,7 +756,8 @@ describe("recoverTruncatedSynthFindings", () => {
     // a (pathological) tail entry re-citing an already-kept source.
     const provenance = [prov("security-0"), prov("security-0")]
     const out = recoverTruncatedSynthFindings({
-      findings, provenanceFindings: provenance,
+      findings,
+      provenanceFindings: provenance,
       sourceById: srcMap(finding("security-0", 5)),
     })
     expect(out.recovered).toHaveLength(0)
@@ -705,11 +766,12 @@ describe("recoverTruncatedSynthFindings", () => {
   it("picks the highest-score source on a merged provenance entry", () => {
     const findings = [finding("security-0", 5)]
     const provenance = [prov("security-0"), prov("logic-3", "tests-2")]
-    const sources = srcMap(
-      finding("logic-3", 3, { headline: "low" }),
-      finding("tests-2", 5, { headline: "high" }),
-    )
-    const out = recoverTruncatedSynthFindings({ findings, provenanceFindings: provenance, sourceById: sources })
+    const sources = srcMap(finding("logic-3", 3, { headline: "low" }), finding("tests-2", 5, { headline: "high" }))
+    const out = recoverTruncatedSynthFindings({
+      findings,
+      provenanceFindings: provenance,
+      sourceById: sources,
+    })
     expect(out.recovered).toHaveLength(1)
     expect(out.recovered[0]?.headline).toBe("high")
   })
@@ -722,7 +784,8 @@ describe("recoverTruncatedSynthFindings", () => {
     const findings = [finding("security-0", 5)]
     const provenance = [prov("security-0"), prov("ast/rule/abc/42"), prov("missing-9")]
     const out = recoverTruncatedSynthFindings({
-      findings, provenanceFindings: provenance,
+      findings,
+      provenanceFindings: provenance,
       sourceById: srcMap(finding("security-0", 5)), // AST + missing-9 absent
     })
     expect(out.recovered).toHaveLength(0)
@@ -767,7 +830,7 @@ describe("SIG-317 recovery → degraded floor composition (alignment contract)",
     // This is the pre-fix path: install was skipped because recovered===0, so the
     // raw 2-entry provenance reached the floor against a 1-entry verdict.
     const buggy = applyDegradedCoverageFindingFloor({
-      findings: [finding("security-0", 5)],                       // length 1
+      findings: [finding("security-0", 5)], // length 1
       provenanceFindings: [prov("security-0"), prov("ast/rule/abc/42")], // length 2 (stale tail)
       specialists: [{ role: "performance", findings: [finding("performance-0", 4)] }],
     })

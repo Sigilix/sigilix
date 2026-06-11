@@ -35,11 +35,7 @@
 //   - Two-stage tests specialist (deterministic existence check + LLM
 //     sufficiency review) → SIG-111 follow-up.
 
-import {
-  classifyDiffFiles,
-  findExistingTestSiblingForSource,
-  type ClassifiedDiffFile,
-} from "./diff-file-classify"
+import { classifyDiffFiles, findExistingTestSiblingForSource, type ClassifiedDiffFile } from "./diff-file-classify"
 import { normalizeConcurrencyLimit } from "@/src/shared/util/bounded-concurrency"
 import { isSubstantiveAddedLine } from "./helper-coverage"
 import type { HelperCoverage } from "./helper-coverage"
@@ -129,9 +125,7 @@ export interface TestingEvidencePack {
   testingFocusHints?: TestingFocusHint[]
 }
 
-export type TestingEvidenceSuppressionReason =
-  | "repo-sibling-exists"
-  | "no-substantive-change"
+export type TestingEvidenceSuppressionReason = "repo-sibling-exists" | "no-substantive-change"
 
 export interface TestingEvidenceSuppression {
   source: string
@@ -232,9 +226,8 @@ export function filterTestingEvidenceForSuppressedMissingCoverage(
   for (const mapping of pack.siblingMappings) {
     if (mapping.test !== null) continue
 
-    const existingTest = args.repoPaths !== undefined
-      ? findExistingTestSiblingForSource(mapping.source, args.repoPaths)
-      : null
+    const existingTest =
+      args.repoPaths !== undefined ? findExistingTestSiblingForSource(mapping.source, args.repoPaths) : null
     if (existingTest !== null) {
       suppressions.push({
         source: mapping.source,
@@ -300,7 +293,10 @@ export interface BudgetedTestFileFetchResult extends InspectedTestFileFetchResul
   skippedForBudgetCount: number
 }
 
-function capTestFileContent(path: string, body: string): {
+function capTestFileContent(
+  path: string,
+  body: string,
+): {
   path: string
   body: string
   truncated: boolean
@@ -310,7 +306,8 @@ function capTestFileContent(path: string, body: string): {
   }
   return {
     path,
-    body: body.slice(0, TEST_FILE_CONTENT_CHAR_CAP) +
+    body:
+      body.slice(0, TEST_FILE_CONTENT_CHAR_CAP) +
       `\n[…truncated at ${TEST_FILE_CONTENT_CHAR_CAP} chars per the testing-evidence per-file cap…]`,
     truncated: true,
   }
@@ -469,10 +466,7 @@ function classifyTestingFocusHint(line: string): TestingFocusHintKind | null {
   const text = stripRawDiffLinePrefix(line).trim()
   if (!isSubstantiveAddedLine(text)) return null
 
-  if (
-    /\b(?:throw|catch|reject|timeout|fallback|abort|retry)\b/i.test(text) ||
-    /\bnew\s+Error\b/.test(text)
-  ) {
+  if (/\b(?:throw|catch|reject|timeout|fallback|abort|retry)\b/i.test(text) || /\bnew\s+Error\b/.test(text)) {
     return "error-path"
   }
   if (
@@ -623,9 +617,7 @@ export function renderTestingEvidenceBlock(
 
   const testingFocusHints = pack.testingFocusHints ?? []
   if (testingFocusHints.length > 0) {
-    lines.push(
-      "Testing focus hints (changed source lines and deleted test assertions; pointers only, not findings):",
-    )
+    lines.push("Testing focus hints (changed source lines and deleted test assertions; pointers only, not findings):")
     lines.push(
       "Use these as recall targets when comparing changed code to cited tests. A customer-visible testing finding still needs the citation fields below.",
     )
@@ -670,13 +662,13 @@ export function renderTestingEvidenceBlock(
     "Citation requirements (the orchestrator's `evaluateTestingFindingCitation` gate drops findings that don't cite):",
   )
   lines.push(
-    "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, anchor the finding to that source file (its `path`) and set `evidenceRefs` to the EXACT mapping string for THAT source from \"Source→test mapping refs\" below. The cited mapping's source must equal the finding's `path` — citing a mapping for a different file is rejected.",
+    '- When firing a `category: "testing"` finding claiming a source file lacks test coverage, anchor the finding to that source file (its `path`) and set `evidenceRefs` to the EXACT mapping string for THAT source from "Source→test mapping refs" below. The cited mapping\'s source must equal the finding\'s `path` — citing a mapping for a different file is rejected.',
   )
   lines.push(
-    "- When the finding instead claims the existing tests are insufficient (vs. absent), set `inspectedTestFiles` to one or more of the EXACT test-file paths listed under \"Inspected test files\" below — files whose full content is embedded in this block. A path not in that list is rejected.",
+    '- When the finding instead claims the existing tests are insufficient (vs. absent), set `inspectedTestFiles` to one or more of the EXACT test-file paths listed under "Inspected test files" below — files whose full content is embedded in this block. A path not in that list is rejected.',
   )
   lines.push(
-    "- When the finding claims the PR REMOVED or RENAMED test coverage (a deleted test file), set `evidenceRefs: [\"testFileChanged:<path>\"]` naming a path from \"Test files changed in this PR\" above. Use this form when the test was deleted (so its content can't be embedded).",
+    '- When the finding claims the PR REMOVED or RENAMED test coverage (a deleted test file), set `evidenceRefs: ["testFileChanged:<path>"]` naming a path from "Test files changed in this PR" above. Use this form when the test was deleted (so its content can\'t be embedded).',
   )
   lines.push(
     "- Findings without a citation that resolves against this block are dropped silently and never reach the customer review.",

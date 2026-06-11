@@ -85,9 +85,7 @@ describe("runWithRetryAndFallback — happy path", () => {
 
 describe("runWithRetryAndFallback — transient failures retry then succeed", () => {
   it("retries primary on 503 and returns when retry succeeds", async () => {
-    mockChat
-      .mockRejectedValueOnce(new Error("Ollama HTTP 503: server overloaded"))
-      .mockResolvedValueOnce(ok("GOOD"))
+    mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 503: server overloaded")).mockResolvedValueOnce(ok("GOOD"))
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("primary-model:cloud")
@@ -107,10 +105,10 @@ describe("runWithRetryAndFallback — transient failures retry then succeed", ()
 
   it("falls through to fallback after primary retries exhausted", async () => {
     mockChat
-      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))  // primary attempt 1
-      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))  // primary attempt 2
-      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))  // primary attempt 3
-      .mockResolvedValueOnce(ok("GOOD"))                                 // fallback succeeds
+      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded")) // primary attempt 1
+      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded")) // primary attempt 2
+      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded")) // primary attempt 3
+      .mockResolvedValueOnce(ok("GOOD")) // fallback succeeds
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("fallback-model:cloud")
@@ -125,19 +123,15 @@ describe("runWithRetryAndFallback — permanent failures (arc PR #37 catch)", ()
     // about whether kimi-k2.5 exists — fallback is on a different
     // provider entirely. Skip retries (same primary = same 404), but
     // still try fallback.
-    mockChat
-      .mockRejectedValueOnce(new Error("Ollama HTTP 404: model not found"))
-      .mockResolvedValueOnce(ok("GOOD"))
+    mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 404: model not found")).mockResolvedValueOnce(ok("GOOD"))
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("fallback-model:cloud")
-    expect(result.attemptsUsed).toBe(2)  // 1 primary + 1 fallback (no retries on permanent)
+    expect(result.attemptsUsed).toBe(2) // 1 primary + 1 fallback (no retries on permanent)
   })
 
   it("HTTP 401 auth error skips retries but tries fallback", async () => {
-    mockChat
-      .mockRejectedValueOnce(new Error("Ollama HTTP 401: unauthorized"))
-      .mockResolvedValueOnce(ok("GOOD"))
+    mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 401: unauthorized")).mockResolvedValueOnce(ok("GOOD"))
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("fallback-model:cloud")
@@ -149,8 +143,8 @@ describe("runWithRetryAndFallback — permanent failures (arc PR #37 catch)", ()
     // retry. But a different model (fallback) may format output
     // correctly — try once before giving up.
     mockChat
-      .mockResolvedValueOnce(ok("not-json"))     // primary returns unparseable
-      .mockResolvedValueOnce(ok("GOOD"))         // fallback parses
+      .mockResolvedValueOnce(ok("not-json")) // primary returns unparseable
+      .mockResolvedValueOnce(ok("GOOD")) // fallback parses
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("fallback-model:cloud")
@@ -164,7 +158,7 @@ describe("runWithRetryAndFallback — total failure", () => {
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toBeNull()
     expect(result.failureReason).toContain("fallback_failed")
-    expect(result.attemptsUsed).toBe(4)  // 3 primary + 1 fallback
+    expect(result.attemptsUsed).toBe(4) // 3 primary + 1 fallback
     expect(result.modelUsed).toBe("fallback-model:cloud")
   })
 
@@ -191,7 +185,7 @@ describe("runWithRetryAndFallback — abort handling", () => {
     })
     expect(result.verdict).toBeNull()
     expect(result.failureReason).toBe("aborted")
-    expect(result.attemptsUsed).toBe(0)  // no chat calls ever fired
+    expect(result.attemptsUsed).toBe(0) // no chat calls ever fired
     expect(mockChat).not.toHaveBeenCalled()
   })
 
@@ -222,8 +216,8 @@ describe("runWithRetryAndFallback — per-attempt timeout cap", () => {
    * an AbortError synchronously. Mirrors the real ollama-chat behavior
    * where fetch() honors AbortSignal.
    */
-  const slowChat = (delay: number, value: ReturnType<typeof ok>) =>
-    (args: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
+  const slowChat = (delay: number, value: ReturnType<typeof ok>) => (args: { signal?: AbortSignal }) =>
+    new Promise((resolve, reject) => {
       const t = setTimeout(() => resolve(value), delay)
       if (args.signal) {
         args.signal.addEventListener(
@@ -240,9 +234,7 @@ describe("runWithRetryAndFallback — per-attempt timeout cap", () => {
   it("aborts a slow primary attempt at perAttemptTimeoutMs and runs the retry", async () => {
     // Primary attempt 1 takes 200ms, cap is 50ms → aborted before completing.
     // Primary attempt 2 succeeds immediately with GOOD.
-    mockChat
-      .mockImplementationOnce(slowChat(200, ok("late-primary-1")))
-      .mockResolvedValueOnce(ok("GOOD"))
+    mockChat.mockImplementationOnce(slowChat(200, ok("late-primary-1"))).mockResolvedValueOnce(ok("GOOD"))
     const result = await runWithRetryAndFallback({
       config: { primary: "p", retries: 2, fallback: null },
       ...baseArgs,
@@ -335,7 +327,12 @@ describe("runWithRetryAndFallback — per-attempt timeout cap", () => {
     mockChat.mockImplementationOnce(slowChat(200, ok("late-primary")))
     const attempts: AttemptCallbackInfo[] = []
     const result = await runWithRetryAndFallback({
-      config: { primary: "primary-model:cloud", retries: 0, fallback: null, perAttemptTimeoutMs: 50 },
+      config: {
+        primary: "primary-model:cloud",
+        retries: 0,
+        fallback: null,
+        perAttemptTimeoutMs: 50,
+      },
       ...baseArgs,
       onAttempt: (info) => attempts.push(info),
     })
@@ -354,8 +351,7 @@ describe("runWithRetryAndFallback — Phase 4a.4 budget invariant", () => {
     // with retry-backoff slack. Lock the math here so a future
     // "tighten cap to N" change can't silently re-break the fallback
     // having time to fire.
-    const { SPECIALIST_TIMEOUT_MS, PER_ATTEMPT_TIMEOUT_MS } =
-      await import("@/src/lib/triage-pr-review-ensemble")
+    const { SPECIALIST_TIMEOUT_MS, PER_ATTEMPT_TIMEOUT_MS } = await import("@/src/lib/triage-pr-review-ensemble")
     // Worst case: retries=1 means 2 primary attempts + 1 fallback = 3
     // attempts at the cap, plus ~1s retry backoff. Must fit in the
     // specialist budget.
@@ -394,7 +390,9 @@ describe("runWithRetryAndFallback onAttempt callback (ARC-283 B1b)", () => {
       parseAnswer: parsePrReviewResponse,
       parseFailureLabel: "did_not_parse",
       startedAt: Date.now(),
-      onAttempt: (info) => { attempts.push(info) },
+      onAttempt: (info) => {
+        attempts.push(info)
+      },
     })
     expect(attempts).toHaveLength(2)
     expect(attempts[0]?.model).toBe("p:cloud")
@@ -425,7 +423,9 @@ describe("runWithRetryAndFallback onAttempt callback (ARC-283 B1b)", () => {
       parseAnswer: parsePrReviewResponse,
       parseFailureLabel: "did_not_parse",
       startedAt: Date.now(),
-      onAttempt: (info) => { attempts.push(info) },
+      onAttempt: (info) => {
+        attempts.push(info)
+      },
     })
     expect(attempts).toHaveLength(0)
     expect(result.verdict).toBeNull()
@@ -457,11 +457,15 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
     try {
       // 4 specialists' happy paths.
       for (const role of ALL_SPECIALISTS) {
-        mockChat.mockResolvedValueOnce(ok(JSON.stringify({
-          summary: `verdict from ${role}`,
-          confidence: 3,
-          findings: [],
-        })))
+        mockChat.mockResolvedValueOnce(
+          ok(
+            JSON.stringify({
+              summary: `verdict from ${role}`,
+              confidence: 3,
+              findings: [],
+            }),
+          ),
+        )
         const result = await runSpecialist({
           role,
           apiKey: "test-key",
@@ -487,8 +491,11 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
 
       const events = logSpy.mock.calls
         .map((c) => {
-          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
-          catch { return null }
+          try {
+            return JSON.parse(c[0] as string) as Record<string, unknown>
+          } catch {
+            return null
+          }
         })
         .filter((e): e is Record<string, unknown> => e !== null && e["event"] === "model-attempt-completed")
       // 4 specialists + 1 synth = exactly 5 attempts on the happy path.
@@ -496,9 +503,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       // Per-role: each specialist must have a primary/index=1/ok event
       // pinned to its declared primary model in SPECIALIST_CONFIGS.
       for (const role of ALL_SPECIALISTS) {
-        const event = events.find(
-          (e) => e["phase"] === "specialist" && e["role"] === role,
-        )
+        const event = events.find((e) => e["phase"] === "specialist" && e["role"] === role)
         expect(event, `missing specialist event for role=${role}`).toBeDefined()
         expect(event?.["attemptKind"]).toBe("primary")
         expect(event?.["attemptIndex"]).toBe(1)
@@ -537,11 +542,15 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       mockChat
         .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
         .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
-        .mockResolvedValueOnce(ok(JSON.stringify({
-          summary: "security verdict",
-          confidence: 3,
-          findings: [],
-        })))
+        .mockResolvedValueOnce(
+          ok(
+            JSON.stringify({
+              summary: "security verdict",
+              confidence: 3,
+              findings: [],
+            }),
+          ),
+        )
       const result = await runSpecialist({
         role: "security",
         apiKey: "test-key",
@@ -556,13 +565,15 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
 
       const events = logSpy.mock.calls
         .map((c) => {
-          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
-          catch { return null }
+          try {
+            return JSON.parse(c[0] as string) as Record<string, unknown>
+          } catch {
+            return null
+          }
         })
-        .filter((e): e is Record<string, unknown> =>
-          e !== null
-          && e["event"] === "model-attempt-completed"
-          && e["role"] === "security",
+        .filter(
+          (e): e is Record<string, unknown> =>
+            e !== null && e["event"] === "model-attempt-completed" && e["role"] === "security",
         )
       expect(events).toHaveLength(3)
       expect(events[0]?.["attemptKind"]).toBe("primary")
@@ -583,21 +594,24 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
     vi.useFakeTimers()
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const outerCtrl = new AbortController()
-    const slowChat = (args: { signal?: AbortSignal }) => new Promise((_, reject) => {
-      args.signal?.addEventListener(
-        "abort",
-        () => reject(new DOMException("The operation was aborted", "AbortError")),
-        { once: true },
-      )
-    })
+    const slowChat = (args: { signal?: AbortSignal }) =>
+      new Promise((_, reject) => {
+        args.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("The operation was aborted", "AbortError")),
+          { once: true },
+        )
+      })
     try {
-      mockChat
-        .mockImplementationOnce(slowChat)
-        .mockResolvedValueOnce(ok(JSON.stringify({
-          summary: "tests fallback verdict",
-          confidence: 3,
-          findings: [],
-        })))
+      mockChat.mockImplementationOnce(slowChat).mockResolvedValueOnce(
+        ok(
+          JSON.stringify({
+            summary: "tests fallback verdict",
+            confidence: 3,
+            findings: [],
+          }),
+        ),
+      )
       const resultPromise = runSpecialist({
         role: "tests",
         apiKey: "test-key",
@@ -619,13 +633,15 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
 
       const events = logSpy.mock.calls
         .map((c) => {
-          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
-          catch { return null }
+          try {
+            return JSON.parse(c[0] as string) as Record<string, unknown>
+          } catch {
+            return null
+          }
         })
-        .filter((e): e is Record<string, unknown> =>
-          e !== null
-          && e["event"] === "model-attempt-completed"
-          && e["role"] === "tests",
+        .filter(
+          (e): e is Record<string, unknown> =>
+            e !== null && e["event"] === "model-attempt-completed" && e["role"] === "tests",
         )
       expect(events).toHaveLength(2)
       expect(events.map((e) => e["attemptKind"])).toEqual(["primary", "fallback"])

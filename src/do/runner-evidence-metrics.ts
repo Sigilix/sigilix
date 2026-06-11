@@ -112,7 +112,9 @@ export class RunnerEvidenceMetricsDO extends DurableObject<Env> {
         `INSERT INTO daily_counts (day, state, reason, count)
          VALUES (?, ?, ?, 1)
          ON CONFLICT(day, state, reason) DO UPDATE SET count = count + 1`,
-        day, args.state, reason,
+        day,
+        args.state,
+        reason,
       )
       // Upsert the repo's latest state — only advance if this observation is at
       // least as recent (guards out-of-order writes). owner/repo "" (no repo id
@@ -126,7 +128,11 @@ export class RunnerEvidenceMetricsDO extends DurableObject<Env> {
              last_reason = excluded.last_reason,
              last_seen_at = excluded.last_seen_at
            WHERE excluded.last_seen_at >= repo_presence.last_seen_at`,
-          args.owner, args.repo, args.state, reason, at,
+          args.owner,
+          args.repo,
+          args.state,
+          reason,
+          at,
         )
       }
     })
@@ -151,13 +157,20 @@ export class RunnerEvidenceMetricsDO extends DurableObject<Env> {
       `SELECT state, reason, SUM(count) AS total
        FROM daily_counts WHERE day >= ? AND day <= ?
        GROUP BY state, reason`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       ;(counts[row.state] ??= {})[row.reason] = row.total
     }
 
     const repoPresence = [
-      ...sql.exec<{ owner: string; repo: string; last_state: string; last_reason: string; last_seen_at: string }>(
+      ...sql.exec<{
+        owner: string
+        repo: string
+        last_state: string
+        last_reason: string
+        last_seen_at: string
+      }>(
         `SELECT owner, repo, last_state, last_reason, last_seen_at
          FROM repo_presence ORDER BY last_seen_at DESC LIMIT ?`,
         MAX_REPO_PRESENCE,
@@ -197,7 +210,9 @@ export class RunnerEvidenceMetricsDO extends DurableObject<Env> {
     const rows = [
       ...sql.exec<{ count: number }>(
         "SELECT count FROM daily_counts WHERE day = ? AND state = ? AND reason = ?",
-        day, state, reason,
+        day,
+        state,
+        reason,
       ),
     ]
     return rows[0] ? rows[0].count : null

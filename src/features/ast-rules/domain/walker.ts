@@ -12,7 +12,6 @@
 
 import { simple as acornWalkSimple, base as defaultBase } from "acorn-walk"
 
-
 export type AstNode = any
 
 export type Visitors = Record<string, (node: AstNode) => void>
@@ -34,7 +33,6 @@ export type Visitors = Record<string, (node: AstNode) => void>
 
 const permissiveBase: any = new Proxy(defaultBase, {
   get(target, prop: string) {
-
     const v = (target as any)[prop]
     if (typeof v === "function") return v
     // No-op for unknown node types. acorn-walk's contract is the base

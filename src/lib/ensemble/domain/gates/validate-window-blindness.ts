@@ -57,9 +57,7 @@ export type WindowBlindnessValidatorMode = "off" | "shadow" | "enforce"
  * whitespace-tolerant; any unknown / missing value resolves to `off` — the
  * cautious default that disables the gate entirely (wrangler sets `shadow`).
  */
-export function parseWindowBlindnessValidatorMode(
-  raw: string | undefined,
-): WindowBlindnessValidatorMode {
+export function parseWindowBlindnessValidatorMode(raw: string | undefined): WindowBlindnessValidatorMode {
   const v = (raw ?? "").trim().toLowerCase()
   if (v === "shadow") return "shadow"
   if (v === "enforce") return "enforce"
@@ -163,13 +161,62 @@ export function isPositiveMisread(finding: PrReviewFinding): boolean {
 // --- Identifier + guard analysis -------------------------------------------
 
 const JS_RESERVED = new Set<string>([
-  "const", "let", "var", "function", "return", "if", "else", "for", "while",
-  "switch", "case", "break", "continue", "new", "this", "typeof", "instanceof",
-  "true", "false", "null", "undefined", "void", "await", "async", "yield",
-  "throw", "try", "catch", "finally", "in", "of", "do", "delete", "class",
-  "extends", "super", "import", "export", "default", "from", "as", "number",
-  "string", "boolean", "object", "any", "unknown", "never", "Math", "Number",
-  "Array", "Object", "String", "Boolean", "JSON", "console",
+  "const",
+  "let",
+  "var",
+  "function",
+  "return",
+  "if",
+  "else",
+  "for",
+  "while",
+  "switch",
+  "case",
+  "break",
+  "continue",
+  "new",
+  "this",
+  "typeof",
+  "instanceof",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "void",
+  "await",
+  "async",
+  "yield",
+  "throw",
+  "try",
+  "catch",
+  "finally",
+  "in",
+  "of",
+  "do",
+  "delete",
+  "class",
+  "extends",
+  "super",
+  "import",
+  "export",
+  "default",
+  "from",
+  "as",
+  "number",
+  "string",
+  "boolean",
+  "object",
+  "any",
+  "unknown",
+  "never",
+  "Math",
+  "Number",
+  "Array",
+  "Object",
+  "String",
+  "Boolean",
+  "JSON",
+  "console",
 ])
 
 const IDENTIFIER_RE = /[A-Za-z_$][A-Za-z0-9_$]*/g

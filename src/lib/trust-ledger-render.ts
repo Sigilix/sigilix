@@ -130,10 +130,7 @@ export function renderOutsideDiffDropdown<T>(
 }
 
 /** The non-collapsed **PR-level** mini-section (no-test / architectural). Null if empty. */
-export function renderPrLevelSection<T>(
-  prLevelFindings: ReadonlyArray<T>,
-  renderRow: (f: T) => string,
-): string | null {
+export function renderPrLevelSection<T>(prLevelFindings: ReadonlyArray<T>, renderRow: (f: T) => string): string | null {
   if (prLevelFindings.length === 0) return null
   // Blank-line-separate rows (see renderOutsideDiffDropdown) so multi-line body rows
   // render as sibling list items, not loose continuations.

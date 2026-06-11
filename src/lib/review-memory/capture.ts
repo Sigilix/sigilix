@@ -30,29 +30,15 @@
 
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
-import type {
-  ResolvedReviewMemoryConfig,
-  ReviewMemoryClaim,
-  ReviewMemorySignal,
-  SigilixCommentMarker,
-} from "./types"
-import {
-  computePathSha256,
-  extractSigilixMarker,
-  hydrateClaimIds,
-} from "./marker"
+import type { ResolvedReviewMemoryConfig, ReviewMemoryClaim, ReviewMemorySignal, SigilixCommentMarker } from "./types"
+import { computePathSha256, extractSigilixMarker, hydrateClaimIds } from "./marker"
 import { isArcGithubLogin } from "@/src/lib/mention"
-import {
-  parseReviewFeedbackSignal,
-  type ParsedReviewFeedback,
-} from "./parse-dismissal"
+import { parseReviewFeedbackSignal, type ParsedReviewFeedback } from "./parse-dismissal"
 import { appendSignal } from "./storage"
 import { recordOutcome } from "@/src/features/precision-profile"
 import { recordDismissalMetric } from "@/src/lib/validation-metrics-client"
 import type { FindingOutcome } from "@/src/features/precision-profile"
-import {
-  parseFindingOutcomeMarkers,
-} from "@/src/lib/pr-finding-markers"
+import { parseFindingOutcomeMarkers } from "@/src/lib/pr-finding-markers"
 import type { DismissReason } from "@/src/lib/dismiss-reasons"
 
 const SEEN_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -119,10 +105,7 @@ interface DismissedReviewCaptureArgs {
   config: ResolvedReviewMemoryConfig
 }
 
-type SignalSource =
-  | "inline-reply"
-  | "top-level-explicit"
-  | "review-dismissed-stale"
+type SignalSource = "inline-reply" | "top-level-explicit" | "review-dismissed-stale"
 
 interface TrustedSigilixSource {
   body: string
@@ -134,25 +117,16 @@ function emitTelemetry(event: string, fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ event, ...fields }))
 }
 
-function captureGateOpen(
-  env: Env,
-  config: ResolvedReviewMemoryConfig,
-): boolean {
+function captureGateOpen(env: Env, config: ResolvedReviewMemoryConfig): boolean {
   if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") return false
   return config.enabled || config.captureOnly
 }
 
 function seenKeyFor(source: SignalSource, id: number): string {
-  return source === "inline-reply"
-    ? `feedback-capture-seen:${id}`
-    : `feedback-capture-seen:${source}:${id}`
+  return source === "inline-reply" ? `feedback-capture-seen:${id}` : `feedback-capture-seen:${source}:${id}`
 }
 
-async function markSeen(
-  env: Env,
-  key: string,
-  fields: Record<string, unknown>,
-): Promise<void> {
+async function markSeen(env: Env, key: string, fields: Record<string, unknown>): Promise<void> {
   try {
     await env.OPENCLAW_STATE.put(key, "1", {
       expirationTtl: SEEN_MARKER_TTL_SECONDS,
@@ -166,11 +140,7 @@ async function markSeen(
   }
 }
 
-async function alreadySeen(
-  env: Env,
-  key: string,
-  fields: Record<string, unknown>,
-): Promise<boolean> {
+async function alreadySeen(env: Env, key: string, fields: Record<string, unknown>): Promise<boolean> {
   try {
     const seen = await env.OPENCLAW_STATE.get(key)
     if (seen !== null) {
@@ -200,12 +170,7 @@ async function resolveRepoIdForCapture(args: {
   if (args.repoId !== undefined) return args.repoId
   try {
     const repoMeta = await args.client.getRepository(args.owner, args.repo)
-    if (
-      repoMeta &&
-      typeof repoMeta.id === "number" &&
-      Number.isInteger(repoMeta.id) &&
-      repoMeta.id > 0
-    ) {
+    if (repoMeta && typeof repoMeta.id === "number" && Number.isInteger(repoMeta.id) && repoMeta.id > 0) {
       return repoMeta.id
     }
   } catch (err) {
@@ -330,16 +295,15 @@ async function writeDismissalMemorySignal(args: {
   if (claims) signal.claims = claims
 
   const writes: Array<Promise<Awaited<ReturnType<typeof appendSignal>>>> = [
-    appendSignal(args.env, args.owner, args.repo,
-      { kind: "category", category: args.marker.cat },
-      signal,
-      args.repoId,
-    ),
+    appendSignal(args.env, args.owner, args.repo, { kind: "category", category: args.marker.cat }, signal, args.repoId),
   ]
   if (args.path !== undefined) {
     const pathSha256 = await computePathSha256(args.path)
     writes.push(
-      appendSignal(args.env, args.owner, args.repo,
+      appendSignal(
+        args.env,
+        args.owner,
+        args.repo,
         { kind: "path-category", category: args.marker.cat, pathSha256 },
         signal,
         args.repoId,
@@ -347,10 +311,8 @@ async function writeDismissalMemorySignal(args: {
     )
   }
   const settled = await Promise.allSettled(writes)
-  const catValue =
-    settled[0]?.status === "fulfilled" ? settled[0].value : undefined
-  const pathValue =
-    settled[1]?.status === "fulfilled" ? settled[1].value : undefined
+  const catValue = settled[0]?.status === "fulfilled" ? settled[0].value : undefined
+  const pathValue = settled[1]?.status === "fulfilled" ? settled[1].value : undefined
   const catWritten = catValue?.written === true
   const pathWritten = pathValue?.written === true
   if (catWritten || pathWritten) {
@@ -360,15 +322,9 @@ async function writeDismissalMemorySignal(args: {
       catWritten,
       pathWritten,
       repo_id_present: args.repoId !== undefined,
-      legacy_written:
-        catValue?.legacyWritten === true ||
-        pathValue?.legacyWritten === true,
-      new_written:
-        catValue?.newWritten === true ||
-        pathValue?.newWritten === true,
-      partial_dual_write:
-        catValue?.partialDualWrite === true ||
-        pathValue?.partialDualWrite === true,
+      legacy_written: catValue?.legacyWritten === true || pathValue?.legacyWritten === true,
+      new_written: catValue?.newWritten === true || pathValue?.newWritten === true,
+      partial_dual_write: catValue?.partialDualWrite === true || pathValue?.partialDualWrite === true,
       key_mode: args.repoId !== undefined ? "dual" : "legacy-only",
       claims_present: claims !== undefined,
       claim_count: claims?.length ?? 0,
@@ -389,8 +345,7 @@ async function applyFeedbackToTrustedSource(args: {
   trusted: TrustedSigilixSource
   repoId?: number
 }): Promise<void> {
-  const precisionOutcome =
-    args.feedback.outcome === "dismissed" ? "dismissed" : "accepted"
+  const precisionOutcome = args.feedback.outcome === "dismissed" ? "dismissed" : "accepted"
   await recordPrecisionOutcomesFromBody({
     env: args.env,
     owner: args.owner,
@@ -431,9 +386,7 @@ async function applyFeedbackToTrustedSource(args: {
     source: args.source,
     marker: args.trusted.marker,
     ...(args.trusted.path !== undefined ? { path: args.trusted.path } : {}),
-    ...(args.feedback.dismissReason !== undefined
-      ? { dismissReason: args.feedback.dismissReason }
-      : {}),
+    ...(args.feedback.dismissReason !== undefined ? { dismissReason: args.feedback.dismissReason } : {}),
     ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
   })
 }
@@ -453,7 +406,10 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   const parentCommentId = replyComment.in_reply_to_id
   if (typeof parentCommentId !== "number") {
     emitTelemetry("review-memory-capture-skipped", {
-      owner, repo, prNumber, commentId: replyCommentId,
+      owner,
+      repo,
+      prNumber,
+      commentId: replyCommentId,
       signal_source: source,
       reason: "not-a-reply",
     })
@@ -463,7 +419,10 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   // Step 2: Gate check
   if (!captureGateOpen(env, config)) {
     emitTelemetry("review-memory-capture-skipped", {
-      owner, repo, prNumber, commentId: replyCommentId,
+      owner,
+      repo,
+      prNumber,
+      commentId: replyCommentId,
       signal_source: source,
       reason: "capture-disabled",
     })
@@ -473,7 +432,10 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   // Step 3: Seen-marker dedupe
   const seenKey = seenKeyFor(source, replyCommentId)
   const baseFields = {
-    owner, repo, prNumber, commentId: replyCommentId,
+    owner,
+    repo,
+    prNumber,
+    commentId: replyCommentId,
     signal_source: source,
   }
   if (await alreadySeen(env, seenKey, baseFields)) return
@@ -482,9 +444,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   let parentBody: string
   let parentLogin: string | undefined
   try {
-    const parent = await client.getPullRequestReviewComment(
-      owner, repo, parentCommentId,
-    )
+    const parent = await client.getPullRequestReviewComment(owner, repo, parentCommentId)
     if (parent === null) {
       emitTelemetry("review-memory-capture-skipped", {
         ...baseFields,
@@ -549,7 +509,10 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   // when the payload is incomplete. Any fallback error degrades to
   // legacy-only writes, never throws.
   repoId = await resolveRepoIdForCapture({
-    client, owner, repo, fields: baseFields,
+    client,
+    owner,
+    repo,
+    fields: baseFields,
     ...(repoId !== undefined ? { repoId } : {}),
   })
 
@@ -570,20 +533,11 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
 export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean {
   if (typeof body !== "string") return false
   if (!parseReviewFeedbackSignal(body)) return false
-  return extractSigilixMarker(body) !== null ||
-    parseFindingOutcomeMarkers(body).length > 0
+  return extractSigilixMarker(body) !== null || parseFindingOutcomeMarkers(body).length > 0
 }
 
-export function hasStaleDismissedReviewFeedbackSignal(
-  review: unknown,
-  headSha: unknown,
-): boolean {
-  if (
-    typeof review !== "object" ||
-    review === null ||
-    typeof headSha !== "string" ||
-    headSha.length === 0
-  ) {
+export function hasStaleDismissedReviewFeedbackSignal(review: unknown, headSha: unknown): boolean {
+  if (typeof review !== "object" || review === null || typeof headSha !== "string" || headSha.length === 0) {
     return false
   }
   const r = review as {
@@ -595,11 +549,7 @@ export function hasStaleDismissedReviewFeedbackSignal(
   if (!isArcGithubLogin(typeof r.user?.login === "string" ? r.user.login : null)) {
     return false
   }
-  if (
-    typeof r.commit_id !== "string" ||
-    r.commit_id.length === 0 ||
-    r.commit_id === headSha
-  ) {
+  if (typeof r.commit_id !== "string" || r.commit_id.length === 0 || r.commit_id === headSha) {
     return false
   }
   return parseFindingOutcomeMarkers(r.body).length > 0
@@ -621,29 +571,19 @@ async function findTrustedSigilixSourceForTopLevel(args: {
   ])
   type MatchStrength = 0 | 1 | 2
   type RankedCandidate = TrustedSigilixSource & { strength: MatchStrength }
-  const matchStrength = (
-    sourceBody: string,
-    sourceMarker: SigilixCommentMarker | null,
-  ): MatchStrength | null => {
-    if (
-      args.explicitMarker !== null &&
-      sourceMarker !== null &&
-      sourceMarker.fid === args.explicitMarker.fid
-    ) {
+  const matchStrength = (sourceBody: string, sourceMarker: SigilixCommentMarker | null): MatchStrength | null => {
+    if (args.explicitMarker !== null && sourceMarker !== null && sourceMarker.fid === args.explicitMarker.fid) {
       return 2
     }
     if (args.explicitFingerprints.size === 0) return null
-    const fingerprintMatch = parseFindingOutcomeMarkers(sourceBody)
-      .some((m) => args.explicitFingerprints.has(m.patternHash))
+    const fingerprintMatch = parseFindingOutcomeMarkers(sourceBody).some((m) =>
+      args.explicitFingerprints.has(m.patternHash),
+    )
     if (!fingerprintMatch) return null
     return sourceMarker !== null ? 1 : 0
   }
   const candidates: RankedCandidate[] = []
-  const pushCandidate = (
-    body: unknown,
-    login: string | null | undefined,
-    path?: string,
-  ): void => {
+  const pushCandidate = (body: unknown, login: string | null | undefined, path?: string): void => {
     if (typeof body !== "string") return
     if (!isArcGithubLogin(login ?? null)) return
     const marker = extractSigilixMarker(body)
@@ -682,13 +622,14 @@ async function findTrustedSigilixSourceForTopLevel(args: {
  * a real Sigilix-authored PR comment/review comment before recording anything.
  * No timeline-order heuristic is trusted.
  */
-export async function captureTopLevelReviewFeedback(
-  args: TopLevelCaptureArgs,
-): Promise<void> {
+export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): Promise<void> {
   const { env, client, owner, repo, prNumber, comment, config } = args
   const source: SignalSource = "top-level-explicit"
   const baseFields = {
-    owner, repo, prNumber, commentId: comment.id,
+    owner,
+    repo,
+    prNumber,
+    commentId: comment.id,
     signal_source: source,
   }
   if (!captureGateOpen(env, config)) {
@@ -708,9 +649,7 @@ export async function captureTopLevelReviewFeedback(
     return
   }
   const explicitMarker = extractSigilixMarker(comment.body)
-  const explicitFingerprints = new Set(
-    parseFindingOutcomeMarkers(comment.body).map((m) => m.patternHash),
-  )
+  const explicitFingerprints = new Set(parseFindingOutcomeMarkers(comment.body).map((m) => m.patternHash))
   if (explicitMarker === null && explicitFingerprints.size === 0) {
     emitTelemetry("review-memory-capture-skipped", {
       ...baseFields,
@@ -725,7 +664,12 @@ export async function captureTopLevelReviewFeedback(
   let trusted: TrustedSigilixSource | null
   try {
     trusted = await findTrustedSigilixSourceForTopLevel({
-      client, owner, repo, prNumber, explicitMarker, explicitFingerprints,
+      client,
+      owner,
+      repo,
+      prNumber,
+      explicitMarker,
+      explicitFingerprints,
     })
   } catch (err) {
     emitTelemetry("review-memory-capture-failed", {
@@ -745,7 +689,10 @@ export async function captureTopLevelReviewFeedback(
 
   await markSeen(env, seenKey, baseFields)
   const repoId = await resolveRepoIdForCapture({
-    client, owner, repo, fields: baseFields,
+    client,
+    owner,
+    repo,
+    fields: baseFields,
     ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
   })
   await applyFeedbackToTrustedSource({
@@ -768,13 +715,14 @@ export async function captureTopLevelReviewFeedback(
  * commit than the current PR head and its body contains mappable finding
  * fingerprints.
  */
-export async function captureDismissedReviewFeedback(
-  args: DismissedReviewCaptureArgs,
-): Promise<void> {
+export async function captureDismissedReviewFeedback(args: DismissedReviewCaptureArgs): Promise<void> {
   const { env, owner, repo, prNumber, review, headSha, config } = args
   const source: SignalSource = "review-dismissed-stale"
   const baseFields = {
-    owner, repo, prNumber, commentId: review.id,
+    owner,
+    repo,
+    prNumber,
+    commentId: review.id,
     signal_source: source,
   }
   if (!captureGateOpen(env, config)) {

@@ -4,13 +4,7 @@
 // signal adaptive: recent outcomes dominate, old ones decay, no retrain needed.
 // `foldOutcomeIntoProfile` is the single pure transition the KV store wraps.
 
-import type {
-  CategoryStat,
-  FindingOutcome,
-  OutcomeEvent,
-  PatternStat,
-  PrecisionProfile,
-} from "./types"
+import type { CategoryStat, FindingOutcome, OutcomeEvent, PatternStat, PrecisionProfile } from "./types"
 import { PRECISION_PROFILE_SCHEMA_VERSION } from "./types"
 
 /** Smoothing factor — higher = more reactive to recent outcomes (~last ~6 dominate). */

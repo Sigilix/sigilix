@@ -26,11 +26,7 @@ interface TokenResponse {
   token_type?: string
 }
 
-export async function getAppActorToken(
-  kv: KVNamespace,
-  clientId: string,
-  clientSecret: string
-): Promise<string> {
+export async function getAppActorToken(kv: KVNamespace, clientId: string, clientSecret: string): Promise<string> {
   const cached = (await kv.get(TOKEN_CACHE_KEY, "json")) as CachedToken | null
   if (
     cached &&
@@ -54,15 +50,11 @@ export async function getAppActorToken(
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(
-      `Linear OAuth token fetch failed: HTTP ${res.status} ${text.slice(0, 300)}`
-    )
+    throw new Error(`Linear OAuth token fetch failed: HTTP ${res.status} ${text.slice(0, 300)}`)
   }
   const json = (await res.json()) as TokenResponse
   if (!json.access_token || typeof json.expires_in !== "number") {
-    throw new Error(
-      `Linear OAuth token response missing fields: ${JSON.stringify(json).slice(0, 200)}`
-    )
+    throw new Error(`Linear OAuth token response missing fields: ${JSON.stringify(json).slice(0, 200)}`)
   }
 
   const expiresAt = Date.now() + json.expires_in * 1000

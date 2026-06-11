@@ -4,7 +4,10 @@
 // to KEEP (hiding a real P0 ≫ worse than the FP).
 
 import { describe, it, expect } from "vitest"
-import { evaluateSecurityUsage, parseSecurityUsageValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
+import {
+  evaluateSecurityUsage,
+  parseSecurityUsageValidatorMode,
+} from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 function finding(over: Partial<PrReviewFinding> & { cweId?: string }): PrReviewFinding {
@@ -92,7 +95,9 @@ describe("evaluateSecurityUsage — DEMOTE (the PR #296 mention family)", () => 
   })
   it("demotes an injection finding where the call is only inside a // comment", () => {
     const f = finding({ path: "src/lib/ast-rules/runner.ts", line: 10 })
-    const c = ctx(f.path, { 10: "  // a real exec(`rm ${x}`) here would be a shell sink — but this is prose" })
+    const c = ctx(f.path, {
+      10: "  // a real exec(`rm ${x}`) here would be a shell sink — but this is prose",
+    })
     expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("demotes vague independentAssessment text that does not cite concrete sink evidence", () => {
@@ -154,7 +159,9 @@ describe("evaluateSecurityUsage — KEEP (recall guards — never hide a real P0
   })
   it("KEEPS a real executable dangerouslySetInnerHTML on a test path (B fails)", () => {
     const f = finding({ path: "tests/x.test.ts", line: 10, cweId: "CWE-79" })
-    const c = ctx(f.path, { 10: "  return <div dangerouslySetInnerHTML={{ __html: userInput }} />;" })
+    const c = ctx(f.path, {
+      10: "  return <div dangerouslySetInnerHTML={{ __html: userInput }} />;",
+    })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("KEEPS a real executable document.write sink on a test path (B fails)", () => {
@@ -182,17 +189,26 @@ describe("evaluateSecurityUsage — KEEP (recall guards — never hide a real P0
   })
   it("KEEPS a re.exec mention when the FILE also requires child_process (C — harness guard)", () => {
     const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
-    const c = ctx(f.path, { 5: `const { exec } = require("child_process");`, 10: "  re.exec(line);" })
+    const c = ctx(f.path, {
+      5: `const { exec } = require("child_process");`,
+      10: "  re.exec(line);",
+    })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("KEEPS a re.exec mention when the FILE also requires child_process with a template literal", () => {
     const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
-    const c = ctx(f.path, { 5: "const { exec } = require(`child_process`);", 10: "  re.exec(line);" })
+    const c = ctx(f.path, {
+      5: "const { exec } = require(`child_process`);",
+      10: "  re.exec(line);",
+    })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("KEEPS a re.exec mention when the FILE also dynamically imports child_process (C — harness guard)", () => {
     const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
-    const c = ctx(f.path, { 5: `const { exec } = await import("node:child_process");`, 10: "  re.exec(line);" })
+    const c = ctx(f.path, {
+      5: `const { exec } = await import("node:child_process");`,
+      10: "  re.exec(line);",
+    })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("KEEPS a mention when the FILE imports an external shell runner (C — harness guard)", () => {
@@ -221,7 +237,8 @@ describe("evaluateSecurityUsage — KEEP (recall guards — never hide a real P0
     const f = finding({
       path: "src/lib/ast-rules/x.ts",
       line: 10,
-      independentAssessment: "Resolved `runUserCommand` to a pre-existing `child_process.exec` sink fed by req.query.cmd.",
+      independentAssessment:
+        "Resolved `runUserCommand` to a pre-existing `child_process.exec` sink fed by req.query.cmd.",
     })
     const c = ctx(f.path, { 10: `  const message = "exec(userInput) is unsafe";` })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)

@@ -42,7 +42,10 @@ describe("findingClaimsIntraInstanceRace", () => {
   it("does NOT fire on a finding with no race/concurrency claim (a real logic bug)", () => {
     expect(
       findingClaimsIntraInstanceRace(
-        finding({ headline: "Off-by-one in the retention boundary", body: "Records exactly 35 days old are deleted." }),
+        finding({
+          headline: "Off-by-one in the retention boundary",
+          body: "Records exactly 35 days old are deleted.",
+        }),
       ),
     ).toBe(false)
   })

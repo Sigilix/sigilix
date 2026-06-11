@@ -40,7 +40,9 @@ describe("resolveTier — highest-proof wins, order-independent", () => {
     expect(resolveTier(["grounded-model", "runner-confirmed", "worker-token-confirmed"])).toBe("runner-confirmed")
   })
   it("deterministic beats worker-token + grounded-model", () => {
-    expect(resolveTier(["worker-token-confirmed", "deterministic-grounded", "grounded-model"])).toBe("deterministic-grounded")
+    expect(resolveTier(["worker-token-confirmed", "deterministic-grounded", "grounded-model"])).toBe(
+      "deterministic-grounded",
+    )
   })
   it("worker-token beats plain grounded-model", () => {
     expect(resolveTier(["grounded-model", "worker-token-confirmed"])).toBe("worker-token-confirmed")
@@ -64,9 +66,17 @@ describe("mergeFindingTrust — immutable, tier-monotonic", () => {
   })
   it("a later body-demote patch keeps a STRONGER prior tier (only the surface lowers)", () => {
     const a = mergeFindingTrust(f(), { signals: ["worker-token-confirmed"], surface: "inline" })
-    const b = mergeFindingTrust(a, { signals: ["body-only-ungrounded"], surface: "body", demoteReason: "verification-refuted" })
+    const b = mergeFindingTrust(a, {
+      signals: ["body-only-ungrounded"],
+      surface: "body",
+      demoteReason: "verification-refuted",
+    })
     // tier stays worker-token-confirmed (3 > 1); surface + reason update.
-    expect(b.trust).toEqual({ tier: "worker-token-confirmed", surface: "body", demoteReason: "verification-refuted" })
+    expect(b.trust).toEqual({
+      tier: "worker-token-confirmed",
+      surface: "body",
+      demoteReason: "verification-refuted",
+    })
   })
   it("a stronger signal raises the tier", () => {
     const a = mergeFindingTrust(f(), { signals: ["grounded-model"] })
@@ -74,13 +84,25 @@ describe("mergeFindingTrust — immutable, tier-monotonic", () => {
     expect(b.trust?.tier).toBe("runner-confirmed")
   })
   it("preserves prior surface/demoteReason when a patch omits them", () => {
-    const a = mergeFindingTrust(f(), { signals: ["body-only-ungrounded"], surface: "body", demoteReason: "outside-diff" })
+    const a = mergeFindingTrust(f(), {
+      signals: ["body-only-ungrounded"],
+      surface: "body",
+      demoteReason: "outside-diff",
+    })
     const b = mergeFindingTrust(a, { signals: ["grounded-model"] })
-    expect(b.trust).toEqual({ tier: "grounded-model", surface: "body", demoteReason: "outside-diff" })
+    expect(b.trust).toEqual({
+      tier: "grounded-model",
+      surface: "body",
+      demoteReason: "outside-diff",
+    })
   })
   it("defaults tier to body-only-ungrounded when no signal ever set it", () => {
     const out = mergeFindingTrust(f(), { surface: "body", demoteReason: "outside-diff" })
-    expect(out.trust).toEqual({ tier: "body-only-ungrounded", surface: "body", demoteReason: "outside-diff" })
+    expect(out.trust).toEqual({
+      tier: "body-only-ungrounded",
+      surface: "body",
+      demoteReason: "outside-diff",
+    })
   })
 })
 
@@ -95,7 +117,11 @@ describe("annotateFindingTrust — in-place, identity-preserving", () => {
     annotateFindingTrust(finding, { signals: ["grounded-model"] })
     annotateFindingTrust(finding, { surface: "body", demoteReason: "verification-refuted" })
     annotateFindingTrust(finding, { signals: ["runner-confirmed"] })
-    expect(finding.trust).toEqual({ tier: "runner-confirmed", surface: "body", demoteReason: "verification-refuted" })
+    expect(finding.trust).toEqual({
+      tier: "runner-confirmed",
+      surface: "body",
+      demoteReason: "verification-refuted",
+    })
   })
 })
 

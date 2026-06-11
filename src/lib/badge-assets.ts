@@ -310,7 +310,11 @@ function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBa
 // directly-consumed SVG is self-describing; the inline `<img alt>` mirrors it.
 // The runner pill style + the SIG Trust Ledger pills share this shape (a
 // word-label text pill with an accent) and the same r9 renderer.
-function renderRunnerBadgeSvg(style: { readonly label: string; readonly accent: string; readonly ariaLabel: string }): string {
+function renderRunnerBadgeSvg(style: {
+  readonly label: string
+  readonly accent: string
+  readonly ariaLabel: string
+}): string {
   const width = categoryBadgeWidth(style.label)
   const glyph = lookupGlyph(style.label)
   const innerW = width - BADGE_GUTTER_PX
@@ -378,11 +382,12 @@ export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; hei
   }
   // Runner + trust pills share the category geometry (variable width, 20-tall)
   // but live in their own style tables, so resolve their label there.
-  const label = name in RUNNER_BADGE_STYLES
-    ? RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
-    : name in TRUST_BADGE_STYLES
-      ? TRUST_BADGE_STYLES[name as TrustBadgeAssetName].label
-      : CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
+  const label =
+    name in RUNNER_BADGE_STYLES
+      ? RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
+      : name in TRUST_BADGE_STYLES
+        ? TRUST_BADGE_STYLES[name as TrustBadgeAssetName].label
+        : CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
   return {
     width: categoryBadgeWidth(label),
     height: CATEGORY_BADGE_HEIGHT,
@@ -408,8 +413,9 @@ export function getBadgeSvg(name: ReviewBadgeAssetName): string {
  * by construction — the `Object.keys` typing is widened to `string[]`
  * at runtime, so we narrow it back via `as readonly ReviewBadgeAssetName[]`.
  */
-export const ALL_BADGE_NAMES: readonly ReviewBadgeAssetName[] =
-  Object.keys(BADGE_SVGS) as readonly ReviewBadgeAssetName[]
+export const ALL_BADGE_NAMES: readonly ReviewBadgeAssetName[] = Object.keys(
+  BADGE_SVGS,
+) as readonly ReviewBadgeAssetName[]
 
 export function handleBadgeAssetRoute(request: Request): Response | null {
   if (request.method !== "GET" && request.method !== "HEAD") return null

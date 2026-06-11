@@ -38,15 +38,12 @@ interface VectorizeMatch {
 interface VectorizeIndex {
   query(
     vector: number[],
-    options: { topK?: number; namespace?: string; returnMetadata?: "all" | "indexed" }
+    options: { topK?: number; namespace?: string; returnMetadata?: "all" | "indexed" },
   ): Promise<{ matches: VectorizeMatch[] }>
 }
 
 interface AiBinding {
-  run(
-    model: string,
-    input: { text: string | string[] }
-  ): Promise<{ data?: number[][]; shape?: number[] }>
+  run(model: string, input: { text: string | string[] }): Promise<{ data?: number[][]; shape?: number[] }>
 }
 
 export interface RetrievalEnv {
@@ -179,13 +176,15 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
 
   const lexical = await lexicalPromise
   const fused = fuseRetrieval(vectorChunks, lexical, namespace)
-  console.log(JSON.stringify({
-    event: "pr-review-retrieval-hybrid",
-    namespace,
-    vectorHits: vectorChunks.length,
-    lexicalHits: lexical.length,
-    fused: fused.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-retrieval-hybrid",
+      namespace,
+      vectorHits: vectorChunks.length,
+      lexicalHits: lexical.length,
+      fused: fused.length,
+    }),
+  )
   return fused.slice(0, TOP_K)
 }
 
@@ -224,11 +223,7 @@ function parseVectorMatches(matches: VectorizeMatch[] | undefined): RetrievedChu
  * and a same-RRF tie breaks toward the semantic hit. `source` records which
  * backend(s) surfaced each chunk so specialists can see the signal.
  */
-export function fuseRetrieval(
-  vector: RetrievedChunk[],
-  lexical: LexicalMatch[],
-  namespace: string,
-): RetrievedChunk[] {
+export function fuseRetrieval(vector: RetrievedChunk[], lexical: LexicalMatch[], namespace: string): RetrievedChunk[] {
   void namespace // reserved for future per-namespace tuning; keeps call sites stable
   const keyOf = (c: { id?: string; path: string; lineStart: number; lineEnd: number }): string =>
     c.id && c.id.length > 0 ? c.id : `${c.path}:${c.lineStart}-${c.lineEnd}`

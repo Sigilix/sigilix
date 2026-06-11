@@ -222,7 +222,10 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
   it("SIG-96: PRESERVES an existing completed summary; writes KV flag; does NOT call updateIssueComment", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 12345, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nA real summary from the prior head — file table + bullets + confidence." },
+      {
+        id: 12345,
+        body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nA real summary from the prior head — file table + bullets + confidence.",
+      },
     ])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
@@ -241,7 +244,10 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
   it("SIG-96: PRESERVES a completed summary on the legacy openclaw marker too (bilingual)", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 4242, body: "<!-- openclaw:pr-overview -->\n## Sigilix Overview\n\nReal pre-rebrand summary — must survive the push." },
+      {
+        id: 4242,
+        body: "<!-- openclaw:pr-overview -->\n## Sigilix Overview\n\nReal pre-rebrand summary — must survive the push.",
+      },
     ])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
@@ -258,9 +264,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
   // ONLY completed summaries, not stubs.
   it("SIG-96: still RESETS body when existing body IS the stub itself (idempotent re-write)", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 555, body: STUB_BODY },
-    ])
+    mockListIssueCommentsPage.mockResolvedValueOnce([{ id: 555, body: STUB_BODY }])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -278,9 +282,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
   // Fixture uses a STUB body so the update branch fires.
   it("returns update-failed and does NOT write KV flag when updateIssueComment throws (round-5 CR Major)", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 777, body: STUB_BODY },
-    ])
+    mockListIssueCommentsPage.mockResolvedValueOnce([{ id: 777, body: STUB_BODY }])
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     mockUpdateIssueComment.mockRejectedValueOnce(new Error("403 perm denied"))
 
@@ -431,7 +433,10 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
     // SKIPS the reset, returns marker-scan-hit pointing at the existing
     // comment id.
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 100, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nPrior head's completed walkthrough." },
+      {
+        id: 100,
+        body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nPrior head's completed walkthrough.",
+      },
     ])
     const newHeadArgs = { ...args, headSha: "n".repeat(40) }
 
@@ -453,9 +458,7 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
     mockCreateIssueComment.mockResolvedValueOnce({ id: 200 })
     await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
-    mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 200, body: STUB_BODY },
-    ])
+    mockListIssueCommentsPage.mockResolvedValueOnce([{ id: 200, body: STUB_BODY }])
     const newHeadArgs = { ...args, headSha: "n".repeat(40) }
 
     const out = await postPrOverviewStubIfNeeded({ ...newHeadArgs, env: makeEnv(kv) })
@@ -507,7 +510,12 @@ describe("waitForPrOverviewStub — review-side wait gate (Codex Q1)", () => {
     }
 
     const out = await waitForPrOverviewStub({
-      ...args, env: makeEnv(kv), now, sleep, maxMs: 2_000, pollMs: 100,
+      ...args,
+      env: makeEnv(kv),
+      now,
+      sleep,
+      maxMs: 2_000,
+      pollMs: 100,
     })
 
     expect(out.kind).toBe("stub-present")
@@ -528,7 +536,12 @@ describe("waitForPrOverviewStub — review-side wait gate (Codex Q1)", () => {
     const now = (): number => nowSeq[Math.min(nowIdx++, nowSeq.length - 1)]!
 
     const out = await waitForPrOverviewStub({
-      ...args, env: makeEnv(kv), now, sleep, maxMs: 2_000, pollMs: 100,
+      ...args,
+      env: makeEnv(kv),
+      now,
+      sleep,
+      maxMs: 2_000,
+      pollMs: 100,
     })
 
     expect(out.kind).toBe("stub-absent")
@@ -541,7 +554,11 @@ describe("waitForPrOverviewStub — review-side wait gate (Codex Q1)", () => {
     const sleep = vi.fn(async () => {})
 
     const out = await waitForPrOverviewStub({
-      ...args, env: makeEnv(kv), sleep, maxMs: 2_000, pollMs: 100,
+      ...args,
+      env: makeEnv(kv),
+      sleep,
+      maxMs: 2_000,
+      pollMs: 100,
     })
 
     expect(out.kind).toBe("stub-kv-error")
@@ -609,9 +626,7 @@ describe("postPrOverviewStubIfNeeded — marker scan short-circuit + cap (Sigili
       id: 6000 + i,
       body: `comment ${i}`,
     }))
-    mockListIssueCommentsPage
-      .mockResolvedValueOnce(partialPage)
-      .mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce(partialPage).mockResolvedValueOnce([])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -631,9 +646,7 @@ describe("postPrOverviewStubIfNeeded — marker scan short-circuit + cap (Sigili
       id: 7100 + i,
       body: `unrelated comment ${i}`,
     }))
-    mockListIssueCommentsPage
-      .mockResolvedValueOnce(fullPage)
-      .mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce(fullPage).mockResolvedValueOnce([])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -652,12 +665,8 @@ describe("postPrOverviewStubIfNeeded — marker scan short-circuit + cap (Sigili
       id: 7000 + i,
       body: `noise ${i}`,
     }))
-    const page2 = [
-      { id: 8001, body: "<!-- sigilix:pr-overview -->\nold walkthrough" },
-    ]
-    mockListIssueCommentsPage
-      .mockResolvedValueOnce(page1)
-      .mockResolvedValueOnce(page2)
+    const page2 = [{ id: 8001, body: "<!-- sigilix:pr-overview -->\nold walkthrough" }]
+    mockListIssueCommentsPage.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2)
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -705,9 +714,7 @@ describe("postPrOverviewStubIfNeeded — GitHub API timeouts (Sigilix round-4)",
       // update branch to fire. A completed-summary body would short-
       // circuit through the new SIG-96 skip-path and never hit the
       // update call this test pins.
-      mockListIssueCommentsPage.mockResolvedValueOnce([
-        { id: 4321, body: STUB_BODY },
-      ])
+      mockListIssueCommentsPage.mockResolvedValueOnce([{ id: 4321, body: STUB_BODY }])
       mockUpdateIssueComment.mockImplementationOnce(() => new Promise(() => {}))
 
       const p = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
@@ -805,13 +812,9 @@ describe("postPrOverviewStubIfNeeded — SIG-92 concurrent-delivery short-circui
     // Tombstone written before create — a later delivery would see it.
     expect(store.has(stubInflightKey(args))).toBe(true)
     // The tombstone put was called with a TTL of 60s.
-    const tombstonePut = putMock.mock.calls.find(
-      (c) => c[0] === stubInflightKey(args),
-    )
+    const tombstonePut = putMock.mock.calls.find((c) => c[0] === stubInflightKey(args))
     expect(tombstonePut).toBeDefined()
-    expect(tombstonePut?.[2]).toEqual(
-      expect.objectContaining({ expirationTtl: 60 }),
-    )
+    expect(tombstonePut?.[2]).toEqual(expect.objectContaining({ expirationTtl: 60 }))
   })
 
   it("swallows a KV read failure on the inflight key and proceeds normally", async () => {
@@ -907,7 +910,8 @@ describe("isStubBody (SIG-96)", () => {
   })
 
   it("returns false when the body mentions `Reviewing` outside the stub-pattern context", () => {
-    const proseSummary = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\nReviewing the auth changes uncovered three risks."
+    const proseSummary =
+      "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\nReviewing the auth changes uncovered three risks."
     expect(isStubBody(proseSummary)).toBe(false)
   })
 

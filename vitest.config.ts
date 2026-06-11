@@ -62,10 +62,7 @@ export default defineConfig({
       // alias it to a tiny shim that exports a DurableObject base
       // class with the surface tests need. Production builds via
       // wrangler ignore the alias.
-      "cloudflare:workers": path.resolve(
-        __dirname,
-        "./src/test-shims/cloudflare-workers-shim.ts",
-      ),
+      "cloudflare:workers": path.resolve(__dirname, "./src/test-shims/cloudflare-workers-shim.ts"),
     },
   },
 })

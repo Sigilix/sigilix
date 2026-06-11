@@ -34,10 +34,7 @@ function keyFor(commentId: string): string {
  *  the surrounding reply path. The `isBotHandle()` displayName check
  *  is the second-line defense in the rare miss case.
  */
-export async function markBotAuthoredComment(
-  kv: KVNamespace,
-  commentId: string
-): Promise<void> {
+export async function markBotAuthoredComment(kv: KVNamespace, commentId: string): Promise<void> {
   if (!commentId || !commentId.trim()) return
   try {
     await kv.put(keyFor(commentId), "1", {
@@ -58,10 +55,7 @@ export async function markBotAuthoredComment(
  *  Returning true on a transient blip would silently drop legitimate
  *  user comments that happened to error on the lookup.
  */
-export async function isBotAuthoredComment(
-  kv: KVNamespace,
-  commentId: string
-): Promise<boolean> {
+export async function isBotAuthoredComment(kv: KVNamespace, commentId: string): Promise<boolean> {
   if (!commentId || !commentId.trim()) return false
   try {
     const v = await kv.get(keyFor(commentId))

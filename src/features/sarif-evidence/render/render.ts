@@ -46,9 +46,10 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
   const lines: string[] = []
   lines.push("[SARIF EVIDENCE — pre-LLM]")
   const droppedByCap = sorted.length - capped.length
-  const summary = droppedByCap > 0
-    ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
-    : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
+  const summary =
+    droppedByCap > 0
+      ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
+      : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
   lines.push(summary)
   lines.push("")
   for (const f of capped) {
@@ -65,10 +66,7 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
   return lines.join("\n").trimEnd()
 }
 
-export function renderSarifFindingsAsJsonForSynth(
-  findings: readonly SarifFinding[],
-  sbom?: SbomSummary,
-): string {
+export function renderSarifFindingsAsJsonForSynth(findings: readonly SarifFinding[], sbom?: SbomSummary): string {
   const sbomBlock = sbom?.present ? sbom.text : ""
   if (findings.length === 0 && sbomBlock.length === 0) return ""
   const payload: Record<string, unknown> = {}

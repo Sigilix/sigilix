@@ -31,10 +31,7 @@ export function hybridRetrievalEnabled(env: {
   OPENCLAW_RETRIEVAL_HYBRID?: string
   OPENCLAW_LEXICAL_INDEX?: D1Database
 }): boolean {
-  return (
-    (env.OPENCLAW_RETRIEVAL_HYBRID ?? "").trim().toLowerCase() === "on" &&
-    env.OPENCLAW_LEXICAL_INDEX != null
-  )
+  return (env.OPENCLAW_RETRIEVAL_HYBRID ?? "").trim().toLowerCase() === "on" && env.OPENCLAW_LEXICAL_INDEX != null
 }
 
 // ---------------------------------------------------------------------
@@ -123,10 +120,7 @@ export function _resetSchemaMemoForTests(): void {
  * FTS5 has no UPSERT, so each id is DELETE-then-INSERT to stay idempotent
  * across queue redelivery / re-index of the same content.
  */
-export async function upsertLexicalChunks(
-  db: D1Database,
-  chunks: ReadonlyArray<LexicalChunk>,
-): Promise<boolean> {
+export async function upsertLexicalChunks(db: D1Database, chunks: ReadonlyArray<LexicalChunk>): Promise<boolean> {
   if (chunks.length === 0) return true
   try {
     await ensureLexicalSchema(db)
@@ -142,12 +136,14 @@ export async function upsertLexicalChunks(
     await db.batch(stmts)
     return true
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "lexical-upsert-failed",
-      count: chunks.length,
-      namespace: chunks[0]?.namespace,
-      err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "lexical-upsert-failed",
+        count: chunks.length,
+        namespace: chunks[0]?.namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return false
   }
 }
@@ -159,23 +155,19 @@ export async function upsertLexicalChunks(
  * Soft-fails (logs) for the same reason the rest of that path is tolerant —
  * one backend's delete failure shouldn't abort the others.
  */
-export async function deleteLexicalNamespace(
-  db: D1Database,
-  namespace: string,
-): Promise<number> {
+export async function deleteLexicalNamespace(db: D1Database, namespace: string): Promise<number> {
   try {
     await ensureLexicalSchema(db)
-    const res = await db
-      .prepare("DELETE FROM lexical_chunks WHERE namespace = ?")
-      .bind(namespace)
-      .run()
+    const res = await db.prepare("DELETE FROM lexical_chunks WHERE namespace = ?").bind(namespace).run()
     return res.meta?.changes ?? 0
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "lexical-delete-failed",
-      namespace,
-      err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "lexical-delete-failed",
+        namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return 0
   }
 }
@@ -248,11 +240,13 @@ export async function queryLexical(
       score: r.score,
     }))
   } catch (error) {
-    console.warn(JSON.stringify({
-      event: "lexical-query-failed",
-      namespace,
-      err: error instanceof Error ? error.message : String(error),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "lexical-query-failed",
+        namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return []
   }
 }
@@ -290,10 +284,7 @@ export interface FusedItem<T> {
  * passed first by convention, so a semantic hit wins an exact rrf tie). The
  * winning item payload is whichever list surfaced the key first.
  */
-export function reciprocalRankFusion<T>(
-  lists: ReadonlyArray<ReadonlyArray<RankedItem<T>>>,
-  k = 60,
-): FusedItem<T>[] {
+export function reciprocalRankFusion<T>(lists: ReadonlyArray<ReadonlyArray<RankedItem<T>>>, k = 60): FusedItem<T>[] {
   const acc = new Map<string, { item: T; score: number; order: number }>()
   let order = 0
   for (const list of lists) {
@@ -309,6 +300,6 @@ export function reciprocalRankFusion<T>(
     }
   }
   return Array.from(acc.values())
-    .sort((a, b) => (b.score - a.score) || (a.order - b.order))
+    .sort((a, b) => b.score - a.score || a.order - b.order)
     .map((e) => ({ item: e.item, rrfScore: e.score }))
 }

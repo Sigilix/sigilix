@@ -15,13 +15,25 @@ function makeDo(): RunnerEvidenceMetricsDO {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -38,8 +50,7 @@ function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 const URL_ = "https://x/metrics/runner-evidence"
 
 describe("handleRunnerEvidenceMetricsRoute", () => {
@@ -63,7 +74,13 @@ describe("handleRunnerEvidenceMetricsRoute", () => {
     const do_ = makeDo()
     // Record evidence-pending first, then verified LAST, so the repo's LATEST
     // observed state is `verified` (the upsert advances on >= last_seen_at).
-    await do_.record({ owner: "Sigilix", repo: "sigilix", prNumber: 8, state: "evidence-pending", reason: "merge-sha-unavailable" })
+    await do_.record({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 8,
+      state: "evidence-pending",
+      reason: "merge-sha-unavailable",
+    })
     await do_.record({ owner: "acme", repo: "site", prNumber: 3, state: "runner-absent" })
     await do_.record({ owner: "Sigilix", repo: "sigilix", prNumber: 7, state: "verified" })
 

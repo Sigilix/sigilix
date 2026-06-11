@@ -70,9 +70,7 @@ export function applyDegradedCoverageFindingFloor(args: {
 }): DegradedFloorResult {
   const minScore = args.minScore ?? DEGRADED_FLOOR_MIN_SCORE
   // Every source finding id the synth already represents in its output.
-  const accounted = new Set<string>(
-    args.provenanceFindings.flatMap((p) => p.sourceFindingIds),
-  )
+  const accounted = new Set<string>(args.provenanceFindings.flatMap((p) => p.sourceFindingIds))
   const findings: PrReviewFinding[] = [...args.findings]
   const provenanceFindings: FloorProvenanceFinding[] = [...args.provenanceFindings]
   const restored: DegradedFloorResult["restored"] = []
@@ -155,13 +153,9 @@ function isProofResolvedDrop(reason: string, astFindingIds: ReadonlySet<string>)
 }
 
 function findingText(finding: PrReviewFinding): string {
-  return [
-    finding.headline,
-    finding.body,
-    finding.failureExample,
-    finding.fixExample,
-    finding.testGap,
-  ].filter((v): v is string => typeof v === "string").join("\n")
+  return [finding.headline, finding.body, finding.failureExample, finding.fixExample, finding.testGap]
+    .filter((v): v is string => typeof v === "string")
+    .join("\n")
 }
 
 function distinctiveBacktickTokens(finding: PrReviewFinding): string[] {
@@ -248,13 +242,14 @@ export function applySynthSourceFindingFloor(args: {
   const minScore = args.minScore ?? SYNTH_SOURCE_FLOOR_MIN_SCORE
   const astFindingIds = args.astFindingIds ?? new Set<string>()
   const alignedFindings = args.findings.slice()
-  const alignedProvenanceFindings = alignedFindings.map((_, i) =>
-    args.provenanceFindings[i] ?? {
-      sourceSpecialists: [],
-      sourceFindingIds: [],
-      action: "rewritten" as const,
-      verifiedViaRetrieval: false,
-    },
+  const alignedProvenanceFindings = alignedFindings.map(
+    (_, i) =>
+      args.provenanceFindings[i] ?? {
+        sourceSpecialists: [],
+        sourceFindingIds: [],
+        action: "rewritten" as const,
+        verifiedViaRetrieval: false,
+      },
   )
   const proofResolved = new Set<string>()
   for (const d of args.provenanceDropped) {
@@ -294,9 +289,7 @@ export function applySynthSourceFindingFloor(args: {
     provenanceFindings.push({ ...provenance, sourceFindingIds })
   }
 
-  const accounted = new Set<string>(
-    provenanceFindings.flatMap((p) => p.sourceFindingIds),
-  )
+  const accounted = new Set<string>(provenanceFindings.flatMap((p) => p.sourceFindingIds))
   for (const id of proofResolved) accounted.add(id)
   const restored: DegradedFloorResult["restored"] = []
   const bestBySourceId = new Map<string, { role: SpecialistRole; finding: PrReviewFinding & { id: string } }>()
@@ -420,7 +413,12 @@ export function recoverTruncatedSynthFindings(args: {
       action: p.action,
       verifiedViaRetrieval: p.verifiedViaRetrieval ?? false,
     })
-    recovered.push({ id: best.id, score: best.score, category: best.category ?? "logic", headline: best.headline })
+    recovered.push({
+      id: best.id,
+      score: best.score,
+      category: best.category ?? "logic",
+      headline: best.headline,
+    })
   }
 
   return { findings, provenanceFindings, recovered }
@@ -579,9 +577,7 @@ export function injectUnmatchedAstEmits(args: {
       (f) =>
         // security entries are covered by ANY finding on the line; other roles
         // require a same-category finding (the synth prompt's coverage rule).
-        (ast.roleHint === "security" || f.category === ast.roleHint) &&
-        f.lo <= hi &&
-        f.hi >= lo,
+        (ast.roleHint === "security" || f.category === ast.roleHint) && f.lo <= hi && f.hi >= lo,
     )
     if (covered) continue
 
@@ -610,7 +606,15 @@ export function injectUnmatchedAstEmits(args: {
       verifiedViaRetrieval: false,
     })
     seen.add(ast.astFindingId)
-    injected.push({ astFindingId: ast.astFindingId, path: ast.path, line: ast.line, score, category: ast.roleHint, headline, body: ast.message })
+    injected.push({
+      astFindingId: ast.astFindingId,
+      path: ast.path,
+      line: ast.line,
+      score,
+      category: ast.roleHint,
+      headline,
+      body: ast.message,
+    })
   }
 
   return { findings, provenanceFindings, injected }

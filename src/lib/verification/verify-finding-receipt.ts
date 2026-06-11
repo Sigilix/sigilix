@@ -125,9 +125,7 @@ export function extractReceiptScanResults(
         if (!norm.ok) continue
         const startLine = loc.physicalLocation?.region?.startLine
         out.push(
-          typeof startLine === "number"
-            ? { path: norm.path, ruleId, line: startLine }
-            : { path: norm.path, ruleId },
+          typeof startLine === "number" ? { path: norm.path, ruleId, line: startLine } : { path: norm.path, ruleId },
         )
       }
     }
@@ -136,9 +134,7 @@ export function extractReceiptScanResults(
 }
 
 /** Index the receipt results by normalized path for O(1)-per-finding lookup. */
-export function buildReceiptIndex(
-  results: ReadonlyArray<ReceiptScanResult>,
-): Map<string, ReceiptScanResult[]> {
+export function buildReceiptIndex(results: ReadonlyArray<ReceiptScanResult>): Map<string, ReceiptScanResult[]> {
   const index = new Map<string, ReceiptScanResult[]>()
   for (const r of results) {
     if (typeof r.path !== "string" || r.path.length === 0) continue
@@ -184,9 +180,7 @@ function ruleClassMatches(findingRuleId: string, sarifRuleId: string): boolean {
  * output, the only population where "the same rule re-runs on HEAD" is a sound
  * question. Everything else (logic / authz-NONE / no evidence) → NO-CHECK.
  */
-export function isReceiptJoinEligible(
-  finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId">,
-): boolean {
+export function isReceiptJoinEligible(finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId">): boolean {
   if (typeof finding.score !== "number" || finding.score < 4) return false
   if (finding.category !== "security") return false
   const id = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
@@ -209,7 +203,11 @@ export function verifyFindingAgainstReceipt(
   const findingRuleId = ruleIdFromEvidenceId(finding.evidenceId as string)
   if (findingRuleId === null) {
     // Eligible but the rule-id isn't extractable — can't ask the sound question.
-    return { verdict: "inconclusive", tokens: [], check: receiptCheck("skipped", "evidenceId rule-id unparsable", "") }
+    return {
+      verdict: "inconclusive",
+      tokens: [],
+      check: receiptCheck("skipped", "evidenceId rule-id unparsable", ""),
+    }
   }
 
   const candidates = receiptIndex.get(finding.path) ?? []
@@ -218,13 +216,16 @@ export function verifyFindingAgainstReceipt(
     // Path-only result (no line) → path+rule match confirms. Line-bearing →
     // require the finding's line within the window (merge/head drift absorbed).
     const lineOk =
-      r.line === undefined ||
-      (typeof finding.line === "number" && Math.abs(r.line - finding.line) <= LINE_WINDOW)
+      r.line === undefined || (typeof finding.line === "number" && Math.abs(r.line - finding.line) <= LINE_WINDOW)
     if (lineOk) {
       return {
         verdict: "confirmed",
         tokens: [findingRuleId],
-        check: receiptCheck("pass", `receipt-join --rule ${findingRuleId} --path ${finding.path} --line ${finding.line}`, `rule ${r.ruleId}${r.line !== undefined ? ` @${r.line}` : " (path-only)"}`),
+        check: receiptCheck(
+          "pass",
+          `receipt-join --rule ${findingRuleId} --path ${finding.path} --line ${finding.line}`,
+          `rule ${r.ruleId}${r.line !== undefined ? ` @${r.line}` : " (path-only)"}`,
+        ),
       }
     }
   }
@@ -234,7 +235,11 @@ export function verifyFindingAgainstReceipt(
   return {
     verdict: "inconclusive",
     tokens: [findingRuleId],
-    check: receiptCheck("fail", `receipt-join --rule ${findingRuleId} --path ${finding.path} --line ${finding.line}`, "no same-rule result at path/line on HEAD"),
+    check: receiptCheck(
+      "fail",
+      `receipt-join --rule ${findingRuleId} --path ${finding.path} --line ${finding.line}`,
+      "no same-rule result at path/line on HEAD",
+    ),
   }
 }
 

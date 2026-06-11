@@ -15,56 +15,26 @@ import { PR_OVERVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { PR_OVERVIEW_PROMPT } from "@/src/prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
-import {
-  CODEOWNERS_PATHS,
-  mergeSuggestedReviewers,
-  parseCodeowners,
-  suggestedReviewersFromRules,
-} from "./codeowners"
-import {
-  runPreMergeGates,
-  type GateResult,
-} from "@/src/shared/domain/pre-merge-gates"
-import {
-  batchReadFileCache,
-  batchWriteFileCache,
-} from "./pr-overview-file-cache"
+import { CODEOWNERS_PATHS, mergeSuggestedReviewers, parseCodeowners, suggestedReviewersFromRules } from "./codeowners"
+import { runPreMergeGates, type GateResult } from "@/src/shared/domain/pre-merge-gates"
+import { batchReadFileCache, batchWriteFileCache } from "./pr-overview-file-cache"
 import type { Env } from "@/src/shared/types/env"
 // SIG-376 (SIG-318 Tier-1 6/8): the pure parse/transform, render, and
 // comment-scan clusters were lifted into three sibling leaves to keep this
 // file under the 1,000-line budget. The core imports what `handlePrOverview`
 // / `buildPrompt` call and re-exports every previously-exported symbol that
 // moved so importers + tests stay unchanged.
-import {
-  mergeCachedAndFreshRows,
-  parseOverviewResponse,
-  scopedDiffFromMisses,
-} from "./triage-pr-overview-parse"
-import {
-  formatOverviewComment,
-  renderReviewContextBlock,
-  truncate,
-} from "./triage-pr-overview-format"
-import {
-  deleteLegacyWarmupSticky,
-  findExistingOverviewComment,
-  scanComments,
-} from "./triage-pr-overview-scan"
+import { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } from "./triage-pr-overview-parse"
+import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
+import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } from "./triage-pr-overview-scan"
 
 // SIG-376: re-export every symbol relocated into the leaves so external
 // importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
 // the unit tests continue to resolve them from `./triage-pr-overview`
 // unchanged. `findExistingOverviewComment` is re-exported here (locally,
 // not via `export … from`) because the core body also calls it.
-export {
-  mergeCachedAndFreshRows,
-  parseOverviewResponse,
-  scopedDiffFromMisses,
-} from "./triage-pr-overview-parse"
-export {
-  formatOverviewComment,
-  renderReviewContextBlock,
-} from "./triage-pr-overview-format"
+export { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } from "./triage-pr-overview-parse"
+export { formatOverviewComment, renderReviewContextBlock } from "./triage-pr-overview-format"
 export {
   findExistingOverviewCommentId,
   LEGACY_OVERVIEW_MARKER,
@@ -187,18 +157,7 @@ const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const {
-    owner,
-    repo,
-    prNumber,
-    headSha,
-    installationId,
-    env,
-    force,
-    reviewContext,
-    skipDedupe,
-    abortSignal,
-  } = args
+  const { owner, repo, prNumber, headSha, installationId, env, force, reviewContext, skipDedupe, abortSignal } = args
   // SIG-216 fix-up: `force` historically bypassed BOTH the KV dedupe
   // lock AND the in-handler stale-head guards. We've split those
   // semantics: `skipDedupe` (preferred for the inline-from-review
@@ -233,12 +192,17 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // suppress the refresh. Webhook-driven enqueues set neither and
   // keep the duplicate-comment guard intact.
   if (!bypassDedupe && (await env.OPENCLAW_STATE.get(dedupeKey))) {
-    console.log(JSON.stringify({
-      event: "pr-overview-skipped",
-      dedupe_system: "kv",
-      reason: "already_running",
-      owner, repo, prNumber, headSha: headSha.slice(0, 7),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-overview-skipped",
+        dedupe_system: "kv",
+        reason: "already_running",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+      }),
+    )
     return
   }
   if (!bypassDedupe) {
@@ -276,11 +240,15 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // into emitting the all-hit placeholder).
       client.listPullRequestFiles(owner, repo, prNumber, { maxFiles: 300 }).catch((err) => {
         listFilesFailed = true
-        console.warn(JSON.stringify({
-          event: "pr-overview-list-files-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-overview-list-files-failed",
+            owner,
+            repo,
+            prNumber,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         return [] as PrChangedFile[]
       }),
     ])
@@ -305,20 +273,29 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         gatesConfig,
       )
       for (const r of gateResults) {
-        console.log(JSON.stringify({
-          event: "pr-overview-pre-merge-gate-result",
-          gate: r.id,
-          passed: r.passed,
-          severity: r.severity,
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-overview-pre-merge-gate-result",
+            gate: r.id,
+            passed: r.passed,
+            severity: r.severity,
+            owner,
+            repo,
+            prNumber,
+            head_sha: headSha.slice(0, 7),
+          }),
+        )
       }
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-pre-merge-gates-failed",
-        err: err instanceof Error ? err.message : String(err),
-        owner, repo, prNumber,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-pre-merge-gates-failed",
+          err: err instanceof Error ? err.message : String(err),
+          owner,
+          repo,
+          prNumber,
+        }),
+      )
     }
 
     // ─── SIG-84: stale-head guard #1 (pre-Ollama) ───────────────────
@@ -345,39 +322,52 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // re-check is the belt-and-braces layer that catches moves
     // landing AFTER this overview call returns.
     if (!force && meta.head?.sha && meta.head.sha !== headSha) {
-      console.log(JSON.stringify({
-        event: "pr-overview-stale-head-before-ollama",
-        owner, repo, prNumber,
-        queued_head_sha: headSha.slice(0, 7),
-        current_head_sha: meta.head.sha.slice(0, 7),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-stale-head-before-ollama",
+          owner,
+          repo,
+          prNumber,
+          queued_head_sha: headSha.slice(0, 7),
+          current_head_sha: meta.head.sha.slice(0, 7),
+        }),
+      )
       // SIG-237: unified skipped-with-reason event.
-      console.log(JSON.stringify({
-        event: "pr-overview-skipped-with-reason",
-        reason: "stale_head_before_ollama",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        current_head_sha: meta.head.sha.slice(0, 7),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-skipped-with-reason",
+          reason: "stale_head_before_ollama",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          current_head_sha: meta.head.sha.slice(0, 7),
+        }),
+      )
       return
     }
 
     const codeownersRef = meta.base?.sha
     if (!codeownersRef) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-codeowners-no-base-ref",
-        owner, repo, prNumber,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-codeowners-no-base-ref",
+          owner,
+          repo,
+          prNumber,
+        }),
+      )
     }
     const codeownersReviewers = codeownersRef
       ? await resolveCodeownersSuggestedReviewers({
-        client,
-        owner,
-        repo,
-        prNumber,
-        ref: codeownersRef,
-        changedPaths: files.map((f) => f.filename),
-        prAuthor: meta.user?.login ?? null,
-      })
+          client,
+          owner,
+          repo,
+          prNumber,
+          ref: codeownersRef,
+          changedPaths: files.map((f) => f.filename),
+          prAuthor: meta.user?.login ?? null,
+        })
       : []
 
     // ARC-263: walkthrough cache lookup. For each changed file, look
@@ -401,7 +391,11 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // tokens are minimal; output tokens are 0 fresh rows (just the
     // cumulative summary/bullets/confidence).
     const { hits: cachedRows, misses: missedFiles } = await batchReadFileCache({
-      env, owner, repo, prNumber, files,
+      env,
+      owner,
+      repo,
+      prNumber,
+      files,
     })
     since("cache-checked")
 
@@ -409,14 +403,19 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // catch). Lets us answer "is the cache actually helping?" in
     // production without re-instrumenting.
     if (files.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-overview-cache-checked",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        file_count: files.length,
-        hits: cachedRows.size,
-        misses: missedFiles.length,
-        hit_ratio: Math.round((cachedRows.size / files.length) * 100) / 100,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-cache-checked",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          file_count: files.length,
+          hits: cachedRows.size,
+          misses: missedFiles.length,
+          hit_ratio: Math.round((cachedRows.size / files.length) * 100) / 100,
+        }),
+      )
     }
 
     // Build a scoped diff containing ONLY missed files' patches. The
@@ -427,9 +426,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // When `listFilesFailed` is true we MUST use the full diff —
     // `missedFiles=[]` would otherwise hit the all-hit placeholder
     // path and the model would see no real diff context.
-    const promptDiff = listFilesFailed
-      ? diff
-      : scopedDiffFromMisses(missedFiles, diff)
+    const promptDiff = listFilesFailed ? diff : scopedDiffFromMisses(missedFiles, diff)
 
     // Pre-Ollama marker scan. Used to pick the prompt's "first run vs
     // incremental" framing. The post-Ollama re-check below is the source
@@ -490,12 +487,17 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // Cloudflare Logs. `responseLength` alone is enough to size
       // the failure mode; the actual content can be retrieved via
       // `console.error` line below if needed for one-off debugging.
-      console.log(JSON.stringify({
-        event: "pr-overview-skipped-with-reason",
-        reason: "verdict_parse_failed",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        responseLength: response.length,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-skipped-with-reason",
+          reason: "verdict_parse_failed",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          responseLength: response.length,
+        }),
+      )
       return
     }
     const modelReviewers = excludePrAuthor(verdict.suggestedReviewers, meta.user?.login ?? null)
@@ -522,12 +524,16 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // confirm it's already gone). Update the cached id either way.
       legacyWarmupId = reScan.legacyWarmupId
       if (existingForWrite != null) {
-        console.log(JSON.stringify({
-          event: "pr-overview-second-pass-dedupe-fired",
-          owner, repo, prNumber,
-          headSha: headSha.slice(0, 7),
-          foundCommentId: existingForWrite,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-overview-second-pass-dedupe-fired",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            foundCommentId: existingForWrite,
+          }),
+        )
       }
     }
 
@@ -545,11 +551,16 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       const manifest = await readRepoIndexManifest(env, owner, repo)
       if (manifest.kind !== "ok") warmup = "pending"
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-manifest-read-failed",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-manifest-read-failed",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
 
     // ARC-263: merge cached rows with the model's fresh rows. The
@@ -598,20 +609,29 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       try {
         const metaCheck = await client.getPullRequest(owner, repo, prNumber)
         if (metaCheck.head?.sha && metaCheck.head.sha !== headSha) {
-          console.log(JSON.stringify({
-            event: "pr-overview-stale-head-before-write",
-            owner, repo, prNumber,
-            queued_head_sha: headSha.slice(0, 7),
-            current_head_sha: metaCheck.head.sha.slice(0, 7),
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-overview-stale-head-before-write",
+              owner,
+              repo,
+              prNumber,
+              queued_head_sha: headSha.slice(0, 7),
+              current_head_sha: metaCheck.head.sha.slice(0, 7),
+            }),
+          )
           // SIG-237: also emit the unified skipped-with-reason event
           // so the dashboard can count stub-stays-stuck cases in a
           // single query rather than joining several event names.
-          console.log(JSON.stringify({
-            event: "pr-overview-skipped-with-reason",
-            reason: "stale_head_before_write",
-            owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-overview-skipped-with-reason",
+              reason: "stale_head_before_write",
+              owner,
+              repo,
+              prNumber,
+              headSha: headSha.slice(0, 7),
+            }),
+          )
           return
         }
       } catch (err) {
@@ -625,19 +645,28 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         // costs us one missed overview render at most — GitHub
         // redelivery / next push will re-enter and produce a fresh
         // overview on the live head.
-        console.warn(JSON.stringify({
-          event: "pr-overview-stale-recheck-failed-aborted",
-          owner, repo, prNumber,
-          queued_head_sha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-overview-stale-recheck-failed-aborted",
+            owner,
+            repo,
+            prNumber,
+            queued_head_sha: headSha.slice(0, 7),
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         // SIG-237: unified skipped-with-reason event.
-        console.log(JSON.stringify({
-          event: "pr-overview-skipped-with-reason",
-          reason: "stale_recheck_failed",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-overview-skipped-with-reason",
+            reason: "stale_recheck_failed",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         return
       }
     }
@@ -646,7 +675,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       await client.updateIssueComment(owner, repo, existingForWrite, body)
       since("comment-updated")
       console.log(
-        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
+        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
       )
     } else {
       // SIG-216 CR fix-up: read-after-write idempotency. The
@@ -663,24 +692,26 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // double-posting.
       const finalRescan = await findExistingOverviewComment(client, owner, repo, prNumber)
       if (finalRescan?.id != null) {
-        console.log(JSON.stringify({
-          event: "pr-overview-final-rescan-found-marker",
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          foundCommentId: finalRescan.id,
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-overview-final-rescan-found-marker",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            foundCommentId: finalRescan.id,
+          }),
+        )
         await client.updateIssueComment(owner, repo, finalRescan.id, body)
         since("comment-updated")
         console.log(
-          `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`
+          `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`,
         )
       } else {
         const created = await client.createIssueComment(owner, repo, prNumber, body)
         since("comment-created")
         console.log(
-          `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
+          `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
         )
       }
     }
@@ -690,7 +721,10 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // matching rows; we look them up by path. Best-effort; isolated
     // per-row write failures don't break the overview.
     const writeResult = await batchWriteFileCache({
-      env, owner, repo, prNumber,
+      env,
+      owner,
+      repo,
+      prNumber,
       misses: missedFiles,
       rows: verdict.files,
     })
@@ -702,13 +736,18 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // the prompt.
     const missedWithPatch = missedFiles.filter((f) => typeof f.patch === "string" && f.patch.length > 0).length
     if (missedWithPatch !== writeResult.written) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-cache-write-drift",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        expected_writes: missedWithPatch,
-        actual_writes: writeResult.written,
-        model_emitted_rows: verdict.files.length,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-cache-write-drift",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          expected_writes: missedWithPatch,
+          actual_writes: writeResult.written,
+          model_emitted_rows: verdict.files.length,
+        }),
+      )
     }
 
     // ARC-258 follow-up: one-way migration. Delete the legacy
@@ -753,28 +792,32 @@ async function resolveCodeownersSuggestedReviewers(args: {
       // `getFileContent` returns null for 404. A throw means the
       // higher-precedence file may exist but could not be read, so fail
       // closed instead of falling through to a lower-precedence path.
-      console.warn(JSON.stringify({
-        event: "pr-overview-codeowners-fetch-failed",
-        owner: args.owner,
-        repo: args.repo,
-        prNumber: args.prNumber,
-        path,
-        ref: args.ref.slice(0, 12),
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-codeowners-fetch-failed",
+          owner: args.owner,
+          repo: args.repo,
+          prNumber: args.prNumber,
+          path,
+          ref: args.ref.slice(0, 12),
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       return []
     }
     if (typeof text !== "string") continue
 
     if (new TextEncoder().encode(text).length > CODEOWNERS_MAX_BYTES) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-codeowners-skipped",
-        reason: "too_large",
-        owner: args.owner,
-        repo: args.repo,
-        prNumber: args.prNumber,
-        path,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-codeowners-skipped",
+          reason: "too_large",
+          owner: args.owner,
+          repo: args.repo,
+          prNumber: args.prNumber,
+          path,
+        }),
+      )
       return []
     }
 
@@ -783,17 +826,19 @@ async function resolveCodeownersSuggestedReviewers(args: {
       exclude: args.prAuthor ? [args.prAuthor] : [],
       limit: 2,
     })
-    console.log(JSON.stringify({
-      event: "pr-overview-codeowners-resolved",
-      owner: args.owner,
-      repo: args.repo,
-      prNumber: args.prNumber,
-      path,
-      changed_files: args.changedPaths.length,
-      rules: parsed.rules.length,
-      skipped: parsed.skipped.length,
-      reviewers: reviewers.length,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-overview-codeowners-resolved",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        path,
+        changed_files: args.changedPaths.length,
+        rules: parsed.rules.length,
+        skipped: parsed.skipped.length,
+        reviewers: reviewers.length,
+      }),
+    )
     return reviewers
   }
 
@@ -853,10 +898,7 @@ export function buildPrompt(ctx: PromptCtx): string {
       "",
     )
   }
-  sections.push(
-    "[OUTPUT]",
-    "Return only the JSON object. No prose, no Markdown fence, no array.",
-  )
+  sections.push("[OUTPUT]", "Return only the JSON object. No prose, no Markdown fence, no array.")
   return sections.join("\n")
 }
 

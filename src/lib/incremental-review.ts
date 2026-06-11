@@ -25,11 +25,11 @@
 import type { Env } from "@/src/shared/types/env"
 
 const KV_KEY_PREFIX = "pr-last-reviewed:"
-const TTL_SECONDS = 30 * 24 * 60 * 60  // 30 days, matches telemetry TTL
+const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days, matches telemetry TTL
 
 export interface LastReviewedRecord {
   reviewedSha: string
-  reviewedAt: number  // ms since epoch
+  reviewedAt: number // ms since epoch
 }
 
 /**
@@ -81,11 +81,9 @@ export async function writeLastReviewedSha(
     reviewedAt: Date.now(),
   }
   try {
-    await env.OPENCLAW_STATE.put(
-      kvKey(owner, repo, prNumber),
-      JSON.stringify(record),
-      { expirationTtl: TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(kvKey(owner, repo, prNumber), JSON.stringify(record), {
+      expirationTtl: TTL_SECONDS,
+    })
   } catch {
     // Swallow — incremental review is an optimization, not a
     // correctness requirement. Next push will fall back to full diff

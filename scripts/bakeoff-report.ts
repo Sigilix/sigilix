@@ -29,11 +29,7 @@
 import { readdir, readFile, writeFile, mkdir, stat } from "node:fs/promises"
 import { join, resolve, basename } from "node:path"
 
-import {
-  buildDecisionReport,
-  renderDecisionReportMarkdown,
-  type ShadowEvent,
-} from "@/src/lib/bakeoff-report"
+import { buildDecisionReport, renderDecisionReportMarkdown, type ShadowEvent } from "@/src/lib/bakeoff-report"
 import { unwrapLogpushEnvelope } from "@/src/lib/bakeoff-logpush-unwrap"
 
 const KNOWN_EVENTS = new Set([
@@ -172,7 +168,13 @@ interface ParseStats {
 
 async function loadEvents(inputPath: string): Promise<{ events: ShadowEvent[]; stats: ParseStats }> {
   const events: ShadowEvent[] = []
-  const stats: ParseStats = { files: 0, lines: 0, parsedEvents: 0, skippedNonShadowEvents: 0, badLines: 0 }
+  const stats: ParseStats = {
+    files: 0,
+    lines: 0,
+    parsedEvents: 0,
+    skippedNonShadowEvents: 0,
+    badLines: 0,
+  }
   for await (const file of collectFiles(inputPath)) {
     stats.files++
     const content = await readFile(file, "utf-8")

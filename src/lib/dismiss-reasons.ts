@@ -37,28 +37,28 @@ export type DismissReason = (typeof ALL_DISMISS_REASONS)[number]
 const REASON_ALIASES: Readonly<Record<string, DismissReason>> = {
   "not-a-bug": "not-a-bug",
   "not a bug": "not-a-bug",
-  "not_a_bug": "not-a-bug",
-  "notabug": "not-a-bug",
+  not_a_bug: "not-a-bug",
+  notabug: "not-a-bug",
 
   "bad-anchor": "bad-anchor",
   "bad anchor": "bad-anchor",
-  "bad_anchor": "bad-anchor",
-  "badanchor": "bad-anchor",
+  bad_anchor: "bad-anchor",
+  badanchor: "bad-anchor",
 
   "already-covered": "already-covered",
   "already covered": "already-covered",
-  "already_covered": "already-covered",
-  "alreadycovered": "already-covered",
+  already_covered: "already-covered",
+  alreadycovered: "already-covered",
 
   "too-minor": "too-minor",
   "too minor": "too-minor",
-  "too_minor": "too-minor",
-  "toominor": "too-minor",
+  too_minor: "too-minor",
+  toominor: "too-minor",
 
   "wrong-context": "wrong-context",
   "wrong context": "wrong-context",
-  "wrong_context": "wrong-context",
-  "wrongcontext": "wrong-context",
+  wrong_context: "wrong-context",
+  wrongcontext: "wrong-context",
 }
 
 /**
@@ -80,6 +80,5 @@ export function parseDismissReason(raw: string): DismissReason | null {
 
 /** Type-guard: is `value` one of the canonical `DismissReason` strings? */
 export function isDismissReason(value: unknown): value is DismissReason {
-  return typeof value === "string" &&
-    (ALL_DISMISS_REASONS as readonly string[]).includes(value)
+  return typeof value === "string" && (ALL_DISMISS_REASONS as readonly string[]).includes(value)
 }

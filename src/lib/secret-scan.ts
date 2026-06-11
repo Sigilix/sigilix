@@ -33,16 +33,7 @@
 interface SecretRule {
   id: string
   /** Human-readable category surfaced to the model + reviewer. */
-  category:
-    | "aws"
-    | "github"
-    | "slack"
-    | "stripe"
-    | "openai"
-    | "anthropic"
-    | "ollama"
-    | "private-key"
-    | "generic-token"
+  category: "aws" | "github" | "slack" | "stripe" | "openai" | "anthropic" | "ollama" | "private-key" | "generic-token"
   /** Pre-compiled-friendly source. */
   pattern: RegExp
   /** When omitted, severity defaults to `error` — secrets in code
@@ -158,9 +149,9 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
   // tripped the 40+-char generic rule as P0 "secrets". All PURELY ALPHABETIC
   // (no digits) — real provider-less secret bodies contain digits, so these
   // never suppress a real secret.
-  if (/^[a-z]+([-/][a-z]+)+$/.test(match)) return true   // kebab / lower path / slash-prose
-  if (/^[A-Z]+(_[A-Z]+)+$/.test(match)) return true       // SCREAMING_SNAKE
-  if (/^[a-z]+(_[a-z]+)+$/.test(match)) return true       // lower snake_case
+  if (/^[a-z]+([-/][a-z]+)+$/.test(match)) return true // kebab / lower path / slash-prose
+  if (/^[A-Z]+(_[A-Z]+)+$/.test(match)) return true // SCREAMING_SNAKE
+  if (/^[a-z]+(_[a-z]+)+$/.test(match)) return true // lower snake_case
   // SIG-251: extend the same single-case-identifier philosophy to the two
   // separator-less / `=`-bearing shapes that slipped through — camelCase &
   // PascalCase identifiers, and SCREAMING_SNAKE=lowercase env refs.
@@ -173,8 +164,8 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
   // (fails camelCase/Pascal which need lowercase runs), and random base64 carries
   // `/` + irregular casing (fails the clean identifier shapes) — so they still
   // FIRE. The shapes only catch tokens with genuine identifier structure.
-  if (/^[a-z]+([A-Z][a-z]*)+$/.test(match)) return true   // camelCase identifier
-  if (/^([A-Z][a-z]+)+$/.test(match)) return true          // PascalCase identifier
+  if (/^[a-z]+([A-Z][a-z]*)+$/.test(match)) return true // camelCase identifier
+  if (/^([A-Z][a-z]+)+$/.test(match)) return true // PascalCase identifier
   if (/^[A-Z]+(_[A-Z]+)*=[a-z]+$/.test(match)) return true // SCREAMING_SNAKE=lowercase env ref
   return false
 }
@@ -192,7 +183,8 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
 // EXCLUDED — `.env` is the most common credential file extension
 // (raw `KEY=VAL` lines pasted into source would have an `.env` tail
 // in the path), and `.lock` is similar for credential dumps.
-const PATH_TAIL_RE = /^\.(?:test\.|spec\.|d\.|stories\.|module\.|config\.)?(?:ts|tsx|js|jsx|mjs|cjs|md|mdx|json|jsonc|yml|yaml|toml|sh|bash|zsh|py|go|rs|java|kt|swift|c|cc|cpp|h|hh|hpp|cs|rb|php|css|scss|sass|less|html|htm|xml|svg|sql|txt|csv|tsv|ini|cfg|conf|log|map)\b/i
+const PATH_TAIL_RE =
+  /^\.(?:test\.|spec\.|d\.|stories\.|module\.|config\.)?(?:ts|tsx|js|jsx|mjs|cjs|md|mdx|json|jsonc|yml|yaml|toml|sh|bash|zsh|py|go|rs|java|kt|swift|c|cc|cpp|h|hh|hpp|cs|rb|php|css|scss|sass|less|html|htm|xml|svg|sql|txt|csv|tsv|ini|cfg|conf|log|map)\b/i
 
 /**
  * SIG-93: returns true when `match` looks like a file path inside
@@ -235,10 +227,7 @@ function looksLikeFilePath(match: string, contextLine: string, matchOffset: numb
  *
  * Pure — exported for tests.
  */
-export type SecretAllowlistReason =
-  | "github-webhook-event"
-  | "screaming-env-var"
-  | "kebab-json-key"
+export type SecretAllowlistReason = "github-webhook-event" | "screaming-env-var" | "kebab-json-key"
 
 /**
  * GitHub webhook ACTION names. They show up as `/`-joined literal lists in
@@ -247,12 +236,36 @@ export type SecretAllowlistReason =
  * and review-thread actions — the sets that actually appear in handler prose.
  */
 const GITHUB_WEBHOOK_EVENTS: ReadonlySet<string> = new Set([
-  "opened", "edited", "closed", "reopened", "assigned", "unassigned",
-  "review_requested", "review_request_removed", "ready_for_review",
-  "converted_to_draft", "labeled", "unlabeled", "synchronize", "synchronized",
-  "locked", "unlocked", "auto_merge_enabled", "auto_merge_disabled",
-  "milestoned", "demilestoned", "enqueued", "dequeued", "pinned", "unpinned",
-  "transferred", "submitted", "dismissed", "created", "deleted", "resolved",
+  "opened",
+  "edited",
+  "closed",
+  "reopened",
+  "assigned",
+  "unassigned",
+  "review_requested",
+  "review_request_removed",
+  "ready_for_review",
+  "converted_to_draft",
+  "labeled",
+  "unlabeled",
+  "synchronize",
+  "synchronized",
+  "locked",
+  "unlocked",
+  "auto_merge_enabled",
+  "auto_merge_disabled",
+  "milestoned",
+  "demilestoned",
+  "enqueued",
+  "dequeued",
+  "pinned",
+  "unpinned",
+  "transferred",
+  "submitted",
+  "dismissed",
+  "created",
+  "deleted",
+  "resolved",
   "unresolved",
 ])
 
@@ -345,7 +358,7 @@ export function runSecretScan(diff: string): SecretHit[] {
     }
     if (inFileHeader && line.startsWith("+++ ")) {
       const p = line.slice(4).trim()
-      currentPath = p === "/dev/null" ? null : (p.startsWith("b/") ? p.slice(2) : p)
+      currentPath = p === "/dev/null" ? null : p.startsWith("b/") ? p.slice(2) : p
       continue
     }
     if (inFileHeader && line.startsWith("--- ")) {
@@ -391,14 +404,16 @@ export function runSecretScan(diff: string): SecretHit[] {
         if (rule.id === "generic-high-entropy-token") {
           const allowReason = secretAllowlistReason(matched)
           if (allowReason) {
-            console.log(JSON.stringify({
-              event: "secret-scan-allowlist-suppressed",
-              reason: allowReason,
-              path: currentPath,
-              line: newLine,
-              match_length: matched.length,
-              preview: redact(matched),
-            }))
+            console.log(
+              JSON.stringify({
+                event: "secret-scan-allowlist-suppressed",
+                reason: allowReason,
+                path: currentPath,
+                line: newLine,
+                match_length: matched.length,
+                preview: redact(matched),
+              }),
+            )
             continue
           }
         }
@@ -438,9 +453,7 @@ export function runSecretScan(diff: string): SecretHit[] {
  * on its own it's noisy, so the credential predicate below requires it to
  * sit in a credential-named assignment before it counts.
  */
-const PROVIDER_RULES: readonly SecretRule[] = RULES.filter(
-  (r) => r.category !== "generic-token",
-)
+const PROVIDER_RULES: readonly SecretRule[] = RULES.filter((r) => r.category !== "generic-token")
 
 /**
  * Identifiers that, when ASSIGNED a long high-entropy value, make that
@@ -540,13 +553,17 @@ function lineHasCredentialToken(line: string): boolean {
  */
 export function renderSecretHitsForPrompt(hits: SecretHit[]): string {
   if (hits.length === 0) return ""
-  const lines = ["[SECRET SCAN — regex pre-filter run before the LLM. These are CANDIDATES with a known false-positive rate, NOT confirmed secrets. Verify each against the surrounding code before reporting it. Raw values redacted.]"]
+  const lines = [
+    "[SECRET SCAN — regex pre-filter run before the LLM. These are CANDIDATES with a known false-positive rate, NOT confirmed secrets. Verify each against the surrounding code before reporting it. Raw values redacted.]",
+  ]
   for (const h of hits) {
     lines.push(
       `- [${h.severity.toUpperCase()}] ${h.path}:${h.line} (${h.category}/${h.ruleId}) length=${h.matchLength} preview=${h.redactedPreview}`,
     )
   }
   lines.push("")
-  lines.push("Confirm a candidate only if the surrounding code shows it is a real credential (used as an auth token, passed to a client/SDK, sent in an Authorization header, or matching a known provider key format). If the code shows it is public-by-design — a Subresource-Integrity hash next to a CDN/asset URL, a lockfile integrity field, a git SHA, a documented example, or a test fixture — it is a false positive; do not report it.")
+  lines.push(
+    "Confirm a candidate only if the surrounding code shows it is a real credential (used as an auth token, passed to a client/SDK, sent in an Authorization header, or matching a known provider key format). If the code shows it is public-by-design — a Subresource-Integrity hash next to a CDN/asset URL, a lockfile integrity field, a git SHA, a documented example, or a test fixture — it is a false positive; do not report it.",
+  )
   return lines.join("\n")
 }

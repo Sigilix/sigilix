@@ -32,7 +32,8 @@ describe("normalizeSarifPath — happy paths", () => {
 
   it("uriBaseId %SRCROOT% accepted", () => {
     expect(normalizeSarifPath("src/foo.js", { uriBaseId: "%SRCROOT%" })).toEqual({
-      ok: true, path: "src/foo.js",
+      ok: true,
+      path: "src/foo.js",
     })
   })
 })

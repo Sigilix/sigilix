@@ -28,7 +28,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -45,8 +47,7 @@ const REQUEST_ROOT_RE = /^(?:req|request|ctx|context)$/
 // (`eta`, `dot`, `art`, `liquid`, `swig`, `twig`) that double as ordinary
 // variables — those are reached only via their name-sufficient methods below
 // (FP-safety over recall; internal review).
-const TEMPLATE_ENGINE_RE =
-  /^(?:handlebars|hbs|ejs|pug|jade|nunjucks|mustache|liquidjs|arttemplate|hogan)$/i
+const TEMPLATE_ENGINE_RE = /^(?:handlebars|hbs|ejs|pug|jade|nunjucks|mustache|liquidjs|arttemplate|hogan)$/i
 // `.compile`/`.render` take a TEMPLATE SOURCE string as arg 0 (engine receiver only).
 const TEMPLATE_COMPILE_METHODS: ReadonlySet<string> = new Set(["compile", "render"])
 // Methods that are template-specific by NAME (fire on any receiver).
@@ -78,8 +79,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -108,7 +110,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     const init = n.init as AstNode
     const id = n.id as AstNode
     const name = idName(id)
-    if (name) { decls.push({ name, init }); return }
+    if (name) {
+      decls.push({ name, init })
+      return
+    }
     // Destructured binding (`const { tpl } = req.query`): each local inherits the
     // initializer's taint (CodeRabbit). `carriesTaint(init)` decides below.
     if (id.type === "ObjectPattern") {
@@ -124,7 +129,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     for (const { name, init } of decls) {
       if (tainted.has(name)) continue
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
-      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (aliasesRoot || carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -141,8 +149,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -179,12 +188,17 @@ export const noSsti: AstRule = {
     if (SKIP_PATH.test(ctx.path)) return null
 
     const fns = collectFunctions(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const taintCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -226,8 +240,9 @@ export const noSsti: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

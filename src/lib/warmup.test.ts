@@ -14,10 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const {
-  mockListIssueComments,
-  mockListOpenPullRequests,
-} = vi.hoisted(() => ({
+const { mockListIssueComments, mockListOpenPullRequests } = vi.hoisted(() => ({
   mockListIssueComments: vi.fn(),
   mockListOpenPullRequests: vi.fn(),
 }))
@@ -35,11 +32,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import {
-  enqueueWarmupRerunsForIndex,
-  LEGACY_WARMUP_MARKER,
-  WARMUP_CALLOUT_MARKER,
-} from "@/src/lib/warmup"
+import { enqueueWarmupRerunsForIndex, LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "@/src/lib/warmup"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
@@ -50,9 +43,15 @@ function makeKvStub(): {
 } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -62,7 +61,11 @@ function makeEnv(): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
   const sent: JobMessage[] = []
   const env = {
     OPENCLAW_STATE: kv,
-    OPENCLAW_JOBS: { send: async (m: JobMessage) => { sent.push(m) } },
+    OPENCLAW_JOBS: {
+      send: async (m: JobMessage) => {
+        sent.push(m)
+      },
+    },
   } as unknown as Env
   return { env, sent, kv: store }
 }
@@ -88,7 +91,8 @@ describe("enqueueWarmupRerunsForIndex", () => {
     mockListOpenPullRequests.mockResolvedValue([pr(10, "h10"), pr(11, "h11"), pr(12, "h12")])
     // PR 10 has the new callout marker, PR 11 has nothing, PR 12 has the legacy marker.
     mockListIssueComments.mockImplementation(async (_o: string, _r: string, prNumber: number) => {
-      if (prNumber === 10) return [{ id: 1, body: `## Sigilix Overview\n> [!NOTE] ${WARMUP_CALLOUT_MARKER}\n> warming...` }]
+      if (prNumber === 10)
+        return [{ id: 1, body: `## Sigilix Overview\n> [!NOTE] ${WARMUP_CALLOUT_MARKER}\n> warming...` }]
       if (prNumber === 11) return [{ id: 2, body: "no marker" }]
       if (prNumber === 12) return [{ id: 3, body: LEGACY_WARMUP_MARKER }]
       return []
@@ -97,7 +101,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-abc",
     })
 
@@ -108,12 +116,12 @@ describe("enqueueWarmupRerunsForIndex", () => {
 
     const reruns = sent.filter((m) => m.type === "pr-review-rerun")
     const overviews = sent.filter((m) => m.type === "pr-overview")
-    expect(reruns.map((m) => "prNumber" in m ? m.prNumber : null).sort()).toEqual([10, 12])
-    expect(overviews.map((m) => "prNumber" in m ? m.prNumber : null).sort()).toEqual([10, 12])
+    expect(reruns.map((m) => ("prNumber" in m ? m.prNumber : null)).sort()).toEqual([10, 12])
+    expect(overviews.map((m) => ("prNumber" in m ? m.prNumber : null)).sort()).toEqual([10, 12])
 
     // The pr-overview messages carry the head SHA so the re-render
     // can compute its own dedupe key.
-    const overviewHeads = overviews.map((m) => "headSha" in m ? m.headSha : null).sort()
+    const overviewHeads = overviews.map((m) => ("headSha" in m ? m.headSha : null)).sort()
     expect(overviewHeads).toEqual(["h10", "h12"])
   })
 
@@ -124,7 +132,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-1",
     })
 
@@ -142,7 +154,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-1",
     })
 
@@ -156,7 +172,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
@@ -173,7 +193,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-abc",
     })
 
@@ -188,7 +212,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
@@ -206,14 +234,22 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     const first = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "same-run-id",
     })
     expect(first.enqueued).toBe(1)
     expect(sent).toHaveLength(2) // 1 rerun + 1 overview
 
     const second = await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "same-run-id",
     })
     expect(second).toEqual({ enqueued: 0, scanned: 0, skipped: "already-fanned-out" })
@@ -227,11 +263,19 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
 
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-one",
     })
     await enqueueWarmupRerunsForIndex({
-      env, client, owner: "Sigilix", repo: "sigilix", installationId: 99,
+      env,
+      client,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
       runId: "run-two",
     })
 

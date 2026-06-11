@@ -274,12 +274,7 @@ export function assertEnsembleBudgetInvariants(b: EnsembleBudgetTimeouts): void 
   }
   // Sigilix PR #94 catch — pre-flight is the third consumer of the headroom
   // envelope alongside retry + finalize.
-  if (
-    b.retrievalPreflightMs +
-      b.synthesizerRetryMs +
-      b.synthRetryFinalizeReserveMs >
-    b.reservedHeadroomMs
-  ) {
+  if (b.retrievalPreflightMs + b.synthesizerRetryMs + b.synthRetryFinalizeReserveMs > b.reservedHeadroomMs) {
     throw new Error(
       `[ensemble] headroom-envelope invariant violated: ` +
         `RETRIEVAL_PREFLIGHT_TIMEOUT_MS (${b.retrievalPreflightMs}) + ` +

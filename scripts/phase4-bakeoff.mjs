@@ -49,7 +49,9 @@ const missingEnv = [
   ["CLOUDFLARE_ACCOUNT_ID", cfAccountId],
   ["CLOUDFLARE_API_TOKEN", cfApiToken],
   ["GH_TOKEN or GITHUB_TOKEN", githubToken],
-].filter(([, v]) => !v).map(([k]) => k)
+]
+  .filter(([, v]) => !v)
+  .map(([k]) => k)
 if (missingEnv.length > 0) {
   console.error(`error: missing required env var(s): ${missingEnv.join(", ")}`)
   process.exit(1)
@@ -60,9 +62,7 @@ if (args.limit !== null && (!Number.isInteger(args.limit) || args.limit < 0)) {
 }
 
 const runId = new Date().toISOString().replace(/[:.]/g, "-")
-const outDir = args.out
-  ? resolve(args.out)
-  : resolve(`bakeoff-runs/phase4-${runId}`)
+const outDir = args.out ? resolve(args.out) : resolve(`bakeoff-runs/phase4-${runId}`)
 await mkdir(outDir, { recursive: true })
 
 console.log(`[bakeoff] phase 4 run ${runId}`)
@@ -147,7 +147,9 @@ for (let i = 0; i < kept.length; i++) {
       ensembleFellBack: ensemble.fellBackToPhase3,
       phase3Available: phase3 !== null,
     })
-    console.log(`[bakeoff] [${tag}] paired — phase3:${comparison.phase3FindingsCount}f phase4:${comparison.phase4FindingsCount}f overlap:${comparison.overlapEstimate}`)
+    console.log(
+      `[bakeoff] [${tag}] paired — phase3:${comparison.phase3FindingsCount}f phase4:${comparison.phase4FindingsCount}f overlap:${comparison.overlapEstimate}`,
+    )
   } catch (e) {
     console.error(`[bakeoff] [${tag}] failed: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -266,27 +268,22 @@ function formatCfErrors(json) {
 // the membership check is case-insensitive — GitHub bot logins are
 // canonically lowercase but defending against drift here is cheap and
 // avoids a silent zero-match if casing ever differs (CR PR #39 catch).
-const SELF_BOT_LOGINS = new Set([
-  "sigilix[bot]",
-  "arc-copilot[bot]",
-  "openclaw[bot]",
-].map((s) => s.toLowerCase()))
+const SELF_BOT_LOGINS = new Set(["sigilix[bot]", "arc-copilot[bot]", "openclaw[bot]"].map((s) => s.toLowerCase()))
 
 async function fetchPhase3Review({ owner, repo, prNumber, headSha }) {
   // Reviews list endpoint is paginated; default 30, max 100. Walk
   // every page so the matching self-bot review is never silently
   // missed because it lives past the first page (CR + arc PR #36 catch).
-  const reviews = await githubGetPaginated(
-    `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-  )
+  const reviews = await githubGetPaginated(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`)
   // Filter to reviews on this SHA, by Sigilix (or a legacy alias), with
   // our dedupe marker. Login compared lowercased — see SELF_BOT_LOGINS.
-  const matching = reviews.filter((r) =>
-    r.commit_id === headSha &&
-    typeof r.user?.login === "string" &&
-    SELF_BOT_LOGINS.has(r.user.login.toLowerCase()) &&
-    typeof r.body === "string" &&
-    r.body.includes("<!-- openclaw:pr-review -->"),
+  const matching = reviews.filter(
+    (r) =>
+      r.commit_id === headSha &&
+      typeof r.user?.login === "string" &&
+      SELF_BOT_LOGINS.has(r.user.login.toLowerCase()) &&
+      typeof r.body === "string" &&
+      r.body.includes("<!-- openclaw:pr-review -->"),
   )
   if (matching.length === 0) return null
   // Pick the latest (highest submitted_at) — there should usually be
@@ -319,9 +316,7 @@ async function fetchReviewInlineComments({ owner, repo, prNumber, reviewId }) {
   // Also paginated (default 30, max 100). Use the same paginated helper
   // and THROW on non-ok so silent [] doesn't skew comparison metrics
   // in Phase 4's favor when GitHub returns 401/403/429 (arc PR #36 catch).
-  return githubGetPaginated(
-    `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
-  )
+  return githubGetPaginated(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`)
 }
 
 /**

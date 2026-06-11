@@ -101,10 +101,7 @@ export interface RunResult {
   compiledRegexFailures: string[]
 }
 
-export function runDeterministicChecks(
-  diff: string,
-  checks: DeterministicCheck[],
-): RunResult {
+export function runDeterministicChecks(diff: string, checks: DeterministicCheck[]): RunResult {
   const hits: DeterministicCheckHit[] = []
   const compiledRegexFailures: string[] = []
   if (!diff || checks.length === 0) {
@@ -150,7 +147,7 @@ export function runDeterministicChecks(
     }
     if (inFileHeader && line.startsWith("+++ ")) {
       const p = line.slice(4).trim()
-      currentPath = p === "/dev/null" ? null : (p.startsWith("b/") ? p.slice(2) : p)
+      currentPath = p === "/dev/null" ? null : p.startsWith("b/") ? p.slice(2) : p
       continue
     }
     if (inFileHeader && line.startsWith("--- ")) {

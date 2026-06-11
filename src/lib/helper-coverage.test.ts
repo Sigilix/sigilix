@@ -11,8 +11,9 @@ import type { TestingSiblingMapping } from "@/src/lib/testing-evidence-pack"
 describe("resolveImportToRepoPath", () => {
   const tested = new Set(["src/lib/branch-retrieval.ts", "src/lib/foo.ts", "src/lib/widget/index.ts"])
   it("resolves a relative extensionless specifier to a tested source", () => {
-    expect(resolveImportToRepoPath("src/lib/triage-pr-review-ensemble.ts", "./branch-retrieval", tested))
-      .toBe("src/lib/branch-retrieval.ts")
+    expect(resolveImportToRepoPath("src/lib/triage-pr-review-ensemble.ts", "./branch-retrieval", tested)).toBe(
+      "src/lib/branch-retrieval.ts",
+    )
   })
   it("resolves a .js specifier to the .ts source (TS ESM convention)", () => {
     expect(resolveImportToRepoPath("src/lib/x.ts", "./foo.js", tested)).toBe("src/lib/foo.ts")
@@ -42,8 +43,14 @@ describe("extractTestedHelperBindings", () => {
     ].join("\n")
     const out = extractTestedHelperBindings("src/lib/ensemble.ts", src, ".ts", tested)
     const byLocal = Object.fromEntries(out.map((b) => [b.local, b]))
-    expect(byLocal["mergeBranchAware"]).toMatchObject({ imported: "mergeBranchAware", helperSource: "src/lib/branch-retrieval.ts" })
-    expect(byLocal["rbc"]).toMatchObject({ imported: "retrieveBranchChunks", helperSource: "src/lib/branch-retrieval.ts" })
+    expect(byLocal["mergeBranchAware"]).toMatchObject({
+      imported: "mergeBranchAware",
+      helperSource: "src/lib/branch-retrieval.ts",
+    })
+    expect(byLocal["rbc"]).toMatchObject({
+      imported: "retrieveBranchChunks",
+      helperSource: "src/lib/branch-retrieval.ts",
+    })
     expect(byLocal["BranchVector"]).toBeUndefined()
     expect(byLocal["foo"]).toBeUndefined()
   })
@@ -101,7 +108,9 @@ const mappings: TestingSiblingMapping[] = [
   { source: ORCH, test: null },
   { source: "src/lib/branch-retrieval.ts", test: "tests/branch-retrieval.test.ts" },
 ]
-const testContent = { "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => { mergeBranchAware([],[],new Set()) })` }
+const testContent = {
+  "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => { mergeBranchAware([],[],new Set()) })`,
+}
 
 function lineMap(lines: Record<number, string>): Map<string, Map<number, string>> {
   const inner = new Map<number, string>()
@@ -114,17 +123,29 @@ describe("detectHelperCoverage", () => {
     const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, paths)`
     const out = detectHelperCoverage({
       filesByPath: new Map([[ORCH, code]]),
-      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const merged = mergeBranchAware(a, b, paths)`, 3: `}` }),
+      addedLineTextByPath: lineMap({
+        1: `import { mergeBranchAware } from "./branch-retrieval"`,
+        2: `const merged = mergeBranchAware(a, b, paths)`,
+        3: `}`,
+      }),
       siblingMappings: mappings,
       testContentByPath: testContent,
     })
-    expect(out.coverageBySource[ORCH]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH]).toEqual({
+      status: "all",
+      helpers: ["src/lib/branch-retrieval.ts"],
+      structurallyGlue: expect.any(Boolean),
+    })
   })
   it("status=partial when only some substantive lines delegate", () => {
     const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, p)\nif (x > threshold) doInlineThing(x)`
     const out = detectHelperCoverage({
       filesByPath: new Map([[ORCH, code]]),
-      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const merged = mergeBranchAware(a, b, p)`, 3: `if (x > threshold) doInlineThing(x)` }),
+      addedLineTextByPath: lineMap({
+        1: `import { mergeBranchAware } from "./branch-retrieval"`,
+        2: `const merged = mergeBranchAware(a, b, p)`,
+        3: `if (x > threshold) doInlineThing(x)`,
+      }),
       siblingMappings: mappings,
       testContentByPath: testContent,
     })
@@ -144,7 +165,10 @@ describe("detectHelperCoverage", () => {
     const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst m = mergeBranchAware(a, b, p)`
     const out = detectHelperCoverage({
       filesByPath: new Map([[ORCH, code]]),
-      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const m = mergeBranchAware(a, b, p)` }),
+      addedLineTextByPath: lineMap({
+        1: `import { mergeBranchAware } from "./branch-retrieval"`,
+        2: `const m = mergeBranchAware(a, b, p)`,
+      }),
       siblingMappings: mappings,
       testContentByPath: { "tests/branch-retrieval.test.ts": `it("something else", () => {})` },
     })
@@ -176,14 +200,23 @@ describe("detectHelperCoverage", () => {
       { source: "src/lib/branch-retrieval.ts", test: "tests/branch-retrieval.test.ts" },
     ]
     const code = `import { mergeBranchAware as mba } from "./branch-retrieval"\nconst merged = mba(a, b, paths)`
-    const inner = new Map<number, string>([[1, `import { mergeBranchAware as mba } from "./branch-retrieval"`], [2, `const merged = mba(a, b, paths)`]])
+    const inner = new Map<number, string>([
+      [1, `import { mergeBranchAware as mba } from "./branch-retrieval"`],
+      [2, `const merged = mba(a, b, paths)`],
+    ])
     const out = detectHelperCoverage({
       filesByPath: new Map([[ORCH2, code]]),
       addedLineTextByPath: new Map([[ORCH2, inner]]),
       siblingMappings: mappings2,
-      testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware works", () => { mergeBranchAware([],[],new Set()) })` },
+      testContentByPath: {
+        "tests/branch-retrieval.test.ts": `it("mergeBranchAware works", () => { mergeBranchAware([],[],new Set()) })`,
+      },
     })
-    expect(out.coverageBySource[ORCH2]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH2]).toEqual({
+      status: "all",
+      helpers: ["src/lib/branch-retrieval.ts"],
+      structurallyGlue: expect.any(Boolean),
+    })
   })
   it("does NOT credit a mixed line (helper call + inline branching) → not all (FN-safe)", () => {
     const ORCH4 = "src/lib/ensemble.ts"
@@ -200,7 +233,9 @@ describe("detectHelperCoverage", () => {
       filesByPath: new Map([[ORCH4, code]]),
       addedLineTextByPath: new Map([[ORCH4, inner]]),
       siblingMappings: mappings4,
-      testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => mergeBranchAware([],[],new Set()))` },
+      testContentByPath: {
+        "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => mergeBranchAware([],[],new Set()))`,
+      },
     })
     // The only substantive line mixes a helper call with inline branching →
     // not delegated → not "all". (Here it's the sole substantive line → none.)
@@ -234,6 +269,10 @@ describe("detectHelperCoverage", () => {
         "tests/alpha.test.ts": `it("afn", () => afn())`,
       },
     })
-    expect(out.coverageBySource[ORCH3]).toEqual({ status: "all", helpers: ["src/lib/alpha.ts", "src/lib/zebra.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH3]).toEqual({
+      status: "all",
+      helpers: ["src/lib/alpha.ts", "src/lib/zebra.ts"],
+      structurallyGlue: expect.any(Boolean),
+    })
   })
 })

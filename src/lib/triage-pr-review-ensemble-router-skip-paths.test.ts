@@ -69,7 +69,9 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>("@/src/shared/adapters/model/ollama-chat")
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
+    "@/src/shared/adapters/model/ollama-chat",
+  )
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -111,19 +113,14 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/features/sarif-evidence", async () => {
-  const actual = await vi.importActual<typeof import("@/src/features/sarif-evidence")>(
-    "@/src/features/sarif-evidence",
-  )
+  const actual = await vi.importActual<typeof import("@/src/features/sarif-evidence")>("@/src/features/sarif-evidence")
   return {
     ...actual,
     runSarifEvidence: (...args: unknown[]) => mockRunSarifEvidence(...args),
   }
 })
 
-import {
-  handlePrReviewEnsemble,
-  ORCHESTRATOR_TIMEOUT_MS,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { handlePrReviewEnsemble, ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): Env["OPENCLAW_STATE"] {
@@ -327,9 +324,11 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     mockListOpenPullRequests.mockResolvedValueOnce([])
     // sigilix.json present with runOnLabels gating to a label the PR
     // doesn't carry.
-    mockGetFileContent.mockResolvedValueOnce(JSON.stringify({
-      costControls: { runOnLabels: ["sigilix:review"] },
-    }))
+    mockGetFileContent.mockResolvedValueOnce(
+      JSON.stringify({
+        costControls: { runOnLabels: ["sigilix:review"] },
+      }),
+    )
 
     const result = await handlePrReviewEnsemble({
       owner: "Sigilix",
@@ -364,9 +363,11 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     })
     mockGetPullRequestDiff.mockResolvedValueOnce(SOURCE_DIFF)
     mockListOpenPullRequests.mockResolvedValueOnce([])
-    mockGetFileContent.mockResolvedValueOnce(JSON.stringify({
-      costControls: { runOnLabels: ["sigilix:review"] },
-    }))
+    mockGetFileContent.mockResolvedValueOnce(
+      JSON.stringify({
+        costControls: { runOnLabels: ["sigilix:review"] },
+      }),
+    )
     mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
 
     const result = await handlePrReviewEnsemble({
@@ -397,16 +398,18 @@ describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (S
     mockGetFileContent.mockResolvedValue(null)
     mockRunSarifEvidence.mockResolvedValueOnce({
       skipped: false,
-      findings: [{
-        ruleId: "no-token",
-        severity: "error",
-        roleHint: "security",
-        category: "secret",
-        path: "src/lib/foo.ts",
-        line: 2,
-        message: "scanner finding",
-        toolName: "Semgrep",
-      }],
+      findings: [
+        {
+          ruleId: "no-token",
+          severity: "error",
+          roleHint: "security",
+          category: "secret",
+          path: "src/lib/foo.ts",
+          line: 2,
+          message: "scanner finding",
+          toolName: "Semgrep",
+        },
+      ],
       telemetry: { truncatedCount: 0, durationMs: 1 },
       sbom: { present: false, text: "", packageCount: 0, directDepCount: 0, licenseCounts: {} },
     })
@@ -429,13 +432,15 @@ describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (S
     expect(result.reviewMeta?.surface).toBe("skip-notice")
     expect(result.reviewMeta?.event).toBe("REQUEST_CHANGES")
     expect(result.reviewMeta?.findingsCount).toBe(0)
-    expect(result.reviewMeta?.deterministicCheckAnnotations).toMatchObject([{
-      path: "src/lib/foo.ts",
-      start_line: 2,
-      end_line: 2,
-      annotation_level: "failure",
-      title: "[SARIF error] Semgrep: no-token",
-    }])
+    expect(result.reviewMeta?.deterministicCheckAnnotations).toMatchObject([
+      {
+        path: "src/lib/foo.ts",
+        start_line: 2,
+        end_line: 2,
+        annotation_level: "failure",
+        title: "[SARIF error] Semgrep: no-token",
+      },
+    ])
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
 })
@@ -460,22 +465,23 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
       getBranchCalled = resolve
     })
     let getRepoTreeCallsAtBranchStart = 0
-    mockGetBranch.mockImplementationOnce(async (
-      _owner: string,
-      _repo: string,
-      _branch: string,
-      opts?: { signal?: AbortSignal },
-    ) => {
-      expect(opts?.signal?.aborted).toBe(false)
-      getRepoTreeCallsAtBranchStart = mockGetRepoTree.mock.calls.length
-      getBranchCalled()
-      return await new Promise<never>((_resolve, reject) => {
-        opts?.signal?.addEventListener("abort", () => {
-          expect(opts.signal?.aborted).toBe(true)
-          reject(new DOMException("The operation was aborted", "AbortError"))
-        }, { once: true })
-      })
-    })
+    mockGetBranch.mockImplementationOnce(
+      async (_owner: string, _repo: string, _branch: string, opts?: { signal?: AbortSignal }) => {
+        expect(opts?.signal?.aborted).toBe(false)
+        getRepoTreeCallsAtBranchStart = mockGetRepoTree.mock.calls.length
+        getBranchCalled()
+        return await new Promise<never>((_resolve, reject) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () => {
+              expect(opts.signal?.aborted).toBe(true)
+              reject(new DOMException("The operation was aborted", "AbortError"))
+            },
+            { once: true },
+          )
+        })
+      },
+    )
 
     const resultPromise = handlePrReviewEnsemble({
       owner: "Sigilix",
@@ -494,27 +500,27 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
     expect(result.status).toBe("errored")
     expect(result.telemetry.fellBackReason).toBe("internal_error")
     expect(result.telemetry.internalError).toMatch(/aborted/i)
-    expect(mockGetBranch).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      "sig-222",
-      { signal: expect.any(AbortSignal) },
-    )
+    expect(mockGetBranch).toHaveBeenCalledWith("Sigilix", "sigilix", "sig-222", {
+      signal: expect.any(AbortSignal),
+    })
     expect(mockGetRepoTree.mock.calls.length).toBe(getRepoTreeCallsAtBranchStart)
-    expect(warnSpy.mock.calls.some((args) =>
-      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-aborted")),
-    )).toBe(true)
-    expect(warnSpy.mock.calls.some((args) =>
-      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-fetch-failed")),
-    )).toBe(false)
-    expect(logSpy.mock.calls.some((args) =>
-      args.some((arg) =>
-        String(arg).includes("tests-evidence-repo-tree-status") &&
-        String(arg).includes("fetch-failed"),
+    expect(
+      warnSpy.mock.calls.some((args) => args.some((arg) => String(arg).includes("tests-evidence-repo-tree-aborted"))),
+    ).toBe(true)
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        args.some((arg) => String(arg).includes("tests-evidence-repo-tree-fetch-failed")),
       ),
-    )).toBe(false)
-    expect(logSpy.mock.calls.some((args) =>
-      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-status")),
-    )).toBe(false)
+    ).toBe(false)
+    expect(
+      logSpy.mock.calls.some((args) =>
+        args.some(
+          (arg) => String(arg).includes("tests-evidence-repo-tree-status") && String(arg).includes("fetch-failed"),
+        ),
+      ),
+    ).toBe(false)
+    expect(
+      logSpy.mock.calls.some((args) => args.some((arg) => String(arg).includes("tests-evidence-repo-tree-status"))),
+    ).toBe(false)
   })
 })

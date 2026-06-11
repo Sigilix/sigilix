@@ -39,16 +39,19 @@ export default tseslint.config(
       // exhaustiveness `_var: never` pattern means real unused
       // variables sneak past `tsc --noEmit`.
       "no-unused-vars": "off", // base rule conflicts with TS; off in favour of the TS-aware one
-      "@typescript-eslint/no-unused-vars": ["error", {
-        // Underscore-prefixed args / locals are intentional placeholders
-        // (e.g., `_args`, `_exhaustive: never`). Matches the existing
-        // convention in src/lib/triage-pr-review.ts:1038-1042.
-        argsIgnorePattern: "^_",
-        varsIgnorePattern: "^_",
-        caughtErrorsIgnorePattern: "^_",
-        // Don't flag arrow-fn rest params that were destructured for clarity.
-        ignoreRestSiblings: true,
-      }],
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          // Underscore-prefixed args / locals are intentional placeholders
+          // (e.g., `_args`, `_exhaustive: never`). Matches the existing
+          // convention in src/lib/triage-pr-review.ts:1038-1042.
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          // Don't flag arrow-fn rest params that were destructured for clarity.
+          ignoreRestSiblings: true,
+        },
+      ],
       // Block `throw "string"` — almost always a refactor mistake;
       // breaks `instanceof Error` discrimination downstream.
       "no-throw-literal": "error",
@@ -79,12 +82,18 @@ export default tseslint.config(
       // `./sibling` is fine. (TS-aware variant so `import type ... from "../"`
       // is caught too under verbatimModuleSyntax.)
       "no-restricted-imports": "off",
-      "@typescript-eslint/no-restricted-imports": ["error", {
-        patterns: [{
-          regex: "^\\.\\./",
-          message: "Climbing imports are banned — use the `@/` root alias (e.g. `@/src/...`). See COMPLIANCE.md §3.",
-        }],
-      }],
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^\\.\\./",
+              message:
+                "Climbing imports are banned — use the `@/` root alias (e.g. `@/src/...`). See COMPLIANCE.md §3.",
+            },
+          ],
+        },
+      ],
     },
   },
   {

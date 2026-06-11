@@ -20,11 +20,7 @@ import {
   type SynthRetentionCase,
   type SynthRetentionOutput,
 } from "./synth-retention-corpus"
-import {
-  runSynthesizer,
-  SYNTHESIZER_CONFIG,
-  SYNTHESIZER_TIMEOUT_MS,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { runSynthesizer, SYNTHESIZER_CONFIG, SYNTHESIZER_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
 import {
   SYNTHESIZER_PROMPT,
   buildSynthesizerInitialMessage,
@@ -109,10 +105,11 @@ describe.skipIf(!API_KEY)("synth retention baseline (LIVE - needs OLLAMA_API_KEY
   it(
     "measures synthesizer TP retention, FP filtering, hallucinations, duplicate collapse, and runtime",
     async () => {
-      const onlyIds = (process.env.SYNTH_RETENTION_ONLY?.split(",").map((s) => s.trim()).filter(Boolean)) ?? []
-      const cases = onlyIds.length
-        ? SYNTH_RETENTION_CASES.filter((c) => onlyIds.includes(c.id))
-        : SYNTH_RETENTION_CASES
+      const onlyIds =
+        process.env.SYNTH_RETENTION_ONLY?.split(",")
+          .map((s) => s.trim())
+          .filter(Boolean) ?? []
+      const cases = onlyIds.length ? SYNTH_RETENTION_CASES.filter((c) => onlyIds.includes(c.id)) : SYNTH_RETENTION_CASES
       const scores = []
       for (let k = 0; k < REPEATS; k++) {
         for (const c of cases) {
@@ -127,9 +124,16 @@ describe.skipIf(!API_KEY)("synth retention baseline (LIVE - needs OLLAMA_API_KEY
             `drift ${score.severityDriftSourceIds.length}`,
             `collapse ${score.duplicateCollapses}`,
           ].join(" - ")
-          console.log(`  [synth] ${c.id.padEnd(30)} ${mark} (${score.modelUsed} - ${score.elapsedMs}ms${score.failureReason ? ` - FAIL:${score.failureReason}` : ""})`)
-          if (process.env.SYNTH_RETENTION_DEBUG && (score.recall < 1 || score.falsePositivesKept > 0 || score.unsupportedFindings > 0)) {
-            console.log(`      missed=${score.missedSourceIds.join(",") || "-"} drift=${score.severityDriftSourceIds.join(",") || "-"} misdiagnosed=${score.misdiagnosedSourceIds.join(",") || "-"}`)
+          console.log(
+            `  [synth] ${c.id.padEnd(30)} ${mark} (${score.modelUsed} - ${score.elapsedMs}ms${score.failureReason ? ` - FAIL:${score.failureReason}` : ""})`,
+          )
+          if (
+            process.env.SYNTH_RETENTION_DEBUG &&
+            (score.recall < 1 || score.falsePositivesKept > 0 || score.unsupportedFindings > 0)
+          ) {
+            console.log(
+              `      missed=${score.missedSourceIds.join(",") || "-"} drift=${score.severityDriftSourceIds.join(",") || "-"} misdiagnosed=${score.misdiagnosedSourceIds.join(",") || "-"}`,
+            )
           }
         }
       }

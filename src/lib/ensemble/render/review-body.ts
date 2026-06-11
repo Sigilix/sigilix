@@ -20,17 +20,8 @@
 import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
 import { type StackContext } from "@/src/lib/pr-stack"
 import { ALL_DISMISS_REASONS } from "@/src/lib/dismiss-reasons"
-import {
-  renderTrustSummary,
-  renderOutsideDiffDropdown,
-  renderPrLevelSection,
-} from "@/src/lib/trust-ledger-render"
-import {
-  findingScope,
-  stripAstMarkers,
-  formatFindingCategory,
-  type BodyFindingLinkContext,
-} from "./finding-format"
+import { renderTrustSummary, renderOutsideDiffDropdown, renderPrLevelSection } from "@/src/lib/trust-ledger-render"
+import { findingScope, stripAstMarkers, formatFindingCategory, type BodyFindingLinkContext } from "./finding-format"
 import { renderBodyOnlyFindings } from "./finding-comment"
 
 /**
@@ -59,8 +50,7 @@ export interface DeltaBadgeCounts {
 
 export function renderDeltaBadge(counts: DeltaBadgeCounts): string | null {
   const { newCount, stillOpenCount, likelyFixedCount, carriedOverCount } = counts
-  const any =
-    newCount > 0 || stillOpenCount > 0 || likelyFixedCount > 0 || carriedOverCount > 0
+  const any = newCount > 0 || stillOpenCount > 0 || likelyFixedCount > 0 || carriedOverCount > 0
   if (!any) return null
   const parts: string[] = []
   if (newCount > 0) parts.push(`+${newCount} new`)
@@ -282,10 +272,7 @@ export function renderApproveBody(args: RenderBodyArgs): string {
   // validateForSubmission, but dedupe by (path,line,headline) defensively so a
   // future caller that passes overlapping lists can't double-render (Codex nit).
   const seenOutOfScope = new Set<string>()
-  const outOfScope = [
-    ...(args.unanchored ?? []),
-    ...args.verdict.findings,
-  ].filter((f) => {
+  const outOfScope = [...(args.unanchored ?? []), ...args.verdict.findings].filter((f) => {
     if (!f.outOfPrScope) return false
     const key = `${f.path}:${f.line}:${f.headline}`
     if (seenOutOfScope.has(key)) return false
@@ -418,8 +405,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   // only findings already get an explicit "+ N body" segment in the
   // lead, so counting them here too would double-count.
   const highOrCriticalCount =
-    inlineFindings.filter((f) => f.score >= 4).length
-    + bodyOnlyFindings.filter((f) => f.score >= 4).length
+    inlineFindings.filter((f) => f.score >= 4).length + bodyOnlyFindings.filter((f) => f.score >= 4).length
   const lowerSeverityInlineCount = inlineFindings.filter((f) => f.score < 4).length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
@@ -510,14 +496,12 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
 
   // Summary paragraph (with optional stack-context parenthetical).
   const stackParen = renderStackParenthetical(args.stack)
-  const summary = stackParen
-    ? `${args.verdict.summary.trimEnd()} ${stackParen}`
-    : args.verdict.summary
+  const summary = stackParen ? `${args.verdict.summary.trimEnd()} ${stackParen}` : args.verdict.summary
   lines.push("")
   if (zeroFindingBlocker) {
     lines.push(
       "Approval is pending because Sigilix has an unresolved policy-level blocker, " +
-      "but no line-specific findings were rendered in this review.",
+        "but no line-specific findings were rendered in this review.",
     )
     lines.push("")
   }
@@ -833,10 +817,7 @@ export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
     })
   if (eligible.length === 0) return null
 
-  const lines: string[] = [
-    "| Severity | Location | Issue |",
-    "|:---|:---|:---|",
-  ]
+  const lines: string[] = ["| Severity | Location | Issue |", "|:---|:---|:---|"]
   for (const f of eligible) {
     // SIG-281 PR B (Rec 6 / Kimi Q3): the table can now contain body-only
     // blockers (file-level / PR-level scope) that have no specific diff
@@ -867,9 +848,8 @@ export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
 }
 
 function formatFixPlanRow(f: PrReviewFinding): string {
-  const range = f.startLine != null && f.startLine !== f.line
-    ? `${f.path}:${f.startLine}-${f.line}`
-    : `${f.path}:${f.line}`
+  const range =
+    f.startLine != null && f.startLine !== f.line ? `${f.path}:${f.startLine}-${f.line}` : `${f.path}:${f.line}`
   // Headline only — the inline comment carries the body. Truncate
   // defensively so an over-long headline can't break the bullet list.
   const cleanHeadline = stripAstMarkers(f.headline)

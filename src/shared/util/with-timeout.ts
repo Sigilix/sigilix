@@ -8,10 +8,7 @@
 // Caller distinguishes timeout from other errors via the conventional
 // `error.name === "AbortError"` check.
 
-export async function withTimeout<T>(
-  factory: (signal: AbortSignal) => Promise<T>,
-  ms: number
-): Promise<T> {
+export async function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {

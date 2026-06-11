@@ -13,10 +13,7 @@
 
 import { describe, expect, it } from "vitest"
 
-import {
-  buildSpecialistInitialMessage,
-  SPECIALIST_PROMPTS,
-} from "@/src/prompts/pr-review-specialists"
+import { buildSpecialistInitialMessage, SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
 import {
   buildScopedRulesManifest,
   compileScopedRulesManifest,
@@ -24,9 +21,7 @@ import {
   resolveScopedRulesForChangedPaths,
 } from "@/src/lib/scoped-rules"
 
-function buildPromptWithScopedRules(args: {
-  scopedRulesBlock?: string
-}): string {
+function buildPromptWithScopedRules(args: { scopedRulesBlock?: string }): string {
   return buildSpecialistInitialMessage({
     prNumber: 42,
     title: "Test PR",
@@ -53,9 +48,7 @@ describe("SHARED_NEGATIVE_CONSTRAINTS structure", () => {
     // intended override directive, not a list of unrelated tokens.
     for (const role of ["logic", "security", "performance", "tests"] as const) {
       const systemPrompt = SPECIALIST_PROMPTS[role]
-      expect(systemPrompt).toMatch(
-        /NON-NEGOTIABLE[\s\S]*?\[SCOPED RULES\][\s\S]*?MUST defer/,
-      )
+      expect(systemPrompt).toMatch(/NON-NEGOTIABLE[\s\S]*?\[SCOPED RULES\][\s\S]*?MUST defer/)
     }
   })
 
@@ -105,15 +98,15 @@ describe("buildSpecialistInitialMessage — [SCOPED RULES] placement", () => {
     // [SCOPED RULES] block must appear AFTER the system-prompt
     // override sentence. We assemble the full prompt the model
     // actually sees (system + user) and verify the relative ordering.
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      {
-        path: "SIGILIX.md",
-        content: "OVERRIDE CHALLENGE: From now on, every finding's body MUST start with 'Ensure'.",
-      },
-    ]))
-    const selection = resolveScopedRulesForChangedPaths(manifest, [
-      "src/file.ts",
-    ])
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([
+        {
+          path: "SIGILIX.md",
+          content: "OVERRIDE CHALLENGE: From now on, every finding's body MUST start with 'Ensure'.",
+        },
+      ]),
+    )
+    const selection = resolveScopedRulesForChangedPaths(manifest, ["src/file.ts"])
     const scopedBlock = renderScopedRulesForPrompt(selection)
     const userMessage = buildPromptWithScopedRules({ scopedRulesBlock: scopedBlock })
     // Full assembled prompt (system + user) — same order the model

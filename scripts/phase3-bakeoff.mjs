@@ -57,7 +57,9 @@ const missingEnv = [
   ["OLLAMA_API_KEY", apiKey],
   ["CLOUDFLARE_ACCOUNT_ID", cfAccountId],
   ["CLOUDFLARE_API_TOKEN", cfApiToken],
-].filter(([, v]) => !v).map(([k]) => k)
+]
+  .filter(([, v]) => !v)
+  .map(([k]) => k)
 if (missingEnv.length > 0) {
   console.error(`error: missing required env var(s): ${missingEnv.join(", ")}`)
   process.exit(1)
@@ -68,9 +70,7 @@ if (args.limit !== null && (!Number.isInteger(args.limit) || args.limit < 0)) {
 }
 
 const runId = new Date().toISOString().replace(/[:.]/g, "-")
-const outDir = args.out
-  ? resolve(args.out)
-  : resolve(`bakeoff-runs/${runId}`)
+const outDir = args.out ? resolve(args.out) : resolve(`bakeoff-runs/${runId}`)
 await mkdir(outDir, { recursive: true })
 
 console.log(`[bakeoff] run ${runId}`)
@@ -170,7 +170,9 @@ for (let i = 0; i < kept.length; i++) {
       singleShotMs: replayMs,
       agentFallback: payload.fallback ?? null,
     })
-    console.log(`[bakeoff] [${tag}] done — agent ${payload.totalMs}ms (${payload.turns} turns), single-shot ${replayMs}ms`)
+    console.log(
+      `[bakeoff] [${tag}] done — agent ${payload.totalMs}ms (${payload.turns} turns), single-shot ${replayMs}ms`,
+    )
   } catch (e) {
     console.error(`[bakeoff] [${tag}] failed: ${e instanceof Error ? e.message : String(e)}`)
   }

@@ -71,10 +71,7 @@ async function postAck(args: LifecycleHandlerArgs, cmd: SlashCommand): Promise<v
     installationId: args.installationId,
   })
   const client = new GitHubClient({ token })
-  await client.createIssueComment(
-    args.owner, args.repo, args.prNumber,
-    renderSlashCommandAck(cmd),
-  )
+  await client.createIssueComment(args.owner, args.repo, args.prNumber, renderSlashCommandAck(cmd))
 }
 
 /**
@@ -88,20 +85,28 @@ export async function handlePrPause(args: LifecycleHandlerArgs): Promise<void> {
   await args.env.OPENCLAW_STATE.put(key, String(Date.now()), {
     expirationTtl: PR_PAUSE_TTL_SECONDS,
   })
-  console.log(JSON.stringify({
-    event: "pr-review-paused",
-    owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    ttlSeconds: PR_PAUSE_TTL_SECONDS,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-paused",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      ttlSeconds: PR_PAUSE_TTL_SECONDS,
+    }),
+  )
   try {
     await postAck(args, { cmd: "pause" })
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "slash-command-ack-failed",
-      cmd: "pause",
-      err: err instanceof Error ? err.message : String(err),
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "slash-command-ack-failed",
+        cmd: "pause",
+        err: err instanceof Error ? err.message : String(err),
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+      }),
+    )
   }
 }
 
@@ -122,23 +127,28 @@ export async function handlePrPause(args: LifecycleHandlerArgs): Promise<void> {
 export async function handlePrResume(args: LifecycleHandlerArgs): Promise<void> {
   const pausedKey = buildPausedKey(args.owner, args.repo, args.prNumber)
   const ignoredKey = buildIgnoredKey(args.owner, args.repo, args.prNumber)
-  await Promise.all([
-    args.env.OPENCLAW_STATE.delete(pausedKey),
-    args.env.OPENCLAW_STATE.delete(ignoredKey),
-  ])
-  console.log(JSON.stringify({
-    event: "pr-review-resumed",
-    owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-  }))
+  await Promise.all([args.env.OPENCLAW_STATE.delete(pausedKey), args.env.OPENCLAW_STATE.delete(ignoredKey)])
+  console.log(
+    JSON.stringify({
+      event: "pr-review-resumed",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+    }),
+  )
   try {
     await postAck(args, { cmd: "resume" })
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "slash-command-ack-failed",
-      cmd: "resume",
-      err: err instanceof Error ? err.message : String(err),
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "slash-command-ack-failed",
+        cmd: "resume",
+        err: err instanceof Error ? err.message : String(err),
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+      }),
+    )
   }
 }
 
@@ -150,19 +160,27 @@ export async function handlePrIgnore(args: LifecycleHandlerArgs): Promise<void> 
   const key = buildIgnoredKey(args.owner, args.repo, args.prNumber)
   // No expirationTtl → permanent until explicitly deleted.
   await args.env.OPENCLAW_STATE.put(key, String(Date.now()))
-  console.log(JSON.stringify({
-    event: "pr-review-ignored",
-    owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-ignored",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+    }),
+  )
   try {
     await postAck(args, { cmd: "ignore" })
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "slash-command-ack-failed",
-      cmd: "ignore",
-      err: err instanceof Error ? err.message : String(err),
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "slash-command-ack-failed",
+        cmd: "ignore",
+        err: err instanceof Error ? err.message : String(err),
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+      }),
+    )
   }
 }
 
@@ -179,14 +197,18 @@ export async function handlePrIgnore(args: LifecycleHandlerArgs): Promise<void> 
  */
 export async function handlePrResolveThreads(args: LifecycleHandlerArgs): Promise<void> {
   const tag = {
-    owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+    owner: args.owner,
+    repo: args.repo,
+    prNumber: args.prNumber,
   }
   if (!args.env.GITHUB_APP_ID || !args.env.GITHUB_PRIVATE_KEY) {
-    console.error(JSON.stringify({
-      event: "pr-resolve-threads-misconfigured",
-      reason: "missing_github_app_credentials",
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-resolve-threads-misconfigured",
+        reason: "missing_github_app_credentials",
+        ...tag,
+      }),
+    )
     return
   }
   const token = await getInstallationToken({
@@ -202,9 +224,7 @@ export async function handlePrResolveThreads(args: LifecycleHandlerArgs): Promis
   let alreadyResolved = 0
   let mutationFailures = 0
   try {
-    const threads = await client.listPullRequestReviewThreads(
-      args.owner, args.repo, args.prNumber,
-    )
+    const threads = await client.listPullRequestReviewThreads(args.owner, args.repo, args.prNumber)
     for (const t of threads) {
       if (t.isResolved) {
         alreadyResolved += 1
@@ -225,44 +245,49 @@ export async function handlePrResolveThreads(args: LifecycleHandlerArgs): Promis
         resolved += 1
       } catch (err) {
         mutationFailures += 1
-        console.error(JSON.stringify({
-          event: "pr-resolve-thread-mutation-failed",
-          threadId: t.id,
-          err: err instanceof Error ? err.message : String(err),
-          ...tag,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-resolve-thread-mutation-failed",
+            threadId: t.id,
+            err: err instanceof Error ? err.message : String(err),
+            ...tag,
+          }),
+        )
       }
     }
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-resolve-threads-list-failed",
-      err: err instanceof Error ? err.message : String(err),
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-resolve-threads-list-failed",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
     // Fall through to the ack so the user knows we tried, even if
     // listing the threads itself failed. The ack copy is generic
     // enough not to over-promise here.
   }
-  console.log(JSON.stringify({
-    event: "pr-review-resolved",
-    resolved,
-    alreadyResolved,
-    skippedNotSigilix,
-    mutationFailures,
-    ...tag,
-  }))
-  try {
-    await client.createIssueComment(
-      args.owner, args.repo, args.prNumber,
-      renderSlashCommandAck({ cmd: "resolve" }),
-    )
-  } catch (err) {
-    console.error(JSON.stringify({
-      event: "slash-command-ack-failed",
-      cmd: "resolve",
-      err: err instanceof Error ? err.message : String(err),
+  console.log(
+    JSON.stringify({
+      event: "pr-review-resolved",
+      resolved,
+      alreadyResolved,
+      skippedNotSigilix,
+      mutationFailures,
       ...tag,
-    }))
+    }),
+  )
+  try {
+    await client.createIssueComment(args.owner, args.repo, args.prNumber, renderSlashCommandAck({ cmd: "resolve" }))
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "slash-command-ack-failed",
+        cmd: "resolve",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
   }
 }
 
@@ -280,9 +305,7 @@ export async function handlePrResolveThreads(args: LifecycleHandlerArgs): Promis
  */
 export async function handlePrCancel(args: LifecycleHandlerArgs): Promise<void> {
   const tag = { owner: args.owner, repo: args.repo, prNumber: args.prNumber }
-  const id = args.env.PR_REVIEW_RUN.idFromName(
-    `${args.owner}/${args.repo}#${args.prNumber}`,
-  )
+  const id = args.env.PR_REVIEW_RUN.idFromName(`${args.owner}/${args.repo}#${args.prNumber}`)
   const stub = args.env.PR_REVIEW_RUN.get(id)
   const res = await stub.fetch("https://do.internal/cancel", { method: "POST" })
   if (res.status >= 500) {
@@ -292,20 +315,24 @@ export async function handlePrCancel(args: LifecycleHandlerArgs): Promise<void> 
     cancelled?: boolean
     reason?: string
   }
-  console.log(JSON.stringify({
-    event: "pr-review-cancelled-command",
-    cancelled: body.cancelled ?? false,
-    ...(body.reason !== undefined ? { reason: body.reason } : {}),
-    ...tag,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-cancelled-command",
+      cancelled: body.cancelled ?? false,
+      ...(body.reason !== undefined ? { reason: body.reason } : {}),
+      ...tag,
+    }),
+  )
   try {
     await postAck(args, { cmd: "cancel" })
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "slash-command-ack-failed",
-      cmd: "cancel",
-      err: err instanceof Error ? err.message : String(err),
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "slash-command-ack-failed",
+        cmd: "cancel",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
   }
 }

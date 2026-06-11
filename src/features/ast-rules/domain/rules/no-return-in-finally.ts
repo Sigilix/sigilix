@@ -22,11 +22,7 @@ function sliceEvidence(source: string, node: AstNode): string {
   return slice.length > SLICE_MAX ? slice.slice(0, SLICE_MAX) + "…" : slice
 }
 
-const FUNCTION_TYPES = new Set([
-  "FunctionDeclaration",
-  "FunctionExpression",
-  "ArrowFunctionExpression",
-])
+const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"])
 
 // Review (both reviewers, HIGH): an unlabeled `break`/`continue` binds to
 // the nearest enclosing loop/switch. One written INSIDE a loop/switch
@@ -92,7 +88,8 @@ export const noReturnInFinally: AstRule = {
     const jump = findJumpInScope(finalizer, false)
     if (!jump) return null
     return {
-      message: "Control-flow jump inside `finally` swallows the try/catch outcome — a pending return value is discarded and any in-flight exception is silently eaten. Move this out of `finally`.",
+      message:
+        "Control-flow jump inside `finally` swallows the try/catch outcome — a pending return value is discarded and any in-flight exception is silently eaten. Move this out of `finally`.",
       evidence: sliceEvidence(ctx.source, jump),
       line: jump.loc?.start?.line ?? finalizer.loc?.start?.line ?? 1,
       endLine: jump.loc?.end?.line ?? jump.loc?.start?.line ?? 1,

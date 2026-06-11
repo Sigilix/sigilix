@@ -81,11 +81,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import {
-  OVERVIEW_MARKER,
-  LEGACY_OVERVIEW_MARKER,
-  findExistingOverviewComment,
-} from "./triage-pr-overview"
+import { OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER, findExistingOverviewComment } from "./triage-pr-overview"
 
 /**
  * Body posted by the stub. The marker on line 1 is what the overview
@@ -145,17 +141,11 @@ function templateIndex(prNumber: number, headSha: string): number {
   return Math.floor(stubKeyHash(prNumber, headSha) / STUB_QUIPS.length) % STUB_ASCII_TEMPLATES.length
 }
 
-export function selectPrOverviewStubQuip(args: {
-  prNumber: number
-  headSha: string
-}): string {
+export function selectPrOverviewStubQuip(args: { prNumber: number; headSha: string }): string {
   return STUB_QUIPS[quipIndex(args.prNumber, args.headSha)]!
 }
 
-export function selectPrOverviewStubAsciiTemplate(args: {
-  prNumber: number
-  headSha: string
-}): StubAsciiTemplate {
+export function selectPrOverviewStubAsciiTemplate(args: { prNumber: number; headSha: string }): StubAsciiTemplate {
   return STUB_ASCII_TEMPLATES[templateIndex(args.prNumber, args.headSha)]!
 }
 
@@ -167,81 +157,31 @@ function centerText(text: string, width: number): string {
 
 function frameLines(lines: readonly string[], width = 58): string {
   const border = `+${"-".repeat(width + 2)}+`
-  return [
-    border,
-    ...lines.map((line) => `| ${centerText(line, width)} |`),
-    border,
-  ].join("\n")
+  return [border, ...lines.map((line) => `| ${centerText(line, width)} |`), border].join("\n")
 }
 
 function renderStubFlourish(template: StubAsciiTemplate, quip: string): string {
   switch (template) {
     case "signal-box":
-      return frameLines([
-        "SIGILIX REVIEW SIGNAL",
-        "",
-        quip,
-        "",
-        "[ diff ] -> [ reason ] -> [ review ]",
-      ])
+      return frameLines(["SIGILIX REVIEW SIGNAL", "", quip, "", "[ diff ] -> [ reason ] -> [ review ]"])
     case "small-lamp":
-      return frameLines([
-        "    .",
-        "   /|\\",
-        "  /_|_\\    small light, sharp sight",
-        "    |",
-        quip,
-      ])
+      return frameLines(["    .", "   /|\\", "  /_|_\\    small light, sharp sight", "    |", quip])
     case "steady-bridge":
-      return frameLines([
-        "source === proof === patch",
-        "====[ review bridge ]====",
-        quip,
-        "cross slowly; ship cleanly",
-      ])
+      return frameLines(["source === proof === patch", "====[ review bridge ]====", quip, "cross slowly; ship cleanly"])
     case "star-map":
-      return frameLines([
-        "       *        .",
-        "  .       [ SIGILIX ]       *",
-        "      trace the changed stars",
-        quip,
-      ])
+      return frameLines(["       *        .", "  .       [ SIGILIX ]       *", "      trace the changed stars", quip])
     case "patch-garden":
-      return frameLines([
-        "  _ _ _",
-        " | patch |  water with tests",
-        " | proof |  prune with care",
-        quip,
-      ])
+      return frameLines(["  _ _ _", " | patch |  water with tests", " | proof |  prune with care", quip])
     case "quiet-compass":
-      return frameLines([
-        "        N",
-        "    W --+-- E",
-        "        S",
-        quip,
-        "direction: changed behavior",
-      ])
+      return frameLines(["        N", "    W --+-- E", "        S", quip, "direction: changed behavior"])
     case "tiny-poem":
-      return frameLines([
-        "Tiny diff, steady hand.",
-        "A line can move a land.",
-        quip,
-      ])
+      return frameLines(["Tiny diff, steady hand.", "A line can move a land.", quip])
     case "proof-lab":
-      return frameLines([
-        "[ hypothesis ]",
-        "      + evidence",
-        "      + changed lines",
-        "      = review note",
-        quip,
-      ])
+      return frameLines(["[ hypothesis ]", "      + evidence", "      + changed lines", "      = review note", quip])
   }
 }
 
-export function buildPrOverviewStubBody(args: {
-  prNumber: number
-  headSha: string
-}): string {
+export function buildPrOverviewStubBody(args: { prNumber: number; headSha: string }): string {
   const quip = selectPrOverviewStubQuip(args)
   const template = selectPrOverviewStubAsciiTemplate(args)
   return `${OVERVIEW_MARKER}
@@ -371,19 +311,13 @@ export const STUB_GITHUB_API_TIMEOUT_MS = 10_000
  * complete server-side regardless. Timeout semantics are about
  * UNBLOCKING the webhook handler, not about cancelling GitHub work.
  */
-async function raceWithTimeout<T>(
-  p: Promise<T>,
-  ms: number,
-): Promise<{ kind: "ok"; value: T } | { kind: "timeout" }> {
+async function raceWithTimeout<T>(p: Promise<T>, ms: number): Promise<{ kind: "ok"; value: T } | { kind: "timeout" }> {
   let timerId: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
     timerId = setTimeout(() => resolve({ kind: "timeout" }), ms)
   })
   try {
-    return await Promise.race([
-      p.then((value) => ({ kind: "ok" as const, value })),
-      timeoutPromise,
-    ])
+    return await Promise.race([p.then((value) => ({ kind: "ok" as const, value })), timeoutPromise])
   } finally {
     if (timerId !== undefined) clearTimeout(timerId)
   }
@@ -406,9 +340,7 @@ async function raceWithTimeout<T>(
 async function pollForFinalFlag(env: Env, flagKey: string): Promise<number | null> {
   for (let attempt = 0; attempt < STUB_CONCURRENT_POLL_MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) {
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, STUB_CONCURRENT_POLL_INTERVAL_MS),
-      )
+      await new Promise<void>((resolve) => setTimeout(resolve, STUB_CONCURRENT_POLL_INTERVAL_MS))
     }
     try {
       const existing = await env.OPENCLAW_STATE.get(flagKey)
@@ -427,12 +359,7 @@ async function pollForFinalFlag(env: Env, flagKey: string): Promise<number | nul
  * Compute the KV flag key used to dedupe stub posts across webhook
  * deliveries. Exposed for tests.
  */
-export function stubFlagKey(args: {
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-}): string {
+export function stubFlagKey(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
   return `${STUB_KV_PREFIX}${args.owner}/${args.repo}#${args.prNumber}:${args.headSha}`
 }
 
@@ -441,12 +368,7 @@ export function stubFlagKey(args: {
  * tests + so the webhook handler (or future operator tooling) can
  * read it for telemetry correlation.
  */
-export function stubInflightKey(args: {
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-}): string {
+export function stubInflightKey(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
   return `${STUB_INFLIGHT_KV_PREFIX}${args.owner}/${args.repo}#${args.prNumber}:${args.headSha}`
 }
 
@@ -515,9 +437,7 @@ export type PostStubOutcome =
  *      can rewrite it again in place); otherwise create a fresh
  *      comment. Write KV flag in both branches.
  */
-export async function postPrOverviewStubIfNeeded(
-  args: PostStubArgs,
-): Promise<PostStubOutcome> {
+export async function postPrOverviewStubIfNeeded(args: PostStubArgs): Promise<PostStubOutcome> {
   const { env, owner, repo, prNumber, headSha, installationId } = args
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
@@ -545,11 +465,16 @@ export async function postPrOverviewStubIfNeeded(
     // create path. Worst case: an extra `listIssueComments` round-trip
     // on this delivery; the create path is still idempotent via the
     // marker scan.
-    console.warn(JSON.stringify({
-      event: "pr-overview-stub-kv-read-failed",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-stub-kv-read-failed",
+        owner,
+        repo,
+        prNumber,
+        head_sha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 
   // ── 1.5. SIG-92 concurrent-delivery short-circuit ────────────────
@@ -575,20 +500,30 @@ export async function postPrOverviewStubIfNeeded(
   if (priorInflight !== null) {
     const polled = await pollForFinalFlag(env, flagKey)
     if (polled !== null) {
-      console.log(JSON.stringify({
-        event: "pr-overview-stub-concurrent-detected",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        comment_id: polled,
-        prior_inflight: priorInflight.slice(0, 8),
-        mode: "polled-win",
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-stub-concurrent-detected",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+          comment_id: polled,
+          prior_inflight: priorInflight.slice(0, 8),
+          mode: "polled-win",
+        }),
+      )
       return { kind: "kv-hit", commentId: polled }
     }
-    console.warn(JSON.stringify({
-      event: "pr-overview-stub-concurrent-poll-timeout",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      prior_inflight: priorInflight.slice(0, 8),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-stub-concurrent-poll-timeout",
+        owner,
+        repo,
+        prNumber,
+        head_sha: headSha.slice(0, 7),
+        prior_inflight: priorInflight.slice(0, 8),
+      }),
+    )
   }
   // Write our own tombstone so any LATER delivery that arrives during
   // our create round-trip can poll instead of racing us. Best-effort —
@@ -596,11 +531,9 @@ export async function postPrOverviewStubIfNeeded(
   // (marker-scan catches most races; the rare double-post self-corrects
   // on the next push).
   try {
-    await env.OPENCLAW_STATE.put(
-      inflightKey,
-      crypto.randomUUID(),
-      { expirationTtl: STUB_INFLIGHT_TTL_SECONDS },
-    )
+    await env.OPENCLAW_STATE.put(inflightKey, crypto.randomUUID(), {
+      expirationTtl: STUB_INFLIGHT_TTL_SECONDS,
+    })
   } catch {
     // Swallow.
   }
@@ -623,11 +556,16 @@ export async function postPrOverviewStubIfNeeded(
       })
       client = new GitHubClient({ token })
     } catch (err) {
-      console.error(JSON.stringify({
-        event: "pr-overview-stub-auth-failed",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.error(
+        JSON.stringify({
+          event: "pr-overview-stub-auth-failed",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       return { kind: "failed", reason: "auth-failed" }
     }
   }
@@ -644,15 +582,18 @@ export async function postPrOverviewStubIfNeeded(
   // push.
   let existingComment: { id: number; body: string } | null = null
   try {
-    existingComment = await findExistingOverviewComment(
-      client, owner, repo, prNumber,
-    )
+    existingComment = await findExistingOverviewComment(client, owner, repo, prNumber)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-stub-marker-scan-failed",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-stub-marker-scan-failed",
+        owner,
+        repo,
+        prNumber,
+        head_sha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     // Treat as no-existing-comment and try to create. The create call
     // below is the only remaining write; a transient listIssueComments
     // failure on a fresh PR shouldn't block the stub.
@@ -669,11 +610,16 @@ export async function postPrOverviewStubIfNeeded(
     // placeholder. This is the regression fix — pre-fix every push
     // erased the prior summary for the ~30-90s rerender window.
     if (!isStubBody(existingComment.body)) {
-      console.log(JSON.stringify({
-        event: "pr-overview-stub-skipped-existing-summary",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        comment_id: existingCommentId,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-overview-stub-skipped-existing-summary",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+          comment_id: existingCommentId,
+        }),
+      )
       await safeWriteFlag(env, flagKey, existingCommentId, owner, repo, prNumber, headSha)
       return { kind: "marker-scan-hit", commentId: existingCommentId }
     }
@@ -714,22 +660,32 @@ export async function postPrOverviewStubIfNeeded(
         STUB_GITHUB_API_TIMEOUT_MS,
       )
       if (raced.kind === "timeout") {
-        console.warn(JSON.stringify({
-          event: "pr-overview-stub-post-timeout",
-          phase: "update",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          comment_id: existingCommentId,
-          timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-overview-stub-post-timeout",
+            phase: "update",
+            owner,
+            repo,
+            prNumber,
+            head_sha: headSha.slice(0, 7),
+            comment_id: existingCommentId,
+            timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
+          }),
+        )
         return { kind: "timeout", phase: "update" }
       }
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-overview-stub-update-failed",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        comment_id: existingCommentId,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-stub-update-failed",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+          comment_id: existingCommentId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       // Do NOT write the KV flag and do NOT return `marker-scan-hit` —
       // we can't confirm the stub body is on the timeline. Surface
       // `update-failed` so callers (and tests) can distinguish this
@@ -753,29 +709,44 @@ export async function postPrOverviewStubIfNeeded(
       STUB_GITHUB_API_TIMEOUT_MS,
     )
     if (raced.kind === "timeout") {
-      console.warn(JSON.stringify({
-        event: "pr-overview-stub-post-timeout",
-        phase: "create",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-overview-stub-post-timeout",
+          phase: "create",
+          owner,
+          repo,
+          prNumber,
+          head_sha: headSha.slice(0, 7),
+          timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
+        }),
+      )
       return { kind: "timeout", phase: "create" }
     }
     created = raced.value
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-overview-stub-create-failed",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-overview-stub-create-failed",
+        owner,
+        repo,
+        prNumber,
+        head_sha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { kind: "failed", reason: "create-failed" }
   }
   await safeWriteFlag(env, flagKey, created.id, owner, repo, prNumber, headSha)
-  console.log(JSON.stringify({
-    event: "pr-overview-stub-posted",
-    owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-    comment_id: created.id,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-overview-stub-posted",
+      owner,
+      repo,
+      prNumber,
+      head_sha: headSha.slice(0, 7),
+      comment_id: created.id,
+    }),
+  )
   return { kind: "posted", commentId: created.id }
 }
 
@@ -797,12 +768,17 @@ async function safeWriteFlag(
       expirationTtl: STUB_KV_TTL_SECONDS,
     })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-overview-stub-kv-write-failed",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      comment_id: commentId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-stub-kv-write-failed",
+        owner,
+        repo,
+        prNumber,
+        head_sha: headSha.slice(0, 7),
+        comment_id: commentId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -852,11 +828,13 @@ export type WaitForStubOutcome =
  * disabled-overview customers should skip the wait entirely (Codex
  * Q5 tweak).
  */
-export async function waitForPrOverviewStub(
-  args: WaitForStubArgs,
-): Promise<WaitForStubOutcome> {
+export async function waitForPrOverviewStub(args: WaitForStubArgs): Promise<WaitForStubOutcome> {
   const {
-    env, owner, repo, prNumber, headSha,
+    env,
+    owner,
+    repo,
+    prNumber,
+    headSha,
     maxMs = STUB_WAIT_MAX_MS,
     pollMs = STUB_WAIT_POLL_MS,
     now = () => Date.now(),
@@ -896,10 +874,7 @@ async function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function safeRead(
-  env: Env,
-  key: string,
-): Promise<{ kind: "ok"; value: string | null } | { kind: "error" }> {
+async function safeRead(env: Env, key: string): Promise<{ kind: "ok"; value: string | null } | { kind: "error" }> {
   try {
     const v = await env.OPENCLAW_STATE.get(key)
     return { kind: "ok", value: v }

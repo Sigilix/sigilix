@@ -65,8 +65,7 @@ function rateRow(
   // counts as met if it holds even when EVERY unlabeled dismissal is hard.
   // Soft dismissals are valid findings (not FPs) and never count here.
   const worstCaseHardRate = postedN > 0 ? (buckets.hard + buckets.unlabeled) / postedN : null
-  const observedMeetsTarget =
-    sufficientN && worstCaseHardRate !== null ? worstCaseHardRate <= target : null
+  const observedMeetsTarget = sufficientN && worstCaseHardRate !== null ? worstCaseHardRate <= target : null
   return {
     role,
     postedN,
@@ -88,23 +87,16 @@ function rateRow(
  * findings / all dismissed); the four specialists are attributed via
  * full-credit sourceSpecialists.
  */
-export function computeFpRates(
-  attr: AttributionResult,
-  opts: ComputeOpts = {},
-): FpRateReport {
+export function computeFpRates(attr: AttributionResult, opts: ComputeOpts = {}): FpRateReport {
   const minN = opts.minN ?? DEFAULT_MIN_N
   const specialistTarget = opts.specialistTarget ?? SPECIALIST_HARD_FP_TARGET
   const synthTarget = opts.synthTarget ?? SYNTH_HARD_FP_TARGET
 
   const rows: RoleRate[] = []
   for (const role of ALL_SPECIALISTS) {
-    rows.push(
-      rateRow(role, attr.denominator[role].length, attr.numerator[role], specialistTarget, minN),
-    )
+    rows.push(rateRow(role, attr.denominator[role].length, attr.numerator[role], specialistTarget, minN))
   }
-  rows.push(
-    rateRow("synth", attr.synthDenominator.length, attr.synthNumerator, synthTarget, minN),
-  )
+  rows.push(rateRow("synth", attr.synthDenominator.length, attr.synthNumerator, synthTarget, minN))
 
   return {
     rows,

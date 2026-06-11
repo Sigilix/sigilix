@@ -39,8 +39,8 @@ export function isPermanentFailure(failureReason: string | undefined, parseFailu
   const httpMatch = failureReason.match(/HTTP\s+(\d{3})/i)
   if (httpMatch && httpMatch[1]) {
     const status = Number.parseInt(httpMatch[1], 10)
-    if (status === 429) return false  // rate-limited = transient
-    if (status >= 400 && status < 500) return true  // other 4xx = permanent
+    if (status === 429) return false // rate-limited = transient
+    if (status >= 400 && status < 500) return true // other 4xx = permanent
   }
   return false
 }

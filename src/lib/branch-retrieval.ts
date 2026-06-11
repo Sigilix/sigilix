@@ -158,12 +158,20 @@ export async function prepareBranchSet(
   const chunks = buildBranchChunks(filesByPath)
   if (chunks.length === 0) return []
   try {
-    const vectors = await embedTexts(ai, chunks.map((c) => c.content))
+    const vectors = await embedTexts(
+      ai,
+      chunks.map((c) => c.content),
+    )
     if (vectors.length !== chunks.length) return []
     // The length check above guarantees vectors[i] exists for every chunk
     // index, so the `!` is safe under noUncheckedIndexedAccess.
     return chunks.map((chunk, i) => ({
-      chunk: { path: chunk.path, lineStart: chunk.lineStart, lineEnd: chunk.lineEnd, content: chunk.content },
+      chunk: {
+        path: chunk.path,
+        lineStart: chunk.lineStart,
+        lineEnd: chunk.lineEnd,
+        content: chunk.content,
+      },
       vector: vectors[i]!,
     }))
   } catch {

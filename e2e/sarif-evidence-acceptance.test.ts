@@ -13,13 +13,11 @@ import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 
 const FIXTURE_DIR = join(__dirname, "fixtures", "sarif")
-const fixture = (name: string): string =>
-  readFileSync(join(FIXTURE_DIR, name), "utf8")
+const fixture = (name: string): string => readFileSync(join(FIXTURE_DIR, name), "utf8")
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }
 const fakeEnv = {} as unknown as Env
-const fakeClient = (raw: string): GitHubClient =>
-  ({ getFileContent: async () => raw } as unknown as GitHubClient)
+const fakeClient = (raw: string): GitHubClient => ({ getFileContent: async () => raw }) as unknown as GitHubClient
 
 const DEFAULT_CONFIG: ResolvedSarifConfig = {
   enabled: true,

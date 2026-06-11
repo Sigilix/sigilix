@@ -38,9 +38,5 @@ export interface RunnerReceiptPort {
    * whose current merge commit is `mergeCommitSha`. Missing inputs →
    * `runner-absent`; transient holes → `evidence-pending`.
    */
-  lookup(
-    repositoryId: string,
-    prNumber: number,
-    mergeCommitSha: string,
-  ): Promise<RunnerEvidenceState>
+  lookup(repositoryId: string, prNumber: number, mergeCommitSha: string): Promise<RunnerEvidenceState>
 }

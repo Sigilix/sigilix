@@ -34,14 +34,22 @@ function makeSqliteState(name: string = "test-instance") {
         return undefined
       },
       async put<T>(key: string, value: T): Promise<void> {
-        void key; void value
+        void key
+        void value
       },
       async delete(key: string): Promise<boolean> {
-        void key; return false
+        void key
+        return false
       },
-      async setAlarm(timestamp: number): Promise<void> { void timestamp },
-      async getAlarm(): Promise<number | null> { return null },
-      async deleteAlarm(): Promise<void> { /* no-op */ },
+      async setAlarm(timestamp: number): Promise<void> {
+        void timestamp
+      },
+      async getAlarm(): Promise<number | null> {
+        return null
+      },
+      async deleteAlarm(): Promise<void> {
+        /* no-op */
+      },
     },
     id: { toString: () => name, name },
   }
@@ -66,9 +74,7 @@ describe("NodeSqliteStorage adapter", () => {
   // silently discarded by the .run() path.
   it("Fix 1: INSERT … RETURNING yields the inserted row(s)", () => {
     const storage = new NodeSqliteStorage()
-    storage.exec(
-      "CREATE TABLE t1 (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT NOT NULL)",
-    )
+    storage.exec("CREATE TABLE t1 (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT NOT NULL)")
     const cursor = storage.exec<{ id: number; val: string }>(
       "INSERT INTO t1 (val) VALUES (?) RETURNING id, val",
       "hello",
@@ -135,7 +141,6 @@ describe("NodeSqliteStorage adapter", () => {
   })
 })
 
-
 describe("RepoGraphDO.upsertFileGraph", () => {
   it("inserts pending symbol/edge rows and is idempotent on retry", async () => {
     const do_ = makeDoInstance("o/r")
@@ -187,8 +192,20 @@ describe("RepoGraphDO.upsertFileGraph", () => {
       symbols: [],
       fileEdgesRaw: [],
       callEdges: [
-        { sourcePath: "src/x.ts", calleeName: "helper", callKind: "same_file", startLine: 5, startCol: 2 },
-        { sourcePath: "src/x.ts", calleeName: "external", callKind: "imported", startLine: 8, startCol: 4 },
+        {
+          sourcePath: "src/x.ts",
+          calleeName: "helper",
+          callKind: "same_file",
+          startLine: 5,
+          startCol: 2,
+        },
+        {
+          sourcePath: "src/x.ts",
+          calleeName: "external",
+          callKind: "imported",
+          startLine: 8,
+          startCol: 4,
+        },
       ],
     }
     await do_.upsertFileGraph(payload)
@@ -199,20 +216,56 @@ describe("RepoGraphDO.upsertFileGraph", () => {
   it("replaces rows for a path when retried with updated data (idempotent replace)", async () => {
     const do_ = makeDoInstance("o/r3")
     const v1 = {
-      runId: "run1", headSha: "sha1", path: "src/a.ts",
+      runId: "run1",
+      headSha: "sha1",
+      path: "src/a.ts",
       symbols: [
-        { symbolId: "src/a.ts function foo 1 0", path: "src/a.ts", name: "foo", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 1, endCol: 5 },
-        { symbolId: "src/a.ts function bar 2 0", path: "src/a.ts", name: "bar", kind: "function", exported: false, startLine: 2, startCol: 0, endLine: 2, endCol: 5 },
+        {
+          symbolId: "src/a.ts function foo 1 0",
+          path: "src/a.ts",
+          name: "foo",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+        {
+          symbolId: "src/a.ts function bar 2 0",
+          path: "src/a.ts",
+          name: "bar",
+          kind: "function",
+          exported: false,
+          startLine: 2,
+          startCol: 0,
+          endLine: 2,
+          endCol: 5,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     }
     const v2 = {
-      runId: "run1", headSha: "sha1", path: "src/a.ts",
+      runId: "run1",
+      headSha: "sha1",
+      path: "src/a.ts",
       // Only one symbol now (idempotent replace should remove old bar)
       symbols: [
-        { symbolId: "src/a.ts function foo 1 0", path: "src/a.ts", name: "foo", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 1, endCol: 5 },
+        {
+          symbolId: "src/a.ts function foo 1 0",
+          path: "src/a.ts",
+          name: "foo",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     }
     await do_.upsertFileGraph(v1)
     expect((await do_.debugCounts("run1")).symbols).toBe(2)
@@ -223,12 +276,35 @@ describe("RepoGraphDO.upsertFileGraph", () => {
   it("stores exported as 1/0 and status as pending", async () => {
     const do_ = makeDoInstance("o/r4")
     await do_.upsertFileGraph({
-      runId: "r", headSha: "h", path: "src/z.ts",
+      runId: "r",
+      headSha: "h",
+      path: "src/z.ts",
       symbols: [
-        { symbolId: "src/z.ts function pub 1 0", path: "src/z.ts", name: "pub", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 1, endCol: 1 },
-        { symbolId: "src/z.ts function priv 2 0", path: "src/z.ts", name: "priv", kind: "function", exported: false, startLine: 2, startCol: 0, endLine: 2, endCol: 1 },
+        {
+          symbolId: "src/z.ts function pub 1 0",
+          path: "src/z.ts",
+          name: "pub",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 1,
+        },
+        {
+          symbolId: "src/z.ts function priv 2 0",
+          path: "src/z.ts",
+          name: "priv",
+          kind: "function",
+          exported: false,
+          startLine: 2,
+          startCol: 0,
+          endLine: 2,
+          endCol: 1,
+        },
       ],
-      fileEdgesRaw: [], callEdges: [],
+      fileEdgesRaw: [],
+      callEdges: [],
     })
     const counts = await do_.debugCounts("r")
     expect(counts.symbols).toBe(2)
@@ -251,7 +327,9 @@ describe("RepoGraphDO.upsertFileGraph", () => {
     }
     await expect(
       do_.upsertFileGraph({
-        runId: "run-dup", headSha: "sha-dup", path: "src/dup.ts",
+        runId: "run-dup",
+        headSha: "sha-dup",
+        path: "src/dup.ts",
         symbols: [],
         fileEdgesRaw: [],
         callEdges: [dupCallEdge, dupCallEdge], // identical → same edge_id
@@ -278,7 +356,9 @@ describe("RepoGraphDO.upsertFileGraph", () => {
     }
     await expect(
       do_.upsertFileGraph({
-        runId: "run-sym-dup", headSha: "sha-sym", path: "src/dup2.ts",
+        runId: "run-sym-dup",
+        headSha: "sha-sym",
+        path: "src/dup2.ts",
         symbols: [dupSymbol, dupSymbol], // identical → same symbol_id
         fileEdgesRaw: [],
         callEdges: [],

@@ -33,17 +33,20 @@ export interface SlashCommandEyesAckArgs {
  * to undefined on every path — the caller never branches on the
  * result. Logs a single warning on failure.
  */
-export async function postSlashCommandEyesAck(
-  args: SlashCommandEyesAckArgs,
-): Promise<void> {
+export async function postSlashCommandEyesAck(args: SlashCommandEyesAckArgs): Promise<void> {
   const { env, owner, repo, commentId, surface, installationId } = args
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.warn(JSON.stringify({
-      event: "slash-command-eyes-ack-misconfigured",
-      reason: "missing_github_app_credentials",
-      owner, repo, commentId, surface,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "slash-command-eyes-ack-misconfigured",
+        reason: "missing_github_app_credentials",
+        owner,
+        repo,
+        commentId,
+        surface,
+      }),
+    )
     return
   }
 
@@ -61,10 +64,15 @@ export async function postSlashCommandEyesAck(
       await client.addReactionToReviewComment(owner, repo, commentId, "eyes")
     }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "slash-command-eyes-ack-failed",
-      err: err instanceof Error ? err.message : String(err),
-      owner, repo, commentId, surface,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "slash-command-eyes-ack-failed",
+        err: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        commentId,
+        surface,
+      }),
+    )
   }
 }

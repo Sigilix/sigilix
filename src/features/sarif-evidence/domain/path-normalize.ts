@@ -50,10 +50,7 @@ function decodeOnce(raw: string): string | null {
  * repo-relative paths or `{ ok: false, reason }` for any rejected
  * shape. Never throws.
  */
-export function normalizeSarifPath(
-  rawUri: string | undefined,
-  opts: NormalizeArgs = {},
-): NormalizeResult {
+export function normalizeSarifPath(rawUri: string | undefined, opts: NormalizeArgs = {}): NormalizeResult {
   // 1. `index` resolution (Kimi MAJOR #2 negative paths)
   let uri: string | undefined = rawUri
   if (uri === undefined || uri === "") {
@@ -62,7 +59,10 @@ export function normalizeSarifPath(
         return { ok: false, reason: "index set but artifacts array missing" }
       }
       if (opts.index < 0 || opts.index >= opts.artifacts.length) {
-        return { ok: false, reason: `index ${opts.index} out of bounds (artifacts length ${opts.artifacts.length})` }
+        return {
+          ok: false,
+          reason: `index ${opts.index} out of bounds (artifacts length ${opts.artifacts.length})`,
+        }
       }
       const lookedUp = opts.artifacts[opts.index]?.location?.uri
       if (typeof lookedUp !== "string" || lookedUp.length === 0) {

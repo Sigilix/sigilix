@@ -69,7 +69,11 @@ import type { Env } from "@/src/shared/types/env"
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
   const haveCreds = opts.credentials ?? true
   return {
-    OPENCLAW_STATE: { get: async () => null, put: async () => {}, delete: async () => {} } as unknown as Env["OPENCLAW_STATE"],
+    OPENCLAW_STATE: {
+      get: async () => null,
+      put: async () => {},
+      delete: async () => {},
+    } as unknown as Env["OPENCLAW_STATE"],
     GITHUB_APP_ID: haveCreds ? "12345" : undefined,
     GITHUB_PRIVATE_KEY: haveCreds ? "fake-key" : undefined,
   } as unknown as Env
@@ -207,8 +211,11 @@ describe("handleStaleHead — sticky comment (exhausted retry budget)", () => {
         .map((c) => c[0])
         .filter((s): s is string => typeof s === "string")
         .map((s) => {
-          try { return JSON.parse(s) as Record<string, unknown> }
-          catch { return null }
+          try {
+            return JSON.parse(s) as Record<string, unknown>
+          } catch {
+            return null
+          }
         })
         .filter((o): o is Record<string, unknown> => o !== null && o.event === "pr-review-stale-head")
       expect(events).toHaveLength(1)

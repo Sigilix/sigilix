@@ -371,10 +371,34 @@ describe("computeSpecialistFanoutSummary (Sigilix PR #95 catch)", () => {
   // synthetic model names so the helper's behavior is independent of
   // the real SPECIALIST_CONFIGS lineup.
   const inputs = [
-    { role: "logic", verdictOk: true, attemptsUsed: 1, modelUsed: "logic-primary", fallbackModel: "logic-fallback" },
-    { role: "security", verdictOk: true, attemptsUsed: 2, modelUsed: "security-fallback", fallbackModel: "security-fallback" }, // hit fallback
-    { role: "performance", verdictOk: false, attemptsUsed: 3, modelUsed: "performance-fallback", fallbackModel: "performance-fallback" }, // hit fallback + failed
-    { role: "tests", verdictOk: true, attemptsUsed: 1, modelUsed: "tests-primary", fallbackModel: "tests-fallback" },
+    {
+      role: "logic",
+      verdictOk: true,
+      attemptsUsed: 1,
+      modelUsed: "logic-primary",
+      fallbackModel: "logic-fallback",
+    },
+    {
+      role: "security",
+      verdictOk: true,
+      attemptsUsed: 2,
+      modelUsed: "security-fallback",
+      fallbackModel: "security-fallback",
+    }, // hit fallback
+    {
+      role: "performance",
+      verdictOk: false,
+      attemptsUsed: 3,
+      modelUsed: "performance-fallback",
+      fallbackModel: "performance-fallback",
+    }, // hit fallback + failed
+    {
+      role: "tests",
+      verdictOk: true,
+      attemptsUsed: 1,
+      modelUsed: "tests-primary",
+      fallbackModel: "tests-fallback",
+    },
   ]
   const dispatched = ["logic", "security", "performance", "tests"]
   const FANOUT_START = 1_000_000
@@ -388,10 +412,10 @@ describe("computeSpecialistFanoutSummary (Sigilix PR #95 catch)", () => {
       ["tests", 1_000_200],
     ])
     const ends = new Map([
-      ["logic", 1_269_400],  // ~269s — slowest
+      ["logic", 1_269_400], // ~269s — slowest
       ["security", 1_120_000], // ~119s
       ["performance", 1_180_000], // ~180s
-      ["tests", 1_050_000],  // ~50s
+      ["tests", 1_050_000], // ~50s
     ])
     const summary = computeSpecialistFanoutSummary({
       dispatchedRoles: dispatched,
@@ -409,13 +433,28 @@ describe("computeSpecialistFanoutSummary (Sigilix PR #95 catch)", () => {
     // `logic` got aborted on the outer signal — no end recorded. The
     // helper treats that as "ended at the fanout end" so the role's
     // elapsed is an over-estimate, never an under-estimate.
-    const starts = new Map([["logic", 1_000_500], ["tests", 1_000_200]])
+    const starts = new Map([
+      ["logic", 1_000_500],
+      ["tests", 1_000_200],
+    ])
     const ends = new Map([["tests", 1_050_000]])
     const summary = computeSpecialistFanoutSummary({
       dispatchedRoles: ["logic", "tests"],
       inputs: [
-        { role: "logic", verdictOk: false, attemptsUsed: 1, modelUsed: undefined, fallbackModel: null },
-        { role: "tests", verdictOk: true, attemptsUsed: 1, modelUsed: "tests-primary", fallbackModel: "tests-fallback" },
+        {
+          role: "logic",
+          verdictOk: false,
+          attemptsUsed: 1,
+          modelUsed: undefined,
+          fallbackModel: null,
+        },
+        {
+          role: "tests",
+          verdictOk: true,
+          attemptsUsed: 1,
+          modelUsed: "tests-primary",
+          fallbackModel: "tests-fallback",
+        },
       ],
       perRoleStartMs: starts,
       perRoleEndMs: ends,
@@ -491,7 +530,15 @@ describe("computeSpecialistFanoutSummary (Sigilix PR #95 catch)", () => {
   it("does not count a role as a fallback when modelUsed matches but fallbackModel is null", () => {
     const summary = computeSpecialistFanoutSummary({
       dispatchedRoles: ["logic"],
-      inputs: [{ role: "logic", verdictOk: true, attemptsUsed: 1, modelUsed: "logic-primary", fallbackModel: null }],
+      inputs: [
+        {
+          role: "logic",
+          verdictOk: true,
+          attemptsUsed: 1,
+          modelUsed: "logic-primary",
+          fallbackModel: null,
+        },
+      ],
       perRoleStartMs: new Map([["logic", 0]]),
       perRoleEndMs: new Map([["logic", 100]]),
       fanoutStartMs: 0,

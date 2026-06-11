@@ -31,10 +31,7 @@ export async function recordValidationMetrics(env: Env, args: RecordBatchArgs): 
   await metricsStub(env).recordBatch(args)
 }
 
-export function queryValidationMetrics(
-  env: Env,
-  windowDays: number,
-): Promise<ValidationMetricsQuery> {
+export function queryValidationMetrics(env: Env, windowDays: number): Promise<ValidationMetricsQuery> {
   // Direct return — no `async` because there's no `await` here. The DO RPC
   // already returns a Promise, so wrapping in `async` would only add a
   // microtask hop. Callers `await` either way (sync throws from
@@ -50,10 +47,7 @@ export function queryValidationMetrics(
  * synthetic owner/repo/prNumber placeholders below exist only to satisfy
  * `RecordBatchArgs`'s shape.
  */
-export async function recordDismissalMetric(
-  env: Env,
-  args: { reason: DismissReason },
-): Promise<void> {
+export async function recordDismissalMetric(env: Env, args: { reason: DismissReason }): Promise<void> {
   await metricsStub(env).recordBatch({
     owner: "",
     repo: "",
@@ -63,10 +57,7 @@ export async function recordDismissalMetric(
   })
 }
 
-export function queryDismissalMetrics(
-  env: Env,
-  windowDays: number,
-): Promise<DismissalMetricsQuery> {
+export function queryDismissalMetrics(env: Env, windowDays: number): Promise<DismissalMetricsQuery> {
   // Direct return — see `queryValidationMetrics` for the no-async rationale.
   return metricsStub(env).queryDismissals({ windowDays })
 }
@@ -80,10 +71,7 @@ export async function recordRepeatFpMetrics(env: Env, args: RecordRepeatFpArgs):
   await metricsStub(env).recordRepeatFps(args)
 }
 
-export function queryRepeatFpMetrics(
-  env: Env,
-  windowDays: number,
-): Promise<RepeatFpMetricsQuery> {
+export function queryRepeatFpMetrics(env: Env, windowDays: number): Promise<RepeatFpMetricsQuery> {
   // Direct return — see `queryValidationMetrics` for the no-async rationale.
   return metricsStub(env).queryRepeatFps({ windowDays })
 }

@@ -53,7 +53,11 @@ interface MakeStubArgs {
   expectedName?: string
 }
 
-function makeEnv(args: MakeStubArgs = {}): { env: Env; calls: DoCall[]; idFromName: ReturnType<typeof vi.fn> } {
+function makeEnv(args: MakeStubArgs = {}): {
+  env: Env
+  calls: DoCall[]
+  idFromName: ReturnType<typeof vi.fn>
+} {
   const calls: DoCall[] = []
   const fetchMock = vi.fn(async (input: string | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url
@@ -202,9 +206,7 @@ describe("runPrReviewWithDoCallback — pickup transport / 5xx (queue redelivers
 
   it("pickup 500 → throws", async () => {
     const { env } = makeEnv({ pickup: { kind: "server-error", status: 500 } })
-    await expect(
-      runPrReviewWithDoCallback(makeJob(), env, async () => {}),
-    ).rejects.toThrow()
+    await expect(runPrReviewWithDoCallback(makeJob(), env, async () => {})).rejects.toThrow()
   })
 
   it("pickup transport throw → propagates raw error (queue redelivers)", async () => {
@@ -223,9 +225,7 @@ describe("runPrReviewWithDoCallback — pickup unexpected 4xx (ack + log, no thr
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const { env, calls } = makeEnv({ pickup: { kind: "server-error", status: 400 } })
     const runEnsemble = vi.fn(async () => {})
-    await expect(
-      runPrReviewWithDoCallback(makeJob(), env, runEnsemble),
-    ).resolves.toBeUndefined()
+    await expect(runPrReviewWithDoCallback(makeJob(), env, runEnsemble)).resolves.toBeUndefined()
     expect(runEnsemble).not.toHaveBeenCalled()
     // Only pickup; no /run-result post since we never had a claim.
     expect(calls).toHaveLength(1)
@@ -238,9 +238,7 @@ describe("runPrReviewWithDoCallback — pickup unexpected 4xx (ack + log, no thr
   it("pickup 404 → ack + log (no throw, no ensemble)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const { env, calls } = makeEnv({ pickup: { kind: "server-error", status: 404 } })
-    await expect(
-      runPrReviewWithDoCallback(makeJob(), env, async () => {}),
-    ).resolves.toBeUndefined()
+    await expect(runPrReviewWithDoCallback(makeJob(), env, async () => {})).resolves.toBeUndefined()
     expect(calls).toHaveLength(1)
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
@@ -339,7 +337,8 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
       if (url.endsWith("/pickup")) {
         pickupCalls++
         return new Response(JSON.stringify({ picked: true }), {
-          status: 200, headers: { "content-type": "application/json" },
+          status: 200,
+          headers: { "content-type": "application/json" },
         })
       }
       if (url.endsWith("/run-result")) {
@@ -357,7 +356,12 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
       PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
     } as unknown as Env
     void pickupCalls
-    return { env, get runResultCalls() { return runResultCalls } } as { env: Env; runResultCalls: number }
+    return {
+      env,
+      get runResultCalls() {
+        return runResultCalls
+      },
+    } as { env: Env; runResultCalls: number }
   }
 
   it("succeeds on attempt 2 → no error log, /run-result called twice", async () => {
@@ -367,7 +371,8 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
       n++
       if (n === 1) return "throw"
       return new Response(JSON.stringify({ recorded: "state" }), {
-        status: 200, headers: { "content-type": "application/json" },
+        status: 200,
+        headers: { "content-type": "application/json" },
       })
     })
     await runPrReviewWithDoCallback(makeJob(), harness.env, async () => {})
@@ -390,9 +395,13 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
 
   it("3 non-OK responses → 3 attempts then log + return", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    const harness = makeRetryEnv(() => new Response(JSON.stringify({ error: "boom" }), {
-      status: 503, headers: { "content-type": "application/json" },
-    }))
+    const harness = makeRetryEnv(
+      () =>
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+    )
     await runPrReviewWithDoCallback(makeJob(), harness.env, async () => {})
     expect(harness.runResultCalls).toBe(3)
     expect(errSpy).toHaveBeenCalled()

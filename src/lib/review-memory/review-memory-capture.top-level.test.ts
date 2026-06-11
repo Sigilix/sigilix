@@ -6,10 +6,7 @@
 // the marker module, so no per-file `vi.mock` is replicated here.
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
-import {
-  captureTopLevelReviewFeedback,
-  hasExplicitTopLevelReviewFeedbackSignal,
-} from "@/src/lib/review-memory/capture"
+import { captureTopLevelReviewFeedback, hasExplicitTopLevelReviewFeedbackSignal } from "@/src/lib/review-memory/capture"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import {
   makeKvStub,
@@ -84,9 +81,7 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecord.signals).toHaveLength(1)
     expect(catRecord.signals[0].commentId).toBe(900)
-    const pathKeys = Array.from(store.keys()).filter((k) =>
-      k.startsWith("review-memory:a/r:path:"),
-    )
+    const pathKeys = Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:path:"))
     expect(pathKeys).toHaveLength(1)
     const profile = JSON.parse(store.get("precision-profile:repo:a/r")!)
     expect(profile.patterns[VALID_FINGERPRINT].suppress).toBe(0.3)
@@ -110,9 +105,7 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     })
     expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
     expect(store.get("precision-profile:repo:a/r")).toBeUndefined()
-    const skipped = consoleSpy.mock.calls
-      .map((a) => String(a[0]))
-      .find((s) => s.includes("not-a-reply-to-sigilix"))
+    const skipped = consoleSpy.mock.calls.map((a) => String(a[0])).find((s) => s.includes("not-a-reply-to-sigilix"))
     expect(skipped).toBeDefined()
   })
 
@@ -207,9 +200,7 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     })
     const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
     expect(catRecord.signals).toHaveLength(1)
-    const pathKeys = Array.from(store.keys()).filter((k) =>
-      k.startsWith("review-memory:a/r:path:"),
-    )
+    const pathKeys = Array.from(store.keys()).filter((k) => k.startsWith("review-memory:a/r:path:"))
     expect(pathKeys).toHaveLength(1)
   })
 
@@ -295,9 +286,7 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     })
     expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
     expect(store.get("precision-profile:repo:a/r")).toBeUndefined()
-    const skipped = consoleSpy.mock.calls
-      .map((a) => String(a[0]))
-      .find((s) => s.includes("not-a-reply-to-sigilix"))
+    const skipped = consoleSpy.mock.calls.map((a) => String(a[0])).find((s) => s.includes("not-a-reply-to-sigilix"))
     expect(skipped).toBeDefined()
   })
 })

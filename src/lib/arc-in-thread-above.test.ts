@@ -69,7 +69,7 @@ describe("arcInThreadAbove", () => {
   })
 
   it("returns false when parent id points to a missing comment (broken chain)", () => {
-    const comments = [human(2, 999)]  // parent 999 doesn't exist
+    const comments = [human(2, 999)] // parent 999 doesn't exist
     expect(arcInThreadAbove(comments, 2)).toBe(false)
   })
 

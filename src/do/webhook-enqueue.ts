@@ -74,10 +74,7 @@ function instanceName(owner: string, repo: string, prNumber: number): string {
  * branch. Returns `{ok: false, route: "do", ...}` when
  * the DO call fails (caller should respond 503).
  */
-export async function enqueuePrReviewJob(
-  env: Env,
-  args: PrReviewEnqueueArgs,
-): Promise<PrReviewEnqueueResult> {
+export async function enqueuePrReviewJob(env: Env, args: PrReviewEnqueueArgs): Promise<PrReviewEnqueueResult> {
   // SIG-98 — pause/ignore gate. Skip the enqueue entirely when a
   // per-PR pause (24h TTL) or ignore (no TTL) flag is set in KV.
   // Every caller of this function is an AUTOMATIC trigger (webhook
@@ -93,21 +90,29 @@ export async function enqueuePrReviewJob(
     env.OPENCLAW_STATE.get(buildIgnoredKey(args.owner, args.repo, args.prNumber)),
   ])
   if (ignoredAt !== null) {
-    console.log(JSON.stringify({
-      event: "pr-review-skipped",
-      reason: "ignored",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      ignoredAt,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-skipped",
+        reason: "ignored",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        ignoredAt,
+      }),
+    )
     return { ok: true, route: "skipped-ignored" }
   }
   if (pausedAt !== null) {
-    console.log(JSON.stringify({
-      event: "pr-review-skipped",
-      reason: "paused",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      pausedAt,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-skipped",
+        reason: "paused",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        pausedAt,
+      }),
+    )
     return { ok: true, route: "skipped-paused" }
   }
 
@@ -119,9 +124,7 @@ export async function enqueuePrReviewJob(
     baseSha: args.baseSha,
     installationId: args.installationId,
     deliveryId: args.deliveryId,
-    ...(args.staleHeadRequeueDepth !== undefined
-      ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth }
-      : {}),
+    ...(args.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth } : {}),
     ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
   }
   let response: Response
@@ -134,21 +137,29 @@ export async function enqueuePrReviewJob(
       body: JSON.stringify(body),
     })
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "do-review-enqueue-failed",
-      dedupe_system: "do",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "do-review-enqueue-failed",
+        dedupe_system: "do",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return { ok: false, route: "do", reason: "do-transport" }
   }
   if (!response.ok) {
-    console.error(JSON.stringify({
-      event: "do-review-enqueue-non-ok",
-      dedupe_system: "do",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      doStatus: response.status,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "do-review-enqueue-non-ok",
+        dedupe_system: "do",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        doStatus: response.status,
+      }),
+    )
     return { ok: false, route: "do", reason: "do-status", status: response.status }
   }
 

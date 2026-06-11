@@ -46,7 +46,10 @@ describe("durableObjectClassSpans", () => {
 })
 
 describe("lineInDurableObjectClass", () => {
-  const spans = [{ start: 10, end: 50 }, { start: 80, end: 90 }]
+  const spans = [
+    { start: 10, end: 50 },
+    { start: 80, end: 90 },
+  ]
   it("true inside a span (inclusive bounds)", () => {
     expect(lineInDurableObjectClass(spans, 10)).toBe(true)
     expect(lineInDurableObjectClass(spans, 50)).toBe(true)

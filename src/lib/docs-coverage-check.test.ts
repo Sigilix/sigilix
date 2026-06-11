@@ -1,10 +1,7 @@
 // ARC-272 — tests for the zero-LLM docs-coverage check.
 
 import { describe, expect, it } from "vitest"
-import {
-  runDocsCoverageCheck,
-  renderDocsCoverageForPrompt,
-} from "@/src/lib/docs-coverage-check"
+import { runDocsCoverageCheck, renderDocsCoverageForPrompt } from "@/src/lib/docs-coverage-check"
 import { resolveDocsReviewConfig } from "@/src/lib/sigilix-config"
 
 const baseConfig = {
@@ -15,18 +12,12 @@ const baseConfig = {
 
 describe("runDocsCoverageCheck", () => {
   it("returns null when disabled", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts"],
-      { ...baseConfig, enabled: false },
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts"], { ...baseConfig, enabled: false })
     expect(out).toBeNull()
   })
 
   it("returns null when architectureGlobs is empty (operator hasn't opted in)", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts"],
-      { ...baseConfig, architectureGlobs: [] },
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts"], { ...baseConfig, architectureGlobs: [] })
     expect(out).toBeNull()
   })
 
@@ -36,45 +27,30 @@ describe("runDocsCoverageCheck", () => {
   })
 
   it("returns null when no path matches architectureGlobs", () => {
-    const out = runDocsCoverageCheck(
-      ["tests/foo.test.ts", "scripts/build.sh"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["tests/foo.test.ts", "scripts/build.sh"], baseConfig)
     expect(out).toBeNull()
   })
 
   it("returns null when architecture is touched AND docs are touched (coverage satisfied)", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts", "README.md"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts", "README.md"], baseConfig)
     expect(out).toBeNull()
   })
 
   it("emits a hit when architecture is touched without docs", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts", "src/lib/bar.ts"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts", "src/lib/bar.ts"], baseConfig)
     expect(out).not.toBeNull()
     expect(out!.architectureFiles).toEqual(["src/lib/foo.ts", "src/lib/bar.ts"])
     expect(out!.docPaths).toEqual(baseConfig.docPaths)
   })
 
   it("emits a hit on a config-file change without docs (wrangler.toml + package.json patterns)", () => {
-    const out = runDocsCoverageCheck(
-      ["wrangler.toml"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["wrangler.toml"], baseConfig)
     expect(out).not.toBeNull()
     expect(out!.architectureFiles).toEqual(["wrangler.toml"])
   })
 
   it("counts a docs/** subpath as docs coverage", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts", "docs/guides/getting-started.md"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts", "docs/guides/getting-started.md"], baseConfig)
     expect(out).toBeNull()
   })
 
@@ -84,10 +60,7 @@ describe("runDocsCoverageCheck", () => {
     // trailing slash. Without this, a PR that adds the `docs`
     // directory as a tree-only change (rare but possible) would
     // miss coverage.
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts", "docs"],
-      baseConfig,
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts", "docs"], baseConfig)
     expect(out).toBeNull()
   })
 
@@ -98,19 +71,19 @@ describe("runDocsCoverageCheck", () => {
   })
 
   it("doesn't crash on a malformed glob (drops it silently)", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts"],
-      { ...baseConfig, architectureGlobs: ["[invalid", "src/lib/**"] },
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts"], {
+      ...baseConfig,
+      architectureGlobs: ["[invalid", "src/lib/**"],
+    })
     expect(out).not.toBeNull()
     expect(out!.architectureFiles).toEqual(["src/lib/foo.ts"])
   })
 
   it("returns null when EVERY architectureGlob is malformed (effectively empty)", () => {
-    const out = runDocsCoverageCheck(
-      ["src/lib/foo.ts"],
-      { ...baseConfig, architectureGlobs: ["[invalid", "{also-bad"] },
-    )
+    const out = runDocsCoverageCheck(["src/lib/foo.ts"], {
+      ...baseConfig,
+      architectureGlobs: ["[invalid", "{also-bad"],
+    })
     expect(out).toBeNull()
   })
 })

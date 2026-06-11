@@ -200,10 +200,7 @@ function hasPositiveSinkAssessment(finding: PrReviewFinding, bucket: SecurityBuc
  * mention surface, with a provably non-executable token, in a file that adds no
  * real sink — is demoted. Never throws, no I/O.
  */
-export function evaluateSecurityUsage(
-  finding: PrReviewFinding,
-  context: SecurityUsageContext,
-): SecurityUsageDecision {
+export function evaluateSecurityUsage(finding: PrReviewFinding, context: SecurityUsageContext): SecurityUsageDecision {
   const bucket = deriveSecurityBucket(finding)
   if (bucket === null || !GATED_BUCKETS.has(bucket)) return { keep: true }
   if ((finding.score ?? 0) < 4) return { keep: true } // P2/P3 advisories aren't the partner-facing harm

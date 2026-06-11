@@ -10,9 +10,7 @@ import type { DepVulnFinding } from "@/src/features/dep-vulns/app/scanner"
  * block. Each finding is a structured stanza so the model treats the
  * output as authoritative facts (not prose to question).
  */
-export function renderDepVulnFindingsForPrompt(
-  findings: DepVulnFinding[],
-): string {
+export function renderDepVulnFindingsForPrompt(findings: DepVulnFinding[]): string {
   if (findings.length === 0) return ""
   const lines: string[] = []
   lines.push("[DEPENDENCY VULNERABILITIES — pre-LLM]")

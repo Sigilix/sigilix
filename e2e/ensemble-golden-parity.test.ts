@@ -25,11 +25,7 @@ import { decode, encode, type EnsembleGoldenFixture } from "@/src/lib/ensemble-g
 import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import { buildReviewSubmissionWithMetadata } from "@/src/lib/triage-pr-review"
 
-const FIXTURES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "_golden",
-  "ensemble-fixtures",
-)
+const FIXTURES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "_golden", "ensemble-fixtures")
 
 function loadFixtures(): { file: string; fx: EnsembleGoldenFixture }[] {
   const files = readdirSync(FIXTURES_DIR).filter((f) => f.endsWith(".json"))
@@ -54,24 +50,18 @@ describe("ensemble golden-output parity (validate + render seams)", () => {
     expect(Array.isArray(fixtures)).toBe(true)
   })
 
-  it.each(fixtures)(
-    "validate seam replays byte-identical for $file",
-    ({ fx }) => {
-      const args = decode(fx.validate.args) as ValidateArgs
-      const actual = validateForSubmission(args)
-      // Byte-identical: compare the CANONICAL-ENCODED actual to the captured
-      // encoded payload (order-sensitive — catches Map/Set/key drift), not
-      // decoded deep-equality (CodeRabbit #408).
-      expect(encode(actual)).toEqual(fx.validate.output)
-    },
-  )
+  it.each(fixtures)("validate seam replays byte-identical for $file", ({ fx }) => {
+    const args = decode(fx.validate.args) as ValidateArgs
+    const actual = validateForSubmission(args)
+    // Byte-identical: compare the CANONICAL-ENCODED actual to the captured
+    // encoded payload (order-sensitive — catches Map/Set/key drift), not
+    // decoded deep-equality (CodeRabbit #408).
+    expect(encode(actual)).toEqual(fx.validate.output)
+  })
 
-  it.each(fixtures)(
-    "render seam replays byte-identical for $file",
-    ({ fx }) => {
-      const input = decode(fx.render.input) as RenderArgs
-      const actual = buildReviewSubmissionWithMetadata(input)
-      expect(encode(actual)).toEqual(fx.render.output)
-    },
-  )
+  it.each(fixtures)("render seam replays byte-identical for $file", ({ fx }) => {
+    const input = decode(fx.render.input) as RenderArgs
+    const actual = buildReviewSubmissionWithMetadata(input)
+    expect(encode(actual)).toEqual(fx.render.output)
+  })
 })

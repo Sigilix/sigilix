@@ -104,10 +104,16 @@ describe("emitShadowAttempt", () => {
 
   it("includes failureReason only when outcome is not ok", () => {
     emitShadowAttempt(CTX, {
-      role: "tests", attemptKind: "fallback", attemptIndex: 2,
-      model: "deepseek-v4-flash:cloud", timeoutMs: 60_000,
-      startedAtMs: 0, endedAtMs: 60_000, elapsedMs: 60_000,
-      outcome: "timeout", failureReason: "per_attempt_timeout",
+      role: "tests",
+      attemptKind: "fallback",
+      attemptIndex: 2,
+      model: "deepseek-v4-flash:cloud",
+      timeoutMs: 60_000,
+      startedAtMs: 0,
+      endedAtMs: 60_000,
+      elapsedMs: 60_000,
+      outcome: "timeout",
+      failureReason: "per_attempt_timeout",
     })
     const event = lastLogged()
     expect(event["outcome"]).toBe("timeout")
@@ -141,7 +147,10 @@ describe("emitShadowRunFailed", () => {
   // runner crash is visible in dashboards instead of being hidden in
   // the cut-short bucket.
   it("emits a shadow-run-failed event with role + message + correlation fields", () => {
-    emitShadowRunFailed(CTX, { role: "synth", message: "TypeError: cannot read 'foo' of undefined" })
+    emitShadowRunFailed(CTX, {
+      role: "synth",
+      message: "TypeError: cannot read 'foo' of undefined",
+    })
     const event = lastLogged()
     expect(event["event"]).toBe("shadow-run-failed")
     expect(event["role"]).toBe("synth")
@@ -199,12 +208,20 @@ describe("emitShadowVerdictComparison", () => {
 })
 
 describe("computeFindingsOverlap", () => {
-  const f = (path: string, line: number, category: string, score: number) =>
-    ({ path, line, category, score, headline: "", body: "" })
+  const f = (path: string, line: number, category: string, score: number) => ({
+    path,
+    line,
+    category,
+    score,
+    headline: "",
+    body: "",
+  })
 
   it("returns zero overlap when one side has no findings", () => {
     expect(computeFindingsOverlap([], [f("a.ts", 1, "logic", 3)])).toEqual({
-      overlapCount: 0, prodOnlyCount: 0, shadowOnlyCount: 1,
+      overlapCount: 0,
+      prodOnlyCount: 0,
+      shadowOnlyCount: 1,
       prodScoreHistogram: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       shadowScoreHistogram: { 1: 0, 2: 0, 3: 1, 4: 0, 5: 0 },
       // SIG-86: score-3 finding doesn't contribute to score-4+ counts.
@@ -215,7 +232,9 @@ describe("computeFindingsOverlap", () => {
       score4PlusShadowFindingsCount: 0,
     })
     expect(computeFindingsOverlap([f("a.ts", 1, "logic", 3)], [])).toEqual({
-      overlapCount: 0, prodOnlyCount: 1, shadowOnlyCount: 0,
+      overlapCount: 0,
+      prodOnlyCount: 1,
+      shadowOnlyCount: 0,
       prodScoreHistogram: { 1: 0, 2: 0, 3: 1, 4: 0, 5: 0 },
       shadowScoreHistogram: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       score4PlusOverlapCount: 0,
@@ -309,10 +328,7 @@ describe("computeFindingsOverlap", () => {
     })
 
     it("score 4 finding in prod + score 3 finding in shadow on the same tuple is prod-only at score-4+", () => {
-      const result = computeFindingsOverlap(
-        [f("x.ts", 1, "logic", 4)],
-        [f("x.ts", 1, "logic", 3)],
-      )
+      const result = computeFindingsOverlap([f("x.ts", 1, "logic", 4)], [f("x.ts", 1, "logic", 3)])
       // Overall: same (path, line, category) → 1 overlap.
       expect(result.overlapCount).toBe(1)
       // Score-4+: prod side has it, shadow side does NOT.
@@ -324,8 +340,12 @@ describe("computeFindingsOverlap", () => {
 })
 
 describe("buildShadowVerdictComparison", () => {
-  const finding = (path: string, line: number, category: string, score: number) =>
-    ({ path, line, category, score })
+  const finding = (path: string, line: number, category: string, score: number) => ({
+    path,
+    line,
+    category,
+    score,
+  })
 
   const okProd = (overrides: Partial<ProdOutcomeForComparison> = {}): ProdOutcomeForComparison => ({
     verdictOk: true,

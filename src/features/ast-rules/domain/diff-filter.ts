@@ -266,12 +266,7 @@ export function buildDeletedLineTextByLine(diff: string): Map<string, Map<number
  * Returns true when `[startLine, endLine]` (inclusive, 1-based)
  * intersects the changed-lines set for the given path.
  */
-export function nodeOverlapsChanged(
-  changed: ChangedLines,
-  path: string,
-  startLine: number,
-  endLine: number,
-): boolean {
+export function nodeOverlapsChanged(changed: ChangedLines, path: string, startLine: number, endLine: number): boolean {
   const set = changed.get(path)
   if (!set || set.size === 0) return false
   for (let l = startLine; l <= endLine; l++) {

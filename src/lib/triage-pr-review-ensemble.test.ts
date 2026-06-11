@@ -21,9 +21,7 @@ import {
   prepareSubmissionAffordance,
   buildSuggestionEmissionLogEvents,
 } from "@/src/lib/triage-pr-review-ensemble"
-import {
-  buildReviewSubmissionWithMetadata,
-} from "@/src/lib/triage-pr-review"
+import { buildReviewSubmissionWithMetadata } from "@/src/lib/triage-pr-review"
 import {
   buildTestingEvidencePack,
   filterTestingEvidenceForSuppressedMissingCoverage,
@@ -35,16 +33,8 @@ import { baseFinding, baseVerdict, makeCounterEnv } from "@/src/lib/triage-pr-re
 describe("SIG-222 testing evidence policy integration", () => {
   it("suppresses repo-known/comment-only missing-sibling rows and keeps remaining testing findings P3 inline COMMENT", () => {
     const pack = buildTestingEvidencePack({
-      splitFilePaths: [
-        "src/lib/comment-only.ts",
-        "src/lib/existing-tested.ts",
-        "src/lib/new-source.ts",
-      ],
-      reviewedFilePaths: [
-        "src/lib/comment-only.ts",
-        "src/lib/existing-tested.ts",
-        "src/lib/new-source.ts",
-      ],
+      splitFilePaths: ["src/lib/comment-only.ts", "src/lib/existing-tested.ts", "src/lib/new-source.ts"],
+      reviewedFilePaths: ["src/lib/comment-only.ts", "src/lib/existing-tested.ts", "src/lib/new-source.ts"],
     })
     const filtered = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
       changedLineTextByPath: new Map([
@@ -52,10 +42,7 @@ describe("SIG-222 testing evidence policy integration", () => {
         ["src/lib/existing-tested.ts", ["export function existingTested() { return run() }"]],
         ["src/lib/new-source.ts", ["export function newSource() { return run() }"]],
       ]),
-      repoPaths: [
-        "src/lib/existing-tested.ts",
-        "tests/existing-tested.test.ts",
-      ],
+      repoPaths: ["src/lib/existing-tested.ts", "tests/existing-tested.test.ts"],
     })
 
     expect(filtered.suppressions).toEqual([
@@ -66,9 +53,7 @@ describe("SIG-222 testing evidence policy integration", () => {
         test: "tests/existing-tested.test.ts",
       },
     ])
-    expect(filtered.pack.siblingMappings).toEqual([
-      { source: "src/lib/new-source.ts", test: null },
-    ])
+    expect(filtered.pack.siblingMappings).toEqual([{ source: "src/lib/new-source.ts", test: null }])
     const evidenceBlock = renderTestingEvidenceBlock(filtered.pack, {
       contentByPath: {},
       failedPaths: [],
@@ -79,9 +64,7 @@ describe("SIG-222 testing evidence policy integration", () => {
     expect(evidenceBlock).not.toContain("src/lib/existing-tested.ts")
     expect(evidenceBlock).toContain("siblingMapping:src/lib/new-source.ts->NONE")
 
-    const reviewable: ReviewableMap = new Map([
-      ["src/lib/new-source.ts", [{ line: 12, side: "RIGHT" }]],
-    ])
+    const reviewable: ReviewableMap = new Map([["src/lib/new-source.ts", [{ line: 12, side: "RIGHT" }]]])
     const addedLineTextByLine = new Map<string, Map<number, string>>([
       ["src/lib/new-source.ts", new Map([[12, "export function newSource() { return run() }"]])],
     ])
@@ -90,16 +73,18 @@ describe("SIG-222 testing evidence policy integration", () => {
         summary: "One test gap.",
         confidence: 5,
         confidenceReason: "Grounded by evidence pack.",
-        findings: [{
-          path: "src/lib/new-source.ts",
-          line: 12,
-          scope: "line",
-          score: 5,
-          category: "testing",
-          headline: "new source lacks a sibling test",
-          body: "Add a sibling test covering the new exported behavior.",
-          evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
-        }],
+        findings: [
+          {
+            path: "src/lib/new-source.ts",
+            line: 12,
+            scope: "line",
+            score: 5,
+            category: "testing",
+            headline: "new source lacks a sibling test",
+            body: "Add a sibling test covering the new exported behavior.",
+            evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
+          },
+        ],
       },
       prAuthor: null,
       headSha: "abc",
@@ -138,28 +123,57 @@ describe("buildAstFindingsSynthBlock (SIG-245 AST-supersession recall fix)", () 
   })
 
   it("autoInline ON: composition is byte-identical to the legacy inline block (prod-unchanged guarantee)", () => {
-    const expected =
-      `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astJson}\n\`\`\``
+    const expected = `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astJson}\n\`\`\``
     expect(buildAstFindingsSynthBlock(astJson, true)).toBe(expected)
   })
 })
 
 describe("resolveReviewEventOverride (SIG-245 + SIG-287 downgrade trigger)", () => {
   it("escalates to REQUEST_CHANGES when there is an approval blocker (wins over everything)", () => {
-    expect(resolveReviewEventOverride({ hasApprovalBlocker: true, reviewIncomplete: true, filesDroppedCount: 3 })).toBe("REQUEST_CHANGES")
-    expect(resolveReviewEventOverride({ hasApprovalBlocker: true, reviewIncomplete: false, filesDroppedCount: 0 })).toBe("REQUEST_CHANGES")
+    expect(
+      resolveReviewEventOverride({
+        hasApprovalBlocker: true,
+        reviewIncomplete: true,
+        filesDroppedCount: 3,
+      }),
+    ).toBe("REQUEST_CHANGES")
+    expect(
+      resolveReviewEventOverride({
+        hasApprovalBlocker: true,
+        reviewIncomplete: false,
+        filesDroppedCount: 0,
+      }),
+    ).toBe("REQUEST_CHANGES")
   })
 
   it("downgrades to COMMENT when files were dropped from review (SIG-245)", () => {
-    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 1 })).toBe("COMMENT")
+    expect(
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: false,
+        filesDroppedCount: 1,
+      }),
+    ).toBe("COMMENT")
   })
 
   it("downgrades to COMMENT when the review is incomplete (SIG-287 degraded/low-confidence)", () => {
-    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: true, filesDroppedCount: 0 })).toBe("COMMENT")
+    expect(
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: true,
+        filesDroppedCount: 0,
+      }),
+    ).toBe("COMMENT")
   })
 
   it("returns undefined for a clean, complete review (no override → APPROVE/RC derived from findings)", () => {
-    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 0 })).toBeUndefined()
+    expect(
+      resolveReviewEventOverride({
+        hasApprovalBlocker: false,
+        reviewIncomplete: false,
+        filesDroppedCount: 0,
+      }),
+    ).toBeUndefined()
   })
 })
 
@@ -216,10 +230,12 @@ describe("buildSuggestionEmissionLogEvents (SIG-103)", () => {
   }
 
   it("renders the post-submit suggestion telemetry shape", () => {
-    expect(buildSuggestionEmissionLogEvents(context, [
-      { path: "src/a.ts", line: 12 },
-      { path: "src/b.ts", line: 20, startLine: 18 },
-    ])).toEqual([
+    expect(
+      buildSuggestionEmissionLogEvents(context, [
+        { path: "src/a.ts", line: 12 },
+        { path: "src/b.ts", line: 20, startLine: 18 },
+      ]),
+    ).toEqual([
       {
         event: "pr-review-suggestion-emitted",
         owner: "Sigilix",
@@ -243,10 +259,15 @@ describe("buildSuggestionEmissionLogEvents (SIG-103)", () => {
   })
 
   it("does not emit telemetry when review comments were suppressed", () => {
-    expect(buildSuggestionEmissionLogEvents({
-      ...context,
-      commentsSubmitted: false,
-    }, [{ path: "src/a.ts", line: 12 }])).toEqual([])
+    expect(
+      buildSuggestionEmissionLogEvents(
+        {
+          ...context,
+          commentsSubmitted: false,
+        },
+        [{ path: "src/a.ts", line: 12 }],
+      ),
+    ).toEqual([])
   })
 })
 
@@ -278,24 +299,28 @@ describe("collectApprovalReadinessSourceFindings", () => {
       body: "A distinct high-confidence finding that was never withdrawn.",
     }
     const out = collectApprovalReadinessSourceFindings(
-      [{
-        role: "logic",
-        verdict: {
-          ...baseVerdict,
-          findings: [withdrawn, kept],
+      [
+        {
+          role: "logic",
+          verdict: {
+            ...baseVerdict,
+            findings: [withdrawn, kept],
+          },
         },
-      }],
-      [{
-        path: withdrawn.path,
-        line: withdrawn.line,
-        bodySnapshot: withdrawn.body,
-        // Recent so it's inside the SIG-217 Part B decay window (an epoch-0
-        // dismissal would read as decayed and be let through, not suppressed).
-        withdrawnAt: Date.now(),
-        withdrawnByCommentId: 123,
-        prHeadSha: "a".repeat(40),
-        reason: "mention-reply-accepted",
-      }],
+      ],
+      [
+        {
+          path: withdrawn.path,
+          line: withdrawn.line,
+          bodySnapshot: withdrawn.body,
+          // Recent so it's inside the SIG-217 Part B decay window (an epoch-0
+          // dismissal would read as decayed and be let through, not suppressed).
+          withdrawnAt: Date.now(),
+          withdrawnByCommentId: 123,
+          prHeadSha: "a".repeat(40),
+          reason: "mention-reply-accepted",
+        },
+      ],
     )
 
     expect(out.map((source) => source.id)).toEqual(["logic-1"])
@@ -324,10 +349,7 @@ describe("collectApprovalReadinessSourceFindings", () => {
     const keptOnlyVerdict = { ...verdict, findings: [keptFinding] }
     const maxTokens = Math.ceil(JSON.stringify(keptOnlyVerdict).length / 4) + 2
 
-    const synthInput = buildSynthInputVerdicts(
-      [{ role: "logic" as const, verdict, elapsedMs: 100 }],
-      maxTokens,
-    )
+    const synthInput = buildSynthInputVerdicts([{ role: "logic" as const, verdict, elapsedMs: 100 }], maxTokens)
     const sources = collectApprovalReadinessSourceFindings(synthInput, [])
 
     expect(synthInput[0]?.verdict.findings.map((f) => f.id)).toEqual(["logic-1"])
@@ -341,9 +363,7 @@ describe("checkQuorum", () => {
     verdict: { ...baseVerdict, findings: [{ ...baseFinding, id: `${role}-0` }] },
     elapsedMs: 100,
   })
-  const allFour: Array<"logic" | "security" | "performance" | "tests"> = [
-    "logic", "security", "performance", "tests",
-  ]
+  const allFour: Array<"logic" | "security" | "performance" | "tests"> = ["logic", "security", "performance", "tests"]
 
   it("returns false on 0 successes (any dispatched count)", () => {
     expect(checkQuorum([], "shadow", allFour)).toBe(false)
@@ -394,10 +414,7 @@ describe("checkQuorum", () => {
 
 describe("truncateVerdictToTokens", () => {
   it("returns the verdict unchanged when under the cap", () => {
-    const out = truncateVerdictToTokens(
-      { ...baseVerdict, findings: [{ ...baseFinding, id: "logic-0" }] },
-      1000,
-    )
+    const out = truncateVerdictToTokens({ ...baseVerdict, findings: [{ ...baseFinding, id: "logic-0" }] }, 1000)
     expect(out.findings).toHaveLength(1)
   })
 

@@ -25,15 +25,11 @@ describe("parseDeterministicChecks — happy paths", () => {
     const result = parseDeterministicChecks([
       { id: "no-todo", pattern: "TODO", severity: "error", message: "no TODOs" },
     ])
-    expect(result).toEqual([
-      { id: "no-todo", pattern: "TODO", severity: "error", message: "no TODOs" },
-    ])
+    expect(result).toEqual([{ id: "no-todo", pattern: "TODO", severity: "error", message: "no TODOs" }])
   })
 
   it("defaults severity to 'warn' when omitted", () => {
-    const result = parseDeterministicChecks([
-      { id: "x", pattern: "y", message: "z" },
-    ])
+    const result = parseDeterministicChecks([{ id: "x", pattern: "y", message: "z" }])
     expect(result[0]?.severity).toBe("warn")
   })
 
@@ -45,16 +41,12 @@ describe("parseDeterministicChecks — happy paths", () => {
   })
 
   it("drops empty-string paths from the array", () => {
-    const result = parseDeterministicChecks([
-      { id: "x", pattern: "y", message: "z", paths: ["", "real.ts", ""] },
-    ])
+    const result = parseDeterministicChecks([{ id: "x", pattern: "y", message: "z", paths: ["", "real.ts", ""] }])
     expect(result[0]?.paths).toEqual(["real.ts"])
   })
 
   it("omits paths when all entries are empty/non-string", () => {
-    const result = parseDeterministicChecks([
-      { id: "x", pattern: "y", message: "z", paths: ["", null, 42] },
-    ])
+    const result = parseDeterministicChecks([{ id: "x", pattern: "y", message: "z", paths: ["", null, 42] }])
     expect(result[0]?.paths).toBeUndefined()
   })
 })
@@ -62,29 +54,27 @@ describe("parseDeterministicChecks — happy paths", () => {
 describe("parseDeterministicChecks — defensive returns", () => {
   it("returns empty for non-array", () => {
     expect(parseDeterministicChecks(null)).toEqual([])
-    expect(parseDeterministicChecks("[]")).toEqual([])  // string ≠ array
+    expect(parseDeterministicChecks("[]")).toEqual([]) // string ≠ array
     expect(parseDeterministicChecks({ id: "x" })).toEqual([])
   })
 
   it("drops entries missing required fields", () => {
     const result = parseDeterministicChecks([
-      { id: "x", pattern: "y", message: "z" },           // valid
-      { id: "x", pattern: "y" },                          // missing message
-      { id: "", pattern: "y", message: "z" },             // empty id
-      { pattern: "y", message: "z" },                     // missing id
-      { id: "x", message: "z" },                          // missing pattern
+      { id: "x", pattern: "y", message: "z" }, // valid
+      { id: "x", pattern: "y" }, // missing message
+      { id: "", pattern: "y", message: "z" }, // empty id
+      { pattern: "y", message: "z" }, // missing id
+      { id: "x", message: "z" }, // missing pattern
       "not an object",
       null,
-      [],                                                 // array isn't an entry
+      [], // array isn't an entry
     ])
     expect(result).toHaveLength(1)
     expect(result[0]?.id).toBe("x")
   })
 
   it("rejects unknown severity values, falls back to 'warn'", () => {
-    const result = parseDeterministicChecks([
-      { id: "x", pattern: "y", message: "z", severity: "FATAL" },
-    ])
+    const result = parseDeterministicChecks([{ id: "x", pattern: "y", message: "z", severity: "FATAL" }])
     expect(result[0]?.severity).toBe("warn")
   })
 })
@@ -147,9 +137,14 @@ describe("runDeterministicChecks — matching", () => {
       "@@ -100,0 +100,1 @@",
       "+TODO line 100",
     ].join("\n")
-    const result = runDeterministicChecks(diff, [{
-      id: "x", pattern: "TODO", severity: "warn", message: "x",
-    }])
+    const result = runDeterministicChecks(diff, [
+      {
+        id: "x",
+        pattern: "TODO",
+        severity: "warn",
+        message: "x",
+      },
+    ])
     expect(result.hits).toHaveLength(2)
     expect(result.hits[0]).toMatchObject({ path: "foo.ts", line: 11 })
     expect(result.hits[1]).toMatchObject({ path: "bar.ts", line: 100 })
@@ -159,7 +154,11 @@ describe("runDeterministicChecks — matching", () => {
     const diffSrc = mkDiff("src/foo.ts", ["TODO inside src"])
     const diffOther = mkDiff("vendor/foo.ts", ["TODO outside src"])
     const check: DeterministicCheck = {
-      id: "x", pattern: "TODO", severity: "warn", message: "x", paths: ["src/**"],
+      id: "x",
+      pattern: "TODO",
+      severity: "warn",
+      message: "x",
+      paths: ["src/**"],
     }
     expect(runDeterministicChecks(diffSrc, [check]).hits).toHaveLength(1)
     expect(runDeterministicChecks(diffOther, [check]).hits).toHaveLength(0)
@@ -170,7 +169,11 @@ describe("runDeterministicChecks — matching", () => {
     // `**`-as-`.*` translation let `src/**/foo.ts` match
     // `src/barfoo.ts`. Verify the segment-boundary fix.
     const check: DeterministicCheck = {
-      id: "x", pattern: "TODO", severity: "warn", message: "x", paths: ["src/**/foo.ts"],
+      id: "x",
+      pattern: "TODO",
+      severity: "warn",
+      message: "x",
+      paths: ["src/**/foo.ts"],
     }
     // Should NOT match — no segment boundary between src/ and foo.ts
     expect(runDeterministicChecks(mkDiff("src/barfoo.ts", ["TODO no"]), [check]).hits).toHaveLength(0)
@@ -185,7 +188,11 @@ describe("runDeterministicChecks — matching", () => {
     // emitted `^dist/.*$` which required the trailing slash; `dist`
     // (no trailing slash) wouldn't match. Verify `(?:/.*)?` fix.
     const check: DeterministicCheck = {
-      id: "x", pattern: "TODO", severity: "warn", message: "x", paths: ["dist/**"],
+      id: "x",
+      pattern: "TODO",
+      severity: "warn",
+      message: "x",
+      paths: ["dist/**"],
     }
     expect(runDeterministicChecks(mkDiff("dist", ["TODO yes"]), [check]).hits).toHaveLength(1)
     expect(runDeterministicChecks(mkDiff("dist/index.js", ["TODO yes"]), [check]).hits).toHaveLength(1)
@@ -196,9 +203,14 @@ describe("runDeterministicChecks — matching", () => {
 
   it("supports JS regex syntax (groups, classes)", () => {
     const diff = mkDiff("foo.ts", ["console.log(x)", "logger.info(y)"])
-    const result = runDeterministicChecks(diff, [{
-      id: "x", pattern: "console\\.(log|warn|error)", severity: "warn", message: "x",
-    }])
+    const result = runDeterministicChecks(diff, [
+      {
+        id: "x",
+        pattern: "console\\.(log|warn|error)",
+        severity: "warn",
+        message: "x",
+      },
+    ])
     expect(result.hits).toHaveLength(1)
     expect(result.hits[0]?.evidence).toBe("console.log")
   })
@@ -214,14 +226,19 @@ describe("runDeterministicChecks — matching", () => {
       "+++ b/script.sql",
       "@@ -1,5 +1,5 @@",
       " keep",
-      "--- old SQL comment",  // CONTENT line that LOOKS like a header marker
-      "+++ replacement note",  // CONTENT addition that LOOKS like a header marker
+      "--- old SQL comment", // CONTENT line that LOOKS like a header marker
+      "+++ replacement note", // CONTENT addition that LOOKS like a header marker
       "+TODO target line",
       " trailing context",
     ].join("\n")
-    const result = runDeterministicChecks(diff, [{
-      id: "x", pattern: "TODO", severity: "warn", message: "x",
-    }])
+    const result = runDeterministicChecks(diff, [
+      {
+        id: "x",
+        pattern: "TODO",
+        severity: "warn",
+        message: "x",
+      },
+    ])
     expect(result.hits).toHaveLength(1)
     expect(result.hits[0]?.path).toBe("script.sql")
     // newLine starts at 1 (per @@ -1,5 +1,5), advances on context (line 1 → 2)
@@ -254,9 +271,14 @@ describe("runDeterministicChecks — fail-open", () => {
   })
 
   it("returns empty for empty diff", () => {
-    const result = runDeterministicChecks("", [{
-      id: "x", pattern: "TODO", severity: "warn", message: "x",
-    }])
+    const result = runDeterministicChecks("", [
+      {
+        id: "x",
+        pattern: "TODO",
+        severity: "warn",
+        message: "x",
+      },
+    ])
     expect(result.hits).toEqual([])
     expect(result.compiledRegexFailures).toEqual([])
   })
@@ -269,9 +291,14 @@ describe("runDeterministicChecks — fail-open", () => {
   it("truncates evidence over the per-hit cap", () => {
     const longLine = "TODO " + "x".repeat(500)
     const diff = mkDiff("foo.ts", [longLine])
-    const result = runDeterministicChecks(diff, [{
-      id: "x", pattern: "TODO.+", severity: "warn", message: "x",
-    }])
+    const result = runDeterministicChecks(diff, [
+      {
+        id: "x",
+        pattern: "TODO.+",
+        severity: "warn",
+        message: "x",
+      },
+    ])
     expect(result.hits[0]?.evidence.length).toBeLessThanOrEqual(200)
   })
 })

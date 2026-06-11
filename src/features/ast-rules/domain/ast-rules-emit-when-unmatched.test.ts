@@ -5,7 +5,11 @@
 import { describe, it, expect } from "vitest"
 import { ALL_RULES } from "@/src/features/ast-rules/domain/rule-registry"
 import { renderAstFindingsAsJsonForSynth } from "@/src/features/ast-rules/render/render"
-import { buildAstFindingsSynthBlock, clampAstEmitScores, validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
+import {
+  buildAstFindingsSynthBlock,
+  clampAstEmitScores,
+  validateForSubmission,
+} from "@/src/lib/triage-pr-review-ensemble"
 import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 import type { PrReviewVerdict, PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
@@ -58,12 +62,20 @@ describe("emitWhenUnmatched — FP-safe scoping", () => {
 
 describe("renderAstFindingsAsJsonForSynth — deterministic_emit field", () => {
   const base: AstFinding = {
-    ruleId: "no-exec-shell-interpolation", severity: "error", roleHint: "security",
-    path: "a.ts", line: 1, column: 0, message: "m", evidence: "", astFindingId: "ast/x/abc/1",
+    ruleId: "no-exec-shell-interpolation",
+    severity: "error",
+    roleHint: "security",
+    path: "a.ts",
+    line: 1,
+    column: 0,
+    message: "m",
+    evidence: "",
+    astFindingId: "ast/x/abc/1",
   }
   it("renders deterministic_emit:true for a flagged finding", () => {
-    expect(renderAstFindingsAsJsonForSynth([{ ...base, emitWhenUnmatched: true }]))
-      .toContain('"deterministic_emit": true')
+    expect(renderAstFindingsAsJsonForSynth([{ ...base, emitWhenUnmatched: true }])).toContain(
+      '"deterministic_emit": true',
+    )
   })
   it("omits the field for an unflagged finding", () => {
     expect(renderAstFindingsAsJsonForSynth([base])).not.toContain("deterministic_emit")
@@ -99,7 +111,12 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
 
 describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-review fix)", () => {
   const ast = (over: Record<string, unknown>) => ({
-    path: "a.ts", line: 20, roleHint: "logic", severity: "warning", emitWhenUnmatched: true, ...over,
+    path: "a.ts",
+    line: 20,
+    roleHint: "logic",
+    severity: "warning",
+    emitWhenUnmatched: true,
+    ...over,
   })
   it("clamps a logic warning-emit finding from P1 (score 4) to P2 (score 3)", () => {
     const f = [{ path: "a.ts", line: 21, category: "logic", score: 4 }]
@@ -151,26 +168,64 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
 describe("emitWhenUnmatched — ast-only provenance survives validateForSubmission", () => {
   const AST_ID = "ast/no-unauthorized-object-lookup/abc1234/42"
   const finding: PrReviewFinding = {
-    path: "src/routes/keys.ts", line: 42, score: 4, category: "security",
-    headline: "IDOR floor", body: "req.params.id reaches a lookup with no authz check.",
-    cweId: "CWE-639", evidenceId: "NONE",
+    path: "src/routes/keys.ts",
+    line: 42,
+    score: 4,
+    category: "security",
+    headline: "IDOR floor",
+    body: "req.params.id reaches a lookup with no authz check.",
+    cweId: "CWE-639",
+    evidenceId: "NONE",
   }
-  const verdict: PrReviewVerdict = { summary: "one idor", confidence: 4, confidenceReason: "x", findings: [finding] }
+  const verdict: PrReviewVerdict = {
+    summary: "one idor",
+    confidence: 4,
+    confidenceReason: "x",
+    findings: [finding],
+  }
   const reviewable: ReviewableMap = new Map([["src/routes/keys.ts", [{ line: 42, side: "RIGHT" as const }]]])
   // A specialist verdict that did NOT flag the IDOR — the floor's reason to exist.
-  const specialistVerdicts = [{
-    role: "logic" as const,
-    verdict: { summary: "", confidence: 3, confidenceReason: "x", findings: [
-      { path: "src/routes/keys.ts", line: 10, score: 3, category: "logic" as const, headline: "unrelated", body: "b", id: "logic-0" },
-    ] },
-  }]
-  const call = (astFindingIds?: readonly string[]) => validateForSubmission({
-    synthOutput: { verdict, provenance: { findings: [
-      { sourceSpecialists: [], sourceFindingIds: [AST_ID], action: "kept", verifiedViaRetrieval: false },
-    ], dropped: [] } },
-    reviewable, specialistVerdicts,
-    ...(astFindingIds ? { astFindingIds } : {}),
-  })
+  const specialistVerdicts = [
+    {
+      role: "logic" as const,
+      verdict: {
+        summary: "",
+        confidence: 3,
+        confidenceReason: "x",
+        findings: [
+          {
+            path: "src/routes/keys.ts",
+            line: 10,
+            score: 3,
+            category: "logic" as const,
+            headline: "unrelated",
+            body: "b",
+            id: "logic-0",
+          },
+        ],
+      },
+    },
+  ]
+  const call = (astFindingIds?: readonly string[]) =>
+    validateForSubmission({
+      synthOutput: {
+        verdict,
+        provenance: {
+          findings: [
+            {
+              sourceSpecialists: [],
+              sourceFindingIds: [AST_ID],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+      ...(astFindingIds ? { astFindingIds } : {}),
+    })
 
   it("WITHOUT astFindingIds: the unmatched emit is dropped (the latent bug Codex found)", () => {
     const out = call(undefined)

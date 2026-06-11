@@ -15,9 +15,7 @@ const fakeEnv = {} as unknown as Env
 const v6Lock = (deps: Record<string, string>) =>
   JSON.stringify({
     lockfileVersion: 1,
-    dependencies: Object.fromEntries(
-      Object.entries(deps).map(([k, v]) => [k, { version: v }]),
-    ),
+    dependencies: Object.fromEntries(Object.entries(deps).map(([k, v]) => [k, { version: v }])),
   })
 
 const minimalPkgJson = (deps: Record<string, string>) =>
@@ -28,8 +26,11 @@ describe("runDepVulnScan — skip paths", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(async () => null),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
       enabled: false,
     })
     expect(result).toEqual({ skipped: true, reason: "disabled-config" })
@@ -43,8 +44,11 @@ describe("runDepVulnScan — skip paths", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result).toEqual({ skipped: true, reason: "missing-package-json" })
   })
@@ -57,8 +61,11 @@ describe("runDepVulnScan — skip paths", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result).toEqual({ skipped: true, reason: "parse-failed" })
   })
@@ -71,8 +78,11 @@ describe("runDepVulnScan — skip paths", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result).toEqual({ skipped: true, reason: "missing-lockfile" })
   })
@@ -89,8 +99,11 @@ describe("runDepVulnScan — finding emission", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result.skipped).toBe(false)
     if (result.skipped) return
@@ -110,8 +123,11 @@ describe("runDepVulnScan — finding emission", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result.skipped).toBe(false)
     if (result.skipped) return
@@ -128,8 +144,11 @@ describe("runDepVulnScan — finding emission", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result.skipped).toBe(false)
     if (result.skipped) return
@@ -146,8 +165,11 @@ describe("runDepVulnScan — finding emission", () => {
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result.skipped).toBe(false)
     if (result.skipped) return
@@ -157,16 +179,18 @@ describe("runDepVulnScan — finding emission", () => {
   it("hoist filter: transitives in lockfile but not in package.json don't surface findings", async () => {
     const get = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
       if (path === "package.json") return minimalPkgJson({ "some-other-pkg": "^1.0.0" })
-      if (path === "package-lock.json" && ref === "h")
-        return v6Lock({ lodash: "4.17.20", "some-other-pkg": "1.0.0" })
+      if (path === "package-lock.json" && ref === "h") return v6Lock({ lodash: "4.17.20", "some-other-pkg": "1.0.0" })
       if (path === "package-lock.json" && ref === "b") return v6Lock({})
       return null
     })
     const result = await runDepVulnScan({
       env: fakeEnv,
       client: fakeClient(get),
-      owner: "o", repo: "r", prNumber: 1,
-      headSha: "h", baseSha: "b",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "h",
+      baseSha: "b",
     })
     expect(result.skipped).toBe(false)
     if (result.skipped) return

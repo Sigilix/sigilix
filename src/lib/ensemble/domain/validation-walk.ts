@@ -21,11 +21,7 @@ import {
   findRangeAwareAnchor,
   findRepairableInlineAnchor,
 } from "./validation-internals"
-import {
-  evaluateSecurityFinding,
-  deriveSecurityBucket,
-  AUTHZ_BUCKET,
-} from "./gates/validate-security-finding"
+import { evaluateSecurityFinding, deriveSecurityBucket, AUTHZ_BUCKET } from "./gates/validate-security-finding"
 import { findingClaimsIntraInstanceRace } from "./gates/validate-do-race-finding"
 import { evaluateTestFinding } from "./gates/validate-test-finding"
 import { evaluateLogicFinding } from "./gates/validate-logic-finding"
@@ -62,9 +58,7 @@ import type { SynthesizerProvenance } from "./validation"
  * gates. The PR-12 exit-arm pattern — the loop's `continue` stays in the
  * skeleton.
  */
-type HardDropResult =
-  | { kind: "continue" }
-  | { kind: "proceed"; finding: PrReviewFinding }
+type HardDropResult = { kind: "continue" } | { kind: "proceed"; finding: PrReviewFinding }
 
 /**
  * SIG-386 (PR2) — the HARD-DROP gate sequence for ONE finding: hallucination
@@ -95,9 +89,7 @@ function applyHardDropGates(
     state.droppedForHallucination++
     return { kind: "continue" }
   }
-  const sourceIds = Array.isArray(provenance.sourceFindingIds)
-    ? provenance.sourceFindingIds
-    : []
+  const sourceIds = Array.isArray(provenance.sourceFindingIds) ? provenance.sourceFindingIds : []
   if (sourceIds.length === 0) {
     state.droppedForHallucination++
     return { kind: "continue" }
@@ -144,13 +136,15 @@ function applyHardDropGates(
     const fromScope: ReviewFindingScope | "undefined" = f.scope ?? "undefined"
     const normalized = normalizeFindingScopeForAnchorability(f, args.reviewable)
     if (normalized !== f) {
-      console.log(JSON.stringify({
-        event: "pr-review-scope-normalized-to-line",
-        fromScope,
-        path: f.path,
-        line: f.line,
-        category: f.category,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-scope-normalized-to-line",
+          fromScope,
+          path: f.path,
+          line: f.line,
+          category: f.category,
+        }),
+      )
       f = normalized
     }
   }
@@ -220,7 +214,8 @@ function applyHardDropGates(
         // which is recorded to telemetry.synthesizer.verdict — capping the
         // score in place would corrupt the recorded synth score (CR #284).
         const demotedFinding: PrReviewFinding = { ...f, score: Math.min(f.score, 3) }
-        if (args.trustLedgerEnabled) annotateFindingTrust(demotedFinding, { surface: "body", demoteReason: "tests-coverage" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(demotedFinding, { surface: "body", demoteReason: "tests-coverage" })
         state.unanchoredFindings.push(demotedFinding)
         return { kind: "continue" }
       }
@@ -238,14 +233,16 @@ function applyHardDropGates(
   if (f.category === "testing" && args.testToSourceRatio > TEST_RATIO_DAMPER_THRESHOLD) {
     const dampedScore = dampTestingScoreForRatio(f.score, args.testToSourceRatio)
     if (dampedScore !== f.score) {
-      console.log(JSON.stringify({
-        event: "pr-review-testing-finding-ratio-damped",
-        path: f.path,
-        line: f.line,
-        fromScore: f.score,
-        toScore: dampedScore,
-        ratio: Number(args.testToSourceRatio.toFixed(3)),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-testing-finding-ratio-damped",
+          path: f.path,
+          line: f.line,
+          fromScore: f.score,
+          toScore: dampedScore,
+          ratio: Number(args.testToSourceRatio.toFixed(3)),
+        }),
+      )
       f = { ...f, score: dampedScore }
     }
   }
@@ -288,11 +285,15 @@ function applyHardDropGates(
     lineInDurableObjectClass(args.doClassSpans.get(f.path.trim()), f.line) &&
     findingClaimsIntraInstanceRace(f)
   ) {
-    console.log(JSON.stringify({
-      event: "do-race-finding-demoted",
-      path: f.path, line: f.line, score: f.score,
-      headline: (f.headline ?? "").slice(0, 100),
-    }))
+    console.log(
+      JSON.stringify({
+        event: "do-race-finding-demoted",
+        path: f.path,
+        line: f.line,
+        score: f.score,
+        headline: (f.headline ?? "").slice(0, 100),
+      }),
+    )
     if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "do-race" })
     state.unanchoredFindings.push(f)
     return { kind: "continue" }
@@ -440,7 +441,10 @@ function applyHardDropGates(
   // re-checks category+sev), so it cannot suppress a real bug. Same
   // shadow-first semantics: only `enforce` drops.
   if (args.logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
-    const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath: args.fullFileByPath, astCache: args.astCache })
+    const claimDecision = evaluateLogicClaimRefutation(f, {
+      fullFileByPath: args.fullFileByPath,
+      astCache: args.astCache,
+    })
     if (!claimDecision.keep) {
       const dropped = args.logicClaimRefutationMode === "enforce"
       state.droppedForFailedLogicClaimRefutation++
@@ -520,9 +524,7 @@ function applyHardDropGates(
  * nits or demoted/dropped to body via `state`); `proceed` carries the repaired
  * `workingFinding` (+ whether the range was rewritten) to the final routing.
  */
-type DemoteResult =
-  | { kind: "continue" }
-  | { kind: "proceed"; workingFinding: PrReviewFinding; rewroteRange: boolean }
+type DemoteResult = { kind: "continue" } | { kind: "proceed"; workingFinding: PrReviewFinding; rewroteRange: boolean }
 
 /**
  * SIG-386 (PR2) — score-1 advisory demotion → line-1 out-of-diff routing →
@@ -607,9 +609,7 @@ function applyDemoteGates(
     // Only count an actual rewrite (anchor differs from the original
     // endpoints) so the counter isn't inflated for findings whose
     // original anchor was already valid and matched by the helper.
-    rewroteRange =
-      workingFinding.line !== f.line ||
-      workingFinding.startLine !== f.startLine
+    rewroteRange = workingFinding.line !== f.line || workingFinding.startLine !== f.startLine
   }
 
   // SIG-281 PR C (Rec 4): inline-grounding gate. A finding that reaches
@@ -628,13 +628,22 @@ function applyDemoteGates(
   // Shadow-first: only `enforce` demotes; `shadow` counts + telemeters
   // and keeps the finding inline.
   {
-    const groundingDecision = evaluateInlineGrounding(workingFinding, { addedLineTextByLine: args.addedLineTextByLine })
+    const groundingDecision = evaluateInlineGrounding(workingFinding, {
+      addedLineTextByLine: args.addedLineTextByLine,
+    })
     if (!groundingDecision.keep) {
       const demoted = args.inlineGroundingValidatorMode === "enforce"
       state.droppedForFailedInlineGroundingValidation++
-      args.onInlineGroundingFindingDropped?.(workingFinding, { reason: groundingDecision.reason, dropped: demoted })
+      args.onInlineGroundingFindingDropped?.(workingFinding, {
+        reason: groundingDecision.reason,
+        dropped: demoted,
+      })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "inline-grounding" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, {
+            surface: "body",
+            demoteReason: "inline-grounding",
+          })
         state.unanchoredFindings.push(workingFinding)
         return { kind: "continue" }
       }
@@ -667,9 +676,16 @@ function applyDemoteGates(
     if (!absenceDecision.keep) {
       const demoted = args.absenceClaimValidatorMode === "enforce"
       state.droppedForFailedAbsenceGroundingValidation++
-      args.onAbsenceFindingDropped?.(workingFinding, { reason: absenceDecision.reason, dropped: demoted })
+      args.onAbsenceFindingDropped?.(workingFinding, {
+        reason: absenceDecision.reason,
+        dropped: demoted,
+      })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "absence-grounding" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, {
+            surface: "body",
+            demoteReason: "absence-grounding",
+          })
         state.unanchoredFindings.push(workingFinding)
         return { kind: "continue" }
       }
@@ -705,7 +721,11 @@ function applyDemoteGates(
         dropped: demoted,
       })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "window-blindness" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, {
+            surface: "body",
+            demoteReason: "window-blindness",
+          })
         state.unanchoredFindings.push(workingFinding)
         return { kind: "continue" }
       }
@@ -737,9 +757,16 @@ function applyDemoteGates(
     if (!sgDecision.keep) {
       const demoted = args.securityGroundingValidatorMode === "enforce"
       state.droppedForFailedSecurityGroundingValidation++
-      args.onSecurityGroundingFindingDropped?.(workingFinding, { reason: sgDecision.reason, dropped: demoted })
+      args.onSecurityGroundingFindingDropped?.(workingFinding, {
+        reason: sgDecision.reason,
+        dropped: demoted,
+      })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-grounding" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, {
+            surface: "body",
+            demoteReason: "security-grounding",
+          })
         state.unanchoredFindings.push(workingFinding)
         return { kind: "continue" }
       }
@@ -753,13 +780,19 @@ function applyDemoteGates(
   // off/shadow/enforce placement as the grounding gate above; DEMOTE-not-drop,
   // keep on any uncertainty (the gate fails closed inside evaluateSecurityUsage).
   if (args.securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
-    const suDecision = evaluateSecurityUsage(workingFinding, { addedLineTextByLine: args.addedLineTextByLine })
+    const suDecision = evaluateSecurityUsage(workingFinding, {
+      addedLineTextByLine: args.addedLineTextByLine,
+    })
     if (!suDecision.keep) {
       const demoted = args.securityUsageValidatorMode === "enforce"
       state.droppedForFailedSecurityUsageValidation++
-      args.onSecurityUsageFindingDropped?.(workingFinding, { reason: suDecision.reason, dropped: demoted })
+      args.onSecurityUsageFindingDropped?.(workingFinding, {
+        reason: suDecision.reason,
+        dropped: demoted,
+      })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-usage" })
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-usage" })
         state.unanchoredFindings.push(workingFinding)
         return { kind: "continue" }
       }
@@ -786,7 +819,11 @@ function routeFinding(
   if (!side) {
     const repairedLine =
       workingFinding.startLine == null
-        ? findRepairableInlineAnchor({ finding: workingFinding, reviewable: args.reviewable, addedLineTextByLine: args.addedLineTextByLine })
+        ? findRepairableInlineAnchor({
+            finding: workingFinding,
+            reviewable: args.reviewable,
+            addedLineTextByLine: args.addedLineTextByLine,
+          })
         : null
     if (repairedLine !== null) {
       state.cleanFindings.push({ ...workingFinding, line: repairedLine })
@@ -818,11 +855,7 @@ function routeFinding(
  * telemetry order of the original loop. Byte-identical to the original lines
  * 1018–1704.
  */
-export function processFindings(
-  args: ResolvedValidationArgs,
-  ctx: ValidationContext,
-  state: ValidationState,
-): void {
+export function processFindings(args: ResolvedValidationArgs, ctx: ValidationContext, state: ValidationState): void {
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < args.synthOutput.verdict.findings.length; i++) {
     const rawFinding = args.synthOutput.verdict.findings[i]!
@@ -835,9 +868,7 @@ export function processFindings(
     // `provenance` is narrowed non-null here (applyHardDropGates returns
     // "continue" when it is missing), and its sourceFindingIds drove the
     // gate routing — re-derive the same `sourceIds` for the demote phase.
-    const sourceIds = Array.isArray(provenance!.sourceFindingIds)
-      ? provenance!.sourceFindingIds
-      : []
+    const sourceIds = Array.isArray(provenance!.sourceFindingIds) ? provenance!.sourceFindingIds : []
 
     const demote = applyDemoteGates(f, sourceIds, args, ctx, state)
     if (demote.kind === "continue") continue

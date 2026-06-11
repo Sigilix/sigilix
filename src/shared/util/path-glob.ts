@@ -35,12 +35,7 @@ export function compileGlob(pattern: string): RegExp {
     // slash followed by gs at end of pattern: match zero or more
     // trailing segments (and the leading slash is optional so
     // `dist/gs` matches `dist`)
-    if (
-      ch === "/" &&
-      pattern[i + 1] === "*" &&
-      pattern[i + 2] === "*" &&
-      i + 3 === pattern.length
-    ) {
+    if (ch === "/" && pattern[i + 1] === "*" && pattern[i + 2] === "*" && i + 3 === pattern.length) {
       regex += "(?:/.*)?"
       i += 3
       continue

@@ -16,25 +16,22 @@
 import type { ClassifiedDiffFile } from "./diff-file-classify"
 import type { DiffSignals, SpecialistRole } from "./ensemble-router"
 import { chat } from "@/src/shared/adapters/model"
-import {
-  buildSanitizedMetadataBlock,
-  type SanitizedMetadata,
-} from "./dispatcher-prompt-sanitizer"
+import { buildSanitizedMetadataBlock, type SanitizedMetadata } from "./dispatcher-prompt-sanitizer"
 import { extractDiffSample, truncate } from "./dynamic-dispatcher-patterns"
 
 export type DispatcherLlmOutcome =
   | "ok"
   | "timeout"
   | "invalid_json"
-  | "disabled"           // OLLAMA_CHAT_ENABLE=off OR mode=off
-  | "skipped_no_ambiguous"  // rules decided everything
-  | "skipped_rules_only_mode"  // SIG-227a: mode=enforce_rules
-                               // intentionally bypasses the LLM
+  | "disabled" // OLLAMA_CHAT_ENABLE=off OR mode=off
+  | "skipped_no_ambiguous" // rules decided everything
+  | "skipped_rules_only_mode" // SIG-227a: mode=enforce_rules
+  // intentionally bypasses the LLM
   | "no_api_key"
-  | "chat_error"         // any chat() throw other than abort: HTTP error,
-                         // stream error, missing body, etc. Renamed from
-                         // `http_error` per code-review H2 — the original
-                         // name was too narrow.
+  | "chat_error" // any chat() throw other than abort: HTTP error,
+// stream error, missing body, etc. Renamed from
+// `http_error` per code-review H2 — the original
+// name was too narrow.
 
 /** Hard cap on the LLM call. Per spec Q1: dispatcher must fit inside
  *  the 5-10s budget. 8s leaves 2s headroom for the orchestrator to
@@ -228,16 +225,22 @@ export function buildLlmMessages(args: {
   prTitle: string
   prBody: string
   ambiguous: readonly SpecialistRole[]
-}): { messages: Array<{ role: "system" | "user"; content: string }>; sanitized: SanitizedMetadata } {
-  const fileSummary = args.classified.slice(0, DIFF_SNIPPET_MAX_FILES).map((f) => {
-    const siblingNote =
-      f.kind === "source" && f.testsSibling
-        ? ` (covered by test ${f.testsSibling})`
-        : f.kind === "source" && !f.testsSibling
-          ? " (no sibling test in this diff)"
-          : ""
-    return `- [${f.kind}] ${f.path}${siblingNote}`
-  }).join("\n")
+}): {
+  messages: Array<{ role: "system" | "user"; content: string }>
+  sanitized: SanitizedMetadata
+} {
+  const fileSummary = args.classified
+    .slice(0, DIFF_SNIPPET_MAX_FILES)
+    .map((f) => {
+      const siblingNote =
+        f.kind === "source" && f.testsSibling
+          ? ` (covered by test ${f.testsSibling})`
+          : f.kind === "source" && !f.testsSibling
+            ? " (no sibling test in this diff)"
+            : ""
+      return `- [${f.kind}] ${f.path}${siblingNote}`
+    })
+    .join("\n")
 
   const diffSample = args.signals.diffText
     ? extractDiffSample(args.signals.diffText, DIFF_SNIPPET_MAX_LINES * DIFF_SNIPPET_MAX_FILES)
@@ -261,14 +264,13 @@ export function buildLlmMessages(args: {
   // wrapped block per-field by re-sanitizing with truncated inputs.
   // Simpler: just truncate the post-sanitize title/body and rebuild
   // the block. (Re-build is cheap; no LLM call here.)
-  const truncatedBlock = (
+  const truncatedBlock =
     sanitized.title.length > 400 || sanitized.body.length > 1_600
       ? buildSanitizedMetadataBlock({
           title: truncate(sanitized.title, 400),
           body: truncate(sanitized.body, 1_600),
         }).block
       : metadataBlock
-  )
 
   const system = [
     "You are the Sigilix specialist-dispatcher. Decide which of the listed AMBIGUOUS review specialists should run on this PR diff.",
@@ -310,7 +312,9 @@ export function buildLlmMessages(args: {
   }
 }
 
-export function parseLlmAnswer(raw: string): { specialists: SpecialistRole[]; confidence: 1 | 2 | 3 | 4 | 5; reasoning: string } | null {
+export function parseLlmAnswer(
+  raw: string,
+): { specialists: SpecialistRole[]; confidence: 1 | 2 | 3 | 4 | 5; reasoning: string } | null {
   if (!raw || typeof raw !== "string") return null
   let parsed: unknown
   try {

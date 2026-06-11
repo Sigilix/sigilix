@@ -2,10 +2,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import {
-  shouldQueueReviewThreadReply,
-  type ReviewReplySkipReason,
-} from "@/src/lib/review-thread-reply"
+import { shouldQueueReviewThreadReply, type ReviewReplySkipReason } from "@/src/lib/review-thread-reply"
 
 function expectSkip(args: Parameters<typeof shouldQueueReviewThreadReply>[0], reason: ReviewReplySkipReason) {
   const out = shouldQueueReviewThreadReply(args)
@@ -21,34 +18,46 @@ function expectOk(args: Parameters<typeof shouldQueueReviewThreadReply>[0]) {
 
 describe("shouldQueueReviewThreadReply — gate ordering", () => {
   it("returns `self` when the author is Sigilix (most important guard, runs first)", () => {
-    expectSkip({
-      body: "is this safe in prod?",
-      authorLogin: "sigilix[bot]",
-      inReplyToId: 100,
-    }, "self")
+    expectSkip(
+      {
+        body: "is this safe in prod?",
+        authorLogin: "sigilix[bot]",
+        inReplyToId: 100,
+      },
+      "self",
+    )
   })
 
   it("recognizes the legacy bot login (`arc-copilot[bot]`) as self too", () => {
     // `isArcGithubLogin` covers the historical bot name from the
     // pre-rename era; the gate must NOT queue replies from it.
-    expectSkip({
-      body: "this is a perfectly fine question?",
-      authorLogin: "arc-copilot[bot]",
-      inReplyToId: 100,
-    }, "self")
+    expectSkip(
+      {
+        body: "this is a perfectly fine question?",
+        authorLogin: "arc-copilot[bot]",
+        inReplyToId: 100,
+      },
+      "self",
+    )
   })
 
   it("returns `not-a-reply` when `in_reply_to_id` is missing (first comment in a thread)", () => {
-    expectSkip({
-      body: "is this safe in prod?",
-      authorLogin: "human-user",
-      inReplyToId: null,
-    }, "not-a-reply")
-    expectSkip({
-      body: "is this safe in prod?",
-      authorLogin: "human-user",
-      inReplyToId: undefined,
-    }, "not-a-reply")
+    expectSkip(
+      {
+        body: "is this safe in prod?",
+        authorLogin: "human-user",
+        inReplyToId: null,
+      },
+      "not-a-reply",
+    )
+    expectSkip(
+      {
+        body: "is this safe in prod?",
+        authorLogin: "human-user",
+        inReplyToId: undefined,
+      },
+      "not-a-reply",
+    )
   })
 
   it("self gate runs BEFORE the not-a-reply gate (Sigilix posting a top-level comment still classified as self)", () => {
@@ -56,11 +65,14 @@ describe("shouldQueueReviewThreadReply — gate ordering", () => {
     // beat every other skip reason so a future caller that omits
     // `in_reply_to_id` for some reason still can't trigger Sigilix
     // replying to itself.
-    expectSkip({
-      body: "anything",
-      authorLogin: "sigilix[bot]",
-      inReplyToId: null,
-    }, "self")
+    expectSkip(
+      {
+        body: "anything",
+        authorLogin: "sigilix[bot]",
+        inReplyToId: null,
+      },
+      "self",
+    )
   })
 })
 
@@ -73,23 +85,46 @@ describe("shouldQueueReviewThreadReply — empty / ack-only", () => {
   })
 
   it("returns `empty` for a body that's only a fenced code block (stripQuotesAndCode removes it)", () => {
-    expectSkip({
-      body: "```\nlooks fine\n```",
-      authorLogin: "human",
-      inReplyToId: 100,
-    }, "empty")
+    expectSkip(
+      {
+        body: "```\nlooks fine\n```",
+        authorLogin: "human",
+        inReplyToId: 100,
+      },
+      "empty",
+    )
   })
 
   it("returns `empty` for a body that's only a blockquote", () => {
-    expectSkip({
-      body: "> Sigilix said something\n> across two lines",
-      authorLogin: "human",
-      inReplyToId: 100,
-    }, "empty")
+    expectSkip(
+      {
+        body: "> Sigilix said something\n> across two lines",
+        authorLogin: "human",
+        inReplyToId: 100,
+      },
+      "empty",
+    )
   })
 
   it("returns `ack-only` for short acknowledgements", () => {
-    for (const tok of ["fixed", "FIXED", "done", "Done!", "thanks", "thx", "ty", "ack", "lgtm", "sgtm", "ok", "okay", "noted", "+1", "resolved", "addressed"]) {
+    for (const tok of [
+      "fixed",
+      "FIXED",
+      "done",
+      "Done!",
+      "thanks",
+      "thx",
+      "ty",
+      "ack",
+      "lgtm",
+      "sgtm",
+      "ok",
+      "okay",
+      "noted",
+      "+1",
+      "resolved",
+      "addressed",
+    ]) {
       expectSkip({ body: tok, authorLogin: "human", inReplyToId: 100 }, "ack-only")
     }
   })
@@ -189,15 +224,17 @@ describe("shouldQueueReviewThreadReply — signal detection", () => {
     // not as a word. They should fall through to no-reply-signal
     // (or stay skipped via length/ack — point is they don't queue).
     for (const body of [
-      "however that worked out",       // "how" → "however"
-      "the product looks fine",         // "prod" → "product"
+      "however that worked out", // "how" → "however"
+      "the product looks fine", // "prod" → "product"
       "reproduction is straightforward", // "prod" → "reproduction"
-      "show me the line",               // "how" → "show"
-      "somehow this passes ci",         // "how" → "somehow"
-      "deprecated path",                // "prod"? no, but a sanity check
+      "show me the line", // "how" → "show"
+      "somehow this passes ci", // "how" → "somehow"
+      "deprecated path", // "prod"? no, but a sanity check
     ]) {
       const out = shouldQueueReviewThreadReply({
-        body, authorLogin: "human", inReplyToId: 100,
+        body,
+        authorLogin: "human",
+        inReplyToId: 100,
       })
       expect(out.ok).toBe(false)
     }
@@ -213,19 +250,25 @@ describe("shouldQueueReviewThreadReply — signal detection", () => {
 
   it("returns `no-reply-signal` for short, signal-less bodies that aren't single-token acks", () => {
     // Multi-word but no `?`, no trigger, short.
-    expectSkip({
-      body: "that one over there",
-      authorLogin: "human",
-      inReplyToId: 100,
-    }, "no-reply-signal")
+    expectSkip(
+      {
+        body: "that one over there",
+        authorLogin: "human",
+        inReplyToId: 100,
+      },
+      "no-reply-signal",
+    )
   })
 
   it("returns `no-reply-signal` for short emoji bursts that aren't on the single-token ack list", () => {
-    expectSkip({
-      body: "🤔 🤔",
-      authorLogin: "human",
-      inReplyToId: 100,
-    }, "no-reply-signal")
+    expectSkip(
+      {
+        body: "🤔 🤔",
+        authorLogin: "human",
+        inReplyToId: 100,
+      },
+      "no-reply-signal",
+    )
   })
 
   it("trigger-word match is case-insensitive", () => {
@@ -255,11 +298,14 @@ describe("shouldQueueReviewThreadReply — signal detection", () => {
 
 describe("shouldQueueReviewThreadReply — robustness", () => {
   it("ignores leading/trailing whitespace before classifying", () => {
-    expectSkip({
-      body: "\n   fixed   \n",
-      authorLogin: "human",
-      inReplyToId: 100,
-    }, "ack-only")
+    expectSkip(
+      {
+        body: "\n   fixed   \n",
+        authorLogin: "human",
+        inReplyToId: 100,
+      },
+      "ack-only",
+    )
   })
 
   it("a body shaped `> Sigilix said X\n\nbut intentional` skips the quote and queues on the trigger word", () => {
@@ -279,10 +325,13 @@ describe("shouldQueueReviewThreadReply — robustness", () => {
   })
 
   it("respects the not-a-reply gate even when the body is a meaningful ask (top-level review comments aren't replies)", () => {
-    expectSkip({
-      body: "is this safe in prod?",
-      authorLogin: "human",
-      inReplyToId: undefined,
-    }, "not-a-reply")
+    expectSkip(
+      {
+        body: "is this safe in prod?",
+        authorLogin: "human",
+        inReplyToId: undefined,
+      },
+      "not-a-reply",
+    )
   })
 })

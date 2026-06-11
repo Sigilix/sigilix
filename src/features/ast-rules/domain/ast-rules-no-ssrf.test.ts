@@ -78,7 +78,9 @@ describe("no-ssrf — FP-safety: does NOT fire on safe fetch code", () => {
     expect(runRule(`app.get("/p", (req, res) => { fetch("https://api.example.com/health"); });`).length).toBe(0)
   })
   it("fixed host, tainted PATH only: fetch('https://api.stripe.com/v1/' + req.query.id)", () => {
-    expect(runRule(`app.get("/p", (req, res) => { fetch("https://api.stripe.com/v1/" + req.query.id); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/p", (req, res) => { fetch("https://api.stripe.com/v1/" + req.query.id); });`).length,
+    ).toBe(0)
   })
   it("folded literals keep the host fixed: fetch('https://api.x.com' + '/' + req.query.id)", () => {
     expect(runRule(`app.get("/p", (req, res) => { fetch("https://api.x.com" + "/" + req.query.id); });`).length).toBe(0)
@@ -92,10 +94,14 @@ app.get("/p", (req, res) => { fetch(API + "/v1/" + req.query.id); });`
   // (env var, imported const, template-interpolated const, deep alias) is still a
   // FIXED authority once a path separator closes it before any taint.
   it("env-var base + tainted path: fetch(process.env.UPSTREAM + '/users/' + req.params.id)", () => {
-    expect(runRule(`app.get("/p", (req, res) => { fetch(process.env.UPSTREAM + "/users/" + req.params.id); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/p", (req, res) => { fetch(process.env.UPSTREAM + "/users/" + req.params.id); });`).length,
+    ).toBe(0)
   })
   it("env-var base in a template: fetch(`${process.env.UPSTREAM}/users/${req.params.id}`)", () => {
-    expect(runRule("app.get('/p', (req, res) => { fetch(`${process.env.UPSTREAM}/users/${req.params.id}`); });").length).toBe(0)
+    expect(
+      runRule("app.get('/p', (req, res) => { fetch(`${process.env.UPSTREAM}/users/${req.params.id}`); });").length,
+    ).toBe(0)
   })
   it("same-file const host in a TEMPLATE: const H='https://api.x.com'; fetch(`${H}/v1/${req.params.id}`)", () => {
     const src = "const H = 'https://api.x.com';\napp.get('/p', (req, res) => { fetch(`${H}/v1/${req.params.id}`); });"
@@ -124,16 +130,24 @@ app.get("/p", (req, res) => { fetch(API + "/v1/" + req.query.id); });`
     expect(runRule(`app.get("/p", (req, res) => { fetch("/proxy/" + req.query.path); });`).length).toBe(0)
   })
   it("new URL(tainted, fixedBase) pins the origin", () => {
-    expect(runRule(`app.get("/p", (req, res) => { fetch(new URL(req.query.path, "https://api.x.com")); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/p", (req, res) => { fetch(new URL(req.query.path, "https://api.x.com")); });`).length,
+    ).toBe(0)
   })
   it("config-object form is not analyzed: axios({ url: 'https://api.x', params: req.query })", () => {
-    expect(runRule(`app.get("/p", (req, res) => { axios({ url: "https://api.x", params: req.query }); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/p", (req, res) => { axios({ url: "https://api.x", params: req.query }); });`).length,
+    ).toBe(0)
   })
   it("http.get config object: http.get({ hostname: 'api.x', path: '/v1/' + req.query.id })", () => {
-    expect(runRule(`app.get("/p", (req, res) => { http.get({ hostname: "api.x", path: "/v1/" + req.query.id }); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/p", (req, res) => { http.get({ hostname: "api.x", path: "/v1/" + req.query.id }); });`).length,
+    ).toBe(0)
   })
   it("new Request body taint is not the URL: fetch(new Request('https://api.x/v1', { body: req.body }))", () => {
-    expect(runRule(`app.post("/p", (req, res) => { fetch(new Request("https://api.x/v1", { body: req.body })); });`).length).toBe(0)
+    expect(
+      runRule(`app.post("/p", (req, res) => { fetch(new Request("https://api.x/v1", { body: req.body })); });`).length,
+    ).toBe(0)
   })
   it("a host allow-list validator is skipped", () => {
     const src = `app.get("/p", (req, res) => {

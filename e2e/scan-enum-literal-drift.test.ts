@@ -7,10 +7,7 @@
 
 import { readFileSync } from "node:fs"
 import { describe, it, expect } from "vitest"
-import {
-  buildGlobalUnionMap,
-  scanSqlEnumDrift,
-} from "@/src/features/ast-rules/domain/scan-enum-literal-drift"
+import { buildGlobalUnionMap, scanSqlEnumDrift } from "@/src/features/ast-rules/domain/scan-enum-literal-drift"
 
 // The REAL pr/10 shared/types.ts shape — note TWO distinct `status` unions
 // (Invoice and Charge). A column-name-only match would be ambiguous and miss the
@@ -60,10 +57,12 @@ describe("buildGlobalUnionMap", () => {
   })
 
   it("does NOT collect a union commented out INSIDE a real interface body (review H1)", () => {
-    const m = buildGlobalUnionMap([`interface Charge {
+    const m = buildGlobalUnionMap([
+      `interface Charge {
       status: "pending" | "settled";
       // future: status: "pending" | "settled" | "refunded"
-    }`])
+    }`,
+    ])
     expect([...(m.get("charge")?.get("status") ?? [])].sort()).toEqual(["pending", "settled"])
   })
 
@@ -133,10 +132,7 @@ describe("scanSqlEnumDrift", () => {
 
   it("detects a static drifting SET value inside template SQL with interpolation elsewhere", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
-    const hits = scanSqlEnumDrift(
-      "pool.query(`UPDATE charges SET status = 'refunded' WHERE id = ${chargeId}`)",
-      unions,
-    )
+    const hits = scanSqlEnumDrift("pool.query(`UPDATE charges SET status = 'refunded' WHERE id = ${chargeId}`)", unions)
     expect(hits).toHaveLength(1)
     expect(hits[0]!.message).toContain("'refunded'")
   })
@@ -164,7 +160,7 @@ describe("scanSqlEnumDrift", () => {
   it("does not let a regex quote swallow a later SQL string", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
     const hits = scanSqlEnumDrift(
-      "const quote = /\"/;\npool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+      'const quote = /"/;\npool.query("UPDATE charges SET status = \'refunded\' WHERE id = $1")',
       unions,
     )
     expect(hits).toHaveLength(1)
@@ -173,14 +169,18 @@ describe("scanSqlEnumDrift", () => {
 
   it("does not let comment markers inside single-quoted JS strings skip later SQL", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
-    expect(scanSqlEnumDrift(
-      "const url = 'http://example.test'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
-      unions,
-    )).toHaveLength(1)
-    expect(scanSqlEnumDrift(
-      "const marker = '/*'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
-      unions,
-    )).toHaveLength(1)
+    expect(
+      scanSqlEnumDrift(
+        "const url = 'http://example.test'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+        unions,
+      ),
+    ).toHaveLength(1)
+    expect(
+      scanSqlEnumDrift(
+        "const marker = '/*'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+        unions,
+      ),
+    ).toHaveLength(1)
   })
 
   it("does not close a template SQL candidate on braces or backticks inside interpolation regexes", () => {
@@ -195,16 +195,16 @@ describe("scanSqlEnumDrift", () => {
 
   it("does NOT flag a SQL write hidden in a -- comment inside the query string (DeepSeek)", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
-    expect(scanSqlEnumDrift(
-      "pool.query(`SELECT 1 -- UPDATE charges SET status = 'refunded'\n`)", unions,
-    )).toHaveLength(0)
+    expect(scanSqlEnumDrift("pool.query(`SELECT 1 -- UPDATE charges SET status = 'refunded'\n`)", unions)).toHaveLength(
+      0,
+    )
   })
 
   it("does NOT flag an INSERT (no SET clause) with a valid status", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
-    expect(scanSqlEnumDrift(
-      `pool.query("INSERT INTO charges (wallet_id, status) VALUES ($1, 'pending')")`, unions,
-    )).toHaveLength(0)
+    expect(
+      scanSqlEnumDrift(`pool.query("INSERT INTO charges (wallet_id, status) VALUES ($1, 'pending')")`, unions),
+    ).toHaveLength(0)
   })
 
   it("matches a snake_case SQL column to a camelCase union property", () => {
@@ -215,7 +215,8 @@ describe("scanSqlEnumDrift", () => {
   it("flags only the drifting column when a SET has several assignments", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
     const hits = scanSqlEnumDrift(
-      `pool.query("UPDATE charges SET status = 'refunded', amount_cents = $1 WHERE id = $2")`, unions,
+      `pool.query("UPDATE charges SET status = 'refunded', amount_cents = $1 WHERE id = $2")`,
+      unions,
     )
     expect(hits).toHaveLength(1)
     expect(hits[0]!.message).toContain("'refunded'")
@@ -223,9 +224,9 @@ describe("scanSqlEnumDrift", () => {
 
   it("does NOT match a literal in the WHERE clause (only the SET clause is scanned)", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
-    expect(scanSqlEnumDrift(
-      `pool.query("UPDATE charges SET amount_cents = $1 WHERE status = 'archived'")`, unions,
-    )).toHaveLength(0)
+    expect(
+      scanSqlEnumDrift(`pool.query("UPDATE charges SET amount_cents = $1 WHERE status = 'archived'")`, unions),
+    ).toHaveLength(0)
   })
 
   it("attributes each statement's value to its OWN table in a multi-statement string (DeepSeek M2)", () => {
@@ -234,7 +235,8 @@ describe("scanSqlEnumDrift", () => {
     // second targets charges (status='refunded' not in Charge → flags). Each
     // value is checked against its own table's union, not the other's.
     const hits = scanSqlEnumDrift(
-      `pool.query("UPDATE invoices SET status = 'settled'; UPDATE charges SET status = 'paid'")`, unions,
+      `pool.query("UPDATE invoices SET status = 'settled'; UPDATE charges SET status = 'paid'")`,
+      unions,
     )
     // 'settled' ∉ Invoice{draft,open,paid} → flag; 'paid' ∉ Charge{pending,settled,failed} → flag.
     expect(hits).toHaveLength(2)

@@ -57,9 +57,7 @@ export function formatMarkdown(report: FpRateReport, meta: ReportMeta): string {
   out.push(`# Sigilix false-positive rate — ${meta.repo}`)
   out.push("")
   out.push(`Generated: ${meta.generatedIso}`)
-  out.push(
-    `Window: last ${meta.windowDays}d (excluding the most recent ${meta.maturityDays}d maturity lag)`,
-  )
+  out.push(`Window: last ${meta.windowDays}d (excluding the most recent ${meta.maturityDays}d maturity lag)`)
   out.push("")
   out.push(`- Reviews scanned: ${report.reviewsScanned}`)
   out.push(
@@ -73,9 +71,7 @@ export function formatMarkdown(report: FpRateReport, meta: ReportMeta): string {
       `${report.unattributed.possiblyExpired} likely-TTL-expired`,
   )
   out.push("")
-  out.push(
-    "| Specialist | Posted (4+) | Hard FP | Soft | Unlabeled | Hard-FP rate | Wilson 95% | Target | Meets? |",
-  )
+  out.push("| Specialist | Posted (4+) | Hard FP | Soft | Unlabeled | Hard-FP rate | Wilson 95% | Target | Meets? |")
   out.push("|---|---:|---:|---:|---:|---:|---|---:|---|")
   for (const r of report.rows) {
     const rate = r.hardFpRate === null ? "n/a" : pct(r.hardFpRate)
@@ -89,7 +85,7 @@ export function formatMarkdown(report: FpRateReport, meta: ReportMeta): string {
   out.push("> **Honesty caveat.** This is a dismissal-based rate: a LOWER BOUND on the true")
   out.push("> false-positive rate (not every false positive is dismissed). The Wilson interval")
   out.push("> is sampling uncertainty on the *observed* rate. This metric tracks trend and a")
-  out.push("> floor; it does NOT prove a ceiling (\"FP rate is at most Y%\") — that requires the")
+  out.push('> floor; it does NOT prove a ceiling ("FP rate is at most Y%") — that requires the')
   out.push("> curated ground-truth eval set. `unlabeled` dominates today because the dismissal")
   out.push("> capture pipeline does not yet emit a reason. `Meets?` is WORST-CASE: every")
   out.push("> unlabeled dismissal is counted as potentially-hard. `Posted (4+)` is the synth")

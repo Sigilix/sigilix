@@ -34,6 +34,7 @@
     "@types/semver": "7.5.8",
     "eslint": "^9.39.4",
     "opentype.js": "^2.0.0",
+    "prettier": "^3.8.4",
     "tsx": "^4.22.3",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.59.3",

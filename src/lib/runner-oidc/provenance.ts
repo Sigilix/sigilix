@@ -28,10 +28,7 @@ function splitWorkflowPath(p: string): { ownerRepo: string; path: string } {
  * SARIF. `expected.repository` and `expected.sha` are REQUIRED by type, so the
  * gate cannot be called in a fail-OPEN way that skips the SARIF binding.
  */
-export function validateRunnerProvenance(
-  claims: GitHubOidcClaims,
-  expected: ExpectedProvenance,
-): ProvenanceResult {
+export function validateRunnerProvenance(claims: GitHubOidcClaims, expected: ExpectedProvenance): ProvenanceResult {
   const ref = typeof claims.job_workflow_ref === "string" ? claims.job_workflow_ref : ""
   // `job_workflow_ref` is `owner/repo/path@ref`. Split on the LAST `@` and match
   // the path part exactly (NOT startsWith — a prefix would admit a sibling repo

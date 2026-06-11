@@ -258,35 +258,53 @@ describe("parsePrDescribeResponse", () => {
   })
 
   it("returns null for too-short summary (< 10 chars)", () => {
-    expect(parsePrDescribeResponse(JSON.stringify({
-      summary: "short",
-      body: "x".repeat(60),
-    }))).toBeNull()
+    expect(
+      parsePrDescribeResponse(
+        JSON.stringify({
+          summary: "short",
+          body: "x".repeat(60),
+        }),
+      ),
+    ).toBeNull()
   })
 
   it("returns null for too-short body (< 50 chars)", () => {
-    expect(parsePrDescribeResponse(JSON.stringify({
-      summary: "ten chars exactly here.",
-      body: "still too short",
-    }))).toBeNull()
+    expect(
+      parsePrDescribeResponse(
+        JSON.stringify({
+          summary: "ten chars exactly here.",
+          body: "still too short",
+        }),
+      ),
+    ).toBeNull()
   })
 
   it("returns null for non-string fields", () => {
-    expect(parsePrDescribeResponse(JSON.stringify({
-      summary: 42,
-      body: "x".repeat(60),
-    }))).toBeNull()
-    expect(parsePrDescribeResponse(JSON.stringify({
-      summary: "ten chars exactly here.",
-      body: ["array", "not", "string"],
-    }))).toBeNull()
+    expect(
+      parsePrDescribeResponse(
+        JSON.stringify({
+          summary: 42,
+          body: "x".repeat(60),
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parsePrDescribeResponse(
+        JSON.stringify({
+          summary: "ten chars exactly here.",
+          body: ["array", "not", "string"],
+        }),
+      ),
+    ).toBeNull()
   })
 
   it("trims whitespace from summary + body", () => {
-    const v = parsePrDescribeResponse(JSON.stringify({
-      summary: "   ten chars exactly here.   ",
-      body: "   " + "x".repeat(60) + "   ",
-    }))
+    const v = parsePrDescribeResponse(
+      JSON.stringify({
+        summary: "   ten chars exactly here.   ",
+        body: "   " + "x".repeat(60) + "   ",
+      }),
+    )
     expect(v!.summary).toBe("ten chars exactly here.")
     expect(v!.body.startsWith(" ")).toBe(false)
     expect(v!.body.endsWith(" ")).toBe(false)
@@ -295,10 +313,13 @@ describe("parsePrDescribeResponse", () => {
   it("tolerates light JSON malformation via parseFirstJsonObject", () => {
     // The model sometimes wraps in a code fence; parseFirstJsonObject
     // already strips that.
-    const text = "```json\n" + JSON.stringify({
-      summary: "Adds the foo bar widget.",
-      body: "x".repeat(60),
-    }) + "\n```"
+    const text =
+      "```json\n" +
+      JSON.stringify({
+        summary: "Adds the foo bar widget.",
+        body: "x".repeat(60),
+      }) +
+      "\n```"
     const v = parsePrDescribeResponse(text)
     expect(v).not.toBeNull()
   })
@@ -323,7 +344,10 @@ describe("buildPrompt", () => {
   it("uses internal-changelog prompt for that mode", () => {
     const prompt = buildPrompt({
       mode: "internal-changelog",
-      prNumber: 1, title: "x", body: "", diff: "",
+      prNumber: 1,
+      title: "x",
+      body: "",
+      diff: "",
     })
     expect(prompt).toContain("internal changelog")
   })
@@ -331,7 +355,10 @@ describe("buildPrompt", () => {
   it("uses external-changelog prompt with disclosure boundary for that mode", () => {
     const prompt = buildPrompt({
       mode: "external-changelog",
-      prNumber: 1, title: "x", body: "", diff: "",
+      prNumber: 1,
+      title: "x",
+      body: "",
+      diff: "",
     })
     expect(prompt).toContain("external changelog")
     expect(prompt).toContain("Disclosure boundary")
@@ -342,7 +369,10 @@ describe("buildPrompt", () => {
     const huge = "x".repeat(200_000)
     const prompt = buildPrompt({
       mode: "pr-description",
-      prNumber: 1, title: "x", body: "", diff: huge,
+      prNumber: 1,
+      title: "x",
+      body: "",
+      diff: huge,
     })
     expect(prompt).toContain("[…truncated…]")
     expect(prompt.length).toBeLessThan(huge.length)
@@ -351,7 +381,10 @@ describe("buildPrompt", () => {
   it("substitutes a placeholder for empty PR body so the model knows it's intentional", () => {
     const prompt = buildPrompt({
       mode: "pr-description",
-      prNumber: 1, title: "x", body: "", diff: "",
+      prNumber: 1,
+      title: "x",
+      body: "",
+      diff: "",
     })
     expect(prompt).toContain("(no description)")
   })
@@ -377,13 +410,18 @@ describe("truncateForGitHub", () => {
 
 describe("handlePrDescribe — happy path", () => {
   it("calls generate with the right model + posts the success comment", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "Adds the widget for users.",
-      body: "## Summary\n\nThis PR adds a widget that users will see on the home screen.",
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "Adds the widget for users.",
+        body: "## Summary\n\nThis PR adds a widget that users will see on the home screen.",
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -400,13 +438,18 @@ describe("handlePrDescribe — happy path", () => {
   })
 
   it("uses OPENCLAW_MODEL override when set", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20),
-      body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv, { OPENCLAW_MODEL: "kimi-k2.6:cloud" } as Partial<Env>),
@@ -416,21 +459,24 @@ describe("handlePrDescribe — happy path", () => {
   })
 
   it("logs telemetry with mode + headSha + per-spec dimensions on the posted event", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20),
-      body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "internal-changelog",
       apply: false,
       env: makeEnv(kv),
     })
-    const postedLog = logSpy.mock.calls.map((c) => String(c[0])).find((s) =>
-      s.includes("pr-describe-posted")
-    )
+    const postedLog = logSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes("pr-describe-posted"))
     expect(postedLog).toBeDefined()
     const parsed = JSON.parse(postedLog!)
     expect(parsed.mode).toBe("internal-changelog")
@@ -446,7 +492,10 @@ describe("handlePrDescribe — sensitive-repo gate", () => {
   it("posts the denial comment + does NOT call generate", async () => {
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "secret-repo", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "secret-repo",
+      prNumber: 1,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv, { OPENCLAW_SENSITIVE_REPOS: "acme/secret-repo" } as Partial<Env>),
@@ -460,14 +509,15 @@ describe("handlePrDescribe — sensitive-repo gate", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "secret-repo", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "secret-repo",
+      prNumber: 1,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv, { OPENCLAW_SENSITIVE_REPOS: "acme/secret-repo" } as Partial<Env>),
     })
-    const log = logSpy.mock.calls.map((c) => String(c[0])).find((s) =>
-      s.includes("pr-describe-skipped")
-    )
+    const log = logSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes("pr-describe-skipped"))
     expect(log).toBeDefined()
     const parsed = JSON.parse(log!)
     expect(parsed.reason).toBe("sensitive_repo")
@@ -484,7 +534,10 @@ describe("handlePrDescribe — disabled-config gate", () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({ describe: { enabled: false } })
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -496,12 +549,18 @@ describe("handlePrDescribe — disabled-config gate", () => {
 
   it("does NOT post the disabled comment when describe.enabled is true", async () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({ describe: { enabled: true } })
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -511,12 +570,18 @@ describe("handlePrDescribe — disabled-config gate", () => {
 
   it("does NOT post the disabled comment when describe field is missing entirely", async () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({})
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -530,7 +595,10 @@ describe("handlePrDescribe — dedupe", () => {
     const { kv, store } = makeKvStub()
     store.set("pr-describe:acme/site#42@abc1234567890abcdef1234567890abcdef12345:pr-description", "1")
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -540,12 +608,18 @@ describe("handlePrDescribe — dedupe", () => {
   })
 
   it("uses a mode-keyed dedupe key (so internal + external don't collide)", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const { kv, store } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv),
@@ -560,24 +634,34 @@ describe("handlePrDescribe — failure paths", () => {
   it("posts the failure comment and RETURNS (no throw) on parse failure", async () => {
     mockGenerate.mockResolvedValue("not even json")
     const { kv } = makeKvStub()
-    await expect(handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
-      mode: "pr-description",
-      apply: false,
-      env: makeEnv(kv),
-    })).resolves.toBeUndefined()
+    await expect(
+      handlePrDescribe({
+        owner: "acme",
+        repo: "site",
+        prNumber: 42,
+        installationId: 1,
+        mode: "pr-description",
+        apply: false,
+        env: makeEnv(kv),
+      }),
+    ).resolves.toBeUndefined()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
     expect(mockCreateIssueComment.mock.calls[0]![3] as string).toContain("could not generate")
   })
 
   it("posts the failure comment on too-short body", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "ten chars exactly here.",
-      body: "short",
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "ten chars exactly here.",
+        body: "short",
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -588,12 +672,17 @@ describe("handlePrDescribe — failure paths", () => {
   it("posts the failure comment + RETURNS (no throw) when generate() rejects (Codex spec catch)", async () => {
     mockGenerate.mockRejectedValueOnce(new Error("ollama: connection refused"))
     const { kv } = makeKvStub()
-    await expect(handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
-      mode: "pr-description",
-      apply: false,
-      env: makeEnv(kv),
-    })).resolves.toBeUndefined()
+    await expect(
+      handlePrDescribe({
+        owner: "acme",
+        repo: "site",
+        prNumber: 42,
+        installationId: 1,
+        mode: "pr-description",
+        apply: false,
+        env: makeEnv(kv),
+      }),
+    ).resolves.toBeUndefined()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
     expect(mockCreateIssueComment.mock.calls[0]![3] as string).toContain("could not generate")
   })
@@ -602,7 +691,10 @@ describe("handlePrDescribe — failure paths", () => {
     mockGenerate.mockResolvedValue("garbage")
     const { kv, deletes, store } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -615,7 +707,10 @@ describe("handlePrDescribe — failure paths", () => {
     mockGenerate.mockRejectedValueOnce(new Error("ollama: 503"))
     const { kv, deletes } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -624,55 +719,81 @@ describe("handlePrDescribe — failure paths", () => {
   })
 
   it("re-throws on 5xx posting the success draft (queue retry path)", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(502, "HTTP 502 Bad Gateway"))
     const { kv } = makeKvStub()
-    await expect(handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
-      mode: "pr-description",
-      apply: false,
-      env: makeEnv(kv),
-    })).rejects.toThrow(/502/)
+    await expect(
+      handlePrDescribe({
+        owner: "acme",
+        repo: "site",
+        prNumber: 42,
+        installationId: 1,
+        mode: "pr-description",
+        apply: false,
+        env: makeEnv(kv),
+      }),
+    ).rejects.toThrow(/502/)
   })
 
   it("does NOT re-throw on 4xx posting the success draft (no retry)", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(422, "HTTP 422 Unprocessable"))
     const { kv } = makeKvStub()
-    await expect(handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
-      mode: "pr-description",
-      apply: false,
-      env: makeEnv(kv),
-    })).resolves.toBeUndefined()
+    await expect(
+      handlePrDescribe({
+        owner: "acme",
+        repo: "site",
+        prNumber: 42,
+        installationId: 1,
+        mode: "pr-description",
+        apply: false,
+        env: makeEnv(kv),
+      }),
+    ).resolves.toBeUndefined()
   })
 
   it("swallows failure-comment post errors (no nested error spiral)", async () => {
     mockGenerate.mockResolvedValue("garbage")
     mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(503, "HTTP 503"))
     const { kv } = makeKvStub()
-    await expect(handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
-      mode: "pr-description",
-      apply: false,
-      env: makeEnv(kv),
-    })).resolves.toBeUndefined()
+    await expect(
+      handlePrDescribe({
+        owner: "acme",
+        repo: "site",
+        prNumber: 42,
+        installationId: 1,
+        mode: "pr-description",
+        apply: false,
+        env: makeEnv(kv),
+      }),
+    ).resolves.toBeUndefined()
   })
 })
 
 describe("handlePrDescribe — comment length cap", () => {
   it("truncates the body field if total comment would exceed COMMENT_BODY_CAP", async () => {
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20),
-      body: "y".repeat(80_000),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(80_000),
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -686,20 +807,24 @@ describe("handlePrDescribe — comment length cap", () => {
 describe("handlePrDescribe — diff truncation telemetry (spec §7)", () => {
   it("emits pr-describe-truncated event when the diff is truncated", async () => {
     mockGetPullRequestDiff.mockResolvedValueOnce("x".repeat(200_000))
-    mockGenerate.mockResolvedValue(JSON.stringify({
-      summary: "x".repeat(20), body: "y".repeat(100),
-    }))
+    mockGenerate.mockResolvedValue(
+      JSON.stringify({
+        summary: "x".repeat(20),
+        body: "y".repeat(100),
+      }),
+    )
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "internal-changelog",
       apply: false,
       env: makeEnv(kv),
     })
-    const truncatedLog = logSpy.mock.calls.map((c) => String(c[0])).find((s) =>
-      s.includes("pr-describe-truncated")
-    )
+    const truncatedLog = logSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes("pr-describe-truncated"))
     expect(truncatedLog).toBeDefined()
     const parsed = JSON.parse(truncatedLog!)
     expect(parsed.truncated_diff).toBe(true)
@@ -716,7 +841,10 @@ describe("handlePrDescribe — no-diff path", () => {
     mockGetPullRequestDiff.mockResolvedValueOnce("")
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 99, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 99,
+      installationId: 1,
       mode: "pr-description",
       apply: false,
       env: makeEnv(kv),
@@ -743,7 +871,10 @@ describe("handlePrDescribe — disclosure boundary (external mode adversarial, s
     })
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv),
@@ -769,7 +900,10 @@ describe("handlePrDescribe — disclosure boundary (external mode adversarial, s
     })
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv),
@@ -786,13 +920,18 @@ describe("handlePrDescribe — disclosure boundary (external mode adversarial, s
       title: "Bump key",
       body: "Old key was AKIAIOSFODNN7EXAMPLE. Rotated.",
     })
-    mockGenerate.mockResolvedValueOnce(JSON.stringify({
-      summary: "Key rotation.",
-      body: "**Fixed:** Credentials rotated. No user-visible impact.",
-    }))
+    mockGenerate.mockResolvedValueOnce(
+      JSON.stringify({
+        summary: "Key rotation.",
+        body: "**Fixed:** Credentials rotated. No user-visible impact.",
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv),
@@ -808,13 +947,18 @@ describe("handlePrDescribe — disclosure boundary (external mode adversarial, s
       body: "Pure refactor, no behavior change.",
     })
     mockGetPullRequestDiff.mockResolvedValueOnce("diff --git a/util.ts ...\n-old\n+new")
-    mockGenerate.mockResolvedValueOnce(JSON.stringify({
-      summary: "Pure refactor — no user-facing changes.",
-      body: "(no user-facing changes)\n\nInternal refactor; no impact on customers.",
-    }))
+    mockGenerate.mockResolvedValueOnce(
+      JSON.stringify({
+        summary: "Pure refactor — no user-facing changes.",
+        body: "(no user-facing changes)\n\nInternal refactor; no impact on customers.",
+      }),
+    )
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 1, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 1,
+      installationId: 1,
       mode: "external-changelog",
       apply: false,
       env: makeEnv(kv),
@@ -831,14 +975,17 @@ describe("handlePrDescribe — best-effort post telemetry carries mode (Codex sp
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({
-      owner: "acme", repo: "site", prNumber: 42, installationId: 1,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      installationId: 1,
       mode: "internal-changelog",
       apply: false,
       env: makeEnv(kv),
     })
-    const log = logSpy.mock.calls.map((c) => String(c[0])).find((s) =>
-      s.includes("pr-describe-best-effort-post-failed")
-    )
+    const log = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("pr-describe-best-effort-post-failed"))
     expect(log).toBeDefined()
     const parsed = JSON.parse(log!)
     expect(parsed.mode).toBe("internal-changelog")

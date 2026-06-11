@@ -42,11 +42,7 @@ export function parseSensitiveRepos(raw: string | undefined): Set<string> {
  * env var's normalization). Always returns `false` when the env var
  * is empty / unset.
  */
-export function isRepoSensitive(
-  envValue: string | undefined,
-  owner: string,
-  repo: string,
-): boolean {
+export function isRepoSensitive(envValue: string | undefined, owner: string, repo: string): boolean {
   const sensitive = parseSensitiveRepos(envValue)
   if (sensitive.size === 0) return false
   return sensitive.has(`${owner}/${repo}`.toLowerCase())

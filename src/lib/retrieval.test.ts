@@ -64,10 +64,7 @@ describe("formatChunksForPrompt", () => {
   })
 
   it("separates multiple chunks with a blank line", () => {
-    const out = formatChunksForPrompt([
-      chunk("a.ts", "AAA"),
-      chunk("b.ts", "BBB"),
-    ])
+    const out = formatChunksForPrompt([chunk("a.ts", "AAA"), chunk("b.ts", "BBB")])
     expect(out).toContain("AAA")
     expect(out).toContain("BBB")
     expect(out!.indexOf("AAA")).toBeLessThan(out!.indexOf("BBB"))

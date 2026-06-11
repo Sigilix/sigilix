@@ -27,7 +27,9 @@ export async function recordVerificationMetrics(env: Env, items: RecordVerificat
 /** Best-effort, time-bounded batch record: telemetry must never block or break a review.
  *  Resolves on success, on the {timeoutMs} race, OR on a DO throw — always swallowing. */
 export async function recordVerificationMetricsBounded(
-  env: Env, items: RecordVerificationArgs[], timeoutMs: number,
+  env: Env,
+  items: RecordVerificationArgs[],
+  timeoutMs: number,
   log?: (event: string, detail: Record<string, unknown>) => void,
 ): Promise<void> {
   if (items.length === 0) return

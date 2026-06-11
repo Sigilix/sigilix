@@ -7,12 +7,7 @@
 //   - upstack fork hasUpstackFork flag
 
 import { describe, it, expect, vi } from "vitest"
-import {
-  detectStack,
-  computeFileOverlap,
-  type OpenPrInput,
-  type CurrentPrInput,
-} from "@/src/lib/pr-stack"
+import { detectStack, computeFileOverlap, type OpenPrInput, type CurrentPrInput } from "@/src/lib/pr-stack"
 
 const REPO = "Sigilix/sigilix"
 
@@ -128,10 +123,7 @@ describe("detectStack", () => {
   it("detects a 3-PR stack with current in the middle", () => {
     const ctx = detectStack({
       currentPr: current(43, "user-routes", "user-model"),
-      openPrs: [
-        pr(42, "user-model", "main"),
-        pr(44, "user-handlers", "user-routes"),
-      ],
+      openPrs: [pr(42, "user-model", "main"), pr(44, "user-handlers", "user-routes")],
     })
     expect(ctx.isStacked).toBe(true)
     expect(ctx.position).toBe(2)
@@ -149,10 +141,7 @@ describe("detectStack", () => {
   it("counts depth correctly for a multi-hop linear upstack from the stack root", () => {
     const ctx = detectStack({
       currentPr: current(42, "user-model", "main"),
-      openPrs: [
-        pr(43, "user-routes", "user-model"),
-        pr(44, "user-handlers", "user-routes"),
-      ],
+      openPrs: [pr(43, "user-routes", "user-model"), pr(44, "user-handlers", "user-routes")],
     })
     expect(ctx.isStacked).toBe(true)
     expect(ctx.position).toBe(1)
@@ -222,10 +211,7 @@ describe("detectStack", () => {
   it("falls back to lowest PR number when authors and updated_at all equal", () => {
     const ctx = detectStack({
       currentPr: current(60, "user-routes", "user-model"),
-      openPrs: [
-        pr(50, "user-model", "main"),
-        pr(42, "user-model", "main"),
-      ],
+      openPrs: [pr(50, "user-model", "main"), pr(42, "user-model", "main")],
     })
     expect(ctx.parent?.number).toBe(42)
   })
@@ -234,9 +220,18 @@ describe("detectStack", () => {
     const ctx = detectStack({
       currentPr: current(42, "user-model", "main", { author: "daniel" }),
       openPrs: [
-        pr(45, "user-routes-b", "user-model", { user: "someone-else", updated_at: "2026-05-10T12:00:00Z" }),
-        pr(44, "user-routes-c", "user-model", { user: "daniel", updated_at: "2026-05-09T12:00:00Z" }),
-        pr(43, "user-routes-a", "user-model", { user: "daniel", updated_at: "2026-05-10T12:00:00Z" }),
+        pr(45, "user-routes-b", "user-model", {
+          user: "someone-else",
+          updated_at: "2026-05-10T12:00:00Z",
+        }),
+        pr(44, "user-routes-c", "user-model", {
+          user: "daniel",
+          updated_at: "2026-05-09T12:00:00Z",
+        }),
+        pr(43, "user-routes-a", "user-model", {
+          user: "daniel",
+          updated_at: "2026-05-10T12:00:00Z",
+        }),
       ],
     })
     expect(ctx.children.map((c) => c.number)).toEqual([43, 44, 45])
@@ -251,9 +246,7 @@ describe("detectStack", () => {
     // base repo.
     const ctx = detectStack({
       currentPr: current(60, "user-routes", "user-model", { baseRepo: REPO }),
-      openPrs: [
-        pr(50, "user-model", "main", { headRepo: "fork-user/sigilix", baseRepo: REPO }),
-      ],
+      openPrs: [pr(50, "user-model", "main", { headRepo: "fork-user/sigilix", baseRepo: REPO })],
     })
     // The fork PR has head in a different repo from our base, so
     // it's not a parent. No other peers → no-stack.
@@ -263,9 +256,7 @@ describe("detectStack", () => {
   it("does NOT match a cross-fork child PR (base in different repo)", () => {
     const ctx = detectStack({
       currentPr: current(42, "user-model", "main"),
-      openPrs: [
-        pr(43, "user-routes", "user-model", { headRepo: REPO, baseRepo: "fork-user/sigilix" }),
-      ],
+      openPrs: [pr(43, "user-routes", "user-model", { headRepo: REPO, baseRepo: "fork-user/sigilix" })],
     })
     // The candidate child's base is in a different repo from our
     // head, so it's not a child.
@@ -313,10 +304,7 @@ describe("detectStack", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     const ctx = detectStack({
       currentPr: current(60, "user-routes", "branch-a"),
-      openPrs: [
-        pr(50, "branch-a", "branch-b"),
-        pr(51, "branch-b", "branch-a"),
-      ],
+      openPrs: [pr(50, "branch-a", "branch-b"), pr(51, "branch-b", "branch-a")],
     })
     expect(ctx.cycleDetected).toBe(true)
     expect(ctx.ancestors).toEqual([])
@@ -411,8 +399,11 @@ describe("detectStack", () => {
       currentPr: current(42, "feature/x", "main"),
       openPrs: [
         {
-          number: 50, title: "bad", user: null,
-          head: { ref: "" }, base: { ref: "" },
+          number: 50,
+          title: "bad",
+          user: null,
+          head: { ref: "" },
+          base: { ref: "" },
         } as OpenPrInput,
       ],
     })

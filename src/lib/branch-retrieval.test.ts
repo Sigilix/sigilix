@@ -145,13 +145,22 @@ describe("prepareBranchSet", () => {
   })
 
   it("returns [] (never throws) when embedding fails", async () => {
-    const ai = { run: async () => { throw new Error("AI down") } }
+    const ai = {
+      run: async () => {
+        throw new Error("AI down")
+      },
+    }
     await expect(prepareBranchSet(ai, files)).resolves.toEqual([])
   })
 
   it("returns [] for empty files without calling AI", async () => {
     let called = false
-    const ai = { run: async () => { called = true; return { data: [] } } }
+    const ai = {
+      run: async () => {
+        called = true
+        return { data: [] }
+      },
+    }
     expect(await prepareBranchSet(ai, new Map())).toEqual([])
     expect(called).toBe(false)
   })
@@ -166,7 +175,10 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
       const texts = Array.isArray(input.text) ? input.text : [input.text]
       const embed = (t: string): number[] => {
         const v = new Array<number>(768).fill(0)
-        for (const tok of t.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)) {
+        for (const tok of t
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean)) {
           let h = 0
           for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) >>> 0
           v[h % 768] += 1
@@ -190,7 +202,15 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
     expect(branchChunks[0].content).toContain("computeWasteFactor")
 
     // Stale main copy of the same path must be displaced by head content.
-    const staleMain = [{ path: "src/util.ts", lineStart: 1, lineEnd: 3, content: "// OLD — symbol absent", score: 0.99 }]
+    const staleMain = [
+      {
+        path: "src/util.ts",
+        lineStart: 1,
+        lineEnd: 3,
+        content: "// OLD — symbol absent",
+        score: 0.99,
+      },
+    ]
     const merged = mergeBranchAware(staleMain, branchChunks, new Set(["src/util.ts"]))
     const utilChunks = merged.filter((c) => c.path === "src/util.ts")
     expect(utilChunks.every((c) => !c.content.includes("OLD"))).toBe(true)
@@ -201,13 +221,19 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
 describe("buildBranchRetrievalEvent (SIG-86 telemetry shape)", () => {
   it("emits the pinned snake_case shape with a 7-char headSha", () => {
     const ev = buildBranchRetrievalEvent({
-      owner: "Sigilix", repo: "sigilix", prNumber: 123,
-      headSha: "abcdef1234567890", branchChunkCount: 12, embedElapsedMs: 340,
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 123,
+      headSha: "abcdef1234567890",
+      branchChunkCount: 12,
+      embedElapsedMs: 340,
       headOverride: { preflight: 2, perf: 1, symbol: 3 },
     })
     expect(ev).toEqual({
       event: "pr-review-branch-retrieval",
-      owner: "Sigilix", repo: "sigilix", prNumber: 123,
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 123,
       headSha: "abcdef1",
       branch_chunk_count: 12,
       embed_elapsed_ms: 340,

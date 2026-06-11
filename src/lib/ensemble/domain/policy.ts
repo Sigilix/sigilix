@@ -64,9 +64,7 @@ export function checkQuorum(
  */
 export type MinSpecialistsEarlyExitMode = "off" | "shadow" | "on"
 
-export function parseMinSpecialistsEarlyExitMode(
-  raw: string | undefined,
-): MinSpecialistsEarlyExitMode {
+export function parseMinSpecialistsEarlyExitMode(raw: string | undefined): MinSpecialistsEarlyExitMode {
   const v = (raw ?? "").trim().toLowerCase()
   if (v === "shadow") return "shadow"
   if (v === "on") return "on"

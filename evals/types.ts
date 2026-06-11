@@ -32,9 +32,12 @@ export function isCategory(s: string): s is Category {
 
 export function toolDisplayName(tool: Tool): string {
   switch (tool) {
-    case "sigilix": return "Sigilix"
-    case "coderabbit": return "CodeRabbit"
-    case "greptile": return "Greptile"
+    case "sigilix":
+      return "Sigilix"
+    case "coderabbit":
+      return "CodeRabbit"
+    case "greptile":
+      return "Greptile"
   }
 }
 

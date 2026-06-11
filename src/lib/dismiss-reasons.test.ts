@@ -10,24 +10,15 @@
 // Self-review (PR #171, finding 2, P3) requested this file.
 
 import { describe, expect, it } from "vitest"
-import {
-  ALL_DISMISS_REASONS,
-  isDismissReason,
-  parseDismissReason,
-  type DismissReason,
-} from "@/src/lib/dismiss-reasons"
+import { ALL_DISMISS_REASONS, isDismissReason, parseDismissReason, type DismissReason } from "@/src/lib/dismiss-reasons"
 
 describe("isDismissReason", () => {
-  it.each<DismissReason>([
-    "not-a-bug",
-    "bad-anchor",
-    "already-covered",
-    "too-minor",
-    "wrong-context",
-    "unlabeled",
-  ])("returns true for canonical label %p", (reason) => {
-    expect(isDismissReason(reason)).toBe(true)
-  })
+  it.each<DismissReason>(["not-a-bug", "bad-anchor", "already-covered", "too-minor", "wrong-context", "unlabeled"])(
+    "returns true for canonical label %p",
+    (reason) => {
+      expect(isDismissReason(reason)).toBe(true)
+    },
+  )
 
   it("returns true for every entry in ALL_DISMISS_REASONS (drift guard)", () => {
     // If a new canonical label is added (DISMISS_REASONS_VERSION bump),

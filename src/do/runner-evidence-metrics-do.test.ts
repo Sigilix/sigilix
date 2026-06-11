@@ -13,17 +13,34 @@ function makeDoInstance(): { do_: RunnerEvidenceMetricsDO; getAlarm: () => numbe
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
-      async put(): Promise<void> { /* no-op */ },
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
+      async put(): Promise<void> {
+        /* no-op */
+      },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
-  return { do_: new RunnerEvidenceMetricsDO(state as unknown as DurableObjectState, {} as Env), getAlarm: () => alarmAt }
+  return {
+    do_: new RunnerEvidenceMetricsDO(state as unknown as DurableObjectState, {} as Env),
+    getAlarm: () => alarmAt,
+  }
 }
 
 const base = { owner: "Sigilix", repo: "sigilix", prNumber: 7 }
@@ -41,9 +58,26 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
 
   it("buckets evidence-pending by its reason", async () => {
     const { do_ } = makeDoInstance()
-    await do_.record({ ...base, state: "evidence-pending", reason: "merge-sha-unavailable", occurredAt: T })
-    await do_.record({ ...base, prNumber: 8, state: "evidence-pending", reason: "merge-sha-mismatch", occurredAt: T })
-    await do_.record({ ...base, prNumber: 9, state: "evidence-pending", reason: "merge-sha-mismatch", occurredAt: T })
+    await do_.record({
+      ...base,
+      state: "evidence-pending",
+      reason: "merge-sha-unavailable",
+      occurredAt: T,
+    })
+    await do_.record({
+      ...base,
+      prNumber: 8,
+      state: "evidence-pending",
+      reason: "merge-sha-mismatch",
+      occurredAt: T,
+    })
+    await do_.record({
+      ...base,
+      prNumber: 9,
+      state: "evidence-pending",
+      reason: "merge-sha-mismatch",
+      occurredAt: T,
+    })
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.counts["evidence-pending"]["merge-sha-unavailable"]).toBe(1)
     expect(out.counts["evidence-pending"]["merge-sha-mismatch"]).toBe(2)
@@ -59,7 +93,12 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
 
   it("tracks the per-repo LATEST state (a newer observation supersedes)", async () => {
     const { do_ } = makeDoInstance()
-    await do_.record({ ...base, state: "evidence-pending", reason: "merge-sha-unavailable", occurredAt: "2026-05-30T10:00:00.000Z" })
+    await do_.record({
+      ...base,
+      state: "evidence-pending",
+      reason: "merge-sha-unavailable",
+      occurredAt: "2026-05-30T10:00:00.000Z",
+    })
     await do_.record({ ...base, state: "verified", occurredAt: "2026-05-30T11:00:00.000Z" })
     // An out-of-order (older) write must NOT regress the latest state.
     await do_.record({ ...base, state: "runner-absent", occurredAt: "2026-05-30T09:00:00.000Z" })

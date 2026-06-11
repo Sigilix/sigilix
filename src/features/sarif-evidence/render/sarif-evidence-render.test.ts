@@ -97,10 +97,19 @@ describe("renderSarifFindingsForPrompt", () => {
 })
 
 describe("renderSarifFindingsAsJsonForSynth", () => {
-  const emptySbom: SbomSummary = { text: "", present: false, packageCount: 0, directDepCount: 0, licenseCounts: {} }
+  const emptySbom: SbomSummary = {
+    text: "",
+    present: false,
+    packageCount: 0,
+    directDepCount: 0,
+    licenseCounts: {},
+  }
   const presentSbom: SbomSummary = {
     text: "[SBOM SUMMARY — pre-LLM]\nTotal packages: 5",
-    present: true, packageCount: 5, directDepCount: 2, licenseCounts: { MIT: 3, "Apache-2.0": 2 },
+    present: true,
+    packageCount: 5,
+    directDepCount: 2,
+    licenseCounts: { MIT: 3, "Apache-2.0": 2 },
   }
 
   it("returns empty when both findings + sbom are empty", () => {

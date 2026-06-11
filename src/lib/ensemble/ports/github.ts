@@ -5,11 +5,7 @@
 // passes a `GitHubClient` where a `GitHubPort` is expected. Types only; imports
 // nothing outward (DTOs come from `@/shared/types/github`, never the adapter).
 
-import type {
-  ListOpenPullsItem,
-  PrChangedFile,
-  PullRequestMeta,
-} from "@/src/shared/types/github"
+import type { ListOpenPullsItem, PrChangedFile, PullRequestMeta } from "@/src/shared/types/github"
 
 export interface GitHubPort {
   /** PR metadata (title, body, head sha, author, labels, merge_commit_sha…). */
@@ -21,12 +17,7 @@ export interface GitHubPort {
   ): Promise<PullRequestMeta>
 
   /** The unified diff for a PR (`Accept: application/vnd.github.v3.diff`). */
-  getPullRequestDiff(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    opts?: { signal?: AbortSignal },
-  ): Promise<string>
+  getPullRequestDiff(owner: string, repo: string, prNumber: number, opts?: { signal?: AbortSignal }): Promise<string>
 
   /** Changed files for a PR (capped/paginated; default maxFiles=50). */
   listPullRequestFiles(
@@ -75,12 +66,7 @@ export interface GitHubPort {
   ): Promise<{ headSha: string; treeSha: string } | null>
 
   /** Merge-base SHA for a base/head pair; null on any failure shape. */
-  getMergeBase(
-    owner: string,
-    repo: string,
-    base: string,
-    head: string,
-  ): Promise<string | null>
+  getMergeBase(owner: string, repo: string, base: string, head: string): Promise<string | null>
 
   /** Open PRs in the repo (for stack detection); default maxItems=200. */
   listOpenPullRequests(
@@ -94,11 +80,13 @@ export interface GitHubPort {
     owner: string,
     repo: string,
     prNumber: number,
-  ): Promise<Array<{
-    id: number
-    state: string
-    user: { login: string } | null
-    body: string
-    commitId: string | null
-  }>>
+  ): Promise<
+    Array<{
+      id: number
+      state: string
+      user: { login: string } | null
+      body: string
+      commitId: string | null
+    }>
+  >
 }

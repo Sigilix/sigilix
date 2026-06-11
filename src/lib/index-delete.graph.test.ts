@@ -6,24 +6,10 @@
 // index-delete.test-helpers.ts.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  deleteRepoIndex,
-  handleInstallationDeleted,
-} from "@/src/lib/index-delete"
-import {
-  legacyRepoIndexManifestKey,
-  repoIndexManifestKey,
-} from "@/src/lib/repo-index-manifest"
-import {
-  legacyRepoIndexVectorsKey,
-  repoIndexVectorsKey,
-} from "@/src/lib/repo-index-vectors"
-import {
-  makeKvStub,
-  makeEnv,
-  manifest,
-  vectors,
-} from "@/src/lib/index-delete.test-helpers"
+import { deleteRepoIndex, handleInstallationDeleted } from "@/src/lib/index-delete"
+import { legacyRepoIndexManifestKey, repoIndexManifestKey } from "@/src/lib/repo-index-manifest"
+import { legacyRepoIndexVectorsKey, repoIndexVectorsKey } from "@/src/lib/repo-index-vectors"
+import { makeKvStub, makeEnv, manifest, vectors } from "@/src/lib/index-delete.test-helpers"
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -43,7 +29,9 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -68,7 +56,9 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -94,13 +84,20 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
     store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     // Same-owner legacy orphan with DIFFERENT (old-namespace) ids.
     store.set(legacyRepoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
-    store.set(legacyRepoIndexVectorsKey("sigilix"), JSON.stringify(vectors({
-      byPath: { "src/legacy.ts": ["old-id-1", "old-id-2"] },
-    })))
+    store.set(
+      legacyRepoIndexVectorsKey("sigilix"),
+      JSON.stringify(
+        vectors({
+          byPath: { "src/legacy.ts": ["old-id-1", "old-id-2"] },
+        }),
+      ),
+    )
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -126,7 +123,9 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -153,7 +152,9 @@ describe("deleteRepoIndex — SIG-132 legacy bare-repo orphan deletion (GDPR)", 
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -177,7 +178,9 @@ describe("handleInstallationDeleted — SIG-132 orphan discovery", () => {
 
     const { env } = makeEnv({ kv })
     const { results, anyError } = await handleInstallationDeleted({
-      env, installationId: 99, ownerLogin: "Sigilix",
+      env,
+      installationId: 99,
+      ownerLogin: "Sigilix",
     })
 
     expect(anyError).toBe(false)
@@ -197,7 +200,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -220,7 +225,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect((env as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
 
     await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-repos-removed",
     })
 
@@ -240,7 +247,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -260,10 +269,14 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env, deletedBatches } = makeEnv({
       kv,
-      graphDeleteImpl: async () => { throw new Error("DO unavailable") },
+      graphDeleteImpl: async () => {
+        throw new Error("DO unavailable")
+      },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -295,7 +308,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
       },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -329,10 +344,14 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env } = makeEnv({
       kv,
-      graphDeleteImpl: async () => { throw new Error("DO write failed") },
+      graphDeleteImpl: async () => {
+        throw new Error("DO write failed")
+      },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -355,7 +374,9 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 

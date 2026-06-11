@@ -72,11 +72,10 @@ async function cmdCollect(opts: { repo?: string; pr?: string; dataDir: string })
   const worksheetPath = join(opts.dataDir, `${base}.worksheet.md`)
 
   console.error(`[collect] ${owner}/${repo}#${pr} — fetching reviews…`)
-  const [prUrl, comments] = await Promise.all([
-    fetchPrUrl(owner, repo, pr),
-    fetchReviewComments(owner, repo, pr),
-  ])
-  const findings = normalizeFindings(comments, { greptileLogins: greptileLoginsFromEnv(process.env, console.warn) })
+  const [prUrl, comments] = await Promise.all([fetchPrUrl(owner, repo, pr), fetchReviewComments(owner, repo, pr)])
+  const findings = normalizeFindings(comments, {
+    greptileLogins: greptileLoginsFromEnv(process.env, console.warn),
+  })
 
   const prev = await readComparison(jsonPath)
   const file = mergeComparison(prev, {

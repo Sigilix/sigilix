@@ -184,10 +184,15 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
   const { env, owner, repo, headSha, installationId } = args
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-skip-missing-creds",
-      owner, repo, head_sha: headSha, installation_id: installationId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-skip-missing-creds",
+        owner,
+        repo,
+        head_sha: headSha,
+        installation_id: installationId,
+      }),
+    )
     return null
   }
 
@@ -221,18 +226,28 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
         summary: "Sigilix is analyzing the changes. The full review will post as a PR comment when ready.",
       },
     })
-    console.log(JSON.stringify({
-      event: "pr-review-check-run-created",
-      owner, repo, head_sha: headSha, installation_id: installationId,
-      check_run_id: created.id,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-check-run-created",
+        owner,
+        repo,
+        head_sha: headSha,
+        installation_id: installationId,
+        check_run_id: created.id,
+      }),
+    )
     return { id: created.id, client, owner, repo }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-create-failed",
-      owner, repo, head_sha: headSha, installation_id: installationId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-create-failed",
+        owner,
+        repo,
+        head_sha: headSha,
+        installation_id: installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return null
   }
 }
@@ -262,10 +277,15 @@ export interface AttachArgs {
 export async function attachExistingCheckRun(args: AttachArgs): Promise<InProgressCheckRun | null> {
   const { env, owner, repo, installationId, checkRunId } = args
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-attach-skip-missing-creds",
-      owner, repo, check_run_id: checkRunId, installation_id: installationId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-attach-skip-missing-creds",
+        owner,
+        repo,
+        check_run_id: checkRunId,
+        installation_id: installationId,
+      }),
+    )
     return null
   }
   try {
@@ -277,11 +297,16 @@ export async function attachExistingCheckRun(args: AttachArgs): Promise<InProgre
     })
     return { id: checkRunId, client: new GitHubClient({ token }), owner, repo }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-attach-failed",
-      owner, repo, check_run_id: checkRunId, installation_id: installationId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-attach-failed",
+        owner,
+        repo,
+        check_run_id: checkRunId,
+        installation_id: installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return null
   }
 }
@@ -323,15 +348,18 @@ export interface CloseOrphanByHeadShaArgs {
  * missing-creds guard, token failure, or any list/PATCH error logs and
  * returns; nothing thrown reaches the DO state machine.
  */
-export async function closeOrphanedInProgressChecksByHeadSha(
-  args: CloseOrphanByHeadShaArgs,
-): Promise<void> {
+export async function closeOrphanedInProgressChecksByHeadSha(args: CloseOrphanByHeadShaArgs): Promise<void> {
   const { env, owner, repo, installationId, headSha, title, summary, conclusion } = args
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-close-orphan-skip-missing-creds",
-      owner, repo, head_sha: headSha, installation_id: installationId,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-close-orphan-skip-missing-creds",
+        owner,
+        repo,
+        head_sha: headSha,
+        installation_id: installationId,
+      }),
+    )
     return
   }
   try {
@@ -343,17 +371,25 @@ export async function closeOrphanedInProgressChecksByHeadSha(
     })
     const client = new GitHubClient({ token })
     await cancelStaleInProgressChecks({
-      client, owner, repo, headSha,
+      client,
+      owner,
+      repo,
+      headSha,
       ...(title !== undefined ? { title } : {}),
       ...(summary !== undefined ? { summary } : {}),
       ...(conclusion !== undefined ? { conclusion } : {}),
     })
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-close-orphan-failed",
-      owner, repo, head_sha: headSha, installation_id: installationId,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-close-orphan-failed",
+        owner,
+        repo,
+        head_sha: headSha,
+        installation_id: installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -456,9 +492,11 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
   // skips/errors (ambiguous "did the bot run?" state). Reserve wire
   // `failure` for future opt-in P0 gates.
   const wireConclusion: "success" | "neutral" =
-    conclusion === "success" ? "success"
-    : conclusion === "failure" ? "neutral"  // errored — ambiguous, not failing the check
-    : "neutral"                              // skipped — legit ambiguous
+    conclusion === "success"
+      ? "success"
+      : conclusion === "failure"
+        ? "neutral" // errored — ambiguous, not failing the check
+        : "neutral" // skipped — legit ambiguous
   try {
     await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
       status: "completed",
@@ -466,20 +504,28 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
       completedAt: new Date().toISOString(),
       output,
     })
-    console.log(JSON.stringify({
-      event: "pr-review-check-run-completed",
-      owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, conclusion: wireConclusion,
-      internal_conclusion: conclusion,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "pr-review-check-run-completed",
+        owner: handle.owner,
+        repo: handle.repo,
+        check_run_id: handle.id,
+        conclusion: wireConclusion,
+        internal_conclusion: conclusion,
+      }),
+    )
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-complete-failed",
-      owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, conclusion: wireConclusion,
-      internal_conclusion: conclusion,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-complete-failed",
+        owner: handle.owner,
+        repo: handle.repo,
+        check_run_id: handle.id,
+        conclusion: wireConclusion,
+        internal_conclusion: conclusion,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
 
@@ -492,14 +538,11 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
   // comment fallback. Best-effort: annotation failures never disturb the
   // already-completed check or the underlying review.
   const modelAnnotations =
-    surfacePostsAnnotations(surface) && conclusion === "success"
-      ? reviewMeta?.checkAnnotations ?? []
-      : []
+    surfacePostsAnnotations(surface) && conclusion === "success" ? (reviewMeta?.checkAnnotations ?? []) : []
   // At this boundary `skipped` means stale-head only. The dispatcher maps
   // user/config skips to `success` and internal errors to `failure`, so this
   // gate suppresses stale-head annotations without hiding post-scan diagnostics.
-  const deterministicAnnotations =
-    conclusion !== "skipped" ? reviewMeta?.deterministicCheckAnnotations ?? [] : []
+  const deterministicAnnotations = conclusion !== "skipped" ? (reviewMeta?.deterministicCheckAnnotations ?? []) : []
   const annotations = [...modelAnnotations, ...deterministicAnnotations]
   if (annotations.length > 0) {
     await postCheckAnnotations({
@@ -534,15 +577,18 @@ async function postCheckAnnotations(args: {
   const { handle, output } = args
   const { owner, repo, id } = handle
 
-  const valid = args.annotations
-    .map(toPlainTextAnnotation)
-    .filter(isPostableAnnotation)
+  const valid = args.annotations.map(toPlainTextAnnotation).filter(isPostableAnnotation)
   const dropped = args.annotations.length - valid.length
   if (dropped > 0) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-annotation-prefilter-dropped",
-      owner, repo, check_run_id: id, dropped,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-annotation-prefilter-dropped",
+        owner,
+        repo,
+        check_run_id: id,
+        dropped,
+      }),
+    )
   }
   if (valid.length === 0) return
 
@@ -568,18 +614,28 @@ async function postCheckAnnotations(args: {
       // triage-pr-review-ensemble.ts. (CodeRabbit + Sigilix, PR #339 review.)
       const isValidationError = err instanceof GitHubHttpError && err.status === 422
       if (!isValidationError) {
-        console.warn(JSON.stringify({
-          event: "pr-review-check-annotation-batch-failed-transient",
-          owner, repo, check_run_id: id, batch_size: batch.length,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-review-check-annotation-batch-failed-transient",
+            owner,
+            repo,
+            check_run_id: id,
+            batch_size: batch.length,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
         continue
       }
-      console.warn(JSON.stringify({
-        event: "pr-review-check-annotation-batch-rejected",
-        owner, repo, check_run_id: id, batch_size: batch.length,
-        err: err.message,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-check-annotation-batch-rejected",
+          owner,
+          repo,
+          check_run_id: id,
+          batch_size: batch.length,
+          err: err.message,
+        }),
+      )
       // Re-post survivors SEQUENTIALLY, isolating + dropping the offender.
       // Not parallelized on purpose: GitHub's REST guidance is to serialize
       // mutations (POST/PATCH) — up to 50 concurrent check-run PATCHes risks
@@ -595,22 +651,32 @@ async function postCheckAnnotations(args: {
           })
           posted += 1
         } catch (singleErr) {
-          console.warn(JSON.stringify({
-            event: "pr-review-check-annotation-dropped",
-            owner, repo, check_run_id: id,
-            path: annotation.path, start_line: annotation.start_line,
-            err: singleErr instanceof Error ? singleErr.message : String(singleErr),
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "pr-review-check-annotation-dropped",
+              owner,
+              repo,
+              check_run_id: id,
+              path: annotation.path,
+              start_line: annotation.start_line,
+              err: singleErr instanceof Error ? singleErr.message : String(singleErr),
+            }),
+          )
         }
       }
     }
   }
 
-  console.log(JSON.stringify({
-    event: "pr-review-check-annotations-posted",
-    owner, repo, check_run_id: id,
-    posted, requested: args.annotations.length,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "pr-review-check-annotations-posted",
+      owner,
+      repo,
+      check_run_id: id,
+      posted,
+      requested: args.annotations.length,
+    }),
+  )
 }
 
 /**
@@ -687,7 +753,12 @@ function stripMarkupToPlainText(input: string): string {
   // doc-comment: real tags are already stripped, so this only turns
   // entity-encoded example text back into readable literal characters.
   // `&amp;` last to avoid double-decoding.
-  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
+  s = s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
   // Collapse 3+ blank lines and trim trailing whitespace per line.
   s = s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n")
   return s.trim()
@@ -702,10 +773,14 @@ function stripMarkupToPlainText(input: string): string {
  */
 function isPostableAnnotation(a: CheckRunAnnotation): boolean {
   return (
-    typeof a.path === "string" && a.path.trim().length > 0 &&
-    Number.isInteger(a.start_line) && a.start_line >= 1 &&
-    Number.isInteger(a.end_line) && a.end_line >= a.start_line &&
-    typeof a.message === "string" && a.message.trim().length > 0
+    typeof a.path === "string" &&
+    a.path.trim().length > 0 &&
+    Number.isInteger(a.start_line) &&
+    a.start_line >= 1 &&
+    Number.isInteger(a.end_line) &&
+    a.end_line >= a.start_line &&
+    typeof a.message === "string" &&
+    a.message.trim().length > 0
   )
 }
 
@@ -741,22 +816,25 @@ export async function cancelStaleInProgressChecks(args: {
 }): Promise<void> {
   const { client, owner, repo, headSha } = args
   const title = args.title ?? "Cancelled (superseded)"
-  const summary = args.summary
-    ?? "A newer Sigilix review run started for this commit and replaced this check."
+  const summary = args.summary ?? "A newer Sigilix review run started for this commit and replaced this check."
   const conclusion = args.conclusion ?? "cancelled"
   let existing: Array<{ id: number; name: string; status: string }>
   try {
     existing = await client.listCheckRunsForRef(owner, repo, headSha)
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-list-failed",
-      owner, repo, head_sha: headSha,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-check-run-list-failed",
+        owner,
+        repo,
+        head_sha: headSha,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return
   }
-  const stale = existing.filter((r) =>
-    KNOWN_CHECK_NAMES.has(r.name) && (r.status === "in_progress" || r.status === "queued"),
+  const stale = existing.filter(
+    (r) => KNOWN_CHECK_NAMES.has(r.name) && (r.status === "in_progress" || r.status === "queued"),
   )
   if (stale.length === 0) return
   for (const run of stale) {
@@ -767,18 +845,28 @@ export async function cancelStaleInProgressChecks(args: {
         completedAt: new Date().toISOString(),
         output: { title, summary },
       })
-      console.log(JSON.stringify({
-        event: "pr-review-check-run-cancelled-stale",
-        owner, repo, head_sha: headSha,
-        check_run_id: run.id, name: run.name,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-check-run-cancelled-stale",
+          owner,
+          repo,
+          head_sha: headSha,
+          check_run_id: run.id,
+          name: run.name,
+        }),
+      )
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "pr-review-check-run-cancel-stale-failed",
-        owner, repo, head_sha: headSha,
-        check_run_id: run.id, name: run.name,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-check-run-cancel-stale-failed",
+          owner,
+          repo,
+          head_sha: headSha,
+          check_run_id: run.id,
+          name: run.name,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   }
 }
@@ -804,16 +892,13 @@ export function renderOutputForConclusion(
   // SIG-184: trust-pill suffix appended to the success summary when a runner
   // receipt backed this review (Kimi spec). `runner-absent` is the omitted
   // case → empty suffix → byte-identical to the pre-badge summary.
-  const runnerBadge = reviewMeta?.runnerEvidence
-    ? ` · ${runnerEvidenceBadgeImg(reviewMeta.runnerEvidence)}`
-    : ""
+  const runnerBadge = reviewMeta?.runnerEvidence ? ` · ${runnerEvidenceBadgeImg(reviewMeta.runnerEvidence)}` : ""
   const deterministicCount = reviewMeta?.deterministicCheckAnnotations?.length ?? 0
-  const deterministicPhrase = deterministicCount > 0
-    ? `${deterministicCount} scanner ${deterministicCount === 1 ? "diagnostic" : "diagnostics"}`
-    : ""
-  const deterministicSuffix = deterministicCount > 0
-    ? ` · ${deterministicPhrase} from deterministic analysis`
-    : ""
+  const deterministicPhrase =
+    deterministicCount > 0
+      ? `${deterministicCount} scanner ${deterministicCount === 1 ? "diagnostic" : "diagnostics"}`
+      : ""
+  const deterministicSuffix = deterministicCount > 0 ? ` · ${deterministicPhrase} from deterministic analysis` : ""
   switch (conclusion) {
     case "success":
       // ARC-276 + SIG-216: when the dispatcher threads `reviewMeta`,
@@ -830,9 +915,8 @@ export function renderOutputForConclusion(
         }
         const n = reviewMeta.findingsCount
         const noun = n === 1 ? "finding" : "findings"
-        const title = reviewMeta.event === "COMMENT"
-          ? `${n} non-blocking ${noun} posted`
-          : `${n} ${noun} — changes requested`
+        const title =
+          reviewMeta.event === "COMMENT" ? `${n} non-blocking ${noun} posted` : `${n} ${noun} — changes requested`
         return {
           title,
           summary: buildFindingsSummary(n, prReviewUrl) + deterministicSuffix + runnerBadge,
@@ -845,7 +929,8 @@ export function renderOutputForConclusion(
     case "skipped":
       return {
         title: "Review skipped (stale head)",
-        summary: "A newer commit was pushed before this review finished. Sigilix will re-review the latest head automatically.",
+        summary:
+          "A newer commit was pushed before this review finished. Sigilix will re-review the latest head automatically.",
       }
     case "failure":
       // ARC-279: the dispatcher maps `surface === "comment"` to
@@ -854,12 +939,14 @@ export function renderOutputForConclusion(
       // synth's body. Title points them at the PR comment so they
       // don't think the bot was entirely silent.
       if (reviewMeta?.surface === "comment") {
-        const scannerSummary = deterministicCount > 0
-          ? ` Deterministic analysis also found ${deterministicPhrase}.`
-          : ""
+        const scannerSummary =
+          deterministicCount > 0 ? ` Deterministic analysis also found ${deterministicPhrase}.` : ""
         return {
           title: "Couldn't post review — see PR comment",
-          summary: "GitHub silently rejected Sigilix's formal review submit." + scannerSummary + " Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
+          summary:
+            "GitHub silently rejected Sigilix's formal review submit." +
+            scannerSummary +
+            " Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
         }
       }
       // ARC-280 follow-up: `surface === "skip-notice"` means the
@@ -868,17 +955,21 @@ export function renderOutputForConclusion(
       // minimal "couldn't review" comment instead. Different
       // title so log analysis can distinguish.
       if (reviewMeta?.surface === "skip-notice") {
-        const scannerSummary = deterministicCount > 0
-          ? ` Deterministic analysis still found ${deterministicPhrase}.`
-          : ""
+        const scannerSummary =
+          deterministicCount > 0 ? ` Deterministic analysis still found ${deterministicPhrase}.` : ""
         return {
           title: "Couldn't review — see PR comment",
-          summary: "Sigilix couldn't generate a model review for this PR (specialists failed, synth couldn't run, or an internal error fired)." + scannerSummary + " A short PR comment explains which path bailed. Re-run `/sigilix review` to try again.",
+          summary:
+            "Sigilix couldn't generate a model review for this PR (specialists failed, synth couldn't run, or an internal error fired)." +
+            scannerSummary +
+            " A short PR comment explains which path bailed. Re-run `/sigilix review` to try again.",
         }
       }
       return {
         title: "Review failed",
-        summary: "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support." + deterministicSuffix,
+        summary:
+          "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support." +
+          deterministicSuffix,
       }
   }
 }
@@ -905,9 +996,7 @@ function buildPrReviewUrl(
  * otherwise.
  */
 function buildApprovedSummary(prReviewUrl: string | null): string {
-  return prReviewUrl
-    ? `Sigilix approved · [View PR](${prReviewUrl})`
-    : "Sigilix approved"
+  return prReviewUrl ? `Sigilix approved · [View PR](${prReviewUrl})` : "Sigilix approved"
 }
 
 /**
@@ -927,7 +1016,5 @@ function buildFindingsSummary(findingsCount: number, prReviewUrl: string | null)
  * emits a neutral pointer at the PR.
  */
 function buildLegacyPostedSummary(prReviewUrl: string | null): string {
-  return prReviewUrl
-    ? `Sigilix posted a review · [View review](${prReviewUrl})`
-    : "Sigilix posted a review"
+  return prReviewUrl ? `Sigilix posted a review · [View review](${prReviewUrl})` : "Sigilix posted a review"
 }

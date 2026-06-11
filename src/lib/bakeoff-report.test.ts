@@ -51,29 +51,20 @@ describe("wilsonInterval", () => {
 
 describe("twoProportionInterval", () => {
   it("returns 0±something when both proportions are equal", () => {
-    const ci = twoProportionInterval(
-      { successes: 50, total: 100 },
-      { successes: 50, total: 100 },
-    )
+    const ci = twoProportionInterval({ successes: 50, total: 100 }, { successes: 50, total: 100 })
     expect(ci.lower).toBeLessThan(0)
     expect(ci.upper).toBeGreaterThan(0)
     expect(Math.abs(ci.lower + ci.upper)).toBeLessThan(0.05)
   })
 
   it("returns a positive CI when a > b", () => {
-    const ci = twoProportionInterval(
-      { successes: 80, total: 100 },
-      { successes: 40, total: 100 },
-    )
+    const ci = twoProportionInterval({ successes: 80, total: 100 }, { successes: 40, total: 100 })
     expect(ci.lower).toBeGreaterThan(0.2)
     expect(ci.upper).toBeGreaterThan(0.3)
   })
 
   it("clamps to [-1, 1]", () => {
-    const ci = twoProportionInterval(
-      { successes: 0, total: 100 },
-      { successes: 100, total: 100 },
-    )
+    const ci = twoProportionInterval({ successes: 0, total: 100 }, { successes: 100, total: 100 })
     expect(ci.lower).toBeGreaterThanOrEqual(-1)
     expect(ci.upper).toBeLessThanOrEqual(1)
   })
@@ -143,11 +134,7 @@ function comparison(
   }
 }
 
-function attempt(
-  role: string,
-  ts: string,
-  elapsedMs: number,
-): ShadowAttemptCompletedEvent {
+function attempt(role: string, ts: string, elapsedMs: number): ShadowAttemptCompletedEvent {
   return {
     event: "shadow-model-attempt-completed",
     ts,
@@ -268,10 +255,7 @@ describe("buildDecisionReport — cut-short and run-failed regression flags", ()
       elapsedAtCutMs: 5000,
       reason: "grace_deadline",
     }
-    const events: ShadowEvent[] = [
-      ...happyPath("synth"),
-      cs,
-    ]
+    const events: ShadowEvent[] = [...happyPath("synth"), cs]
     const r = buildDecisionReport({ events, ...WINDOW }).roles[0]!
     expect(r.metrics.cutShortRate.verdict).toBe("fail")
     expect(r.overallVerdict).toBe("fail")

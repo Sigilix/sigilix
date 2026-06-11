@@ -83,12 +83,7 @@ function makeClientStub(): ClientStub {
     client: undefined as unknown as GitHubClient,
   }
   stub.client = {
-    async createIssueComment(
-      owner: string,
-      repo: string,
-      pr: number,
-      body: string,
-    ): Promise<{ id: number }> {
+    async createIssueComment(owner: string, repo: string, pr: number, body: string): Promise<{ id: number }> {
       stub.createCalls.push({ owner, repo, pr, body })
       const id = stub.nextCommentId++
       const page = stub.pages.get(1) ?? []
@@ -96,12 +91,7 @@ function makeClientStub(): ClientStub {
       stub.pages.set(1, page)
       return { id }
     },
-    async updateIssueComment(
-      owner: string,
-      repo: string,
-      id: number,
-      body: string,
-    ): Promise<void> {
+    async updateIssueComment(owner: string, repo: string, id: number, body: string): Promise<void> {
       stub.updateCalls.push({ owner, repo, id, body })
       // Reflect the update in the stub's "PR comments" pages so a
       // later scan would still find the same fingerprint.
@@ -144,9 +134,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
 describe("normaliseBodyForFingerprint", () => {
   it("lowercases, collapses whitespace, strips trailing punctuation", () => {
     expect(normaliseBodyForFingerprint("  Hello  WORLD.\n")).toBe("hello world")
-    expect(normaliseBodyForFingerprint("Tabs\tand\nnewlines!!!")).toBe(
-      "tabs and newlines",
-    )
+    expect(normaliseBodyForFingerprint("Tabs\tand\nnewlines!!!")).toBe("tabs and newlines")
   })
 
   it("collapses internal punctuation but only strips at the tail", () => {
@@ -314,8 +302,11 @@ describe("upsertUnanchoredComment — withdrawal short-circuit", () => {
       reason: "mention-reply-accepted",
     }
     const result = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [withdrawal],
     })
@@ -344,8 +335,11 @@ describe("upsertUnanchoredComment — KV hit → PATCH (not POST)", () => {
     kvStub.store.set(key, "555")
 
     const result = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -382,13 +376,14 @@ describe("upsertUnanchoredComment — KV miss + marker found in scan → PATCH +
     // Prime the PR with an existing Sigilix comment carrying the
     // fingerprint marker — simulates a prior push whose KV entry
     // expired or never landed.
-    client.pages.set(1, [
-      { id: 7777, body: `Prior body.\n\n${marker}` },
-    ])
+    client.pages.set(1, [{ id: 7777, body: `Prior body.\n\n${marker}` }])
 
     const result = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -423,8 +418,11 @@ describe("upsertUnanchoredComment — KV miss + marker found in scan → PATCH +
     client.pages.set(2, [{ id: 4242, body: `Body\n\n${marker}` }])
 
     const result = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -446,8 +444,11 @@ describe("upsertUnanchoredComment — full miss → POST + write KV", () => {
     })
 
     const result = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -472,8 +473,11 @@ describe("upsertUnanchoredComment — two pushes, one comment", () => {
 
     // Push 1 — fingerprint cold; POST.
     const first = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -482,8 +486,11 @@ describe("upsertUnanchoredComment — two pushes, one comment", () => {
 
     // Push 2 — same finding, same fingerprint; KV hit → PATCH.
     const second = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -495,9 +502,7 @@ describe("upsertUnanchoredComment — two pushes, one comment", () => {
     expect(client.createCalls).toHaveLength(1)
     expect(client.updateCalls).toHaveLength(1)
     const allCommentsAcrossPages = Array.from(client.pages.values()).flat()
-    const liveForFingerprint = allCommentsAcrossPages.filter((c) =>
-      c.body.includes(`fid:${first.fingerprint}`),
-    )
+    const liveForFingerprint = allCommentsAcrossPages.filter((c) => c.body.includes(`fid:${first.fingerprint}`))
     expect(liveForFingerprint).toHaveLength(1)
   })
 
@@ -508,8 +513,11 @@ describe("upsertUnanchoredComment — two pushes, one comment", () => {
 
     // Push 1 — POST.
     const first = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })
@@ -519,8 +527,11 @@ describe("upsertUnanchoredComment — two pushes, one comment", () => {
 
     // Push 2 — KV miss but marker still present in the PR's comments.
     const second = await upsertUnanchoredComment({
-      env, client: client.client,
-      owner: OWNER, repo: REPO, prNumber: PR,
+      env,
+      client: client.client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
       finding: BASE_FINDING,
       withdrawals: [],
     })

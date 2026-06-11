@@ -15,7 +15,9 @@ import { PrReviewRunDO } from "@/src/do/pr-review-run"
 import type { Env } from "@/src/shared/types/env"
 import type { RunState } from "@/src/do/types"
 
-interface FakeAlarmState { alarmAt: number | null }
+interface FakeAlarmState {
+  alarmAt: number | null
+}
 
 function makeDoState(): {
   ctx: DurableObjectState
@@ -26,12 +28,24 @@ function makeDoState(): {
   const alarms: FakeAlarmState = { alarmAt: null }
   const ctx = {
     storage: {
-      async get<T>(k: string): Promise<T | undefined> { return store.get(k) as T | undefined },
-      async put<T>(k: string, v: T): Promise<void> { store.set(k, v) },
-      async delete(k: string): Promise<boolean> { return store.delete(k) },
-      async setAlarm(t: number): Promise<void> { alarms.alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarms.alarmAt },
-      async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
+      async get<T>(k: string): Promise<T | undefined> {
+        return store.get(k) as T | undefined
+      },
+      async put<T>(k: string, v: T): Promise<void> {
+        store.set(k, v)
+      },
+      async delete(k: string): Promise<boolean> {
+        return store.delete(k)
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarms.alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarms.alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarms.alarmAt = null
+      },
     },
     id: { toString: () => "Sigilix/sigilix#7", name: "Sigilix/sigilix#7" },
     store,
@@ -44,11 +58,17 @@ function makeDoState(): {
   }
 }
 
-interface QueueState { sent: unknown[] }
+interface QueueState {
+  sent: unknown[]
+}
 
 function makeEnv(queue: QueueState, retries: number = 3): Env {
   return {
-    OPENCLAW_JOBS: { send: async (m: unknown) => { queue.sent.push(m) } },
+    OPENCLAW_JOBS: {
+      send: async (m: unknown) => {
+        queue.sent.push(m)
+      },
+    },
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(retries),
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",
@@ -103,7 +123,7 @@ describe("PrReviewRunDO.alarm — retry alarm fires", () => {
 
     const after = store.get("state") as RunState
     expect(after.state).toBe("queued")
-    expect(after.attempts).toBe(2)  // was 1, alarm fired → 2
+    expect(after.attempts).toBe(2) // was 1, alarm fired → 2
     expect(queue.sent.length).toBe(1)
     const msg = queue.sent[0] as { type: string; runId: string }
     expect(msg.type).toBe("pr-review")
@@ -142,8 +162,8 @@ describe("PrReviewRunDO.alarm — retry alarm fires", () => {
 
     const after = store.get("state") as RunState
     expect(after.runId).toBe("NEW-runId")
-    expect(after.attempts).toBe(1)  // NOT incremented
-    expect(queue.sent.length).toBe(0)  // NOT re-enqueued
+    expect(after.attempts).toBe(1) // NOT incremented
+    expect(queue.sent.length).toBe(0) // NOT re-enqueued
   })
 
   it("ARC-251 Codex BLOCKER #2 — retry alarm preserves staleHeadRequeueDepth from RunState", async () => {
@@ -185,8 +205,8 @@ describe("PrReviewRunDO.alarm — watchdog alarm fires", () => {
 
     const after = store.get("state") as RunState
     expect(after.state).toBe("failed-transient")
-    expect(after.attempts).toBe(1)  // NOT incremented at watchdog fire
-                                     // (single-increment is at retry-alarm fire)
+    expect(after.attempts).toBe(1) // NOT incremented at watchdog fire
+    // (single-increment is at retry-alarm fire)
     expect(after.alarmKind).toBe("retry")
     expect(alarms.alarmAt).not.toBeNull()
     expect(after.lastError?.stage).toBe("watchdog")
@@ -230,7 +250,7 @@ describe("PrReviewRunDO.alarm — watchdog alarm fires", () => {
     await instance.alarm!()
 
     const after = store.get("state") as RunState
-    expect(after.state).toBe("done")  // unchanged
+    expect(after.state).toBe("done") // unchanged
     expect(queue.sent.length).toBe(0)
   })
 
@@ -263,7 +283,7 @@ describe("PrReviewRunDO.alarm — watchdog alarm fires", () => {
 
     const after = store.get("state") as RunState
     expect(after.runId).toBe("NEW-runId")
-    expect(after.state).toBe("running")  // unchanged
+    expect(after.state).toBe("running") // unchanged
   })
 })
 
@@ -303,15 +323,15 @@ describe("PrReviewRunDO.alarm — terminal-state guard", () => {
     seedState(store, {
       state: "done",
       attempts: 1,
-      alarmKind: "retry",  // stale alarm — /run-result didn't clear
+      alarmKind: "retry", // stale alarm — /run-result didn't clear
     })
     const instance = new PrReviewRunDO(ctx, env)
     await instance.alarm!()
 
     const after = store.get("state") as RunState
-    expect(after.state).toBe("done")        // NOT resurrected
-    expect(after.attempts).toBe(1)          // NOT incremented
-    expect(queue.sent.length).toBe(0)       // NOT re-enqueued
+    expect(after.state).toBe("done") // NOT resurrected
+    expect(after.attempts).toBe(1) // NOT incremented
+    expect(queue.sent.length).toBe(0) // NOT re-enqueued
   })
 
   it("retry alarm no-ops when state is already failed (terminal)", async () => {
@@ -339,19 +359,25 @@ describe("PrReviewRunDO.alarm — watchdog terminal prunes history", () => {
     const queue: QueueState = { sent: [] }
     const env = {
       ...makeEnv(queue, 3),
-      OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "2",  // tight cap
+      OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "2", // tight cap
     } as unknown as Env
     const { ctx, store } = makeDoState()
     seedState(store, { state: "queued", attempts: 3, alarmKind: "watchdog" })
     // Pre-seed two existing history records (older finishedAt).
     store.set("run:OLD-1", {
-      runId: "OLD-1", headSha: "x".repeat(40), finalState: "done",
-      attempts: 1, startedAt: "2026-05-01T00:00:00.000Z",
+      runId: "OLD-1",
+      headSha: "x".repeat(40),
+      finalState: "done",
+      attempts: 1,
+      startedAt: "2026-05-01T00:00:00.000Z",
       finishedAt: "2026-05-01T01:00:00.000Z",
     })
     store.set("run:OLD-2", {
-      runId: "OLD-2", headSha: "y".repeat(40), finalState: "failed",
-      attempts: 3, startedAt: "2026-05-02T00:00:00.000Z",
+      runId: "OLD-2",
+      headSha: "y".repeat(40),
+      finalState: "failed",
+      attempts: 3,
+      startedAt: "2026-05-02T00:00:00.000Z",
       finishedAt: "2026-05-02T01:00:00.000Z",
     })
 
@@ -377,7 +403,7 @@ describe("PrReviewRunDO.alarm — retry clears pickedUpAt", () => {
       state: "failed-transient",
       attempts: 1,
       alarmKind: "retry",
-      pickedUpAt: "2026-05-07T05:00:00.000Z",  // stale from prev attempt
+      pickedUpAt: "2026-05-07T05:00:00.000Z", // stale from prev attempt
       consumerId: "old-consumer",
     })
     const instance = new PrReviewRunDO(ctx, env)

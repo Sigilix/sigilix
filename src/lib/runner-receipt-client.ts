@@ -6,12 +6,7 @@
 // try/catch (a DO failure must surface a clean 5xx, never crash the route).
 
 import type { Env } from "@/src/shared/types/env"
-import type {
-  RunnerReceiptDO,
-  ClaimReceiptArgs,
-  ClaimReceiptResult,
-  RunnerReceiptRow,
-} from "@/src/do/runner-receipt"
+import type { RunnerReceiptDO, ClaimReceiptArgs, ClaimReceiptResult, RunnerReceiptRow } from "@/src/do/runner-receipt"
 
 function receiptStub(env: Env, repositoryId: string): DurableObjectStub<RunnerReceiptDO> {
   const ns = env.RUNNER_RECEIPT_DO as unknown as DurableObjectNamespace<RunnerReceiptDO>

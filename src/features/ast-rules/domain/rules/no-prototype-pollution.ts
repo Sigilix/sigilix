@@ -36,7 +36,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -48,9 +50,7 @@ const REQUEST_ROOT_RE = /^(?:c|req|request|ctx|context)$/
 // Recursive-merge methods — name-sufficient (distinctive; they recurse into nested
 // keys, which is what walks into `__proto__`). `merge` alone is too collision-prone
 // (Array/RxJS/Map), so it fires only on a lodash receiver.
-const DEEP_MERGE_DISTINCTIVE: ReadonlySet<string> = new Set([
-  "defaultsdeep", "mergewith", "deepmerge", "mergedeep",
-])
+const DEEP_MERGE_DISTINCTIVE: ReadonlySet<string> = new Set(["defaultsdeep", "mergewith", "deepmerge", "mergedeep"])
 const LODASH_RECEIVER_RE = /^(?:_|lodash)$/
 // In-body `__proto__` sanitization → the dev is defending → fail closed (skip).
 const PROTO_GUARD_RE = /__proto__|Object\.create\(\s*null\s*\)/
@@ -78,8 +78,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -114,7 +115,9 @@ function isWholeTaintedRef(arg: AstNode | undefined, taintedLocals: Map<string, 
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
   const decls: Array<{ name: string; init: AstNode }> = []
   const counts = new Map<string, number>()
-  const bump = (name: string | null): void => { if (name) counts.set(name, (counts.get(name) ?? 0) + 1) }
+  const bump = (name: string | null): void => {
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
   walkNoNested(root, (n) => {
     if (n.type === "VariableDeclarator") {
       const name = idName(n.id as AstNode)
@@ -130,7 +133,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     for (const { name, init } of decls) {
       if (tainted.has(name) || (counts.get(name) ?? 0) > 1) continue
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
-      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (aliasesRoot || carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -151,8 +157,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -191,18 +198,26 @@ export const noPrototypePollution: AstRule = {
     if (SKIP_PATH.test(ctx.path)) return null
 
     const fns = collectFunctions(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const guardCache = new Map<AstNode, boolean>()
     const isGuarded = (f: AstNode): boolean => {
       let v = guardCache.get(f)
-      if (v === undefined) { v = hasProtoGuard((f.body as AstNode) ?? f, ctx.source); guardCache.set(f, v) }
+      if (v === undefined) {
+        v = hasProtoGuard((f.body as AstNode) ?? f, ctx.source)
+        guardCache.set(f, v)
+      }
       return v
     }
     const taintCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -216,7 +231,9 @@ export const noPrototypePollution: AstRule = {
         let enclosing: AstNode | null = null
         for (const f of fns) {
           const [s, e] = fnRange(f)
-          if (s <= start && start < e) { if (!enclosing || s >= fnRange(enclosing)[0]) enclosing = f }
+          if (s <= start && start < e) {
+            if (!enclosing || s >= fnRange(enclosing)[0]) enclosing = f
+          }
         }
         const scope = enclosing ?? node
         if (taintedDeepMerge(n, taintLocalsOf(scope), ctx.source) && !(enclosing && isGuarded(enclosing))) {
@@ -236,8 +253,9 @@ export const noPrototypePollution: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

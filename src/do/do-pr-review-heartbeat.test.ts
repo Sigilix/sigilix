@@ -16,7 +16,9 @@ import type { RunState } from "@/src/do/types"
 
 // ─── DO-side harness ─────────────────────────────────────────
 
-interface FakeAlarmState { alarmAt: number | null }
+interface FakeAlarmState {
+  alarmAt: number | null
+}
 
 function makeDoState(): {
   ctx: DurableObjectState
@@ -27,12 +29,24 @@ function makeDoState(): {
   const alarms: FakeAlarmState = { alarmAt: null }
   const ctx = {
     storage: {
-      async get<T>(k: string): Promise<T | undefined> { return store.get(k) as T | undefined },
-      async put<T>(k: string, v: T): Promise<void> { store.set(k, v) },
-      async delete(k: string): Promise<boolean> { return store.delete(k) },
-      async setAlarm(t: number): Promise<void> { alarms.alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarms.alarmAt },
-      async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
+      async get<T>(k: string): Promise<T | undefined> {
+        return store.get(k) as T | undefined
+      },
+      async put<T>(k: string, v: T): Promise<void> {
+        store.set(k, v)
+      },
+      async delete(k: string): Promise<boolean> {
+        return store.delete(k)
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarms.alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarms.alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarms.alarmAt = null
+      },
     },
     id: { toString: () => "Sigilix/sigilix#7", name: "Sigilix/sigilix#7" },
     store,
@@ -83,15 +97,21 @@ function seedState(store: Map<string, unknown>, over: Partial<RunState> = {}): R
   return s
 }
 
-function isoAgo(ms: number): string { return new Date(Date.now() - ms).toISOString() }
-function isoIn(ms: number): string { return new Date(Date.now() + ms).toISOString() }
+function isoAgo(ms: number): string {
+  return new Date(Date.now() - ms).toISOString()
+}
+function isoIn(ms: number): string {
+  return new Date(Date.now() + ms).toISOString()
+}
 
 async function postJson(instance: PrReviewRunDO, path: string, body: unknown): Promise<Response> {
-  return instance.fetch(new Request(`https://do.internal${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }))
+  return instance.fetch(
+    new Request(`https://do.internal${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  )
 }
 
 let logSpy: ReturnType<typeof vi.spyOn>
@@ -154,7 +174,10 @@ describe("PrReviewRunDO /heartbeat", () => {
     seedState(store)
     const instance = new PrReviewRunDO(ctx, env)
 
-    const res = await postJson(instance, "/heartbeat", { runId: RUN_ID, consumerId: "someone-else" })
+    const res = await postJson(instance, "/heartbeat", {
+      runId: RUN_ID,
+      consumerId: "someone-else",
+    })
     expect(res.status).toBe(410)
   })
 
@@ -164,7 +187,10 @@ describe("PrReviewRunDO /heartbeat", () => {
     seedState(store)
     const instance = new PrReviewRunDO(ctx, env)
 
-    const res = await postJson(instance, "/heartbeat", { runId: "other-run", consumerId: CONSUMER_ID })
+    const res = await postJson(instance, "/heartbeat", {
+      runId: "other-run",
+      consumerId: CONSUMER_ID,
+    })
     expect(res.status).toBe(410)
   })
 
@@ -326,11 +352,13 @@ function makeConsumerEnv(opts: { heartbeat410?: boolean } = {}): {
     paths.push(path)
     if (path === "/heartbeat" && opts.heartbeat410) {
       return new Response(JSON.stringify({ reason: "stale-or-terminal" }), {
-        status: 410, headers: { "content-type": "application/json" },
+        status: 410,
+        headers: { "content-type": "application/json" },
       })
     }
     return new Response(JSON.stringify({ ok: true }), {
-      status: 200, headers: { "content-type": "application/json" },
+      status: 200,
+      headers: { "content-type": "application/json" },
     })
   })
   const stub = { fetch: fetchMock } as unknown as DurableObjectStub
@@ -360,7 +388,9 @@ describe("runPrReviewWithDoCallback — heartbeat loop (SIG-329)", () => {
     vi.useFakeTimers()
     const { env, paths } = makeConsumerEnv()
     let resolveEnsemble: () => void = () => undefined
-    const ensemble = new Promise<void>((r) => { resolveEnsemble = r })
+    const ensemble = new Promise<void>((r) => {
+      resolveEnsemble = r
+    })
 
     const p = runPrReviewWithDoCallback(makeJob(), env, () => ensemble)
     await vi.advanceTimersByTimeAsync(0) // let /pickup settle, arm first heartbeat
@@ -386,7 +416,9 @@ describe("runPrReviewWithDoCallback — heartbeat loop (SIG-329)", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
     const { env, paths } = makeConsumerEnv({ heartbeat410: true })
     let resolveEnsemble: () => void = () => undefined
-    const ensemble = new Promise<void>((r) => { resolveEnsemble = r })
+    const ensemble = new Promise<void>((r) => {
+      resolveEnsemble = r
+    })
 
     const p = runPrReviewWithDoCallback(makeJob(), env, () => ensemble)
     await vi.advanceTimersByTimeAsync(0)

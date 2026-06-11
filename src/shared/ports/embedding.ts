@@ -9,10 +9,7 @@
 
 /** Minimal shape of the Cloudflare Workers AI binding used for embeddings. */
 export interface AiBinding {
-  run(
-    model: string,
-    input: { text: string | string[] }
-  ): Promise<{ data?: number[][]; shape?: number[] }>
+  run(model: string, input: { text: string | string[] }): Promise<{ data?: number[][]; shape?: number[] }>
 }
 
 export interface EmbeddingPort {

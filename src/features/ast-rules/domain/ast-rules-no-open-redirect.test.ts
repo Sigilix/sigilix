@@ -117,14 +117,21 @@ describe("no-open-redirect — FP-safety: does NOT fire on safe redirect code", 
     expect(runRule(`app.get("/r", (req, res) => { res.json(req.query.data); });`).length).toBe(0)
   })
   it("Map/cache .set('location', tainted) does NOT fire (not a Headers receiver) — H1", () => {
-    expect(runRule(`app.get("/r", (req, res) => { const cache = new Map(); cache.set("location", req.query.x); res.end(); });`).length).toBe(0)
+    expect(
+      runRule(
+        `app.get("/r", (req, res) => { const cache = new Map(); cache.set("location", req.query.x); res.end(); });`,
+      ).length,
+    ).toBe(0)
   })
   it("url.searchParams.set('location', tainted) does NOT fire (not a Headers receiver)", () => {
     const src = `app.get("/r", (req, res) => { const u = new URL("https://x"); u.searchParams.set("location", req.query.x); res.end(); });`
     expect(runRule(src).length).toBe(0)
   })
   it("map.location(req.query.coords) does NOT fire (location verb dropped) — H2", () => {
-    expect(runRule(`app.get("/r", (req, res) => { const map = makeMap(); map.location(req.query.coords); res.end(); });`).length).toBe(0)
+    expect(
+      runRule(`app.get("/r", (req, res) => { const map = makeMap(); map.location(req.query.coords); res.end(); });`)
+        .length,
+    ).toBe(0)
   })
   it("a Map NAMED headers does NOT fire (declaration-based receiver, not name) — F2", () => {
     const src = `app.get("/r", (req, res) => { const headers = new Map(); headers.set("location", req.query.x); res.end(); });`
@@ -138,7 +145,9 @@ describe("no-open-redirect — FP-safety: does NOT fire on safe redirect code", 
     expect(runRule("app.get('/r', (req, res) => { res.redirect(`/u/${req.params.id}/edit`); });").length).toBe(0)
   })
   it("same-origin prefix chain does NOT fire: res.redirect('/users/' + req.params.id + '?x=1')", () => {
-    expect(runRule(`app.get("/r", (req, res) => { res.redirect("/users/" + req.params.id + "?x=1"); });`).length).toBe(0)
+    expect(runRule(`app.get("/r", (req, res) => { res.redirect("/users/" + req.params.id + "?x=1"); });`).length).toBe(
+      0,
+    )
   })
   it("skips test / spec / migration files", () => {
     const src = `app.get("/r", (req, res) => { res.redirect(req.query.url); });`

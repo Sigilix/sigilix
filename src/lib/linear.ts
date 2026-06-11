@@ -34,15 +34,9 @@ export interface LinearAuthEnv {
 export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
   if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
     if (!env.OPENCLAW_STATE) {
-      throw new Error(
-        "buildLinearAuth: OAuth client_credentials configured but OPENCLAW_STATE KV binding is missing"
-      )
+      throw new Error("buildLinearAuth: OAuth client_credentials configured but OPENCLAW_STATE KV binding is missing")
     }
-    const token = await getAppActorToken(
-      env.OPENCLAW_STATE,
-      env.LINEAR_OAUTH_CLIENT_ID,
-      env.LINEAR_OAUTH_CLIENT_SECRET
-    )
+    const token = await getAppActorToken(env.OPENCLAW_STATE, env.LINEAR_OAUTH_CLIENT_ID, env.LINEAR_OAUTH_CLIENT_SECRET)
     return { oauthToken: token }
   }
   return { apiKey: env.LINEAR_API_KEY }
@@ -101,8 +95,7 @@ export class LinearClient {
     // Personal API keys go through as the raw header value (Linear's docs).
     // OAuth access tokens use the standard Bearer prefix. Mixing them up
     // produces a 401 on every call, which is the expected mode failure.
-    this.authHeader =
-      "oauthToken" in auth ? `Bearer ${auth.oauthToken}` : auth.apiKey
+    this.authHeader = "oauthToken" in auth ? `Bearer ${auth.oauthToken}` : auth.apiKey
   }
 
   /**
@@ -117,27 +110,40 @@ export class LinearClient {
         comment(id: $id) {
           id
           body
-          user { name displayName }
-          parent { id }
+          user {
+            name
+            displayName
+          }
+          parent {
+            id
+          }
           issue {
             id
             identifier
             title
             description
-            team { id key }
+            team {
+              id
+              key
+            }
             comments(first: 50) {
               nodes {
                 id
                 body
                 createdAt
-                user { name displayName }
+                user {
+                  name
+                  displayName
+                }
               }
             }
           }
         }
       }
     `
-    const data = await this.gql<{ comment: LinearCommentWithIssue | null }>(query, { id: commentId })
+    const data = await this.gql<{ comment: LinearCommentWithIssue | null }>(query, {
+      id: commentId,
+    })
     return data.comment
   }
 
@@ -161,16 +167,27 @@ export class LinearClient {
    */
   async getCommentParents(
     issueId: string,
-    opts?: { signal?: AbortSignal }
-  ): Promise<Array<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null }>> {
+    opts?: { signal?: AbortSignal },
+  ): Promise<
+    Array<{
+      id: string
+      parentId: string | null
+      user: { name: string | null; displayName: string | null } | null
+    }>
+  > {
     const query = /* GraphQL */ `
       query CommentParents($id: String!) {
         issue(id: $id) {
           comments(first: 100, orderBy: updatedAt) {
             nodes {
               id
-              parent { id }
-              user { name displayName }
+              parent {
+                id
+              }
+              user {
+                name
+                displayName
+              }
             }
           }
         }
@@ -205,14 +222,23 @@ export class LinearClient {
    */
   async getCommentAuthor(
     commentId: string,
-    opts?: { signal?: AbortSignal }
-  ): Promise<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null } | null> {
+    opts?: { signal?: AbortSignal },
+  ): Promise<{
+    id: string
+    parentId: string | null
+    user: { name: string | null; displayName: string | null } | null
+  } | null> {
     const query = /* GraphQL */ `
       query CommentAuthor($id: String!) {
         comment(id: $id) {
           id
-          parent { id }
-          user { name displayName }
+          parent {
+            id
+          }
+          user {
+            name
+            displayName
+          }
         }
       }
     `
@@ -238,10 +264,25 @@ export class LinearClient {
           title
           description
           url
-          team { id key }
-          creator { name displayName }
-          labels { nodes { name } }
-          comments(first: 50) { nodes { id body } }
+          team {
+            id
+            key
+          }
+          creator {
+            name
+            displayName
+          }
+          labels {
+            nodes {
+              name
+            }
+          }
+          comments(first: 50) {
+            nodes {
+              id
+              body
+            }
+          }
         }
       }
     `
@@ -262,7 +303,12 @@ export class LinearClient {
     const query = /* GraphQL */ `
       query Labels($teamId: String!) {
         team(id: $teamId) {
-          labels(first: 250) { nodes { id name } }
+          labels(first: 250) {
+            nodes {
+              id
+              name
+            }
+          }
         }
       }
     `
@@ -302,7 +348,9 @@ export class LinearClient {
       mutation IssueLabelCreate($input: IssueLabelCreateInput!) {
         issueLabelCreate(input: $input) {
           success
-          issueLabel { id }
+          issueLabel {
+            id
+          }
         }
       }
     `
@@ -328,11 +376,13 @@ export class LinearClient {
       estimate?: number
       labelIds?: string[]
       description?: string
-    }
+    },
   ): Promise<void> {
     const mutation = /* GraphQL */ `
       mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
-        issueUpdate(id: $id, input: $input) { success }
+        issueUpdate(id: $id, input: $input) {
+          success
+        }
       }
     `
     const input: Record<string, unknown> = {}
@@ -361,7 +411,9 @@ export class LinearClient {
       mutation CommentCreate($input: CommentCreateInput!) {
         commentCreate(input: $input) {
           success
-          comment { id }
+          comment {
+            id
+          }
         }
       }
     `
@@ -377,17 +429,15 @@ export class LinearClient {
   async updateComment(commentId: string, body: string): Promise<void> {
     const mutation = /* GraphQL */ `
       mutation CommentUpdate($id: String!, $input: CommentUpdateInput!) {
-        commentUpdate(id: $id, input: $input) { success }
+        commentUpdate(id: $id, input: $input) {
+          success
+        }
       }
     `
     await this.gql(mutation, { id: commentId, input: { body } })
   }
 
-  private async gql<T>(
-    query: string,
-    variables: Record<string, unknown>,
-    signal?: AbortSignal
-  ): Promise<T> {
+  private async gql<T>(query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     const init: RequestInit = {
       method: "POST",
       headers: {

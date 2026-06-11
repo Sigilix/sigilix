@@ -16,7 +16,10 @@ const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
 }
 
 function parseWindowDays(raw: string | null): number | null {

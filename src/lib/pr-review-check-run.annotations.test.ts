@@ -9,17 +9,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const {
-  mockGetInstallationToken,
-  mockCreateCheckRun,
-  mockUpdateCheckRun,
-  mockListCheckRunsForRef,
-} = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
-  mockCreateCheckRun: vi.fn(),
-  mockUpdateCheckRun: vi.fn(),
-  mockListCheckRunsForRef: vi.fn(),
-}))
+const { mockGetInstallationToken, mockCreateCheckRun, mockUpdateCheckRun, mockListCheckRunsForRef } = vi.hoisted(
+  () => ({
+    mockGetInstallationToken: vi.fn(async () => "test-token"),
+    mockCreateCheckRun: vi.fn(),
+    mockUpdateCheckRun: vi.fn(),
+    mockListCheckRunsForRef: vi.fn(),
+  }),
+)
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -41,10 +38,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import {
-  completeCheckRun,
-  startInProgressCheckRun,
-} from "@/src/lib/pr-review-check-run"
+import { completeCheckRun, startInProgressCheckRun } from "@/src/lib/pr-review-check-run"
 import { GitHubHttpError } from "@/src/shared/adapters/github"
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import { makeEnv, baseArgs } from "@/src/lib/pr-review-check-run.test-helpers"
@@ -85,17 +79,29 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       handle,
       conclusion: "success",
       surface: "both",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 51, prNumber: 5, checkAnnotations: makeAnnotations(51) },
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 51,
+        prNumber: 5,
+        checkAnnotations: makeAnnotations(51),
+      },
     })
 
     // 1 completion PATCH (no annotations) + 2 annotation batches (50 + 1)
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
-    const completion = mockUpdateCheckRun.mock.calls[0]![3] as { status: string; output: { annotations?: unknown[] } }
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as {
+      status: string
+      output: { annotations?: unknown[] }
+    }
     expect(completion.status).toBe("completed")
     expect(completion.output.annotations).toBeUndefined()
 
-    const b1 = mockUpdateCheckRun.mock.calls[1]![3] as { output: { title: string; summary: string; annotations: CheckRunAnnotation[] } }
-    const b2 = mockUpdateCheckRun.mock.calls[2]![3] as { output: { summary: string; annotations: CheckRunAnnotation[] } }
+    const b1 = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { title: string; summary: string; annotations: CheckRunAnnotation[] }
+    }
+    const b2 = mockUpdateCheckRun.mock.calls[2]![3] as {
+      output: { summary: string; annotations: CheckRunAnnotation[] }
+    }
     expect(b1.output.annotations).toHaveLength(50) // GitHub's per-request cap
     expect(b2.output.annotations).toHaveLength(1)
     // GitHub's Update-a-check-run schema requires `output.summary` whenever an
@@ -118,7 +124,11 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       handle,
       conclusion: "success",
       surface: "annotations",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2, checkAnnotations: makeAnnotations(2) },
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 2,
+        checkAnnotations: makeAnnotations(2),
+      },
     })
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2) // completion + 1 batch
@@ -134,7 +144,11 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       handle,
       conclusion: "skipped",
       surface: "both",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2, checkAnnotations: makeAnnotations(2) },
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 2,
+        checkAnnotations: makeAnnotations(2),
+      },
     })
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1) // completion only
@@ -146,10 +160,28 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     const env = makeEnv()
     const handle = await startInProgressCheckRun({ env, ...baseArgs })
     const annotations: CheckRunAnnotation[] = [
-      { path: "src/app.ts", start_line: 5, end_line: 5, annotation_level: "warning", message: "ok" },
-      { path: "src/app.ts", start_line: 0, end_line: 0, annotation_level: "warning", message: "bad line" },
+      {
+        path: "src/app.ts",
+        start_line: 5,
+        end_line: 5,
+        annotation_level: "warning",
+        message: "ok",
+      },
+      {
+        path: "src/app.ts",
+        start_line: 0,
+        end_line: 0,
+        annotation_level: "warning",
+        message: "bad line",
+      },
       { path: "", start_line: 3, end_line: 3, annotation_level: "warning", message: "no path" },
-      { path: "src/app.ts", start_line: 9, end_line: 2, annotation_level: "warning", message: "end<start" },
+      {
+        path: "src/app.ts",
+        start_line: 9,
+        end_line: 2,
+        annotation_level: "warning",
+        message: "end<start",
+      },
     ]
 
     await completeCheckRun({
@@ -160,7 +192,9 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     })
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2) // completion + 1 batch (1 survivor)
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toHaveLength(1)
     expect(batch.output.annotations[0]!.message).toBe("ok")
   })
@@ -181,9 +215,27 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     const env = makeEnv()
     const handle = await startInProgressCheckRun({ env, ...baseArgs })
     const annotations: CheckRunAnnotation[] = [
-      { path: "src/a.ts", start_line: 1, end_line: 1, annotation_level: "warning", message: "good 1" },
-      { path: "src/a.ts", start_line: 999, end_line: 999, annotation_level: "failure", message: "stale" },
-      { path: "src/a.ts", start_line: 3, end_line: 3, annotation_level: "warning", message: "good 2" },
+      {
+        path: "src/a.ts",
+        start_line: 1,
+        end_line: 1,
+        annotation_level: "warning",
+        message: "good 1",
+      },
+      {
+        path: "src/a.ts",
+        start_line: 999,
+        end_line: 999,
+        annotation_level: "failure",
+        message: "stale",
+      },
+      {
+        path: "src/a.ts",
+        start_line: 3,
+        end_line: 3,
+        annotation_level: "warning",
+        message: "good 2",
+      },
     ]
 
     await completeCheckRun({
@@ -223,7 +275,11 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       handle,
       conclusion: "success",
       surface: "both",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, checkAnnotations: makeAnnotations(3) },
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 3,
+        checkAnnotations: makeAnnotations(3),
+      },
     })
 
     // completion(1) + the single failed batch(1) — NO per-annotation retries
@@ -240,12 +296,18 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     const env = makeEnv()
     const handle = await startInProgressCheckRun({ env, ...baseArgs })
 
-    await expect(completeCheckRun({
-      handle,
-      conclusion: "success",
-      surface: "both",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1, checkAnnotations: makeAnnotations(1) },
-    })).resolves.toBeUndefined()
+    await expect(
+      completeCheckRun({
+        handle,
+        conclusion: "success",
+        surface: "both",
+        reviewMeta: {
+          event: "REQUEST_CHANGES",
+          findingsCount: 1,
+          checkAnnotations: makeAnnotations(1),
+        },
+      }),
+    ).resolves.toBeUndefined()
   })
 })
 
@@ -299,7 +361,9 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
     const completion = mockUpdateCheckRun.mock.calls[0]![3] as { output: { summary: string } }
     expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toEqual(deterministic)
   })
 
@@ -325,7 +389,9 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
     const completion = mockUpdateCheckRun.mock.calls[0]![3] as { output: { summary: string } }
     expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toEqual([...model, ...deterministic])
   })
 
@@ -357,7 +423,9 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(completion.output.title).toBe("Couldn't review — see PR comment")
     expect(completion.output.summary).toContain("couldn't generate a model review")
     expect(completion.output.summary).toContain("Deterministic analysis still found 1 scanner diagnostic")
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toEqual(deterministic)
   })
 
@@ -388,7 +456,9 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(completion.conclusion).toBe("neutral")
     expect(completion.output.title).toBe("Couldn't post review — see PR comment")
     expect(completion.output.summary).toContain("Deterministic analysis also found 1 scanner diagnostic")
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toEqual(deterministic)
   })
 
@@ -417,7 +487,9 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(completion.conclusion).toBe("neutral")
     expect(completion.output.title).toBe("Review failed")
     expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
-    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as {
+      output: { annotations: CheckRunAnnotation[] }
+    }
     expect(batch.output.annotations).toEqual(deterministic)
   })
 

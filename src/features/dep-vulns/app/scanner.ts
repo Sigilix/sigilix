@@ -14,11 +14,7 @@
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 import { loadAdvisoryDb, type AdvisoryRecord } from "@/src/features/dep-vulns/domain/advisory-db"
-import {
-  parsePackageJson,
-  parsePackageLock,
-  rootDepNames,
-} from "@/src/features/dep-vulns/domain/manifest-parsers"
+import { parsePackageJson, parsePackageLock, rootDepNames } from "@/src/features/dep-vulns/domain/manifest-parsers"
 import { matchVersion } from "@/src/features/dep-vulns/domain/version-matcher"
 
 const PACKAGE_JSON_PATH = "package.json"
@@ -39,11 +35,7 @@ export interface DepVulnFinding {
   match_type: "range-vulnerable"
 }
 
-export type ScanSkipReason =
-  | "disabled-config"
-  | "missing-package-json"
-  | "missing-lockfile"
-  | "parse-failed"
+export type ScanSkipReason = "disabled-config" | "missing-package-json" | "missing-lockfile" | "parse-failed"
 
 export type ScanResult =
   | { skipped: true; reason: ScanSkipReason }
@@ -67,42 +59,58 @@ export async function runDepVulnScan(args: RunDepVulnScanArgs): Promise<ScanResu
   const t0 = Date.now()
 
   if (!enabled) {
-    console.log(JSON.stringify({
-      event: "dep-vuln-scan-skipped",
-      reason: "disabled-config",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "dep-vuln-scan-skipped",
+        reason: "disabled-config",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return { skipped: true, reason: "disabled-config" }
   }
 
   const headPkgJsonRaw = await safeFetch(client, owner, repo, PACKAGE_JSON_PATH, headSha)
   if (headPkgJsonRaw === null) {
-    console.log(JSON.stringify({
-      event: "dep-vuln-scan-skipped",
-      reason: "missing-package-json",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "dep-vuln-scan-skipped",
+        reason: "missing-package-json",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return { skipped: true, reason: "missing-package-json" }
   }
 
   const headPkgJson = parsePackageJson(headPkgJsonRaw)
   if (headPkgJson === null) {
-    console.log(JSON.stringify({
-      event: "dep-vuln-scan-skipped",
-      reason: "parse-failed",
-      detail: "package.json",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "dep-vuln-scan-skipped",
+        reason: "parse-failed",
+        detail: "package.json",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return { skipped: true, reason: "parse-failed" }
   }
 
   const headLockRaw = await safeFetch(client, owner, repo, PACKAGE_LOCK_PATH, headSha)
   if (headLockRaw === null) {
-    console.log(JSON.stringify({
-      event: "dep-vuln-scan-skipped",
-      reason: "missing-lockfile",
-      owner, repo, prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "dep-vuln-scan-skipped",
+        reason: "missing-lockfile",
+        owner,
+        repo,
+        prNumber,
+      }),
+    )
     return { skipped: true, reason: "missing-lockfile" }
   }
 
@@ -124,14 +132,18 @@ export async function runDepVulnScan(args: RunDepVulnScanArgs): Promise<ScanResu
   }
 
   const db = loadAdvisoryDb()
-  console.log(JSON.stringify({
-    event: "dep-vuln-snapshot-meta",
-    snapshotDate: db.metadata.snapshotDate,
-    sourceHash: db.metadata.sourceHash,
-    advisoryCount: db.metadata.advisoryCount,
-    schemaVersion: db.metadata.schemaVersion,
-    owner, repo, prNumber,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "dep-vuln-snapshot-meta",
+      snapshotDate: db.metadata.snapshotDate,
+      sourceHash: db.metadata.sourceHash,
+      advisoryCount: db.metadata.advisoryCount,
+      schemaVersion: db.metadata.schemaVersion,
+      owner,
+      repo,
+      prNumber,
+    }),
+  )
 
   const findings: DepVulnFinding[] = []
   for (const { name, version } of targets) {
@@ -154,25 +166,33 @@ export async function runDepVulnScan(args: RunDepVulnScanArgs): Promise<ScanResu
         match_type: "range-vulnerable",
       }
       findings.push(finding)
-      console.log(JSON.stringify({
-        event: "dep-vuln-finding",
-        owner, repo, prNumber,
-        package_name: finding.package_name,
-        version: finding.version,
-        advisory_id: finding.advisory_id,
-        severity: finding.severity,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "dep-vuln-finding",
+          owner,
+          repo,
+          prNumber,
+          package_name: finding.package_name,
+          version: finding.version,
+          advisory_id: finding.advisory_id,
+          severity: finding.severity,
+        }),
+      )
     }
   }
 
-  console.log(JSON.stringify({
-    event: "dep-vuln-scan-ran",
-    owner, repo, prNumber,
-    manifestsScanned: 1,
-    depsScanned: targets.length,
-    findingsCount: findings.length,
-    durationMs: Date.now() - t0,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "dep-vuln-scan-ran",
+      owner,
+      repo,
+      prNumber,
+      manifestsScanned: 1,
+      depsScanned: targets.length,
+      findingsCount: findings.length,
+      durationMs: Date.now() - t0,
+    }),
+  )
 
   return {
     skipped: false,

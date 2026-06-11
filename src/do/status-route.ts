@@ -100,10 +100,10 @@ export async function handleReviewStatusRoute(
   ]
   for (const v of validations) {
     if (v) {
-      return new Response(
-        JSON.stringify({ error: v.reason }),
-        { status: v.status, headers: { "content-type": "application/json" } },
-      )
+      return new Response(JSON.stringify({ error: v.reason }), {
+        status: v.status,
+        headers: { "content-type": "application/json" },
+      })
     }
   }
 
@@ -116,49 +116,53 @@ export async function handleReviewStatusRoute(
   } catch (err) {
     // CR PR #70 catch: log internal transport detail server-side but
     // do not echo it to the public unauth response body.
-    console.warn(JSON.stringify({
-      event: "do-status-route-transport-failed",
-      err: err instanceof Error ? err.message : String(err),
-      owner, repo, prNumber,
-    }))
-    return new Response(
-      JSON.stringify({ error: "do transport failed" }),
-      { status: 503, headers: { "content-type": "application/json" } },
+    console.warn(
+      JSON.stringify({
+        event: "do-status-route-transport-failed",
+        err: err instanceof Error ? err.message : String(err),
+        owner,
+        repo,
+        prNumber,
+      }),
     )
+    return new Response(JSON.stringify({ error: "do transport failed" }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    })
   }
   if (!doRes.ok) {
-    return new Response(
-      JSON.stringify({ error: `do returned ${doRes.status}` }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    )
+    return new Response(JSON.stringify({ error: `do returned ${doRes.status}` }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    })
   }
 
   let parsed: unknown
   try {
     parsed = await doRes.json()
   } catch {
-    return new Response(
-      JSON.stringify({ error: "do response was not valid JSON" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    )
+    return new Response(JSON.stringify({ error: "do response was not valid JSON" }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    })
   }
 
   // CR PR #70 catch: validate the parsed JSON before treating it as a
   // StatusResponse. A malformed payload would otherwise be returned
   // verbatim with status 200.
   if (!isStatusResponse(parsed)) {
-    return new Response(
-      JSON.stringify({ error: "do response shape invalid" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    )
+    return new Response(JSON.stringify({ error: "do response shape invalid" }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    })
   }
   const body = parsed
 
   if (body.kind === "no-state") {
-    return new Response(
-      JSON.stringify({ error: "no review state for this PR" }),
-      { status: 404, headers: { "content-type": "application/json" } },
-    )
+    return new Response(JSON.stringify({ error: "no review state for this PR" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    })
   }
 
   return new Response(JSON.stringify(body), {

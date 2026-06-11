@@ -18,7 +18,9 @@ const CURRENT_DIFF = "diff --git a/foo b/foo\n@@ -1 +1 @@\n-x\n+y\n"
 const mockPostStub = vi.fn(async (_a?: unknown) => ({ kind: "posted" as const, commentId: 999 }))
 const mockLoadSigilixConfig = vi.fn(async (..._a: unknown[]) => ({ overview: { enabled: true } }))
 const mockGetInstallationToken = vi.fn(async (_a?: unknown) => "fake-token")
-const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({ ok: true as const }))
+const mockEnqueuePrReviewJob = vi.fn(async (_env?: unknown, _args?: unknown) => ({
+  ok: true as const,
+}))
 const mockGetPullRequestDiff = vi.fn(
   async (_o?: string, _r?: string, _n?: number, _opts?: { signal?: AbortSignal }) => CURRENT_DIFF,
 )
@@ -32,26 +34,18 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 }))
 
 vi.mock("@/src/shared/adapters/github", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>(
-    "@/src/shared/adapters/github",
-  )
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
-      getPullRequestDiff: (
-        o: string,
-        r: string,
-        n: number,
-        opts?: { signal?: AbortSignal },
-      ) => mockGetPullRequestDiff(o, r, n, opts),
+      getPullRequestDiff: (o: string, r: string, n: number, opts?: { signal?: AbortSignal }) =>
+        mockGetPullRequestDiff(o, r, n, opts),
     })),
   }
 })
 
 vi.mock("@/src/lib/sigilix-config", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>(
-    "@/src/lib/sigilix-config",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
     loadSigilixConfig: (...a: unknown[]) => mockLoadSigilixConfig(...a),
@@ -68,13 +62,9 @@ const SECRET = "test-webhook-secret"
 const encoder = new TextEncoder()
 
 async function signBody(body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(body))
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -256,7 +246,7 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
   it("DISPATCHES enqueuePrReviewJob when the diff hash differs (real content change)", async () => {
     const { env } = makeEnv({
       [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
-        diffHash: "deadbeef".repeat(8),  // 64 hex chars, won't match
+        diffHash: "deadbeef".repeat(8), // 64 hex chars, won't match
         reviewedHeadSha: "0".repeat(40),
         hashedAt: 1_700_000_000_000,
       }),

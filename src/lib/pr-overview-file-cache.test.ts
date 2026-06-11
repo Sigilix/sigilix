@@ -21,9 +21,15 @@ import type { Env } from "@/src/shared/types/env"
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -42,8 +48,11 @@ const sampleRow: CachedFileRow = {
 describe("buildCacheKey", () => {
   it("normalizes owner/repo to lowercase and includes both hashes", async () => {
     const key = await buildCacheKey({
-      owner: "Sigilix", repo: "Sigilix", prNumber: 42,
-      filename: "src/foo.ts", patch: "@@ -1 +1 @@\n-old\n+new",
+      owner: "Sigilix",
+      repo: "Sigilix",
+      prNumber: 42,
+      filename: "src/foo.ts",
+      patch: "@@ -1 +1 @@\n-old\n+new",
     })
     expect(key.startsWith("pr-overview-file-cache:sigilix/sigilix#42:")).toBe(true)
     // Two SHA-256 hex hashes (24 chars each) separated by ":"
@@ -55,20 +64,36 @@ describe("buildCacheKey", () => {
 
   it("different filenames at the same patch → different keys", async () => {
     const a = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "a.ts", patch: "X",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "a.ts",
+      patch: "X",
     })
     const b = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "b.ts", patch: "X",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "b.ts",
+      patch: "X",
     })
     expect(a).not.toBe(b)
   })
 
   it("same filename + same patch → same key (idempotent)", async () => {
     const a = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "a.ts", patch: "X",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "a.ts",
+      patch: "X",
     })
     const b = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "a.ts", patch: "X",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "a.ts",
+      patch: "X",
     })
     expect(a).toBe(b)
   })
@@ -79,13 +104,22 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     await writeFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "src/foo.ts", patch: "P", row: sampleRow,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "src/foo.ts",
+      patch: "P",
+      row: sampleRow,
     })
     expect(store.size).toBe(1)
     const out = await readFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "src/foo.ts", patch: "P",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "src/foo.ts",
+      patch: "P",
     })
     expect(out).toEqual(sampleRow)
   })
@@ -94,8 +128,12 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv)
     const out = await readFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "missing.ts", patch: "P",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "missing.ts",
+      patch: "P",
     })
     expect(out).toBeNull()
   })
@@ -104,14 +142,24 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const errSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const env = {
       OPENCLAW_STATE: {
-        async get(): Promise<string | null> { throw new Error("KV outage") },
-        async put(): Promise<void> { /* unreached */ },
-        async delete(): Promise<void> { /* unreached */ },
+        async get(): Promise<string | null> {
+          throw new Error("KV outage")
+        },
+        async put(): Promise<void> {
+          /* unreached */
+        },
+        async delete(): Promise<void> {
+          /* unreached */
+        },
       },
     } as unknown as Env
     const out = await readFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "x.ts", patch: "P",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "x.ts",
+      patch: "P",
     })
     expect(out).toBeNull()
     expect(errSpy).toHaveBeenCalled()
@@ -122,11 +170,20 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     const key = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "x.ts", patch: "P",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "x.ts",
+      patch: "P",
     })
     store.set(key, "not json")
     const out = await readFileCache({
-      env, owner: "o", repo: "r", prNumber: 1, filename: "x.ts", patch: "P",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "x.ts",
+      patch: "P",
     })
     expect(out).toBeNull()
   })
@@ -135,11 +192,20 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     const key = await buildCacheKey({
-      owner: "o", repo: "r", prNumber: 1, filename: "x.ts", patch: "P",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "x.ts",
+      patch: "P",
     })
     store.set(key, JSON.stringify({ path: "x.ts" })) // missing score/overview/nextStep
     const out = await readFileCache({
-      env, owner: "o", repo: "r", prNumber: 1, filename: "x.ts", patch: "P",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "x.ts",
+      patch: "P",
     })
     expect(out).toBeNull()
   })
@@ -148,15 +214,28 @@ describe("readFileCache / writeFileCache round-trip", () => {
     const errSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const env = {
       OPENCLAW_STATE: {
-        async get(): Promise<string | null> { return null },
-        async put(): Promise<void> { throw new Error("KV write outage") },
-        async delete(): Promise<void> { /* unreached */ },
+        async get(): Promise<string | null> {
+          return null
+        },
+        async put(): Promise<void> {
+          throw new Error("KV write outage")
+        },
+        async delete(): Promise<void> {
+          /* unreached */
+        },
       },
     } as unknown as Env
-    await expect(writeFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "x.ts", patch: "P", row: sampleRow,
-    })).resolves.toBeUndefined()
+    await expect(
+      writeFileCache({
+        env,
+        owner: "o",
+        repo: "r",
+        prNumber: 1,
+        filename: "x.ts",
+        patch: "P",
+        row: sampleRow,
+      }),
+    ).resolves.toBeUndefined()
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
   })
@@ -168,16 +247,29 @@ describe("batchReadFileCache", () => {
     const env = makeEnv(kv)
     // Pre-populate cache for two of three files.
     await writeFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "a.ts", patch: "PA", row: { ...sampleRow, path: "a.ts" },
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "a.ts",
+      patch: "PA",
+      row: { ...sampleRow, path: "a.ts" },
     })
     await writeFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
-      filename: "c.ts", patch: "PC", row: { ...sampleRow, path: "c.ts" },
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      filename: "c.ts",
+      patch: "PC",
+      row: { ...sampleRow, path: "c.ts" },
     })
 
     const { hits, misses } = await batchReadFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
       files: [
         { filename: "a.ts", patch: "PA" },
         { filename: "b.ts", patch: "PB" },
@@ -196,7 +288,10 @@ describe("batchReadFileCache", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv)
     const { hits, misses } = await batchReadFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
       files: [
         { filename: "binary.png" }, // no patch
         { filename: "huge.lock", patch: "" }, // empty patch
@@ -212,7 +307,10 @@ describe("batchWriteFileCache", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     const result = await batchWriteFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
       misses: [
         { filename: "a.ts", patch: "PA" },
         { filename: "b.ts", patch: "PB" },
@@ -230,7 +328,10 @@ describe("batchWriteFileCache", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     const result = await batchWriteFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
       misses: [
         { filename: "a.ts", patch: "PA" },
         { filename: "b.ts", patch: "PB" },
@@ -245,7 +346,10 @@ describe("batchWriteFileCache", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     const result = await batchWriteFileCache({
-      env, owner: "o", repo: "r", prNumber: 1,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
       misses: [{ filename: "binary.png" }],
       rows: [{ ...sampleRow, path: "binary.png" }],
     })

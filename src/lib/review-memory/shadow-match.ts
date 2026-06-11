@@ -16,11 +16,7 @@
 // incoming version separately and flag `version_mismatch` so Phase 4 can
 // measure the false-negative rate an id-match WOULD have incurred.
 
-import type {
-  ReviewMemoryCategory,
-  ReviewMemoryClaimType,
-  ReviewMemoryFinding,
-} from "./types"
+import type { ReviewMemoryCategory, ReviewMemoryClaimType, ReviewMemoryFinding } from "./types"
 
 /** Default distinct-PR floor for the telemetry-only `wouldSoftenAtFloor`
  *  LABEL. Phase-4-tunable; it GATES NOTHING in Phase 3. */
@@ -117,15 +113,10 @@ export function shadowMatchReviewMemoryClaims(args: {
   for (const f of args.findings) {
     if (f.category === null) continue
 
-    const catMem = args.memories.find(
-      (m) => m.scope === "category" && m.category === f.category,
-    )
+    const catMem = args.memories.find((m) => m.scope === "category" && m.category === f.category)
     const pathMems = args.memories.filter(
       (m) =>
-        m.scope === "path-category" &&
-        m.category === f.category &&
-        f.pathSha12 !== null &&
-        m.pathSha12 === f.pathSha12,
+        m.scope === "path-category" && m.category === f.category && f.pathSha12 !== null && m.pathSha12 === f.pathSha12,
     )
     const categoryOnlyWouldAlsoFire = catMem !== undefined
 
@@ -138,9 +129,7 @@ export function shadowMatchReviewMemoryClaims(args: {
 
       // Tier 1: path-category match (most specific).
       let tier: ShadowMatchRow["matchedTier"] | null = null
-      let sc:
-        | NonNullable<ReviewMemoryFinding["shadowClaims"]>[number]
-        | undefined
+      let sc: NonNullable<ReviewMemoryFinding["shadowClaims"]>[number] | undefined
       for (const pm of pathMems) {
         const hit = pm.shadowClaims?.find((c) => c.type === incoming.type)
         if (hit) {

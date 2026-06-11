@@ -24,10 +24,7 @@ import {
 } from "@/src/lib/review-manifest"
 import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import { TELEMETRY_TTL_DAYS } from "@/src/lib/fp-rate/attribute"
-import type {
-  EnsemblePersistencePort,
-  EnsembleTelemetrySummary,
-} from "@/src/lib/ensemble/ports/persistence"
+import type { EnsemblePersistencePort, EnsembleTelemetrySummary } from "@/src/lib/ensemble/ports/persistence"
 
 /**
  * Best-effort write of the review-provenance manifest from the
@@ -86,26 +83,40 @@ export async function writeReviewManifestForEnsemble(args: {
     }
     const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
     if (ok) {
-      console.log(JSON.stringify({
-        event: "review-manifest-written",
-        owner, repo, prNumber,
-        headSha, baseSha, modelId,
-        promptVersion: PROMPT_VERSION,
-        target: { kind: "review", id: reviewId },
-      }))
+      console.log(
+        JSON.stringify({
+          event: "review-manifest-written",
+          owner,
+          repo,
+          prNumber,
+          headSha,
+          baseSha,
+          modelId,
+          promptVersion: PROMPT_VERSION,
+          target: { kind: "review", id: reviewId },
+        }),
+      )
     } else {
-      console.error(JSON.stringify({
-        event: "review-manifest-write-failed",
-        owner, repo, prNumber,
-        err: "writeReviewManifest returned false",
-      }))
+      console.error(
+        JSON.stringify({
+          event: "review-manifest-write-failed",
+          owner,
+          repo,
+          prNumber,
+          err: "writeReviewManifest returned false",
+        }),
+      )
     }
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "review-manifest-write-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-manifest-write-failed",
+        owner,
+        repo,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 }
 
@@ -144,7 +155,12 @@ export function makePersistenceAdapter(
 ): EnsemblePersistencePort {
   return {
     writeReviewManifest(args) {
-      return writeReviewManifestForEnsemble({ env, client, enabled: reviewManifestEnabled, ...args })
+      return writeReviewManifestForEnsemble({
+        env,
+        client,
+        enabled: reviewManifestEnabled,
+        ...args,
+      })
     },
     incrementDailyBudget(by) {
       return incrementDailyBudget(env, by)

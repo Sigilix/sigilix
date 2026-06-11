@@ -63,11 +63,7 @@ function isScopedRulesManifest(value: unknown): value is ScopedRulesManifest {
  * context, so a missing/invalid/unreadable record must NEVER fail
  * the review.
  */
-export async function readScopedRulesManifest(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<ReadResult> {
+export async function readScopedRulesManifest(env: Env, owner: string, repo: string): Promise<ReadResult> {
   let raw: string | null
   try {
     raw = await env.OPENCLAW_STATE.get(scopedRulesKey(owner, repo))
@@ -107,17 +103,23 @@ export async function loadCompiledScopedRulesManifest(
     return compileScopedRulesManifest(result.manifest)
   }
   if (result.kind === "kv-error") {
-    console.warn(JSON.stringify({
-      event: "scoped-rules-manifest-read-failed",
-      owner, repo,
-      err: result.err,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "scoped-rules-manifest-read-failed",
+        owner,
+        repo,
+        err: result.err,
+      }),
+    )
   } else if (result.kind === "invalid") {
-    console.warn(JSON.stringify({
-      event: "scoped-rules-manifest-invalid",
-      owner, repo,
-      reason: result.reason,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "scoped-rules-manifest-invalid",
+        owner,
+        repo,
+        reason: result.reason,
+      }),
+    )
   }
   return { perDirectoryRules: [], globRules: [] }
 }
@@ -139,11 +141,9 @@ export async function writeScopedRulesManifest(
   entries: ReadonlyArray<{ path: string; content: string }>,
 ): Promise<ScopedRulesManifest> {
   const manifest = buildScopedRulesManifest(entries)
-  await env.OPENCLAW_STATE.put(
-    scopedRulesKey(owner, repo),
-    JSON.stringify(manifest),
-    { expirationTtl: TTL_SECONDS },
-  )
+  await env.OPENCLAW_STATE.put(scopedRulesKey(owner, repo), JSON.stringify(manifest), {
+    expirationTtl: TTL_SECONDS,
+  })
   return manifest
 }
 
@@ -151,10 +151,6 @@ export async function writeScopedRulesManifest(
  * Delete the scoped-rules manifest. Called from the uninstall path
  * (GDPR delete) alongside the index manifest + vectors deletion.
  */
-export async function deleteScopedRulesManifest(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<void> {
+export async function deleteScopedRulesManifest(env: Env, owner: string, repo: string): Promise<void> {
   await env.OPENCLAW_STATE.delete(scopedRulesKey(owner, repo))
 }

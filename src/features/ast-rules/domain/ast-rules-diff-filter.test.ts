@@ -224,7 +224,13 @@ describe("nodeOverlapsChanged", () => {
 
 describe("findReviewPosition", () => {
   const reviewable: ReviewableMap = new Map([
-    ["src/foo.ts", [{ line: 10, side: "RIGHT" }, { line: 11, side: "RIGHT" }]],
+    [
+      "src/foo.ts",
+      [
+        { line: 10, side: "RIGHT" },
+        { line: 11, side: "RIGHT" },
+      ],
+    ],
     ["src/old.ts", [{ line: 5, side: "LEFT" }]],
   ])
 

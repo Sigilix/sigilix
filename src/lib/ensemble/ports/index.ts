@@ -29,12 +29,7 @@ export type { GitHubPort } from "./github"
 
 export type { ReviewSinkPort } from "./review-sink"
 
-export type {
-  RetrievalPort,
-  RetrievedChunk,
-  CorpusHit,
-  MultiCorpusResult,
-} from "./retrieval"
+export type { RetrievalPort, RetrievedChunk, CorpusHit, MultiCorpusResult } from "./retrieval"
 
 export type { RunnerReceiptPort, RunnerEvidenceState } from "./runner-receipt"
 

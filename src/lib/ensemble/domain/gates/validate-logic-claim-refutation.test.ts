@@ -13,10 +13,7 @@ import {
 } from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation"
 import { createAstCache } from "@/src/features/ast-rules/domain/parse-cache"
 import { LARGE_FILE_BYTES } from "@/src/features/ast-rules/domain/parser"
-import {
-  finding,
-  ctx,
-} from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
+import { finding, ctx } from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation.test-helpers"
 
 describe("parseLogicClaimRefutationMode", () => {
   it("defaults to off; parses shadow/enforce case-insensitively", () => {
@@ -52,7 +49,11 @@ describe("control-flow refutation (REFUTE: the early-return guard makes the tail
   if (rateLimited) return
   doWork()
 }`
-    const f = finding({ line: 3, headline: "doWork() runs unconditionally", body: "doWork always executes." })
+    const f = finding({
+      line: 3,
+      headline: "doWork() runs unconditionally",
+      body: "doWork always executes.",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(false)
   })
 
@@ -259,7 +260,12 @@ describe("sync-race recall-safety (KEEP: any async / closure / IO / external bou
   await audit(account)
   account.balance -= amount
 }`
-    const f = finding({ line: 4, score: 4, headline: "Read-check-write race", body: "TOCTOU across the await." })
+    const f = finding({
+      line: 4,
+      score: 4,
+      headline: "Read-check-write race",
+      body: "TOCTOU across the await.",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })
 
@@ -268,7 +274,12 @@ describe("sync-race recall-safety (KEEP: any async / closure / IO / external bou
   if (existsSync(path)) return
   writeFileSync(path, data)
 }`
-    const f = finding({ line: 3, score: 4, headline: "TOCTOU race between existsSync and writeFileSync", body: "check-then-act on the filesystem." })
+    const f = finding({
+      line: 3,
+      score: 4,
+      headline: "TOCTOU race between existsSync and writeFileSync",
+      body: "check-then-act on the filesystem.",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })
 
@@ -278,7 +289,12 @@ describe("sync-race recall-safety (KEEP: any async / closure / IO / external bou
   items.forEach((i) => { acc.total += i })
   acc.total -= 1
 }`
-    const f = finding({ line: 4, score: 4, headline: "Non-atomic read-check-write on acc.total", body: "race condition / lost update." })
+    const f = finding({
+      line: 4,
+      score: 4,
+      headline: "Non-atomic read-check-write on acc.total",
+      body: "race condition / lost update.",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })
 })
@@ -654,23 +670,36 @@ describe("scope + fail-open guards (KEEP)", () => {
   }
 }`
   const cfFinding = (o: Partial<PrReviewFinding> = {}) =>
-    finding({ path: "src/middleware/auth.ts", line: 6, headline: "`next()` runs unconditionally after the 403", body: "double-response", ...o })
+    finding({
+      path: "src/middleware/auth.ts",
+      line: 6,
+      headline: "`next()` runs unconditionally after the 403",
+      body: "double-response",
+      ...o,
+    })
 
   it("KEEPS non-logic findings", () => {
-    expect(evaluateLogicClaimRefutation(cfFinding({ category: "security" }), ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
+    expect(
+      evaluateLogicClaimRefutation(cfFinding({ category: "security" }), ctx("src/middleware/auth.ts", AUTH)).keep,
+    ).toBe(true)
   })
   it(`KEEPS below the sev>=${LOGIC_CLAIM_REFUTATION_MIN_SEVERITY} floor`, () => {
     expect(evaluateLogicClaimRefutation(cfFinding({ score: 3 }), ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
   })
   it("KEEPS a finding with no checkable claim shape", () => {
-    const f = cfFinding({ headline: "off-by-one in the loop bound", body: "the slice drops the last element" })
+    const f = cfFinding({
+      headline: "off-by-one in the loop bound",
+      body: "the slice drops the last element",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
   })
   it("KEEPS when the cited source is unavailable (window-blind)", () => {
     expect(evaluateLogicClaimRefutation(cfFinding(), { fullFileByPath: new Map() }).keep).toBe(true)
   })
   it("KEEPS when the source fails to parse", () => {
-    expect(evaluateLogicClaimRefutation(cfFinding(), ctx("src/middleware/auth.ts", "function ( { ][ )")).keep).toBe(true)
+    expect(evaluateLogicClaimRefutation(cfFinding(), ctx("src/middleware/auth.ts", "function ( { ][ )")).keep).toBe(
+      true,
+    )
   })
   it("KEEPS for a non-source file extension", () => {
     expect(evaluateLogicClaimRefutation(cfFinding({ path: "docs/auth.md" }), ctx("docs/auth.md", AUTH)).keep).toBe(true)
@@ -683,15 +712,28 @@ describe("unused-identifier refutation (REFUTE when the symbol is referenced)", 
   return rows.filter((r) => r.name.includes(needle))
 }`
   it("refutes 'Unused \`req\` parameter' when req IS referenced", () => {
-    const f = finding({ path: "src/filter.ts", line: 2, headline: "Unused `req` parameter after refactor", body: "the req parameter is no longer used" })
-    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", SRC))).toEqual({ keep: false, reason: "unused-claim-refuted-identifier-is-referenced" })
+    const f = finding({
+      path: "src/filter.ts",
+      line: 2,
+      headline: "Unused `req` parameter after refactor",
+      body: "the req parameter is no longer used",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", SRC))).toEqual({
+      keep: false,
+      reason: "unused-claim-refuted-identifier-is-referenced",
+    })
   })
   it("KEEPS 'unused `dead` variable' when dead really is unused (appears once)", () => {
     const S = `export function f(rows) {
   const dead = 1
   return rows.length
 }`
-    const g = finding({ path: "src/f.ts", line: 2, headline: "Unused variable `dead`", body: "the dead binding is never referenced" })
+    const g = finding({
+      path: "src/f.ts",
+      line: 2,
+      headline: "Unused variable `dead`",
+      body: "the dead binding is never referenced",
+    })
     expect(evaluateLogicClaimRefutation(g, ctx("src/f.ts", S)).keep).toBe(true)
   })
   it("KEEPS a genuinely-unused OUTER var that a NESTED scope reuses the name of (code-reviewer P1)", () => {
@@ -702,7 +744,12 @@ describe("unused-identifier refutation (REFUTE when the symbol is referenced)", 
     return dead
   })
 }`
-    const g = finding({ path: "src/f.ts", line: 2, headline: "Unused variable `dead`", body: "the outer dead binding is never used" })
+    const g = finding({
+      path: "src/f.ts",
+      line: 2,
+      headline: "Unused variable `dead`",
+      body: "the outer dead binding is never used",
+    })
     expect(evaluateLogicClaimRefutation(g, ctx("src/f.ts", S)).keep).toBe(true)
   })
 })
@@ -712,21 +759,39 @@ describe("missing-return-type refutation (REFUTE when the annotation is present)
     const S = `export function filterRows(rows: Row[], req: Req): Row[] {
   return rows.filter((r) => r.name.includes(String(req.query.q ?? "")))
 }`
-    const f = finding({ path: "src/filter.ts", line: 1, headline: "Function return type annotation is missing", body: "filterRows lacks an explicit return type annotation" })
-    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", S))).toEqual({ keep: false, reason: "missing-return-type-claim-refuted-annotation-present" })
+    const f = finding({
+      path: "src/filter.ts",
+      line: 1,
+      headline: "Function return type annotation is missing",
+      body: "filterRows lacks an explicit return type annotation",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", S))).toEqual({
+      keep: false,
+      reason: "missing-return-type-claim-refuted-annotation-present",
+    })
   })
   it("KEEPS 'return type is missing' when it genuinely is absent", () => {
     const S = `export function filterRows(rows: Row[], req: Req) {
   return rows.filter((r) => r.name.includes(String(req.query.q ?? "")))
 }`
-    const f = finding({ path: "src/filter.ts", line: 1, headline: "Function return type annotation is missing", body: "no explicit return type" })
+    const f = finding({
+      path: "src/filter.ts",
+      line: 1,
+      headline: "Function return type annotation is missing",
+      body: "no explicit return type",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", S)).keep).toBe(true)
   })
   it("KEEPS a real bug whose text merely contains 'return type' (the GUARD, not the annotation — code-reviewer P2)", () => {
     const S = `export async function load(id: string): Promise<Data> {
   return fetchData(id)
 }`
-    const f = finding({ path: "src/load.ts", line: 2, headline: "Missing the return-type guard before the await", body: "no narrowing before returning" })
+    const f = finding({
+      path: "src/load.ts",
+      line: 2,
+      headline: "Missing the return-type guard before the await",
+      body: "no narrowing before returning",
+    })
     expect(evaluateLogicClaimRefutation(f, ctx("src/load.ts", S)).keep).toBe(true)
   })
 })

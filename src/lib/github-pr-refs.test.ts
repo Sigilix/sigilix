@@ -6,13 +6,8 @@ const arcInfer = () => ({ owner: "Sigilix", repo: "rema-portal" })
 
 describe("extractPullRequestRefs", () => {
   it("extracts a full PR URL", () => {
-    const refs = extractPullRequestRefs(
-      "is this done via https://github.com/Sigilix/rema-portal/pull/162",
-      noInfer
-    )
-    expect(refs).toEqual([
-      { owner: "Sigilix", repo: "rema-portal", number: 162, source: "url" },
-    ])
+    const refs = extractPullRequestRefs("is this done via https://github.com/Sigilix/rema-portal/pull/162", noInfer)
+    expect(refs).toEqual([{ owner: "Sigilix", repo: "rema-portal", number: 162, source: "url" }])
   })
 
   it("strips /files, /commits, anchors, and query strings", () => {
@@ -23,7 +18,7 @@ describe("extractPullRequestRefs", () => {
         "https://github.com/o/r/pull/3#discussion_r1",
         "https://github.com/o/r/pull/4?diff=split",
       ].join(" "),
-      noInfer
+      noInfer,
     )
     expect(refs.map((r) => r.number)).toEqual([1, 2])
   })
@@ -31,7 +26,7 @@ describe("extractPullRequestRefs", () => {
   it("dedupes repeated URLs", () => {
     const refs = extractPullRequestRefs(
       "see https://github.com/o/r/pull/5 and again https://github.com/o/r/pull/5",
-      noInfer
+      noInfer,
     )
     expect(refs).toHaveLength(1)
     expect(refs[0].number).toBe(5)
@@ -39,12 +34,8 @@ describe("extractPullRequestRefs", () => {
 
   it("caps at 2 unique refs", () => {
     const refs = extractPullRequestRefs(
-      [
-        "https://github.com/o/r/pull/1",
-        "https://github.com/o/r/pull/2",
-        "https://github.com/o/r/pull/3",
-      ].join(" "),
-      noInfer
+      ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2", "https://github.com/o/r/pull/3"].join(" "),
+      noInfer,
     )
     expect(refs).toHaveLength(2)
     expect(refs.map((r) => r.number)).toEqual([1, 2])
@@ -52,9 +43,7 @@ describe("extractPullRequestRefs", () => {
 
   it("matches bare 'PR #N' when inferRepo returns a value", () => {
     const refs = extractPullRequestRefs("@arc this is technically done right via PR #162?", arcInfer)
-    expect(refs).toEqual([
-      { owner: "Sigilix", repo: "rema-portal", number: 162, source: "bare-pr-n" },
-    ])
+    expect(refs).toEqual([{ owner: "Sigilix", repo: "rema-portal", number: 162, source: "bare-pr-n" }])
   })
 
   it("does NOT match bare 'PR #N' when inferRepo returns null", () => {
@@ -74,10 +63,7 @@ describe("extractPullRequestRefs", () => {
   })
 
   it("extracts both full URL and bare PR in one comment", () => {
-    const refs = extractPullRequestRefs(
-      "compare https://github.com/Sigilix/rema-portal/pull/100 and PR #200",
-      arcInfer
-    )
+    const refs = extractPullRequestRefs("compare https://github.com/Sigilix/rema-portal/pull/100 and PR #200", arcInfer)
     expect(refs).toHaveLength(2)
     expect(refs.map((r) => r.source).sort()).toEqual(["bare-pr-n", "url"])
   })

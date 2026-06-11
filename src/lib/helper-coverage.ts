@@ -49,7 +49,10 @@ function normalizePath(p: string): string {
   const out: string[] = []
   for (const seg of p.split("/")) {
     if (seg === "" || seg === ".") continue
-    if (seg === "..") { out.pop(); continue }
+    if (seg === "..") {
+      out.pop()
+      continue
+    }
     out.push(seg)
   }
   return out.join("/")
@@ -156,8 +159,8 @@ export function isSubstantiveAddedLine(text: string): boolean {
 export function hasInlineControlFlow(text: string): boolean {
   if (/\b(if|for|while|switch)\b/.test(text)) return true
   if (text.includes("&&") || text.includes("||")) return true
-  if (text.includes("??")) return true        // nullish coalescing
-  if (/ \? /.test(text)) return true            // ternary (spaced; not ?. ?? ?:)
+  if (text.includes("??")) return true // nullish coalescing
+  if (/ \? /.test(text)) return true // ternary (spaced; not ?. ?? ?:)
   return false
 }
 
@@ -183,7 +186,8 @@ const GLUE_MAX_SUBSTANTIVE = 12
 const GLUE_MIN_DELEGATION_RATIO = 0.5
 
 const ARITHMETIC_OPERATOR = /[+\-*/%]=|[A-Za-z_0-9$)\]]\s*[+\-*/%]\s*[A-Za-z_0-9$(]/
-const CONTROL_FLOW_KEYWORD = /(?:^|[\s{};(])(if|for|while|switch|return|throw|break|continue|try|catch|finally|else|do|await)\b/
+const CONTROL_FLOW_KEYWORD =
+  /(?:^|[\s{};(])(if|for|while|switch|return|throw|break|continue|try|catch|finally|else|do|await)\b/
 const CALL_EXPRESSION = /[A-Za-z_$][\w$.]*\s*\(/
 const ASSIGNMENT_KEYWORD = /(?:^|\s)(const|let|var)\s+[A-Za-z_$]/
 const METHOD_OR_FUNCTION_HEADER = /(?:^|\s)(async\s+)?(function\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*[:{=]/
@@ -291,9 +295,7 @@ const FREE_FUNCTION_CALL =
  *
  * Pure — exported for tests.
  */
-export function isStructurallyOrchestratorGlue(
-  addedLines: ReadonlyMap<number, string>,
-): boolean {
+export function isStructurallyOrchestratorGlue(addedLines: ReadonlyMap<number, string>): boolean {
   let substantive = 0
   let delegation = 0
   let hasFreeFunctionCall = false
@@ -354,9 +356,9 @@ export interface DetectHelperCoverageArgs {
  * references the delegated symbol. Fail closed (-> `none`) on any missing
  * input. Never throws.
  */
-export function detectHelperCoverage(
-  args: DetectHelperCoverageArgs,
-): { coverageBySource: Record<string, HelperCoverage> } {
+export function detectHelperCoverage(args: DetectHelperCoverageArgs): {
+  coverageBySource: Record<string, HelperCoverage>
+} {
   const testedHelpers = new Map<string, string>()
   for (const m of args.siblingMappings) {
     if (m.test !== null && m.test.length > 0) testedHelpers.set(m.source, m.test)
@@ -388,9 +390,7 @@ function computeOne(
 
   const bindings = extractTestedHelperBindings(source, content, ext, testedHelpers, args.astCache)
   if (bindings.length === 0) {
-    return structurallyGlue
-      ? { status: "none", helpers: [], structurallyGlue: true }
-      : NONE
+    return structurallyGlue ? { status: "none", helpers: [], structurallyGlue: true } : NONE
   }
 
   let substantive = 0

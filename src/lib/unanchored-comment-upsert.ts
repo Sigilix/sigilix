@@ -71,14 +71,8 @@ import {
   computeUnanchoredFingerprint,
   findFingerprintInCommentBody,
 } from "./review-memory/marker"
-import type {
-  ReviewMemoryCategory,
-  ReviewMemorySeverityLabel,
-} from "./review-memory/types"
-import {
-  filterWithdrawnFindings,
-  type WithdrawalRecord,
-} from "./review-withdrawal-store"
+import type { ReviewMemoryCategory, ReviewMemorySeverityLabel } from "./review-memory/types"
+import { filterWithdrawnFindings, type WithdrawalRecord } from "./review-withdrawal-store"
 
 // 7-day TTL: long enough to span active PR lifecycles without
 // occupying KV indefinitely. Mirrors the
@@ -167,10 +161,7 @@ function kvKey(owner: string, repo: string, prNumber: number, fingerprint: strin
  *
  * Pure — exported for tests.
  */
-export function renderUnanchoredCommentBody(args: {
-  body: string
-  marker: string
-}): string {
+export function renderUnanchoredCommentBody(args: { body: string; marker: string }): string {
   const trimmed = args.body.trimEnd()
   // Match the inline-marker convention of `\n\n<marker>` at the end
   // so a comment-thread reply doesn't visually butt up against the
@@ -183,10 +174,7 @@ export function renderUnanchoredCommentBody(args: {
  * cache miss, malformed entry, or KV read failure (best-effort —
  * cache misses fall through to the scan recovery path).
  */
-async function readKvCachedCommentId(
-  env: Env,
-  key: string,
-): Promise<number | null> {
+async function readKvCachedCommentId(env: Env, key: string): Promise<number | null> {
   try {
     const raw = await env.OPENCLAW_STATE.get(key)
     if (!raw) return null
@@ -197,11 +185,7 @@ async function readKvCachedCommentId(
   }
 }
 
-async function writeKvCachedCommentId(
-  env: Env,
-  key: string,
-  commentId: number,
-): Promise<void> {
+async function writeKvCachedCommentId(env: Env, key: string, commentId: number): Promise<void> {
   try {
     await env.OPENCLAW_STATE.put(key, String(commentId), {
       expirationTtl: KV_TTL_SECONDS,
@@ -210,10 +194,12 @@ async function writeKvCachedCommentId(
     // KV write failures aren't fatal — the marker in the comment body
     // is the durable source of truth and the next run recovers via
     // the scan path. Log so on-call notices a persistent failure.
-    console.warn(JSON.stringify({
-      event: "unanchored-comment-upsert-kv-write-failed",
-      key,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "unanchored-comment-upsert-kv-write-failed",
+        key,
+      }),
+    )
   }
 }
 
@@ -234,20 +220,24 @@ async function scanForFingerprintMarker(args: {
   fingerprint: string
   listIssueCommentsPage?: UpsertUnanchoredCommentArgs["listIssueCommentsPage"]
 }): Promise<number | null> {
-  const fetchPage = args.listIssueCommentsPage
-    ?? ((owner, repo, issueNumber, page) =>
-      args.client.listIssueCommentsPage(owner, repo, issueNumber, page))
+  const fetchPage =
+    args.listIssueCommentsPage ??
+    ((owner, repo, issueNumber, page) => args.client.listIssueCommentsPage(owner, repo, issueNumber, page))
   for (let page = 1; page <= MARKER_SCAN_PAGE_CAP; page++) {
     let items: ReadonlyArray<{ id: number; body: string }>
     try {
       items = await fetchPage(args.owner, args.repo, args.prNumber, page)
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "unanchored-comment-upsert-scan-failed",
-        owner: args.owner, repo: args.repo, pr_number: args.prNumber,
-        page,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "unanchored-comment-upsert-scan-failed",
+          owner: args.owner,
+          repo: args.repo,
+          pr_number: args.prNumber,
+          page,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       return null
     }
     if (items.length === 0) return null
@@ -271,9 +261,7 @@ async function scanForFingerprintMarker(args: {
  * — the caller decides whether to fall through to the wrapped
  * `postReviewCommentFallback` or surface the error.
  */
-export async function upsertUnanchoredComment(
-  args: UpsertUnanchoredCommentArgs,
-): Promise<UnanchoredUpsertResult> {
+export async function upsertUnanchoredComment(args: UpsertUnanchoredCommentArgs): Promise<UnanchoredUpsertResult> {
   const { env, client, owner, repo, prNumber, finding, withdrawals } = args
   const fingerprint = await computeUnanchoredFingerprint({
     ruleId: finding.ruleId ?? null,
@@ -282,8 +270,12 @@ export async function upsertUnanchoredComment(
     body: finding.body,
   })
   const tag = {
-    owner, repo, pr_number: prNumber,
-    fingerprint, path: finding.path, category: finding.category,
+    owner,
+    repo,
+    pr_number: prNumber,
+    fingerprint,
+    path: finding.path,
+    category: finding.category,
   }
 
   // Withdrawal check MUST run before any GitHub call (CodeQL / Semgrep
@@ -326,10 +318,14 @@ export async function upsertUnanchoredComment(
       // a reviewer or by a sweep). Fall through to the marker-scan
       // path; if no replacement exists we POST fresh and rewrite KV.
       const msg = err instanceof Error ? err.message : String(err)
-      console.warn(JSON.stringify({
-        event: "unanchored-comment-upsert-kv-patch-failed",
-        ...tag, comment_id: cachedId, err: msg,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "unanchored-comment-upsert-kv-patch-failed",
+          ...tag,
+          comment_id: cachedId,
+          err: msg,
+        }),
+      )
       // Best-effort delete the stale KV entry before falling through —
       // otherwise the next call also wastes a PATCH on a dead id.
       try {
@@ -344,10 +340,12 @@ export async function upsertUnanchoredComment(
   // the PATCH failed — paginate PR comments to find a still-live
   // marker for this fingerprint.
   const scannedId = await scanForFingerprintMarker({
-    client, owner, repo, prNumber, fingerprint,
-    ...(args.listIssueCommentsPage !== undefined
-      ? { listIssueCommentsPage: args.listIssueCommentsPage }
-      : {}),
+    client,
+    owner,
+    repo,
+    prNumber,
+    fingerprint,
+    ...(args.listIssueCommentsPage !== undefined ? { listIssueCommentsPage: args.listIssueCommentsPage } : {}),
   })
   if (scannedId !== null) {
     // If KV held a DIFFERENT id than the scan found, a concurrent
@@ -361,12 +359,15 @@ export async function upsertUnanchoredComment(
       // concurrent first-write race (across-SHA double-posts aren't
       // bounded; see the model docstring at the top of this file).
       emit("unanchored-comment-upsert-stale-kv-recovered", {
-        ...tag, kv_comment_id: cachedId, scan_comment_id: scannedId,
+        ...tag,
+        kv_comment_id: cachedId,
+        scan_comment_id: scannedId,
       })
     }
     await client.updateIssueComment(owner, repo, scannedId, body)
     emit("unanchored-comment-upsert-hit-scan", {
-      ...tag, comment_id: scannedId,
+      ...tag,
+      comment_id: scannedId,
       ...(isStaleKvRecovery ? { recovered_from_stale_kv: true } : {}),
     })
     await writeKvCachedCommentId(env, key, scannedId)
@@ -380,16 +381,17 @@ export async function upsertUnanchoredComment(
   // Cache + marker both miss — first time we've posted this finding
   // (or all prior copies were deleted). POST fresh.
   const created = await client.createIssueComment(owner, repo, prNumber, body)
-  const commentId = typeof created === "object" && created !== null && "id" in created
-    ? Number((created as { id: unknown }).id)
-    : NaN
+  const commentId =
+    typeof created === "object" && created !== null && "id" in created ? Number((created as { id: unknown }).id) : NaN
   if (!Number.isFinite(commentId) || commentId <= 0) {
     // GitHub returned 2xx with no id — log + bail without writing
     // KV. The next run scans the body and recovers.
-    console.warn(JSON.stringify({
-      event: "unanchored-comment-upsert-create-no-id",
-      ...tag,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "unanchored-comment-upsert-create-no-id",
+        ...tag,
+      }),
+    )
     return { outcome: "miss_created", fingerprint }
   }
   await writeKvCachedCommentId(env, key, commentId)

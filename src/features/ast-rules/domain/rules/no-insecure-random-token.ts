@@ -28,7 +28,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.mock\.|\.fixture\.|(^|\/)(__tests__|__mocks__|tests?|fixtures?|mocks?)\/)/
 
@@ -104,13 +106,17 @@ function findMathRandom(root: AstNode): AstNode | null {
   function walk(n: AstNode): void {
     if (found || !n || typeof n !== "object") return
     if (typeof n.type === "string" && FUNCTION_TYPES.has(n.type) && n !== root) return
-    if (isMathRandomCall(n)) { found = n; return }
+    if (isMathRandomCall(n)) {
+      found = n
+      return
+    }
     for (const k of Object.keys(n)) {
       if (found) return
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -122,20 +128,20 @@ function findMathRandom(root: AstNode): AstNode | null {
  *  properties, and class methods (CodeRabbit #346). */
 function credentialTarget(node: AstNode): AstNode | null {
   if (node.type === "VariableDeclarator") {
-    return isCredentialName(idName(node.id as AstNode)) ? (node.init as AstNode) ?? null : null
+    return isCredentialName(idName(node.id as AstNode)) ? ((node.init as AstNode) ?? null) : null
   }
   if (node.type === "AssignmentExpression") {
     const left = node.left as AstNode
     // `tok = …`, `obj.resetToken = …`, AND computed `obj["resetToken"] = …`.
     const name = left?.type === "MemberExpression" ? keyName(left.property as AstNode) : idName(left)
-    return isCredentialName(name) ? (node.right as AstNode) ?? null : null
+    return isCredentialName(name) ? ((node.right as AstNode) ?? null) : null
   }
   // Object property (incl. quoted `{ "apiKey": … }`) and class methods.
   if (node.type === "Property") {
-    return isCredentialName(keyName(node.key as AstNode)) ? (node.value as AstNode) ?? null : null
+    return isCredentialName(keyName(node.key as AstNode)) ? ((node.value as AstNode) ?? null) : null
   }
   if (node.type === "MethodDefinition") {
-    return isCredentialName(keyName(node.key as AstNode)) ? (node.value as AstNode) ?? null : null
+    return isCredentialName(keyName(node.key as AstNode)) ? ((node.value as AstNode) ?? null) : null
   }
   return null
 }
@@ -184,10 +190,7 @@ export const noInsecureRandomToken: AstRule = {
       // A function named like a credential factory taints its return values.
       let credFn = inCredentialFn
       if (typeof n.type === "string" && FUNCTION_TYPES.has(n.type)) {
-        const fnName =
-          n.type === "FunctionDeclaration"
-            ? idName(n.id as AstNode)
-            : null // assigned-name handled by the VariableDeclarator branch
+        const fnName = n.type === "FunctionDeclaration" ? idName(n.id as AstNode) : null // assigned-name handled by the VariableDeclarator branch
         credFn = isCredentialName(fnName)
       }
       if (credFn && n.type === "ReturnStatement" && n.argument) {
@@ -198,8 +201,9 @@ export const noInsecureRandomToken: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode, credFn) }
-        else if (v && typeof v === "object") walk(v as AstNode, credFn)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode, credFn)
+        } else if (v && typeof v === "object") walk(v as AstNode, credFn)
       }
     }
     walk(node, false)

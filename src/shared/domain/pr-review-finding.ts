@@ -12,20 +12,11 @@ import type { FindingCategory } from "./finding-category"
  */
 export type StackOrigin = "current-pr" | "downstack-context" | "upstack-followup"
 
-export const STACK_ORIGINS: ReadonlySet<StackOrigin> = new Set([
-  "current-pr",
-  "downstack-context",
-  "upstack-followup",
-])
+export const STACK_ORIGINS: ReadonlySet<StackOrigin> = new Set(["current-pr", "downstack-context", "upstack-followup"])
 
 export type ReviewFindingScope = "line" | "file" | "pr" | "comment"
 
-export const REVIEW_FINDING_SCOPES: ReadonlySet<ReviewFindingScope> = new Set([
-  "line",
-  "file",
-  "pr",
-  "comment",
-])
+export const REVIEW_FINDING_SCOPES: ReadonlySet<ReviewFindingScope> = new Set(["line", "file", "pr", "comment"])
 
 /**
  * SIG Trust Ledger v0: per-finding "why you can trust this" metadata, attached
@@ -359,11 +350,7 @@ export function isDeletionSuggestion(finding: PrReviewFinding): boolean {
 
 export function isReplacementSuggestion(finding: PrReviewFinding): boolean {
   const repl = finding.suggestedReplacement
-  return (
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" &&
-    repl.length > 0
-  )
+  return (finding.kind === "replace" || finding.kind === undefined) && typeof repl === "string" && repl.length > 0
 }
 
 // SIG-281 PR C: exported so the inline-grounding gate

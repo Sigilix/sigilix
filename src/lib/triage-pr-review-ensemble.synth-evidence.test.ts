@@ -11,10 +11,7 @@ import {
   graphExpansionMode,
   resolveDynamicEvidencePromptBlock,
 } from "@/src/lib/triage-pr-review-ensemble"
-import {
-  buildSpecialistInitialMessage,
-  buildSynthesizerInitialMessage,
-} from "@/src/prompts/pr-review-specialists"
+import { buildSpecialistInitialMessage, buildSynthesizerInitialMessage } from "@/src/prompts/pr-review-specialists"
 import type { Env } from "@/src/shared/types/env"
 
 describe("resolveDynamicEvidencePromptBlock", () => {
@@ -24,7 +21,7 @@ describe("resolveDynamicEvidencePromptBlock", () => {
       [
         "export function parseFinalAnswer(response: string): string {",
         "  const match = response.match(/FINAL\\((.*?)\\)/)",
-        "  return match?.[1] ?? \"\"",
+        '  return match?.[1] ?? ""',
         "}",
       ].join("\n"),
     ],
@@ -34,20 +31,24 @@ describe("resolveDynamicEvidencePromptBlock", () => {
     filesByPath,
     changedLines,
     reviewablePaths: ["src/parser.ts"],
-    retrievalChunks: [{
-      path: "src/repl.ts",
-      lineStart: 10,
-      lineEnd: 12,
-      score: 0.87,
-      content: "const answer = parseFinalAnswer(rawResponse)",
-    }],
-    graphNodes: [{
-      path: "src/repl.ts",
-      symbolId: null,
-      name: null,
-      hop: 1,
-      edgeKind: "import",
-    }],
+    retrievalChunks: [
+      {
+        path: "src/repl.ts",
+        lineStart: 10,
+        lineEnd: 12,
+        score: 0.87,
+        content: "const answer = parseFinalAnswer(rawResponse)",
+      },
+    ],
+    graphNodes: [
+      {
+        path: "src/repl.ts",
+        symbolId: null,
+        name: null,
+        hop: 1,
+        edgeKind: "import",
+      },
+    ],
     blastCallerPaths: [],
     blastDependentPaths: [],
     testingEvidence: undefined,
@@ -106,16 +107,12 @@ describe("resolveDynamicEvidencePromptBlock", () => {
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber: 101,
       diff: "diff --git a/src/parser.ts b/src/parser.ts",
-      specialistVerdictsBlock: "=== LOGIC ===\n{\"findings\":[]}",
+      specialistVerdictsBlock: '=== LOGIC ===\n{"findings":[]}',
       dynamicEvidenceBlock: resolved.promptBlock,
     })
     expect(synthMessage).toContain("[DYNAMIC REVIEW EVIDENCE")
-    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeGreaterThan(
-      synthMessage.indexOf("[DIFF]"),
-    )
-    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeLessThan(
-      synthMessage.indexOf("[SPECIALIST VERDICTS]"),
-    )
+    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeGreaterThan(synthMessage.indexOf("[DIFF]"))
+    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeLessThan(synthMessage.indexOf("[SPECIALIST VERDICTS]"))
   })
 })
 
@@ -165,7 +162,7 @@ describe("graph-context expansion never injects into prompts (SIG-286 PR1 shadow
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber: 1,
       diff: "diff --git a/src/b.ts b/src/b.ts",
-      specialistVerdictsBlock: "=== LOGIC ===\n{\"findings\":[]}",
+      specialistVerdictsBlock: '=== LOGIC ===\n{"findings":[]}',
       graphContext: "",
     })
     expect(synthMessage).not.toContain(expansionText)
@@ -189,7 +186,10 @@ describe("buildSynthesizerInitialMessage [DEGRADED COVERAGE] block (ARC-277)", (
   it("omits the block when degradedCoverage is set but rolesMissing is empty (defensive — caller should not pass that)", () => {
     const out = buildSynthesizerInitialMessage({
       ...baseCtx,
-      degradedCoverage: { rolesReturned: ["logic", "security", "performance", "tests"], rolesMissing: [] },
+      degradedCoverage: {
+        rolesReturned: ["logic", "security", "performance", "tests"],
+        rolesMissing: [],
+      },
     })
     expect(out).not.toContain("[DEGRADED COVERAGE]")
   })
@@ -268,33 +268,29 @@ describe("classifySynthOutcome (ARC-278)", () => {
   })
 
   it("returns `timeout` when output carries an abort-shaped failureReason (Phase 4a.2 path)", () => {
-    expect(classifySynthOutcome(
-      { ...okSynth, verdict: null, provenance: null, failureReason: "Operation aborted" },
-      false,
-    )).toBe("timeout")
-    expect(classifySynthOutcome(
-      { ...okSynth, verdict: null, provenance: null, failureReason: "timeout exceeded" },
-      false,
-    )).toBe("timeout")
+    expect(
+      classifySynthOutcome({ ...okSynth, verdict: null, provenance: null, failureReason: "Operation aborted" }, false),
+    ).toBe("timeout")
+    expect(
+      classifySynthOutcome({ ...okSynth, verdict: null, provenance: null, failureReason: "timeout exceeded" }, false),
+    ).toBe("timeout")
   })
 
   it("returns `provenance` when output has invalid-provenance failureReason and missing verdict/provenance", () => {
-    expect(classifySynthOutcome(
-      { ...okSynth, verdict: null, provenance: null, failureReason: "synth_invalid_provenance" },
-      false,
-    )).toBe("provenance")
+    expect(
+      classifySynthOutcome(
+        { ...okSynth, verdict: null, provenance: null, failureReason: "synth_invalid_provenance" },
+        false,
+      ),
+    ).toBe("provenance")
   })
 
   it("returns `parse` for other non-abort failure shapes (catch-all bucket)", () => {
-    expect(classifySynthOutcome(
-      { ...okSynth, verdict: null, provenance: null, failureReason: "synth_failed_parse" },
-      false,
-    )).toBe("parse")
+    expect(
+      classifySynthOutcome({ ...okSynth, verdict: null, provenance: null, failureReason: "synth_failed_parse" }, false),
+    ).toBe("parse")
     // No failureReason but missing verdict/provenance still routes to parse.
-    expect(classifySynthOutcome(
-      { ...okSynth, verdict: null, provenance: null },
-      false,
-    )).toBe("parse")
+    expect(classifySynthOutcome({ ...okSynth, verdict: null, provenance: null }, false)).toBe("parse")
   })
 })
 
@@ -352,13 +348,13 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", ()
     // slower when synth produces a large finding set). ARC-288:
     // import the constant from source so a future bump can't drift
     // the test loose.
-    expect(SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS)
-      .toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
   })
 
   it("SPECIALIST + SYNTHESIZER + HEADROOM still ≤ ORCHESTRATOR (the primary invariant)", () => {
-    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
-      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS).toBeLessThanOrEqual(
+      ORCHESTRATOR_TIMEOUT_MS,
+    )
   })
 
   it("retry budget is generous enough to actually complete after a primary timeout (ARC-283)", () => {
@@ -368,9 +364,7 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", ()
     // attempt at the same work: at least 30% of the primary budget.
     // This breaks the pre-ARC-283 invariant that retry << primary
     // (intentional — that invariant was the cause of ARC-283).
-    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(
-      Math.floor(SYNTHESIZER_TIMEOUT_MS * 0.3),
-    )
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(Math.floor(SYNTHESIZER_TIMEOUT_MS * 0.3))
   })
 })
 

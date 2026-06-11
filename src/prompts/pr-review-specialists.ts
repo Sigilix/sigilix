@@ -48,8 +48,8 @@ export interface SpecialistInitialMessageCtx {
   title: string
   body: string
   diff: string
-  retrievalSnapshot: string  // pre-formatted chunks (or empty when preflight failed)
-  namespace: string  // for follow-up retrieve_codebase calls
+  retrievalSnapshot: string // pre-formatted chunks (or empty when preflight failed)
+  namespace: string // for follow-up retrieve_codebase calls
   /**
    * ARC-174: per-repo guidance from `sigilix.json`. Prepended to the
    * message in a labeled block so the specialist treats it as
@@ -159,9 +159,7 @@ export interface SpecialistInitialMessageCtx {
   scopedRulesBlock?: string
 }
 
-export function buildSpecialistInitialMessage(
-  ctx: SpecialistInitialMessageCtx,
-): string {
+export function buildSpecialistInitialMessage(ctx: SpecialistInitialMessageCtx): string {
   const lines: string[] = []
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE — applies to ALL specialists (from sigilix.json)]")
@@ -183,10 +181,14 @@ export function buildSpecialistInitialMessage(
     lines.push("")
   }
   if (ctx.profile === "chill") {
-    lines.push("[REVIEW PROFILE — chill] Surface only must-fix findings (correctness, security, real bugs). Skip nits, style preferences, and minor refactors.")
+    lines.push(
+      "[REVIEW PROFILE — chill] Surface only must-fix findings (correctness, security, real bugs). Skip nits, style preferences, and minor refactors.",
+    )
     lines.push("")
   } else if (ctx.profile === "assertive") {
-    lines.push("[REVIEW PROFILE — assertive] Surface must-fix findings AND nits/style. Be thorough; the team has opted into more comments.")
+    lines.push(
+      "[REVIEW PROFILE — assertive] Surface must-fix findings AND nits/style. Be thorough; the team has opted into more comments.",
+    )
     lines.push("")
   }
   if (ctx.deterministicChecksBlock && ctx.deterministicChecksBlock.length > 0) {
@@ -233,23 +235,25 @@ export function buildSpecialistInitialMessage(
     ctx.diff,
     "",
     "[RETRIEVAL SNAPSHOT]",
-    ctx.retrievalSnapshot.length > 0 ? ctx.retrievalSnapshot : "(no chunks; pre-flight retrieval did not return results)",
+    ctx.retrievalSnapshot.length > 0
+      ? ctx.retrievalSnapshot
+      : "(no chunks; pre-flight retrieval did not return results)",
   )
   // SIG-138 Phase 2: graph-context neighbors of the changed code,
   // placed immediately after [RETRIEVAL SNAPSHOT] so both structural
   // and semantic context appear together. Additive: absent/empty →
   // no block emitted, output is bit-for-bit identical to pre-SIG-138.
   if (ctx.graphContext && ctx.graphContext.trim()) {
-    lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
+    lines.push(
+      "",
+      "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]",
+      ctx.graphContext.trim(),
+    )
   }
   if (ctx.dynamicEvidenceBlock && ctx.dynamicEvidenceBlock.trim()) {
     lines.push("", ctx.dynamicEvidenceBlock.trim())
   }
-  lines.push(
-    "",
-    `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`,
-    ctx.namespace,
-  )
+  lines.push("", `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`, ctx.namespace)
   return lines.join("\n")
 }
 
@@ -320,9 +324,7 @@ export interface SynthesizerInitialMessageCtx {
   dynamicEvidenceBlock?: string
 }
 
-export function buildSynthesizerInitialMessage(
-  ctx: SynthesizerInitialMessageCtx,
-): string {
+export function buildSynthesizerInitialMessage(ctx: SynthesizerInitialMessageCtx): string {
   const lines: string[] = []
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE (from sigilix.json)]")
@@ -359,28 +361,23 @@ export function buildSynthesizerInitialMessage(
       "",
     )
   }
-  lines.push(
-    `[PR] #${ctx.prNumber}`,
-    "",
-    "[DIFF]",
-    ctx.diff,
-  )
+  lines.push(`[PR] #${ctx.prNumber}`, "", "[DIFF]", ctx.diff)
   // SIG-138 Phase 2: graph-context neighbors, placed after [DIFF] and
   // before [SPECIALIST VERDICTS] so synth sees structural neighbors
   // alongside the diff when weighing specialist findings. Additive:
   // absent/empty → no block emitted, output is bit-for-bit identical
   // to pre-SIG-138.
   if (ctx.graphContext && ctx.graphContext.trim()) {
-    lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
+    lines.push(
+      "",
+      "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]",
+      ctx.graphContext.trim(),
+    )
   }
   if (ctx.dynamicEvidenceBlock && ctx.dynamicEvidenceBlock.trim()) {
     lines.push("", ctx.dynamicEvidenceBlock.trim())
   }
-  lines.push(
-    "",
-    "[SPECIALIST VERDICTS]",
-    ctx.specialistVerdictsBlock,
-  )
+  lines.push("", "[SPECIALIST VERDICTS]", ctx.specialistVerdictsBlock)
   return lines.join("\n")
 }
 
@@ -391,9 +388,7 @@ export function buildSynthesizerInitialMessage(
  * etc.) — this is the key the synthesizer references in
  * `provenance.findings[i].sourceFindingIds`.
  */
-export function renderSpecialistVerdictsForSynth(
-  verdicts: Array<{ role: SpecialistRole; verdict: unknown }>,
-): string {
+export function renderSpecialistVerdictsForSynth(verdicts: Array<{ role: SpecialistRole; verdict: unknown }>): string {
   return verdicts
     .map(({ role, verdict }) => {
       const upper = role.toUpperCase()

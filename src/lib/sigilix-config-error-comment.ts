@@ -39,9 +39,7 @@ function buildKvKey(owner: string, repo: string, prNumber: number, headSha: stri
 }
 
 function renderBody(reason: string, raw: string, headSha: string): string {
-  const snippet = raw.length > RAW_SNIPPET_MAX
-    ? raw.slice(0, RAW_SNIPPET_MAX) + "\n…[truncated]"
-    : raw
+  const snippet = raw.length > RAW_SNIPPET_MAX ? raw.slice(0, RAW_SNIPPET_MAX) + "\n…[truncated]" : raw
   return [
     buildMarker(headSha),
     "",
@@ -88,9 +86,7 @@ export type PostResult =
  * Returns a discriminated result so the caller can decide what to log
  * without re-listing comments. Best-effort — never throws.
  */
-export async function postConfigErrorComment(
-  args: PostConfigErrorCommentArgs,
-): Promise<PostResult> {
+export async function postConfigErrorComment(args: PostConfigErrorCommentArgs): Promise<PostResult> {
   const { env, client, owner, repo, prNumber, headSha, reason, raw } = args
   if (!headSha) {
     return { kind: "skipped", reason: "missing-headsha" }
@@ -107,11 +103,16 @@ export async function postConfigErrorComment(
   try {
     const existing = await env.OPENCLAW_STATE.get(kvKey)
     if (existing) {
-      console.log(JSON.stringify({
-        event: "command-config-error-comment-suppressed-dedupe",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        source: "kv",
-      }))
+      console.log(
+        JSON.stringify({
+          event: "command-config-error-comment-suppressed-dedupe",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          source: "kv",
+        }),
+      )
       return { kind: "suppressed", reason: "kv-dedupe" }
     }
   } catch {
@@ -123,9 +124,7 @@ export async function postConfigErrorComment(
   try {
     const comments = await client.listIssueComments(owner, repo, prNumber)
     const existing = comments.find(
-      (c) =>
-        typeof c.body === "string" &&
-        (c.body.includes(marker) || c.body.includes(legacyMarker)),
+      (c) => typeof c.body === "string" && (c.body.includes(marker) || c.body.includes(legacyMarker)),
     )
     if (existing) {
       // Warm the KV fast path so the next webhook short-circuits.
@@ -136,22 +135,31 @@ export async function postConfigErrorComment(
       } catch {
         // Best-effort warm — ignore.
       }
-      console.log(JSON.stringify({
-        event: "command-config-error-comment-suppressed-dedupe",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        source: "github",
-        commentId: existing.id,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "command-config-error-comment-suppressed-dedupe",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          source: "github",
+          commentId: existing.id,
+        }),
+      )
       return { kind: "suppressed", reason: "github-dedupe" }
     }
   } catch (err) {
     // Listing comments failed — proceed to post anyway. Worst case is
     // a duplicate comment which the user can resolve by deleting one.
-    console.error(JSON.stringify({
-      event: "command-config-error-comment-list-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "command-config-error-comment-list-failed",
+        owner,
+        repo,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
   }
 
   // Post the comment.
@@ -166,19 +174,29 @@ export async function postConfigErrorComment(
       // Comment posted; KV warm-up failed. Next webhook will GH-search
       // and find the comment. Acceptable degradation.
     }
-    console.log(JSON.stringify({
-      event: "command-config-error-comment-posted",
-      owner, repo, prNumber, headSha: headSha.slice(0, 7),
-      commentId: out.id,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "command-config-error-comment-posted",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        commentId: out.id,
+      }),
+    )
     return { kind: "posted", commentId: out.id }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "command-config-error-comment-failed",
-      owner, repo, prNumber, headSha: headSha.slice(0, 7),
-      err: msg,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "command-config-error-comment-failed",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        err: msg,
+      }),
+    )
     return { kind: "failed", err: msg }
   }
 }

@@ -9,20 +9,31 @@ const emptyResult: SarifResult = { message: { text: "x" } }
 describe("resolveTaxonomy — ruleId pattern matches (highest precision)", () => {
   it("CVE-* ruleId → vulnerability/security", () => {
     const rule: SarifRule = { id: "CVE-2024-1234" }
-    expect(resolveTaxonomy({ result: { ...emptyResult, ruleId: "CVE-2024-1234" }, rule, toolName: "Trivy" }))
-      .toEqual({ category: "vulnerability", roleHint: "security", isSbom: false })
+    expect(
+      resolveTaxonomy({
+        result: { ...emptyResult, ruleId: "CVE-2024-1234" },
+        rule,
+        toolName: "Trivy",
+      }),
+    ).toEqual({ category: "vulnerability", roleHint: "security", isSbom: false })
   })
 
   it("GHSA-* ruleId → vulnerability/security", () => {
     const rule: SarifRule = { id: "GHSA-abcd-1234-efgh" }
-    expect(resolveTaxonomy({ result: emptyResult, rule, toolName: "Trivy" }))
-      .toEqual({ category: "vulnerability", roleHint: "security", isSbom: false })
+    expect(resolveTaxonomy({ result: emptyResult, rule, toolName: "Trivy" })).toEqual({
+      category: "vulnerability",
+      roleHint: "security",
+      isSbom: false,
+    })
   })
 
   it("AVD-KSV-* ruleId → iac/security", () => {
     const rule: SarifRule = { id: "AVD-KSV-0017" }
-    expect(resolveTaxonomy({ result: emptyResult, rule, toolName: "Trivy" }))
-      .toEqual({ category: "iac", roleHint: "security", isSbom: false })
+    expect(resolveTaxonomy({ result: emptyResult, rule, toolName: "Trivy" })).toEqual({
+      category: "iac",
+      roleHint: "security",
+      isSbom: false,
+    })
   })
 })
 
@@ -103,14 +114,21 @@ describe("resolveTaxonomy — first-match-wins ordering", () => {
       id: "CVE-2024-9999",
       properties: { tags: ["License"] },
     }
-    const r = resolveTaxonomy({ result: { ...emptyResult, ruleId: "CVE-2024-9999" }, rule, toolName: "Trivy" })
+    const r = resolveTaxonomy({
+      result: { ...emptyResult, ruleId: "CVE-2024-9999" },
+      rule,
+      toolName: "Trivy",
+    })
     expect(r.category).toBe("vulnerability")
   })
 })
 
 describe("resolveTaxonomy — null/empty inputs", () => {
   it("null rule + empty result + unknown tool → other/security/no-sbom", () => {
-    expect(resolveTaxonomy({ result: emptyResult, rule: null, toolName: "Unknown" }))
-      .toEqual({ category: "other", roleHint: "security", isSbom: false })
+    expect(resolveTaxonomy({ result: emptyResult, rule: null, toolName: "Unknown" })).toEqual({
+      category: "other",
+      roleHint: "security",
+      isSbom: false,
+    })
   })
 })

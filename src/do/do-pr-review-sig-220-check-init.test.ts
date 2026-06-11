@@ -38,7 +38,9 @@ import { PrReviewRunDO } from "@/src/do/pr-review-run"
 
 // ─── DO storage stub (shared with the route + alarm test files) ────
 
-interface FakeAlarmState { alarmAt: number | null }
+interface FakeAlarmState {
+  alarmAt: number | null
+}
 
 function makeDoState(): {
   ctx: DurableObjectState
@@ -51,12 +53,24 @@ function makeDoState(): {
   let alarmHandler: (() => Promise<void>) | null = null
   const ctx = {
     storage: {
-      async get<T>(k: string): Promise<T | undefined> { return store.get(k) as T | undefined },
-      async put<T>(k: string, v: T): Promise<void> { store.set(k, v) },
-      async delete(k: string): Promise<boolean> { return store.delete(k) },
-      async setAlarm(t: number): Promise<void> { alarms.alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarms.alarmAt },
-      async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
+      async get<T>(k: string): Promise<T | undefined> {
+        return store.get(k) as T | undefined
+      },
+      async put<T>(k: string, v: T): Promise<void> {
+        store.set(k, v)
+      },
+      async delete(k: string): Promise<boolean> {
+        return store.delete(k)
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarms.alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarms.alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarms.alarmAt = null
+      },
       list: async (opts?: { prefix?: string }): Promise<Map<string, unknown>> => {
         const prefix = opts?.prefix ?? ""
         const m = new Map<string, unknown>()
@@ -81,11 +95,17 @@ function makeDoState(): {
   }
 }
 
-interface QueueState { sent: unknown[] }
+interface QueueState {
+  sent: unknown[]
+}
 
 function makeEnv(queue: QueueState, retries: number = 3): Env {
   return {
-    OPENCLAW_JOBS: { send: async (m: unknown) => { queue.sent.push(m) } },
+    OPENCLAW_JOBS: {
+      send: async (m: unknown) => {
+        queue.sent.push(m)
+      },
+    },
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(retries),
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",
@@ -114,11 +134,13 @@ function makeEnqueueReq(over: Partial<EnqueueRequest> = {}): EnqueueRequest {
 }
 
 async function postJson(instance: PrReviewRunDO, path: string, body: unknown): Promise<Response> {
-  return instance.fetch(new Request(`https://do.internal${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: { "content-type": "application/json" },
-  }))
+  return instance.fetch(
+    new Request(`https://do.internal${path}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+    }),
+  )
 }
 
 let consoleSpy: ReturnType<typeof vi.spyOn>
@@ -217,14 +239,21 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
       // startSpy resolves only after a long-enough delay that the 3s
       // timeout wins the Promise.race. The actual returned handle
       // never lands on RunState — null wins via the timeout path.
-      startSpy.mockImplementationOnce(() => new Promise((resolve) => {
-        setTimeout(() => resolve({
-          id: 11111,
-          client: {} as unknown,
-          owner: "Sigilix",
-          repo: "sigilix",
-        }), 10_000)
-      }))
+      startSpy.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve({
+                  id: 11111,
+                  client: {} as unknown,
+                  owner: "Sigilix",
+                  repo: "sigilix",
+                }),
+              10_000,
+            )
+          }),
+      )
 
       const queue: QueueState = { sent: [] }
       const env = makeEnv(queue)
@@ -277,7 +306,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     queue.sent.length = 0
     const res = await postJson(instance, "/enqueue", makeEnqueueReq())
     expect(res.status).toBe(200)
-    const body = await res.json() as { deduped: boolean; action: string }
+    const body = (await res.json()) as { deduped: boolean; action: string }
     expect(body.deduped).toBe(true)
     expect(body.action).toBe("dedupe-active")
     expect(startSpy).not.toHaveBeenCalled()
@@ -299,7 +328,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     queue.sent.length = 0
     const res = await postJson(instance, "/enqueue", makeEnqueueReq())
     expect(res.status).toBe(200)
-    const body = await res.json() as { action: string }
+    const body = (await res.json()) as { action: string }
     expect(body.action).toBe("dedupe-terminal")
     expect(startSpy).not.toHaveBeenCalled()
   })
@@ -323,7 +352,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     })
     const res = await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "NEW".padEnd(40, "0") }))
     expect(res.status).toBe(200)
-    const body = await res.json() as { action: string }
+    const body = (await res.json()) as { action: string }
     expect(body.action).toBe("supersede")
 
     expect(startSpy).toHaveBeenCalledTimes(1)
@@ -402,7 +431,7 @@ describe("SIG-220 — retry alarm forwards checkRunId from RunState", () => {
 describe("SIG-220 — watchdog terminal failure closes the upstream check", () => {
   it("calls attachExistingCheckRun + completeCheckRun with failure conclusion when checkRunId is set", async () => {
     const queue: QueueState = { sent: [] }
-    const env = makeEnv(queue, 1)  // max attempts = 1 so first watchdog goes terminal
+    const env = makeEnv(queue, 1) // max attempts = 1 so first watchdog goes terminal
     const ds = makeDoState()
     const instance = new PrReviewRunDO(ds.ctx, env)
 

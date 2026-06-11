@@ -67,7 +67,7 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
     it("COMMENT also fires for multiple borderline findings", () => {
       expect(
         chooseReviewEventWithGate({
-          findings: [f(0.65), f(0.72), f(0.80)],
+          findings: [f(0.65), f(0.72), f(0.8)],
           threshold: 0.85,
           missingScorePolicy: "permit",
         }),
@@ -111,7 +111,7 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
   })
 
   describe("missingScorePolicy", () => {
-    it('block: missing gateScore is treated as 1.0 (effectively blocks)', () => {
+    it("block: missing gateScore is treated as 1.0 (effectively blocks)", () => {
       // Rollout fail-open: a finding without a score blocks like today.
       // With threshold = 1.0, the effective 1.0 score is >= threshold,
       // so we get REQUEST_CHANGES — same as the legacy `findings.length > 0`.
@@ -124,7 +124,7 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
       ).toBe("REQUEST_CHANGES")
     })
 
-    it('block: missing gateScore still blocks even at sub-1.0 thresholds', () => {
+    it("block: missing gateScore still blocks even at sub-1.0 thresholds", () => {
       // With threshold = 0.85 + block policy, the effective 1.0 is still
       // >= 0.85, so REQUEST_CHANGES.
       expect(
@@ -136,7 +136,7 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
       ).toBe("REQUEST_CHANGES")
     })
 
-    it('throw: missing gateScore raises a pipeline-invariant error', () => {
+    it("throw: missing gateScore raises a pipeline-invariant error", () => {
       // Post-calibration regime — every finding MUST have a score by
       // the time it reaches the gate. A missing score is a bug, not a
       // case to silently handle.
@@ -193,7 +193,7 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
       ).toBe("REQUEST_CHANGES")
     })
 
-    it('permit: missing gateScore is treated as 0.0 (offline replay)', () => {
+    it("permit: missing gateScore is treated as 0.0 (offline replay)", () => {
       // Replay/backfill: synthesize verdicts on pre-gate findings.
       // Missing score floors at 0.0 → suppressed (< FLOOR_SUPPRESS in
       // the pre-emit filter, but here it just falls into the < threshold
@@ -261,10 +261,9 @@ describe("computeGateScore (SIG-161 §5)", () => {
     // Maximal inputs (conf 5 + evidence + 3-way agreement + score 5):
     //   0.90 + 0.10 + 0.10 + 0.10 = 1.20 → clamped to 1.0
     expect(
-      computeGateScore(
-        f({ confidence: 5, score: 5, category: "logic" }),
-        { sourceSpecialists: ["logic", "security", "performance"] },
-      ),
+      computeGateScore(f({ confidence: 5, score: 5, category: "logic" }), {
+        sourceSpecialists: ["logic", "security", "performance"],
+      }),
     ).toBe(1.0)
     // Minimal inputs (conf 1 + no evidence + 1-way + score 1):
     //   0.10 + 0 + 0 + (-0.10) = 0.0
@@ -273,19 +272,17 @@ describe("computeGateScore (SIG-161 §5)", () => {
     // (Logic always returns true since it has no per-category
     // evidence requirement.)
     expect(
-      computeGateScore(
-        f({ confidence: 1, score: 1, category: "testing" }),
-        { sourceSpecialists: ["tests"] },
-      ),
+      computeGateScore(f({ confidence: 1, score: 1, category: "testing" }), {
+        sourceSpecialists: ["tests"],
+      }),
     ).toBe(0.0)
   })
 
   it("weakly monotone in confidence (1→5 produces non-decreasing scores)", () => {
     const scores = [1, 2, 3, 4, 5].map((c) =>
-      computeGateScore(
-        f({ confidence: c, score: 3, category: "logic" }),
-        { sourceSpecialists: ["logic"] },
-      ),
+      computeGateScore(f({ confidence: c, score: 3, category: "logic" }), {
+        sourceSpecialists: ["logic"],
+      }),
     )
     for (let i = 1; i < scores.length; i++) {
       expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1] ?? 0)
@@ -294,10 +291,9 @@ describe("computeGateScore (SIG-161 §5)", () => {
 
   it("weakly monotone in severity (score 1→5 non-decreasing)", () => {
     const out = [1, 2, 3, 4, 5].map((s) =>
-      computeGateScore(
-        f({ confidence: 3, score: s, category: "logic" }),
-        { sourceSpecialists: ["logic"] },
-      ),
+      computeGateScore(f({ confidence: 3, score: s, category: "logic" }), {
+        sourceSpecialists: ["logic"],
+      }),
     )
     for (let i = 1; i < out.length; i++) {
       expect(out[i]).toBeGreaterThanOrEqual(out[i - 1] ?? 0)
@@ -306,10 +302,9 @@ describe("computeGateScore (SIG-161 §5)", () => {
 
   it("evidence presence boosts score by 0.10 (testing category)", () => {
     // Testing requires inspectedTestFiles OR evidenceRefs for evidence credit
-    const noEv = computeGateScore(
-      f({ confidence: 3, score: 3, category: "testing" }),
-      { sourceSpecialists: ["tests"] },
-    )
+    const noEv = computeGateScore(f({ confidence: 3, score: 3, category: "testing" }), {
+      sourceSpecialists: ["tests"],
+    })
     const withEv = computeGateScore(
       f({
         confidence: 3,
@@ -319,40 +314,34 @@ describe("computeGateScore (SIG-161 §5)", () => {
       }),
       { sourceSpecialists: ["tests"] },
     )
-    expect(withEv - noEv).toBeCloseTo(0.10, 5)
+    expect(withEv - noEv).toBeCloseTo(0.1, 5)
   })
 
   it("agreement boosts score by 0.05 per additional specialist, capped at 0.10", () => {
-    const oneSpec = computeGateScore(
-      f({ confidence: 3, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic"] },
-    )
-    const twoSpec = computeGateScore(
-      f({ confidence: 3, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic", "security"] },
-    )
-    const threeSpec = computeGateScore(
-      f({ confidence: 3, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic", "security", "performance"] },
-    )
-    const fourSpec = computeGateScore(
-      f({ confidence: 3, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic", "security", "performance", "tests"] },
-    )
+    const oneSpec = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic"],
+    })
+    const twoSpec = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic", "security"],
+    })
+    const threeSpec = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic", "security", "performance"],
+    })
+    const fourSpec = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic", "security", "performance", "tests"],
+    })
     expect(twoSpec - oneSpec).toBeCloseTo(0.05, 5)
     expect(threeSpec - twoSpec).toBeCloseTo(0.05, 5)
-    expect(fourSpec - threeSpec).toBeCloseTo(0.0, 5)   // cap
+    expect(fourSpec - threeSpec).toBeCloseTo(0.0, 5) // cap
   })
 
   it("defaults missing confidence to 3 (neutral)", () => {
-    const missing = computeGateScore(
-      f({ confidence: undefined, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic"] },
-    )
-    const explicit3 = computeGateScore(
-      f({ confidence: 3, score: 3, category: "logic" }),
-      { sourceSpecialists: ["logic"] },
-    )
+    const missing = computeGateScore(f({ confidence: undefined, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic"],
+    })
+    const explicit3 = computeGateScore(f({ confidence: 3, score: 3, category: "logic" }), {
+      sourceSpecialists: ["logic"],
+    })
     expect(missing).toBeCloseTo(explicit3, 5)
   })
 
@@ -465,9 +454,7 @@ describe("hasRequiredEvidence (SIG-161 §5)", () => {
   })
 
   it("security score<4 does not require evidence (returns true)", () => {
-    expect(
-      hasRequiredEvidence({ ...baseFinding, category: "security", score: 3 }),
-    ).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "security", score: 3 })).toBe(true)
   })
 
   it("performance score>=4 requires complexityEstimate OR hotPathIdentifier", () => {
@@ -554,7 +541,7 @@ describe("computeShadowGateDivergence (SIG-161 PR 4b)", () => {
       threshold: 0.85,
       legacyEvent: "REQUEST_CHANGES",
     })
-    expect(result.gateEvent).toBe("COMMENT")  // 0.42 < 0.85
+    expect(result.gateEvent).toBe("COMMENT") // 0.42 < 0.85
     expect(result.divergence!.scoreSummary).toBe("0.42")
   })
 
@@ -607,7 +594,7 @@ describe("computeShadowGateDivergence (SIG-161 PR 4b)", () => {
       unanchored: [],
       provenance: [{ sourceSpecialists: ["tests"] }, { sourceSpecialists: undefined }],
       threshold: 0.85,
-      legacyEvent: "APPROVE",   // synthetic: pretend legacy approved
+      legacyEvent: "APPROVE", // synthetic: pretend legacy approved
     })
     // Gate decides: fScored has gateScore 0.10 (preserved, < 0.85, non-blocking);
     // fNaN gets recomputed: conf 3 → 0.50 + evidence (logic, always true) → 0.10 + 0 spec + score 3 → 0
@@ -637,8 +624,8 @@ describe("computeShadowGateDivergence (SIG-161 PR 4b)", () => {
 
   it("scoreSummary stringifies all per-finding scores in order (renderable then unanchored)", () => {
     const result = computeShadowGateDivergence({
-      renderable: [f({ confidence: 3, score: 3, category: "logic", gateScore: 0.50 })],
-      unanchored: [f({ confidence: 1, score: 1, category: "logic", gateScore: 0.10 })],
+      renderable: [f({ confidence: 3, score: 3, category: "logic", gateScore: 0.5 })],
+      unanchored: [f({ confidence: 1, score: 1, category: "logic", gateScore: 0.1 })],
       provenance: [{ sourceSpecialists: ["logic"] }],
       threshold: 0.85,
       legacyEvent: "REQUEST_CHANGES",

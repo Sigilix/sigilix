@@ -65,9 +65,7 @@ describe("parseFirstJsonObject quote repair", () => {
   })
 
   it("still terminates valid nested object strings before container closings", () => {
-    const out = parseFirstJsonObject(
-      '{ "items": [{ "name": "Alice" }], "body": "Cover "kind" parsing" }',
-    )
+    const out = parseFirstJsonObject('{ "items": [{ "name": "Alice" }], "body": "Cover "kind" parsing" }')
 
     expect(out?.items).toEqual([{ name: "Alice" }])
     expect(out?.body).toBe('Cover "kind" parsing')

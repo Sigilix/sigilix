@@ -33,11 +33,7 @@ import {
   resolveScopedRulesForChangedPaths,
   walkScopedRuleFiles,
 } from "@/src/lib/scoped-rules"
-import {
-  loadCompiledScopedRulesManifest,
-  readScopedRulesManifest,
-  scopedRulesKey,
-} from "@/src/lib/scoped-rules-kv"
+import { loadCompiledScopedRulesManifest, readScopedRulesManifest, scopedRulesKey } from "@/src/lib/scoped-rules-kv"
 import type { Env } from "@/src/shared/types/env"
 
 describe("parseRuleFrontmatter", () => {
@@ -164,12 +160,7 @@ describe("classifyRuleFilePath", () => {
 
 describe("ancestorDirs", () => {
   it("returns [parent..., root] closest-first for a nested path", () => {
-    expect(ancestorDirs("a/b/c/file.ts", MAX_ANCESTORS)).toEqual([
-      "a/b/c",
-      "a/b",
-      "a",
-      "",
-    ])
+    expect(ancestorDirs("a/b/c/file.ts", MAX_ANCESTORS)).toEqual(["a/b/c", "a/b", "a", ""])
   })
 
   it("returns just [root] for a file at repo root", () => {
@@ -212,11 +203,7 @@ describe("walkScopedRuleFiles", () => {
     ]
     const found = walkScopedRuleFiles(entries)
     const paths = found.map((f) => f.path).sort()
-    expect(paths).toEqual([
-      ".sigilix/rules/security.md",
-      "SIGILIX.md",
-      "src/payments/SIGILIX.md",
-    ])
+    expect(paths).toEqual([".sigilix/rules/security.md", "SIGILIX.md", "src/payments/SIGILIX.md"])
   })
 
   it("rejects oversized rule files (defends prompt budget)", () => {
@@ -232,32 +219,23 @@ describe("walkScopedRuleFiles", () => {
 
 describe("resolveScopedRulesForChangedPaths — closest-ancestor (SIGILIX.md)", () => {
   it("a root SIGILIX.md applies to every changed file", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      { path: "SIGILIX.md", content: "Repo-wide rule body." },
-    ]))
-    const selection = resolveScopedRulesForChangedPaths(manifest, [
-      "anywhere.ts",
-      "src/deep/nested/file.ts",
-    ])
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([{ path: "SIGILIX.md", content: "Repo-wide rule body." }]),
+    )
+    const selection = resolveScopedRulesForChangedPaths(manifest, ["anywhere.ts", "src/deep/nested/file.ts"])
     expect(selection.perDirectoryRules).toHaveLength(1)
     expect(selection.perDirectoryRules[0]!.dirPath).toBe("")
   })
 
   it("a src/payments/SIGILIX.md applies only when a changed file is under src/payments", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      { path: "src/payments/SIGILIX.md", content: "Payment-area rule." },
-    ]))
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([{ path: "src/payments/SIGILIX.md", content: "Payment-area rule." }]),
+    )
     // Off-target changed file → no match.
-    expect(resolveScopedRulesForChangedPaths(manifest, [
-      "src/users/profile.ts",
-    ]).perDirectoryRules).toHaveLength(0)
+    expect(resolveScopedRulesForChangedPaths(manifest, ["src/users/profile.ts"]).perDirectoryRules).toHaveLength(0)
     // On-target changed file → match.
-    const hit = resolveScopedRulesForChangedPaths(manifest, [
-      "src/payments/checkout.ts",
-    ])
-    expect(hit.perDirectoryRules.map((r) => r.dirPath)).toEqual([
-      "src/payments",
-    ])
+    const hit = resolveScopedRulesForChangedPaths(manifest, ["src/payments/checkout.ts"])
+    expect(hit.perDirectoryRules.map((r) => r.dirPath)).toEqual(["src/payments"])
   })
 
   it("renders ancestor SIGILIX.md files with the DEEPEST positioned LAST", () => {
@@ -266,16 +244,16 @@ describe("resolveScopedRulesForChangedPaths — closest-ancestor (SIGILIX.md)", 
     // last entry in the rendered prompt so the AGENTS.md "deeper
     // wins on conflict" model translates into "later wins in the
     // LLM's flat-list attention."
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      { path: "SIGILIX.md", content: "Root rule." },
-      { path: "src/payments/SIGILIX.md", content: "Payments rule." },
-    ]))
-    const selection = resolveScopedRulesForChangedPaths(manifest, [
-      "src/payments/checkout.ts",
-    ])
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([
+        { path: "SIGILIX.md", content: "Root rule." },
+        { path: "src/payments/SIGILIX.md", content: "Payments rule." },
+      ]),
+    )
+    const selection = resolveScopedRulesForChangedPaths(manifest, ["src/payments/checkout.ts"])
     expect(selection.perDirectoryRules.map((r) => r.dirPath)).toEqual([
-      "",                 // shallowest (rendered FIRST)
-      "src/payments",     // deepest (rendered LAST — wins on conflict)
+      "", // shallowest (rendered FIRST)
+      "src/payments", // deepest (rendered LAST — wins on conflict)
     ])
     const rendered = renderScopedRulesForPrompt(selection)
     const idxRoot = rendered.indexOf("Root rule.")
@@ -291,36 +269,31 @@ describe("resolveScopedRulesForChangedPaths — closest-ancestor (SIGILIX.md)", 
   // count, producing nondeterministic-feeling ordering for repos like
   // `src/a` + `src/abc`.
   it("sorts per-directory rules by depth (segments), not string length, with lexicographic tie-break", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      // Root + two same-depth siblings of different name lengths.
-      { path: "SIGILIX.md", content: "ROOT" },
-      { path: "src/a/SIGILIX.md", content: "SRC-A" },
-      { path: "src/abc/SIGILIX.md", content: "SRC-ABC" },
-    ]))
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([
+        // Root + two same-depth siblings of different name lengths.
+        { path: "SIGILIX.md", content: "ROOT" },
+        { path: "src/a/SIGILIX.md", content: "SRC-A" },
+        { path: "src/abc/SIGILIX.md", content: "SRC-ABC" },
+      ]),
+    )
     // Two changed files, one under each sibling, so both fire.
-    const selection = resolveScopedRulesForChangedPaths(manifest, [
-      "src/a/file.ts",
-      "src/abc/file.ts",
-    ])
+    const selection = resolveScopedRulesForChangedPaths(manifest, ["src/a/file.ts", "src/abc/file.ts"])
     // Expected render order: shallowest first (root depth 0), then the
     // two same-depth siblings in lexicographic order. A length-sort
     // would put `src/a` before `src/abc` for an unrelated reason
     // (shorter string) and could flip cross-depth pairs (e.g. a depth-1
     // "foo" vs a depth-2 "src/a").
-    expect(selection.perDirectoryRules.map((r) => r.dirPath)).toEqual([
-      "",
-      "src/a",
-      "src/abc",
-    ])
+    expect(selection.perDirectoryRules.map((r) => r.dirPath)).toEqual(["", "src/a", "src/abc"])
   })
 
   it("dedupes ancestor SIGILIX.md when multiple changed files share it", () => {
     // Two changed files both under src/payments share the same
     // src/payments/SIGILIX.md. The deduped manifest must contain
     // each SIGILIX.md exactly once.
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      { path: "src/payments/SIGILIX.md", content: "Payments rule." },
-    ]))
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([{ path: "src/payments/SIGILIX.md", content: "Payments rule." }]),
+    )
     const selection = resolveScopedRulesForChangedPaths(manifest, [
       "src/payments/checkout.ts",
       "src/payments/refund.ts",
@@ -350,64 +323,58 @@ describe("resolveScopedRulesForChangedPaths — closest-ancestor (SIGILIX.md)", 
     const rendered = renderScopedRulesForPrompt(selection)
     expect(rendered).not.toContain("ROOT-RULE")
     expect(rendered).toContain("LVL-12") // deepest survives
-    expect(rendered).toContain("LVL-5")  // 8th-deepest survives
+    expect(rendered).toContain("LVL-5") // 8th-deepest survives
     expect(rendered).not.toContain("LVL-4") // dropped (shallower than cap)
   })
 })
 
 describe("resolveScopedRulesForChangedPaths — glob rules (.sigilix/rules/*.md)", () => {
   it("a glob-keyed rule applies only when a changed file matches the glob", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      {
-        path: ".sigilix/rules/security.md",
-        content: "---\nglob: src/**/auth*.ts\n---\nAuth-security rule body.",
-      },
-    ]))
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([
+        {
+          path: ".sigilix/rules/security.md",
+          content: "---\nglob: src/**/auth*.ts\n---\nAuth-security rule body.",
+        },
+      ]),
+    )
     // No changed file matches the glob → rule doesn't fire.
-    expect(resolveScopedRulesForChangedPaths(manifest, [
-      "src/payments/checkout.ts",
-      "README.md",
-    ]).globRules).toHaveLength(0)
+    expect(
+      resolveScopedRulesForChangedPaths(manifest, ["src/payments/checkout.ts", "README.md"]).globRules,
+    ).toHaveLength(0)
     // At least one changed file matches → rule fires.
-    const hit = resolveScopedRulesForChangedPaths(manifest, [
-      "src/users/auth-login.ts",
-      "README.md",
-    ])
-    expect(hit.globRules.map((g) => g.rulePath)).toEqual([
-      ".sigilix/rules/security.md",
-    ])
+    const hit = resolveScopedRulesForChangedPaths(manifest, ["src/users/auth-login.ts", "README.md"])
+    expect(hit.globRules.map((g) => g.rulePath)).toEqual([".sigilix/rules/security.md"])
   })
 
   it("a rule without `glob:` frontmatter always applies", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      { path: ".sigilix/rules/general.md", content: "Always-on rule body." },
-    ]))
-    const hit = resolveScopedRulesForChangedPaths(manifest, [
-      "anywhere.ts",
-    ])
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([{ path: ".sigilix/rules/general.md", content: "Always-on rule body." }]),
+    )
+    const hit = resolveScopedRulesForChangedPaths(manifest, ["anywhere.ts"])
     expect(hit.globRules).toHaveLength(1)
   })
 
   it("multiple matching glob rules are concatenated in lexicographic order", () => {
-    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
-      // Three globs that all match the same changed file. Intentionally
-      // inserted in non-alphabetical order; render order should be A→B→C.
-      {
-        path: ".sigilix/rules/c-zeta.md",
-        content: "---\nglob: src/**/*.ts\n---\nZ body.",
-      },
-      {
-        path: ".sigilix/rules/a-alpha.md",
-        content: "---\nglob: src/**/*.ts\n---\nA body.",
-      },
-      {
-        path: ".sigilix/rules/b-beta.md",
-        content: "---\nglob: src/**/*.ts\n---\nB body.",
-      },
-    ]))
-    const selection = resolveScopedRulesForChangedPaths(manifest, [
-      "src/foo.ts",
-    ])
+    const manifest = compileScopedRulesManifest(
+      buildScopedRulesManifest([
+        // Three globs that all match the same changed file. Intentionally
+        // inserted in non-alphabetical order; render order should be A→B→C.
+        {
+          path: ".sigilix/rules/c-zeta.md",
+          content: "---\nglob: src/**/*.ts\n---\nZ body.",
+        },
+        {
+          path: ".sigilix/rules/a-alpha.md",
+          content: "---\nglob: src/**/*.ts\n---\nA body.",
+        },
+        {
+          path: ".sigilix/rules/b-beta.md",
+          content: "---\nglob: src/**/*.ts\n---\nB body.",
+        },
+      ]),
+    )
+    const selection = resolveScopedRulesForChangedPaths(manifest, ["src/foo.ts"])
     expect(selection.globRules.map((g) => g.rulePath)).toEqual([
       ".sigilix/rules/a-alpha.md",
       ".sigilix/rules/b-beta.md",
@@ -478,17 +445,17 @@ describe("resolveScopedRulesForChangedPaths — glob rules (.sigilix/rules/*.md)
 
 describe("renderScopedRulesForPrompt", () => {
   it("returns the empty string when no rules apply", () => {
-    expect(renderScopedRulesForPrompt({
-      perDirectoryRules: [],
-      globRules: [],
-    })).toBe("")
+    expect(
+      renderScopedRulesForPrompt({
+        perDirectoryRules: [],
+        globRules: [],
+      }),
+    ).toBe("")
   })
 
   it("labels the repo-root SIGILIX.md as <repo root> for readability", () => {
     const rendered = renderScopedRulesForPrompt({
-      perDirectoryRules: [
-        { dirPath: "", body: "Root body." },
-      ],
+      perDirectoryRules: [{ dirPath: "", body: "Root body." }],
       globRules: [],
     })
     expect(rendered).toContain("[SIGILIX.md — <repo root>]")
@@ -527,12 +494,12 @@ describe("renderScopedRulesForPrompt", () => {
     // deepest-wins priority.
     const big = "x".repeat(4 * 1024)
     const perDirectoryRules = [
-      { dirPath: "", body: `ROOT-${big}` },          // shallowest — dropped first
+      { dirPath: "", body: `ROOT-${big}` }, // shallowest — dropped first
       { dirPath: "z/y/x", body: `ZYX-${big}` },
       { dirPath: "a", body: `A-${big}` },
       { dirPath: "a/b", body: `AB-${big}` },
       { dirPath: "a/b/c", body: `ABC-${big}` },
-      { dirPath: "a/b/c/d", body: `ABCD-${big}` },   // deepest — kept
+      { dirPath: "a/b/c/d", body: `ABCD-${big}` }, // deepest — kept
     ]
     const rendered = renderScopedRulesForPrompt({
       perDirectoryRules,
@@ -623,8 +590,6 @@ describe("scoped-rules KV read fails open on transient errors", () => {
     // Sanity that the imported helper still produces the documented
     // shape — pinning the key contract so a future rename to the KV
     // prefix doesn't silently drift between writer + reader.
-    expect(scopedRulesKey("Sigilix", "Sigilix")).toBe(
-      "repo-index-rules:sigilix/sigilix",
-    )
+    expect(scopedRulesKey("Sigilix", "Sigilix")).toBe("repo-index-rules:sigilix/sigilix")
   })
 })

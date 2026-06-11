@@ -164,20 +164,17 @@ function candidateSources(testPath: string): string[] {
 function leafStem(path: string): string {
   const base = path.split("/").pop() ?? path
   // Strip .test./.spec. marker AND the trailing extension.
-  return base
-    .replace(/\.(test|spec)\.(?:m|c)?[jt]sx?$/i, "")
-    .replace(/\.(?:m|c)?[jt]sx?$/i, "")
+  return base.replace(/\.(test|spec)\.(?:m|c)?[jt]sx?$/i, "").replace(/\.(?:m|c)?[jt]sx?$/i, "")
 }
 
 function normalizeRepoPathForSiblingMatch(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/|\/)+/, "")
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^(?:\.\/|\/)+/, "")
 }
 
-function appendRepoSiblingSourceCandidates(
-  candidates: string[],
-  prefix: string | undefined,
-  rest: string,
-): void {
+function appendRepoSiblingSourceCandidates(candidates: string[], prefix: string | undefined, rest: string): void {
   if (prefix !== undefined) {
     candidates.push(`${prefix}/${rest}`)
     for (const sourceRoot of ["src", "src/lib", "app", "lib", "workers"]) {
@@ -196,10 +193,7 @@ function repoWideCandidateSources(testPath: string): string[] {
   const candidates: string[] = []
   const stripped = stripTestMarker(testPath)
 
-  if (
-    stripped !== testPath &&
-    !/(^|\/)(?:tests|__tests__)\//.test(stripped)
-  ) {
+  if (stripped !== testPath && !/(^|\/)(?:tests|__tests__)\//.test(stripped)) {
     candidates.push(stripped)
   }
 
@@ -232,10 +226,7 @@ function matchesSourceForTestPath(sourcePath: string, testPath: string): boolean
  * sibling. Returns a path only for one unambiguous recognized test match;
  * no match or multiple plausible matches both fail open as `null`.
  */
-export function findExistingTestSiblingForSource(
-  sourcePath: string,
-  repoPaths: readonly string[],
-): string | null {
+export function findExistingTestSiblingForSource(sourcePath: string, repoPaths: readonly string[]): string | null {
   const normalizedSource = normalizeRepoPathForSiblingMatch(sourcePath)
   if (normalizedSource.length === 0) return null
 
@@ -259,9 +250,7 @@ export function findExistingTestSiblingForSource(
  * in the diff is NOT reported (the model only sees the diff, so
  * out-of-diff existence claims would be unverifiable from its side).
  */
-export function classifyDiffFiles(
-  paths: readonly string[],
-): ClassifiedDiffFile[] {
+export function classifyDiffFiles(paths: readonly string[]): ClassifiedDiffFile[] {
   const pathSet = new Set(paths)
   const initial: Array<{ path: string; kind: DiffFileKind }> = paths.map((p) => ({
     path: p,
@@ -341,8 +330,8 @@ export function classifyDiffFiles(
   return initial.map(({ path, kind }) => ({
     path,
     kind,
-    testsSibling: kind === "source" ? sourceToTest.get(path) ?? null : null,
-    sourceSibling: kind === "test" ? testToSource.get(path) ?? null : null,
+    testsSibling: kind === "source" ? (sourceToTest.get(path) ?? null) : null,
+    sourceSibling: kind === "test" ? (testToSource.get(path) ?? null) : null,
   }))
 }
 
@@ -356,9 +345,7 @@ export function classifyDiffFiles(
  * AND no test files (e.g. pure docs / config PR) — keeps the prompt
  * lean for cases where the classification adds no signal.
  */
-export function renderDiffFileClassificationBlock(
-  classified: readonly ClassifiedDiffFile[],
-): string {
+export function renderDiffFileClassificationBlock(classified: readonly ClassifiedDiffFile[]): string {
   const sources = classified.filter((f) => f.kind === "source")
   const tests = classified.filter((f) => f.kind === "test")
   if (sources.length === 0 && tests.length === 0) return ""
@@ -399,7 +386,7 @@ export function renderDiffFileClassificationBlock(
   }
 
   lines.push(
-    "Use this classification when reasoning about test coverage. A `\"module ships without tests\"` finding is ONLY admissible when the source file has `no sibling test file in this diff` AND the diff actually changes the source (new file or substantial edit) AND no other test file in this diff plausibly covers it. Do NOT flag a source file as untested when its row above shows a covering test file.",
+    'Use this classification when reasoning about test coverage. A `"module ships without tests"` finding is ONLY admissible when the source file has `no sibling test file in this diff` AND the diff actually changes the source (new file or substantial edit) AND no other test file in this diff plausibly covers it. Do NOT flag a source file as untested when its row above shows a covering test file.',
   )
 
   return lines.join("\n")

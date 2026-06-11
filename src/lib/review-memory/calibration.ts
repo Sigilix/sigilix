@@ -75,9 +75,7 @@ export interface ClaimCalibrationParams {
 }
 
 /** The full blob: a partial map from claim type to its params. */
-export type CalibrationBlob = Partial<
-  Record<ReviewMemoryClaimType, ClaimCalibrationParams>
->
+export type CalibrationBlob = Partial<Record<ReviewMemoryClaimType, ClaimCalibrationParams>>
 
 const CLAIM_TYPE_SET: ReadonlySet<string> = new Set(ALL_REVIEW_MEMORY_CLAIM_TYPES)
 
@@ -87,9 +85,7 @@ const CLAIM_TYPE_SET: ReadonlySet<string> = new Set(ALL_REVIEW_MEMORY_CLAIM_TYPE
  * trustworthy sample, and clears the lower-bound threshold. Everything
  * else — undefined, cold, thin sample, low bound, NaN — VETOES.
  */
-export function shouldKeepSoften(
-  params: ClaimCalibrationParams | undefined,
-): boolean {
+export function shouldKeepSoften(params: ClaimCalibrationParams | undefined): boolean {
   if (!params) return false
   if (params.cold) return false
   if (!params.trustworthyN) return false
@@ -106,9 +102,9 @@ export function shouldKeepSoften(
  * falls back to the cold (veto-all) regime. Takes a minimal getter so it
  * stays ensemble-safe and unit-testable without a real KV binding.
  */
-export async function readCalibrationParams(
-  kv: { get(key: string): Promise<string | null> },
-): Promise<CalibrationBlob | null> {
+export async function readCalibrationParams(kv: {
+  get(key: string): Promise<string | null>
+}): Promise<CalibrationBlob | null> {
   try {
     return parseCalibrationBlob(await kv.get(CALIBRATION_PARAMS_KV_KEY))
   } catch {

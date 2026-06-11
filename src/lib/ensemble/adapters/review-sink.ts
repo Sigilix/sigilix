@@ -77,12 +77,17 @@ export async function verifyReviewPersisted(
     const found = list.find((r) => r.id === reviewId)
     if (found) {
       if (found.state === "PENDING") {
-        console.warn(JSON.stringify({
-          event: "pr-review-verify-pending",
-          owner, repo, prNumber, review_id: reviewId,
-          submit_path: submitPath,
-          submitted_state: submittedState,
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "pr-review-verify-pending",
+            owner,
+            repo,
+            prNumber,
+            review_id: reviewId,
+            submit_path: submitPath,
+            submitted_state: submittedState,
+          }),
+        )
         return false
       }
       return true
@@ -91,22 +96,32 @@ export async function verifyReviewPersisted(
     // tell missing-from-everywhere apart from on-a-later-page;
     // assume persisted and emit a distinct event so we notice.
     if (list.length >= REVIEW_LIST_PAGE_CAP) {
-      console.warn(JSON.stringify({
-        event: "pr-review-verify-list-capped",
-        owner, repo, prNumber, review_id: reviewId,
-        submit_path: submitPath,
-        list_size: list.length,
-        note: "listPullRequestReviews returned page cap; cannot confirm review present, defaulting to verified=true.",
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-verify-list-capped",
+          owner,
+          repo,
+          prNumber,
+          review_id: reviewId,
+          submit_path: submitPath,
+          list_size: list.length,
+          note: "listPullRequestReviews returned page cap; cannot confirm review present, defaulting to verified=true.",
+        }),
+      )
       return true
     }
-    console.warn(JSON.stringify({
-      event: "pr-review-verify-missing",
-      owner, repo, prNumber, review_id: reviewId,
-      submit_path: submitPath,
-      submitted_state: submittedState,
-      list_size: list.length,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-verify-missing",
+        owner,
+        repo,
+        prNumber,
+        review_id: reviewId,
+        submit_path: submitPath,
+        submitted_state: submittedState,
+        list_size: list.length,
+      }),
+    )
     return false
   } catch (err) {
     // Network blip / transient 5xx — we'd rather false-positive a
@@ -114,12 +129,17 @@ export async function verifyReviewPersisted(
     // The Check Run's `success` conclusion stays; if the review
     // genuinely didn't post, the customer will notice and we can
     // grep telemetry for `pr-review-verify-error`.
-    console.warn(JSON.stringify({
-      event: "pr-review-verify-error",
-      owner, repo, prNumber, review_id: reviewId,
-      submit_path: submitPath,
-      err: err instanceof Error ? err.message : String(err),
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-verify-error",
+        owner,
+        repo,
+        prNumber,
+        review_id: reviewId,
+        submit_path: submitPath,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return true
   }
 }

@@ -48,12 +48,8 @@ describe("renderReviewMemoryForPrompt", () => {
     })
     // shadowClaims must NEVER reach the rendered prompt: no claim type, no
     // confidence, no count leaks in.
-    expect(renderReviewMemoryForPrompt([withShadow])).toBe(
-      renderReviewMemoryForPrompt([base]),
-    )
-    expect(renderReviewMemoryForPrompt([withShadow])).not.toContain(
-      "structural-glue-not-test-target",
-    )
+    expect(renderReviewMemoryForPrompt([withShadow])).toBe(renderReviewMemoryForPrompt([base]))
+    expect(renderReviewMemoryForPrompt([withShadow])).not.toContain("structural-glue-not-test-target")
   })
 
   it("renders pathSha12 for path-scoped findings, NOT raw paths", () => {
@@ -122,10 +118,8 @@ describe("renderReviewMemoryForPrompt", () => {
     // the record over the per-record budget. (sha12 is normally 12
     // chars, but the renderer treats whatever's passed in as a
     // string for budget-truncation purposes.)
-    const longHash = "a".repeat(80)  // >> sha12; forces budget overflow
-    const out = renderReviewMemoryForPrompt([
-      f({ scope: "path-category", category: "tests", pathSha12: longHash }),
-    ])
+    const longHash = "a".repeat(80) // >> sha12; forces budget overflow
+    const out = renderReviewMemoryForPrompt([f({ scope: "path-category", category: "tests", pathSha12: longHash })])
     expect(out).toMatch(/…\b|…/)
   })
 
@@ -145,9 +139,7 @@ describe("renderReviewMemoryForPrompt", () => {
   })
 
   it("includes lastSignalTs YYYY-MM-DD prefix in each record", () => {
-    const out = renderReviewMemoryForPrompt([
-      f({ category: "performance", lastSignalTs: "2026-04-12T18:30:11Z" }),
-    ])
+    const out = renderReviewMemoryForPrompt([f({ category: "performance", lastSignalTs: "2026-04-12T18:30:11Z" })])
     expect(out).toContain("last=2026-04-12")
   })
 })

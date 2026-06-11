@@ -10,17 +10,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const {
-  mockGetInstallationToken,
-  mockCreateCheckRun,
-  mockUpdateCheckRun,
-  mockListCheckRunsForRef,
-} = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
-  mockCreateCheckRun: vi.fn(),
-  mockUpdateCheckRun: vi.fn(),
-  mockListCheckRunsForRef: vi.fn(),
-}))
+const { mockGetInstallationToken, mockCreateCheckRun, mockUpdateCheckRun, mockListCheckRunsForRef } = vi.hoisted(
+  () => ({
+    mockGetInstallationToken: vi.fn(async () => "test-token"),
+    mockCreateCheckRun: vi.fn(),
+    mockUpdateCheckRun: vi.fn(),
+    mockListCheckRunsForRef: vi.fn(),
+  }),
+)
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -164,8 +161,8 @@ describe("SIG-220: attachExistingCheckRun", () => {
   it("cancels stale in-progress Sigilix checks on the same head_sha before creating a new one", async () => {
     mockListCheckRunsForRef.mockResolvedValue([
       { id: 111, name: "Sigilix Review", status: "in_progress" }, // legacy name
-      { id: 222, name: "Sigilix", status: "queued" },              // current name, queued
-      { id: 333, name: "Sigilix", status: "completed" },           // current name, completed → no cancel
+      { id: 222, name: "Sigilix", status: "queued" }, // current name, queued
+      { id: 333, name: "Sigilix", status: "completed" }, // current name, completed → no cancel
       { id: 444, name: "Workers Builds: sigilix", status: "in_progress" }, // unrelated → no cancel
     ])
     mockUpdateCheckRun.mockResolvedValue(undefined)
@@ -209,9 +206,7 @@ describe("SIG-220: attachExistingCheckRun", () => {
   })
 
   it("proceeds with create even if a per-check cancel PATCH fails (isolated retry would orphan, but cleanup is best-effort)", async () => {
-    mockListCheckRunsForRef.mockResolvedValue([
-      { id: 111, name: "Sigilix Review", status: "in_progress" },
-    ])
+    mockListCheckRunsForRef.mockResolvedValue([{ id: 111, name: "Sigilix Review", status: "in_progress" }])
     mockUpdateCheckRun.mockRejectedValue(new Error("HTTP 422 Validation Failed"))
     mockCreateCheckRun.mockResolvedValue({ id: 999 })
     const env = makeEnv()
@@ -246,7 +241,7 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
     mockListCheckRunsForRef.mockResolvedValue([
       { id: 111, name: "Sigilix", status: "in_progress" },
       { id: 222, name: "Sigilix Review", status: "queued" }, // legacy name, queued → also closed
-      { id: 333, name: "Sigilix", status: "completed" },      // already done → untouched
+      { id: 333, name: "Sigilix", status: "completed" }, // already done → untouched
       { id: 444, name: "Workers Builds: sigilix", status: "in_progress" }, // unrelated → untouched
     ])
     mockUpdateCheckRun.mockResolvedValue(undefined)
@@ -269,18 +264,22 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
   })
 
   it("applies the title/summary/conclusion override on the closed orphan (watchdog → timed_out)", async () => {
-    mockListCheckRunsForRef.mockResolvedValue([
-      { id: 111, name: "Sigilix", status: "in_progress" },
-    ])
+    mockListCheckRunsForRef.mockResolvedValue([{ id: 111, name: "Sigilix", status: "in_progress" }])
     mockUpdateCheckRun.mockResolvedValue(undefined)
     const env = makeEnv()
 
     await closeOrphanedInProgressChecksByHeadSha({
-      env, ...orphanArgs, title: "Timed out", summary: "Sigilix did not finish in time.",
+      env,
+      ...orphanArgs,
+      title: "Timed out",
+      summary: "Sigilix did not finish in time.",
       conclusion: "timed_out",
     })
 
-    const payload = mockUpdateCheckRun.mock.calls[0]![3] as { conclusion: string; output: { title: string; summary: string } }
+    const payload = mockUpdateCheckRun.mock.calls[0]![3] as {
+      conclusion: string
+      output: { title: string; summary: string }
+    }
     expect(payload.output.title).toBe("Timed out")
     expect(payload.output.summary).toBe("Sigilix did not finish in time.")
     // conclusion must match the title — the believability nit code-reviewer flagged.
@@ -301,9 +300,7 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
   it("returns (no throw, no token) when credentials are missing", async () => {
     const env = makeEnv({ credentials: false })
 
-    await expect(
-      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
-    ).resolves.toBeUndefined()
+    await expect(closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs })).resolves.toBeUndefined()
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
     expect(mockUpdateCheckRun).not.toHaveBeenCalled()
@@ -313,9 +310,7 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
     mockGetInstallationToken.mockRejectedValueOnce(new Error("HTTP 503 token endpoint down"))
     const env = makeEnv()
 
-    await expect(
-      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
-    ).resolves.toBeUndefined()
+    await expect(closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs })).resolves.toBeUndefined()
     expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
   })
 
@@ -323,9 +318,7 @@ describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
     mockListCheckRunsForRef.mockRejectedValue(new Error("HTTP 502"))
     const env = makeEnv()
 
-    await expect(
-      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
-    ).resolves.toBeUndefined()
+    await expect(closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs })).resolves.toBeUndefined()
     expect(mockUpdateCheckRun).not.toHaveBeenCalled()
   })
 })
@@ -354,7 +347,11 @@ describe("completeCheckRun", () => {
     expect(owner).toBe("Sigilix")
     expect(repo).toBe("sigilix")
     expect(checkRunId).toBe(7777)
-    const p = payload as { status: string; conclusion: string; output: { title: string; summary: string } }
+    const p = payload as {
+      status: string
+      conclusion: string
+      output: { title: string; summary: string }
+    }
     expect(p.status).toBe("completed")
     expect(p.conclusion).toBe("success")
     expect(p.output.title).toBe("Review posted")
@@ -390,7 +387,10 @@ describe("completeCheckRun", () => {
     })
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
-    const completionPayload = mockUpdateCheckRun.mock.calls[0]![3] as { status: string; output: { annotations?: unknown[] } }
+    const completionPayload = mockUpdateCheckRun.mock.calls[0]![3] as {
+      status: string
+      output: { annotations?: unknown[] }
+    }
     expect(completionPayload.status).toBe("completed")
     expect(completionPayload.output.annotations).toBeUndefined()
   })
@@ -463,9 +463,7 @@ describe("completeCheckRun", () => {
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("Approved — no issues found")
-    expect(p.output.summary).toBe(
-      "Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)",
-    )
+    expect(p.output.summary).toBe("Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)")
   })
 
   it("renders the REQUEST_CHANGES title + Greptile-direction findings summary when reviewMeta says REQUEST_CHANGES", async () => {
@@ -483,9 +481,7 @@ describe("completeCheckRun", () => {
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("3 findings — changes requested")
-    expect(p.output.summary).toBe(
-      "3 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)",
-    )
+    expect(p.output.summary).toBe("3 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)")
   })
 
   it("renders the COMMENT title + Greptile-direction findings summary with non-blocking count", async () => {
@@ -503,9 +499,7 @@ describe("completeCheckRun", () => {
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("2 non-blocking findings posted")
-    expect(p.output.summary).toBe(
-      "2 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)",
-    )
+    expect(p.output.summary).toBe("2 suggestions · [View review](https://github.com/Sigilix/sigilix/pull/42)")
   })
 
   it("singularizes the title and summary when REQUEST_CHANGES has exactly 1 finding", async () => {
@@ -524,9 +518,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("1 finding — changes requested")
     // SIG-216: singular "suggestion" in the Greptile-direction summary too.
-    expect(p.output.summary).toBe(
-      "1 suggestion · [View review](https://github.com/Sigilix/sigilix/pull/42)",
-    )
+    expect(p.output.summary).toBe("1 suggestion · [View review](https://github.com/Sigilix/sigilix/pull/42)")
   })
 
   // SIG-216: when no prNumber is threaded (legacy producer that
@@ -582,7 +574,12 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, prNumber: 42, runnerEvidence: "evidence-pending" },
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 3,
+        prNumber: 42,
+        runnerEvidence: "evidence-pending",
+      },
     })
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
@@ -607,9 +604,7 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { summary: string } }
-    expect(p.output.summary).toBe(
-      "Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)",
-    )
+    expect(p.output.summary).toBe("Sigilix approved · [View PR](https://github.com/Sigilix/sigilix/pull/42)")
     expect(p.output.summary).not.toContain("<img")
   })
 

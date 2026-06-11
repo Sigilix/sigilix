@@ -53,7 +53,7 @@ describe("SIG-144: toPlainTextAnnotation", () => {
       end_line: 12,
       annotation_level: "warning",
       title: "[P1] **logic**: `foo` is wrong",
-      message: "**Bold** body with `code` and a [link](https://x.test) <img src=\"b.svg\" />\n\n\n\nmore",
+      message: '**Bold** body with `code` and a [link](https://x.test) <img src="b.svg" />\n\n\n\nmore',
       raw_details: "```ts\nconst x = 1\n```",
     }
     const out = toPlainTextAnnotation(a)
@@ -75,7 +75,9 @@ describe("SIG-144: toPlainTextAnnotation", () => {
 
   it("preserves TypeScript generics in finding text (does NOT treat them as HTML tags)", () => {
     const out = toPlainTextAnnotation({
-      path: "a.ts", start_line: 1, end_line: 1,
+      path: "a.ts",
+      start_line: 1,
+      end_line: 1,
       annotation_level: "warning",
       title: "Type `Map<string, number>` is wrong",
       message: "Use `Promise<void>` not `Promise<any>`; also `Array<Record<string, T>>` and a < b comparison.",
@@ -93,11 +95,13 @@ describe("SIG-144: toPlainTextAnnotation", () => {
     // literal characters, NOT mistaken for a tag and deleted. (PR #339:
     // CodeRabbit code-span corruption + Sigilix decode-order.)
     const out = toPlainTextAnnotation({
-      path: "a.ts", start_line: 1, end_line: 1,
+      path: "a.ts",
+      start_line: 1,
+      end_line: 1,
       annotation_level: "notice",
       message: "<details><summary>x</summary>Use `&lt;details&gt;` not `&lt;div&gt;`</details> **bold**",
     })
-    expect(out.message).not.toContain("**")            // markdown stripped
+    expect(out.message).not.toContain("**") // markdown stripped
     expect(out.message).toContain("Use <details> not <div>") // example text survives
     expect(out.message).toContain("bold")
     // the real <summary>/<details> wrappers are gone (only the decoded
@@ -107,7 +111,9 @@ describe("SIG-144: toPlainTextAnnotation", () => {
 
   it("removes dangerous element bodies entirely (script/style) — defense in depth", () => {
     const out = toPlainTextAnnotation({
-      path: "a.ts", start_line: 1, end_line: 1,
+      path: "a.ts",
+      start_line: 1,
+      end_line: 1,
       annotation_level: "warning",
       message: "before <script>alert(1)</script> after <style>.x{}</style> end",
     })
@@ -126,7 +132,9 @@ describe("SIG-144: toPlainTextAnnotation", () => {
     // PLAIN TEXT (inert). Pins the decode-order/deny-list interaction so a
     // future reader doesn't mistake the deny-list for a load-bearing sanitizer.
     const out = toPlainTextAnnotation({
-      path: "a.ts", start_line: 1, end_line: 1,
+      path: "a.ts",
+      start_line: 1,
+      end_line: 1,
       annotation_level: "warning",
       message: "Reject untrusted `&lt;script&gt;alert(1)&lt;/script&gt;` payloads",
     })
@@ -135,8 +143,11 @@ describe("SIG-144: toPlainTextAnnotation", () => {
 
   it("leaves an undefined title/raw_details undefined", () => {
     const out = toPlainTextAnnotation({
-      path: "a.ts", start_line: 1, end_line: 1,
-      annotation_level: "notice", message: "plain",
+      path: "a.ts",
+      start_line: 1,
+      end_line: 1,
+      annotation_level: "notice",
+      message: "plain",
     })
     expect(out.title).toBeUndefined()
     expect(out.raw_details).toBeUndefined()
@@ -168,7 +179,10 @@ describe("SIG-144: applyOutputSurfaceToSubmission (inline-comment suppression)",
     return {
       event: "REQUEST_CHANGES" as const,
       body: "<!-- sigilix:pr-review -->\nVerdict body.",
-      comments: [{ path: "a.ts", line: 1, body: "x" }, { path: "b.ts", line: 2, body: "y" }],
+      comments: [
+        { path: "a.ts", line: 1, body: "x" },
+        { path: "b.ts", line: 2, body: "y" },
+      ],
     }
   }
 

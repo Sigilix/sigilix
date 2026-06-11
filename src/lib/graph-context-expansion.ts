@@ -17,12 +17,7 @@
 // throws — on any internal error it returns a zeroed result.
 
 import { estimateTokens } from "./diff-packing"
-import type {
-  GraphContextExpansion,
-  GraphDefinitionRow,
-  GraphCallerRow,
-  GraphImportRow,
-} from "@/src/do/repo-graph"
+import type { GraphContextExpansion, GraphDefinitionRow, GraphCallerRow, GraphImportRow } from "@/src/do/repo-graph"
 
 /** Default byte cap on the simulated rendered payload. */
 const DEFAULT_MAX_BYTES = 50_000
@@ -139,9 +134,7 @@ function zeroResult(graphAvailable: boolean, elapsedMs: number): EnrichedGraphCo
  * Never throws: any internal error returns a zeroed result (graphAvailable
  * preserved from the expansion).
  */
-export async function buildGraphContextExpansion(
-  args: BuildGraphContextExpansionArgs,
-): Promise<EnrichedGraphContext> {
+export async function buildGraphContextExpansion(args: BuildGraphContextExpansionArgs): Promise<EnrichedGraphContext> {
   const startMs = Date.now()
   const graphAvailable = args.expansion.graphAvailable
   try {
@@ -224,21 +217,14 @@ export async function buildGraphContextExpansion(
     // Render highest-value first (definitions), drop lowest-value first
     // (import dependents → callers → definitions). Whichever lists overflow
     // the cap have their tails dropped; `dropped.cap` counts removed snippets.
-    const capResult = applyByteCap(
-      { definitionBodies, callerBodies, dependentBodies },
-      maxBytes,
-    )
+    const capResult = applyByteCap({ definitionBodies, callerBodies, dependentBodies }, maxBytes)
     dropped.cap = capResult.droppedCount
 
     // CONTROL vs TREATMENT token split (over the SURVIVING, post-cap snippets):
     // control = filesByPath-sourced bodies only (what PR1 / no-fetch would see);
     // treatment = all surviving bodies. netNew = the cross-file context gain.
     const totalTokens = estimateTokens(capResult.rendered)
-    const controlRendered = [
-      ...capResult.definitionBodies,
-      ...capResult.callerBodies,
-      ...capResult.dependentBodies,
-    ]
+    const controlRendered = [...capResult.definitionBodies, ...capResult.callerBodies, ...capResult.dependentBodies]
       .filter((s) => s.source === "filesByPath")
       .map(renderSnippet)
       .join("\n")
@@ -292,9 +278,7 @@ export async function buildGraphContextExpansion(
  * they can never drift. Pure.
  */
 export function netNewCrossFileBodies(enriched: EnrichedGraphContext): GraphBodySnippet[] {
-  return [...enriched.definitionBodies, ...enriched.callerBodies].filter(
-    (b) => b.source !== "filesByPath",
-  )
+  return [...enriched.definitionBodies, ...enriched.callerBodies].filter((b) => b.source !== "filesByPath")
 }
 
 export function renderGraphExpansionForPrompt(enriched: EnrichedGraphContext): string {
@@ -338,7 +322,13 @@ async function prefetchCrossFileSources(
   fetchedCache: Map<string, string | null>,
 ): Promise<PrefetchStats> {
   const startMs = Date.now()
-  const empty: PrefetchStats = { files: 0, bytes: 0, elapsedMs: 0, budgetExhausted: false, wantedOverBudget: 0 }
+  const empty: PrefetchStats = {
+    files: 0,
+    bytes: 0,
+    elapsedMs: 0,
+    budgetExhausted: false,
+    wantedOverBudget: 0,
+  }
   if (!args.fetchFileContent) return empty
 
   // Distinct cross-file paths in FN-value order.
@@ -374,9 +364,7 @@ async function prefetchCrossFileSources(
         // must NOT throw into the review (the outer catch is the last resort).
         const src = await fetchFile(path).catch(() => null)
         fetchedCache.set(path, src)
-        return typeof src === "string"
-          ? { fetched: true, bytes: byteLength(src) }
-          : { fetched: false, bytes: 0 }
+        return typeof src === "string" ? { fetched: true, bytes: byteLength(src) } : { fetched: false, bytes: 0 }
       }),
     )
     for (const r of results) {
@@ -398,11 +386,7 @@ async function prefetchCrossFileSources(
 
 // ─── Snippet builders ───────────────────────────────────────────────
 
-function definitionSnippet(
-  row: GraphDefinitionRow,
-  source: string,
-  kind: "filesByPath" | "github",
-): GraphBodySnippet {
+function definitionSnippet(row: GraphDefinitionRow, source: string, kind: "filesByPath" | "github"): GraphBodySnippet {
   const lineCount = countLines(source)
   const startLine = clampLine(row.startLine, lineCount)
   const endLine = clampLine(Math.max(row.startLine, row.endLine), lineCount)
@@ -416,16 +400,11 @@ function definitionSnippet(
   }
 }
 
-function callerSnippet(
-  row: GraphCallerRow,
-  source: string,
-  kind: "filesByPath" | "github",
-): GraphBodySnippet {
+function callerSnippet(row: GraphCallerRow, source: string, kind: "filesByPath" | "github"): GraphBodySnippet {
   const lineCount = countLines(source)
   // Prefer the whole caller symbol body when its span resolved; otherwise a
   // bounded window around the call-site line.
-  const hasSpan =
-    typeof row.callerStartLine === "number" && typeof row.callerEndLine === "number"
+  const hasSpan = typeof row.callerStartLine === "number" && typeof row.callerEndLine === "number"
   const startLine = hasSpan
     ? clampLine(row.callerStartLine as number, lineCount)
     : clampLine(row.startLine - WINDOW_LINES, lineCount)
@@ -442,11 +421,7 @@ function callerSnippet(
   }
 }
 
-function importSnippet(
-  row: GraphImportRow,
-  source: string,
-  kind: "filesByPath" | "github",
-): GraphBodySnippet {
+function importSnippet(row: GraphImportRow, source: string, kind: "filesByPath" | "github"): GraphBodySnippet {
   const lineCount = countLines(source)
   const startLine = clampLine(row.startLine - WINDOW_LINES, lineCount)
   const endLine = clampLine(row.startLine + WINDOW_LINES, lineCount)
@@ -475,7 +450,10 @@ interface CappedLists {
  * Returns the surviving lists, the rendered payload string, and how many
  * snippets were dropped for the cap.
  */
-function applyByteCap(lists: CappedLists, maxBytes: number): CappedLists & {
+function applyByteCap(
+  lists: CappedLists,
+  maxBytes: number,
+): CappedLists & {
   rendered: string
   droppedCount: number
 } {

@@ -1,13 +1,9 @@
 // SIG-292 — injection/XSS taint-grounding detector.
 
 import { describe, expect, it } from "vitest"
-import {
-  extractSinkValueExpr,
-  sinkValueIsProvablyConstant,
-} from "@/src/shared/domain/validate-injection-taint"
+import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "@/src/shared/domain/validate-injection-taint"
 
-const fileWith = (lines: string[]): Map<number, string> =>
-  new Map(lines.map((t, i) => [i + 1, t]))
+const fileWith = (lines: string[]): Map<number, string> => new Map(lines.map((t, i) => [i + 1, t]))
 
 describe("extractSinkValueExpr", () => {
   it("extracts the value from each recognized sink", () => {
@@ -16,7 +12,7 @@ describe("extractSinkValueExpr", () => {
     expect(extractSinkValueExpr(`document.write(tpl)`)).toBe("tpl")
     expect(extractSinkValueExpr(`node.insertAdjacentHTML("beforeend", frag)`)).toBe("frag")
     expect(extractSinkValueExpr(`const r = eval(expr)`)).toBe("expr")
-    expect(extractSinkValueExpr("const fn = new Function(\"count\", `return (${e})`)")).toBe("`return (${e})`")
+    expect(extractSinkValueExpr('const fn = new Function("count", `return (${e})`)')).toBe("`return (${e})`")
   })
   it("returns null when there is no injection sink", () => {
     expect(extractSinkValueExpr(`const x = compute(items)`)).toBeNull()
@@ -37,21 +33,27 @@ describe("sinkValueIsProvablyConstant", () => {
       `export function Panel() {`,
       `  return <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />;`,
     ])
-    expect(sinkValueIsProvablyConstant(`  return <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />;`, file)).toBe(true)
+    expect(
+      sinkValueIsProvablyConstant(`  return <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />;`, file),
+    ).toBe(true)
   })
 
   it("KEEPS (false) when the sink value is a member access — potentially attacker-controlled", () => {
-    expect(sinkValueIsProvablyConstant(`<div dangerouslySetInnerHTML={{ __html: props.bio }} />`, undefined)).toBe(false)
+    expect(sinkValueIsProvablyConstant(`<div dangerouslySetInnerHTML={{ __html: props.bio }} />`, undefined)).toBe(
+      false,
+    )
     expect(sinkValueIsProvablyConstant(`el.innerHTML = row.event.action_label`, undefined)).toBe(false)
   })
 
   it("KEEPS (false) on an interpolated template literal (real code injection)", () => {
-    expect(sinkValueIsProvablyConstant("const fn = new Function(\"n\", `return (${userExpr})`)", undefined)).toBe(false)
+    expect(sinkValueIsProvablyConstant('const fn = new Function("n", `return (${userExpr})`)', undefined)).toBe(false)
     expect(sinkValueIsProvablyConstant("eval(`do(${x})`)", undefined)).toBe(false)
   })
 
   it("KEEPS (false) when the identifier can't be resolved to a literal in the file", () => {
-    expect(sinkValueIsProvablyConstant(`el.innerHTML = userHtml`, fileWith([`function f(userHtml: string) {}`]))).toBe(false)
+    expect(sinkValueIsProvablyConstant(`el.innerHTML = userHtml`, fileWith([`function f(userHtml: string) {}`]))).toBe(
+      false,
+    )
     // resolves to a CALL, not a literal
     const file = fileWith([`const html = render(input);`, `el.innerHTML = html;`])
     expect(sinkValueIsProvablyConstant(`el.innerHTML = html;`, file)).toBe(false)

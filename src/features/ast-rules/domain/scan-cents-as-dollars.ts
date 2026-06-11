@@ -48,8 +48,19 @@ const CALL_RE = /[\w$)\]]\s*\(/
 
 /** Keywords after which a `/` begins a REGEX literal, not a division. */
 const REGEX_KEYWORDS = new Set([
-  "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
-  "do", "else", "yield", "await", "case",
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "case",
 ])
 /** Heads whose `(…)` is a control-flow condition, so a `/` right after the `)`
  *  begins a regex (`if (ok) /re/.test(s)`), not a division (CodeRabbit #306). */
@@ -80,7 +91,10 @@ function isRegexStart(src: string, slashIdx: number, masked: boolean[]): boolean
     for (; k >= 0; k--) {
       if (masked[k]) continue
       if (src[k] === ")") depth++
-      else if (src[k] === "(") { depth--; if (depth === 0) break }
+      else if (src[k] === "(") {
+        depth--
+        if (depth === 0) break
+      }
     }
     if (k <= 0) return false
     const w = skipBack(k - 1)
@@ -146,8 +160,17 @@ function lex(src: string): { inTmplText: boolean[]; masked: boolean[] } {
     const top = stack[stack.length - 1]
     const c = src[i]
     if (top?.k === "tmpl") {
-      if (c === "\\") { inTmplText[i] = true; if (i + 1 < n) inTmplText[i + 1] = true; i += 2; continue }
-      if (c === "`") { stack.pop(); i++; continue }
+      if (c === "\\") {
+        inTmplText[i] = true
+        if (i + 1 < n) inTmplText[i + 1] = true
+        i += 2
+        continue
+      }
+      if (c === "`") {
+        stack.pop()
+        i++
+        continue
+      }
       if (c === "$" && src[i + 1] === "{") {
         inTmplText[i] = true // the `$` is the interpolation marker (template text)
         stack.push({ k: "interp", brace: 1 })
@@ -159,11 +182,26 @@ function lex(src: string): { inTmplText: boolean[]; masked: boolean[] } {
       continue
     }
     // code / JSX / interpolation-expression context
-    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { masked[i] = true; i++ }; continue }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        masked[i] = true
+        i++
+      }
+      continue
+    }
     if (c === "/" && src[i + 1] === "*") {
-      masked[i] = true; masked[i + 1] = true; i += 2
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { masked[i] = true; i++ }
-      if (i < n) { masked[i] = true; masked[i + 1] = true; i += 2 }
+      masked[i] = true
+      masked[i + 1] = true
+      i += 2
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        masked[i] = true
+        i++
+      }
+      if (i < n) {
+        masked[i] = true
+        masked[i + 1] = true
+        i += 2
+      }
       continue
     }
     if (c === "/" && isRegexStart(src, i, masked)) {
@@ -171,33 +209,65 @@ function lex(src: string): { inTmplText: boolean[]; masked: boolean[] } {
       // currency (code-review + DeepSeek FP vector). Handle `\` escapes and a
       // `[…]` char class (where `/` is literal). Bail at a newline (a regex
       // can't span lines unescaped).
-      masked[i] = true; i++
+      masked[i] = true
+      i++
       let inClass = false
       while (i < n) {
         const d = src[i]
         if (d === "\n") break
         masked[i] = true
-        if (d === "\\") { if (i + 1 < n) masked[i + 1] = true; i += 2; continue }
+        if (d === "\\") {
+          if (i + 1 < n) masked[i + 1] = true
+          i += 2
+          continue
+        }
         if (d === "[") inClass = true
         else if (d === "]") inClass = false
-        else if (d === "/" && !inClass) { i++; break }
+        else if (d === "/" && !inClass) {
+          i++
+          break
+        }
         i++
       }
       continue
     }
     if (c === "'" || c === '"') {
-      const q = c; masked[i] = true; i++
+      const q = c
+      masked[i] = true
+      i++
       while (i < n && src[i] !== q) {
-        if (src[i] === "\\") { masked[i] = true; if (i + 1 < n) masked[i + 1] = true; i += 2 }
-        else { masked[i] = true; i++ }
+        if (src[i] === "\\") {
+          masked[i] = true
+          if (i + 1 < n) masked[i + 1] = true
+          i += 2
+        } else {
+          masked[i] = true
+          i++
+        }
       }
-      if (i < n) { masked[i] = true; i++ }
+      if (i < n) {
+        masked[i] = true
+        i++
+      }
       continue
     }
-    if (c === "`") { stack.push({ k: "tmpl" }); i++; continue }
+    if (c === "`") {
+      stack.push({ k: "tmpl" })
+      i++
+      continue
+    }
     if (top?.k === "interp") {
-      if (c === "{") { top.brace++; i++; continue }
-      if (c === "}") { top.brace--; if (top.brace === 0) stack.pop(); i++; continue }
+      if (c === "{") {
+        top.brace++
+        i++
+        continue
+      }
+      if (c === "}") {
+        top.brace--
+        if (top.brace === 0) stack.pop()
+        i++
+        continue
+      }
     }
     i++
   }

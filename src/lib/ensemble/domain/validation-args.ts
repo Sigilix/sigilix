@@ -11,68 +11,26 @@
 // `CollectedVerdict` / `SynthesizerProvenance`, which `verbatimModuleSyntax`
 // fully erases (zero runtime cycle).
 
-import type {
-  PrReviewVerdict,
-  PrReviewFinding,
-} from "@/src/shared/domain/pr-review-finding"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
-import type {
-  buildSourceFindingSecurityEvidenceById,
-  buildSourceFindingRationaleById,
-} from "./validation-internals"
+import type { buildSourceFindingSecurityEvidenceById, buildSourceFindingRationaleById } from "./validation-internals"
 import {
   factClassCompatible,
   type SecurityValidatorMode,
   type SecurityDropReason,
 } from "./gates/validate-security-finding"
-import {
-  parseCoverageGapRef,
-  type TestsValidatorMode,
-  type TestDropReason,
-} from "./gates/validate-test-finding"
-import type {
-  LogicValidatorMode,
-  LogicDropReason,
-  LogicEvidence,
-} from "./gates/validate-logic-finding"
-import type {
-  LogicRefutationMode,
-  LogicRefutationDropReason,
-} from "./gates/validate-logic-refutation"
-import type {
-  RefutationSurvivalMode,
-  RefutationSurvivalDropReason,
-} from "./gates/validate-refutation-survival"
-import type {
-  LogicClaimRefutationMode,
-  LogicClaimDropReason,
-} from "./gates/validate-logic-claim-refutation"
-import type {
-  PerfValidatorMode,
-  PerfDropReason,
-  PerfEvidence,
-} from "./gates/validate-perf-finding"
-import type {
-  InlineGroundingValidatorMode,
-  InlineGroundingDropReason,
-} from "./gates/validate-inline-grounding"
-import type {
-  AbsenceClaimValidatorMode,
-  AbsenceGroundingDropReason,
-} from "./gates/validate-absence-grounding"
-import type {
-  WindowBlindnessValidatorMode,
-  WindowBlindnessDropReason,
-} from "./gates/validate-window-blindness"
-import type {
-  SecurityGroundingValidatorMode,
-  SecurityGroundingDropReason,
-} from "./gates/validate-security-grounding"
-import type {
-  SecurityUsageValidatorMode,
-  SecurityUsageDropReason,
-} from "./gates/validate-security-usage"
+import { parseCoverageGapRef, type TestsValidatorMode, type TestDropReason } from "./gates/validate-test-finding"
+import type { LogicValidatorMode, LogicDropReason, LogicEvidence } from "./gates/validate-logic-finding"
+import type { LogicRefutationMode, LogicRefutationDropReason } from "./gates/validate-logic-refutation"
+import type { RefutationSurvivalMode, RefutationSurvivalDropReason } from "./gates/validate-refutation-survival"
+import type { LogicClaimRefutationMode, LogicClaimDropReason } from "./gates/validate-logic-claim-refutation"
+import type { PerfValidatorMode, PerfDropReason, PerfEvidence } from "./gates/validate-perf-finding"
+import type { InlineGroundingValidatorMode, InlineGroundingDropReason } from "./gates/validate-inline-grounding"
+import type { AbsenceClaimValidatorMode, AbsenceGroundingDropReason } from "./gates/validate-absence-grounding"
+import type { WindowBlindnessValidatorMode, WindowBlindnessDropReason } from "./gates/validate-window-blindness"
+import type { SecurityGroundingValidatorMode, SecurityGroundingDropReason } from "./gates/validate-security-grounding"
+import type { SecurityUsageValidatorMode, SecurityUsageDropReason } from "./gates/validate-security-usage"
 import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
 import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
 import type { SigilixProfile } from "@/src/lib/sigilix-config"
@@ -91,14 +49,7 @@ export const MAX_ADVISORY_NITS = 5
  * tell the model not to emit these; this post-processing filter is
  * the backstop for findings that slip through.
  */
-export const VAGUE_PREFIXES = [
-  "Ensure",
-  "Verify",
-  "Validate",
-  "Consider",
-  "Review",
-  "Confirm",
-] as const
+export const VAGUE_PREFIXES = ["Ensure", "Verify", "Validate", "Consider", "Review", "Confirm"] as const
 
 /**
  * Returns true when the finding's headline OR body begins with one
@@ -312,10 +263,7 @@ export function firstSpecialistRoleFromSourceIds(sourceIds: readonly string[]): 
   return "logic"
 }
 
-export function sourceRolesInclude(
-  sourceIds: readonly string[],
-  role: SpecialistRole,
-): boolean {
+export function sourceRolesInclude(sourceIds: readonly string[], role: SpecialistRole): boolean {
   // Codex-M1 (review): the `<role>-<index>` finding-id prefixes are
   // assigned deterministically (assignStableFindingIds) and are the
   // authoritative provenance signal. `sourceSpecialists` is synth-
@@ -389,10 +337,7 @@ export type ValidateForSubmissionArgs = {
    * orchestrator log `pr-review-finding-rejected-validation` with full
    * correlation fields without coupling the pure validator to a logger.
    */
-  onSecurityFindingDropped?: (
-    finding: PrReviewFinding,
-    info: { reason: SecurityDropReason; dropped: boolean },
-  ) => void
+  onSecurityFindingDropped?: (finding: PrReviewFinding, info: { reason: SecurityDropReason; dropped: boolean }) => void
   /**
    * SIG-111: tests-finding specificity gate mode. `shadow` (default):
    * the gate's verdict is counted + telemetered but the finding is NOT
@@ -411,10 +356,7 @@ export type ValidateForSubmissionArgs = {
    * (the SIG-108 event, reused with a `gate: "tests"` discriminator)
    * without coupling the pure validator to a logger.
    */
-  onTestFindingDropped?: (
-    finding: PrReviewFinding,
-    info: { reason: TestDropReason; dropped: boolean },
-  ) => void
+  onTestFindingDropped?: (finding: PrReviewFinding, info: { reason: TestDropReason; dropped: boolean }) => void
   /**
    * SIG-118: the real coverage-gap set, keyed `"<path>:<line>"`, built
    * by the orchestrator from `ingestCoverage`. Threaded into BOTH the
@@ -458,10 +400,7 @@ export type ValidateForSubmissionArgs = {
    * event, reused with a `gate: "logic"` discriminator) without coupling
    * the pure validator to a logger.
    */
-  onLogicFindingDropped?: (
-    finding: PrReviewFinding,
-    info: { reason: LogicDropReason; dropped: boolean },
-  ) => void
+  onLogicFindingDropped?: (finding: PrReviewFinding, info: { reason: LogicDropReason; dropped: boolean }) => void
   /**
    * SIG-308: logic-refutation backstop mode. `off` (default): the gate
    * doesn't run. `shadow`: the verdict is counted + telemetered but the
@@ -542,10 +481,7 @@ export type ValidateForSubmissionArgs = {
    * flagged (reuses the `pr-review-finding-rejected-validation` event with
    * a `gate: "perf"` discriminator).
    */
-  onPerfFindingDropped?: (
-    finding: PrReviewFinding,
-    info: { reason: PerfDropReason; dropped: boolean },
-  ) => void
+  onPerfFindingDropped?: (finding: PrReviewFinding, info: { reason: PerfDropReason; dropped: boolean }) => void
   /**
    * SIG-281 PR C (Rec 4): inline-grounding gate mode. `shadow` (default)
    * counts + telemeters but keeps every finding inline; `enforce` DEMOTES

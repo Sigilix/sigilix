@@ -20,15 +20,15 @@ import {
 } from "./types"
 
 const SARIF_FINDING_CATEGORIES: ReadonlySet<SarifFindingCategoryRef> = new Set([
-  "iac", "misconfiguration", "vulnerability", "license", "secret", "other",
+  "iac",
+  "misconfiguration",
+  "vulnerability",
+  "license",
+  "secret",
+  "other",
 ])
 
-const COMMAND_NAMES: ReadonlySet<SigilixCommandName> = new Set([
-  "review",
-  "improve",
-  "describe",
-  "ask",
-])
+const COMMAND_NAMES: ReadonlySet<SigilixCommandName> = new Set(["review", "improve", "describe", "ask"])
 
 const ADDENDUM_MAX_CODE_POINTS = 4000
 const FALLBACKS_MAX_ENTRIES = 4
@@ -57,9 +57,7 @@ const MAX_PATCH_LENGTH_MAX = 200_000
  * need the reason keep using the legacy `parseSigilixConfig`
  * signature (which is now a thin wrapper).
  */
-export type ParseResult =
-  | { ok: true; config: SigilixConfig }
-  | { ok: false; reason: string; raw: string }
+export type ParseResult = { ok: true; config: SigilixConfig } | { ok: false; reason: string; raw: string }
 
 function codePointLength(s: string): number {
   let n = 0
@@ -261,9 +259,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // negation. Drop entries that aren't strings; bad globs are
   // tolerated downstream (compileGlob throws → caller skips).
   if (Array.isArray(obj.pathFilters)) {
-    const filters = obj.pathFilters.filter(
-      (p): p is string => typeof p === "string" && p.length > 0,
-    )
+    const filters = obj.pathFilters.filter((p): p is string => typeof p === "string" && p.length > 0)
     if (filters.length > 0) out.pathFilters = filters
   }
   // ARC-176: profile — accept only the two known values; anything
@@ -279,11 +275,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // ignored (forward-compat for future fields like describe.tone,
   // describe.maxWords, etc., which would land under a separate
   // Linear issue, e.g. ARC-185).
-  if (
-    obj.describe &&
-    typeof obj.describe === "object" &&
-    !Array.isArray(obj.describe)
-  ) {
+  if (obj.describe && typeof obj.describe === "object" && !Array.isArray(obj.describe)) {
     const describeIn = obj.describe as Record<string, unknown>
     if (typeof describeIn.enabled === "boolean") {
       out.describe = { enabled: describeIn.enabled }
@@ -293,11 +285,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // describe.enabled. Forward-compat: unknown subfields under
   // `overview` are ignored so future additions (overview.maxFiles,
   // overview.profile, etc.) can ship without breaking older configs.
-  if (
-    obj.overview &&
-    typeof obj.overview === "object" &&
-    !Array.isArray(obj.overview)
-  ) {
+  if (obj.overview && typeof obj.overview === "object" && !Array.isArray(obj.overview)) {
     const overviewIn = obj.overview as Record<string, unknown>
     if (typeof overviewIn.enabled === "boolean") {
       out.overview = { enabled: overviewIn.enabled }
@@ -305,11 +293,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   }
   // SIG-112: evidence.visible — strict-bool opt-IN. Unknown subfields
   // are ignored so future evidence settings can ship compatibly.
-  if (
-    obj.evidence &&
-    typeof obj.evidence === "object" &&
-    !Array.isArray(obj.evidence)
-  ) {
+  if (obj.evidence && typeof obj.evidence === "object" && !Array.isArray(obj.evidence)) {
     const evidenceIn = obj.evidence as Record<string, unknown>
     if (typeof evidenceIn.visible === "boolean") {
       out.evidence = { visible: evidenceIn.visible }
@@ -318,11 +302,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // SIG-135: labels.enabled — strict boolean parsing, same opt-OUT
   // polarity as overview.enabled. Unknown subfields under `labels`
   // are ignored so future label settings can ship compatibly.
-  if (
-    obj.labels &&
-    typeof obj.labels === "object" &&
-    !Array.isArray(obj.labels)
-  ) {
+  if (obj.labels && typeof obj.labels === "object" && !Array.isArray(obj.labels)) {
     const labelsIn = obj.labels as Record<string, unknown>
     if (typeof labelsIn.enabled === "boolean") {
       out.labels = { enabled: labelsIn.enabled }
@@ -360,7 +340,11 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
         const promptIn = cmdIn.prompt as Record<string, unknown>
         if (promptIn.addendum !== undefined) {
           if (typeof promptIn.addendum !== "string") {
-            return { ok: false, reason: `\`commands.${key}.prompt.addendum\` must be a string`, raw }
+            return {
+              ok: false,
+              reason: `\`commands.${key}.prompt.addendum\` must be a string`,
+              raw,
+            }
           }
           if (codePointLength(promptIn.addendum) > ADDENDUM_MAX_CODE_POINTS) {
             return {
@@ -403,7 +387,11 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
         }
         if (modelIn.fallbacks !== undefined) {
           if (!Array.isArray(modelIn.fallbacks)) {
-            return { ok: false, reason: `\`commands.${key}.model.fallbacks\` must be an array of strings`, raw }
+            return {
+              ok: false,
+              reason: `\`commands.${key}.model.fallbacks\` must be an array of strings`,
+              raw,
+            }
           }
           if (modelIn.fallbacks.length > FALLBACKS_MAX_ENTRIES) {
             return {
@@ -454,22 +442,14 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   }
   // ARC-186: depVulnScan.enabled — same strict-bool semantics as
   // describe.enabled. Unknown subfields ignored (forward-compat).
-  if (
-    obj.depVulnScan &&
-    typeof obj.depVulnScan === "object" &&
-    !Array.isArray(obj.depVulnScan)
-  ) {
+  if (obj.depVulnScan && typeof obj.depVulnScan === "object" && !Array.isArray(obj.depVulnScan)) {
     const depIn = obj.depVulnScan as Record<string, unknown>
     if (typeof depIn.enabled === "boolean") {
       out.depVulnScan = { enabled: depIn.enabled }
     }
   }
   // ARC-181: astRules — locked defaults at resolveAstRulesConfig time.
-  if (
-    obj.astRules &&
-    typeof obj.astRules === "object" &&
-    !Array.isArray(obj.astRules)
-  ) {
+  if (obj.astRules && typeof obj.astRules === "object" && !Array.isArray(obj.astRules)) {
     const astIn = obj.astRules as Record<string, unknown>
     const astOut: NonNullable<SigilixConfig["astRules"]> = {}
     if (typeof astIn.enabled === "boolean") {
@@ -483,12 +463,14 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       astOut.severityThreshold = astIn.severityThreshold
     }
     if (Array.isArray(astIn.disabledRules)) {
-      const ids = [...new Set(
-        astIn.disabledRules
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const ids = [
+        ...new Set(
+          astIn.disabledRules
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       astOut.disabledRules = ids
     }
     if (typeof astIn.autoInline === "boolean") {
@@ -499,11 +481,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
   }
   // ARC-188: sarifEvidence — single-file SARIF channel config.
-  if (
-    obj.sarifEvidence &&
-    typeof obj.sarifEvidence === "object" &&
-    !Array.isArray(obj.sarifEvidence)
-  ) {
+  if (obj.sarifEvidence && typeof obj.sarifEvidence === "object" && !Array.isArray(obj.sarifEvidence)) {
     const sarifIn = obj.sarifEvidence as Record<string, unknown>
     const sarifOut: NonNullable<SigilixConfig["sarifEvidence"]> = {}
     if (typeof sarifIn.enabled === "boolean") {
@@ -520,21 +498,25 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       sarifOut.severityThreshold = sarifIn.severityThreshold
     }
     if (Array.isArray(sarifIn.disabledRules)) {
-      const ids = [...new Set(
-        sarifIn.disabledRules
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const ids = [
+        ...new Set(
+          sarifIn.disabledRules
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       sarifOut.disabledRules = ids
     }
     if (Array.isArray(sarifIn.disabledCategories)) {
-      const cats = [...new Set(
-        sarifIn.disabledCategories
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v): v is SarifFindingCategoryRef => SARIF_FINDING_CATEGORIES.has(v as SarifFindingCategoryRef)),
-      )]
+      const cats = [
+        ...new Set(
+          sarifIn.disabledCategories
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v): v is SarifFindingCategoryRef => SARIF_FINDING_CATEGORIES.has(v as SarifFindingCategoryRef)),
+        ),
+      ]
       sarifOut.disabledCategories = cats
     }
     if (Object.keys(sarifOut).length > 0) {
@@ -544,11 +526,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // SIG-118: coverage — coverage-diff ingestion (default OFF). Only the
   // literal "github-actions-artifact" opts in; anything else (including
   // the explicit "off") leaves the resolver on its default-OFF path.
-  if (
-    obj.coverage &&
-    typeof obj.coverage === "object" &&
-    !Array.isArray(obj.coverage)
-  ) {
+  if (obj.coverage && typeof obj.coverage === "object" && !Array.isArray(obj.coverage)) {
     const covIn = obj.coverage as Record<string, unknown>
     const covOut: NonNullable<SigilixConfig["coverage"]> = {}
     if (covIn.source === "github-actions-artifact" || covIn.source === "off") {
@@ -565,11 +543,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
   }
   // ARC-189: reviewMemory — cross-PR review memory (default OFF).
-  if (
-    obj.reviewMemory &&
-    typeof obj.reviewMemory === "object" &&
-    !Array.isArray(obj.reviewMemory)
-  ) {
+  if (obj.reviewMemory && typeof obj.reviewMemory === "object" && !Array.isArray(obj.reviewMemory)) {
     const rmIn = obj.reviewMemory as Record<string, unknown>
     const rmOut: NonNullable<SigilixConfig["reviewMemory"]> = {}
     // Strict-bool: only literal true opts in. Truthy non-bool (1, "true")
@@ -648,12 +622,14 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       }
     }
     if (Array.isArray(ccIn.runOnLabels)) {
-      const labels = [...new Set(
-        ccIn.runOnLabels
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const labels = [
+        ...new Set(
+          ccIn.runOnLabels
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       if (labels.length > 0) ccOut.runOnLabels = labels
     }
     if (Object.keys(ccOut).length > 0) out.costControls = ccOut
@@ -667,21 +643,25 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       drOut.enabled = drIn.enabled
     }
     if (Array.isArray(drIn.architectureGlobs)) {
-      const globs = [...new Set(
-        drIn.architectureGlobs
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const globs = [
+        ...new Set(
+          drIn.architectureGlobs
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       if (globs.length > 0) drOut.architectureGlobs = globs
     }
     if (Array.isArray(drIn.docPaths)) {
-      const paths = [...new Set(
-        drIn.docPaths
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const paths = [
+        ...new Set(
+          drIn.docPaths
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       if (paths.length > 0) drOut.docPaths = paths
     }
     if (Object.keys(drOut).length > 0) out.docsReview = drOut
@@ -704,7 +684,11 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       if (typeof tIn.regex === "string" && tIn.regex.length > 0) tOut.regex = tIn.regex
       if (Object.keys(tOut).length > 0) gatesOut.titleFormat = tOut
     }
-    if (gatesIn.descriptionCompleteness && typeof gatesIn.descriptionCompleteness === "object" && !Array.isArray(gatesIn.descriptionCompleteness)) {
+    if (
+      gatesIn.descriptionCompleteness &&
+      typeof gatesIn.descriptionCompleteness === "object" &&
+      !Array.isArray(gatesIn.descriptionCompleteness)
+    ) {
       const dIn = gatesIn.descriptionCompleteness as Record<string, unknown>
       const dOut: NonNullable<NonNullable<SigilixConfig["preMergeGates"]>["descriptionCompleteness"]> = {}
       if (typeof dIn.enabled === "boolean") dOut.enabled = dIn.enabled
@@ -752,12 +736,14 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       }
     }
     if (Array.isArray(pbIn.hotPaths)) {
-      const paths = [...new Set(
-        pbIn.hotPaths
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0),
-      )]
+      const paths = [
+        ...new Set(
+          pbIn.hotPaths
+            .filter((v): v is string => typeof v === "string")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0),
+        ),
+      ]
       if (paths.length > 0) pbOut.hotPaths = paths
     }
     if (Object.keys(pbOut).length > 0) out.perfBudgets = pbOut

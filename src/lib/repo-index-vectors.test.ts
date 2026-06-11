@@ -22,9 +22,15 @@ function makeKvStub(): {
 } {
   const store = new Map<string, string>()
   const kv = {
-    async get(key: string): Promise<string | null> { return store.get(key) ?? null },
-    async put(key: string, value: string): Promise<void> { store.set(key, value) },
-    async delete(key: string): Promise<void> { store.delete(key) },
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null
+    },
+    async put(key: string, value: string): Promise<void> {
+      store.set(key, value)
+    },
+    async delete(key: string): Promise<void> {
+      store.delete(key)
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { kv, store }
 }
@@ -46,9 +52,7 @@ const SAMPLE_VECTORS: RepoIndexVectorsV1 = {
 
 describe("repoIndexVectorsKey", () => {
   it("keys by the lowercased <owner>/<repo> namespace", () => {
-    expect(repoIndexVectorsKey("Sigilix", "Sigilix")).toBe(
-      "repo-index-vectors:sigilix/sigilix",
-    )
+    expect(repoIndexVectorsKey("Sigilix", "Sigilix")).toBe("repo-index-vectors:sigilix/sigilix")
     expect(repoIndexVectorsKey("ACME", "API")).toBe("repo-index-vectors:acme/api")
   })
 })
@@ -88,9 +92,18 @@ describe("writeRepoIndexVectors — SIG-243 Phase 2b dual-write", () => {
 
   it("does NOT dual-write when githubRepoId is zero / negative / non-integer", async () => {
     const { kv, store } = makeKvStub()
-    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 0 } as RepoIndexVectorsV1)
-    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: -1 } as RepoIndexVectorsV1)
-    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 1.5 } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), {
+      ...SAMPLE_VECTORS,
+      githubRepoId: 0,
+    } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), {
+      ...SAMPLE_VECTORS,
+      githubRepoId: -1,
+    } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), {
+      ...SAMPLE_VECTORS,
+      githubRepoId: 1.5,
+    } as RepoIndexVectorsV1)
     expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
   })
 })
@@ -227,10 +240,7 @@ describe("read/write round-trip", () => {
 
   it("returns invalid/wrong-version for v0 records", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      "repo-index-vectors:sigilix/sigilix",
-      JSON.stringify({ ...SAMPLE_VECTORS, v: 2 }),
-    )
+    store.set("repo-index-vectors:sigilix/sigilix", JSON.stringify({ ...SAMPLE_VECTORS, v: 2 }))
     const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("wrong-version")
@@ -248,10 +258,13 @@ describe("read/write round-trip", () => {
 
   it("returns invalid/shape on non-array byPath value", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:sigilix/sigilix", JSON.stringify({
-      ...SAMPLE_VECTORS,
-      byPath: { "src/a.ts": "not-an-array" },
-    }))
+    store.set(
+      "repo-index-vectors:sigilix/sigilix",
+      JSON.stringify({
+        ...SAMPLE_VECTORS,
+        byPath: { "src/a.ts": "not-an-array" },
+      }),
+    )
     const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("shape")
@@ -295,7 +308,10 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
+          v: 1,
+          owner: "Sigilix",
+          repo: "sigilix",
+          runId: "run-A",
           byPath: { "src/a.ts": ["a1"], "src/b.ts": ["b1"] },
         },
       },
@@ -315,7 +331,10 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
+          v: 1,
+          owner: "Sigilix",
+          repo: "sigilix",
+          runId: "run-A",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -333,7 +352,10 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-B-stale",
+          v: 1,
+          owner: "Sigilix",
+          repo: "sigilix",
+          runId: "run-B-stale",
           byPath: { "src/old.ts": ["x"] },
         },
       },
@@ -356,7 +378,10 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Sigilix", repo: "sigilix", runId: "current-run",
+          v: 1,
+          owner: "Sigilix",
+          repo: "sigilix",
+          runId: "current-run",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -376,7 +401,10 @@ describe("computeMerge — run-aware semantics", () => {
       existing: {
         kind: "ok",
         vectors: {
-          v: 1, owner: "Sigilix", repo: "sigilix", runId: "other-run",
+          v: 1,
+          owner: "Sigilix",
+          repo: "sigilix",
+          runId: "other-run",
           byPath: { "src/a.ts": ["a1"] },
         },
       },
@@ -399,26 +427,70 @@ describe("computeMerge — run-aware semantics", () => {
   })
 
   it("supersedes when the active-run lease names the incoming run (SIG-136 re-index)", () => {
-    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } } } as const
-    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "new", idsByPathSlice: { "a.ts": ["id2"] }, activeRunId: "new" })
+    const existing = {
+      kind: "ok",
+      vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } },
+    } as const
+    const out = computeMerge({
+      existing,
+      owner: "o",
+      repo: "r",
+      runId: "new",
+      idsByPathSlice: { "a.ts": ["id2"] },
+      activeRunId: "new",
+    })
     expect(out.action).toBe("superseded")
   })
   it("stale-skips when a DIFFERENT run holds the lease (redelivery / superseded)", () => {
-    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } } } as const
-    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "old", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "newer" })
+    const existing = {
+      kind: "ok",
+      vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } },
+    } as const
+    const out = computeMerge({
+      existing,
+      owner: "o",
+      repo: "r",
+      runId: "old",
+      idsByPathSlice: { "a.ts": ["id1"] },
+      activeRunId: "newer",
+    })
     expect(out.action).toBe("stale-skip")
   })
   it("lease mismatch stale-skips even when existing is MISSING (gates create)", () => {
-    const out = computeMerge({ existing: { kind: "missing" }, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "run-2" })
+    const out = computeMerge({
+      existing: { kind: "missing" },
+      owner: "o",
+      repo: "r",
+      runId: "run-1",
+      idsByPathSlice: { "a.ts": ["id1"] },
+      activeRunId: "run-2",
+    })
     expect(out.action).toBe("stale-skip")
   })
   it("creates when existing missing and the lease is ours", () => {
-    const out = computeMerge({ existing: { kind: "missing" }, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "run-1" })
+    const out = computeMerge({
+      existing: { kind: "missing" },
+      owner: "o",
+      repo: "r",
+      runId: "run-1",
+      idsByPathSlice: { "a.ts": ["id1"] },
+      activeRunId: "run-1",
+    })
     expect(out.action).toBe("created")
   })
   it("extends a continuation shard of the same run", () => {
-    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "run-1", byPath: { "a.ts": ["id1"] } } } as const
-    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "b.ts": ["id2"] }, activeRunId: "run-1" })
+    const existing = {
+      kind: "ok",
+      vectors: { v: 1, owner: "o", repo: "r", runId: "run-1", byPath: { "a.ts": ["id1"] } },
+    } as const
+    const out = computeMerge({
+      existing,
+      owner: "o",
+      repo: "r",
+      runId: "run-1",
+      idsByPathSlice: { "b.ts": ["id2"] },
+      activeRunId: "run-1",
+    })
     expect(out.action).toBe("extended")
   })
 
@@ -438,10 +510,13 @@ describe("computeMerge — run-aware semantics", () => {
 describe("flattenIds", () => {
   it("returns a deduped flat list", () => {
     const ids = flattenIds({
-      v: 1, owner: "o", repo: "r", runId: "rn",
+      v: 1,
+      owner: "o",
+      repo: "r",
+      runId: "rn",
       byPath: {
-        "a": ["x", "y", "shared"],
-        "b": ["shared", "z"],
+        a: ["x", "y", "shared"],
+        b: ["shared", "z"],
       },
     })
     expect(new Set(ids)).toEqual(new Set(["x", "y", "shared", "z"]))
@@ -450,7 +525,11 @@ describe("flattenIds", () => {
 
   it("returns [] for an empty byPath", () => {
     const ids = flattenIds({
-      v: 1, owner: "o", repo: "r", runId: "rn", byPath: {},
+      v: 1,
+      owner: "o",
+      repo: "r",
+      runId: "rn",
+      byPath: {},
     })
     expect(ids).toEqual([])
   })
@@ -461,7 +540,9 @@ describe("flattenIds", () => {
 describe("appendVectorCoverage", () => {
   it("creates the record with the given runId when none exists", async () => {
     const { kv } = makeKvStub()
-    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-1", { "src/a.ts": ["a1", "a2"] })
+    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-1", {
+      "src/a.ts": ["a1", "a2"],
+    })
     const r = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
     expect(r.kind).toBe("ok")
     if (r.kind === "ok") {
@@ -473,12 +554,18 @@ describe("appendVectorCoverage", () => {
   it("unions into an existing record and PRESERVES its runId (coverage doesn't claim ownership)", async () => {
     const { kv } = makeKvStub()
     await writeRepoIndexVectors(makeEnv(kv), {
-      v: 1, owner: "Sigilix", repo: "sigilix", runId: "run-A",
+      v: 1,
+      owner: "Sigilix",
+      repo: "sigilix",
+      runId: "run-A",
       byPath: { "src/a.ts": ["a1"] },
     })
     // A different (e.g. superseded) run appends coverage — must not drop run-A's
     // ids and must not steal ownership of the runId field.
-    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-B", { "src/a.ts": ["a2"], "src/b.ts": ["b1"] })
+    await appendVectorCoverage(makeEnv(kv), "Sigilix", "Sigilix", "run-B", {
+      "src/a.ts": ["a2"],
+      "src/b.ts": ["b1"],
+    })
     const r = await readRepoIndexVectors(makeEnv(kv), "Sigilix", "Sigilix")
     expect(r.kind).toBe("ok")
     if (r.kind === "ok") {
@@ -505,12 +592,16 @@ describe("appendVectorCoverage", () => {
 
   it("throws when the KV write fails (so the caller aborts before upserting)", async () => {
     const failingKv = {
-      async get(): Promise<string | null> { return null },
-      async put(): Promise<void> { throw new Error("kv down") },
+      async get(): Promise<string | null> {
+        return null
+      },
+      async put(): Promise<void> {
+        throw new Error("kv down")
+      },
       async delete(): Promise<void> {},
     } as unknown as Env["OPENCLAW_STATE"]
-    await expect(
-      appendVectorCoverage(makeEnv(failingKv), "o", "r", "run-1", { "src/a.ts": ["a1"] }),
-    ).rejects.toThrow(/coverage write failed/)
+    await expect(appendVectorCoverage(makeEnv(failingKv), "o", "r", "run-1", { "src/a.ts": ["a1"] })).rejects.toThrow(
+      /coverage write failed/,
+    )
   })
 })

@@ -19,25 +19,12 @@
 //     filters by `manifest.owner === ownerLogin`.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  deleteRepoIndex,
-  handleInstallReposRemoved,
-  handleInstallationDeleted,
-} from "@/src/lib/index-delete"
-import {
-  repoIndexManifestKey,
-} from "@/src/lib/repo-index-manifest"
-import {
-  repoIndexVectorsKey,
-} from "@/src/lib/repo-index-vectors"
+import { deleteRepoIndex, handleInstallReposRemoved, handleInstallationDeleted } from "@/src/lib/index-delete"
+import { repoIndexManifestKey } from "@/src/lib/repo-index-manifest"
+import { repoIndexVectorsKey } from "@/src/lib/repo-index-vectors"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import type { Env } from "@/src/shared/types/env"
-import {
-  makeKvStub,
-  makeEnv,
-  manifest,
-  vectors,
-} from "@/src/lib/index-delete.test-helpers"
+import { makeKvStub, makeEnv, manifest, vectors } from "@/src/lib/index-delete.test-helpers"
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -58,7 +45,9 @@ describe("deleteRepoIndex — happy path", () => {
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -86,14 +75,13 @@ describe("deleteRepoIndex — happy path", () => {
     const { kv, store } = makeKvStub()
     store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
     store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
-    store.set(
-      activeRunKey("Sigilix", "sigilix"),
-      JSON.stringify({ v: 1, runId: "x", startedAt: "t" }),
-    )
+    store.set(activeRunKey("Sigilix", "sigilix"), JSON.stringify({ v: 1, runId: "x", startedAt: "t" }))
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -111,7 +99,9 @@ describe("deleteRepoIndex — happy path", () => {
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
     expect(result.status).toBe("complete")
@@ -129,20 +119,16 @@ describe("deleteRepoIndex — happy path", () => {
 describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
   it("deletes repo-tenant:{id} + repo-vectors:{id} on default-branch uninstall when githubRepoId is set", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      repoIndexManifestKey("Sigilix", "sigilix"),
-      JSON.stringify(manifest({ githubRepoId: 808247824 })),
-    )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors({ githubRepoId: 808247824 })),
-    )
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ githubRepoId: 808247824 })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ githubRepoId: 808247824 })))
     store.set("repo-tenant:808247824", "{}")
     store.set("repo-vectors:808247824", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -165,24 +151,28 @@ describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
     const { kv, store } = makeKvStub()
     store.set(
       repoIndexManifestKey("Sigilix", "sigilix/__branch__/h646576"),
-      JSON.stringify(manifest({
-        repo: "sigilix/__branch__/h646576",
-        actualRepo: "sigilix",
-        branch: "feature/something",
-        githubRepoId: 808247824, // would-be-bug: branch manifest carrying ID
-      })),
+      JSON.stringify(
+        manifest({
+          repo: "sigilix/__branch__/h646576",
+          actualRepo: "sigilix",
+          branch: "feature/something",
+          githubRepoId: 808247824, // would-be-bug: branch manifest carrying ID
+        }),
+      ),
     )
     store.set(
       repoIndexVectorsKey("Sigilix", "sigilix/__branch__/h646576"),
-      JSON.stringify(vectors({
-        repo: "sigilix/__branch__/h646576",
-        githubRepoId: 808247824,
-      })),
+      JSON.stringify(
+        vectors({
+          repo: "sigilix/__branch__/h646576",
+          githubRepoId: 808247824,
+        }),
+      ),
     )
     // Canonical default-branch tenant keys exist — these MUST NOT
     // be touched by the branch-scoped delete.
-    store.set("repo-tenant:808247824", "{\"canonical\":true}")
-    store.set("repo-vectors:808247824", "{\"canonical\":true}")
+    store.set("repo-tenant:808247824", '{"canonical":true}')
+    store.set("repo-vectors:808247824", '{"canonical":true}')
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
@@ -195,8 +185,8 @@ describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
     expect(result.status).toBe("complete")
     // Tenant keys survive — the canonical default-branch record
     // for this repo is intact.
-    expect(store.get("repo-tenant:808247824")).toBe("{\"canonical\":true}")
-    expect(store.get("repo-vectors:808247824")).toBe("{\"canonical\":true}")
+    expect(store.get("repo-tenant:808247824")).toBe('{"canonical":true}')
+    expect(store.get("repo-vectors:808247824")).toBe('{"canonical":true}')
   })
 
   it("does not touch tenant keys for pre-Phase-2 legacy records without githubRepoId", async () => {
@@ -205,17 +195,16 @@ describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
       repoIndexManifestKey("Sigilix", "sigilix"),
       JSON.stringify(manifest()), // no githubRepoId field
     )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors()),
-    )
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     // A pre-existing canonical tenant key for a different repo with the
     // same hypothetical ID (defensive — shouldn't happen in practice).
     store.set("repo-tenant:99999999", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -230,24 +219,17 @@ describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
 describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
   it("deletes the legacy review-memory:<owner>/<repo>:* prefix on uninstall", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      repoIndexManifestKey("Sigilix", "sigilix"),
-      JSON.stringify(manifest()),
-    )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors()),
-    )
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     store.set("review-memory:Sigilix/sigilix:cat:performance", "{}")
     store.set("review-memory:Sigilix/sigilix:cat:logic", "{}")
-    store.set(
-      "review-memory:Sigilix/sigilix:path:abc:cat:tests",
-      "{}",
-    )
+    store.set("review-memory:Sigilix/sigilix:path:abc:cat:tests", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -260,26 +242,22 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
 
   it("ALSO deletes the new review-memory:repo:<id>:* prefix when manifest carries githubRepoId", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      repoIndexManifestKey("Sigilix", "sigilix"),
-      JSON.stringify(manifest({ githubRepoId: 808247824 })),
-    )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors({ githubRepoId: 808247824 })),
-    )
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ githubRepoId: 808247824 })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ githubRepoId: 808247824 })))
     store.set("review-memory:Sigilix/sigilix:cat:performance", "{}")
     store.set("review-memory:repo:808247824:cat:performance", "{}")
     store.set("review-memory:repo:808247824:cat:logic", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
     expect(result.status).toBe("complete")
-    expect(result.reviewMemoryKeys).toBe(3)  // 1 legacy + 2 new
+    expect(result.reviewMemoryKeys).toBe(3) // 1 legacy + 2 new
     expect(store.has("review-memory:Sigilix/sigilix:cat:performance")).toBe(false)
     expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(false)
     expect(store.has("review-memory:repo:808247824:cat:logic")).toBe(false)
@@ -288,21 +266,17 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
   it("does NOT delete review-memory:repo:<id>:* when no positive integer githubRepoId is on either record", async () => {
     const { kv, store } = makeKvStub()
     // Manifest exists but lacks githubRepoId (pre-Phase-2 record)
-    store.set(
-      repoIndexManifestKey("Sigilix", "sigilix"),
-      JSON.stringify(manifest()),
-    )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors()),
-    )
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors()))
     // Hypothetical foreign new-key (e.g., a different repo's id that
     // accidentally collided — defensive guard: must NOT delete)
     store.set("review-memory:repo:99999999:cat:performance", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -314,17 +288,13 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
 
   it("returns reviewMemoryKeys=0 when no review-memory state exists at all", async () => {
     const { kv, store } = makeKvStub()
-    store.set(
-      repoIndexManifestKey("Sigilix", "sigilix"),
-      JSON.stringify(manifest({ githubRepoId: 808247824 })),
-    )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors({ githubRepoId: 808247824 })),
-    )
+    store.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest({ githubRepoId: 808247824 })))
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ githubRepoId: 808247824 })))
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
     expect(result.reviewMemoryKeys).toBe(0)
@@ -338,7 +308,9 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -367,7 +339,9 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -389,16 +363,15 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
       repoIndexManifestKey("Sigilix", "sigilix"),
       JSON.stringify(manifest({ branch: "feature-x", githubRepoId: 808247824 })),
     )
-    store.set(
-      repoIndexVectorsKey("Sigilix", "sigilix"),
-      JSON.stringify(vectors({ githubRepoId: 808247824 })),
-    )
+    store.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors({ githubRepoId: 808247824 })))
     store.set("review-memory:Sigilix/sigilix:cat:performance", "{}")
     store.set("review-memory:repo:808247824:cat:performance", "{}")
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "branch-deleted",
     })
 
@@ -424,7 +397,9 @@ describe("deleteRepoIndex — cross-tenant guard", () => {
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -451,7 +426,9 @@ describe("deleteRepoIndex — pre-PR3 (no vectors record)", () => {
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -471,7 +448,9 @@ describe("deleteRepoIndex — no state", () => {
     const { kv } = makeKvStub()
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
     expect(result.status).toBe("no-state")
@@ -501,7 +480,9 @@ describe("deleteRepoIndex — partial failure", () => {
       },
     })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -533,7 +514,9 @@ describe("deleteRepoIndex — vectors owner mismatch (Sigilix HIGH / CR Critical
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -562,7 +545,9 @@ describe("deleteRepoIndex — vectors owner mismatch (Sigilix HIGH / CR Critical
 
     const { env, deletedBatches } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -597,7 +582,9 @@ describe("deleteRepoIndex — KV pagination across multiple pages", () => {
       const limit = opts.limit ?? 1000
       let snapshot = snapshots.get(prefix)
       if (!snapshot) {
-        snapshot = Array.from(store.keys()).filter((k) => k.startsWith(prefix)).sort()
+        snapshot = Array.from(store.keys())
+          .filter((k) => k.startsWith(prefix))
+          .sort()
         snapshots.set(prefix, snapshot)
       }
       const startIdx = cursor ? parseInt(cursor, 10) : 0
@@ -614,7 +601,9 @@ describe("deleteRepoIndex — KV pagination across multiple pages", () => {
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -638,7 +627,9 @@ describe("deleteRepoIndex — KV pagination across multiple pages", () => {
 
     const { env } = makeEnv({ kv })
     const result = await deleteRepoIndex({
-      env, owner: "Sigilix", repo: "sigilix",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
       reason: "install-deleted",
     })
 
@@ -658,7 +649,8 @@ describe("handleInstallReposRemoved", () => {
 
     const { env } = makeEnv({ kv })
     const { results, anyError } = await handleInstallReposRemoved({
-      env, installationId: 99,
+      env,
+      installationId: 99,
       repositories: [
         { full_name: "Acme/repo-a" },
         { full_name: "Acme/repo-b" },
@@ -677,19 +669,29 @@ describe("handleInstallReposRemoved", () => {
     const branchRepo = "repo-a/__branch__/h646576"
     store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))
     store.set(repoIndexVectorsKey("Acme", "repo-a"), JSON.stringify(vectors({ repo: "repo-a", owner: "Acme" })))
-    store.set(repoIndexManifestKey("Acme", branchRepo), JSON.stringify(manifest({
-      repo: branchRepo,
-      owner: "Acme",
-      actualRepo: "repo-a",
-      branch: "dev",
-      defaultBranch: "main",
-      namespace: "acme/repo-a/__branch__/h646576",
-    })))
-    store.set(repoIndexVectorsKey("Acme", branchRepo), JSON.stringify(vectors({
-      repo: branchRepo,
-      owner: "Acme",
-      byPath: { "src/dev.ts": ["dev-id"] },
-    })))
+    store.set(
+      repoIndexManifestKey("Acme", branchRepo),
+      JSON.stringify(
+        manifest({
+          repo: branchRepo,
+          owner: "Acme",
+          actualRepo: "repo-a",
+          branch: "dev",
+          defaultBranch: "main",
+          namespace: "acme/repo-a/__branch__/h646576",
+        }),
+      ),
+    )
+    store.set(
+      repoIndexVectorsKey("Acme", branchRepo),
+      JSON.stringify(
+        vectors({
+          repo: branchRepo,
+          owner: "Acme",
+          byPath: { "src/dev.ts": ["dev-id"] },
+        }),
+      ),
+    )
 
     const { env, deletedBatches } = makeEnv({ kv })
     const { results, anyError } = await handleInstallReposRemoved({
@@ -715,27 +717,42 @@ describe("handleInstallReposRemoved", () => {
     const badManifestKey = repoIndexManifestKey("Acme", badBranchRepo)
     store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))
     store.set(repoIndexVectorsKey("Acme", "repo-a"), JSON.stringify(vectors({ repo: "repo-a", owner: "Acme" })))
-    store.set(repoIndexManifestKey("Acme", okBranchRepo), JSON.stringify(manifest({
-      repo: okBranchRepo,
-      owner: "Acme",
-      actualRepo: "repo-a",
-      branch: "dev",
-      defaultBranch: "main",
-      namespace: "acme/repo-a/__branch__/h646576",
-    })))
-    store.set(repoIndexVectorsKey("Acme", okBranchRepo), JSON.stringify(vectors({
-      repo: okBranchRepo,
-      owner: "Acme",
-      byPath: { "src/dev.ts": ["dev-id"] },
-    })))
-    store.set(badManifestKey, JSON.stringify(manifest({
-      repo: badBranchRepo,
-      owner: "Acme",
-      actualRepo: "repo-a",
-      branch: "fail",
-      defaultBranch: "main",
-      namespace: "acme/repo-a/__branch__/h6661696c",
-    })))
+    store.set(
+      repoIndexManifestKey("Acme", okBranchRepo),
+      JSON.stringify(
+        manifest({
+          repo: okBranchRepo,
+          owner: "Acme",
+          actualRepo: "repo-a",
+          branch: "dev",
+          defaultBranch: "main",
+          namespace: "acme/repo-a/__branch__/h646576",
+        }),
+      ),
+    )
+    store.set(
+      repoIndexVectorsKey("Acme", okBranchRepo),
+      JSON.stringify(
+        vectors({
+          repo: okBranchRepo,
+          owner: "Acme",
+          byPath: { "src/dev.ts": ["dev-id"] },
+        }),
+      ),
+    )
+    store.set(
+      badManifestKey,
+      JSON.stringify(
+        manifest({
+          repo: badBranchRepo,
+          owner: "Acme",
+          actualRepo: "repo-a",
+          branch: "fail",
+          defaultBranch: "main",
+          namespace: "acme/repo-a/__branch__/h6661696c",
+        }),
+      ),
+    )
 
     const kvWithTransientGet = {
       ...kv,
@@ -767,10 +784,13 @@ describe("handleInstallReposRemoved", () => {
 
     const { env } = makeEnv({
       kv,
-      deleteByIdsImpl: async () => { throw new Error("vectorize down") },
+      deleteByIdsImpl: async () => {
+        throw new Error("vectorize down")
+      },
     })
     const { anyError } = await handleInstallReposRemoved({
-      env, installationId: 99,
+      env,
+      installationId: 99,
       repositories: [{ full_name: "Acme/repo-a" }],
     })
     expect(anyError).toBe(true)
@@ -785,11 +805,16 @@ describe("handleInstallationDeleted", () => {
     store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))
     store.set(repoIndexManifestKey("Acme", "repo-b"), JSON.stringify(manifest({ repo: "repo-b", owner: "Acme" })))
     // Different-owner repo should NOT be touched.
-    store.set(repoIndexManifestKey("OtherCorp", "repo-c"), JSON.stringify(manifest({ repo: "repo-c", owner: "OtherCorp" })))
+    store.set(
+      repoIndexManifestKey("OtherCorp", "repo-c"),
+      JSON.stringify(manifest({ repo: "repo-c", owner: "OtherCorp" })),
+    )
 
     const { env } = makeEnv({ kv })
     const { results } = await handleInstallationDeleted({
-      env, installationId: 99, ownerLogin: "Acme",
+      env,
+      installationId: 99,
+      ownerLogin: "Acme",
     })
 
     expect(results.length).toBe(2)
@@ -806,7 +831,9 @@ describe("handleInstallationDeleted", () => {
     })
     const { env } = makeEnv({ kv })
     const { anyError } = await handleInstallationDeleted({
-      env, installationId: 99, ownerLogin: "Acme",
+      env,
+      installationId: 99,
+      ownerLogin: "Acme",
     })
     expect(anyError).toBe(true)
   })

@@ -55,18 +55,17 @@ describe("weightedSignalCount", () => {
 
   it("differentially weights too-minor at 1.5x", () => {
     // 2 too-minor = 3.0; same count as 3 unlabeled.
-    expect(weightedSignalCount([
-      { dismissReason: "too-minor" },
-      { dismissReason: "too-minor" },
-    ])).toBe(3)
+    expect(weightedSignalCount([{ dismissReason: "too-minor" }, { dismissReason: "too-minor" }])).toBe(3)
   })
 
   it("mixes weights correctly across reasons", () => {
     // 1 too-minor (1.5) + 1 not-a-bug (1.0) + 1 unlabeled (1.0) = 3.5
-    expect(weightedSignalCount([
-      { dismissReason: "too-minor" },
-      { dismissReason: "not-a-bug" },
-      { dismissReason: "unlabeled" },
-    ])).toBe(3.5)
+    expect(
+      weightedSignalCount([
+        { dismissReason: "too-minor" },
+        { dismissReason: "not-a-bug" },
+        { dismissReason: "unlabeled" },
+      ]),
+    ).toBe(3.5)
   })
 })

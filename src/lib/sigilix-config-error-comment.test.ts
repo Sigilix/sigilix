@@ -132,7 +132,10 @@ describe("postConfigErrorComment", () => {
   it("returns skipped when headSha is empty", async () => {
     const { stub } = fakeKV()
     const result = await postConfigErrorComment({
-      env: makeEnv(stub), client: fakeClient({}), ...args, headSha: "",
+      env: makeEnv(stub),
+      client: fakeClient({}),
+      ...args,
+      headSha: "",
     })
     expect(result).toEqual({ kind: "skipped", reason: "missing-headsha" })
   })
@@ -143,7 +146,10 @@ describe("postConfigErrorComment", () => {
     const { stub } = fakeKV()
     const longRaw = "x".repeat(2000)
     await postConfigErrorComment({
-      env: makeEnv(stub), client, ...args, raw: longRaw,
+      env: makeEnv(stub),
+      client,
+      ...args,
+      raw: longRaw,
     })
     const body = create.mock.calls[0][3] as string
     // Snippet section should not contain the full 2000-char body

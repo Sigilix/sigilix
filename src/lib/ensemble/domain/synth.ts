@@ -128,17 +128,14 @@ export function classifySynthOutcome(
  * SYNTHESIZER_RETRY_TIMEOUT_MS budget, so the model only has time
  * for one tight re-emission — we tell it exactly what to fix.
  */
-export function buildSynthRetryMessage(
-  originalMessage: string,
-  outcome: SynthAttemptOutcome,
-): string {
+export function buildSynthRetryMessage(originalMessage: string, outcome: SynthAttemptOutcome): string {
   if (outcome === "ok") return originalMessage
   const hint =
     outcome === "parse"
       ? "RETRY: Your previous response could not be parsed as JSON. Re-emit ONLY a single JSON object matching the schema. No prose. No markdown fence. No leading or trailing text."
       : outcome === "provenance"
-      ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], softened?: [...] }`. Each `provenance.findings[i].sourceFindingIds[]` and each `provenance.softened[i].sourceFindingId` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
-      : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
+        ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], softened?: [...] }`. Each `provenance.findings[i].sourceFindingIds[]` and each `provenance.softened[i].sourceFindingId` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
+        : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
   return `${originalMessage}\n\n${hint}`
 }
 
@@ -147,10 +144,7 @@ export function buildSynthRetryMessage(
  * Drops lowest-score findings first to preserve severity. Approximate
  * — uses 4 chars/token estimate.
  */
-export function truncateVerdictToTokens(
-  verdict: PrReviewVerdictWithIds,
-  maxTokens: number,
-): PrReviewVerdictWithIds {
+export function truncateVerdictToTokens(verdict: PrReviewVerdictWithIds, maxTokens: number): PrReviewVerdictWithIds {
   const charBudget = maxTokens * 4
   const working = { ...verdict, findings: [...verdict.findings] }
   // Sort findings by score DESC so we drop the lowest first.

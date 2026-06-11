@@ -8,9 +8,15 @@ const reviewable = parseDiffToReviewablePositions(
 )
 function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
-    path: "src/a.ts", line: 1, score: 4, category: "performance",
-    headline: "h", body: "b", confidence: 5,
-    suggestedReplacement: "const x = batch(1)", ...over,
+    path: "src/a.ts",
+    line: 1,
+    score: 4,
+    category: "performance",
+    headline: "h",
+    body: "b",
+    confidence: 5,
+    suggestedReplacement: "const x = batch(1)",
+    ...over,
   } as PrReviewFinding
 }
 

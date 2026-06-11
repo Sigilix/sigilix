@@ -25,8 +25,12 @@ function makeKv(seed: Record<string, string> = {}): MockKv {
   const store = new Map<string, string>(Object.entries(seed))
   const asEnv = {
     get: async (key: string): Promise<string | null> => store.get(key) ?? null,
-    put: async (key: string, value: string) => { store.set(key, value) },
-    delete: async (key: string) => { store.delete(key) },
+    put: async (key: string, value: string) => {
+      store.set(key, value)
+    },
+    delete: async (key: string) => {
+      store.delete(key)
+    },
   } as unknown as KVNamespace
   return { store, asEnv }
 }
@@ -83,7 +87,9 @@ describe("bumpPrReviewCounter", () => {
     const putMock = vi.fn(async () => {})
     const env = {
       OPENCLAW_STATE: {
-        get: async () => { throw new Error("KV get boom") },
+        get: async () => {
+          throw new Error("KV get boom")
+        },
         put: putMock,
         delete: async () => {},
       } as unknown as KVNamespace,
@@ -102,7 +108,9 @@ describe("bumpPrReviewCounter", () => {
     const env = {
       OPENCLAW_STATE: {
         get: async () => "9",
-        put: async () => { throw new Error("KV put boom") },
+        put: async () => {
+          throw new Error("KV put boom")
+        },
         delete: async () => {},
       } as unknown as KVNamespace,
     } as unknown as Env
@@ -157,7 +165,9 @@ describe("preparePrReviewCounter", () => {
     const putMock = vi.fn(async () => {})
     const env = {
       OPENCLAW_STATE: {
-        get: async () => { throw new Error("KV get boom") },
+        get: async () => {
+          throw new Error("KV get boom")
+        },
         put: putMock,
         delete: async () => {},
       } as unknown as KVNamespace,

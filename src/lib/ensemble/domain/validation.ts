@@ -22,18 +22,10 @@
 // `ValidateForSubmissionArgs` type moved to the phases sibling and are re-exported
 // from here so this module's export surface is unchanged.
 
-import type {
-  PrReviewVerdict,
-  PrReviewFinding,
-  EvidenceRecord,
-} from "@/src/shared/domain/pr-review-finding"
+import type { PrReviewVerdict, PrReviewFinding, EvidenceRecord } from "@/src/shared/domain/pr-review-finding"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { PrReviewVerdictWithIds } from "./findings"
-import {
-  initializeValidationState,
-  aggregateAdvisoryNits,
-  tagOutOfPrScopeFindings,
-} from "./validation-phases"
+import { initializeValidationState, aggregateAdvisoryNits, tagOutOfPrScopeFindings } from "./validation-phases"
 import { processFindings } from "./validation-walk"
 // PR2: re-exported (below) to preserve this module's public surface — the
 // barrel (`triage-pr-review-ensemble.ts`) + the orchestrator import them from
@@ -47,11 +39,7 @@ import {
 
 // PR2: re-export the moved public symbols so importers of `./validation` (the
 // barrel + the orchestrator) keep resolving exactly as before.
-export {
-  VAGUE_PREFIXES,
-  hasVaguePrefix,
-  evaluateTestingFindingCitation,
-}
+export { VAGUE_PREFIXES, hasVaguePrefix, evaluateTestingFindingCitation }
 export type { ValidateForSubmissionArgs }
 
 export interface SynthesizerProvenance {
@@ -260,11 +248,7 @@ export function validateForSubmission(args: ValidateForSubmissionArgs): Validate
 
   processFindings(resolved, context, state)
 
-  const summary = aggregateAdvisoryNits(
-    resolved.synthOutput.verdict.summary,
-    state.advisoryNits,
-    resolved.profile,
-  )
+  const summary = aggregateAdvisoryNits(resolved.synthOutput.verdict.summary, state.advisoryNits, resolved.profile)
 
   tagOutOfPrScopeFindings(state.cleanFindings, state.unanchoredFindings, resolved.reviewable)
 

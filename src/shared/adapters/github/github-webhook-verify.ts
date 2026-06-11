@@ -13,23 +13,15 @@
 
 const encoder = new TextEncoder()
 
-export async function verifyGitHubWebhook(
-  rawBody: string,
-  signatureHeader: string,
-  secret: string
-): Promise<boolean> {
+export async function verifyGitHubWebhook(rawBody: string, signatureHeader: string, secret: string): Promise<boolean> {
   if (!signatureHeader || !secret) return false
   if (!signatureHeader.startsWith("sha256=")) return false
   const provided = signatureHeader.slice("sha256=".length).toLowerCase()
   if (provided.length === 0) return false
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody))
   const expected = bufferToHex(digest)
 

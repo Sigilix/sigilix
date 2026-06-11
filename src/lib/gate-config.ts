@@ -39,9 +39,7 @@ const CACHE_TTL_MS = 60_000
 
 // Per-key cache entry: either a settled value with an expiry, OR an
 // in-flight Promise (single-flight coalescing — see below).
-type CacheEntry<T> =
-  | { kind: "value"; value: T; expiresAt: number }
-  | { kind: "pending"; promise: Promise<T> }
+type CacheEntry<T> = { kind: "value"; value: T; expiresAt: number } | { kind: "pending"; promise: Promise<T> }
 
 // Per-binding caches keyed on the KVNamespace object itself. This
 // matters in two scenarios:
@@ -222,14 +220,10 @@ export function parseGateModel(raw: string): GateModel | null {
   if (typeof obj.intercept !== "number" || !Number.isFinite(obj.intercept)) return null
   const intercept = obj.intercept
   if (!Array.isArray(obj.coefs)) return null
-  const coefs = (obj.coefs as unknown[]).filter(
-    (c): c is number => typeof c === "number" && Number.isFinite(c),
-  )
+  const coefs = (obj.coefs as unknown[]).filter((c): c is number => typeof c === "number" && Number.isFinite(c))
   if (coefs.length === 0 || coefs.length !== obj.coefs.length) return null
   if (!Array.isArray(obj.featureNames)) return null
-  const featureNames = (obj.featureNames as unknown[]).filter(
-    (n): n is string => typeof n === "string" && n.length > 0,
-  )
+  const featureNames = (obj.featureNames as unknown[]).filter((n): n is string => typeof n === "string" && n.length > 0)
   if (featureNames.length !== coefs.length) return null
   const out: GateModel = { version: 1, intercept, coefs, featureNames }
   if (typeof obj.calibratedAt === "string") out.calibratedAt = obj.calibratedAt

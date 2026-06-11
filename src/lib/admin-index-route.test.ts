@@ -24,7 +24,11 @@ function makeEnv(overrides: Partial<Env> = {}): { env: Env; sent: JobMessage[] }
     OPENCLAW_ADMIN_TOKEN: TOKEN,
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
-    OPENCLAW_JOBS: { send: async (m: JobMessage) => { sent.push(m) } },
+    OPENCLAW_JOBS: {
+      send: async (m: JobMessage) => {
+        sent.push(m)
+      },
+    },
     ...overrides,
   } as unknown as Env
   return { env, sent }
@@ -45,13 +49,19 @@ describe("handleAdminIndexRoute", () => {
   it("401 on missing/wrong bearer", async () => {
     const { env } = makeEnv()
     expect((await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o&repo=r"), env)).status).toBe(401)
-    expect((await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o&repo=r", "Bearer no"), env)).status).toBe(401)
+    expect(
+      (await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o&repo=r", "Bearer no"), env)).status,
+    ).toBe(401)
   })
 
   it("400 when owner or repo is missing", async () => {
     const { env } = makeEnv()
-    expect((await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o", `Bearer ${TOKEN}`), env)).status).toBe(400)
-    expect((await handleAdminIndexRoute(post("https://x/admin/index-repo?repo=r", `Bearer ${TOKEN}`), env)).status).toBe(400)
+    expect(
+      (await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(400)
+    expect(
+      (await handleAdminIndexRoute(post("https://x/admin/index-repo?repo=r", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(400)
   })
 
   it("503 when the GitHub App isn't configured (either credential missing)", async () => {
@@ -82,7 +92,10 @@ describe("handleAdminIndexRoute", () => {
   it("202 enqueues a manual index-repo job with the resolved installationId", async () => {
     mockResolve.mockResolvedValue(998877)
     const { env, sent } = makeEnv()
-    const res = await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=Sigilix&repo=sigilix", `Bearer ${TOKEN}`), env)
+    const res = await handleAdminIndexRoute(
+      post("https://x/admin/index-repo?owner=Sigilix&repo=sigilix", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(202)
     expect(sent).toHaveLength(1)
     expect(sent[0]).toEqual({
@@ -102,7 +115,9 @@ describe("handleAdminBackfillRoute", () => {
 
   it("503 when the admin token is unset", async () => {
     const { env } = makeEnv({ OPENCLAW_ADMIN_TOKEN: undefined })
-    expect((await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(
+      (await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(503)
     expect(mockBackfill).not.toHaveBeenCalled()
   })
 
@@ -113,20 +128,41 @@ describe("handleAdminBackfillRoute", () => {
 
   it("503 when the GitHub App isn't configured", async () => {
     const { env } = makeEnv({ GITHUB_PRIVATE_KEY: undefined })
-    expect((await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(
+      (await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(503)
   })
 
   it("200 returns the backfill summary (dryRun flag threaded)", async () => {
-    mockBackfill.mockResolvedValue({ installations: 3, repos: 12, enqueued: 12, sensitiveSkipped: 0, perRepoFailed: 0, dryRun: true, enumerationIncomplete: false })
+    mockBackfill.mockResolvedValue({
+      installations: 3,
+      repos: 12,
+      enqueued: 12,
+      sensitiveSkipped: 0,
+      perRepoFailed: 0,
+      dryRun: true,
+      enumerationIncomplete: false,
+    })
     const { env } = makeEnv()
-    const res = await handleAdminBackfillRoute(post("https://x/admin/index-backfill?dryRun=true", `Bearer ${TOKEN}`), env)
+    const res = await handleAdminBackfillRoute(
+      post("https://x/admin/index-backfill?dryRun=true", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ installations: 3, repos: 12, dryRun: true })
     expect(mockBackfill).toHaveBeenCalledWith(env, { dryRun: true })
   })
 
   it("defaults dryRun=false when not specified", async () => {
-    mockBackfill.mockResolvedValue({ installations: 0, repos: 0, enqueued: 0, sensitiveSkipped: 0, perRepoFailed: 0, dryRun: false, enumerationIncomplete: false })
+    mockBackfill.mockResolvedValue({
+      installations: 0,
+      repos: 0,
+      enqueued: 0,
+      sensitiveSkipped: 0,
+      perRepoFailed: 0,
+      dryRun: false,
+      enumerationIncomplete: false,
+    })
     const { env } = makeEnv()
     await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)
     expect(mockBackfill).toHaveBeenCalledWith(env, { dryRun: false })
@@ -135,9 +171,16 @@ describe("handleAdminBackfillRoute", () => {
 
 const mockReconcile = vi.mocked(runIndexReconciliation)
 const reconcileSummary = (dryRun: boolean) => ({
-  installations: 1, reposChecked: 2, reposMissingManifest: 1, reposMissingGraph: 0, graphReadErrors: 0,
-  enqueued: 1, sensitiveSkipped: 0, perRepoFailed: 0,
-  dryRun, enumerationIncomplete: false,
+  installations: 1,
+  reposChecked: 2,
+  reposMissingManifest: 1,
+  reposMissingGraph: 0,
+  graphReadErrors: 0,
+  enqueued: 1,
+  sensitiveSkipped: 0,
+  perRepoFailed: 0,
+  dryRun,
+  enumerationIncomplete: false,
 })
 
 describe("handleAdminReconcileRoute", () => {
@@ -145,7 +188,9 @@ describe("handleAdminReconcileRoute", () => {
 
   it("503 when the admin token is unset", async () => {
     const { env } = makeEnv({ OPENCLAW_ADMIN_TOKEN: undefined })
-    expect((await handleAdminReconcileRoute(post("https://x/admin/index-reconcile", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(
+      (await handleAdminReconcileRoute(post("https://x/admin/index-reconcile", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(503)
     expect(mockReconcile).not.toHaveBeenCalled()
   })
 
@@ -156,13 +201,18 @@ describe("handleAdminReconcileRoute", () => {
 
   it("503 when the GitHub App isn't configured", async () => {
     const { env } = makeEnv({ GITHUB_PRIVATE_KEY: undefined })
-    expect((await handleAdminReconcileRoute(post("https://x/admin/index-reconcile", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(
+      (await handleAdminReconcileRoute(post("https://x/admin/index-reconcile", `Bearer ${TOKEN}`), env)).status,
+    ).toBe(503)
   })
 
   it("200 returns the reconciliation summary (dryRun flag threaded)", async () => {
     mockReconcile.mockResolvedValue(reconcileSummary(true))
     const { env } = makeEnv()
-    const res = await handleAdminReconcileRoute(post("https://x/admin/index-reconcile?dryRun=true", `Bearer ${TOKEN}`), env)
+    const res = await handleAdminReconcileRoute(
+      post("https://x/admin/index-reconcile?dryRun=true", `Bearer ${TOKEN}`),
+      env,
+    )
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({
       reposChecked: 2,

@@ -71,7 +71,13 @@ export interface GraphMetricsQuery {
     blastDependentCount: number
   }
   modeReviews: Record<string, number>
-  lastSeenPrHeads: Array<{ owner: string; repo: string; prNumber: number; headSha: string; lastSeenAt: string }>
+  lastSeenPrHeads: Array<{
+    owner: string
+    repo: string
+    prNumber: number
+    headSha: string
+    lastSeenAt: string
+  }>
 }
 
 function utcDay(iso?: string): string {
@@ -117,13 +123,24 @@ export class GraphMetricsDO extends DurableObject<Env> {
            sum_blast_caller = sum_blast_caller + ?,
            sum_blast_dependent = sum_blast_dependent + ?`,
         day,
-        s.jaccard, s.addedCount, s.nodeCount, s.cappedNodeCount, s.blastCallerCount, s.blastDependentCount,
-        s.jaccard, s.addedCount, s.nodeCount, s.cappedNodeCount, s.blastCallerCount, s.blastDependentCount,
+        s.jaccard,
+        s.addedCount,
+        s.nodeCount,
+        s.cappedNodeCount,
+        s.blastCallerCount,
+        s.blastDependentCount,
+        s.jaccard,
+        s.addedCount,
+        s.nodeCount,
+        s.cappedNodeCount,
+        s.blastCallerCount,
+        s.blastDependentCount,
       )
       sql.exec(
         `INSERT INTO daily_graph_mode (day, mode, reviews) VALUES (?, ?, 1)
          ON CONFLICT(day, mode) DO UPDATE SET reviews = reviews + 1`,
-        day, s.mode,
+        day,
+        s.mode,
       )
       sql.exec(
         `INSERT INTO last_seen_pr (owner, repo, pr_number, head_sha, last_seen_at)
@@ -132,7 +149,11 @@ export class GraphMetricsDO extends DurableObject<Env> {
            head_sha = excluded.head_sha,
            last_seen_at = excluded.last_seen_at
          WHERE excluded.last_seen_at >= last_seen_pr.last_seen_at`,
-        args.owner, args.repo, args.prNumber, args.headSha, at,
+        args.owner,
+        args.repo,
+        args.prNumber,
+        args.headSha,
+        at,
       )
     })
 
@@ -150,8 +171,13 @@ export class GraphMetricsDO extends DurableObject<Env> {
 
     const agg = [
       ...sql.exec<{
-        reviews: number; sum_jaccard: number; sum_added: number; sum_nodes: number
-        sum_capped: number; sum_blast_caller: number; sum_blast_dependent: number
+        reviews: number
+        sum_jaccard: number
+        sum_added: number
+        sum_nodes: number
+        sum_capped: number
+        sum_blast_caller: number
+        sum_blast_dependent: number
       }>(
         `SELECT
            COALESCE(SUM(reviews), 0) AS reviews,
@@ -162,9 +188,18 @@ export class GraphMetricsDO extends DurableObject<Env> {
            COALESCE(SUM(sum_blast_caller), 0) AS sum_blast_caller,
            COALESCE(SUM(sum_blast_dependent), 0) AS sum_blast_dependent
          FROM daily_graph WHERE day >= ? AND day <= ?`,
-        startDay, endDay,
+        startDay,
+        endDay,
       ),
-    ][0] ?? { reviews: 0, sum_jaccard: 0, sum_added: 0, sum_nodes: 0, sum_capped: 0, sum_blast_caller: 0, sum_blast_dependent: 0 }
+    ][0] ?? {
+      reviews: 0,
+      sum_jaccard: 0,
+      sum_added: 0,
+      sum_nodes: 0,
+      sum_capped: 0,
+      sum_blast_caller: 0,
+      sum_blast_dependent: 0,
+    }
 
     const reviews = agg.reviews
     const avg = (sum: number): number => (reviews > 0 ? sum / reviews : 0)
@@ -173,18 +208,31 @@ export class GraphMetricsDO extends DurableObject<Env> {
     for (const row of sql.exec<{ mode: string; reviews: number }>(
       `SELECT mode, SUM(reviews) AS reviews FROM daily_graph_mode
        WHERE day >= ? AND day <= ? GROUP BY mode`,
-      startDay, endDay,
+      startDay,
+      endDay,
     )) {
       modeReviews[row.mode] = row.reviews
     }
 
     const lastSeenPrHeads = [
-      ...sql.exec<{ owner: string; repo: string; pr_number: number; head_sha: string; last_seen_at: string }>(
+      ...sql.exec<{
+        owner: string
+        repo: string
+        pr_number: number
+        head_sha: string
+        last_seen_at: string
+      }>(
         `SELECT owner, repo, pr_number, head_sha, last_seen_at
          FROM last_seen_pr ORDER BY last_seen_at DESC LIMIT ?`,
         MAX_LAST_SEEN,
       ),
-    ].map((r) => ({ owner: r.owner, repo: r.repo, prNumber: r.pr_number, headSha: r.head_sha, lastSeenAt: r.last_seen_at }))
+    ].map((r) => ({
+      owner: r.owner,
+      repo: r.repo,
+      prNumber: r.pr_number,
+      headSha: r.head_sha,
+      lastSeenAt: r.last_seen_at,
+    }))
 
     return {
       window: { days: args.windowDays, startDay, endDay },

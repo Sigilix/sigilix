@@ -17,30 +17,38 @@ import {
 
 describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
   it("parses overview.enabled === true", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      overview: { enabled: true },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: { enabled: true },
+      }),
+    )
     expect(result).toEqual({ overview: { enabled: true } })
   })
 
   it("parses overview.enabled === false", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      overview: { enabled: false },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: { enabled: false },
+      }),
+    )
     expect(result).toEqual({ overview: { enabled: false } })
   })
 
   it('strips a string `"false"` (strict boolean — no JS truthy nonsense)', () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      overview: { enabled: "false" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: { enabled: "false" },
+      }),
+    )
     expect(result).toEqual({})
   })
 
   it("strips a number 0 (strict boolean)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      overview: { enabled: 0 },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: { enabled: 0 },
+      }),
+    )
     expect(result).toEqual({})
   })
 
@@ -51,9 +59,11 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
   })
 
   it("ignores unknown subfields under overview (forward-compat)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      overview: { enabled: false, profile: "future-field" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: { enabled: false, profile: "future-field" },
+      }),
+    )
     expect(result).toEqual({ overview: { enabled: false } })
   })
 
@@ -83,16 +93,20 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
 
 describe("parseSigilixConfig — evidence.visible (SIG-112)", () => {
   it("parses evidence.visible === true", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      evidence: { visible: true },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        evidence: { visible: true },
+      }),
+    )
     expect(result).toEqual({ evidence: { visible: true } })
   })
 
   it("parses evidence.visible === false", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      evidence: { visible: false },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        evidence: { visible: false },
+      }),
+    )
     expect(result).toEqual({ evidence: { visible: false } })
   })
 
@@ -108,9 +122,11 @@ describe("parseSigilixConfig — evidence.visible (SIG-112)", () => {
   })
 
   it("ignores unknown subfields under evidence (forward-compat)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      evidence: { visible: true, density: "future-field" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        evidence: { visible: true, density: "future-field" },
+      }),
+    )
     expect(result).toEqual({ evidence: { visible: true } })
   })
 
@@ -126,10 +142,7 @@ describe("parseSigilixConfig — evidence.visible (SIG-112)", () => {
 
     it("evidence.visible === false → hidden unless env forces it", () => {
       expect(isFindingEvidenceVisible({ evidence: { visible: false } }, {})).toBe(false)
-      expect(isFindingEvidenceVisible(
-        { evidence: { visible: false } },
-        { OPENCLAW_SHOW_EVIDENCE: "on" },
-      )).toBe(true)
+      expect(isFindingEvidenceVisible({ evidence: { visible: false } }, { OPENCLAW_SHOW_EVIDENCE: "on" })).toBe(true)
     })
 
     it("env override is exact and case-sensitive", () => {
@@ -141,23 +154,29 @@ describe("parseSigilixConfig — evidence.visible (SIG-112)", () => {
 
 describe("parseSigilixConfig — labels.enabled (SIG-135)", () => {
   it("parses labels.enabled === true", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      labels: { enabled: true },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        labels: { enabled: true },
+      }),
+    )
     expect(result).toEqual({ labels: { enabled: true } })
   })
 
   it("parses labels.enabled === false", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      labels: { enabled: false },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        labels: { enabled: false },
+      }),
+    )
     expect(result).toEqual({ labels: { enabled: false } })
   })
 
   it('strips a string `"false"` (strict boolean)', () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      labels: { enabled: "false" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        labels: { enabled: "false" },
+      }),
+    )
     expect(result).toEqual({})
   })
 
@@ -168,9 +187,11 @@ describe("parseSigilixConfig — labels.enabled (SIG-135)", () => {
   })
 
   it("ignores unknown subfields under labels (forward-compat)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      labels: { enabled: false, strategy: "future-field" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        labels: { enabled: false, strategy: "future-field" },
+      }),
+    )
     expect(result).toEqual({ labels: { enabled: false } })
   })
 
@@ -196,30 +217,38 @@ describe("parseSigilixConfig — labels.enabled (SIG-135)", () => {
 
 describe("parseSigilixConfig — describe.enabled (ARC-191)", () => {
   it("parses describe.enabled === true", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      describe: { enabled: true },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        describe: { enabled: true },
+      }),
+    )
     expect(result).toEqual({ describe: { enabled: true } })
   })
 
   it("parses describe.enabled === false", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      describe: { enabled: false },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        describe: { enabled: false },
+      }),
+    )
     expect(result).toEqual({ describe: { enabled: false } })
   })
 
   it('strips a string `"false"` (strict boolean — no JS truthy nonsense)', () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      describe: { enabled: "false" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        describe: { enabled: "false" },
+      }),
+    )
     expect(result).toEqual({})
   })
 
   it("strips a number 0 (strict boolean)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      describe: { enabled: 0 },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        describe: { enabled: 0 },
+      }),
+    )
     expect(result).toEqual({})
   })
 
@@ -230,9 +259,11 @@ describe("parseSigilixConfig — describe.enabled (ARC-191)", () => {
   })
 
   it("ignores unknown subfields under describe (forward-compat)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      describe: { enabled: false, futureField: "ignored" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        describe: { enabled: false, futureField: "ignored" },
+      }),
+    )
     expect(result).toEqual({ describe: { enabled: false } })
   })
 
@@ -299,9 +330,11 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
   })
 
   it("rejects unknown command names (typo catching)", () => {
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { reviews: { prompt: { addendum: "x" } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { reviews: { prompt: { addendum: "x" } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/unknown command/i)
@@ -310,9 +343,11 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
 
   it("rejects addendum > 4000 code points", () => {
     const long = "a".repeat(4001)
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { prompt: { addendum: long } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { prompt: { addendum: long } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/addendum.*length|too long/i)
@@ -320,9 +355,11 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
 
   it("accepts addendum exactly 4000 code points", () => {
     const exact = "a".repeat(4000)
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { prompt: { addendum: exact } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { prompt: { addendum: exact } } },
+      }),
+    )
     expect(result.ok).toBe(true)
   })
 
@@ -331,25 +368,31 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
     // 2001 emoji = 2001 code points (under cap), but 4002 UTF-16 units.
     const emoji = "😀"
     const addendum = emoji.repeat(2001)
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { prompt: { addendum } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { prompt: { addendum } } },
+      }),
+    )
     expect(result.ok).toBe(true)
   })
 
   it("rejects whitespace-only model.primary", () => {
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { model: { primary: "   " } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { model: { primary: "   " } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/model.primary/i)
   })
 
   it("rejects non-array fallbacks", () => {
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { model: { fallbacks: "x" } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { model: { fallbacks: "x" } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/fallbacks.*array of strings/i)
@@ -358,18 +401,22 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
   it("rejects >4 fallback entries", () => {
     // Pad with duplicates if KNOWN_MODELS has fewer than 5 entries.
     const tooMany = [KNOWN, KNOWN, KNOWN, KNOWN, KNOWN]
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { model: { primary: KNOWN, fallbacks: tooMany } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { model: { primary: KNOWN, fallbacks: tooMany } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/fallbacks.*4 entries|at most 4/i)
   })
 
   it("rejects unknown model names (not in registry)", () => {
-    const result = parseSigilixConfigDetailed(JSON.stringify({
-      commands: { review: { model: { primary: "definitely-not-a-real-model" } } },
-    }))
+    const result = parseSigilixConfigDetailed(
+      JSON.stringify({
+        commands: { review: { model: { primary: "definitely-not-a-real-model" } } },
+      }),
+    )
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toMatch(/unknown model|not in.*registry/i)
@@ -378,7 +425,9 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
   it("BACK-COMPAT: parseSigilixConfig still returns null on the same bad inputs", () => {
     const bad = JSON.stringify({ commands: ["review"] })
     expect(parseSigilixConfig(bad)).toBeNull()
-    const bad2 = JSON.stringify({ commands: { review: { prompt: { addendum: "a".repeat(5000) } } } })
+    const bad2 = JSON.stringify({
+      commands: { review: { prompt: { addendum: "a".repeat(5000) } } },
+    })
     expect(parseSigilixConfig(bad2)).toBeNull()
   })
 
@@ -416,35 +465,23 @@ describe("resolveCommandConfig (ARC-185)", () => {
   })
 
   it("captures the addendum", () => {
-    const out = resolveCommandConfig(
-      { commands: { improve: { prompt: { addendum: "x" } } } },
-      "improve",
-    )
+    const out = resolveCommandConfig({ commands: { improve: { prompt: { addendum: "x" } } } }, "improve")
     expect(out.promptAddendum).toBe("x")
   })
 
   it("captures the model primary", () => {
-    const out = resolveCommandConfig(
-      { commands: { improve: { model: { primary: KNOWN } } } },
-      "improve",
-    )
+    const out = resolveCommandConfig({ commands: { improve: { model: { primary: KNOWN } } } }, "improve")
     expect(out.modelPrimary).toBe(KNOWN)
   })
 
   it("EXPLICIT EMPTY fallbacks → use defaults (override: false)", () => {
-    const out = resolveCommandConfig(
-      { commands: { improve: { model: { fallbacks: [] } } } },
-      "improve",
-    )
+    const out = resolveCommandConfig({ commands: { improve: { model: { fallbacks: [] } } } }, "improve")
     expect(out.modelFallbacks).toEqual({ override: false })
   })
 
   it("non-empty fallbacks → override: true with the array", () => {
     const fallbacks = [...KNOWN_MODELS].slice(0, 2)
-    const out = resolveCommandConfig(
-      { commands: { improve: { model: { fallbacks } } } },
-      "improve",
-    )
+    const out = resolveCommandConfig({ commands: { improve: { model: { fallbacks } } } }, "improve")
     expect(out.modelFallbacks).toEqual({ override: true, models: fallbacks })
   })
 
@@ -472,7 +509,7 @@ describe("parseSigilixConfig — depVulnScan.enabled (ARC-186)", () => {
     expect(result?.depVulnScan?.enabled).toBe(true)
   })
 
-  it("STRICT-BOOL: string \"false\" does NOT disable", () => {
+  it('STRICT-BOOL: string "false" does NOT disable', () => {
     const result = parseSigilixConfig(JSON.stringify({ depVulnScan: { enabled: "false" } }))
     expect(result?.depVulnScan).toBeUndefined()
   })
@@ -488,9 +525,11 @@ describe("parseSigilixConfig — depVulnScan.enabled (ARC-186)", () => {
   })
 
   it("ignores unknown subfields under depVulnScan (forward-compat)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      depVulnScan: { enabled: false, futureField: "ignored" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        depVulnScan: { enabled: false, futureField: "ignored" },
+      }),
+    )
     expect(result).toEqual({ depVulnScan: { enabled: false } })
   })
 
@@ -499,4 +538,3 @@ describe("parseSigilixConfig — depVulnScan.enabled (ARC-186)", () => {
     expect(parseSigilixConfig(JSON.stringify({ depVulnScan: false }))).toEqual({})
   })
 })
-

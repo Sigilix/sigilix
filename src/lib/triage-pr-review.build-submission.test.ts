@@ -372,7 +372,12 @@ describe("buildReviewSubmission", () => {
     // The 422-retry path re-renders via buildFallbackSubmission; it must not
     // silently omit dropped files either.
     const out = buildFallbackSubmission({
-      verdict: { summary: "Re-rendered anchorless.", confidence: 4, confidenceReason: "y", findings: [] },
+      verdict: {
+        summary: "Re-rendered anchorless.",
+        confidence: 4,
+        confidenceReason: "y",
+        findings: [],
+      },
       unanchored: [],
       headSha: "abc",
       eventOverride: "COMMENT",
@@ -410,7 +415,14 @@ describe("buildBodyOnlyCheckAnnotations", () => {
   it("EXCLUDES out-of-PR-scope findings — no check annotation on an untouched file (CodeRabbit #334)", () => {
     const annotations = buildBodyOnlyCheckAnnotations([
       { ...baseFinding, path: "in-pr.ts", line: 5, score: 5, headline: "real blocker" },
-      { ...baseFinding, path: "other.ts", line: 9, score: 5, headline: "out of scope", outOfPrScope: true },
+      {
+        ...baseFinding,
+        path: "other.ts",
+        line: 9,
+        score: 5,
+        headline: "out of scope",
+        outOfPrScope: true,
+      },
     ])
     expect(annotations).toHaveLength(1)
     expect(annotations[0]).toMatchObject({ path: "in-pr.ts" })
@@ -491,9 +503,9 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
         "<!-- sigilix:fid:2222222222222222:cat:logic:sev:info:path:222222222222 -->",
       ],
     })
-    expect(out.comments?.[0]?.body.endsWith(
-      "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->",
-    )).toBe(true)
+    expect(
+      out.comments?.[0]?.body.endsWith("<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->"),
+    ).toBe(true)
     expect(out.comments?.[1]?.body).toContain(
       "<!-- sigilix:fid:2222222222222222:cat:logic:sev:info:path:222222222222 -->",
     )
@@ -504,10 +516,7 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
       verdict,
       prAuthor: "alice",
       headSha: "abc",
-      findingMarkers: [
-        "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->",
-        null,
-      ],
+      findingMarkers: ["<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->", null],
     })
     const body = out.comments?.[0]?.body ?? ""
     expect(body).toContain("<!-- sigilix:pr-review-finding -->")
@@ -535,8 +544,7 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
   })
 
   it("separates marker from body with a blank line", () => {
-    const marker =
-      "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->"
+    const marker = "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->"
     const out = buildReviewSubmission({
       verdict,
       prAuthor: "alice",
@@ -602,14 +610,20 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     // demoting to the body, anchor forward to the substantive line (CodeRabbit
     // parity). Score-4 isolates this from the SIG-281 confidence demotion.
     const braceP1: PrReviewFinding = {
-      path: "src/lib/foo.ts", line: 1370, score: 4,
-      headline: "race in the queue consumer", body: "Guard the check-then-act.",
+      path: "src/lib/foo.ts",
+      line: 1370,
+      score: 4,
+      headline: "race in the queue consumer",
+      body: "Guard the check-then-act.",
     }
     const mapWithCodeAfter = new Map<string, Map<number, string>>([
-      ["src/lib/foo.ts", new Map<number, string>([
-        [1370, "}"],
-        [1372, "  await processQueue(batch)"],
-      ])],
+      [
+        "src/lib/foo.ts",
+        new Map<number, string>([
+          [1370, "}"],
+          [1372, "  await processQueue(batch)"],
+        ]),
+      ],
     ])
     const out = buildReviewSubmission({
       verdict: { ...verdict, findings: [braceP1] },
@@ -656,9 +670,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       headSha: "abc",
       addedLineTextByLine,
     })
-    const inlineCount = (out.comments ?? []).filter((c) =>
-      c.body.includes("lacks integration tests"),
-    ).length
+    const inlineCount = (out.comments ?? []).filter((c) => c.body.includes("lacks integration tests")).length
     expect(inlineCount).toBe(0)
     const bodyOccurrences = (out.body ?? "").split("lacks integration tests").length - 1
     expect(bodyOccurrences).toBe(1)

@@ -52,9 +52,7 @@ export interface FetchPrContextArgs {
   env: Env
 }
 
-export async function fetchPullRequestContext(
-  args: FetchPrContextArgs
-): Promise<PrFetchResult> {
+export async function fetchPullRequestContext(args: FetchPrContextArgs): Promise<PrFetchResult> {
   const { owner, repo, number, env } = args
 
   const lookup = resolveInstallation(owner, repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
@@ -86,10 +84,7 @@ export async function fetchPullRequestContext(
   // Meta is the only fatal call — without title/body we abort entirely.
   let meta: PullRequestMeta
   try {
-    meta = await withTimeout(
-      (signal) => client.getPullRequest(owner, repo, number, { signal }),
-      TIMEOUT_MS
-    )
+    meta = await withTimeout((signal) => client.getPullRequest(owner, repo, number, { signal }), TIMEOUT_MS)
   } catch (error) {
     return { ok: false, reason: mapTopLevelError(error) }
   }
@@ -101,8 +96,7 @@ export async function fetchPullRequestContext(
     fetchFilesPartial(client, owner, repo, number),
   ])
 
-  const totalChanged =
-    typeof meta.changed_files === "number" ? meta.changed_files : null
+  const totalChanged = typeof meta.changed_files === "number" ? meta.changed_files : null
 
   const filesChanged: PrContext["filesChanged"] =
     filesResult.kind === "items"
@@ -130,22 +124,16 @@ export async function fetchPullRequestContext(
   }
 }
 
-type FilesPartial =
-  | { kind: "items"; items: PrChangedFile[] }
-  | { kind: "timeout" }
-  | { kind: "error" }
+type FilesPartial = { kind: "items"; items: PrChangedFile[] } | { kind: "timeout" } | { kind: "error" }
 
 async function fetchDiffPartial(
   client: GitHubClient,
   owner: string,
   repo: string,
-  number: number
+  number: number,
 ): Promise<PrContext["diff"]> {
   try {
-    const raw = await withTimeout(
-      (signal) => client.getPullRequestDiff(owner, repo, number, { signal }),
-      TIMEOUT_MS
-    )
+    const raw = await withTimeout((signal) => client.getPullRequestDiff(owner, repo, number, { signal }), TIMEOUT_MS)
     return truncateDiff(raw ?? "")
   } catch (error) {
     return isAbortError(error) ? "[timeout]" : "[error]"
@@ -156,7 +144,7 @@ async function fetchFilesPartial(
   client: GitHubClient,
   owner: string,
   repo: string,
-  number: number
+  number: number,
 ): Promise<FilesPartial> {
   try {
     const items = await withTimeout(
@@ -166,7 +154,7 @@ async function fetchFilesPartial(
           maxFiles: FILES_MAX,
           signal,
         }),
-      TIMEOUT_MS
+      TIMEOUT_MS,
     )
     return { kind: "items", items }
   } catch (error) {
@@ -203,9 +191,7 @@ function isAbortError(error: unknown): boolean {
 function truncateDiff(raw: string): string {
   const lines = raw.split("\n")
   const cappedLines = lines.map((line) =>
-    line.length > DIFF_LINE_MAX_CHARS
-      ? `${line.slice(0, DIFF_LINE_MAX_CHARS)} […line truncated…]`
-      : line
+    line.length > DIFF_LINE_MAX_CHARS ? `${line.slice(0, DIFF_LINE_MAX_CHARS)} […line truncated…]` : line,
   )
   const truncatedLines =
     cappedLines.length > DIFF_LINES_MAX

@@ -24,21 +24,14 @@
 
 import { chat } from "@/src/shared/adapters/model"
 import { isChatDisabledError } from "@/src/shared/adapters/model/ollama-chat"
-import type {
-  ChatArgs,
-  ChatMessage,
-  ChatResult,
-  ChatToolDef,
-} from "@/src/shared/ports/model"
+import type { ChatArgs, ChatMessage, ChatResult, ChatToolDef } from "@/src/shared/ports/model"
 import type { AgentTool } from "./agent-tools"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import type { Env } from "@/src/shared/types/env"
 
 // ──────────────────────────────────────────────────────────────── types
 
-export type AgentLoopResult =
-  | { ok: true; answer: unknown; stats: AgentLoopStats }
-  | AgentLoopFailure
+export type AgentLoopResult = { ok: true; answer: unknown; stats: AgentLoopStats } | AgentLoopFailure
 
 export interface AgentLoopStats {
   toolTurns: number
@@ -124,9 +117,7 @@ export interface AgentLoopArgs {
 
 // ──────────────────────────────────────────────────────────────── public
 
-export async function runAgentLoop(
-  args: AgentLoopArgs,
-): Promise<AgentLoopResult> {
+export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult> {
   const ctrl = new AbortController()
   const totalTimeoutMs = args.totalTimeoutMs ?? 120_000
   const loopTimer = setTimeout(() => ctrl.abort(), totalTimeoutMs)
@@ -286,8 +277,7 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
         ...messages,
         {
           role: "system",
-          content:
-            "You've used your tool budget. Answer or abstain now — no more tool calls.",
+          content: "You've used your tool budget. Answer or abstain now — no more tool calls.",
         },
       ]
       let forced: ChatResult
@@ -607,10 +597,7 @@ interface SchemaValidation {
  * pattern, etc.) — enough for our 3 tool schemas. Phase 4 can swap
  * in a real validator if needed.
  */
-function validateAgainstSchema(
-  value: Record<string, unknown>,
-  schema: Record<string, unknown>,
-): SchemaValidation {
+function validateAgainstSchema(value: Record<string, unknown>, schema: Record<string, unknown>): SchemaValidation {
   const required = (schema.required as string[] | undefined) ?? []
   for (const key of required) {
     if (!(key in value) || value[key] === undefined || value[key] === null) {
@@ -667,10 +654,7 @@ function parseAnswerJson(content: string): unknown {
  * parser then rejected it AFTER the loop's fallback opportunity was
  * already gone, leaving the user with no reply at all.)
  */
-function parseAndValidateFinalAnswer(
-  content: string,
-  schema: Record<string, unknown>,
-): unknown {
+function parseAndValidateFinalAnswer(content: string, schema: Record<string, unknown>): unknown {
   const parsed = parseAnswerJson(content)
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
   const obj = parsed as Record<string, unknown>

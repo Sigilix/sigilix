@@ -172,11 +172,7 @@ export function isPositionReviewable(
  * This is the orchestrator's "pick the side" step (Codex catch:
  * synthesizer should NOT decide side; orchestrator derives from diff).
  */
-export function deriveSide(
-  reviewable: ReviewableMap,
-  path: string,
-  line: number,
-): "LEFT" | "RIGHT" | null {
+export function deriveSide(reviewable: ReviewableMap, path: string, line: number): "LEFT" | "RIGHT" | null {
   const positions = reviewable.get(path)
   if (!positions) return null
   const right = positions.find((p) => p.line === line && p.side === "RIGHT")

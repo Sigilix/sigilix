@@ -132,7 +132,11 @@ describe("runAgentLoop — happy paths", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "get code chunks",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         return { ok: true, chunks: [{ path: "x.ts", content: "..." }], count: 1 }
       },
@@ -142,14 +146,15 @@ describe("runAgentLoop — happy paths", () => {
         message: {
           role: "assistant",
           content: "",
-          tool_calls: [
-            { id: "call_1", function: { name: "retrieve_codebase", arguments: '{"query":"foo"}' } },
-          ],
+          tool_calls: [{ id: "call_1", function: { name: "retrieve_codebase", arguments: '{"query":"foo"}' } }],
         },
         hasToolCalls: true,
       })
       .mockResolvedValueOnce({
-        message: { role: "assistant", content: '{"answer":"found","confidence":5,"abstain":false}' },
+        message: {
+          role: "assistant",
+          content: '{"answer":"found","confidence":5,"abstain":false}',
+        },
         hasToolCalls: false,
       })
 
@@ -215,9 +220,7 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
       message: {
         role: "assistant",
         content: "",
-        tool_calls: [
-          { id: "c1", function: { name: "nonexistent_tool", arguments: "{}" } },
-        ],
+        tool_calls: [{ id: "c1", function: { name: "nonexistent_tool", arguments: "{}" } }],
       },
       hasToolCalls: true,
     })
@@ -235,7 +238,11 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "x",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         return { ok: true }
       },
@@ -248,9 +255,7 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
         message: {
           role: "assistant",
           content: "",
-          tool_calls: [
-            { id: "c1", function: { name: "retrieve_codebase", arguments: "{not valid json" } },
-          ],
+          tool_calls: [{ id: "c1", function: { name: "retrieve_codebase", arguments: "{not valid json" } }],
         },
         hasToolCalls: true,
       })
@@ -258,9 +263,7 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
         message: {
           role: "assistant",
           content: "",
-          tool_calls: [
-            { id: "c2", function: { name: "retrieve_codebase", arguments: '{"query":"x"}' } },
-          ],
+          tool_calls: [{ id: "c2", function: { name: "retrieve_codebase", arguments: '{"query":"x"}' } }],
         },
         hasToolCalls: true,
       })
@@ -280,7 +283,11 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "x",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         return { ok: true }
       },
@@ -314,7 +321,11 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "x",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         throw new Error("network down")
       },
@@ -323,9 +334,7 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
       message: {
         role: "assistant",
         content: "",
-        tool_calls: [
-          { id: "c1", function: { name: "retrieve_codebase", arguments: '{"query":"x"}' } },
-        ],
+        tool_calls: [{ id: "c1", function: { name: "retrieve_codebase", arguments: '{"query":"x"}' } }],
       },
       hasToolCalls: true,
     })
@@ -370,7 +379,11 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "x",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         return { ok: true, chunks: [] }
       },
@@ -385,7 +398,10 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
           format: callArgs.format,
         }
         return {
-          message: { role: "assistant", content: '{"answer":"forced","confidence":2,"abstain":false}' },
+          message: {
+            role: "assistant",
+            content: '{"answer":"forced","confidence":2,"abstain":false}',
+          },
           hasToolCalls: false,
         }
       }
@@ -416,7 +432,11 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     const tool: AgentTool = {
       name: "retrieve_codebase",
       description: "x",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
       async execute() {
         return { ok: true }
       },
@@ -471,10 +491,10 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     // fence), so this fell into final_answer_did_not_parse and the loop
     // wasted a single-shot fallback that itself produced the wrong reply.
     const realProsePlusFence = [
-      "No mention of \"Todd Bowles\" found in either the `sigilix-website` or `rubberfit` repos. The `sigilix-website` search returned zero results, and the `rubberfit` search returned only unrelated code chunks with low relevance scores.",
+      'No mention of "Todd Bowles" found in either the `sigilix-website` or `rubberfit` repos. The `sigilix-website` search returned zero results, and the `rubberfit` search returned only unrelated code chunks with low relevance scores.',
       "",
       "```json",
-      "{\"answer\": \"No mention of Todd Bowles found anywhere in the sigilix-website repo (or the other indexed repos).\", \"confidence\": 4, \"abstain\": false}",
+      '{"answer": "No mention of Todd Bowles found anywhere in the sigilix-website repo (or the other indexed repos).", "confidence": 4, "abstain": false}',
       "```",
     ].join("\n")
     mockChat.mockResolvedValueOnce({
@@ -570,10 +590,10 @@ describe("buildTelemetryRecordInput", () => {
     const parseFail: AgentLoopResult = {
       ok: false,
       reason: "final_answer_did_not_parse",
-      rawAnswer: "Sure, here's my answer: { \"answer\": 42 }",
+      rawAnswer: 'Sure, here\'s my answer: { "answer": 42 }',
     }
     expect(buildTelemetryRecordInput(parseFail, args, state).failureRawAnswer).toBe(
-      "Sure, here's my answer: { \"answer\": 42 }",
+      'Sure, here\'s my answer: { "answer": 42 }',
     )
 
     // Other failure modes don't carry rawAnswer — the field stays absent.
@@ -600,8 +620,7 @@ describe("withComposedTimeout", () => {
   it("HARD timeout: factory ignoring its signal still gets killed", async () => {
     // Factory that NEVER resolves and NEVER reads its signal — pure
     // setTimeout that doesn't honor abort. Killed at timer + grace.
-    const slowFactory = (): Promise<string> =>
-      new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
+    const slowFactory = (): Promise<string> => new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
     const start = Date.now()
     await expect(withComposedTimeout(slowFactory, 50)).rejects.toThrow(/aborted/)
     // Phase 4a.2: grace window allows abort-aware factories to settle;
@@ -612,8 +631,7 @@ describe("withComposedTimeout", () => {
 
   it("composes parent signal — parent abort kills the call", async () => {
     const parent = new AbortController()
-    const factory = (): Promise<string> =>
-      new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
+    const factory = (): Promise<string> => new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
     const promise = withComposedTimeout(factory, 60_000, parent.signal)
     setTimeout(() => parent.abort(), 30)
     await expect(promise).rejects.toThrow(/aborted/)
@@ -636,7 +654,11 @@ describe("withComposedTimeout", () => {
   })
 
   it("propagates non-Abort errors", async () => {
-    await expect(withComposedTimeout(async () => { throw new Error("boom") }, 1_000)).rejects.toThrow("boom")
+    await expect(
+      withComposedTimeout(async () => {
+        throw new Error("boom")
+      }, 1_000),
+    ).rejects.toThrow("boom")
   })
 
   // ─── Phase 4a.2 grace-window behavior ─────────────────────────
@@ -651,7 +673,13 @@ describe("withComposedTimeout", () => {
       // returning a structured failure with diagnostic fields populated.
       return await new Promise<Result>((resolve) => {
         const t = setTimeout(
-          () => resolve({ ok: false, reason: "should_not_reach", attemptsUsed: 0, modelUsed: "primary" }),
+          () =>
+            resolve({
+              ok: false,
+              reason: "should_not_reach",
+              attemptsUsed: 0,
+              modelUsed: "primary",
+            }),
           10_000,
         )
         signal.addEventListener(
@@ -672,10 +700,7 @@ describe("withComposedTimeout", () => {
     type Result = { ok: false; reason: string; modelUsed: string }
     const abortAwareFactory = async (signal: AbortSignal): Promise<Result> =>
       new Promise<Result>((resolve) => {
-        const t = setTimeout(
-          () => resolve({ ok: false, reason: "should_not_reach", modelUsed: "primary" }),
-          10_000,
-        )
+        const t = setTimeout(() => resolve({ ok: false, reason: "should_not_reach", modelUsed: "primary" }), 10_000)
         signal.addEventListener(
           "abort",
           () => {

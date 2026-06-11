@@ -10,13 +10,9 @@
 
 import { describe, expect, it } from "vitest"
 
-import {
-  isDelegationShapedLine,
-  isStructurallyOrchestratorGlue,
-} from "@/src/lib/helper-coverage"
+import { isDelegationShapedLine, isStructurallyOrchestratorGlue } from "@/src/lib/helper-coverage"
 
-const linesOf = (...texts: string[]) =>
-  new Map(texts.map((t, i) => [i + 1, t]))
+const linesOf = (...texts: string[]) => new Map(texts.map((t, i) => [i + 1, t]))
 
 describe("isDelegationShapedLine (SIG-128 PR 6)", () => {
   it("flags pure log statements as delegation-shaped", () => {
@@ -61,7 +57,7 @@ describe("isStructurallyOrchestratorGlue (SIG-128 PR 6)", () => {
     // This is the case that regressed SIG-128 and triggered SIG-159 / SIG-160.
     const added = linesOf(
       "  async scheduled(_event, env, ctx) {",
-      '    if (!isIndexerEnabled(env)) {',
+      "    if (!isIndexerEnabled(env)) {",
       '      console.log(JSON.stringify({ event: "index-reconcile-tick-skip-disabled" }))',
       "      return",
       "    }",
@@ -140,12 +136,7 @@ describe("isStructurallyOrchestratorGlue (SIG-128 PR 6)", () => {
   // pure-guard function with no real delegation would falsely satisfy
   // the gate. Negative-lookahead exclusion in the regex fixes that.
   it("does NOT flag a tiny pure-guard function (no real free-function call) — CR M1 regression", () => {
-    const added = linesOf(
-      '  function validate(x) {',
-      '    if (x > 0) return "ok"',
-      '    return "bad"',
-      '  }',
-    )
+    const added = linesOf("  function validate(x) {", '    if (x > 0) return "ok"', '    return "bad"', "  }")
     expect(isStructurallyOrchestratorGlue(added)).toBe(false)
   })
 
@@ -155,22 +146,16 @@ describe("isStructurallyOrchestratorGlue (SIG-128 PR 6)", () => {
   // slipping past the keyword filter and could let
   // isStructurallyOrchestratorGlue suppress real findings.
   it("does NOT flag a minimal subclass constructor (super() is not delegation) — CR M3 regression", () => {
-    const added = linesOf(
-      '  class Child extends Parent {',
-      '    constructor() {',
-      '      super()',
-      '    }',
-      '  }',
-    )
+    const added = linesOf("  class Child extends Parent {", "    constructor() {", "      super()", "    }", "  }")
     expect(isStructurallyOrchestratorGlue(added)).toBe(false)
   })
 
   it("does NOT flag a minimal dynamic-import loader (import() is not delegation) — CR M3 regression", () => {
     const added = linesOf(
-      '  async function load() {',
+      "  async function load() {",
       '    const mod = await import("./feature")',
-      '    return mod.default',
-      '  }',
+      "    return mod.default",
+      "  }",
     )
     expect(isStructurallyOrchestratorGlue(added)).toBe(false)
   })

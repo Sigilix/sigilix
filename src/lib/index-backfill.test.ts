@@ -37,7 +37,13 @@ describe("runIndexBackfill", () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a", "o/b"])).mockResolvedValueOnce(ok(["o/c"]))
     const out = await runIndexBackfill(env, { dryRun: true })
-    expect(out).toMatchObject({ installations: 2, repos: 3, enqueued: 0, dryRun: true, enumerationIncomplete: false })
+    expect(out).toMatchObject({
+      installations: 2,
+      repos: 3,
+      enqueued: 0,
+      dryRun: true,
+      enumerationIncomplete: false,
+    })
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 
@@ -48,19 +54,34 @@ describe("runIndexBackfill", () => {
       .mockResolvedValueOnce({ attempted: 2, succeeded: 2, perRepoFailed: 0, sensitiveSkipped: 0 })
       .mockResolvedValueOnce({ attempted: 1, succeeded: 0, perRepoFailed: 0, sensitiveSkipped: 1 })
     const out = await runIndexBackfill(env, { dryRun: false })
-    expect(out).toMatchObject({ installations: 2, repos: 3, enqueued: 2, sensitiveSkipped: 1, perRepoFailed: 0, enumerationIncomplete: false })
+    expect(out).toMatchObject({
+      installations: 2,
+      repos: 3,
+      enqueued: 2,
+      sensitiveSkipped: 1,
+      perRepoFailed: 0,
+      enumerationIncomplete: false,
+    })
     expect(mockEnqueue).toHaveBeenCalledTimes(2)
-    expect(mockEnqueue).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      installationId: 111,
-      reason: "manual",
-      repositories: [{ full_name: "o/a" }, { full_name: "o/b" }],
-    }))
+    expect(mockEnqueue).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        installationId: 111,
+        reason: "manual",
+        repositories: [{ full_name: "o/a" }, { full_name: "o/b" }],
+      }),
+    )
   })
 
   it("flags enumerationIncomplete when installation listing is partial", async () => {
     mockListInstalls.mockResolvedValue({ items: [111], complete: false })
     mockListRepos.mockResolvedValue(ok(["o/a"]))
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
     const out = await runIndexBackfill(env, { dryRun: false })
     expect(out.enumerationIncomplete).toBe(true)
   })
@@ -68,10 +89,13 @@ describe("runIndexBackfill", () => {
   it("flags enumerationIncomplete when a repo listing is partial, and keeps fanning out", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     // install 111: complete; install 222: partial repo listing
-    mockListRepos
-      .mockResolvedValueOnce(ok(["o/a"]))
-      .mockResolvedValueOnce({ items: ["o/b"], complete: false })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"])).mockResolvedValueOnce({ items: ["o/b"], complete: false })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
     const out = await runIndexBackfill(env, { dryRun: false })
     expect(out.enumerationIncomplete).toBe(true)
     expect(out.repos).toBe(2)
@@ -93,7 +117,12 @@ describe("runIndexBackfill", () => {
   it("per-installation fail-soft: an install with zero repos is skipped, others still run", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     mockListRepos.mockResolvedValueOnce(ok([])).mockResolvedValueOnce(ok(["o/c"]))
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
     const out = await runIndexBackfill(env, { dryRun: false })
     expect(out).toMatchObject({ installations: 2, repos: 1, enqueued: 1 })
     expect(mockEnqueue).toHaveBeenCalledTimes(1) // only the install with repos

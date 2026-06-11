@@ -23,8 +23,7 @@ function clientFrom(
   tree: Array<{ path?: string; type?: string; size?: number }> = [],
 ): GitHubClient {
   return {
-    getFileContent: async (_o: string, _r: string, path: string) =>
-      path in files ? files[path] : null,
+    getFileContent: async (_o: string, _r: string, path: string) => (path in files ? files[path] : null),
     getRepoTree: async () => ({ tree, truncated: false }),
   } as unknown as GitHubClient
 }
@@ -84,12 +83,7 @@ describe("loadAiInstructions", () => {
   })
 
   it("covers the documented cross-tool file set", () => {
-    expect(AI_INSTRUCTION_FILES).toEqual([
-      "CLAUDE.md",
-      "AGENTS.md",
-      ".cursorrules",
-      ".github/copilot-instructions.md",
-    ])
+    expect(AI_INSTRUCTION_FILES).toEqual(["CLAUDE.md", "AGENTS.md", ".cursorrules", ".github/copilot-instructions.md"])
     expect(GITHUB_INSTRUCTION_FILE_PATTERN).toBe(".github/instructions/**/*.instructions.md")
   })
 
@@ -113,7 +107,7 @@ describe("loadAiInstructions", () => {
 
   it("parses flat applyTo frontmatter and strips it from the instruction body", () => {
     const parsed = parseAiInstructionFrontmatter(
-      "---\r\napplyTo: \"src/auth/**, workers/**/*.ts\"\r\n---\r\nCheck auth carefully.",
+      '---\r\napplyTo: "src/auth/**, workers/**/*.ts"\r\n---\r\nCheck auth carefully.',
     )
     expect(parsed).toEqual({
       applyTo: ["src/auth/**", "workers/**/*.ts"],
@@ -123,9 +117,7 @@ describe("loadAiInstructions", () => {
   })
 
   it("keeps commas inside quoted applyTo patterns", () => {
-    const parsed = parseAiInstructionFrontmatter(
-      "---\napplyTo: \"src/a, special/file.ts\", docs/**\n---\nBody.",
-    )
+    const parsed = parseAiInstructionFrontmatter('---\napplyTo: "src/a, special/file.ts", docs/**\n---\nBody.')
     expect(parsed.applyTo).toEqual(["src/a, special/file.ts", "docs/**"])
   })
 
@@ -134,10 +126,8 @@ describe("loadAiInstructions", () => {
       {
         ".github/instructions/auth.instructions.md":
           "---\napplyTo: src/auth/**, workers/**/*.ts\n---\nCheck auth boundaries.",
-        ".github/instructions/docs.instructions.md":
-          "---\napplyTo: docs/**\n---\nRequire docs examples.",
-        ".github/instructions/global.instructions.md":
-          "Use precise issue titles.",
+        ".github/instructions/docs.instructions.md": "---\napplyTo: docs/**\n---\nRequire docs examples.",
+        ".github/instructions/global.instructions.md": "Use precise issue titles.",
       },
       [
         { path: ".github/instructions/docs.instructions.md", type: "blob", size: 100 },
@@ -173,10 +163,7 @@ describe("loadAiInstructions", () => {
     const catalog = await loadAiInstructions(client, "o", "r", "sha")
     const filtered = filterAiInstructionsForChangedPaths(catalog!, ["src/auth/login.ts"])
 
-    expect(filtered!.chunks.map((c) => c.source)).toEqual([
-      "CLAUDE.md",
-      ".github/instructions/auth.instructions.md",
-    ])
+    expect(filtered!.chunks.map((c) => c.source)).toEqual(["CLAUDE.md", ".github/instructions/auth.instructions.md"])
     expect(filtered!.chunks.map((c) => c.text)).toEqual([
       "Prefer existing patterns.",
       "Auth changes need integration tests.",
@@ -193,8 +180,7 @@ describe("loadAiInstructions", () => {
 
   it("falls back to root instructions when the tree response shape is unexpected", async () => {
     const client = {
-      getFileContent: async (_o: string, _r: string, path: string) =>
-        path === "CLAUDE.md" ? "Root guidance." : null,
+      getFileContent: async (_o: string, _r: string, path: string) => (path === "CLAUDE.md" ? "Root guidance." : null),
       getRepoTree: async () => ({ nope: true }),
     } as unknown as GitHubClient
     await expect(loadAiInstructions(client, "o", "r", "sha")).resolves.toEqual({
@@ -220,7 +206,9 @@ describe("shouldIngestAiInstructions — precedence (the ensemble glue's decisio
 
 describe("buildAiInstructionGuidance — prompt-injection-safe advisory wrapper", () => {
   it("names the source and frames the content as advisory / never-suppress", () => {
-    const g = buildAiInstructionGuidance({ chunks: [{ source: "CLAUDE.md", text: "Prefer X over Y." }] })
+    const g = buildAiInstructionGuidance({
+      chunks: [{ source: "CLAUDE.md", text: "Prefer X over Y." }],
+    })
     expect(g).toContain("CLAUDE.md")
     expect(g).toContain("ADVISORY")
     expect(g).toContain("never overrides review discipline")

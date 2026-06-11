@@ -18,17 +18,32 @@ function makeDo(): { do_: GraphExpansionMetricsDO; getAlarm: () => number | null
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
-  return { do_: new GraphExpansionMetricsDO(state as unknown as DurableObjectState, {} as Env), getAlarm: () => alarmAt }
+  return {
+    do_: new GraphExpansionMetricsDO(state as unknown as DurableObjectState, {} as Env),
+    getAlarm: () => alarmAt,
+  }
 }
 
 const T = "2026-05-31T12:00:00.000Z"
@@ -90,7 +105,13 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.reviews).toBe(5)
     expect(out.graphAvailableReviews).toBe(5)
     expect(out.netNewTokens.histogram).toEqual({
-      "[0,1)": 1, "[1,200)": 1, "[200,500)": 1, "[500,800)": 0, "[800,1600)": 2, "[1600,3200)": 0, "[3200,∞)": 0,
+      "[0,1)": 1,
+      "[1,200)": 1,
+      "[200,500)": 1,
+      "[500,800)": 0,
+      "[800,1600)": 2,
+      "[1600,3200)": 0,
+      "[3200,∞)": 0,
     })
     // grouped median interpolates within b2 [200,500): 200 + ((2.5-2)/1)*300 = 350.
     expect(out.netNewTokens.medianBucket).toBe("[200,500)")
@@ -100,7 +121,13 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.netNewTokens.meaningfulRate).toBe(0.6) // 3 of 5 have netNew >= 200
     expect(out.control.meanTokens).toBe(100)
     expect(out.treatment.meanTokens).toBe(560) // (100+200+400+1000+1100)/5
-    expect(out.fetch).toEqual({ reviews: 5, meanFiles: 1, meanBytes: 500, meanElapsedMs: 50, budgetExhaustedReviews: 0 })
+    expect(out.fetch).toEqual({
+      reviews: 5,
+      meanFiles: 1,
+      meanBytes: 500,
+      meanElapsedMs: 50,
+      budgetExhaustedReviews: 0,
+    })
     expect(out.modeReviews).toEqual({ shadow: 5 })
     expect(out.goKill.verdict).toBe("KILL")
   })
@@ -157,7 +184,17 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     await record(do_, sample(300, { fetchBytes: 1000, fetchFiles: 6, budgetExhausted: true }))
     // A fetchEnabled=false sample carrying STALE non-zero fetch fields must NOT
     // contribute to the per-fetch means or the exhaustion count (CodeRabbit #256).
-    await record(do_, sample(0, { mode: "post", fetchEnabled: false, fetchFiles: 99, fetchBytes: 99, fetchElapsedMs: 99, budgetExhausted: true }))
+    await record(
+      do_,
+      sample(0, {
+        mode: "post",
+        fetchEnabled: false,
+        fetchFiles: 99,
+        fetchBytes: 99,
+        fetchElapsedMs: 99,
+        budgetExhausted: true,
+      }),
+    )
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.reviews).toBe(2)
     expect(out.fetch.reviews).toBe(1) // only the fetch-enabled one
@@ -179,7 +216,15 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     // fetchEnabled=false with stale non-finite fetch fields: those are gated to 0
     // before the write, so they must NOT invalidate the sample — it's KEPT, else
     // we'd undercount the window and skew GO/KILL (CodeRabbit #256).
-    await record(do_, sample(700, { fetchEnabled: false, fetchFiles: Number.NaN, fetchBytes: Number.NaN, fetchElapsedMs: Number.NaN }))
+    await record(
+      do_,
+      sample(700, {
+        fetchEnabled: false,
+        fetchFiles: Number.NaN,
+        fetchBytes: Number.NaN,
+        fetchElapsedMs: Number.NaN,
+      }),
+    )
     warn.mockRestore()
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.reviews).toBe(2) // the good 800 + the kept disabled 700

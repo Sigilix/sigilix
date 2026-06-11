@@ -33,16 +33,8 @@ describe("buildTestingEvidencePack", () => {
 
   it("classifies source files + finds sibling test pairs from the full diff", () => {
     const pack = buildTestingEvidencePack({
-      splitFilePaths: [
-        "src/lib/foo.ts",
-        "src/lib/bar.ts",
-        "tests/foo.test.ts",
-      ],
-      reviewedFilePaths: [
-        "src/lib/foo.ts",
-        "src/lib/bar.ts",
-        "tests/foo.test.ts",
-      ],
+      splitFilePaths: ["src/lib/foo.ts", "src/lib/bar.ts", "tests/foo.test.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts", "src/lib/bar.ts", "tests/foo.test.ts"],
     })
     expect(pack.sourceFilesChanged).toEqual(["src/lib/foo.ts", "src/lib/bar.ts"])
     expect(pack.testFilesChanged).toEqual(["tests/foo.test.ts"])
@@ -72,19 +64,12 @@ describe("buildTestingEvidencePack", () => {
     })
     expect(pack.testFilesInPromptDiff).toEqual([])
     expect(pack.testFilesNotInPromptDiff).toEqual(["tests/foo.test.ts"])
-    expect(pack.siblingMappings).toEqual([
-      { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
-    ])
+    expect(pack.siblingMappings).toEqual([{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }])
   })
 
   it("annotates test files in-prompt-diff vs not-in-prompt-diff correctly", () => {
     const pack = buildTestingEvidencePack({
-      splitFilePaths: [
-        "src/lib/foo.ts",
-        "src/lib/bar.ts",
-        "tests/foo.test.ts",
-        "tests/bar.test.ts",
-      ],
+      splitFilePaths: ["src/lib/foo.ts", "src/lib/bar.ts", "tests/foo.test.ts", "tests/bar.test.ts"],
       reviewedFilePaths: [
         "src/lib/foo.ts",
         "tests/foo.test.ts", // in prompt diff
@@ -96,16 +81,8 @@ describe("buildTestingEvidencePack", () => {
 
   it("flags source files with no sibling test as test: null in siblingMappings", () => {
     const pack = buildTestingEvidencePack({
-      splitFilePaths: [
-        "src/api/unnoticed.ts",
-        "tests/foo.test.ts",
-        "src/lib/foo.ts",
-      ],
-      reviewedFilePaths: [
-        "src/api/unnoticed.ts",
-        "tests/foo.test.ts",
-        "src/lib/foo.ts",
-      ],
+      splitFilePaths: ["src/api/unnoticed.ts", "tests/foo.test.ts", "src/lib/foo.ts"],
+      reviewedFilePaths: ["src/api/unnoticed.ts", "tests/foo.test.ts", "src/lib/foo.ts"],
     })
     const unnoticed = pack.siblingMappings.find((m) => m.source === "src/api/unnoticed.ts")
     expect(unnoticed?.test).toBeNull()
@@ -134,19 +111,23 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
       repoPaths: ["src/lib/foo.ts", "tests/foo.test.ts"],
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "src/lib/foo.ts",
-      reason: "repo-sibling-exists",
-      test: "tests/foo.test.ts",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "src/lib/foo.ts",
+        reason: "repo-sibling-exists",
+        test: "tests/foo.test.ts",
+      },
+    ])
     expect(result.pack.sourceFilesChanged).toEqual([])
     expect(result.pack.siblingMappings).toEqual([])
-    expect(renderTestingEvidenceBlock(result.pack, {
-      contentByPath: {},
-      failedPaths: [],
-      truncatedPaths: [],
-      totalChars: 0,
-    })).toBe("")
+    expect(
+      renderTestingEvidenceBlock(result.pack, {
+        contentByPath: {},
+        failedPaths: [],
+        truncatedPaths: [],
+        totalChars: 0,
+      }),
+    ).toBe("")
   })
 
   it("normalizes repo-tree paths before matching existing siblings", () => {
@@ -160,11 +141,13 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
       repoPaths: [".\\tests\\foo.test.ts"],
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "src/lib/foo.ts",
-      reason: "repo-sibling-exists",
-      test: "tests/foo.test.ts",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "src/lib/foo.ts",
+        reason: "repo-sibling-exists",
+        test: "tests/foo.test.ts",
+      },
+    ])
   })
 
   it("does not let a package-scoped repo sibling suppress an unrelated root source", () => {
@@ -193,11 +176,13 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
       repoPaths: ["packages/app/tests/foo.test.ts"],
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "packages/app/src/foo.ts",
-      reason: "repo-sibling-exists",
-      test: "packages/app/tests/foo.test.ts",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "packages/app/src/foo.ts",
+        reason: "repo-sibling-exists",
+        test: "packages/app/tests/foo.test.ts",
+      },
+    ])
   })
 
   it("does not let a prefixed __tests__ file suppress package source-root variants", () => {
@@ -226,11 +211,13 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
       repoPaths: ["packages/app/__tests__/foo.test.ts"],
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "packages/app/foo.ts",
-      reason: "repo-sibling-exists",
-      test: "packages/app/__tests__/foo.test.ts",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "packages/app/foo.ts",
+        reason: "repo-sibling-exists",
+        test: "packages/app/__tests__/foo.test.ts",
+      },
+    ])
   })
 
   it("fails open when repo-wide sibling matching is ambiguous", () => {
@@ -256,19 +243,19 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
 
     const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
       changedLineTextByPath: new Map([
-        ["src/lib/foo.ts", [
-          "import { bar } from './bar'",
-          "// clarify why the branch is safe",
-          "export type Foo = { id: string }",
-          "}",
-        ]],
+        [
+          "src/lib/foo.ts",
+          ["import { bar } from './bar'", "// clarify why the branch is safe", "export type Foo = { id: string }", "}"],
+        ],
       ]),
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "src/lib/foo.ts",
-      reason: "no-substantive-change",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "src/lib/foo.ts",
+        reason: "no-substantive-change",
+      },
+    ])
     expect(result.pack.sourceFilesChanged).toEqual([])
     expect(result.pack.siblingMappings).toEqual([])
   })
@@ -280,18 +267,15 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
     })
 
     const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
-      changedLineTextByPath: new Map([
-        ["src/lib/foo.ts", [
-          "-// old explanation",
-          "+// clearer explanation",
-        ]],
-      ]),
+      changedLineTextByPath: new Map([["src/lib/foo.ts", ["-// old explanation", "+// clearer explanation"]]]),
     })
 
-    expect(result.suppressions).toEqual([{
-      source: "src/lib/foo.ts",
-      reason: "no-substantive-change",
-    }])
+    expect(result.suppressions).toEqual([
+      {
+        source: "src/lib/foo.ts",
+        reason: "no-substantive-change",
+      },
+    ])
   })
 
   it("does not suppress when the changed-line evidence includes a substantive deletion", () => {
@@ -302,10 +286,7 @@ describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
 
     const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
       changedLineTextByPath: new Map([
-        ["src/lib/foo.ts", [
-          "-if (!user) return null",
-          "// explain why the remaining branch is safe",
-        ]],
+        ["src/lib/foo.ts", ["-if (!user) return null", "// explain why the remaining branch is safe"]],
       ]),
     })
 
@@ -324,10 +305,7 @@ describe("applyTestFileContentCaps", () => {
 
   it("includes content under the per-file cap unchanged", () => {
     const short = "describe('foo', () => { it('works', () => {}) })"
-    const out = applyTestFileContentCaps(
-      { "tests/foo.test.ts": short },
-      ["tests/foo.test.ts"],
-    )
+    const out = applyTestFileContentCaps({ "tests/foo.test.ts": short }, ["tests/foo.test.ts"])
     expect(out.contentByPath["tests/foo.test.ts"]).toBe(short)
     expect(out.truncatedPaths).toEqual([])
     expect(out.totalChars).toBe(short.length)
@@ -335,14 +313,10 @@ describe("applyTestFileContentCaps", () => {
 
   it("truncates content over TEST_FILE_CONTENT_CHAR_CAP and flags it", () => {
     const huge = "a".repeat(TEST_FILE_CONTENT_CHAR_CAP + 5000)
-    const out = applyTestFileContentCaps(
-      { "tests/huge.test.ts": huge },
-      ["tests/huge.test.ts"],
-    )
+    const out = applyTestFileContentCaps({ "tests/huge.test.ts": huge }, ["tests/huge.test.ts"])
     expect(out.contentByPath["tests/huge.test.ts"]).toContain("[…truncated at")
     expect(out.truncatedPaths).toEqual(["tests/huge.test.ts"])
-    expect(out.contentByPath["tests/huge.test.ts"]!.length)
-      .toBeLessThan(huge.length)
+    expect(out.contentByPath["tests/huge.test.ts"]!.length).toBeLessThan(huge.length)
   })
 
   it("stops including files once total budget is exceeded", () => {
@@ -377,10 +351,10 @@ describe("applyTestFileContentCaps", () => {
   })
 
   it("skips paths in the order hint that aren't in the fetched-content map", () => {
-    const out = applyTestFileContentCaps(
-      { "tests/foo.test.ts": "content" },
-      ["tests/foo.test.ts", "tests/missing.test.ts"],
-    )
+    const out = applyTestFileContentCaps({ "tests/foo.test.ts": "content" }, [
+      "tests/foo.test.ts",
+      "tests/missing.test.ts",
+    ])
     expect(out.contentByPath).toEqual({ "tests/foo.test.ts": "content" })
   })
 })
@@ -515,31 +489,52 @@ describe("SIG-349 testing focus hints", () => {
       reviewedFilePaths: ["src/lib/retry.ts", "tests/retry.test.ts"],
     })
 
-    const merged = mergeTestingFocusHints(pack, new Map([
-      ["src/lib/retry.ts", new Map([
-        [2, "  if (signal?.aborted) {"],
-        [3, "    throw new Error(\"timeout\")"],
-        [4, "  if (signal?.aborted) throw new Error(\"timeout\")"],
-        [5, "  if (raw) return JSON.parse(raw)"],
-        [7, "  const kind = String(raw ?? \"task\").toLowerCase()"],
-        [8, "  return kind"],
-      ])],
-      // Added test-file lines are still ignored; deleted test assertions have
-      // their own old-side input map below.
-      ["tests/retry.test.ts", new Map([[4, "it(\"rejects on timeout\", () => {})"]])],
-    ]))
+    const merged = mergeTestingFocusHints(
+      pack,
+      new Map([
+        [
+          "src/lib/retry.ts",
+          new Map([
+            [2, "  if (signal?.aborted) {"],
+            [3, '    throw new Error("timeout")'],
+            [4, '  if (signal?.aborted) throw new Error("timeout")'],
+            [5, "  if (raw) return JSON.parse(raw)"],
+            [7, '  const kind = String(raw ?? "task").toLowerCase()'],
+            [8, "  return kind"],
+          ]),
+        ],
+        // Added test-file lines are still ignored; deleted test assertions have
+        // their own old-side input map below.
+        ["tests/retry.test.ts", new Map([[4, 'it("rejects on timeout", () => {})']])],
+      ]),
+    )
 
     expect(merged.testingFocusHints).toEqual([
       { source: "src/lib/retry.ts", line: 2, kind: "branch", token: "if (signal?.aborted) {" },
-      { source: "src/lib/retry.ts", line: 3, kind: "error-path", token: "throw new Error(\"timeout\")" },
+      {
+        source: "src/lib/retry.ts",
+        line: 3,
+        kind: "error-path",
+        token: 'throw new Error("timeout")',
+      },
       // Error-path tokens intentionally outrank branch tokens when both appear on one line.
-      { source: "src/lib/retry.ts", line: 4, kind: "error-path", token: "if (signal?.aborted) throw new Error(\"timeout\")" },
-      { source: "src/lib/retry.ts", line: 5, kind: "parser-coercion", token: "if (raw) return JSON.parse(raw)" },
+      {
+        source: "src/lib/retry.ts",
+        line: 4,
+        kind: "error-path",
+        token: 'if (signal?.aborted) throw new Error("timeout")',
+      },
+      {
+        source: "src/lib/retry.ts",
+        line: 5,
+        kind: "parser-coercion",
+        token: "if (raw) return JSON.parse(raw)",
+      },
       {
         source: "src/lib/retry.ts",
         line: 7,
         kind: "parser-coercion",
-        token: "const kind = String(raw ?? \"task\").toLowerCase()",
+        token: 'const kind = String(raw ?? "task").toLowerCase()',
       },
     ])
   })
@@ -554,11 +549,14 @@ describe("SIG-349 testing focus hints", () => {
       pack,
       new Map(),
       new Map([
-        ["tests/refunds.test.ts", new Map([
-          [1, "import { describe, expect, it } from \"vitest\""],
-          [4, "it(\"rejects negative refund amounts\", () => {"],
-          [5, "  expect(() => refund({ amount: -1 })).toThrow(\"amount\")"],
-        ])],
+        [
+          "tests/refunds.test.ts",
+          new Map([
+            [1, 'import { describe, expect, it } from "vitest"'],
+            [4, 'it("rejects negative refund amounts", () => {'],
+            [5, '  expect(() => refund({ amount: -1 })).toThrow("amount")'],
+          ]),
+        ],
       ]),
     )
 
@@ -567,13 +565,13 @@ describe("SIG-349 testing focus hints", () => {
         source: "tests/refunds.test.ts",
         line: 4,
         kind: "deleted-test",
-        token: "it(\"rejects negative refund amounts\", () => {",
+        token: 'it("rejects negative refund amounts", () => {',
       },
       {
         source: "tests/refunds.test.ts",
         line: 5,
         kind: "deleted-test",
-        token: "expect(() => refund({ amount: -1 })).toThrow(\"amount\")",
+        token: 'expect(() => refund({ amount: -1 })).toThrow("amount")',
       },
     ])
   })
@@ -602,11 +600,10 @@ describe("SIG-349 testing focus hints", () => {
       reviewedFilePaths: ["src/lib/slug.ts", "tests/slug.test.ts"],
     })
 
-    const merged = mergeTestingFocusHints(pack, new Map([
-      ["src/lib/slug.ts", new Map([
-        [2, "  const normalized = input.trim().toLowerCase()"],
-      ])],
-    ]))
+    const merged = mergeTestingFocusHints(
+      pack,
+      new Map([["src/lib/slug.ts", new Map([[2, "  const normalized = input.trim().toLowerCase()"]])]]),
+    )
 
     expect(merged.testingFocusHints).toEqual([])
   })
@@ -616,12 +613,18 @@ describe("SIG-349 testing focus hints", () => {
       splitFilePaths: ["src/lib/parse-kind.ts"],
       reviewedFilePaths: ["src/lib/parse-kind.ts"],
     })
-    const pack = mergeTestingFocusHints(base, new Map([
-      ["src/lib/parse-kind.ts", new Map([
-        [3, "  const kind = String(raw ?? \"task\").toLowerCase()"],
-        [4, "  const fallback = String(raw ?? `task`).toLowerCase()"],
-      ])],
-    ]))
+    const pack = mergeTestingFocusHints(
+      base,
+      new Map([
+        [
+          "src/lib/parse-kind.ts",
+          new Map([
+            [3, '  const kind = String(raw ?? "task").toLowerCase()'],
+            [4, "  const fallback = String(raw ?? `task`).toLowerCase()"],
+          ]),
+        ],
+      ]),
+    )
 
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: {},
@@ -652,11 +655,7 @@ describe("SIG-349 testing focus hints", () => {
 -  it("rejects negative amounts", () => {
 -    expect(() => refund({ amount: -1 })).toThrow("amount")
 -  })`
-    const pack = mergeTestingFocusHints(
-      base,
-      new Map(),
-      buildDeletedLineTextByLine(diff),
-    )
+    const pack = mergeTestingFocusHints(base, new Map(), buildDeletedLineTextByLine(diff))
 
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: {},
@@ -676,21 +675,13 @@ describe("SIG-349 testing focus hints", () => {
 
   it("keeps focus hints in the production filter/inspect/focus/coverage/render order", () => {
     const initial = buildTestingEvidencePack({
-      splitFilePaths: [
-        "src/lib/comment-only.ts",
-        "src/lib/parse-kind.ts",
-        "tests/parse-kind.test.ts",
-      ],
-      reviewedFilePaths: [
-        "src/lib/comment-only.ts",
-        "src/lib/parse-kind.ts",
-        "tests/parse-kind.test.ts",
-      ],
+      splitFilePaths: ["src/lib/comment-only.ts", "src/lib/parse-kind.ts", "tests/parse-kind.test.ts"],
+      reviewedFilePaths: ["src/lib/comment-only.ts", "src/lib/parse-kind.ts", "tests/parse-kind.test.ts"],
     })
     const filtered = filterTestingEvidenceForSuppressedMissingCoverage(initial, {
       changedLineTextByPath: new Map([
         ["src/lib/comment-only.ts", ["// update comment"]],
-        ["src/lib/parse-kind.ts", ["const kind = String(raw ?? \"task\").toLowerCase()"]],
+        ["src/lib/parse-kind.ts", ['const kind = String(raw ?? "task").toLowerCase()']],
       ]),
     }).pack
     const inspected = mergeInspectedTestFileContents(filtered, {
@@ -701,16 +692,21 @@ describe("SIG-349 testing focus hints", () => {
       truncatedPaths: [],
       totalChars: 70,
     })
-    const withFocus = mergeTestingFocusHints(inspected, new Map([
-      ["src/lib/comment-only.ts", new Map([[1, "if (commentOnly) return"]])],
-      ["src/lib/parse-kind.ts", new Map([[4, "const kind = String(raw ?? \"task\").toLowerCase()"]])],
-    ]))
-    expect(withFocus.testingFocusHints).toEqual([{
-      source: "src/lib/parse-kind.ts",
-      line: 4,
-      kind: "parser-coercion",
-      token: "const kind = String(raw ?? \"task\").toLowerCase()",
-    }])
+    const withFocus = mergeTestingFocusHints(
+      inspected,
+      new Map([
+        ["src/lib/comment-only.ts", new Map([[1, "if (commentOnly) return"]])],
+        ["src/lib/parse-kind.ts", new Map([[4, 'const kind = String(raw ?? "task").toLowerCase()']])],
+      ]),
+    )
+    expect(withFocus.testingFocusHints).toEqual([
+      {
+        source: "src/lib/parse-kind.ts",
+        line: 4,
+        kind: "parser-coercion",
+        token: 'const kind = String(raw ?? "task").toLowerCase()',
+      },
+    ])
     const withCoverage = mergeHelperCoverage(withFocus, {})
     const block = renderTestingEvidenceBlock(withCoverage, {
       contentByPath: {
@@ -921,13 +917,17 @@ describe("SIG-128 helper-coverage annotation", () => {
     return mergeHelperCoverage(base, coverage)
   }
   it("renders an 'all delegates' note for an all-status ->NONE source", () => {
-    const pack = packWith({ "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] } })
+    const pack = packWith({
+      "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+    })
     const block = renderTestingEvidenceBlock(pack, emptyFetch)
     expect(block).toContain("ALL changed logic here delegates to helpers unit-tested in this PR")
     expect(block).toContain("src/lib/branch-retrieval.ts")
   })
   it("renders a 'partial' note without suppressing", () => {
-    const pack = packWith({ "src/lib/ensemble.ts": { status: "partial", helpers: ["src/lib/branch-retrieval.ts"] } })
+    const pack = packWith({
+      "src/lib/ensemble.ts": { status: "partial", helpers: ["src/lib/branch-retrieval.ts"] },
+    })
     expect(renderTestingEvidenceBlock(pack, emptyFetch)).toContain("SOME changed lines call tested helpers")
   })
   it("leaves a none-status ->NONE source with the original wording", () => {
@@ -935,9 +935,14 @@ describe("SIG-128 helper-coverage annotation", () => {
     expect(renderTestingEvidenceBlock(pack, emptyFetch)).toContain("no sibling test file in this PR")
   })
   it("mergeHelperCoverage is immutable and defaults to {}", () => {
-    const base = buildTestingEvidencePack({ splitFilePaths: ["src/lib/ensemble.ts"], reviewedFilePaths: ["src/lib/ensemble.ts"] })
+    const base = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/ensemble.ts"],
+      reviewedFilePaths: ["src/lib/ensemble.ts"],
+    })
     expect(base.helperCoverageBySource).toEqual({})
-    const merged = mergeHelperCoverage(base, { "src/lib/ensemble.ts": { status: "all", helpers: [] } })
+    const merged = mergeHelperCoverage(base, {
+      "src/lib/ensemble.ts": { status: "all", helpers: [] },
+    })
     expect(base.helperCoverageBySource).toEqual({})
     expect(merged.helperCoverageBySource["src/lib/ensemble.ts"]?.status).toBe("all")
   })

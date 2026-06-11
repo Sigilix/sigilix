@@ -71,10 +71,7 @@ export function pricingForModel(model: string): ModelPricing {
 /** Per-review token totals, keyed by the model that produced them.
  *  Mutated in place by the recorder so the orchestrator can hang it
  *  straight off the telemetry object. */
-export type TokenUsageByModel = Record<
-  string,
-  { inputTokens: number; outputTokens: number }
->
+export type TokenUsageByModel = Record<string, { inputTokens: number; outputTokens: number }>
 
 /**
  * Build the callback the orchestrator hangs on `perfCtx.recordTokens`.
@@ -116,8 +113,7 @@ export function computeReviewCost(usage: TokenUsageByModel): ReviewCost {
   for (const [model, t] of Object.entries(usage)) {
     const price = pricingForModel(model)
     const usd =
-      (t.inputTokens / 1_000_000) * price.inputPerMTokUsd +
-      (t.outputTokens / 1_000_000) * price.outputPerMTokUsd
+      (t.inputTokens / 1_000_000) * price.inputPerMTokUsd + (t.outputTokens / 1_000_000) * price.outputPerMTokUsd
     byModelUsd[model] = usd
     totalUsd += usd
     totalInputTokens += t.inputTokens
@@ -205,8 +201,7 @@ export function evaluateReviewSlo(args: {
   const latencyOverBudget = args.totalMs > target.timeToFullReviewMs
   const costOverBudget = args.costUsd > target.costPerReviewUsd
   const overviewLatencyOverBudget =
-    args.timeToFirstOverviewMs !== undefined &&
-    args.timeToFirstOverviewMs > target.timeToFirstOverviewMs
+    args.timeToFirstOverviewMs !== undefined && args.timeToFirstOverviewMs > target.timeToFirstOverviewMs
   return {
     tier,
     target,
@@ -248,10 +243,7 @@ export interface ReviewSloSummary {
   byModelUsd: Record<string, number>
 }
 
-export function emitReviewSloSummary(
-  ctx: EnsembleRunCtx,
-  summary: ReviewSloSummary,
-): void {
+export function emitReviewSloSummary(ctx: EnsembleRunCtx, summary: ReviewSloSummary): void {
   console.log(
     JSON.stringify({
       event: "review-slo-summary",
@@ -288,9 +280,7 @@ export function emitReviewSlo(
     // exactOptionalPropertyTypes — an explicit `undefined` isn't
     // assignable to the optional `tier?`.
     ...(args.tier !== undefined ? { tier: args.tier } : {}),
-    ...(args.timeToFirstOverviewMs !== undefined
-      ? { timeToFirstOverviewMs: args.timeToFirstOverviewMs }
-      : {}),
+    ...(args.timeToFirstOverviewMs !== undefined ? { timeToFirstOverviewMs: args.timeToFirstOverviewMs } : {}),
     totalMs: args.totalMs,
     costUsd: cost.totalUsd,
   })

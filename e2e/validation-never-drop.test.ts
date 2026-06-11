@@ -148,7 +148,14 @@ function reviewableAt(line = 17, path = PATH): ReviewableMap {
 }
 function provFor(role: "logic" | "security" | "performance" | "tests", id: string): SynthesizerProvenance {
   return {
-    findings: [{ sourceSpecialists: [role], sourceFindingIds: [id], action: "kept", verifiedViaRetrieval: false }],
+    findings: [
+      {
+        sourceSpecialists: [role],
+        sourceFindingIds: [id],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
+    ],
     dropped: [],
     softened: [],
   }
@@ -157,17 +164,27 @@ type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specia
 function specialistsFor(role: "logic" | "security" | "performance" | "tests", id: string): SpecialistVerdictsArg {
   return [{ role, verdict: { findings: [{ id }] } }] as unknown as SpecialistVerdictsArg
 }
-function synth(f: PrReviewFinding, provenance: SynthesizerProvenance): Parameters<typeof validateForSubmission>[0]["synthOutput"] {
-  return { verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings: [f] }, provenance }
+function synth(
+  f: PrReviewFinding,
+  provenance: SynthesizerProvenance,
+): Parameters<typeof validateForSubmission>[0]["synthOutput"] {
+  return {
+    verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings: [f] },
+    provenance,
+  }
 }
 
 describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the finding inline", () => {
   it("security (SIG-108) enforce: no manifest threaded → gate no-ops, sev-4 finding kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 4, category: "security",
+      path: PATH,
+      line: 17,
+      score: 4,
+      category: "security",
       headline: "SQL injection in query builder",
       body: "User input is concatenated directly into the SQL string.",
-      cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17",
+      cweId: "CWE-89",
+      evidenceId: "sarif:fake:000000000000:17",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("security", "security-0")),
@@ -183,8 +200,12 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("logic evidence (SIG-109) enforce: no logicEvidence threaded → gate no-ops, sev-4 finding kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 4, category: "logic",
-      headline: "vague claim with no anchor", body: "risky refactor",
+      path: PATH,
+      line: 17,
+      score: 4,
+      category: "logic",
+      headline: "vague claim with no anchor",
+      body: "risky refactor",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("logic", "logic-0")),
@@ -199,8 +220,12 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("perf evidence (SIG-110) enforce: no perfEvidence threaded → gate no-ops, sev-4 finding kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 4, category: "performance",
-      headline: "Performance could be improved", body: "This area is slow.",
+      path: PATH,
+      line: 17,
+      score: 4,
+      category: "performance",
+      headline: "Performance could be improved",
+      body: "This area is slow.",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("performance", "performance-0")),
@@ -215,8 +240,13 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("security-grounding (SIG-293) enforce: no diff wired → UNKNOWN → kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 3, category: "security", cweId: "CWE-798",
-      headline: "secret leaked via `payload`", body: "Looks like a credential is logged.",
+      path: PATH,
+      line: 17,
+      score: 3,
+      category: "security",
+      cweId: "CWE-798",
+      headline: "secret leaked via `payload`",
+      body: "Looks like a credential is logged.",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("security", "security-0")),
@@ -231,8 +261,12 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("absence-grounding (SIG-290) enforce: path NOT dropped → UNKNOWN → kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 4, category: "security",
-      headline: "no null check on `userInput` before deref", body: "A null `userInput` would throw.",
+      path: PATH,
+      line: 17,
+      score: 4,
+      category: "security",
+      headline: "no null check on `userInput` before deref",
+      body: "A null `userInput` would throw.",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("security", "security-0")),
@@ -248,8 +282,12 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("window-blindness enforce: no full file for the path → can't prove out-of-window → kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 5, category: "logic",
-      headline: "`amount` can be NaN", body: "computeFee(amount) returns NaN; no finite check guards it.",
+      path: PATH,
+      line: 17,
+      score: 5,
+      category: "logic",
+      headline: "`amount` can be NaN",
+      body: "computeFee(amount) returns NaN; no finite check guards it.",
     }
     const out = validateForSubmission({
       synthOutput: synth(f, provFor("logic", "logic-0")),
@@ -264,7 +302,12 @@ describe("validateForSubmission — fail-closed: an UNDECIDABLE gate keeps the f
 
   it("refutation-survival (SIG-325) enforce: finding carries a survival rationale → kept inline", () => {
     const f: PrReviewFinding = {
-      path: PATH, line: 17, score: 4, category: "security", cweId: "CWE-918", evidenceId: "NONE",
+      path: PATH,
+      line: 17,
+      score: 4,
+      category: "security",
+      cweId: "CWE-918",
+      evidenceId: "NONE",
       headline: "SSRF via attacker-controlled Content-Type",
       body: "The decode path is driven by an attacker-controlled header.",
       independentAssessment: "source=req.query.url -> sink=fetch(url) -> type=string; no allowlist.",

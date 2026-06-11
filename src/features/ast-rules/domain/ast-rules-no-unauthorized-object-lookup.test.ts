@@ -21,7 +21,11 @@ function runRule(source: string, path = "src/routes/x.ts"): AstRuleHit[] {
   const visitors: Record<string, (n: AstNode) => void> = {}
   for (const t of noUnauthorizedObjectLookup.nodeTypes) {
     visitors[t] = (n: AstNode) => {
-      const hit: AstRuleVisitResult = noUnauthorizedObjectLookup.visit(n, { path, source, ast: r.ast })
+      const hit: AstRuleVisitResult = noUnauthorizedObjectLookup.visit(n, {
+        path,
+        source,
+        ast: r.ast,
+      })
       if (hit) Array.isArray(hit) ? out.push(...hit) : out.push(hit)
     }
   }

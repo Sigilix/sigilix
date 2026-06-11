@@ -30,18 +30,45 @@ export function blank(src: string, alsoStrings = false): string {
   while (i < n) {
     const c = src[i]!
     if (inStr) {
-      if (c === "\\") { if (alsoStrings) { out[i] = " "; if (i + 1 < n) out[i + 1] = " " } i += 2; continue }
+      if (c === "\\") {
+        if (alsoStrings) {
+          out[i] = " "
+          if (i + 1 < n) out[i + 1] = " "
+        }
+        i += 2
+        continue
+      }
       if (alsoStrings && c !== "\n") out[i] = " "
       if (c === inStr) inStr = null
       i++
       continue
     }
-    if (c === '"' || c === "'" || c === "`") { inStr = c; if (alsoStrings) out[i] = " "; i++; continue }
-    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { out[i] = " "; i++ } continue }
+    if (c === '"' || c === "'" || c === "`") {
+      inStr = c
+      if (alsoStrings) out[i] = " "
+      i++
+      continue
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        out[i] = " "
+        i++
+      }
+      continue
+    }
     if (c === "/" && src[i + 1] === "*") {
-      out[i] = " "; out[i + 1] = " "; i += 2
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++ }
-      if (i < n) { out[i] = " "; out[i + 1] = " "; i += 2 }
+      out[i] = " "
+      out[i + 1] = " "
+      i += 2
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] !== "\n") out[i] = " "
+        i++
+      }
+      if (i < n) {
+        out[i] = " "
+        out[i + 1] = " "
+        i += 2
+      }
       continue
     }
     i++
@@ -80,7 +107,10 @@ export function extractFunctions(blanked: string): FnInfo[] {
     const start = i
     for (; i < blanked.length; i++) {
       if (blanked[i] === "{") depth++
-      else if (blanked[i] === "}") { depth--; if (depth === 0) break }
+      else if (blanked[i] === "}") {
+        depth--
+        if (depth === 0) break
+      }
     }
     fns.push({ name: m[1]!, body: blanked.slice(start, i + 1), start })
   }

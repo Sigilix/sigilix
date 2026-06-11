@@ -453,25 +453,14 @@ export interface DispatcherSafetyNetPattern {
  * the entire review-memory type chain. Same literal union as
  * `ReviewMemoryCategory`. SIG-247 Phase 0 added `"architecture"`.
  */
-export type ReviewMemoryCategoryRef =
-  | "security"
-  | "logic"
-  | "performance"
-  | "tests"
-  | "architecture"
+export type ReviewMemoryCategoryRef = "security" | "logic" | "performance" | "tests" | "architecture"
 
 /**
  * ARC-188: re-exported from `sarif-evidence/types.ts` so the config
  * surface declares the categories without `sigilix-config.ts`
  * importing the entire SARIF type chain. Kept narrow.
  */
-export type SarifFindingCategoryRef =
-  | "iac"
-  | "misconfiguration"
-  | "vulnerability"
-  | "license"
-  | "secret"
-  | "other"
+export type SarifFindingCategoryRef = "iac" | "misconfiguration" | "vulnerability" | "license" | "secret" | "other"
 
 export interface SigilixPathInstruction {
   paths: string[]
@@ -499,7 +488,12 @@ export interface SigilixCommandConfig {
   model?: SigilixCommandModelConfig
 }
 
-export const SPECIALIST_ROLES = ["logic", "security", "performance", "tests"] as const satisfies readonly SpecialistRole[]
+export const SPECIALIST_ROLES = [
+  "logic",
+  "security",
+  "performance",
+  "tests",
+] as const satisfies readonly SpecialistRole[]
 
 /**
  * Registry of model names accepted by `commands.<cmd>.model.primary`
@@ -521,14 +515,14 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   // because it's no longer referenced after the synth swap to
   // `gpt-oss:120b-cloud`. `deepseek-v4-pro:cloud` STAYS because it's
   // still the cross-provider fallback for security.
-  "glm-5.1:cloud",            // performance primary
-  "kimi-k2.5:cloud",          // logic + performance fallback
-  "qwen3-coder:480b-cloud",   // reserved for per-repo overrides
-  "qwen3-coder-next:cloud",   // logic fallback (was security primary; swapped to a reasoner after pr/07)
-  "deepseek-v4-pro:cloud",    // logic primary (2026-06-05) + security fallback
-  "deepseek-v4-flash:cloud",  // security + tests primary (reasoner), synth fallback
-  "minimax-m3:cloud",         // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
-  "gpt-oss:120b-cloud",       // synth primary
+  "glm-5.1:cloud", // performance primary
+  "kimi-k2.5:cloud", // logic + performance fallback
+  "qwen3-coder:480b-cloud", // reserved for per-repo overrides
+  "qwen3-coder-next:cloud", // logic fallback (was security primary; swapped to a reasoner after pr/07)
+  "deepseek-v4-pro:cloud", // logic primary (2026-06-05) + security fallback
+  "deepseek-v4-flash:cloud", // security + tests primary (reasoner), synth fallback
+  "minimax-m3:cloud", // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
+  "gpt-oss:120b-cloud", // synth primary
 ])
 
 export const EMPTY_CONFIG: SigilixConfig = {}

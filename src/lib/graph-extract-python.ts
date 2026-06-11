@@ -54,7 +54,10 @@ function stripComment(line: string): string {
   for (let i = 0; i < line.length; i++) {
     const c = line[i]
     if (inS) {
-      if (c === "\\") { i++; continue }
+      if (c === "\\") {
+        i++
+        continue
+      }
       if (c === inS) inS = null
     } else if (c === '"' || c === "'") {
       inS = c
@@ -81,20 +84,39 @@ function tripleStateAfter(line: string, start: Triple): Triple {
   let i = 0
   while (i < line.length) {
     if (state) {
-      if (line.startsWith(state, i)) { state = null; i += 3; continue }
+      if (line.startsWith(state, i)) {
+        state = null
+        i += 3
+        continue
+      }
       i++
       continue
     }
     if (inStr) {
-      if (line[i] === "\\") { i += 2; continue }
+      if (line[i] === "\\") {
+        i += 2
+        continue
+      }
       if (line[i] === inStr) inStr = null
       i++
       continue
     }
-    if (line.startsWith('"""', i)) { state = '"""'; i += 3; continue }
-    if (line.startsWith("'''", i)) { state = "'''"; i += 3; continue }
+    if (line.startsWith('"""', i)) {
+      state = '"""'
+      i += 3
+      continue
+    }
+    if (line.startsWith("'''", i)) {
+      state = "'''"
+      i += 3
+      continue
+    }
     const c = line[i]
-    if (c === '"' || c === "'") { inStr = c; i++; continue }
+    if (c === '"' || c === "'") {
+      inStr = c
+      i++
+      continue
+    }
     i++
   }
   return state
@@ -103,7 +125,10 @@ function tripleStateAfter(line: string, start: Triple): Triple {
 /** Split a comma list, respecting nothing fancy (Python import lists are flat
  *  identifiers, optionally `as`-aliased). Parens are stripped by the caller. */
 function splitList(s: string): string[] {
-  return s.split(",").map((p) => p.trim()).filter((p) => p.length > 0)
+  return s
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
 }
 
 function parseImportClause(clause: string): { specifier: string; localName: string } {

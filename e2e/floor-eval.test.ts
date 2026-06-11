@@ -36,18 +36,38 @@ function fires(rule: AstRule, source: string): boolean {
 interface FloorResult {
   id: string
   cwe: string
-  tp: number; fp: number; tn: number; fn: number
-  precision: number; recall: number; fpRate: number
-  fpSamples: string[]; fnSamples: string[]
+  tp: number
+  fp: number
+  tn: number
+  fn: number
+  precision: number
+  recall: number
+  fpRate: number
+  fpSamples: string[]
+  fnSamples: string[]
 }
 
 function evaluate(): FloorResult[] {
   return FLOOR_EVALS.map((f) => {
-    let tp = 0, fp = 0, tn = 0, fn = 0
+    let tp = 0,
+      fp = 0,
+      tn = 0,
+      fn = 0
     const fpSamples: string[] = []
     const fnSamples: string[] = []
-    for (const s of f.vuln) { if (fires(f.rule, s)) tp++; else { fn++; fnSamples.push(s) } }
-    for (const s of f.safe) { if (fires(f.rule, s)) { fp++; fpSamples.push(s) } else tn++ }
+    for (const s of f.vuln) {
+      if (fires(f.rule, s)) tp++
+      else {
+        fn++
+        fnSamples.push(s)
+      }
+    }
+    for (const s of f.safe) {
+      if (fires(f.rule, s)) {
+        fp++
+        fpSamples.push(s)
+      } else tn++
+    }
     const precision = tp + fp === 0 ? 1 : tp / (tp + fp)
     const recall = tp + fn === 0 ? 1 : tp / (tp + fn)
     const fpRate = fp + tn === 0 ? 0 : fp / (fp + tn)
@@ -65,12 +85,18 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
     lines.push("")
     lines.push("┌─ DETERMINISTIC SECURITY FLOOR EVAL ─────────────────────────────────────────┐")
     lines.push("floor                          CWE                    TP/FN  FP/TN  prec  recall  FP-rate")
-    let TP = 0, FP = 0, TN = 0, FN = 0
+    let TP = 0,
+      FP = 0,
+      TN = 0,
+      FN = 0
     for (const r of results) {
-      TP += r.tp; FP += r.fp; TN += r.tn; FN += r.fn
+      TP += r.tp
+      FP += r.fp
+      TN += r.tn
+      FN += r.fn
       lines.push(
         `${r.id.padEnd(30)} ${r.cwe.padEnd(22)} ${`${r.tp}/${r.fn}`.padEnd(6)} ${`${r.fp}/${r.tn}`.padEnd(6)} ` +
-        `${pct(r.precision).padStart(4)}  ${pct(r.recall).padStart(6)}  ${pct(r.fpRate).padStart(6)}`,
+          `${pct(r.precision).padStart(4)}  ${pct(r.recall).padStart(6)}  ${pct(r.fpRate).padStart(6)}`,
       )
       for (const s of r.fpSamples) lines.push(`    ⚠ FALSE POSITIVE: ${s.replace(/\n/g, " ").slice(0, 90)}`)
       for (const s of r.fnSamples) lines.push(`    · missed (FN): ${s.replace(/\n/g, " ").slice(0, 90)}`)
@@ -79,7 +105,9 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
     const fpRate = FP + TN === 0 ? 0 : FP / (FP + TN)
     const precision = TP + FP === 0 ? 1 : TP / (TP + FP)
     lines.push("─────────────────────────────────────────────────────────────────────────────")
-    lines.push(`OVERALL: ${TP} TP · ${FN} FN · ${FP} FP · ${TN} TN  →  precision ${pct(precision)} · recall ${pct(recall)} · FP-rate ${pct(fpRate)}`)
+    lines.push(
+      `OVERALL: ${TP} TP · ${FN} FN · ${FP} FP · ${TN} TN  →  precision ${pct(precision)} · recall ${pct(recall)} · FP-rate ${pct(fpRate)}`,
+    )
     lines.push("└─────────────────────────────────────────────────────────────────────────────┘")
     // eslint-disable-next-line no-console
     console.log(lines.join("\n"))

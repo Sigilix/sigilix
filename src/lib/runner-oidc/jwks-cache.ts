@@ -23,9 +23,7 @@ const JWKS_TTL_MS = 10 * 60_000
 const FORCE_REFETCH_COOLDOWN_MS = 60_000
 const DEFAULT_TIMEOUT_MS = 3000
 
-type CacheEntry =
-  | { kind: "value"; keys: Jwk[]; expiresAt: number }
-  | { kind: "pending"; promise: Promise<Jwk[]> }
+type CacheEntry = { kind: "value"; keys: Jwk[]; expiresAt: number } | { kind: "pending"; promise: Promise<Jwk[]> }
 
 // Module-global, isolate-scoped. JWKS is a single global blob (not per-binding),
 // so a plain variable suffices (simpler than gate-config's per-KV WeakMap).

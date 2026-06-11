@@ -35,7 +35,8 @@ export const noProcessEnvMutation: AstRule = {
     if (objObj?.type !== "Identifier" || objObj.name !== "process") return null
     if (objProp?.type !== "Identifier" || objProp.name !== "env") return null
     return {
-      message: "Mutating `process.env` at runtime — almost always a test-leak bug. Use a config object that flows through the call chain.",
+      message:
+        "Mutating `process.env` at runtime — almost always a test-leak bug. Use a config object that flows through the call chain.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       column: node.loc?.start?.column ?? 0,

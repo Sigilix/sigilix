@@ -27,12 +27,7 @@ function sliceEvidence(source: string, node: AstNode): string {
   return slice.length > SLICE_MAX ? slice.slice(0, SLICE_MAX) + "…" : slice
 }
 
-const JUMP_TYPES = new Set([
-  "ReturnStatement",
-  "ThrowStatement",
-  "BreakStatement",
-  "ContinueStatement",
-])
+const JUMP_TYPES = new Set(["ReturnStatement", "ThrowStatement", "BreakStatement", "ContinueStatement"])
 
 /**
  * Statement types that are HOISTED and so remain reachable even after a
@@ -40,10 +35,7 @@ const JUMP_TYPES = new Set([
  * empty statements are harmless. Excluding these avoids false positives
  * on legal post-jump declarations.
  */
-const HOISTED_OR_INERT = new Set([
-  "FunctionDeclaration",
-  "EmptyStatement",
-])
+const HOISTED_OR_INERT = new Set(["FunctionDeclaration", "EmptyStatement"])
 
 export const noUnreachableAfterJump: AstRule = {
   id: "no-unreachable-after-jump",
@@ -72,7 +64,8 @@ export const noUnreachableAfterJump: AstRule = {
       if (j >= body.length) return null
       const dead = body[j]
       return {
-        message: "Unreachable code: this statement follows an unconditional `return`/`throw`/`break`/`continue` in the same block and can never run. Remove it or fix the control flow.",
+        message:
+          "Unreachable code: this statement follows an unconditional `return`/`throw`/`break`/`continue` in the same block and can never run. Remove it or fix the control flow.",
         evidence: sliceEvidence(ctx.source, dead),
         line: dead.loc?.start?.line ?? node.loc?.start?.line ?? 1,
         endLine: dead.loc?.end?.line ?? dead.loc?.start?.line ?? 1,

@@ -30,7 +30,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -78,8 +80,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -103,7 +106,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
       if (tainted.has(name)) continue
       // tainted if the init reaches a request source directly OR via an
       // already-tainted local (carriesTaint consults the evolving map).
-      if (carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -139,8 +145,9 @@ function collectConstInits(program: AstNode): Map<string, AstNode> {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -156,7 +163,11 @@ function staticString(node: AstNode | undefined, consts: Map<string, AstNode>, d
     if (((node.expressions ?? []) as AstNode[]).length > 0) return null
     const quasis = (node.quasis ?? []) as Array<AstNode & { value?: { cooked?: string; raw?: string } }>
     let out = ""
-    for (const q of quasis) { const c = q.value?.cooked ?? q.value?.raw; if (typeof c !== "string") return null; out += c }
+    for (const q of quasis) {
+      const c = q.value?.cooked ?? q.value?.raw
+      if (typeof c !== "string") return null
+      out += c
+    }
     return out
   }
   if (node.type === "BinaryExpression" && node.operator === "+") {
@@ -178,8 +189,10 @@ function staticString(node: AstNode | undefined, consts: Map<string, AstNode>, d
 function authorityClosed(s: string): boolean {
   let rest = s
   if (SCHEME_RE.test(rest)) rest = rest.replace(SCHEME_RE, "")
-  else if (rest.startsWith("//")) rest = rest.slice(2) // protocol-relative — host follows
-  else if (SAME_ORIGIN_RE.test(rest)) return true // `/path` — same origin, closed
+  else if (rest.startsWith("//"))
+    rest = rest.slice(2) // protocol-relative — host follows
+  else if (SAME_ORIGIN_RE.test(rest))
+    return true // `/path` — same origin, closed
   else if (rest.startsWith("/")) return false // bare `/` or `/\` — could become `//evil`
   return /[/?#]/.test(rest)
 }
@@ -192,7 +205,10 @@ type UrlPart = { kind: "static"; s: string } | { kind: "taint" } | { kind: "opaq
  *  imported const, runtime call) — NOT request-controlled, so it is fixed-host
  *  material, not taint. */
 function urlParts(
-  node: AstNode, consts: Map<string, AstNode>, taintedLocals: Map<string, AstNode>, source: string,
+  node: AstNode,
+  consts: Map<string, AstNode>,
+  taintedLocals: Map<string, AstNode>,
+  source: string,
 ): UrlPart[] {
   const out: UrlPart[] = []
   const classify = (n: AstNode): void => {
@@ -212,8 +228,10 @@ function urlParts(
   }
   const flat: AstNode[] = []
   ;(function flatten(n: AstNode): void {
-    if (n.type === "BinaryExpression" && n.operator === "+") { flatten(n.left as AstNode); flatten(n.right as AstNode) }
-    else flat.push(n)
+    if (n.type === "BinaryExpression" && n.operator === "+") {
+      flatten(n.left as AstNode)
+      flatten(n.right as AstNode)
+    } else flat.push(n)
   })(node)
   for (const p of flat) classify(p)
   return out
@@ -224,7 +242,10 @@ function urlParts(
  *  (opaque/env/import operands count as fixed host material), the authority must
  *  be closed by a path separator BEFORE the first tainted operand. */
 function authorityFixed(
-  target: AstNode, consts: Map<string, AstNode>, taintedLocals: Map<string, AstNode>, source: string,
+  target: AstNode,
+  consts: Map<string, AstNode>,
+  taintedLocals: Map<string, AstNode>,
+  source: string,
 ): boolean {
   let node = target
   // Resolve a tainted-local chain to the underlying expression
@@ -297,7 +318,8 @@ const GUARD_METHODS = /^(?:includes|startswith|endswith|test|has|match|some|ever
  *  compares. A request-tainted member (`req.query.host`) is the INPUT, not a check. */
 function isHostMember(n: AstNode, source: string): boolean {
   return (
-    n.type === "MemberExpression" && !n.computed &&
+    n.type === "MemberExpression" &&
+    !n.computed &&
     /^(?:host|hostname)$/.test(idName(n.property as AstNode) ?? "") &&
     !TAINTED_MEMBER_RE.test(sliceOf(source, n))
   )
@@ -306,7 +328,9 @@ function isHostMember(n: AstNode, source: string): boolean {
 /** Does this subtree contain a host/hostname member access? */
 function subtreeHasHostMember(node: AstNode, source: string): boolean {
   let f = false
-  walkNoNested(node, (n) => { if (!f && isHostMember(n, source)) f = true })
+  walkNoNested(node, (n) => {
+    if (!f && isHostMember(n, source)) f = true
+  })
   return f
 }
 
@@ -331,8 +355,11 @@ function hasValidationSignal(body: AstNode, source: string): boolean {
       }
     } else if (n.type === "CallExpression") {
       const callee = n.callee as AstNode
-      if (callee?.type === "MemberExpression" && !callee.computed &&
-          GUARD_METHODS.test((idName(callee.property as AstNode) ?? "").toLowerCase())) {
+      if (
+        callee?.type === "MemberExpression" &&
+        !callee.computed &&
+        GUARD_METHODS.test((idName(callee.property as AstNode) ?? "").toLowerCase())
+      ) {
         // `ALLOWED.includes(u.hostname)`, `u.hostname.endsWith(".x.com")`
         const inArgs = ((n.arguments ?? []) as AstNode[]).some((a) => subtreeHasHostMember(a, source))
         if (inArgs || subtreeHasHostMember(callee.object as AstNode, source)) found = true
@@ -352,8 +379,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -374,18 +402,26 @@ export const noSsrf: AstRule = {
 
     const fns = collectFunctions(node)
     const consts = collectConstInits(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const validatedCache = new Map<AstNode, boolean>()
     const isValidated = (f: AstNode): boolean => {
       let v = validatedCache.get(f)
-      if (v === undefined) { v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source); validatedCache.set(f, v) }
+      if (v === undefined) {
+        v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source)
+        validatedCache.set(f, v)
+      }
       return v
     }
     const taintCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -432,8 +468,9 @@ export const noSsrf: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

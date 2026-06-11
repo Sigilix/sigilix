@@ -101,9 +101,15 @@ export function parseLcov(text: string): Map<string, number[]> {
       if (existing) {
         const merged = new Set(existing)
         for (const l of uncovered) merged.add(l)
-        out.set(currentFile, [...merged].sort((a, b) => a - b))
+        out.set(
+          currentFile,
+          [...merged].sort((a, b) => a - b),
+        )
       } else {
-        out.set(currentFile, [...uncovered].sort((a, b) => a - b))
+        out.set(
+          currentFile,
+          [...uncovered].sort((a, b) => a - b),
+        )
       }
     }
     currentFile = null
@@ -216,10 +222,7 @@ export function normalizeSfPath(sf: string): string {
  *
  * Pure. `changedPaths` is the set of repo-relative paths the PR touched.
  */
-export function resolveToChangedFile(
-  normalizedSf: string,
-  changedPaths: ReadonlySet<string>,
-): string | null {
+export function resolveToChangedFile(normalizedSf: string, changedPaths: ReadonlySet<string>): string | null {
   if (typeof normalizedSf !== "string" || normalizedSf.length === 0) return null
   // Reject traversal / still-absolute shapes.
   if (normalizedSf.startsWith("/")) return null
@@ -388,11 +391,7 @@ export async function ingestCoverage(args: IngestCoverageArgs): Promise<Coverage
     )
     if (!artifact) {
       const present = artifacts.find((a) => a.name === config.artifactName)
-      const reason = !present
-        ? "no-artifact"
-        : present.expired
-          ? "artifact-expired"
-          : "artifact-too-large"
+      const reason = !present ? "no-artifact" : present.expired ? "artifact-expired" : "artifact-too-large"
       emit("coverage-ingest-skipped", { ...ctx, runId, artifactName: config.artifactName, reason })
       return null
     }
@@ -420,17 +419,34 @@ export async function ingestCoverage(args: IngestCoverageArgs): Promise<Coverage
       })
       extracted = files[entry]
     } catch {
-      emit("coverage-ingest-skipped", { ...ctx, runId, artifactName: config.artifactName, reason: "unzip-failed" })
+      emit("coverage-ingest-skipped", {
+        ...ctx,
+        runId,
+        artifactName: config.artifactName,
+        reason: "unzip-failed",
+      })
       return null
     }
     if (!extracted) {
-      emit("coverage-ingest-skipped", { ...ctx, runId, artifactName: config.artifactName, entry, reason: "entry-not-found" })
+      emit("coverage-ingest-skipped", {
+        ...ctx,
+        runId,
+        artifactName: config.artifactName,
+        entry,
+        reason: "entry-not-found",
+      })
       return null
     }
     // Verify the extracted size against the cap (defense in depth — the
     // filter relies on `originalSize` from the central directory).
     if (extracted.byteLength > ENTRY_CAP) {
-      emit("coverage-ingest-skipped", { ...ctx, runId, artifactName: config.artifactName, entry, reason: "entry-too-large" })
+      emit("coverage-ingest-skipped", {
+        ...ctx,
+        runId,
+        artifactName: config.artifactName,
+        entry,
+        reason: "entry-too-large",
+      })
       return null
     }
 

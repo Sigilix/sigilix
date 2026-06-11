@@ -173,13 +173,15 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (typeof o.repo !== "string" || o.repo.length === 0) return false
   if (o.actualRepo !== undefined && (typeof o.actualRepo !== "string" || o.actualRepo.length === 0)) return false
   if (o.branch !== undefined && (typeof o.branch !== "string" || o.branch.length === 0)) return false
-  if (o.defaultBranch !== undefined && (typeof o.defaultBranch !== "string" || o.defaultBranch.length === 0)) return false
+  if (o.defaultBranch !== undefined && (typeof o.defaultBranch !== "string" || o.defaultBranch.length === 0))
+    return false
   if (o.namespace !== undefined && (typeof o.namespace !== "string" || o.namespace.length === 0)) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
   if (
     o.githubRepoId !== undefined &&
     (typeof o.githubRepoId !== "number" || !Number.isInteger(o.githubRepoId) || o.githubRepoId <= 0)
-  ) return false
+  )
+    return false
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (typeof o.fileCount !== "number") return false
@@ -199,11 +201,7 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
  * emit `repo-index-manifest-invalid` telemetry with the reason and
  * fall through to a fresh re-index when the stored shape is unusable.
  */
-export async function readRepoIndexManifest(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<ReadResult> {
+export async function readRepoIndexManifest(env: Env, owner: string, repo: string): Promise<ReadResult> {
   const raw = await env.OPENCLAW_STATE.get(repoIndexManifestKey(owner, repo))
   if (raw === null) return { kind: "missing" }
   return parseRepoIndexManifest(raw)
@@ -268,15 +266,10 @@ export function parseRepoIndexManifest(raw: string): ReadResult {
  * scraping can measure Phase 2 coverage before Phase 3 flips the read
  * path.
  */
-export async function writeRepoIndexManifest(
-  env: Env,
-  manifest: RepoIndexManifestV1,
-): Promise<void> {
-  await env.OPENCLAW_STATE.put(
-    repoIndexManifestKey(manifest.owner, manifest.repo),
-    JSON.stringify(manifest),
-    { expirationTtl: TTL_SECONDS },
-  )
+export async function writeRepoIndexManifest(env: Env, manifest: RepoIndexManifestV1): Promise<void> {
+  await env.OPENCLAW_STATE.put(repoIndexManifestKey(manifest.owner, manifest.repo), JSON.stringify(manifest), {
+    expirationTtl: TTL_SECONDS,
+  })
   const isDefaultBranchManifest = manifest.branch === undefined
   if (
     isDefaultBranchManifest &&
@@ -284,17 +277,17 @@ export async function writeRepoIndexManifest(
     Number.isInteger(manifest.githubRepoId) &&
     manifest.githubRepoId > 0
   ) {
-    await env.OPENCLAW_STATE.put(
-      repoTenantKey(manifest.githubRepoId),
-      JSON.stringify(manifest),
-      { expirationTtl: TTL_SECONDS },
+    await env.OPENCLAW_STATE.put(repoTenantKey(manifest.githubRepoId), JSON.stringify(manifest), {
+      expirationTtl: TTL_SECONDS,
+    })
+    console.log(
+      JSON.stringify({
+        event: "dual-write-succeeded",
+        key_legacy: repoIndexManifestKey(manifest.owner, manifest.repo),
+        key_new: repoTenantKey(manifest.githubRepoId),
+        github_repo_id: manifest.githubRepoId,
+      }),
     )
-    console.log(JSON.stringify({
-      event: "dual-write-succeeded",
-      key_legacy: repoIndexManifestKey(manifest.owner, manifest.repo),
-      key_new: repoTenantKey(manifest.githubRepoId),
-      github_repo_id: manifest.githubRepoId,
-    }))
   }
 }
 

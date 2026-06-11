@@ -67,21 +67,12 @@ describe("parseSlashCommand", () => {
   })
 
   it("finds the command on any line in a multi-line body", () => {
-    const body = [
-      "Thanks for the review.",
-      "",
-      "/sigilix review",
-      "",
-      "(re-running because I pushed a fix)",
-    ].join("\n")
+    const body = ["Thanks for the review.", "", "/sigilix review", "", "(re-running because I pushed a fix)"].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
   })
 
   it("matches only the first recognized invocation when multiple exist", () => {
-    const body = [
-      "/sigilix review",
-      "/sigilix review",
-    ].join("\n")
+    const body = ["/sigilix review", "/sigilix review"].join("\n")
     // First match wins; both would yield the same result but we want
     // to confirm we don't accumulate state or return arrays.
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
@@ -102,11 +93,7 @@ describe("parseSlashCommand", () => {
   it("recognizes the command on a later line in a mixed body", () => {
     // First line has the command embedded mid-sentence (no match);
     // a later line has it at the start (match).
-    const body = [
-      "Hey /sigilix review please do it",
-      "",
-      "/sigilix review",
-    ].join("\n")
+    const body = ["Hey /sigilix review please do it", "", "/sigilix review"].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
   })
 
@@ -117,10 +104,7 @@ describe("parseSlashCommand", () => {
     // subcommand would silently drop a valid `/sigilix review`
     // further down. Use a still-unrecognized subcommand here so the
     // test stays meaningful as we add more commands.
-    const body = [
-      "/sigilix bogus",
-      "/sigilix review",
-    ].join("\n")
+    const body = ["/sigilix bogus", "/sigilix review"].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
   })
 })
@@ -291,23 +275,14 @@ describe("parseSlashCommand + stripQuotesAndCode integration", () => {
   // contract in so a regression in either function surfaces.
 
   it("ignores `/sigilix review` inside a fenced code block", () => {
-    const body = [
-      "Some explanation",
-      "```",
-      "/sigilix review",
-      "```",
-      "",
-    ].join("\n")
+    const body = ["Some explanation", "```", "/sigilix review", "```", ""].join("\n")
     expect(parseSlashCommand(stripQuotesAndCode(body))).toBeNull()
   })
 
   it("ignores `/sigilix review` inside a markdown blockquote", () => {
-    const body = [
-      "Quoting an earlier comment:",
-      "> /sigilix review",
-      "",
-      "what does that command actually do?",
-    ].join("\n")
+    const body = ["Quoting an earlier comment:", "> /sigilix review", "", "what does that command actually do?"].join(
+      "\n",
+    )
     expect(parseSlashCommand(stripQuotesAndCode(body))).toBeNull()
   })
 
@@ -418,10 +393,7 @@ describe("parseSlashCommand — SIG-98 lifecycle commands", () => {
     // from PR #58 also has to be guarded against the new two-token
     // `full` path. An unrecognized second token after `full` should
     // continue scanning later lines.
-    const body = [
-      "/sigilix full nonsense",
-      "/sigilix review",
-    ].join("\n")
+    const body = ["/sigilix full nonsense", "/sigilix review"].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
   })
 

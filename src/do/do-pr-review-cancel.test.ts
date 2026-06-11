@@ -30,7 +30,9 @@ import { PrReviewRunDO } from "@/src/do/pr-review-run"
 
 // ─── DO storage stub ─────────────────────────────────────────
 
-interface FakeAlarmState { alarmAt: number | null }
+interface FakeAlarmState {
+  alarmAt: number | null
+}
 
 function makeDoState(): {
   ctx: DurableObjectState
@@ -41,12 +43,24 @@ function makeDoState(): {
   const alarms: FakeAlarmState = { alarmAt: 999 } // pretend an alarm is armed
   const ctx = {
     storage: {
-      async get<T>(k: string): Promise<T | undefined> { return store.get(k) as T | undefined },
-      async put<T>(k: string, v: T): Promise<void> { store.set(k, v) },
-      async delete(k: string): Promise<boolean> { return store.delete(k) },
-      async setAlarm(t: number): Promise<void> { alarms.alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarms.alarmAt },
-      async deleteAlarm(): Promise<void> { alarms.alarmAt = null },
+      async get<T>(k: string): Promise<T | undefined> {
+        return store.get(k) as T | undefined
+      },
+      async put<T>(k: string, v: T): Promise<void> {
+        store.set(k, v)
+      },
+      async delete(k: string): Promise<boolean> {
+        return store.delete(k)
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarms.alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarms.alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarms.alarmAt = null
+      },
       list: async (opts?: { prefix?: string }): Promise<Map<string, unknown>> => {
         const prefix = opts?.prefix ?? ""
         const m = new Map<string, unknown>()
@@ -150,7 +164,10 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
 
     expect(attachSpy).toHaveBeenCalledTimes(1)
     expect(attachSpy.mock.calls[0]![0]).toMatchObject({
-      owner: "Sigilix", repo: "sigilix", installationId: 99, checkRunId: CHECK_RUN_ID,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      checkRunId: CHECK_RUN_ID,
     })
     expect(completeSpy).toHaveBeenCalledTimes(1)
     expect(completeSpy.mock.calls[0]![0]).toMatchObject({ conclusion: "skipped" })
@@ -211,13 +228,19 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
     const { ctx, store } = makeDoState()
     seedState(store, { state: "running" })
     store.set("run:OLD-1", {
-      runId: "OLD-1", headSha: "x".repeat(40), finalState: "done",
-      attempts: 1, startedAt: "2026-05-01T00:00:00.000Z",
+      runId: "OLD-1",
+      headSha: "x".repeat(40),
+      finalState: "done",
+      attempts: 1,
+      startedAt: "2026-05-01T00:00:00.000Z",
       finishedAt: "2026-05-01T01:00:00.000Z",
     })
     store.set("run:OLD-2", {
-      runId: "OLD-2", headSha: "y".repeat(40), finalState: "failed",
-      attempts: 2, startedAt: "2026-05-02T00:00:00.000Z",
+      runId: "OLD-2",
+      headSha: "y".repeat(40),
+      finalState: "failed",
+      attempts: 2,
+      startedAt: "2026-05-02T00:00:00.000Z",
       finishedAt: "2026-05-02T01:00:00.000Z",
     })
     const instance = new PrReviewRunDO(ctx, env)
@@ -246,7 +269,11 @@ describe("PrReviewRunDO /cancel — no-op cases", () => {
     it(`already-${terminal} → 200 no-op, state unchanged, check not re-closed`, async () => {
       const env = makeEnv()
       const { ctx, store } = makeDoState()
-      seedState(store, { state: terminal, checkRunId: CHECK_RUN_ID, finishedAt: "2026-05-07T07:00:00.000Z" })
+      seedState(store, {
+        state: terminal,
+        checkRunId: CHECK_RUN_ID,
+        finishedAt: "2026-05-07T07:00:00.000Z",
+      })
       const instance = new PrReviewRunDO(ctx, env)
 
       const res = await cancel(instance)

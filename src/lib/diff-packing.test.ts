@@ -87,14 +87,9 @@ describe("splitDiffByFile", () => {
   })
 
   it("strips the leading b/ prefix from new paths", () => {
-    const diff = [
-      "diff --git a/foo.ts b/foo.ts",
-      "+++ b/foo.ts",
-      "@@ -1 +1 @@",
-      "+x",
-    ].join("\n")
+    const diff = ["diff --git a/foo.ts b/foo.ts", "+++ b/foo.ts", "@@ -1 +1 @@", "+x"].join("\n")
     const blocks = splitDiffByFile(diff)
-    expect(blocks[0]?.path).toBe("foo.ts")  // not "b/foo.ts"
+    expect(blocks[0]?.path).toBe("foo.ts") // not "b/foo.ts"
   })
 
   it("drops leading lines that aren't part of any file block", () => {
@@ -144,7 +139,7 @@ describe("packFilesIntoBatches", () => {
   })
 
   it("returns one batch when total fits", () => {
-    const files = [mkFile("a", 100), mkFile("b", 100)]  // ~25 + ~25 = 50 tokens
+    const files = [mkFile("a", 100), mkFile("b", 100)] // ~25 + ~25 = 50 tokens
     const result = packFilesIntoBatches(files, SMALL_CAP)
     expect(result.batches).toHaveLength(1)
     expect(result.batches[0]?.map((f) => f.path)).toEqual(["a", "b"])
@@ -186,7 +181,7 @@ describe("packFilesIntoBatches", () => {
   it("uses DEFAULT_MAX_DIFF_TOKENS_PER_CALL when no cap provided", () => {
     expect(DEFAULT_MAX_DIFF_TOKENS_PER_CALL).toBeGreaterThan(1000)
     // A small-ish diff fits in one batch under the default cap.
-    const files = [mkFile("a", 1000), mkFile("b", 1000)]  // 250 + 250 = 500t
+    const files = [mkFile("a", 1000), mkFile("b", 1000)] // 250 + 250 = 500t
     const result = packFilesIntoBatches(files)
     expect(result.batches).toHaveLength(1)
   })

@@ -33,11 +33,7 @@ import type {
   ReviewMemorySeverityLabel,
   SigilixCommentMarker,
 } from "./types"
-import {
-  ALL_REVIEW_MEMORY_CATEGORIES,
-  ALL_REVIEW_MEMORY_CLAIM_TYPES,
-  ALL_REVIEW_MEMORY_SEVERITIES,
-} from "./types"
+import { ALL_REVIEW_MEMORY_CATEGORIES, ALL_REVIEW_MEMORY_CLAIM_TYPES, ALL_REVIEW_MEMORY_SEVERITIES } from "./types"
 import type { SpecialistRole } from "@/src/lib/ensemble-router"
 
 const FID_HEX_WIDTH = 16
@@ -46,15 +42,9 @@ const RULE_ID_NULL_SENTINEL = "none"
 /** SIG-276: at most 3 claims ride a marker (matches the extractor cap). */
 const MAX_MARKER_CLAIMS = 3
 
-const CATEGORY_SET: ReadonlySet<ReviewMemoryCategory> = new Set(
-  ALL_REVIEW_MEMORY_CATEGORIES,
-)
-const SEVERITY_SET: ReadonlySet<ReviewMemorySeverityLabel> = new Set(
-  ALL_REVIEW_MEMORY_SEVERITIES,
-)
-const CLAIM_TYPE_SET: ReadonlySet<ReviewMemoryClaimType> = new Set(
-  ALL_REVIEW_MEMORY_CLAIM_TYPES,
-)
+const CATEGORY_SET: ReadonlySet<ReviewMemoryCategory> = new Set(ALL_REVIEW_MEMORY_CATEGORIES)
+const SEVERITY_SET: ReadonlySet<ReviewMemorySeverityLabel> = new Set(ALL_REVIEW_MEMORY_SEVERITIES)
+const CLAIM_TYPE_SET: ReadonlySet<ReviewMemoryClaimType> = new Set(ALL_REVIEW_MEMORY_CLAIM_TYPES)
 /** Strict decimal-only guard for the serialized confPct / version fields
  *  — keeps `Number()` from accepting hex (`0x10`) or empty inputs on a
  *  hand-corrupted marker, matching the serializer's decimal output. */
@@ -73,9 +63,7 @@ function isClaimType(v: string): v is ReviewMemoryClaimType {
  * though the extractor already validated — the marker is the durable
  * record and must never carry a value the parser would reject.
  */
-function serializeClaims(
-  claims: ReadonlyArray<ReviewMemoryClaimMarkerData>,
-): string {
+function serializeClaims(claims: ReadonlyArray<ReviewMemoryClaimMarkerData>): string {
   return claims
     .filter(
       (c) =>
@@ -86,10 +74,7 @@ function serializeClaims(
         c.extractorVersion >= 0,
     )
     .slice(0, MAX_MARKER_CLAIMS)
-    .map(
-      (c) =>
-        `${c.type}~${Math.round(c.confidence * 100)}~${c.extractorVersion}`,
-    )
+    .map((c) => `${c.type}~${Math.round(c.confidence * 100)}~${c.extractorVersion}`)
     .join(",")
 }
 
@@ -100,9 +85,7 @@ function serializeClaims(
  * mirroring the `loc` precedent). Returns `undefined` when nothing
  * survives so the caller can omit the `claims` key entirely.
  */
-function parseClaimsSegment(
-  raw: string | undefined,
-): ReviewMemoryClaimMarkerData[] | undefined {
+function parseClaimsSegment(raw: string | undefined): ReviewMemoryClaimMarkerData[] | undefined {
   if (!raw) return undefined
   const out: ReviewMemoryClaimMarkerData[] = []
   for (const part of raw.split(",")) {
@@ -183,9 +166,7 @@ export async function computePathSha256(path: string): Promise<string> {
  * extractor version share an id regardless of per-finding confidence, so
  * Phase 3+ can group signals by claim identity.
  */
-export async function computeClaimId(
-  claim: ReviewMemoryClaimMarkerData,
-): Promise<string> {
+export async function computeClaimId(claim: ReviewMemoryClaimMarkerData): Promise<string> {
   const canonical = `${claim.extractorVersion}:${claim.type}`
   const full = await sha256Hex(canonical)
   return truncateHashHex(full, FID_HEX_WIDTH)
@@ -199,9 +180,7 @@ export async function computeClaimId(
 export async function hydrateClaimIds(
   claims: ReadonlyArray<ReviewMemoryClaimMarkerData>,
 ): Promise<ReviewMemoryClaim[]> {
-  return Promise.all(
-    claims.map(async (c) => ({ ...c, id: await computeClaimId(c) })),
-  )
+  return Promise.all(claims.map(async (c) => ({ ...c, id: await computeClaimId(c) })))
 }
 
 /**
@@ -307,9 +286,7 @@ const KNOWN_LOC_VALUES: ReadonlySet<string> = new Set(["inline", "unanchored"])
  * comment-edit flows to append a fresher marker without breaking
  * lookup; v1 only ever emits one marker per comment).
  */
-export function extractSigilixMarker(
-  commentBody: string,
-): SigilixCommentMarker | null {
+export function extractSigilixMarker(commentBody: string): SigilixCommentMarker | null {
   if (!commentBody || typeof commentBody !== "string") return null
   // Reset lastIndex on the global regex for each parse.
   MARKER_REGEX.lastIndex = 0
@@ -327,9 +304,7 @@ export function extractSigilixMarker(
   // values are silently dropped (forward-compat with future location
   // classes); the marker is still considered well-formed because the
   // dismissal pipeline only branches on `fid`/`cat`/`sev`.
-  const loc = locRaw && KNOWN_LOC_VALUES.has(locRaw)
-    ? (locRaw as "inline" | "unanchored")
-    : undefined
+  const loc = locRaw && KNOWN_LOC_VALUES.has(locRaw) ? (locRaw as "inline" | "unanchored") : undefined
   // SIG-276: parse the optional claims payload. Malformed/unknown
   // entries are dropped; an all-dropped payload yields `undefined` so
   // the `claims` key is omitted entirely (keeps `toEqual` shape stable

@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  validateForSubmission,
-  type SynthesizerProvenance,
-} from "@/src/lib/triage-pr-review-ensemble"
+import { validateForSubmission, type SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
 import {
   buildReviewSubmissionWithMetadata,
   type PrReviewVerdict,
@@ -13,10 +10,13 @@ import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.te
 
 describe("validateForSubmission — SIG-216 scope normalization (file → line when anchorable)", () => {
   const reviewable: ReviewableMap = new Map([
-    ["src/lib/foo.ts", [
-      { line: 42, side: "RIGHT" },
-      { line: 50, side: "RIGHT" },
-    ]],
+    [
+      "src/lib/foo.ts",
+      [
+        { line: 42, side: "RIGHT" },
+        { line: 50, side: "RIGHT" },
+      ],
+    ],
   ])
 
   const specialistVerdicts = [
@@ -24,9 +24,7 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       role: "logic" as const,
       verdict: {
         ...baseVerdict,
-        findings: [
-          { ...baseFinding, id: "logic-0", line: 42, score: 4 },
-        ],
+        findings: [{ ...baseFinding, id: "logic-0", line: 42, score: 4 }],
       },
       elapsedMs: 100,
     },
@@ -44,12 +42,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
         findings: [finding],
       },
       provenance: {
-        findings: [{
-          sourceSpecialists: ["logic"],
-          sourceFindingIds: ["logic-0"],
-          action: "kept",
-          verifiedViaRetrieval: false,
-        }],
+        findings: [
+          {
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          },
+        ],
         dropped: [],
       },
     }
@@ -216,9 +216,12 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
   // section rather than emitting an inline comment that would 422.
   it("leaves file scope alone when the matching anchor is LEFT-only (deleted-line position)", () => {
     const leftOnlyReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 42, side: "LEFT" }, // deleted line — anchorable but not on RIGHT
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 42, side: "LEFT" }, // deleted line — anchorable but not on RIGHT
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "file" }),
@@ -246,11 +249,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
   // finding range with the diff in the middle got routed to body).
   it("flips file → line for multi-line findings when only `line` is in a RIGHT-side hunk (relaxed any-line-in-range)", () => {
     const partialReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        // `line: 42` is RIGHT-anchorable, but `startLine: 38` is not.
-        { line: 42, side: "RIGHT" },
-        { line: 50, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          // `line: 42` is RIGHT-anchorable, but `startLine: 38` is not.
+          { line: 42, side: "RIGHT" },
+          { line: 50, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -273,10 +279,13 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("flips file → line for multi-line findings when BOTH startLine AND line are in RIGHT-side hunks", () => {
     const bothRightReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 38, side: "RIGHT" },
-        { line: 42, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 38, side: "RIGHT" },
+          { line: 42, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -299,15 +308,18 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
   // the diff, but the middle is. Must flip inline.
   it("flips file → line for multi-line findings when only middle lines are in RIGHT-side hunks (PR #175 case)", () => {
     const middleOnlyReviewable: ReviewableMap = new Map([
-      ["src/lib/index-delete.ts", [
-        { line: 432, side: "RIGHT" },
-        { line: 433, side: "RIGHT" },
-        { line: 434, side: "RIGHT" },
-        { line: 435, side: "RIGHT" },
-        { line: 436, side: "RIGHT" },
-        { line: 437, side: "RIGHT" },
-        { line: 438, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/index-delete.ts",
+        [
+          { line: 432, side: "RIGHT" },
+          { line: 433, side: "RIGHT" },
+          { line: 434, side: "RIGHT" },
+          { line: 435, side: "RIGHT" },
+          { line: 436, side: "RIGHT" },
+          { line: 437, side: "RIGHT" },
+          { line: 438, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -328,9 +340,7 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
     // ([432, 438]) so the inline POST won't 422. The finding MUST land
     // in `verdict.findings` with scope:"line" and MUST NOT appear in
     // `unanchoredFindings`.
-    expect(
-      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
-    ).toBeUndefined()
+    expect(out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts")).toBeUndefined()
     const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
     expect(matching).toBeDefined()
     expect(matching?.scope).toBe("line")
@@ -355,15 +365,18 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
   // through `deriveSide` against the stale `startLine: 429`.
   it("rewrites multi-line endpoints BEFORE deriveSide so unanchorable startLine can't slip through (PR #176 CR follow-up)", () => {
     const middleOnlyReviewable: ReviewableMap = new Map([
-      ["src/lib/index-delete.ts", [
-        { line: 432, side: "RIGHT" },
-        { line: 433, side: "RIGHT" },
-        { line: 434, side: "RIGHT" },
-        { line: 435, side: "RIGHT" },
-        { line: 436, side: "RIGHT" },
-        { line: 437, side: "RIGHT" },
-        { line: 438, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/index-delete.ts",
+        [
+          { line: 432, side: "RIGHT" },
+          { line: 433, side: "RIGHT" },
+          { line: 434, side: "RIGHT" },
+          { line: 435, side: "RIGHT" },
+          { line: 436, side: "RIGHT" },
+          { line: 437, side: "RIGHT" },
+          { line: 438, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -377,9 +390,7 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       reviewable: middleOnlyReviewable,
       specialistVerdicts,
     })
-    expect(
-      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
-    ).toBeUndefined()
+    expect(out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts")).toBeUndefined()
     const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
     expect(matching).toBeDefined()
     // Rewritten to the in-diff subrange — NOT the stale originals
@@ -394,11 +405,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("flips file → line for multi-line findings when only `startLine` is in a RIGHT-side hunk", () => {
     const startOnlyReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        // `startLine: 38` is RIGHT-anchorable, but `line: 42` is not.
-        { line: 38, side: "RIGHT" },
-        { line: 50, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          // `startLine: 38` is RIGHT-anchorable, but `line: 42` is not.
+          { line: 38, side: "RIGHT" },
+          { line: 50, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -423,11 +437,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("leaves file scope alone for multi-line findings when NEITHER endpoint NOR any middle line is in a RIGHT-side hunk", () => {
     const noOverlapReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        // Range [38, 42] has nothing overlapping the reviewable lines.
-        { line: 100, side: "RIGHT" },
-        { line: 101, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          // Range [38, 42] has nothing overlapping the reviewable lines.
+          { line: 100, side: "RIGHT" },
+          { line: 101, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -459,10 +476,13 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
   // reintroduce the quadratic walk.
   it("flips file → line for an extreme-range finding (startLine: 1, line: 999999) when one anchor lands inside the range", () => {
     const sparseReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        // One RIGHT anchor at line 500 inside the giant [1, 999999] range.
-        { line: 500, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          // One RIGHT anchor at line 500 inside the giant [1, 999999] range.
+          { line: 500, side: "RIGHT" },
+        ],
+      ],
     ])
     const start = performance.now()
     const out = validateForSubmission({
@@ -507,11 +527,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("returns false when every anchor is LEFT-side (RIGHT-side filter holds)", () => {
     const leftOnlyReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 40, side: "LEFT" },
-        { line: 41, side: "LEFT" },
-        { line: 42, side: "LEFT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 40, side: "LEFT" },
+          { line: 41, side: "LEFT" },
+          { line: 42, side: "LEFT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -532,10 +555,13 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("returns false when every RIGHT anchor sits outside the range", () => {
     const outsideRangeReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 10, side: "RIGHT" },
-        { line: 100, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 10, side: "RIGHT" },
+          { line: 100, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({
@@ -556,11 +582,14 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
 
   it("returns true when a single RIGHT anchor sits inside the range", () => {
     const insideRangeReviewable: ReviewableMap = new Map([
-      ["src/lib/foo.ts", [
-        { line: 5, side: "LEFT" },
-        { line: 40, side: "RIGHT" }, // inside [38, 42]
-        { line: 100, side: "RIGHT" },
-      ]],
+      [
+        "src/lib/foo.ts",
+        [
+          { line: 5, side: "LEFT" },
+          { line: 40, side: "RIGHT" }, // inside [38, 42]
+          { line: 100, side: "RIGHT" },
+        ],
+      ],
     ])
     const out = validateForSubmission({
       synthOutput: packSynth({

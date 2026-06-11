@@ -54,7 +54,7 @@ export const DISMISSAL_SOFTENING_WEIGHTS: Readonly<Record<DismissReason, number>
   "already-covered": 1.0,
   "too-minor": 1.5,
   "wrong-context": 1.0,
-  "unlabeled": 1.0,
+  unlabeled: 1.0,
 }
 
 /** Default weight for any signal without a reason (or unknown reason). */
@@ -77,9 +77,7 @@ export function weightForReason(reason: DismissReason | undefined): number {
  * Sum the softening weights for a set of signals. Each signal contributes
  * `weightForReason(signal.dismissReason)`. Pure — exported for tests.
  */
-export function weightedSignalCount(
-  signals: ReadonlyArray<{ dismissReason?: DismissReason }>,
-): number {
+export function weightedSignalCount(signals: ReadonlyArray<{ dismissReason?: DismissReason }>): number {
   let total = 0
   for (const s of signals) total += weightForReason(s.dismissReason)
   return total

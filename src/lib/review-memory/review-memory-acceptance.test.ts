@@ -14,10 +14,7 @@ import { describe, expect, it, vi } from "vitest"
 import { captureReviewFeedback } from "@/src/lib/review-memory/capture"
 import { runReviewMemoryLookup } from "@/src/lib/review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "@/src/lib/review-memory/render"
-import {
-  buildSigilixMarker,
-  computePathSha256,
-} from "@/src/lib/review-memory/marker"
+import { buildSigilixMarker, computePathSha256 } from "@/src/lib/review-memory/marker"
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { ResolvedReviewMemoryConfig } from "@/src/lib/review-memory/types"
@@ -89,11 +86,7 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
 
     // ── Phase 2: simulate 3 PRs, each with one dismissal reply.
     const config = makeConfig()
-    const dismissalReplies = [
-      "false positive",
-      "not relevant for tests",
-      "wontfix",
-    ]
+    const dismissalReplies = ["false positive", "not relevant for tests", "wontfix"]
     for (let i = 0; i < 3; i++) {
       const parentBody = parentBodies[i]!
       const fakeClient = {

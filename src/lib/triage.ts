@@ -180,14 +180,10 @@ function buildPrompt(ctx: PromptCtx): string {
       "[RELEVANT CODEBASE CHUNKS (semantic similarity to issue body)]",
       "Verify each is actually relevant before citing — retrieval can return false positives.",
       "",
-      ctx.codebaseChunks
+      ctx.codebaseChunks,
     )
   }
-  sections.push(
-    "",
-    "[OUTPUT]",
-    "Return only the JSON object. No prose, no Markdown fence, no array."
-  )
+  sections.push("", "[OUTPUT]", "Return only the JSON object. No prose, no Markdown fence, no array.")
   return sections.join("\n")
 }
 
@@ -293,9 +289,8 @@ export interface IssueTriageCommentVerdict {
 
 export function issueTriagePriorityBadge(severity: string): string {
   const key = severity.toUpperCase()
-  const badge = key in ISSUE_TRIAGE_BADGES
-    ? ISSUE_TRIAGE_BADGES[key as keyof typeof ISSUE_TRIAGE_BADGES]
-    : ISSUE_TRIAGE_BADGES.P2
+  const badge =
+    key in ISSUE_TRIAGE_BADGES ? ISSUE_TRIAGE_BADGES[key as keyof typeof ISSUE_TRIAGE_BADGES] : ISSUE_TRIAGE_BADGES.P2
   return `[${badge.label}]`
 }
 

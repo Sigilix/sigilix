@@ -14,10 +14,7 @@
 //   - The agent loop ALSO wraps record() in its own withComposedTimeout
 //     defense-in-depth.
 
-import type {
-  AgentLoopTelemetryRecordInput,
-  AgentLoopTelemetrySink,
-} from "./agent-loop"
+import type { AgentLoopTelemetryRecordInput, AgentLoopTelemetrySink } from "./agent-loop"
 
 const MAX_FIELD_BYTES = 32 * 1024
 const SECRET_PATTERNS: RegExp[] = [
@@ -29,8 +26,10 @@ const SECRET_PATTERNS: RegExp[] = [
 const KEY_PREFIX = "agent-loop-telemetry"
 const TTL_DAYS = 30
 
-interface StoredPayload extends Omit<AgentLoopTelemetryRecordInput,
-  "agentInitialUserMessage" | "singleShotPrompt" | "promptBuilderSource" | "failureRawAnswer"> {
+interface StoredPayload extends Omit<
+  AgentLoopTelemetryRecordInput,
+  "agentInitialUserMessage" | "singleShotPrompt" | "promptBuilderSource" | "failureRawAnswer"
+> {
   agentInitialUserMessage: string
   agentInitialUserMessageTruncated: boolean
   singleShotPrompt: string
@@ -70,9 +69,7 @@ export function makeKvTelemetrySink(kv: KVNamespace): AgentLoopTelemetrySink {
   }
 }
 
-async function buildStoredPayload(
-  input: AgentLoopTelemetryRecordInput,
-): Promise<StoredPayload> {
+async function buildStoredPayload(input: AgentLoopTelemetryRecordInput): Promise<StoredPayload> {
   // Hashes computed on UNTRUNCATED inputs (Codex round-3) so they
   // reflect what actually ran, not what got stored.
   const singleShotPromptHash = await sha256Hex(input.singleShotPrompt)

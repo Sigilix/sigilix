@@ -14,13 +14,25 @@ function makeDo(): VerificationMetricsDO {
   const state = {
     storage: {
       sql: sqlStorage,
-      transactionSync<T>(fn: () => T): T { return sqlStorage.transactionSync(fn) },
-      async get(): Promise<unknown> { return undefined },
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
       async put(): Promise<void> {},
-      async delete(): Promise<boolean> { return false },
-      async setAlarm(t: number): Promise<void> { alarmAt = t },
-      async getAlarm(): Promise<number | null> { return alarmAt },
-      async deleteAlarm(): Promise<void> { alarmAt = null },
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
     },
     id: { toString: () => "global", name: "global" },
   }
@@ -37,13 +49,19 @@ function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 const URL_ = "https://x/metrics/verification"
 
 describe("handleVerificationMetricsRoute", () => {
   it("503 when the shared metrics token is unset", async () => {
-    expect((await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({ OPENCLAW_VALIDATION_METRICS_TOKEN: undefined }))).status).toBe(503)
+    expect(
+      (
+        await handleVerificationMetricsRoute(
+          get(URL_, `Bearer ${TOKEN}`),
+          makeEnv({ OPENCLAW_VALIDATION_METRICS_TOKEN: undefined }),
+        )
+      ).status,
+    ).toBe(503)
   })
 
   it("401 on missing / wrong bearer", async () => {
@@ -53,7 +71,9 @@ describe("handleVerificationMetricsRoute", () => {
   })
 
   it("400 on an out-of-range window", async () => {
-    expect((await handleVerificationMetricsRoute(get(`${URL_}?window=99`, `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
+    expect((await handleVerificationMetricsRoute(get(`${URL_}?window=99`, `Bearer ${TOKEN}`), makeEnv())).status).toBe(
+      400,
+    )
   })
 
   it("200 with mode, totals, derived fractions, and the verdict breakdown", async () => {
@@ -67,14 +87,23 @@ describe("handleVerificationMetricsRoute", () => {
     const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({}, do_))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      mode: string; total: number; refutableFraction: number; refutedFraction: number
-      byVerdict: Record<string, number>; counts: Record<string, Record<string, number>>
+      mode: string
+      total: number
+      refutableFraction: number
+      refutedFraction: number
+      byVerdict: Record<string, number>
+      counts: Record<string, Record<string, number>>
     }
     expect(body.mode).toBe("shadow")
     expect(body.total).toBe(4)
     expect(body.refutableFraction).toBe(0.5) // (1 confirmed + 1 refuted)/4
     expect(body.refutedFraction).toBe(0.25)
-    expect(body.byVerdict).toMatchObject({ refuted: 1, confirmed: 1, "no-check": 1, inconclusive: 1 })
+    expect(body.byVerdict).toMatchObject({
+      refuted: 1,
+      confirmed: 1,
+      "no-check": 1,
+      inconclusive: 1,
+    })
     expect(body.counts.refuted).toEqual({ security: 1 })
   })
 
@@ -91,12 +120,23 @@ describe("handleVerificationMetricsRoute", () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      total: number; receiptJoinMode: string
-      receiptJoin: { confirmed: number; inconclusive: number; total: number; refutableEligibleFraction: number }
+      total: number
+      receiptJoinMode: string
+      receiptJoin: {
+        confirmed: number
+        inconclusive: number
+        total: number
+        refutableEligibleFraction: number
+      }
     }
     expect(body.total).toBe(1) // worker-token only — receipt-join excluded
     expect(body.receiptJoinMode).toBe("shadow")
-    expect(body.receiptJoin).toEqual({ confirmed: 1, inconclusive: 1, total: 2, refutableEligibleFraction: 0.5 })
+    expect(body.receiptJoin).toEqual({
+      confirmed: 1,
+      inconclusive: 1,
+      total: 2,
+      refutableEligibleFraction: 0.5,
+    })
   })
 
   it("defaults receiptJoinMode to off when OPENCLAW_RECEIPTJOIN_MODE is unset", async () => {
@@ -118,12 +158,16 @@ describe("handleVerificationMetricsRoute", () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      total: number; trustLedgerMode: string
+      total: number
+      trustLedgerMode: string
       trustLedger: { byTier: Record<string, number>; total: number }
     }
     expect(body.total).toBe(1) // worker-token only — trust-ledger excluded
     expect(body.trustLedgerMode).toBe("shadow")
-    expect(body.trustLedger).toEqual({ byTier: { "runner-confirmed": 1, "grounded-model": 2 }, total: 3 })
+    expect(body.trustLedger).toEqual({
+      byTier: { "runner-confirmed": 1, "grounded-model": 2 },
+      total: 3,
+    })
   })
 
   it("defaults trustLedgerMode to off when OPENCLAW_TRUST_LEDGER is unset", async () => {
@@ -132,7 +176,10 @@ describe("handleVerificationMetricsRoute", () => {
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {
-    const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv({ OPENCLAW_VERIFICATION_MODE: undefined }))
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_VERIFICATION_MODE: undefined }),
+    )
     expect(((await res.json()) as { mode: string }).mode).toBe("off")
   })
 })

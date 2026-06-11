@@ -13,10 +13,7 @@
 // `CollectedVerdict` / `SynthesizerProvenance`, which `verbatimModuleSyntax`
 // fully erases (zero runtime cycle).
 
-import type {
-  PrReviewFinding,
-  EvidenceRecord,
-} from "@/src/shared/domain/pr-review-finding"
+import type { PrReviewFinding, EvidenceRecord } from "@/src/shared/domain/pr-review-finding"
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
@@ -112,9 +109,10 @@ export function rolesFromValidatedSources(
     provenance.sourceFindingIds.some((id) => id.startsWith(`${role}-`)),
   )
   if (rolesFromIds.length > 0) return rolesFromIds
-  return ALL_SPECIALISTS.filter((role) =>
-    provenance.sourceSpecialists.includes(role) &&
-    specialistReturnedMatchingFinding(role, finding, specialistVerdicts),
+  return ALL_SPECIALISTS.filter(
+    (role) =>
+      provenance.sourceSpecialists.includes(role) &&
+      specialistReturnedMatchingFinding(role, finding, specialistVerdicts),
   )
 }
 
@@ -127,15 +125,14 @@ export function deterministicFactIdsForFinding(
   const evidenceId = hasNonEmptyString(finding.evidenceId) ? finding.evidenceId.trim() : ""
   const sourceEvidenceIds = sourceIds
     .map((id) => sourceEvidenceById.get(id)?.evidenceId)
-    .filter((id): id is string =>
-      hasNonEmptyString(id) &&
-      id !== "NONE" &&
-      hasDeterministicPrefix(id, DETERMINISTIC_EVIDENCE_ID_PREFIXES),
+    .filter(
+      (id): id is string =>
+        hasNonEmptyString(id) && id !== "NONE" && hasDeterministicPrefix(id, DETERMINISTIC_EVIDENCE_ID_PREFIXES),
     )
   return uniqueNonEmpty([
     ...(evidenceId !== "" &&
-      evidenceId !== "NONE" &&
-      hasDeterministicPrefix(evidenceId, DETERMINISTIC_EVIDENCE_ID_PREFIXES)
+    evidenceId !== "NONE" &&
+    hasDeterministicPrefix(evidenceId, DETERMINISTIC_EVIDENCE_ID_PREFIXES)
       ? [evidenceId]
       : []),
     ...sourceEvidenceIds,
@@ -317,9 +314,7 @@ export function normalizeFindingScopeForAnchorability(
   // RIGHT-side filter inside isAnyLineInRightHunk handles that.
   const endLine = finding.line
   const startLine =
-    typeof finding.startLine === "number" && Number.isFinite(finding.startLine)
-      ? finding.startLine
-      : endLine
+    typeof finding.startLine === "number" && Number.isFinite(finding.startLine) ? finding.startLine : endLine
   const lo = Math.min(startLine, endLine)
   const hi = Math.max(startLine, endLine)
   if (!isAnyLineInRightHunk(anchorLines, lo, hi)) return finding
@@ -433,9 +428,7 @@ export function findRangeAwareAnchor(
   if (path.length === 0) return null
   if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return null
   const hasMultiLine =
-    typeof finding.startLine === "number" &&
-    Number.isFinite(finding.startLine) &&
-    finding.startLine !== finding.line
+    typeof finding.startLine === "number" && Number.isFinite(finding.startLine) && finding.startLine !== finding.line
   if (!hasMultiLine) return null
 
   const anchors = reviewable.get(path)
@@ -460,9 +453,7 @@ export function findRangeAwareAnchor(
   }
   if (lastLine === null || firstLine === null) return null
 
-  return firstLine < lastLine
-    ? { line: lastLine, startLine: firstLine }
-    : { line: lastLine }
+  return firstLine < lastLine ? { line: lastLine, startLine: firstLine } : { line: lastLine }
 }
 
 export function findRepairableInlineAnchor(args: {

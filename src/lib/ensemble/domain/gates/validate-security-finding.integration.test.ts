@@ -17,16 +17,10 @@ import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
-import {
-  finding,
-  fact,
-  manifestOf,
-} from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
+import { finding, fact, manifestOf } from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
 
 function makeReviewable(path = "src/db.ts"): ReviewableMap {
-  return new Map([
-    [path, [{ line: 17, side: "RIGHT" as const, position: 1 }]],
-  ])
+  return new Map([[path, [{ line: 17, side: "RIGHT" as const, position: 1 }]]])
 }
 
 // The real param type, extracted from validateForSubmission's signature
@@ -57,7 +51,10 @@ function makeSpecialistVerdictsWithSecuritySources(
   sources: Array<Partial<PrReviewFinding> & { id: string }>,
 ): SpecialistVerdictsArg {
   return [
-    { role: "security", verdict: { findings: sources.map((source) => ({ ...finding(), ...source })) } },
+    {
+      role: "security",
+      verdict: { findings: sources.map((source) => ({ ...finding(), ...source })) },
+    },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
   ] as unknown as SpecialistVerdictsArg
 }
@@ -65,7 +62,12 @@ function makeSpecialistVerdictsWithSecuritySources(
 function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
   return {
     findings: [
-      { sourceSpecialists: ["security"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["security"],
+        sourceFindingIds: [sourceId],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
     softened: [],
@@ -81,7 +83,9 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: securityProvenance(),
@@ -122,7 +126,9 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: securityProvenance(),
@@ -146,7 +152,9 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: securityProvenance(),
@@ -159,14 +167,19 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     })
     expect(result.droppedForFailedValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(1) // NOT dropped in shadow
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "fabricated-evidence-id", dropped: false })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "fabricated-evidence-id",
+      dropped: false,
+    })
   })
 
   it("defaults to SHADOW when securityValidatorMode is omitted", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: securityProvenance(),
@@ -203,12 +216,16 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            cweId: "CWE-862",
-            evidenceId: "NONE",
-            body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              cweId: "CWE-862",
+              evidenceId: "NONE",
+              body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
+            }),
+          ],
         },
         provenance: securityProvenance(),
       },
@@ -225,12 +242,16 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            cweId: undefined,
-            evidenceId: undefined,
-            body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              cweId: undefined,
+              evidenceId: undefined,
+              body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
+            }),
+          ],
         },
         provenance: securityProvenance("security-0"),
       },
@@ -254,16 +275,20 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: undefined, evidenceId: undefined })],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["security"],
-            sourceFindingIds: ["security-0", "security-1"],
-            action: "merged",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["security"],
+              sourceFindingIds: ["security-0", "security-1"],
+              action: "merged",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
           softened: [],
         },
@@ -284,20 +309,26 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            cweId: undefined,
-            evidenceId: "NONE",
-            body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              cweId: undefined,
+              evidenceId: "NONE",
+              body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
+            }),
+          ],
         },
         provenance: {
-          findings: [{
-            sourceSpecialists: ["security"],
-            sourceFindingIds: ["security-0", "security-1"],
-            action: "merged",
-            verifiedViaRetrieval: false,
-          }],
+          findings: [
+            {
+              sourceSpecialists: ["security"],
+              sourceFindingIds: ["security-0", "security-1"],
+              action: "merged",
+              verifiedViaRetrieval: false,
+            },
+          ],
           dropped: [],
           softened: [],
         },
@@ -321,11 +352,15 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            cweId: "CWE-89",
-            evidenceId: "sarif:sql-injection:abc123abc123:17",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              cweId: "CWE-89",
+              evidenceId: "sarif:sql-injection:abc123abc123:17",
+            }),
+          ],
         },
         provenance: securityProvenance("security-0"),
       },
@@ -349,12 +384,29 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({ category: "logic", headline: "Off-by-one in cursor", cweId: undefined, evidenceId: undefined })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              category: "logic",
+              headline: "Off-by-one in cursor",
+              cweId: undefined,
+              evidenceId: undefined,
+            }),
+          ],
         },
         provenance: {
-          findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -370,13 +422,29 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           // category:"logic" but provenance says it came from security too.
-          findings: [finding({ category: "logic", cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
+          findings: [
+            finding({
+              category: "logic",
+              cweId: "CWE-89",
+              evidenceId: "sarif:fake:000000000000:17",
+            }),
+          ],
         },
         provenance: {
-          findings: [{ sourceSpecialists: ["security", "logic"], sourceFindingIds: ["security-0", "logic-0"], action: "merged", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: ["security", "logic"],
+              sourceFindingIds: ["security-0", "logic-0"],
+              action: "merged",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -392,13 +460,23 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: {
           // sourceSpecialists empty, but the validated id has the security- prefix.
-          findings: [{ sourceSpecialists: [], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: [],
+              sourceFindingIds: ["security-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -414,7 +492,9 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
         },
         provenance: securityProvenance(),
@@ -479,10 +559,7 @@ describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () 
   // finding (CWE-89) claiming NONE falls through to auto-enrich and, with
   // no backing fact, is rejected.
   it("scanner-covered bucket (CWE-89) claiming NONE with no fact → reject", () => {
-    const decision = evaluateSecurityFinding(
-      finding({ score: 5, cweId: "CWE-89", evidenceId: "NONE" }),
-      manifestOf(),
-    )
+    const decision = evaluateSecurityFinding(finding({ score: 5, cweId: "CWE-89", evidenceId: "NONE" }), manifestOf())
     expect(decision).toEqual({ keep: false, reason: "unsupported-scanner-covered" })
   })
 
@@ -498,7 +575,13 @@ describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () 
       cwe: undefined,
     })
     const decision = evaluateSecurityFinding(
-      finding({ score: 5, cweId: undefined, evidenceId: undefined, path: "package-lock.json", line: 999 }),
+      finding({
+        score: 5,
+        cweId: undefined,
+        evidenceId: undefined,
+        path: "package-lock.json",
+        line: 999,
+      }),
       manifestOf(pathOnly),
     )
     expect(decision).toEqual({ keep: false, reason: "unsupported-scanner-covered" })
@@ -542,13 +625,17 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            path: "src/do/repo-graph.ts",
-            cweId: "CWE-639",
-            evidenceId: "NONE",
-            body: "The blastRadius method lacks an access check before reading caller-supplied symbol ids and could be invoked without authorization.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              path: "src/do/repo-graph.ts",
+              cweId: "CWE-639",
+              evidenceId: "NONE",
+              body: "The blastRadius method lacks an access check before reading caller-supplied symbol ids and could be invoked without authorization.",
+            }),
+          ],
         },
         provenance: securityProvenance(),
       },
@@ -568,14 +655,18 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            path: "src/do/mixed.ts",
-            line: 5, // a top-level helper ABOVE the DO class (span starts at 20)
-            cweId: "CWE-639",
-            evidenceId: "NONE",
-            body: "The exported readRecord helper lacks an access check before returning the requested row and could leak another tenant's data.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              path: "src/do/mixed.ts",
+              line: 5, // a top-level helper ABOVE the DO class (span starts at 20)
+              cweId: "CWE-639",
+              evidenceId: "NONE",
+              body: "The exported readRecord helper lacks an access check before returning the requested row and could leak another tenant's data.",
+            }),
+          ],
         },
         provenance: securityProvenance(),
       },
@@ -595,7 +686,12 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     // caught by the DO suppression — that gate is scoped to security provenance.
     const logicProvenance: SynthesizerProvenance = {
       findings: [
-        { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+        {
+          sourceSpecialists: ["logic"],
+          sourceFindingIds: ["logic-0"],
+          action: "kept",
+          verifiedViaRetrieval: false,
+        },
       ],
       dropped: [],
       softened: [],
@@ -603,15 +699,19 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            path: "src/do/repo-graph.ts",
-            line: 17,
-            cweId: "CWE-639",
-            category: "logic",
-            headline: "Off-by-one lets the wrong record id through",
-            body: "The bounds check uses <= instead of <, so the loop reads one record past the requested range.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              path: "src/do/repo-graph.ts",
+              line: 17,
+              cweId: "CWE-639",
+              category: "logic",
+              headline: "Off-by-one lets the wrong record id through",
+              body: "The bounds check uses <= instead of <, so the loop reads one record past the requested range.",
+            }),
+          ],
         },
         provenance: logicProvenance,
       },
@@ -629,13 +729,17 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
-          findings: [finding({
-            path: "src/db.ts",
-            cweId: "CWE-639",
-            evidenceId: "NONE",
-            body: "The query handler lacks an access check before reading the requested record id and could leak another tenant's data.",
-          })],
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              path: "src/db.ts",
+              cweId: "CWE-639",
+              evidenceId: "NONE",
+              body: "The query handler lacks an access check before reading the requested record id and could leak another tenant's data.",
+            }),
+          ],
         },
         provenance: securityProvenance(),
       },
@@ -658,7 +762,9 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ path: "src/db.ts", line: 1 })],
         },
         provenance: securityProvenance(),
@@ -677,7 +783,9 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ path: "src/db.ts", line: 1 })],
         },
         provenance: securityProvenance(),

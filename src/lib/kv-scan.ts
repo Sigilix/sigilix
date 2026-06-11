@@ -26,11 +26,7 @@ export async function listKeys(env: Env, prefix: string, cap: number): Promise<s
 }
 
 /** Map `items` through `fn` in batches of `limit` concurrent calls. */
-export async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
+export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = []
   for (let i = 0; i < items.length; i += limit) {
     out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))))

@@ -24,9 +24,7 @@ function ctx(): ExecutionContext {
 
 describe("badge assets (SIG-201)", () => {
   it("serves a 20x20 P2 priority chip with hairline gutter + rx=1 (SIG-238 r9)", async () => {
-    const res = handleBadgeAssetRoute(
-      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
-    )
+    const res = handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`))
 
     expect(res?.status).toBe(200)
     expect(res?.headers.get("content-type")).toContain("image/svg+xml")
@@ -58,20 +56,20 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toContain('fill="#0A0A0A"')
     expect(body).toContain('<path d="')
     expect(body).not.toContain("<text")
-    expect(body).not.toContain('font-family')
-    expect(body).not.toContain('font-size')
-    expect(body).not.toContain('font-weight')
-    expect(body).not.toContain('letter-spacing')
-    expect(body).not.toContain('text-anchor')
-    expect(body).not.toContain('stroke=')
-    expect(body).not.toContain('stroke-opacity')
+    expect(body).not.toContain("font-family")
+    expect(body).not.toContain("font-size")
+    expect(body).not.toContain("font-weight")
+    expect(body).not.toContain("letter-spacing")
+    expect(body).not.toContain("text-anchor")
+    expect(body).not.toContain("stroke=")
+    expect(body).not.toContain("stroke-opacity")
     expect(body).not.toContain("<image")
     expect(body).toBe(getBadgeSvg("p2"))
   })
 
   it("serves low-saturation filled category chips for specialist labels (Kimi R2 + SIG-216 path-bake)", async () => {
     const res = handleBadgeAssetRoute(
-      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`)
+      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`),
     )
 
     expect(res?.status).toBe(200)
@@ -89,23 +87,21 @@ describe("badge assets (SIG-201)", () => {
     expect(body).not.toContain('<g transform="translate')
     // Hue identity preserved (magenta family) but desaturated/darkened for BG
     // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
-    expect(body).not.toContain('#F0ABFC')
+    expect(body).not.toContain("#F0ABFC")
     expect(body).toContain('fill="#322833"') // BG @ S=12% L=18%, hue 295
     expect(body).toContain('fill="#EAC0F2"') // FG @ S=65% L=85%, hue 295
     // SIG-216 path-bake: no <text>, no font attrs — just a <path>.
     expect(body).toContain('<path d="')
     expect(body).not.toContain("<text")
-    expect(body).not.toContain('font-family')
-    expect(body).not.toContain('font-size')
-    expect(body).not.toContain('font-weight')
-    expect(body).not.toContain('letter-spacing')
+    expect(body).not.toContain("font-family")
+    expect(body).not.toContain("font-size")
+    expect(body).not.toContain("font-weight")
+    expect(body).not.toContain("letter-spacing")
     expect(body).toBe(getBadgeSvg("security"))
   })
 
   it("supports HEAD for external image probes without returning a body (worker self-serve path)", async () => {
-    const res = handleBadgeAssetRoute(
-      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p1.svg`, { method: "HEAD" })
-    )
+    const res = handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p1.svg`, { method: "HEAD" }))
 
     expect(res?.status).toBe(200)
     expect(await res!.text()).toBe("")
@@ -156,7 +152,9 @@ describe("badge assets (SIG-201)", () => {
     })
 
     it("builds raw.githubusercontent glyph URLs for the runner pills at the current version", () => {
-      expect(badgeAssetUrl("runner-verified")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/runner-verified.svg`)
+      expect(badgeAssetUrl("runner-verified")).toBe(
+        `${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/runner-verified.svg`,
+      )
       expect(badgeAssetUrl("runner-pending")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/runner-pending.svg`)
     })
 
@@ -274,11 +272,7 @@ describe("badge assets (SIG-201)", () => {
       OPENCLAW_GITHUB_INSTALLATION_MAP: "{}",
     } as Partial<Env> as Env
 
-    const res = await worker.fetch(
-      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p2.svg`),
-      env,
-      ctx(),
-    )
+    const res = await worker.fetch(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p2.svg`), env, ctx())
 
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('aria-label="P2"')

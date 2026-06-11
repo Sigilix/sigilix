@@ -20,11 +20,7 @@ import {
   deriveSecurityBucket,
   parseSecurityValidatorMode,
 } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
-import {
-  finding,
-  fact,
-  manifestOf,
-} from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
+import { finding, fact, manifestOf } from "@/src/lib/ensemble/domain/gates/validate-security-finding.test-helpers"
 
 describe("parseSecurityValidatorMode", () => {
   it("defaults to shadow for unset / unknown values", () => {
@@ -52,13 +48,11 @@ describe("deriveSecurityBucket", () => {
 
 describe("isDismissibleFact (SIG-282)", () => {
   it("only warn-level secret-scan facts are dismissible by the analyst", () => {
-    expect(
-      isDismissibleFact(fact({ tool: "secret", severity: "warn", ruleId: "generic-high-entropy-token" })),
-    ).toBe(true)
+    expect(isDismissibleFact(fact({ tool: "secret", severity: "warn", ruleId: "generic-high-entropy-token" }))).toBe(
+      true,
+    )
     // high-confidence provider hit — a real secret must NEVER be waved off
-    expect(
-      isDismissibleFact(fact({ tool: "secret", severity: "error", ruleId: "aws-access-key" })),
-    ).toBe(false)
+    expect(isDismissibleFact(fact({ tool: "secret", severity: "error", ruleId: "aws-access-key" }))).toBe(false)
     // non-secret facts (sarif/depvuln/ast) are not analyst-refutable here
     expect(isDismissibleFact(fact({ tool: "sarif" }))).toBe(false)
     // a secret fact missing severity is treated as non-dismissible
@@ -88,7 +82,10 @@ describe("evaluateScanFactDismissal (SIG-282)", () => {
 
   it("accepts a justified dismissal of a warn-level candidate (the SRI case)", () => {
     const decision = evaluateScanFactDismissal(
-      { evidenceId: dismissible.evidenceId, reason: "SRI integrity hash next to a jsdelivr CDN URL; public by design" },
+      {
+        evidenceId: dismissible.evidenceId,
+        reason: "SRI integrity hash next to a jsdelivr CDN URL; public by design",
+      },
       manifestOf(dismissible),
     )
     expect(decision).toEqual({ accepted: true, ruleId: "generic-high-entropy-token" })
@@ -104,10 +101,17 @@ describe("evaluateScanFactDismissal (SIG-282)", () => {
 
   it("NEVER lets a high-confidence provider hit be waved off, even with a reason", () => {
     const decision = evaluateScanFactDismissal(
-      { evidenceId: provider.evidenceId, reason: "this AKIA key is just a placeholder test fixture, ignore" },
+      {
+        evidenceId: provider.evidenceId,
+        reason: "this AKIA key is just a placeholder test fixture, ignore",
+      },
       manifestOf(provider),
     )
-    expect(decision).toEqual({ accepted: false, reason: "not-dismissible", ruleId: "aws-access-key" })
+    expect(decision).toEqual({
+      accepted: false,
+      reason: "not-dismissible",
+      ruleId: "aws-access-key",
+    })
   })
 
   it("rejects a dismissal with no concrete justification", () => {
@@ -115,7 +119,11 @@ describe("evaluateScanFactDismissal (SIG-282)", () => {
       { evidenceId: dismissible.evidenceId, reason: "nah" },
       manifestOf(dismissible),
     )
-    expect(decision).toEqual({ accepted: false, reason: "missing-justification", ruleId: "generic-high-entropy-token" })
+    expect(decision).toEqual({
+      accepted: false,
+      reason: "missing-justification",
+      ruleId: "generic-high-entropy-token",
+    })
   })
 })
 
@@ -147,9 +155,7 @@ describe("remediationForFinding — secrets-exposure credential gate (Pattern A)
 
   it("de-alarms when the cited line has NO credential (the hallucinated .length leak)", () => {
     const f = finding({ cweId: "CWE-798", headline: "Secret leaked to logs" })
-    expect(remediationForFinding(f, "console.log(payload.length)")).toBe(
-      SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED,
-    )
+    expect(remediationForFinding(f, "console.log(payload.length)")).toBe(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED)
     // The de-alarmed text must NEVER confidently assert compromise.
     expect(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED).not.toContain("Treat the value as compromised")
     expect(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED.toLowerCase()).toContain("if this value is an actual credential")
@@ -173,7 +179,9 @@ describe("remediationForFinding — secrets-exposure credential gate (Pattern A)
   })
 
   it("returns null for a non-security finding even with credential-looking cited text", () => {
-    expect(remediationForFinding(finding({ category: "logic", cweId: "CWE-798" }), 'const apiKey = "AKIAIOSFODNN7EXAMPLE"')).toBeNull()
+    expect(
+      remediationForFinding(finding({ category: "logic", cweId: "CWE-798" }), 'const apiKey = "AKIAIOSFODNN7EXAMPLE"'),
+    ).toBeNull()
   })
 })
 
@@ -211,7 +219,11 @@ describe("evaluateSecurityFinding (pure FP-safe decision)", () => {
 
   it("DROPS a real evidenceId pointing at a DIFFERENT file than the finding", () => {
     const r = evaluateSecurityFinding(
-      finding({ path: "src/other.ts", cweId: "CWE-89", evidenceId: "sarif:sql-injection:abc123abc123:17" }),
+      finding({
+        path: "src/other.ts",
+        cweId: "CWE-89",
+        evidenceId: "sarif:sql-injection:abc123abc123:17",
+      }),
       manifestOf(fact({ path: "src/db.ts" })),
     )
     expect(r.keep).toBe(false)
@@ -220,8 +232,21 @@ describe("evaluateSecurityFinding (pure FP-safe decision)", () => {
 
   it("keeps a path-only fact (line=null) cited by an evidenceId regardless of the finding's line", () => {
     const r = evaluateSecurityFinding(
-      finding({ path: "package.json", line: 5, cweId: "CWE-1035", evidenceId: "depvuln:GHSA-x:abc123abc123" }),
-      manifestOf(fact({ evidenceId: "depvuln:GHSA-x:abc123abc123", tool: "depvuln", path: "package.json", line: null, cwe: undefined })),
+      finding({
+        path: "package.json",
+        line: 5,
+        cweId: "CWE-1035",
+        evidenceId: "depvuln:GHSA-x:abc123abc123",
+      }),
+      manifestOf(
+        fact({
+          evidenceId: "depvuln:GHSA-x:abc123abc123",
+          tool: "depvuln",
+          path: "package.json",
+          line: null,
+          cwe: undefined,
+        }),
+      ),
     )
     expect(r.keep).toBe(true)
   })
@@ -254,10 +279,7 @@ describe("evaluateSecurityFinding (pure FP-safe decision)", () => {
   })
 
   it("DROPS an authz-bucket finding with evidenceId NONE but no body justification", () => {
-    const r = evaluateSecurityFinding(
-      finding({ cweId: "CWE-862", evidenceId: "NONE", body: "bad" }),
-      manifestOf(),
-    )
+    const r = evaluateSecurityFinding(finding({ cweId: "CWE-862", evidenceId: "NONE", body: "bad" }), manifestOf())
     expect(r.keep).toBe(false)
     if (!r.keep) expect(r.reason).toBe("authz-none-without-justification")
   })
@@ -274,7 +296,11 @@ describe("evaluateSecurityFinding (pure FP-safe decision)", () => {
 
   it("DROPS an injection finding that sets evidenceId NONE (NONE is authz-only)", () => {
     const r = evaluateSecurityFinding(
-      finding({ cweId: "CWE-89", evidenceId: "NONE", body: "A long enough body explaining the SQL injection in detail here." }),
+      finding({
+        cweId: "CWE-89",
+        evidenceId: "NONE",
+        body: "A long enough body explaining the SQL injection in detail here.",
+      }),
       manifestOf(),
     )
     expect(r.keep).toBe(false)

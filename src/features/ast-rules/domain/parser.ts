@@ -17,9 +17,7 @@
 import { Parser as AcornParser } from "acorn"
 import tsPlugin from "acorn-typescript"
 
-export type SourceExt =
-  | ".js" | ".mjs" | ".cjs" | ".jsx"
-  | ".ts" | ".mts" | ".cts" | ".tsx"
+export type SourceExt = ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".mts" | ".cts" | ".tsx"
 
 export type ParseOk = { ok: true; ast: unknown }
 export type ParseErr = { ok: false; reason: string }
@@ -36,10 +34,7 @@ export const LARGE_FILE_BYTES = 500_000
 // we instantiate two parsers — JS-only and TS-extended — once at module
 // load. acorn parsers are stateless w.r.t. the configuration so this
 // is cheap.
-const TsAcorn = AcornParser.extend(
-
-  (tsPlugin as any)({ allowSatisfies: true }),
-)
+const TsAcorn = AcornParser.extend((tsPlugin as any)({ allowSatisfies: true }))
 
 // Use the TS-extended parser for any extension that may contain TS
 // syntax OR JSX. Plain acorn does not parse JSX; acorn-typescript's
@@ -48,8 +43,7 @@ const TsAcorn = AcornParser.extend(
 // satisfies, etc.) but the TS parser tolerates these as a permissive
 // superset, so routing JSX through it is safe.
 function needsTsParser(ext: SourceExt): boolean {
-  return ext === ".ts" || ext === ".tsx" || ext === ".mts" || ext === ".cts"
-    || ext === ".jsx"
+  return ext === ".ts" || ext === ".tsx" || ext === ".mts" || ext === ".cts" || ext === ".jsx"
 }
 
 function isJsxExt(ext: SourceExt): boolean {
@@ -87,7 +81,6 @@ export function parseSource(code: string, ext: SourceExt): ParseResult {
     ...(isJsxExt(ext) ? { jsx: true } : {}),
   }
   try {
-
     const ast = Parser.parse(code, options as any)
     return { ok: true, ast }
   } catch (err) {

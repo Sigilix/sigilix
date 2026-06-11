@@ -12,8 +12,7 @@ const DEFAULT_CONFIG = {
   disabledRules: [],
   autoInline: false,
 }
-const REVIEWABLE_AT = (path: string, line: number): ReviewableMap =>
-  new Map([[path, [{ line, side: "RIGHT" }]]])
+const REVIEWABLE_AT = (path: string, line: number): ReviewableMap => new Map([[path, [{ line, side: "RIGHT" }]]])
 
 function diffAdd(path: string, line: number, text: string): string {
   const header = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n`

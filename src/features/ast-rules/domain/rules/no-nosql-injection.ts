@@ -38,7 +38,9 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
@@ -50,15 +52,29 @@ const REQUEST_ROOT_RE = /^(?:c|req|request|ctx|context)$/
 // Mongo-DISTINCTIVE driver methods — the name alone is a sufficient sink signal
 // (these don't collide with the common safe ORM/builder/array/lodash APIs).
 const MONGO_DISTINCTIVE: ReadonlySet<string> = new Set([
-  "findoneandupdate", "findoneanddelete", "findoneandreplace",
-  "updateone", "updatemany", "replaceone", "deleteone", "deletemany",
-  "countdocuments", "estimateddocumentcount", "insertmany",
+  "findoneandupdate",
+  "findoneanddelete",
+  "findoneandreplace",
+  "updateone",
+  "updatemany",
+  "replaceone",
+  "deleteone",
+  "deletemany",
+  "countdocuments",
+  "estimateddocumentcount",
+  "insertmany",
 ])
 // AMBIGUOUS query methods — collide with knex/Sequelize/TypeORM/arrays/lodash, so
 // they fire ONLY with a positive Mongo signal (`.collection(`, a Mongoose chain,
 // or a tainted `$where`).
 const MONGO_AMBIGUOUS: ReadonlySet<string> = new Set([
-  "find", "findone", "update", "count", "remove", "distinct", "aggregate",
+  "find",
+  "findone",
+  "update",
+  "count",
+  "remove",
+  "distinct",
+  "aggregate",
 ])
 // In-memory predicate libraries — never a DB query. Excluded outright.
 const NON_DB_RECEIVER_RE = /^(?:_|lodash|underscore)$/
@@ -96,8 +112,9 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(root)
@@ -137,8 +154,12 @@ function hasTaintedWhereOp(arg: AstNode | undefined, taintedLocals: Map<string, 
   walkNoNested(arg, (n) => {
     if (found || n.type !== "Property" || n.computed) return
     const key = n.key as AstNode
-    const name = key.type === "Identifier" ? (key.name as string)
-      : key.type === "Literal" && typeof key.value === "string" ? key.value : null
+    const name =
+      key.type === "Identifier"
+        ? (key.name as string)
+        : key.type === "Literal" && typeof key.value === "string"
+          ? key.value
+          : null
     if (name && WHERE_OP_RE.test(name) && carriesTaint(n.value as AstNode, taintedLocals, source)) found = true
   })
   return found
@@ -152,7 +173,9 @@ function hasTaintedWhereOp(arg: AstNode | undefined, taintedLocals: Map<string, 
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
   const decls: Array<{ name: string; init: AstNode }> = []
   const counts = new Map<string, number>()
-  const bump = (name: string | null): void => { if (name) counts.set(name, (counts.get(name) ?? 0) + 1) }
+  const bump = (name: string | null): void => {
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
   walkNoNested(root, (n) => {
     if (n.type === "VariableDeclarator") {
       const name = idName(n.id as AstNode)
@@ -171,7 +194,10 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     for (const { name, init } of decls) {
       if (tainted.has(name) || (counts.get(name) ?? 0) > 1) continue // ambiguous shadow → skip
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
-      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      if (aliasesRoot || carriesTaint(init, tainted, source)) {
+        tainted.set(name, init)
+        changed = true
+      }
     }
     if (!changed) break
   }
@@ -197,8 +223,9 @@ function collectFunctions(program: AstNode): AstNode[] {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -223,10 +250,13 @@ function collectMongooseChainBases(program: AstNode): Set<number> {
           for (let i = 0; node && i < 12; i++) {
             if (node.type === "CallExpression") {
               const c = node.callee as AstNode
-              const cm = c && c.type === "MemberExpression" && !c.computed
-                ? (idName(c.property as AstNode) ?? "").toLowerCase() : ""
+              const cm =
+                c && c.type === "MemberExpression" && !c.computed
+                  ? (idName(c.property as AstNode) ?? "").toLowerCase()
+                  : ""
               if ((cm === "find" || cm === "findone") && typeof node.start === "number") {
-                bases.add(node.start); break
+                bases.add(node.start)
+                break
               }
               node = c && c.type === "MemberExpression" ? (c.object as AstNode) : undefined
             } else if (node.type === "MemberExpression") {
@@ -239,8 +269,9 @@ function collectMongooseChainBases(program: AstNode): Set<number> {
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
-      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-      else if (v && typeof v === "object") walk(v as AstNode)
+      if (Array.isArray(v)) {
+        for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+      } else if (v && typeof v === "object") walk(v as AstNode)
     }
   }
   walk(program)
@@ -282,18 +313,26 @@ export const noNosqlInjection: AstRule = {
 
     const fns = collectFunctions(node)
     const chainBases = collectMongooseChainBases(node)
-    const fnRange = (f: AstNode): [number, number] =>
-      [typeof f.start === "number" ? f.start : -1, typeof f.end === "number" ? f.end : -1]
+    const fnRange = (f: AstNode): [number, number] => [
+      typeof f.start === "number" ? f.start : -1,
+      typeof f.end === "number" ? f.end : -1,
+    ]
     const sanitizeCache = new Map<AstNode, boolean>()
     const isSanitized = (f: AstNode): boolean => {
       let v = sanitizeCache.get(f)
-      if (v === undefined) { v = hasSanitizeSignal((f.body as AstNode) ?? f); sanitizeCache.set(f, v) }
+      if (v === undefined) {
+        v = hasSanitizeSignal((f.body as AstNode) ?? f)
+        sanitizeCache.set(f, v)
+      }
       return v
     }
     const taintCache = new Map<AstNode, Map<string, AstNode>>()
     const taintLocalsOf = (scope: AstNode): Map<string, AstNode> => {
       let t = taintCache.get(scope)
-      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      if (!t) {
+        t = collectTaintedLocals(scope, ctx.source)
+        taintCache.set(scope, t)
+      }
       return t
     }
 
@@ -328,7 +367,7 @@ export const noNosqlInjection: AstRule = {
               if (start >= 0) seen.add(start)
               hits.push({
                 message:
-                  "A request-controlled object is passed directly to a NoSQL query as the filter here. Because the raw request object reaches the query, an attacker can inject query operators (e.g. `{\"$ne\": null}` to bypass an auth check, `{\"$gt\": \"\"}` to defeat a filter) or run server-side JavaScript via `$where` — NoSQL injection (CWE-943). Validate/cast the input to the expected scalar shape, or pull named fields explicitly instead of passing the whole request object.",
+                  'A request-controlled object is passed directly to a NoSQL query as the filter here. Because the raw request object reaches the query, an attacker can inject query operators (e.g. `{"$ne": null}` to bypass an auth check, `{"$gt": ""}` to defeat a filter) or run server-side JavaScript via `$where` — NoSQL injection (CWE-943). Validate/cast the input to the expected scalar shape, or pull named fields explicitly instead of passing the whole request object.',
                 evidence: sliceEvidence(ctx.source, n),
                 line: n.loc?.start?.line ?? 1,
                 endLine: n.loc?.end?.line ?? n.loc?.start?.line ?? 1,
@@ -341,8 +380,9 @@ export const noNosqlInjection: AstRule = {
       for (const k of Object.keys(n)) {
         if (k === "type" || k === "loc" || k === "start" || k === "end") continue
         const v = (n as Record<string, unknown>)[k]
-        if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
-        else if (v && typeof v === "object") walk(v as AstNode)
+        if (Array.isArray(v)) {
+          for (const item of v) if (item && typeof item === "object") walk(item as AstNode)
+        } else if (v && typeof v === "object") walk(v as AstNode)
       }
     }
     walk(node)

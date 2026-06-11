@@ -46,10 +46,7 @@ interface DurableObjectState {
     // SIG-138: SQLite storage surface. Tests back this with
     // NodeSqliteStorage — a real node:sqlite-backed adapter.
     sql: {
-      exec<T extends Record<string, unknown>>(
-        query: string,
-        ...params: unknown[]
-      ): SqlCursor<T>
+      exec<T extends Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<T>
     }
     transactionSync<T>(closure: () => T): T
   }
@@ -113,7 +110,9 @@ function emptyCursor(written = 0): SqlCursor<AnyRow> {
     one(): AnyRow {
       throw new Error("SqlCursor.one(): no rows returned (empty cursor)")
     },
-    raw: function* () { /* no rows */ },
+    raw: function* () {
+      /* no rows */
+    },
     rowsRead: 0,
     rowsWritten: written,
   }
@@ -126,9 +125,7 @@ function rowsCursor<T extends AnyRow>(rows: T[], read = rows.length): SqlCursor<
     toArray: () => [...rows],
     one(): T {
       if (rows.length !== 1) {
-        throw new Error(
-          `SqlCursor.one(): expected exactly 1 row, got ${rows.length}`,
-        )
+        throw new Error(`SqlCursor.one(): expected exactly 1 row, got ${rows.length}`)
       }
       return rows[0]
     },
@@ -170,9 +167,7 @@ export class NodeSqliteStorage {
     // Reject transaction-control keywords — Cloudflare forbids these
     // through sql.exec(); they must go through transactionSync().
     if (TX_CTRL_RE.test(q)) {
-      throw new Error(
-        `sql.exec(): transaction-control statement not allowed: "${q.slice(0, 40)}"`,
-      )
+      throw new Error(`sql.exec(): transaction-control statement not allowed: "${q.slice(0, 40)}"`)
     }
 
     // Multi-statement DDL path: no bindings + query contains at least
@@ -233,7 +228,9 @@ export class NodeSqliteStorage {
           this.db.exec(`ROLLBACK TO ${spName}`)
           this.db.exec(`RELEASE ${spName}`)
         }
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
       throw err
     } finally {
       this.txDepth--

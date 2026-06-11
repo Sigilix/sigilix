@@ -25,7 +25,8 @@ export const noNewFunctionConstructor: AstRule = {
     const callee = node.callee
     if (!callee || callee.type !== "Identifier" || callee.name !== "Function") return null
     return {
-      message: "`new Function()` is equivalent to eval — the argument is parsed and executed at runtime. Use a literal function expression instead.",
+      message:
+        "`new Function()` is equivalent to eval — the argument is parsed and executed at runtime. Use a literal function expression instead.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       column: node.loc?.start?.column ?? 0,

@@ -38,9 +38,7 @@ function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
 
 function evidence(overrides: Partial<LogicEvidence> = {}): LogicEvidence {
   return {
-    changedLineTextByPath: new Map([
-      [PATH, ["  for (let i = 0; i <= arr.length; i++) {", "    total += arr[i]"]],
-    ]),
+    changedLineTextByPath: new Map([[PATH, ["  for (let i = 0; i <= arr.length; i++) {", "    total += arr[i]"]]]),
     astLogicFindings: [],
     ...overrides,
   }
@@ -106,22 +104,12 @@ describe("buildChangedLineTextByPath", () => {
   })
 
   it("does NOT capture the +++ header line as content", () => {
-    const diff = [
-      "diff --git a/src/a.ts b/src/a.ts",
-      "+++ b/src/a.ts",
-      "@@ -0,0 +1 @@",
-      "+added",
-    ].join("\n")
+    const diff = ["diff --git a/src/a.ts b/src/a.ts", "+++ b/src/a.ts", "@@ -0,0 +1 @@", "+added"].join("\n")
     expect(buildChangedLineTextByPath(diff).get("src/a.ts")).toEqual(["added"])
   })
 
   it("skips deleted files (/dev/null new side)", () => {
-    const diff = [
-      "diff --git a/src/gone.ts b/src/gone.ts",
-      "+++ /dev/null",
-      "@@ -1 +0,0 @@",
-      "-const x = 1",
-    ].join("\n")
+    const diff = ["diff --git a/src/gone.ts b/src/gone.ts", "+++ /dev/null", "@@ -1 +0,0 @@", "-const x = 1"].join("\n")
     expect(buildChangedLineTextByPath(diff).size).toBe(0)
   })
 
@@ -163,10 +151,10 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
   it("KEEPS an AST-corroborated finding even when changedLineTextByPath is EMPTY (AST-only caller)", () => {
     // CodeRabbit: an AST-only evidence caller (no diff text wired) must
     // NOT hard-drop as path-not-changed when a co-located AST hit exists.
-    const r = evaluateLogicFinding(
-      finding({ headline: "vague", body: "vague", line: 17 }),
-      { changedLineTextByPath: new Map(), astLogicFindings: [astHit({ line: 17 })] },
-    )
+    const r = evaluateLogicFinding(finding({ headline: "vague", body: "vague", line: 17 }), {
+      changedLineTextByPath: new Map(),
+      astLogicFindings: [astHit({ line: 17 })],
+    })
     expect(r.keep).toBe(true)
   })
 
@@ -268,23 +256,24 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
 // ── Integration with validateForSubmission ──────────────────────
 
 function makeReviewable(path = PATH, line = 17): ReviewableMap {
-  return new Map([
-    [path, [{ line, side: "RIGHT" as const, position: 1 }]],
-  ])
+  return new Map([[path, [{ line, side: "RIGHT" as const, position: 1 }]]])
 }
 
 type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specialistVerdicts"]
 
 function makeSpecialistVerdicts(): SpecialistVerdictsArg {
-  return [
-    { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
-  ] as unknown as SpecialistVerdictsArg
+  return [{ role: "logic", verdict: { findings: [{ id: "logic-0" }] } }] as unknown as SpecialistVerdictsArg
 }
 
 function logicProvenance(sourceId = "logic-0"): SynthesizerProvenance {
   return {
     findings: [
-      { sourceSpecialists: ["logic"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false },
+      {
+        sourceSpecialists: ["logic"],
+        sourceFindingIds: [sourceId],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      },
     ],
     dropped: [],
     softened: [],
@@ -311,7 +300,10 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
     })
     expect(result.droppedForFailedLogicValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(0)
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "unanchored-logic-claim", dropped: true })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "unanchored-logic-claim",
+      dropped: true,
+    })
   })
 
   it("SHADOW: counts the would-drop + fires callback with dropped:false but KEEPS the finding", () => {
@@ -333,7 +325,10 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
     })
     expect(result.droppedForFailedLogicValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(1) // NOT dropped in shadow
-    expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "unanchored-logic-claim", dropped: false })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "unanchored-logic-claim",
+      dropped: false,
+    })
   })
 
   it("defaults to SHADOW when logicValidatorMode is omitted", () => {
@@ -357,7 +352,12 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
   it("ENFORCE: keeps a concrete anchored logic finding (token on an added line)", () => {
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(),
@@ -373,7 +373,9 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
-          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
           findings: [finding({ score: 2, headline: "vague", body: "vague" })],
         },
         provenance: logicProvenance(),
@@ -393,8 +395,16 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
       synthOutput: {
         verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
         provenance: {
-          findings: [{ sourceSpecialists: ["security"], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [],
+          findings: [
+            {
+              sourceSpecialists: ["security"],
+              sourceFindingIds: ["security-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -432,7 +442,12 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     const onFlag = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(),
@@ -452,7 +467,12 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     const onFlag = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(),
@@ -494,7 +514,12 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
   it("defaults to OFF when logicRefutationMode is omitted (gate does not run)", () => {
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(),
@@ -514,7 +539,10 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
         role: "logic",
         verdict: {
           findings: [
-            { id: "logic-0", independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard." },
+            {
+              id: "logic-0",
+              independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard.",
+            },
           ],
         },
       },
@@ -522,7 +550,12 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     const result = validateForSubmission({
       synthOutput: {
         // synthesized finding LACKS independentAssessment (synthesis dropped it)
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: logicProvenance("logic-0"),
       },
       reviewable: makeReviewable(),
@@ -540,19 +573,39 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
   // rationale can backfill — here the logic source has none, so it stays flagged.
   it("ENFORCE: a co-merged security independentAssessment does NOT satisfy the logic gate", () => {
     const crossLensSources = [
-      { role: "security", verdict: { findings: [{ id: "security-0", independentAssessment: "Passed to the Stripe client as the secret key — confirms credential use." }] } },
+      {
+        role: "security",
+        verdict: {
+          findings: [
+            {
+              id: "security-0",
+              independentAssessment: "Passed to the Stripe client as the secret key — confirms credential use.",
+            },
+          ],
+        },
+      },
       { role: "logic", verdict: { findings: [{ id: "logic-0" }] } }, // no survival rationale
     ] as unknown as SpecialistVerdictsArg
     const crossLensProvenance: SynthesizerProvenance = {
       findings: [
-        { sourceSpecialists: ["security", "logic"], sourceFindingIds: ["security-0", "logic-0"], action: "merged", verifiedViaRetrieval: false },
+        {
+          sourceSpecialists: ["security", "logic"],
+          sourceFindingIds: ["security-0", "logic-0"],
+          action: "merged",
+          verifiedViaRetrieval: false,
+        },
       ],
       dropped: [],
       softened: [],
     }
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding()],
+        },
         provenance: crossLensProvenance,
       },
       reviewable: makeReviewable(),
@@ -597,7 +650,12 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     const onFlag = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [refutableFinding],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(AUTH_PATH, 6),
@@ -618,7 +676,12 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     const onFlag = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [regexSubstringFinding] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [regexSubstringFinding],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(FILTER_PATH, 3),
@@ -639,7 +702,12 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     const onFlag = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [refutableFinding],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(AUTH_PATH, 6),
@@ -659,7 +727,12 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
   it("defaults to OFF when logicClaimRefutationMode is omitted (gate does not run)", () => {
     const result = validateForSubmission({
       synthOutput: {
-        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [refutableFinding],
+        },
         provenance: logicProvenance(),
       },
       reviewable: makeReviewable(AUTH_PATH, 6),

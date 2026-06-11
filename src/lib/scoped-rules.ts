@@ -154,9 +154,7 @@ export function parseRuleFrontmatter(text: string): { glob?: string; body: strin
  * are intentional uppercase / dotted-dir conventions and a casing
  * mistake should silently miss rather than be tolerated.
  */
-export function classifyRuleFilePath(
-  path: string,
-): "sigilix-md" | "glob-rule" | null {
+export function classifyRuleFilePath(path: string): "sigilix-md" | "glob-rule" | null {
   if (path.length === 0) return null
   const lastSlash = path.lastIndexOf("/")
   const basename = lastSlash >= 0 ? path.slice(lastSlash + 1) : path
@@ -215,9 +213,7 @@ export function dirDepth(dirPath: string): number {
  * on the catch so dashboards can surface "your rule isn't compiling"
  * without waiting for a human to notice it never fires.
  */
-export function compileScopedRulesManifest(
-  manifest: ScopedRulesManifest,
-): CompiledScopedRulesManifest {
+export function compileScopedRulesManifest(manifest: ScopedRulesManifest): CompiledScopedRulesManifest {
   const compiledGlobRules = manifest.globRules.map((g) => {
     if (g.glob === null) {
       return { ...g, matcher: null as Matcher | null }
@@ -226,12 +222,14 @@ export function compileScopedRulesManifest(
       const matcher = picomatch(g.glob, { dot: true })
       return { ...g, matcher: matcher as Matcher | null }
     } catch (err) {
-      console.warn(JSON.stringify({
-        event: "scoped-rules-glob-compile-failed",
-        rulePath: g.rulePath,
-        glob: g.glob,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "scoped-rules-glob-compile-failed",
+          rulePath: g.rulePath,
+          glob: g.glob,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       return { ...g, matcher: null as Matcher | null }
     }
   })
@@ -262,9 +260,7 @@ export function resolveScopedRulesForChangedPaths(
   manifest: CompiledScopedRulesManifest,
   changedPaths: ReadonlyArray<string>,
 ): ScopedRuleSelection {
-  const ancestorsByDir = new Map<string, PerDirectoryRule>(
-    manifest.perDirectoryRules.map((r) => [r.dirPath, r]),
-  )
+  const ancestorsByDir = new Map<string, PerDirectoryRule>(manifest.perDirectoryRules.map((r) => [r.dirPath, r]))
   // Walk each changed file's ancestors closest-first, collect any
   // matching SIGILIX.md. Dedup by dirPath across all changed files.
   const matchedPerDir = new Map<string, PerDirectoryRule>()
@@ -304,25 +300,27 @@ export function resolveScopedRulesForChangedPaths(
   // Glob rules: a rule fires if its matcher returns true for at least
   // one changed path, OR if `glob: null` (always-on). Lexicographic
   // sort by rulePath for stable rendering.
-  const matchedGlobRules = manifest.globRules.filter((g) => {
-    if (g.matcher === null) {
-      // Two ways a matcher ends up null:
-      //   - `glob: null` (no frontmatter) → rule has NO per-file
-      //     scoping; fire repo-wide for any changed file.
-      //   - non-null glob string that picomatch refused to compile
-      //     (typo / malformed pattern) → DON'T fire. Over-firing on
-      //     every PR because of one typo would be hard to debug
-      //     after the fact; silently suppressing it surfaces the
-      //     bug the first time the operator notices the rule isn't
-      //     applying.
-      return g.glob === null
-    }
-    return changedPaths.some((p) => g.matcher!(p))
-  }).sort((a, b) => {
-    if (a.rulePath < b.rulePath) return -1
-    if (a.rulePath > b.rulePath) return 1
-    return 0
-  })
+  const matchedGlobRules = manifest.globRules
+    .filter((g) => {
+      if (g.matcher === null) {
+        // Two ways a matcher ends up null:
+        //   - `glob: null` (no frontmatter) → rule has NO per-file
+        //     scoping; fire repo-wide for any changed file.
+        //   - non-null glob string that picomatch refused to compile
+        //     (typo / malformed pattern) → DON'T fire. Over-firing on
+        //     every PR because of one typo would be hard to debug
+        //     after the fact; silently suppressing it surfaces the
+        //     bug the first time the operator notices the rule isn't
+        //     applying.
+        return g.glob === null
+      }
+      return changedPaths.some((p) => g.matcher!(p))
+    })
+    .sort((a, b) => {
+      if (a.rulePath < b.rulePath) return -1
+      if (a.rulePath > b.rulePath) return 1
+      return 0
+    })
 
   return { perDirectoryRules: perDirOrdered, globRules: matchedGlobRules }
 }
@@ -364,9 +362,7 @@ export const MAX_RENDERED_SCOPED_RULES_BYTES = 16 * 1024
  * marker is appended so the model knows it didn't see everything.
  * Telemetry surfaces dropped count + rendered bytes for dashboards.
  */
-export function renderScopedRulesForPrompt(
-  selection: ScopedRuleSelection,
-): string {
+export function renderScopedRulesForPrompt(selection: ScopedRuleSelection): string {
   const dirBodies = selection.perDirectoryRules.map((r) => {
     const label = r.dirPath.length === 0 ? "<repo root>" : r.dirPath
     return `[SIGILIX.md — ${label}]\n${r.body.trim()}`
@@ -404,8 +400,7 @@ export function renderScopedRulesForPrompt(
   // Header bytes + the two `\n\n` separators joining the three header
   // lines together. Inter-block separators between header-tail and
   // first kept block are added per-block below.
-  const headerBytes =
-    encoder.encode(HEADER_LINES.join("\n\n")).length
+  const headerBytes = encoder.encode(HEADER_LINES.join("\n\n")).length
   const kept: string[] = []
   let totalBytes = headerBytes
   for (let i = blocks.length - 1; i >= 0; i--) {
@@ -424,21 +419,20 @@ export function renderScopedRulesForPrompt(
   }
   const droppedCount = blocks.length - kept.length
   if (droppedCount > 0) {
-    console.warn(JSON.stringify({
-      event: "scoped-rules-block-truncated",
-      droppedCount,
-      renderedBytes: totalBytes,
-      capBytes: MAX_RENDERED_SCOPED_RULES_BYTES,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "scoped-rules-block-truncated",
+        droppedCount,
+        renderedBytes: totalBytes,
+        capBytes: MAX_RENDERED_SCOPED_RULES_BYTES,
+      }),
+    )
     kept.push(
       `_[scoped rules truncated at ${MAX_RENDERED_SCOPED_RULES_BYTES} bytes; ${droppedCount} rule ${droppedCount === 1 ? "body" : "bodies"} omitted]_`,
     )
   }
 
-  return [
-    ...HEADER_LINES,
-    ...kept,
-  ].join("\n\n")
+  return [...HEADER_LINES, ...kept].join("\n\n")
 }
 
 /**
@@ -479,7 +473,11 @@ export function ancestorDirs(path: string, cap: number): string[] {
  * intentionally drops via the dotfile-dir skip.
  */
 export function walkScopedRuleFiles(
-  entries: ReadonlyArray<{ path?: string | undefined; type?: string | undefined; size?: number | undefined }>,
+  entries: ReadonlyArray<{
+    path?: string | undefined
+    type?: string | undefined
+    size?: number | undefined
+  }>,
 ): Array<{ path: string; size: number }> {
   const out: Array<{ path: string; size: number }> = []
   for (const entry of entries) {

@@ -12,15 +12,11 @@ vi.mock("@/src/lib/index-producer", async () => {
   // Keep the real `parseFullName` — it's pure, no IO, and reconcile delegates
   // to it so its "missing manifest" decision matches what the producer
   // actually accepts on enqueue.
-  const actual = await vi.importActual<typeof import("@/src/lib/index-producer")>(
-    "@/src/lib/index-producer",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/index-producer")>("@/src/lib/index-producer")
   return { ...actual, enqueueIndexJobsForRepos: vi.fn() }
 })
 vi.mock("@/src/lib/repo-index-manifest", async () => {
-  const actual = await vi.importActual<typeof import("@/src/lib/repo-index-manifest")>(
-    "@/src/lib/repo-index-manifest",
-  )
+  const actual = await vi.importActual<typeof import("@/src/lib/repo-index-manifest")>("@/src/lib/repo-index-manifest")
   return { ...actual, readRepoIndexManifest: vi.fn() }
 })
 vi.mock("@/src/lib/repo-graph-client", () => ({
@@ -47,9 +43,20 @@ const ok = <T>(items: T[]) => ({ items, complete: true })
 const okManifest = () => ({
   kind: "ok" as const,
   manifest: {
-    v: 1, repo: "r", owner: "o", headSha: "h", runId: "run", fileCount: 0,
-    chunkCount: 0, shardCount: 1, indexedAt: "2026-05-22T00:00:00Z",
-    modelId: "m", embeddingDim: 768, chunkerVersion: 1, windowLines: 80, overlapLines: 16,
+    v: 1,
+    repo: "r",
+    owner: "o",
+    headSha: "h",
+    runId: "run",
+    fileCount: 0,
+    chunkCount: 0,
+    shardCount: 1,
+    indexedAt: "2026-05-22T00:00:00Z",
+    modelId: "m",
+    embeddingDim: 768,
+    chunkerVersion: 1,
+    windowLines: 80,
+    overlapLines: 16,
   },
 })
 
@@ -78,7 +85,12 @@ describe("runIndexReconciliation", () => {
       .mockResolvedValueOnce(okManifest())
       .mockResolvedValueOnce({ kind: "missing" })
       .mockResolvedValueOnce(okManifest())
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
 
@@ -94,19 +106,26 @@ describe("runIndexReconciliation", () => {
       enumerationIncomplete: false,
     })
     expect(mockEnqueue).toHaveBeenCalledTimes(1)
-    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
-      installationId: 111,
-      reason: "manual",
-      // Only the missing repo is in the fan-out batch
-      repositories: [{ full_name: "o/b" }],
-    }))
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 111,
+        reason: "manual",
+        // Only the missing repo is in the fan-out batch
+        repositories: [{ full_name: "o/b" }],
+      }),
+    )
   })
 
   it("treats an invalid manifest as missing (corrupt KV value triggers re-index)", async () => {
     mockListInstalls.mockResolvedValue(ok([111]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
     mockReadManifest.mockResolvedValueOnce({ kind: "invalid", reason: "shape" })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
 
@@ -121,7 +140,12 @@ describe("runIndexReconciliation", () => {
 
     const out = await runIndexReconciliation(env, { dryRun: false })
 
-    expect(out).toMatchObject({ installations: 1, reposChecked: 2, reposMissingManifest: 0, enqueued: 0 })
+    expect(out).toMatchObject({
+      installations: 1,
+      reposChecked: 2,
+      reposMissingManifest: 0,
+      enqueued: 0,
+    })
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 
@@ -132,7 +156,12 @@ describe("runIndexReconciliation", () => {
 
     const out = await runIndexReconciliation(env, { dryRun: true })
 
-    expect(out).toMatchObject({ reposChecked: 2, reposMissingManifest: 1, enqueued: 0, dryRun: true })
+    expect(out).toMatchObject({
+      reposChecked: 2,
+      reposMissingManifest: 1,
+      enqueued: 0,
+      dryRun: true,
+    })
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 
@@ -141,12 +170,16 @@ describe("runIndexReconciliation", () => {
     mockListRepos.mockResolvedValueOnce(ok(["o/a", "o/b"]))
     mockReadManifest.mockResolvedValueOnce(okManifest()).mockResolvedValueOnce(okManifest())
     mockDebugActiveGraphVersion.mockResolvedValueOnce("run").mockResolvedValueOnce(null)
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
-    const out = await runIndexReconciliation(
-      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
-      { dryRun: false },
-    )
+    const out = await runIndexReconciliation({ ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env, {
+      dryRun: false,
+    })
 
     expect(out).toMatchObject({
       reposChecked: 2,
@@ -154,9 +187,11 @@ describe("runIndexReconciliation", () => {
       reposMissingGraph: 1,
       enqueued: 1,
     })
-    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
-      repositories: [{ full_name: "o/b" }],
-    }))
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [{ full_name: "o/b" }],
+      }),
+    )
   })
 
   it("enqueues repos whose manifest is fresh but graph active version is stale", async () => {
@@ -164,17 +199,23 @@ describe("runIndexReconciliation", () => {
     mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
     mockReadManifest.mockResolvedValueOnce(okManifest())
     mockDebugActiveGraphVersion.mockResolvedValueOnce("older-run")
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
-    const out = await runIndexReconciliation(
-      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
-      { dryRun: false },
-    )
+    const out = await runIndexReconciliation({ ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env, {
+      dryRun: false,
+    })
 
     expect(out.reposMissingGraph).toBe(1)
-    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
-      repositories: [{ full_name: "o/a" }],
-    }))
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [{ full_name: "o/a" }],
+      }),
+    )
   })
 
   it("treats graph active-version read errors as fail-soft and does not enqueue", async () => {
@@ -183,10 +224,9 @@ describe("runIndexReconciliation", () => {
     mockReadManifest.mockResolvedValueOnce(okManifest())
     mockDebugActiveGraphVersion.mockRejectedValueOnce(new Error("DO transient"))
 
-    const out = await runIndexReconciliation(
-      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
-      { dryRun: false },
-    )
+    const out = await runIndexReconciliation({ ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env, {
+      dryRun: false,
+    })
 
     expect(out.reposMissingGraph).toBe(0)
     expect(out.graphReadErrors).toBe(1)
@@ -208,10 +248,13 @@ describe("runIndexReconciliation", () => {
   it("manifest-read throw is fail-soft: skips the repo + flags enumerationIncomplete (no enqueue)", async () => {
     mockListInstalls.mockResolvedValue(ok([111]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a", "o/b"]))
-    mockReadManifest
-      .mockRejectedValueOnce(new Error("KV transient"))
-      .mockResolvedValueOnce({ kind: "missing" })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockReadManifest.mockRejectedValueOnce(new Error("KV transient")).mockResolvedValueOnce({ kind: "missing" })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
 
@@ -219,16 +262,23 @@ describe("runIndexReconciliation", () => {
     expect(out.reposMissingManifest).toBe(1)
     expect(out.enumerationIncomplete).toBe(true)
     // The non-throwing missing repo IS enqueued (we don't abort the install).
-    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
-      repositories: [{ full_name: "o/b" }],
-    }))
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositories: [{ full_name: "o/b" }],
+      }),
+    )
   })
 
   it("flags enumerationIncomplete when installation listing is partial", async () => {
     mockListInstalls.mockResolvedValue({ items: [111], complete: false })
     mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
     mockReadManifest.mockResolvedValueOnce({ kind: "missing" })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
     expect(out.enumerationIncomplete).toBe(true)
@@ -236,13 +286,14 @@ describe("runIndexReconciliation", () => {
 
   it("flags enumerationIncomplete when a repo listing is partial, keeps fanning out", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
-    mockListRepos
-      .mockResolvedValueOnce(ok(["o/a"]))
-      .mockResolvedValueOnce({ items: ["o/b"], complete: false })
-    mockReadManifest
-      .mockResolvedValueOnce({ kind: "missing" })
-      .mockResolvedValueOnce({ kind: "missing" })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"])).mockResolvedValueOnce({ items: ["o/b"], complete: false })
+    mockReadManifest.mockResolvedValueOnce({ kind: "missing" }).mockResolvedValueOnce({ kind: "missing" })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
     expect(out.enumerationIncomplete).toBe(true)
@@ -273,11 +324,14 @@ describe("runIndexReconciliation", () => {
     // Token refresh / GH 5xx mid-tick used to abort every remaining install.
     // Wrap fail-soft: log + enumerationIncomplete, continue to next install.
     mockListInstalls.mockResolvedValue(ok([111, 222]))
-    mockListRepos
-      .mockRejectedValueOnce(new Error("github 503"))
-      .mockResolvedValueOnce(ok(["o/x"]))
+    mockListRepos.mockRejectedValueOnce(new Error("github 503")).mockResolvedValueOnce(ok(["o/x"]))
     mockReadManifest.mockResolvedValueOnce({ kind: "missing" })
-    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    mockEnqueue.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      perRepoFailed: 0,
+      sensitiveSkipped: 0,
+    })
 
     const out = await runIndexReconciliation(env, { dryRun: false })
 
@@ -285,18 +339,18 @@ describe("runIndexReconciliation", () => {
     expect(out.enumerationIncomplete).toBe(true)
     expect(out.enqueued).toBe(1) // 2nd install completed
     expect(mockEnqueue).toHaveBeenCalledTimes(1)
-    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
-      installationId: 222,
-      repositories: [{ full_name: "o/x" }],
-    }))
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 222,
+        repositories: [{ full_name: "o/x" }],
+      }),
+    )
   })
 
   it("per-installation fail-soft: enqueue throw on one install doesn't abort the run", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a"])).mockResolvedValueOnce(ok(["o/c"]))
-    mockReadManifest
-      .mockResolvedValueOnce({ kind: "missing" })
-      .mockResolvedValueOnce({ kind: "missing" })
+    mockReadManifest.mockResolvedValueOnce({ kind: "missing" }).mockResolvedValueOnce({ kind: "missing" })
     mockEnqueue
       .mockRejectedValueOnce(new Error("queue binding broken"))
       .mockResolvedValueOnce({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })

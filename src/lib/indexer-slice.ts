@@ -84,11 +84,15 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
       if (err instanceof GitHubHttpError && err.status !== 404 && err.status !== 403) {
         throw err
       }
-      console.warn(JSON.stringify({
-        event: "index-file-fetch-failed",
-        owner, repo, path: file.path,
-        err: err instanceof Error ? err.message : String(err),
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "index-file-fetch-failed",
+          owner,
+          repo,
+          path: file.path,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
       continue
     }
     if (content === null) continue
@@ -99,7 +103,9 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
       try {
         const fg = extractFileGraph(file.path, content)
         await writeFileGraph(env, owner, repo, {
-          runId, headSha, path: file.path,
+          runId,
+          headSha,
+          path: file.path,
           symbols: fg.symbols,
           fileEdgesRaw: fg.fileEdgesRaw,
           callEdges: fg.callEdges.map((c) => ({
@@ -111,11 +117,16 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
           })),
         })
       } catch (err) {
-        console.warn(JSON.stringify({
-          event: "graph-write-failed",
-          owner, repo, path: file.path, run_id: runId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        console.warn(
+          JSON.stringify({
+            event: "graph-write-failed",
+            owner,
+            repo,
+            path: file.path,
+            run_id: runId,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
       }
     }
 
@@ -181,14 +192,17 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
     await dualWriteLexical(env, upBatch) // SIG-45 — soft lexical mirror
   }
 
-  console.log(JSON.stringify({
-    event: "index-chunking",
-    owner: args.owner, repo: args.repo,
-    ast_on: args.astChunking,
-    ast_chunk_files: astChunkFiles,
-    line_chunk_files: lineChunkFiles,
-    parse_fallback_files: parseFallbackFiles,
-  }))
+  console.log(
+    JSON.stringify({
+      event: "index-chunking",
+      owner: args.owner,
+      repo: args.repo,
+      ast_on: args.astChunking,
+      ast_chunk_files: astChunkFiles,
+      line_chunk_files: lineChunkFiles,
+      parse_fallback_files: parseFallbackFiles,
+    }),
+  )
 
   return { chunkCount: totalChunks, idsByPath }
 }
@@ -212,10 +226,7 @@ interface VectorizeRecord {
  * lexical-mirror hiccup must never abort indexing or strand a vector that
  * escapes the uninstall delete.
  */
-async function dualWriteLexical(
-  env: Env,
-  records: ReadonlyArray<VectorizeRecord>,
-): Promise<void> {
+async function dualWriteLexical(env: Env, records: ReadonlyArray<VectorizeRecord>): Promise<void> {
   const db = env.OPENCLAW_LEXICAL_INDEX
   if (db == null || records.length === 0) return
   const chunks: LexicalChunk[] = []
@@ -235,26 +246,27 @@ async function dualWriteLexical(
   await upsertLexicalChunks(db, chunks)
 }
 
-async function embedBatch(
-  env: Env,
-  chunks: ReadonlyArray<Chunk>,
-  namespace: string,
-): Promise<VectorizeRecord[]> {
-  const vectors = await embedTexts(env.AI, chunks.map((c) => c.content))
+async function embedBatch(env: Env, chunks: ReadonlyArray<Chunk>, namespace: string): Promise<VectorizeRecord[]> {
+  const vectors = await embedTexts(
+    env.AI,
+    chunks.map((c) => c.content),
+  )
   const out: VectorizeRecord[] = []
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]!
     const vec = vectors[i]!
     const id = await chunkId(namespace, chunk)
     if (shouldSkipForLength(id, namespace)) {
-      console.error(JSON.stringify({
-        event: "vector-upsert-length-exceeded",
-        namespaceLength: namespace.length,
-        idLength: id.length,
-        namespaceSample: namespace.slice(0, 32),
-        idSample: id.slice(0, 16),
-        path: chunk.path,
-      }))
+      console.error(
+        JSON.stringify({
+          event: "vector-upsert-length-exceeded",
+          namespaceLength: namespace.length,
+          idLength: id.length,
+          namespaceSample: namespace.slice(0, 32),
+          idSample: id.slice(0, 16),
+          path: chunk.path,
+        }),
+      )
       continue
     }
     out.push({

@@ -38,14 +38,8 @@ import { isRepoSensitive } from "@/src/lib/repo-policy"
 import { handleGithubMention } from "@/src/lib/github-mention"
 import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
-import {
-  handleIndexRepoJob,
-} from "@/src/lib/indexer"
-import {
-  handleCorpusPrUpsert,
-  handleCorpusPrBackfill,
-  handleCorpusIssueUpsert,
-} from "@/src/lib/multi-corpus-jobs"
+import { handleIndexRepoJob } from "@/src/lib/indexer"
+import { handleCorpusPrUpsert, handleCorpusPrBackfill, handleCorpusIssueUpsert } from "@/src/lib/multi-corpus-jobs"
 import {
   attachExistingCheckRun,
   startInProgressCheckRun,
@@ -53,9 +47,7 @@ import {
   parseReviewOutputSurface,
   type SigilixCheckConclusion,
 } from "@/src/lib/pr-review-check-run"
-import {
-  deleteRepoIndex,
-} from "@/src/lib/index-delete"
+import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
 
 /**
@@ -80,10 +72,7 @@ export async function postSlashCommandAck(
     installationId: args.installationId,
   })
   const client = new GitHubClient({ token })
-  await client.createIssueComment(
-    args.owner, args.repo, args.prNumber,
-    renderSlashCommandAck(cmd),
-  )
+  await client.createIssueComment(args.owner, args.repo, args.prNumber, renderSlashCommandAck(cmd))
 }
 
 /**
@@ -92,9 +81,7 @@ export async function postSlashCommandAck(
  * non-null `merged_at` (a merged PR reports `state: "closed"` too, but we check
  * both so the predicate is robust to partial mocks). Exported for tests.
  */
-export function prMetaIsClosedOrMerged(
-  pr: { merged_at?: string | null; state?: "open" | "closed" },
-): boolean {
+export function prMetaIsClosedOrMerged(pr: { merged_at?: string | null; state?: "open" | "closed" }): boolean {
   return pr.merged_at != null || pr.state === "closed"
 }
 
@@ -214,16 +201,18 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // handler level (not dispatchJob's scope) so add it back here
       // in a follow-up if duplicates persist after the obvious causes
       // are ruled out.
-      console.log(JSON.stringify({
-        event: "pr-review-dispatch-received",
-        owner: job.owner,
-        repo: job.repo,
-        prNumber: job.prNumber,
-        headSha: job.headSha.slice(0, 7),
-        runId: typeof job.runId === "string" ? job.runId : null,
-        staleHeadRequeueDepth: job.staleHeadRequeueDepth ?? 0,
-        dispatchedAt: Date.now(),
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-dispatch-received",
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          headSha: job.headSha.slice(0, 7),
+          runId: typeof job.runId === "string" ? job.runId : null,
+          staleHeadRequeueDepth: job.staleHeadRequeueDepth ?? 0,
+          dispatchedAt: Date.now(),
+        }),
+      )
       // ARC-190 Task 7: when the message carries a string `runId`, the
       // DO is the dedupe + retry source-of-truth. The wrapper posts
       // /pickup → runs the work → posts /run-result. Legacy direct-path
@@ -257,9 +246,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // both review pipelines. Webhook-driven messages omit the
         // field (treated as 0); stale-head-driven requeues carry the
         // incremented depth so the helper can cap further retries.
-        ...(job.staleHeadRequeueDepth !== undefined
-          ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth }
-          : {}),
+        ...(job.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth } : {}),
         // SIG-247 Phase 1: thread the immutable repo.id into the
         // review pipeline so the review-memory lookup hits BOTH the
         // legacy and repo-id keyspaces. Webhook-driven jobs carry it
@@ -286,13 +273,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // this ticket; the ensemble owns submit, verify, retry, and
         // comment-fallback end-to-end (ARC-277 / ARC-278 / ARC-279).
         if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, job.owner, job.repo)) {
-          console.log(JSON.stringify({
-            event: "pr-review-skipped",
-            reason: "repo_in_sensitive_denylist",
-            owner: job.owner,
-            repo: job.repo,
-            prNumber: job.prNumber,
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-review-skipped",
+              reason: "repo_in_sensitive_denylist",
+              owner: job.owner,
+              repo: job.repo,
+              prNumber: job.prNumber,
+            }),
+          )
           // SIG-220: when the DO created the check upstream (so the
           // user already sees "Sigilix · In progress" in the GitHub
           // UI) and the dispatcher then skips for a sensitive-repo
@@ -322,21 +311,22 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // the pre-SIG-220 dispatcher-time create path — best-effort
         // throughout; a null handle means the completion below is
         // a no-op.
-        const checkRun = job.checkRunId !== undefined
-          ? await attachExistingCheckRun({
-              env,
-              owner: job.owner,
-              repo: job.repo,
-              installationId: job.installationId,
-              checkRunId: job.checkRunId,
-            })
-          : await startInProgressCheckRun({
-              env,
-              owner: job.owner,
-              repo: job.repo,
-              headSha: job.headSha,
-              installationId: job.installationId,
-            })
+        const checkRun =
+          job.checkRunId !== undefined
+            ? await attachExistingCheckRun({
+                env,
+                owner: job.owner,
+                repo: job.repo,
+                installationId: job.installationId,
+                checkRunId: job.checkRunId,
+              })
+            : await startInProgressCheckRun({
+                env,
+                owner: job.owner,
+                repo: job.repo,
+                headSha: job.headSha,
+                installationId: job.installationId,
+              })
         let conclusion: SigilixCheckConclusion | null = null
         // ARC-276: capture the customer-visible review verdict +
         // findings count on the posted path so the Check Run title
@@ -387,9 +377,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // the ensemble didn't return a reviewMeta (degraded paths),
           // the summary degrades to the link-less fallback — that's
           // intentional, not worth scaffolding a synthetic reviewMeta.
-          const reviewMetaForComplete = reviewMeta !== undefined
-            ? { ...reviewMeta, prNumber: job.prNumber }
-            : undefined
+          const reviewMetaForComplete = reviewMeta !== undefined ? { ...reviewMeta, prNumber: job.prNumber } : undefined
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
@@ -412,13 +400,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
                 events: validationSink,
               })
             } catch (err) {
-              console.log(JSON.stringify({
-                event: "validation-metrics-record-error",
-                owner: job.owner,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                error: err instanceof Error ? err.message : String(err),
-              }))
+              console.log(
+                JSON.stringify({
+                  event: "validation-metrics-record-error",
+                  owner: job.owner,
+                  repo: job.repo,
+                  prNumber: job.prNumber,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              )
             }
           }
           // SIG-152: flush the per-review graph-retrieval sample once.
@@ -434,13 +424,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
                 sample: graphSample,
               })
             } catch (err) {
-              console.log(JSON.stringify({
-                event: "graph-metrics-record-error",
-                owner: job.owner,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                error: err instanceof Error ? err.message : String(err),
-              }))
+              console.log(
+                JSON.stringify({
+                  event: "graph-metrics-record-error",
+                  owner: job.owner,
+                  repo: job.repo,
+                  prNumber: job.prNumber,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              )
             }
           }
           // SIG-286 PR2.5: flush the per-review graph-expansion sample once.
@@ -450,13 +442,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             try {
               await recordGraphExpansionMetrics(env, { sample: expansionSample })
             } catch (err) {
-              console.log(JSON.stringify({
-                event: "graph-expansion-metrics-record-error",
-                owner: job.owner,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                error: err instanceof Error ? err.message : String(err),
-              }))
+              console.log(
+                JSON.stringify({
+                  event: "graph-expansion-metrics-record-error",
+                  owner: job.owner,
+                  repo: job.repo,
+                  prNumber: job.prNumber,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              )
             }
           }
         }
@@ -471,11 +465,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       const tag = { owner: job.owner, repo: job.repo, prNumber: job.prNumber }
       try {
         if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-          console.error(JSON.stringify({
-            event: "pr-review-rerun-misconfigured",
-            reason: "missing_github_app_credentials",
-            ...tag,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "pr-review-rerun-misconfigured",
+              reason: "missing_github_app_credentials",
+              ...tag,
+            }),
+          )
           return
         }
         const token = await getInstallationToken({
@@ -488,11 +484,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         const meta = await client.getPullRequest(job.owner, job.repo, job.prNumber)
         const headSha = meta.head.sha
         if (!headSha) {
-          console.error(JSON.stringify({
-            event: "pr-review-rerun-skipped",
-            reason: "no_head_sha",
-            ...tag,
-          }))
+          console.error(
+            JSON.stringify({
+              event: "pr-review-rerun-skipped",
+              reason: "no_head_sha",
+              ...tag,
+            }),
+          )
           return
         }
         // SIG-247 Phase 1: resolve the immutable repo.id before
@@ -504,20 +502,17 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         let rerunRepoId: number | undefined
         try {
           const repoMeta = await client.getRepository(job.owner, job.repo)
-          if (
-            repoMeta &&
-            typeof repoMeta.id === "number" &&
-            Number.isInteger(repoMeta.id) &&
-            repoMeta.id > 0
-          ) {
+          if (repoMeta && typeof repoMeta.id === "number" && Number.isInteger(repoMeta.id) && repoMeta.id > 0) {
             rerunRepoId = repoMeta.id
           }
         } catch (err) {
-          console.warn(JSON.stringify({
-            event: "pr-review-rerun-repo-id-fetch-failed",
-            err: err instanceof Error ? err.message : String(err),
-            ...tag,
-          }))
+          console.warn(
+            JSON.stringify({
+              event: "pr-review-rerun-repo-id-fetch-failed",
+              err: err instanceof Error ? err.message : String(err),
+              ...tag,
+            }),
+          )
         }
         // Post ack comment so the user knows the request was received.
         // Best-effort: a failed ack doesn't block the re-review.
@@ -534,21 +529,18 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // The two acks differ — "...with cumulative-diff dedup
           // bypass..." vs the plain rerun copy — and rendering the
           // wrong one on the dedup-bypass path was misleading.
-          const ackCmd: SlashCommand = job.forceFresh === true
-            ? { cmd: "full-review" }
-            : { cmd: "review" }
+          const ackCmd: SlashCommand = job.forceFresh === true ? { cmd: "full-review" } : { cmd: "review" }
           try {
-            await client.createIssueComment(
-              job.owner, job.repo, job.prNumber,
-              renderSlashCommandAck(ackCmd),
-            )
+            await client.createIssueComment(job.owner, job.repo, job.prNumber, renderSlashCommandAck(ackCmd))
           } catch (err) {
-            console.error(JSON.stringify({
-              event: "slash-command-ack-failed",
-              err: err instanceof Error ? err.message : String(err),
-              cmd: ackCmd.cmd,
-              ...tag,
-            }))
+            console.error(
+              JSON.stringify({
+                event: "slash-command-ack-failed",
+                err: err instanceof Error ? err.message : String(err),
+                cmd: ackCmd.cmd,
+                ...tag,
+              }),
+            )
           }
         }
         // ARC-280: Phase 3's legacy single-shot dedupe lock is gone
@@ -602,12 +594,14 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // surrounding try/catch swallows + logs the throw and
             // returns — so re-throwing here would NOT trigger a
             // queue retry. Log explicitly and continue.
-            console.error(JSON.stringify({
-              event: "pr-review-rerun-enqueue-failed",
-              reason: `do-${enq.reason}`,
-              silent: true,
-              ...tag,
-            }))
+            console.error(
+              JSON.stringify({
+                event: "pr-review-rerun-enqueue-failed",
+                reason: `do-${enq.reason}`,
+                silent: true,
+                ...tag,
+              }),
+            )
           } else {
             // Codex LOW on PR review: emit rerun-context telemetry
             // so we can count how often warmup reruns are being
@@ -615,11 +609,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // own `do-review-deduped` log carries (owner, repo,
             // prNumber, runId, action) — correlate by timestamp +
             // (owner, repo, prNumber).
-            console.log(JSON.stringify({
-              event: "pr-review-rerun-silent-routed",
-              route: enq.route,
-              ...tag,
-            }))
+            console.log(
+              JSON.stringify({
+                event: "pr-review-rerun-silent-routed",
+                route: enq.route,
+                ...tag,
+              }),
+            )
           }
         } else {
           const reviewMessage: JobMessage = {
@@ -645,18 +641,22 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // only runs on the webhook `synchronize` path); `forceFresh`
           // is the explicit bypass switch for any future dedup layer
           // that DOES apply to rerun jobs.
-          console.log(JSON.stringify({
-            event: "pr-review-rerun-dispatched",
-            forceFresh: job.forceFresh === true,
-            ...tag,
-          }))
+          console.log(
+            JSON.stringify({
+              event: "pr-review-rerun-dispatched",
+              forceFresh: job.forceFresh === true,
+              ...tag,
+            }),
+          )
         }
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-rerun-error",
-          err: err instanceof Error ? err.message : String(err),
-          ...tag,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-review-rerun-error",
+            err: err instanceof Error ? err.message : String(err),
+            ...tag,
+          }),
+        )
       }
       return
     }
@@ -666,17 +666,27 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // Independent of the ensemble; fail-soft on ack but re-throws
       // on the actual run so queue retries get a chance.
       try {
-        await postSlashCommandAck(env, { cmd: "improve" }, {
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          installationId: job.installationId,
-        })
+        await postSlashCommandAck(
+          env,
+          { cmd: "improve" },
+          {
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            installationId: job.installationId,
+          },
+        )
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "slash-command-ack-failed",
-          err: err instanceof Error ? err.message : String(err),
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          cmd: "improve",
-        }))
+        console.error(
+          JSON.stringify({
+            event: "slash-command-ack-failed",
+            err: err instanceof Error ? err.message : String(err),
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            cmd: "improve",
+          }),
+        )
       }
       return handlePrImprove({
         owner: job.owner,
@@ -691,16 +701,26 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // help-body markdown (the body IS the response), so the same
       // ack helper used by other slash commands does the entire job.
       try {
-        await postSlashCommandAck(env, { cmd: "help" }, {
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          installationId: job.installationId,
-        })
+        await postSlashCommandAck(
+          env,
+          { cmd: "help" },
+          {
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            installationId: job.installationId,
+          },
+        )
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-help-error",
-          err: err instanceof Error ? err.message : String(err),
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-help-error",
+            err: err instanceof Error ? err.message : String(err),
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+          }),
+        )
       }
       return
     }
@@ -714,19 +734,29 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // differs. Independent of the ensemble; does NOT consume the
       // ensemble daily budget.
       try {
-        await postSlashCommandAck(env, { cmd: "describe", mode: job.mode, apply: job.apply }, {
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          installationId: job.installationId,
-        })
+        await postSlashCommandAck(
+          env,
+          { cmd: "describe", mode: job.mode, apply: job.apply },
+          {
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            installationId: job.installationId,
+          },
+        )
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "slash-command-ack-failed",
-          err: err instanceof Error ? err.message : String(err),
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          cmd: "describe",
-          mode: job.mode,
-          apply: job.apply,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "slash-command-ack-failed",
+            err: err instanceof Error ? err.message : String(err),
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            cmd: "describe",
+            mode: job.mode,
+            apply: job.apply,
+          }),
+        )
       }
       return handlePrDescribe({
         owner: job.owner,
@@ -756,11 +786,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           currentPromptVersion: job.currentPromptVersion,
         })
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-stale-mark-bubbled",
-          err: err instanceof Error ? err.message : String(err),
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-        }))
+        console.error(
+          JSON.stringify({
+            event: "pr-stale-mark-bubbled",
+            err: err instanceof Error ? err.message : String(err),
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+          }),
+        )
         throw err
       }
       return
@@ -808,46 +842,70 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
     case "pr-pause":
       // SIG-98: `/sigilix pause` — 24h auto-review pause.
       return handlePrPause({
-        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        env,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
         installationId: job.installationId,
       })
     case "pr-resume":
       // SIG-98: `/sigilix resume` — clears pause + ignore flags.
       return handlePrResume({
-        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        env,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
         installationId: job.installationId,
       })
     case "pr-ignore":
       // SIG-98: `/sigilix ignore` — permanent auto-review opt-out.
       return handlePrIgnore({
-        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        env,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
         installationId: job.installationId,
       })
     case "pr-resolve-threads":
       // SIG-98: `/sigilix resolve` — mark Sigilix-rooted threads
       // resolved via the GraphQL `resolveReviewThread` mutation.
       return handlePrResolveThreads({
-        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        env,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
         installationId: job.installationId,
       })
     case "pr-cancel":
       // SIG-329: `/sigilix cancel` — abort the in-flight review by
       // terminating its PrReviewRunDO run + closing the check.
       return handlePrCancel({
-        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        env,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
         installationId: job.installationId,
       })
     case "corpus-pr-upsert":
       // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
       return handleCorpusPrUpsert(env, {
-        owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-        title: job.title, body: job.body,
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        title: job.title,
+        body: job.body,
       })
     case "corpus-pr-backfill":
       // SIG-44: 90-day merged-PR backfill on repo onboarding.
-      return handleCorpusPrBackfill(env, {
-        owner: job.owner, repo: job.repo, installationId: job.installationId,
-      }, Date.now())
+      return handleCorpusPrBackfill(
+        env,
+        {
+          owner: job.owner,
+          repo: job.repo,
+          installationId: job.installationId,
+        },
+        Date.now(),
+      )
     case "corpus-issue-upsert":
       // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
       return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
@@ -857,9 +915,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // compile time, AND we throw at runtime so a stale producer/
       // consumer pairing surfaces loudly instead of silently acking.
       const exhaustive: never = job
-      throw new Error(
-        `unknown queue job type: ${JSON.stringify(exhaustive).slice(0, 200)}`
-      )
+      throw new Error(`unknown queue job type: ${JSON.stringify(exhaustive).slice(0, 200)}`)
     }
   }
 }

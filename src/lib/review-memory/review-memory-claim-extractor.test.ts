@@ -144,11 +144,7 @@ describe("parseClaimExtractionResponse — validation", () => {
       ],
     })
     const out = parseClaimExtractionResponse(content, 1)
-    expect(Object.keys(out![0]![0]!).sort()).toEqual([
-      "confidence",
-      "extractorVersion",
-      "type",
-    ])
+    expect(Object.keys(out![0]![0]!).sort()).toEqual(["confidence", "extractorVersion", "type"])
   })
 })
 
@@ -212,7 +208,13 @@ describe("extractClaims — fail-open orchestration", () => {
     })
     expect(out).toEqual([
       [],
-      [{ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: CLAIM_EXTRACTOR_VERSION }],
+      [
+        {
+          type: "auth-gate-is-boundary",
+          confidence: 0.8,
+          extractorVersion: CLAIM_EXTRACTOR_VERSION,
+        },
+      ],
     ])
   })
 })

@@ -16,10 +16,7 @@ interface DoCall {
 }
 
 interface MakeEnvArgs {
-  doResponse?:
-    | { kind: "200"; body?: unknown }
-    | { kind: "non-ok"; status: number }
-    | { kind: "throw" }
+  doResponse?: { kind: "200"; body?: unknown } | { kind: "non-ok"; status: number } | { kind: "throw" }
   /**
    * SIG-98: pre-seeded KV state for the pause/ignore gate. Any key
    * present here will be returned by `OPENCLAW_STATE.get`; unset keys
@@ -43,7 +40,9 @@ function makeEnv(args: MakeEnvArgs = {}): {
     if (init?.body && typeof init.body === "string") {
       try {
         body = JSON.parse(init.body)
-      } catch { body = init.body }
+      } catch {
+        body = init.body
+      }
     }
     doCalls.push({ url, method, body })
     const r = args.doResponse ?? { kind: "200" as const }
@@ -69,8 +68,12 @@ function makeEnv(args: MakeEnvArgs = {}): {
     OPENCLAW_JOBS: { send: queueSend } as unknown as Queue<unknown>,
     OPENCLAW_STATE: {
       get: async (key: string): Promise<string | null> => kv.get(key) ?? null,
-      put: async (key: string, value: string) => { kv.set(key, value) },
-      delete: async (key: string) => { kv.delete(key) },
+      put: async (key: string, value: string) => {
+        kv.set(key, value)
+      },
+      delete: async (key: string) => {
+        kv.delete(key)
+      },
     } as unknown as KVNamespace,
   } as unknown as Env
   return { env, doCalls, queueSend, idFromName, kv }

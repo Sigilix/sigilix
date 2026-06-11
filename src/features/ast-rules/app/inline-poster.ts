@@ -45,9 +45,7 @@ function renderInlineBody(f: AstFinding): string {
   return lines.join("\n")
 }
 
-export async function postAstInlineFindings(
-  args: PostAstInlineArgs,
-): Promise<PostAstInlineResult> {
+export async function postAstInlineFindings(args: PostAstInlineArgs): Promise<PostAstInlineResult> {
   const { client, owner, repo, prNumber, headSha, findings, perFindingPositions } = args
   const ctx = { owner, repo, prNumber }
   let posted = 0

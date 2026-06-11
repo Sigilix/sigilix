@@ -32,8 +32,7 @@ function makeEnv(records: Record<string, unknown> = {}, overrides: Partial<Env> 
   } as unknown as Env
 }
 
-const get = (url: string, auth?: string) =>
-  new Request(url, auth ? { headers: { authorization: auth } } : undefined)
+const get = (url: string, auth?: string) => new Request(url, auth ? { headers: { authorization: auth } } : undefined)
 
 /** A telemetry record ~1 day old with an A/B arm + synth findings of given scores. */
 function rec(arm: "treatment" | "control" | undefined, scores: number[], pr: number): [string, unknown] {
@@ -51,17 +50,48 @@ function rec(arm: "treatment" | "control" | undefined, scores: number[], pr: num
 describe("handleGraphExpansionAbMetricsRoute", () => {
   it("503 when the token is unset", async () => {
     const env = makeEnv({}, { OPENCLAW_VALIDATION_METRICS_TOKEN: undefined })
-    expect((await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab?repo=o/r", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(
+      (
+        await handleGraphExpansionAbMetricsRoute(
+          get("https://x/metrics/graph-expansion-ab?repo=o/r", `Bearer ${TOKEN}`),
+          env,
+        )
+      ).status,
+    ).toBe(503)
   })
 
   it("401 on missing / wrong token", async () => {
-    expect((await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab?repo=o/r"), makeEnv())).status).toBe(401)
-    expect((await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab?repo=o/r", "Bearer nope"), makeEnv())).status).toBe(401)
+    expect(
+      (await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab?repo=o/r"), makeEnv()))
+        .status,
+    ).toBe(401)
+    expect(
+      (
+        await handleGraphExpansionAbMetricsRoute(
+          get("https://x/metrics/graph-expansion-ab?repo=o/r", "Bearer nope"),
+          makeEnv(),
+        )
+      ).status,
+    ).toBe(401)
   })
 
   it("400 on missing / malformed repo", async () => {
-    expect((await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
-    expect((await handleGraphExpansionAbMetricsRoute(get("https://x/metrics/graph-expansion-ab?repo=notarepo", `Bearer ${TOKEN}`), makeEnv())).status).toBe(400)
+    expect(
+      (
+        await handleGraphExpansionAbMetricsRoute(
+          get("https://x/metrics/graph-expansion-ab", `Bearer ${TOKEN}`),
+          makeEnv(),
+        )
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await handleGraphExpansionAbMetricsRoute(
+          get("https://x/metrics/graph-expansion-ab?repo=notarepo", `Bearer ${TOKEN}`),
+          makeEnv(),
+        )
+      ).status,
+    ).toBe(400)
   })
 
   it("aggregates findings per arm; excludes records without an arm", async () => {
@@ -78,15 +108,37 @@ describe("handleGraphExpansionAbMetricsRoute", () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       mode: string
-      treatment: { reviews: number; totalFindings: number; highSevFindings: number; meanFindings: number | null; meanHighSev: number | null }
-      control: { reviews: number; totalFindings: number; highSevFindings: number; meanHighSev: number | null }
+      treatment: {
+        reviews: number
+        totalFindings: number
+        highSevFindings: number
+        meanFindings: number | null
+        meanHighSev: number | null
+      }
+      control: {
+        reviews: number
+        totalFindings: number
+        highSevFindings: number
+        meanHighSev: number | null
+      }
       verdict: string
     }
     expect(body.mode).toBe("post")
     // Treatment: 2 reviews, 4 findings total, 3 high-sev → meanHighSev 1.5.
-    expect(body.treatment).toMatchObject({ reviews: 2, totalFindings: 4, highSevFindings: 3, meanFindings: 2, meanHighSev: 1.5 })
+    expect(body.treatment).toMatchObject({
+      reviews: 2,
+      totalFindings: 4,
+      highSevFindings: 3,
+      meanFindings: 2,
+      meanHighSev: 1.5,
+    })
     // Control: 1 review, 1 finding, 0 high-sev.
-    expect(body.control).toMatchObject({ reviews: 1, totalFindings: 1, highSevFindings: 0, meanHighSev: 0 })
+    expect(body.control).toMatchObject({
+      reviews: 1,
+      totalFindings: 1,
+      highSevFindings: 0,
+      meanHighSev: 0,
+    })
     // The no-arm record (104) is in neither arm: total reviews = 3, not 4.
     expect(body.treatment.reviews + body.control.reviews).toBe(3)
     // Below MIN_PER_ARM (30) → accruing.
@@ -112,7 +164,11 @@ describe("handleGraphExpansionAbMetricsRoute", () => {
       get("https://x/metrics/graph-expansion-ab?repo=o/r", `Bearer ${TOKEN}`),
       env,
     )
-    const body = (await res.json()) as { failedFetches: number; treatment: { reviews: number }; control: { reviews: number } }
+    const body = (await res.json()) as {
+      failedFetches: number
+      treatment: { reviews: number }
+      control: { reviews: number }
+    }
     expect(body.failedFetches).toBe(1)
     // The failed record is dropped — counts toward neither arm.
     expect(body.treatment.reviews + body.control.reviews).toBe(0)
@@ -122,7 +178,9 @@ describe("handleGraphExpansionAbMetricsRoute", () => {
     const oldReverseTs = REVERSE_TS_BASE - (Date.now() - 40 * DAY) // ~40 days old
     const records: Record<string, unknown> = {
       [`ensemble-review-telemetry:${oldReverseTs}:o/r#200`]: {
-        owner: "o", repo: "r", prNumber: 200,
+        owner: "o",
+        repo: "r",
+        prNumber: 200,
         synthesizer: { verdict: { findings: [{ score: 5 }] } },
         graphExpansionAb: { arm: "treatment" },
       },

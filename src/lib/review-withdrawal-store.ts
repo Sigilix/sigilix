@@ -84,11 +84,7 @@ export interface WithdrawalRecord {
  *
  * Pure (no I/O beyond the platform hash) — exported for tests + the write path.
  */
-export async function computeContentFingerprint(
-  category: string,
-  path: string,
-  body: string,
-): Promise<string> {
+export async function computeContentFingerprint(category: string, path: string, body: string): Promise<string> {
   const snippet = stripBodyForMatching(body).slice(0, 80)
   const input = `${category}\0${path}\0${snippet}`
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))
@@ -145,19 +141,21 @@ export function jaccardSimilarity(a: string, b: string): number {
  * Pure — exported for tests.
  */
 export function stripBodyForMatching(body: string): string {
-  return body
-    // HTML comment markers (sigilix:*, coderabbit:*, etc.)
-    .replace(/<!--[\s\S]*?-->/g, "")
-    // Fenced suggestion blocks
-    .replace(/```suggestion[\s\S]*?```/g, "")
-    // Other fenced code blocks
-    .replace(/```[\s\S]*?```/g, "")
-    // Link URLs — keep the link text, drop the URL
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    // Collapse whitespace
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 800)
+  return (
+    body
+      // HTML comment markers (sigilix:*, coderabbit:*, etc.)
+      .replace(/<!--[\s\S]*?-->/g, "")
+      // Fenced suggestion blocks
+      .replace(/```suggestion[\s\S]*?```/g, "")
+      // Other fenced code blocks
+      .replace(/```[\s\S]*?```/g, "")
+      // Link URLs — keep the link text, drop the URL
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // Collapse whitespace
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 800)
+  )
 }
 
 /**
@@ -189,10 +187,7 @@ export function findingMatchesWithdrawal(
   }
   if (finding.path !== withdrawal.path) return false
   if (Math.abs(finding.line - withdrawal.line) > LINE_TOLERANCE) return false
-  const sim = jaccardSimilarity(
-    stripBodyForMatching(finding.body),
-    stripBodyForMatching(withdrawal.bodySnapshot),
-  )
+  const sim = jaccardSimilarity(stripBodyForMatching(finding.body), stripBodyForMatching(withdrawal.bodySnapshot))
   return sim >= MATCH_THRESHOLD
 }
 
@@ -259,16 +254,19 @@ export function filterWithdrawnFindingsDetailed<F extends MatchableFinding>(
       continue
     }
     const viaFingerprint = Boolean(
-      f.contentFingerprint &&
-        w.contentFingerprint &&
-        f.contentFingerprint === w.contentFingerprint,
+      f.contentFingerprint && w.contentFingerprint && f.contentFingerprint === w.contentFingerprint,
     )
     const severityEscalated =
       viaFingerprint &&
       typeof f.score === "number" &&
       typeof w.dismissedScore === "number" &&
       f.score > w.dismissedScore
-    const entry: WithdrawnSuppression<F> = { finding: f, withdrawal: w, viaFingerprint, severityEscalated }
+    const entry: WithdrawnSuppression<F> = {
+      finding: f,
+      withdrawal: w,
+      viaFingerprint,
+      severityEscalated,
+    }
     // Past the decay window → stop suppressing. Keep the finding and record the
     // lapse instead of muting a concession that may now be stale.
     if (now - w.withdrawnAt > DISMISS_DECAY_WINDOW_MS) {
@@ -334,21 +332,30 @@ export async function writeWithdrawal(args: WriteArgs): Promise<boolean> {
     await args.env.OPENCLAW_STATE.put(key, JSON.stringify(record), {
       expirationTtl: TTL_SECONDS,
     })
-    console.log(JSON.stringify({
-      event: "review-withdrawal-recorded",
-      owner: args.owner, repo: args.repo, pr_number: args.prNumber,
-      path: args.path, line: args.line,
-      comment_id: args.withdrawnByCommentId,
-      head_sha: args.prHeadSha,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "review-withdrawal-recorded",
+        owner: args.owner,
+        repo: args.repo,
+        pr_number: args.prNumber,
+        path: args.path,
+        line: args.line,
+        comment_id: args.withdrawnByCommentId,
+        head_sha: args.prHeadSha,
+      }),
+    )
     return true
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "review-withdrawal-write-failed",
-      owner: args.owner, repo: args.repo, pr_number: args.prNumber,
-      comment_id: args.withdrawnByCommentId,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-withdrawal-write-failed",
+        owner: args.owner,
+        repo: args.repo,
+        pr_number: args.prNumber,
+        comment_id: args.withdrawnByCommentId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return false
   }
 }
@@ -382,9 +389,7 @@ export async function loadWithdrawals(
     const rawEntries: (string | null)[] = []
     for (let i = 0; i < list.keys.length; i += BATCH) {
       const slice = list.keys.slice(i, i + BATCH)
-      const batchResults = await Promise.all(
-        slice.map((key) => env.OPENCLAW_STATE.get(key.name)),
-      )
+      const batchResults = await Promise.all(slice.map((key) => env.OPENCLAW_STATE.get(key.name)))
       rawEntries.push(...batchResults)
     }
     const records: WithdrawalRecord[] = []
@@ -404,14 +409,11 @@ export async function loadWithdrawals(
           // — pre-SIG-173 records simply lack it, and an out-of-band value
           // (manual KV poke, future-version downgrade) shouldn't poison the
           // softening weight calculation.
-          const dismissReason = isDismissReason(parsed.dismissReason)
-            ? parsed.dismissReason
-            : undefined
+          const dismissReason = isDismissReason(parsed.dismissReason) ? parsed.dismissReason : undefined
           // SIG-217: forward the optional fingerprint/score when well-typed.
           const contentFingerprint =
             typeof parsed.contentFingerprint === "string" ? parsed.contentFingerprint : undefined
-          const dismissedScore =
-            typeof parsed.dismissedScore === "number" ? parsed.dismissedScore : undefined
+          const dismissedScore = typeof parsed.dismissedScore === "number" ? parsed.dismissedScore : undefined
           records.push({
             path: parsed.path,
             line: parsed.line,
@@ -431,11 +433,15 @@ export async function loadWithdrawals(
     }
     return records
   } catch (err) {
-    console.error(JSON.stringify({
-      event: "review-withdrawal-load-failed",
-      owner, repo, pr_number: prNumber,
-      error: err instanceof Error ? err.message : String(err),
-    }))
+    console.error(
+      JSON.stringify({
+        event: "review-withdrawal-load-failed",
+        owner,
+        repo,
+        pr_number: prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     return []
   }
 }

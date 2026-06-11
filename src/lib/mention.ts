@@ -15,11 +15,7 @@
 // genuinely needs to keep an old alias (env var name is internal infra
 // and stays OPENCLAW_* for zero-config impact on existing deployments).
 
-const DEFAULT_TRIGGERS = [
-  "sigilix",
-  "sigilix[bot]",
-  "Sigilix[bot]",
-]
+const DEFAULT_TRIGGERS = ["sigilix", "sigilix[bot]", "Sigilix[bot]"]
 
 export function getMentionTriggers(envValue?: string): string[] {
   const raw = envValue?.trim()
@@ -109,10 +105,7 @@ export function stripMentionFromBody(body: string, triggers: string[]): string {
  */
 export function isBotHandle(displayName: string | null | undefined): boolean {
   if (!displayName) return false
-  return (
-    /\[bot\]$/i.test(displayName) ||
-    /^(sigilix|openclaw|arc)(\[bot\])?$/i.test(displayName)
-  )
+  return /\[bot\]$/i.test(displayName) || /^(sigilix|openclaw|arc)(\[bot\])?$/i.test(displayName)
 }
 
 /**
@@ -176,9 +169,10 @@ export function isArcGithubLogin(login: string | null | undefined): boolean {
  * implicit-mention there would mean "Sigilix commented at any point on the
  * PR" → too eager; mention-only is the right default.
  */
-export function arcInThreadAbove<
-  T extends { id: number; in_reply_to_id?: number; user: { login: string } | null },
->(comments: T[], sourceId: number): boolean {
+export function arcInThreadAbove<T extends { id: number; in_reply_to_id?: number; user: { login: string } | null }>(
+  comments: T[],
+  sourceId: number,
+): boolean {
   const byId = new Map<number, T>()
   for (const c of comments) byId.set(c.id, c)
   const start = byId.get(sourceId)

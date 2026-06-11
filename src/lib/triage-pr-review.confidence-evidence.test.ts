@@ -201,29 +201,36 @@ describe("parsePrReviewResponse — SIG-101 per-finding confidence", () => {
 
   it("reads `finding.confidence` when present and in range", () => {
     const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 5 }] }),
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, category: "logic", confidence: 5 }],
+      }),
     )
     expect(out?.findings[0]?.confidence).toBe(5)
   })
 
   it("drops out-of-range confidence (leaves the field undefined)", () => {
     const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 0 }] }),
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, category: "logic", confidence: 0 }],
+      }),
     )
     expect(out?.findings[0]?.confidence).toBeUndefined()
   })
 
   it("clamps fractional confidence to nearest integer", () => {
     const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 3.7 }] }),
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, category: "logic", confidence: 3.7 }],
+      }),
     )
     expect(out?.findings[0]?.confidence).toBe(4)
   })
 
   it("absent confidence stays undefined (caller defaults to verdict-level)", () => {
-    const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic" }] }),
-    )
+    const out = parsePrReviewResponse(JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic" }] }))
     expect(out?.findings[0]?.confidence).toBeUndefined()
   })
 })
@@ -240,45 +247,46 @@ describe("parsePrReviewResponse — SIG-113 evidence citation fields", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          category: "testing",
-          inspectedTestFiles: ["tests/foo.test.ts", "tests/bar.test.ts"],
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            category: "testing",
+            inspectedTestFiles: ["tests/foo.test.ts", "tests/bar.test.ts"],
+          },
+        ],
       }),
     )
-    expect(out?.findings[0]?.inspectedTestFiles).toEqual([
-      "tests/foo.test.ts",
-      "tests/bar.test.ts",
-    ])
+    expect(out?.findings[0]?.inspectedTestFiles).toEqual(["tests/foo.test.ts", "tests/bar.test.ts"])
   })
 
   it("reads evidenceRefs when supplied", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          category: "testing",
-          evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"],
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            category: "testing",
+            evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"],
+          },
+        ],
       }),
     )
-    expect(out?.findings[0]?.evidenceRefs).toEqual([
-      "siblingMapping:src/lib/foo.ts->NONE",
-    ])
+    expect(out?.findings[0]?.evidenceRefs).toEqual(["siblingMapping:src/lib/foo.ts->NONE"])
   })
 
   it("trims whitespace + drops empty entries on both fields", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          category: "testing",
-          inspectedTestFiles: ["  tests/foo.test.ts  ", "", "  "],
-          evidenceRefs: ["", "siblingMapping:x->y", "  "],
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            category: "testing",
+            inspectedTestFiles: ["  tests/foo.test.ts  ", "", "  "],
+            evidenceRefs: ["", "siblingMapping:x->y", "  "],
+          },
+        ],
       }),
     )
     expect(out?.findings[0]?.inspectedTestFiles).toEqual(["tests/foo.test.ts"])
@@ -289,18 +297,17 @@ describe("parsePrReviewResponse — SIG-113 evidence citation fields", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          category: "testing",
-          inspectedTestFiles: ["tests/foo.test.ts", 42, null, "tests/bar.test.ts"],
-          evidenceRefs: [{ shape: "object" }, "valid:ref"],
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            category: "testing",
+            inspectedTestFiles: ["tests/foo.test.ts", 42, null, "tests/bar.test.ts"],
+            evidenceRefs: [{ shape: "object" }, "valid:ref"],
+          },
+        ],
       }),
     )
-    expect(out?.findings[0]?.inspectedTestFiles).toEqual([
-      "tests/foo.test.ts",
-      "tests/bar.test.ts",
-    ])
+    expect(out?.findings[0]?.inspectedTestFiles).toEqual(["tests/foo.test.ts", "tests/bar.test.ts"])
     expect(out?.findings[0]?.evidenceRefs).toEqual(["valid:ref"])
   })
 
@@ -319,12 +326,14 @@ describe("parsePrReviewResponse — SIG-113 evidence citation fields", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({
         ...valid,
-        findings: [{
-          ...baseFinding,
-          category: "testing",
-          inspectedTestFiles: [],
-          evidenceRefs: [],
-        }],
+        findings: [
+          {
+            ...baseFinding,
+            category: "testing",
+            inspectedTestFiles: [],
+            evidenceRefs: [],
+          },
+        ],
       }),
     )
     expect(out?.findings[0]?.inspectedTestFiles).toBeUndefined()
@@ -417,11 +426,20 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
 
 describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
   const base = {
-    summary: "s", confidence: 4, confidenceReason: "r",
-    findings: [{
-      path: "src/a.ts", line: 10, score: 4, category: "performance",
-      headline: "h", body: "b", suggestedReplacement: "  return getUsers(ids)\n",
-    }],
+    summary: "s",
+    confidence: 4,
+    confidenceReason: "r",
+    findings: [
+      {
+        path: "src/a.ts",
+        line: 10,
+        score: 4,
+        category: "performance",
+        headline: "h",
+        body: "b",
+        suggestedReplacement: "  return getUsers(ids)\n",
+      },
+    ],
   }
   it("reads a non-empty suggestedReplacement (raw kept, incl. indentation/newline)", () => {
     const v = parsePrReviewResponse(JSON.stringify(base))
@@ -453,38 +471,55 @@ describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
 
 describe("parsePrReviewResponse — kind / deletion suggestion (SIG-162 PR 5)", () => {
   const base = {
-    summary: "s", confidence: 4, confidenceReason: "r",
-    findings: [{
-      path: "src/a.ts", line: 10, score: 4, category: "logic",
-      headline: "h", body: "b",
-    }],
+    summary: "s",
+    confidence: 4,
+    confidenceReason: "r",
+    findings: [
+      {
+        path: "src/a.ts",
+        line: 10,
+        score: 4,
+        category: "logic",
+        headline: "h",
+        body: "b",
+      },
+    ],
   }
 
-  it("preserves kind=\"delete\" + empty suggestedReplacement (deletion intent)", () => {
-    const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "" }] }
+  it('preserves kind="delete" + empty suggestedReplacement (deletion intent)', () => {
+    const raw = {
+      ...base,
+      findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "" }],
+    }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.kind).toBe("delete")
     expect(v?.findings[0]?.suggestedReplacement).toBe("")
   })
 
-  it("preserves kind=\"replace\" + non-empty suggestedReplacement", () => {
-    const raw = { ...base, findings: [{ ...base.findings[0], kind: "replace", suggestedReplacement: "  return ok\n" }] }
+  it('preserves kind="replace" + non-empty suggestedReplacement', () => {
+    const raw = {
+      ...base,
+      findings: [{ ...base.findings[0], kind: "replace", suggestedReplacement: "  return ok\n" }],
+    }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.kind).toBe("replace")
     expect(v?.findings[0]?.suggestedReplacement).toBe("  return ok\n")
   })
 
-  it("coerces kind=\"delete\" + NON-empty suggestedReplacement to kind=\"replace\" (intent inconsistent)", () => {
+  it('coerces kind="delete" + NON-empty suggestedReplacement to kind="replace" (intent inconsistent)', () => {
     // Model said delete but provided replacement content — trust the content
     // (it's the actionable signal), reclassify as replace so the renderer
     // emits a normal replacement suggestion instead of a deletion block.
-    const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "  return ok\n" }] }
+    const raw = {
+      ...base,
+      findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "  return ok\n" }],
+    }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.kind).toBe("replace")
     expect(v?.findings[0]?.suggestedReplacement).toBe("  return ok\n")
   })
 
-  it("drops kind=\"delete\" when suggestedReplacement is absent (ambiguous intent)", () => {
+  it('drops kind="delete" when suggestedReplacement is absent (ambiguous intent)', () => {
     const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete" }] }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.kind).toBeUndefined()
@@ -497,7 +532,10 @@ describe("parsePrReviewResponse — kind / deletion suggestion (SIG-162 PR 5)", 
   })
 
   it("treats unknown kind values as if absent", () => {
-    const raw = { ...base, findings: [{ ...base.findings[0], kind: "rearrange", suggestedReplacement: "x" }] }
+    const raw = {
+      ...base,
+      findings: [{ ...base.findings[0], kind: "rearrange", suggestedReplacement: "x" }],
+    }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.kind).toBeUndefined()
     // Replacement content is still preserved when present (back-compat).
@@ -507,19 +545,26 @@ describe("parsePrReviewResponse — kind / deletion suggestion (SIG-162 PR 5)", 
 
 describe("formatFindingComment — deletion suggestion rendering (SIG-162 PR 5)", () => {
   const baseFinding: PrReviewFinding = {
-    path: "src/a.ts", line: 12, startLine: 10, score: 5,
-    category: "logic", headline: "remove unreachable branch",
+    path: "src/a.ts",
+    line: 12,
+    startLine: 10,
+    score: 5,
+    category: "logic",
+    headline: "remove unreachable branch",
     body: "Lines 10-12 are dead code after the refactor.",
     kind: "delete",
     suggestedReplacement: "",
   }
   // Map 10..12 as RIGHT-side reviewable so isFindingAnchorable passes.
   const reviewable: ReviewableMap = new Map([
-    ["src/a.ts", [
-      { line: 10, side: "RIGHT" as const },
-      { line: 11, side: "RIGHT" as const },
-      { line: 12, side: "RIGHT" as const },
-    ]],
+    [
+      "src/a.ts",
+      [
+        { line: 10, side: "RIGHT" as const },
+        { line: 11, side: "RIGHT" as const },
+        { line: 12, side: "RIGHT" as const },
+      ],
+    ],
   ])
 
   it("emits an EMPTY ```suggestion block when kind=delete + anchorable + high-confidence", () => {
@@ -543,14 +588,25 @@ describe("formatFindingComment — deletion suggestion rendering (SIG-162 PR 5)"
   })
 
   it("kind=replace + non-empty content still renders as before (regression check)", () => {
-    const f: PrReviewFinding = { ...baseFinding, kind: "replace", suggestedReplacement: "  return ok\n" }
+    const f: PrReviewFinding = {
+      ...baseFinding,
+      kind: "replace",
+      suggestedReplacement: "  return ok\n",
+    }
     const out = formatFindingComment(f, 5, reviewable)
     expect(out).toContain("```suggestion")
     expect(out).toContain("return ok")
   })
 
   it("kind absent + suggestedReplacement absent → no suggestion block (back-compat)", () => {
-    const f: PrReviewFinding = { path: "src/a.ts", line: 12, score: 4, category: "logic", headline: "x", body: "y" }
+    const f: PrReviewFinding = {
+      path: "src/a.ts",
+      line: 12,
+      score: 4,
+      category: "logic",
+      headline: "x",
+      body: "y",
+    }
     const out = formatFindingComment(f, 5, reviewable)
     expect(out).not.toContain("```suggestion")
     expect(out).not.toContain("**Proposed change:**")

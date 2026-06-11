@@ -33,10 +33,9 @@ describe("SHADOW_BAKEOFF_LINEUP", () => {
     }
     for (const [role, config] of Object.entries(SHADOW_BAKEOFF_LINEUP)) {
       if (config.fallback === null) continue
-      expect(
-        familyOf(config.primary),
-        `shadow ${role} primary+fallback are same family`,
-      ).not.toBe(familyOf(config.fallback))
+      expect(familyOf(config.primary), `shadow ${role} primary+fallback are same family`).not.toBe(
+        familyOf(config.fallback),
+      )
     }
   })
 
@@ -46,8 +45,10 @@ describe("SHADOW_BAKEOFF_LINEUP", () => {
   })
 
   it("differs from the production lineup on at least one role (otherwise shadow is pointless)", () => {
-    const differs = (a: { primary: string; fallback: string | null }, b: { primary: string; fallback: string | null }) =>
-      a.primary !== b.primary || a.fallback !== b.fallback
+    const differs = (
+      a: { primary: string; fallback: string | null },
+      b: { primary: string; fallback: string | null },
+    ) => a.primary !== b.primary || a.fallback !== b.fallback
     const anyDiffers =
       differs(SHADOW_BAKEOFF_LINEUP.logic, SPECIALIST_CONFIGS.logic) ||
       differs(SHADOW_BAKEOFF_LINEUP.security, SPECIALIST_CONFIGS.security) ||

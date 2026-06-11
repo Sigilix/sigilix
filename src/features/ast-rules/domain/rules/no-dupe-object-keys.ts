@@ -93,7 +93,8 @@ export const noDupeObjectKeys: AstRule = {
         continue
       }
       return {
-        message: "Duplicate object key — the later value silently overwrites the earlier one, so the first assignment is dead. Remove the duplicate or rename one key.",
+        message:
+          "Duplicate object key — the later value silently overwrites the earlier one, so the first assignment is dead. Remove the duplicate or rename one key.",
         evidence: sliceEvidence(ctx.source, prop),
         line: prop.loc?.start?.line ?? node.loc?.start?.line ?? 1,
         endLine: prop.loc?.end?.line ?? prop.loc?.start?.line ?? 1,

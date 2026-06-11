@@ -23,14 +23,22 @@ function makeSqliteState(name: string = "test-instance") {
         return undefined
       },
       async put<T>(key: string, value: T): Promise<void> {
-        void key; void value
+        void key
+        void value
       },
       async delete(key: string): Promise<boolean> {
-        void key; return false
+        void key
+        return false
       },
-      async setAlarm(timestamp: number): Promise<void> { void timestamp },
-      async getAlarm(): Promise<number | null> { return null },
-      async deleteAlarm(): Promise<void> { /* no-op */ },
+      async setAlarm(timestamp: number): Promise<void> {
+        void timestamp
+      },
+      async getAlarm(): Promise<number | null> {
+        return null
+      },
+      async deleteAlarm(): Promise<void> {
+        /* no-op */
+      },
     },
     id: { toString: () => name, name },
   }
@@ -599,7 +607,10 @@ describe("RepoGraphDO.blastRadiusByNames", () => {
     await do_.commitGraphVersion("r")
 
     // Only src/one.ts changed → only consumer-one is an import dependent.
-    const br = await do_.blastRadiusByNames({ changedNames: ["shared"], changedPaths: ["src/one.ts"] })
+    const br = await do_.blastRadiusByNames({
+      changedNames: ["shared"],
+      changedPaths: ["src/one.ts"],
+    })
     expect(br.importDependents).toEqual(["src/consumer-one.ts"])
   })
 
@@ -684,7 +695,10 @@ describe("RepoGraphDO.blastRadiusByNames", () => {
     })
     await do_.commitGraphVersion("r")
 
-    const br = await do_.blastRadiusByNames({ changedNames: ["foo", "bar"], changedPaths: ["src/lib.ts"] })
+    const br = await do_.blastRadiusByNames({
+      changedNames: ["foo", "bar"],
+      changedPaths: ["src/lib.ts"],
+    })
     expect(br.importDependents).toEqual(["src/app.ts"])
     expect(br.callerPaths).toEqual(["src/app.ts"])
   })
@@ -748,4 +762,3 @@ describe("RepoGraphDO.blastRadiusByNames", () => {
 })
 
 // ─── contextForVectorHits tests ──────────────────────────────────
-

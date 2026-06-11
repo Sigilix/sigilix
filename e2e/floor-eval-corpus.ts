@@ -137,7 +137,8 @@ export const FLOOR_EVALS: FloorEval[] = [
     ],
     safe: [
       FS + `app.get("/file", (req, res) => { fs.readFile(path.join(UPLOADS, path.basename(req.query.name)), cb); });`,
-      FS + `app.get("/r", (req, res) => { const p = path.resolve(BASE, req.query.name); if (!p.startsWith(BASE)) return res.status(400).end(); fs.readFile(p, cb); });`,
+      FS +
+        `app.get("/r", (req, res) => { const p = path.resolve(BASE, req.query.name); if (!p.startsWith(BASE)) return res.status(400).end(); fs.readFile(p, cb); });`,
       FS + `app.get("/c", (req, res) => { fs.readFile("./config/app.json", cb); });`,
       `app.get("/v", (req, res) => { res.sendFile(req.query.name, { root: SAFE_DIR }); });`,
       `import { createReadStream } from "fast-csv";\napp.post("/x", (req, res) => { createReadStream(req.body.config); });`,

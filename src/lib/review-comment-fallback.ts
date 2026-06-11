@@ -55,12 +55,7 @@ const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
  *  Distinct key family from the regular pr-review dedupe so a
  *  comment-fallback record doesn't suppress a future successful
  *  formal-review submit on the same SHA (and vice versa). */
-function dedupeKeyForCommentFallback(args: {
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-}): string {
+function dedupeKeyForCommentFallback(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
   return `pr-review-comment-fallback:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
 }
 
@@ -165,10 +160,7 @@ export function renderReviewCommentFallback(args: {
   // `<!-- openclaw:pr-review -->` so a synth body still in the
   // pre-rebrand shape doesn't get a duplicate marker injected by the
   // defensive branch below.
-  if (
-    body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
-    body.includes(LEGACY_REVIEW_BODY_MARKER)
-  ) {
+  if (body.includes(SIGILIX_REVIEW_BODY_MARKER) || body.includes(LEGACY_REVIEW_BODY_MARKER)) {
     return `${header}${body}`
   }
   // Defensive: if the synth body somehow lacks the marker, inject
@@ -223,20 +215,24 @@ export async function postReviewCommentFallback(
   try {
     const existing = await env.OPENCLAW_STATE.get(key)
     if (existing) {
-      console.log(JSON.stringify({
-        event: "pr-review-comment-fallback-dedupe-hit",
-        ...tag,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-comment-fallback-dedupe-hit",
+          ...tag,
+        }),
+      )
       return { ok: true, reason: "dedupe-hit" }
     }
   } catch (err) {
     // KV read failure is not fatal — proceed without the dedupe
     // guard. Two comments are a worse-day failure mode than zero.
-    console.warn(JSON.stringify({
-      event: "pr-review-comment-fallback-dedupe-read-failed",
-      err: err instanceof Error ? err.message : String(err),
-      ...tag,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-comment-fallback-dedupe-read-failed",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
   }
 
   const commentBody = renderReviewCommentFallback({ body, submitPath, headSha })
@@ -252,30 +248,32 @@ export async function postReviewCommentFallback(
       // KV write failure is non-fatal — the comment is already
       // posted; a subsequent retry would just post a duplicate.
       // Log so we notice if this fires regularly.
-      console.warn(JSON.stringify({
-        event: "pr-review-comment-fallback-dedupe-write-failed",
-        err: err instanceof Error ? err.message : String(err),
-        ...tag,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-comment-fallback-dedupe-write-failed",
+          err: err instanceof Error ? err.message : String(err),
+          ...tag,
+        }),
+      )
     })
-    const commentId = typeof result === "object" && result !== null && "id" in result
-      ? Number(result.id)
-      : undefined
-    console.log(JSON.stringify({
-      event: "pr-review-comment-fallback-posted",
-      ...tag,
-      ...(commentId !== undefined ? { comment_id: commentId } : {}),
-    }))
-    return commentId !== undefined
-      ? { ok: true, reason: "posted", commentId }
-      : { ok: true, reason: "posted" }
+    const commentId = typeof result === "object" && result !== null && "id" in result ? Number(result.id) : undefined
+    console.log(
+      JSON.stringify({
+        event: "pr-review-comment-fallback-posted",
+        ...tag,
+        ...(commentId !== undefined ? { comment_id: commentId } : {}),
+      }),
+    )
+    return commentId !== undefined ? { ok: true, reason: "posted", commentId } : { ok: true, reason: "posted" }
   } catch (err) {
     const errStr = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "pr-review-comment-fallback-post-failed",
-      err: errStr,
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-review-comment-fallback-post-failed",
+        err: errStr,
+        ...tag,
+      }),
+    )
     return { ok: false, reason: "post-failed", error: errStr }
   }
 }
@@ -304,12 +302,7 @@ export type SkipNoticeReason =
   | "synth_invalid_provenance"
   | "internal_error"
 
-function dedupeKeyForSkipNotice(args: {
-  owner: string
-  repo: string
-  prNumber: number
-  headSha: string
-}): string {
+function dedupeKeyForSkipNotice(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
   return `pr-review-skip-notice:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
 }
 
@@ -330,14 +323,12 @@ export function renderReviewSkipNotice(args: {
 }): string {
   const { reason, headSha, dispatchedRoles } = args
   const sha7 = headSha.slice(0, 7)
-  const roles = dispatchedRoles && dispatchedRoles.length > 0
-    ? dispatchedRoles.join(", ")
-    : "logic, security, performance, tests"
+  const roles =
+    dispatchedRoles && dispatchedRoles.length > 0 ? dispatchedRoles.join(", ") : "logic, security, performance, tests"
   const explanation: Record<SkipNoticeReason, string> = {
     router_no_specialists:
       "The diff didn't match any specialist's domain (logic / security / performance / tests), so no specialist could run.",
-    specialists_all_failed:
-      `Every specialist the router dispatched (${roles}) failed to return a verdict (model timeout / rate-limit / parse-fail). Synth had no input to work with.`,
+    specialists_all_failed: `Every specialist the router dispatched (${roles}) failed to return a verdict (model timeout / rate-limit / parse-fail). Synth had no input to work with.`,
     synth_timeout:
       "The synth call timed out twice (primary + retry). Specialist verdicts were produced but couldn't be merged.",
     synth_failed_parse:
@@ -388,9 +379,7 @@ export type PostReviewSkipNoticeResult =
  *
  * Never throws — every failure path returns a structured result.
  */
-export async function postReviewSkipNotice(
-  args: PostReviewSkipNoticeArgs,
-): Promise<PostReviewSkipNoticeResult> {
+export async function postReviewSkipNotice(args: PostReviewSkipNoticeArgs): Promise<PostReviewSkipNoticeResult> {
   const { env, client, owner, repo, prNumber, headSha, reason, dispatchedRoles } = args
   const tag = { owner, repo, prNumber, headSha, skip_reason: reason }
   const key = dedupeKeyForSkipNotice({ owner, repo, prNumber, headSha })
@@ -398,18 +387,22 @@ export async function postReviewSkipNotice(
   try {
     const existing = await env.OPENCLAW_STATE.get(key)
     if (existing) {
-      console.log(JSON.stringify({
-        event: "pr-review-skip-notice-dedupe-hit",
-        ...tag,
-      }))
+      console.log(
+        JSON.stringify({
+          event: "pr-review-skip-notice-dedupe-hit",
+          ...tag,
+        }),
+      )
       return { ok: true, reason: "dedupe-hit" }
     }
   } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-skip-notice-dedupe-read-failed",
-      err: err instanceof Error ? err.message : String(err),
-      ...tag,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-skip-notice-dedupe-read-failed",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }),
+    )
   }
 
   const body = renderReviewSkipNotice({
@@ -423,30 +416,32 @@ export async function postReviewSkipNotice(
     await env.OPENCLAW_STATE.put(key, String(Date.now()), {
       expirationTtl: 7 * 24 * 60 * 60,
     }).catch((err) => {
-      console.warn(JSON.stringify({
-        event: "pr-review-skip-notice-dedupe-write-failed",
-        err: err instanceof Error ? err.message : String(err),
-        ...tag,
-      }))
+      console.warn(
+        JSON.stringify({
+          event: "pr-review-skip-notice-dedupe-write-failed",
+          err: err instanceof Error ? err.message : String(err),
+          ...tag,
+        }),
+      )
     })
-    const commentId = typeof result === "object" && result !== null && "id" in result
-      ? Number(result.id)
-      : undefined
-    console.log(JSON.stringify({
-      event: "pr-review-skip-notice-posted",
-      ...tag,
-      ...(commentId !== undefined ? { comment_id: commentId } : {}),
-    }))
-    return commentId !== undefined
-      ? { ok: true, reason: "posted", commentId }
-      : { ok: true, reason: "posted" }
+    const commentId = typeof result === "object" && result !== null && "id" in result ? Number(result.id) : undefined
+    console.log(
+      JSON.stringify({
+        event: "pr-review-skip-notice-posted",
+        ...tag,
+        ...(commentId !== undefined ? { comment_id: commentId } : {}),
+      }),
+    )
+    return commentId !== undefined ? { ok: true, reason: "posted", commentId } : { ok: true, reason: "posted" }
   } catch (err) {
     const errStr = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "pr-review-skip-notice-post-failed",
-      err: errStr,
-      ...tag,
-    }))
+    console.error(
+      JSON.stringify({
+        event: "pr-review-skip-notice-post-failed",
+        err: errStr,
+        ...tag,
+      }),
+    )
     return { ok: false, reason: "post-failed", error: errStr }
   }
 }

@@ -75,8 +75,11 @@ describe("parsePrImproveResponse", () => {
       summary: "x",
       suggestions: [
         {
-          path: "a.ts", line: 1, category: "blorp",
-          headline: "h", body: "b\n```suggestion\nfoo\n```",
+          path: "a.ts",
+          line: 1,
+          category: "blorp",
+          headline: "h",
+          body: "b\n```suggestion\nfoo\n```",
         },
       ],
     })
@@ -99,8 +102,11 @@ describe("parsePrImproveResponse", () => {
 
   it("caps suggestions at 5 even when the model returns more", () => {
     const tooMany = Array.from({ length: 8 }, (_, i) => ({
-      path: `f${i}.ts`, line: i + 1, category: "naming",
-      headline: "h", body: "b\n```suggestion\nx\n```",
+      path: `f${i}.ts`,
+      line: i + 1,
+      category: "naming",
+      headline: "h",
+      body: "b\n```suggestion\nx\n```",
     }))
     const json = JSON.stringify({ summary: "x", suggestions: tooMany })
     expect(parsePrImproveResponse(json)!.suggestions).toHaveLength(5)
@@ -156,10 +162,7 @@ describe("filterAnchorableSuggestions", () => {
 
   it("drops suggestions with no `\\`\\`\\`suggestion` block", () => {
     const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion({ body: "Just prose, no patch." })],
-      reviewable,
-    )
+    const out = filterAnchorableSuggestions([okSuggestion({ body: "Just prose, no patch." })], reviewable)
     expect(out).toHaveLength(0)
   })
 
@@ -175,7 +178,10 @@ describe("filterAnchorableSuggestions", () => {
   it("partitions unanchorable or prose-only suggestions into summary fallback instead of dropping them", () => {
     const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
     const proseOnly = okSuggestion({ body: "This can be simplified without a safe inline patch." })
-    const offDiff = okSuggestion({ line: 99, body: "Rename this.\n\n```suggestion\nconst name = value\n```" })
+    const offDiff = okSuggestion({
+      line: 99,
+      body: "Rename this.\n\n```suggestion\nconst name = value\n```",
+    })
     const out = partitionImproveSuggestions([okSuggestion(), proseOnly, offDiff], reviewable)
 
     expect(out.valid).toHaveLength(1)
@@ -206,10 +212,7 @@ describe("filterAnchorableSuggestions", () => {
 
   it("dedupes suggestions targeting the same anchor", () => {
     const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion(), okSuggestion({ headline: "duplicate" })],
-      reviewable,
-    )
+    const out = filterAnchorableSuggestions([okSuggestion(), okSuggestion({ headline: "duplicate" })], reviewable)
     expect(out).toHaveLength(1)
     expect(out[0]!.headline).toBe("h")
   })
@@ -220,10 +223,7 @@ describe("filterAnchorableSuggestions", () => {
       { path: "src/foo.ts", line: 11, side: "RIGHT" },
     ])
     const out = filterAnchorableSuggestions(
-      [
-        okSuggestion({ line: 10 }),
-        okSuggestion({ line: 11, startLine: 10 }),
-      ],
+      [okSuggestion({ line: 10 }), okSuggestion({ line: 11, startLine: 10 })],
       reviewable,
     )
     expect(out).toHaveLength(2)
@@ -243,13 +243,8 @@ describe("filterAnchorableSuggestions", () => {
   it("drops suggestions whose startLine isn't in-diff", () => {
     // line 10 is a valid RIGHT anchor, but startLine 5 is NOT in the
     // diff at all — would 422 the whole review.
-    const reviewable = makeReviewable([
-      { path: "src/foo.ts", line: 10, side: "RIGHT" },
-    ])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion({ line: 10, startLine: 5 })],
-      reviewable,
-    )
+    const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
+    const out = filterAnchorableSuggestions([okSuggestion({ line: 10, startLine: 5 })], reviewable)
     expect(out).toHaveLength(0)
   })
 
@@ -261,10 +256,7 @@ describe("filterAnchorableSuggestions", () => {
       { path: "src/foo.ts", line: 10, side: "RIGHT" },
       { path: "src/foo.ts", line: 8, side: "LEFT" },
     ])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion({ line: 10, startLine: 8 })],
-      reviewable,
-    )
+    const out = filterAnchorableSuggestions([okSuggestion({ line: 10, startLine: 8 })], reviewable)
     expect(out).toHaveLength(0)
   })
 
@@ -274,10 +266,7 @@ describe("filterAnchorableSuggestions", () => {
       { path: "src/foo.ts", line: 8, side: "RIGHT" },
       { path: "src/foo.ts", line: 9, side: "RIGHT" },
     ])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion({ line: 10, startLine: 8 })],
-      reviewable,
-    )
+    const out = filterAnchorableSuggestions([okSuggestion({ line: 10, startLine: 8 })], reviewable)
     expect(out).toHaveLength(1)
     expect(out[0]!.startLine).toBe(8)
   })
@@ -291,10 +280,7 @@ describe("filterAnchorableSuggestions", () => {
       { path: "src/foo.ts", line: 10, side: "RIGHT" },
       { path: "src/foo.ts", line: 13, side: "RIGHT" },
     ])
-    const out = filterAnchorableSuggestions(
-      [okSuggestion({ line: 13, startLine: 10 })],
-      reviewable,
-    )
+    const out = filterAnchorableSuggestions([okSuggestion({ line: 13, startLine: 10 })], reviewable)
     expect(out).toHaveLength(0)
   })
 })

@@ -18,25 +18,55 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const LOOP_TYPES: ReadonlySet<string> = new Set([
-  "ForStatement", "ForInStatement", "ForOfStatement",
-  "WhileStatement", "DoWhileStatement",
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
 ])
 const FUNCTION_BOUNDARY_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression",
-  "ArrowFunctionExpression", "MethodDefinition",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "MethodDefinition",
 ])
 
 // Known DB-client roots whose `.query(…)` is a database round-trip.
 const QUERY_ROOTS: ReadonlySet<string> = new Set(["db", "pool", "client", "connection"])
 // axios HTTP verbs.
-const AXIOS_METHODS: ReadonlySet<string> = new Set(["get", "post", "put", "delete", "patch", "options", "head", "request"])
+const AXIOS_METHODS: ReadonlySet<string> = new Set([
+  "get",
+  "post",
+  "put",
+  "delete",
+  "patch",
+  "options",
+  "head",
+  "request",
+])
 // Prisma data-access methods (a model method that is NOT one of these is
 // likely a user helper, so we don't flag it).
 const PRISMA_METHODS: ReadonlySet<string> = new Set([
-  "findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "findMany",
-  "create", "createMany", "update", "updateMany", "upsert",
-  "delete", "deleteMany", "count", "aggregate", "groupBy",
-  "$queryRaw", "$executeRaw", "$queryRawUnsafe", "$executeRawUnsafe", "$transaction",
+  "findUnique",
+  "findUniqueOrThrow",
+  "findFirst",
+  "findFirstOrThrow",
+  "findMany",
+  "create",
+  "createMany",
+  "update",
+  "updateMany",
+  "upsert",
+  "delete",
+  "deleteMany",
+  "count",
+  "aggregate",
+  "groupBy",
+  "$queryRaw",
+  "$executeRaw",
+  "$queryRawUnsafe",
+  "$executeRawUnsafe",
+  "$transaction",
 ])
 // Supabase query-builder terminal/initiator methods.
 const SUPABASE_METHODS: ReadonlySet<string> = new Set(["select", "insert", "update", "delete", "upsert", "rpc"])
@@ -161,7 +191,8 @@ export const noNPlusOneCallInLoop: AstRule = {
     walk(node, 0)
     if (hits.length === 0) return null
     return hits.map((h) => ({
-      message: "Awaiting a data-access call inside a loop runs one round-trip per iteration (N+1). Batch the work into a single query/request, or collect the promises and `await Promise.all(…)`.",
+      message:
+        "Awaiting a data-access call inside a loop runs one round-trip per iteration (N+1). Batch the work into a single query/request, or collect the promises and `await Promise.all(…)`.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,

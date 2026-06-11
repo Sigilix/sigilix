@@ -49,15 +49,17 @@ export interface AdvisoryDb {
 }
 
 const VALID_SEVERITY: ReadonlySet<SeverityClass> = new Set(["low", "medium", "high", "critical"])
-const VALID_SOURCES: ReadonlySet<AdvisoryRecord["source"]> = new Set([
-  "github", "npm", "snyk", "aikido",
-])
+const VALID_SOURCES: ReadonlySet<AdvisoryRecord["source"]> = new Set(["github", "npm", "snyk", "aikido"])
 
 function isAdvisoryRangeRecord(v: unknown): v is AdvisoryRangeRecord {
   if (!v || typeof v !== "object") return false
   const o = v as Record<string, unknown>
-  return typeof o.vulnerable_range === "string" && o.vulnerable_range.length > 0
-    && typeof o.patched_in === "string" && o.patched_in.length > 0
+  return (
+    typeof o.vulnerable_range === "string" &&
+    o.vulnerable_range.length > 0 &&
+    typeof o.patched_in === "string" &&
+    o.patched_in.length > 0
+  )
 }
 
 function isAdvisoryRecord(v: unknown): v is AdvisoryRecord {

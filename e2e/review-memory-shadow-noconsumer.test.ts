@@ -15,10 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // The block relocated as one unit, so the consumer-less ordering invariants this
 // guard pins (shadowRows / shadowMemoriesForPhase3 / shadowEvent all precede
 // findingMarkers) still hold within the carved file.
-const ENSEMBLE = readFileSync(
-  resolve(here, "../src/lib/ensemble/app/verification-prep.ts"),
-  "utf8",
-)
+const ENSEMBLE = readFileSync(resolve(here, "../src/lib/ensemble/app/verification-prep.ts"), "utf8")
 
 // The marker-building declaration is the "start of the posting path" landmark
 // the ordering guards anchor on. One lookup, validated once (CodeRabbit #257).

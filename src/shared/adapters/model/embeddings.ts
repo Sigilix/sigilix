@@ -23,9 +23,7 @@ export async function embedText(ai: AiBinding, text: string): Promise<number[]> 
   const result = await ai.run(EMBEDDING_MODEL, { text: trimmed })
   const first = result.data?.[0]
   if (!Array.isArray(first) || first.length !== EMBEDDING_DIMENSIONS) {
-    throw new Error(
-      `embedText: unexpected shape — got ${first?.length ?? "no"} dims, want ${EMBEDDING_DIMENSIONS}`
-    )
+    throw new Error(`embedText: unexpected shape — got ${first?.length ?? "no"} dims, want ${EMBEDDING_DIMENSIONS}`)
   }
   return first
 }

@@ -32,32 +32,16 @@
 
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import { postReviewSkipNotice, type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
-import {
-  type SpecialistRole,
-} from "@/src/lib/ensemble-router"
-import {
-  createRetrievalCache,
-} from "@/src/lib/retrieval-cache"
-import {
-  passesLabelGate,
-} from "@/src/lib/sigilix-config"
+import { type SpecialistRole } from "@/src/lib/ensemble-router"
+import { createRetrievalCache } from "@/src/lib/retrieval-cache"
+import { passesLabelGate } from "@/src/lib/sigilix-config"
 import { createAstCache, type AstCache } from "@/src/features/ast-rules"
 import { handleStaleHead } from "@/src/lib/stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "@/src/lib/merge-guard"
-import {
-  type EnsembleRunCtx,
-} from "@/src/lib/ensemble-perf-telemetry"
-import {
-  type TokenUsageByModel,
-  makeTokenRecorder,
-} from "@/src/lib/ensemble-slo-telemetry"
-import {
-  type ShadowRunResult,
-} from "@/src/lib/shadow-bakeoff-runner"
-import {
-  ORCHESTRATOR_TIMEOUT_MS,
-  SHADOW_FINALIZE_GRACE_MS,
-} from "@/src/lib/ensemble/domain/budget"
+import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
+import { type TokenUsageByModel, makeTokenRecorder } from "@/src/lib/ensemble-slo-telemetry"
+import { type ShadowRunResult } from "@/src/lib/shadow-bakeoff-runner"
+import { ORCHESTRATOR_TIMEOUT_MS, SHADOW_FINALIZE_GRACE_MS } from "@/src/lib/ensemble/domain/budget"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
@@ -66,11 +50,7 @@ import {
   type ValidatedOutput,
 } from "@/src/lib/ensemble/domain/validation"
 import { adjudicateFindings } from "./adjudicate"
-import {
-  settleShadowBakeoff,
-  type ShadowBakeoffState,
-  type ProdSpecialistSnapshot,
-} from "./shadow-settle"
+import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
 import { runSpecialistsAndSynthesize } from "./specialists"
 import { fetchDiffAndConfig, packAndRoute } from "./context/fetch-and-pack"
 import { gatherRetrievalEvidence } from "./context/gather-evidence"
@@ -79,15 +59,9 @@ import { assembleSpecialistPrompts } from "./context/assemble-prompts"
 import { prepareRender } from "./render-prep"
 import { verifyAndBuildSubmission } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
-import {
-  finalize,
-  type ReviewMeta,
-} from "./session"
+import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
-import {
-  buildClient,
-  verifyReviewPersisted,
-} from "@/src/lib/ensemble/adapters/review-sink"
+import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -138,15 +112,11 @@ export type { EnsembleHandlerArgs }
  * orchestrator is thinned (PR 12). Exported so the inject-vs-parse contract is
  * unit-tested directly.
  */
-export function resolveEnsembleConfig(
-  args: Pick<EnsembleHandlerArgs, "env" | "ensembleConfig">,
-): EnsembleConfig {
+export function resolveEnsembleConfig(args: Pick<EnsembleHandlerArgs, "env" | "ensembleConfig">): EnsembleConfig {
   return args.ensembleConfig ?? parseEnsembleConfig(args.env)
 }
 
-export async function handlePrReviewEnsemble(
-  args: EnsembleHandlerArgs,
-): Promise<EnsembleResult> {
+export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise<EnsembleResult> {
   // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode
   // routing (shadow vs post) is gone; this handler is the only
   // production review path. The `EnsembleTelemetry.mode` field is
@@ -256,7 +226,26 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedLogicClaimRefutation: 0, droppedForFailedRefutationSurvival: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
+    postValidation: {
+      droppedForInvalidLine: 0,
+      remappedInvalidLineToInline: 0,
+      droppedForHallucination: 0,
+      demotedScore1: 0,
+      droppedForVaguePrefix: 0,
+      droppedForUncitedTestingEvidence: 0,
+      droppedForFailedValidation: 0,
+      droppedForFailedTestValidation: 0,
+      droppedForFailedLogicValidation: 0,
+      droppedForFailedLogicRefutation: 0,
+      droppedForFailedLogicClaimRefutation: 0,
+      droppedForFailedRefutationSurvival: 0,
+      droppedForFailedPerfValidation: 0,
+      droppedForFailedInlineGroundingValidation: 0,
+      droppedForFailedAbsenceGroundingValidation: 0,
+      droppedForFailedWindowBlindnessValidation: 0,
+      droppedForFailedSecurityGroundingValidation: 0,
+      droppedForFailedSecurityUsageValidation: 0,
+    },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -286,7 +275,13 @@ export async function handlePrReviewEnsemble(
       opts?: { dispatchedRoles?: readonly string[] },
     ): Promise<EnsembleResult> => {
       const out = await postReviewSkipNotice({
-        env, client, owner, repo, prNumber, headSha, reason,
+        env,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        reason,
         ...(opts?.dispatchedRoles !== undefined ? { dispatchedRoles: opts.dispatchedRoles } : {}),
       })
       // `ok && reason === "posted"` → a fresh comment is on the PR.
@@ -319,7 +314,11 @@ export async function handlePrReviewEnsemble(
       // the dispatcher does NOT fall through to Phase 3 (which would
       // also stale-head and post a duplicate sticky / second requeue).
       await handleStaleHead({
-        env, owner, repo, prNumber, installationId,
+        env,
+        owner,
+        repo,
+        prNumber,
+        installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta.head.sha,
         baseSha: meta.base?.sha ?? null,
@@ -348,7 +347,11 @@ export async function handlePrReviewEnsemble(
       const mergedAtMs = new Date(meta.merged_at).getTime()
       telemetry.fellBackReason = "merged_before_fanout"
       const out = await submitMergedOnApprove({
-        client, owner, repo, prNumber, headSha,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
         stage: "pre-fanout",
         mergedAtMs,
         startMs,
@@ -362,8 +365,13 @@ export async function handlePrReviewEnsemble(
         // results we still claim `posted` (matches the standard
         // path's semantics on capped/error returns).
         await verifyReviewPersisted(
-          client, owner, repo, prNumber, out.reviewId,
-          "merged-on-approve-pre-fanout", out.state,
+          client,
+          owner,
+          repo,
+          prNumber,
+          out.reviewId,
+          "merged-on-approve-pre-fanout",
+          out.state,
         )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
@@ -390,7 +398,14 @@ export async function handlePrReviewEnsemble(
     // stays orchestral. It mutates `telemetry.incrementalReview` by reference.
     // `sigilixConfig` is a `let` — `packAndRoute` reassigns it on the AI-ingest path.
     const fetched = await fetchDiffAndConfig({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      telemetry,
     })
     const { fullPrDiff, openPrsForStack, fullDiff, shouldLoadAiInstructions, costControls } = fetched
     let sigilixConfig = fetched.sigilixConfig
@@ -402,17 +417,20 @@ export async function handlePrReviewEnsemble(
     // dispatcher-owned Check Run completes as `neutral` rather
     // than misclassifying as a failed review.
     if (costControls.runOnLabels.length > 0) {
-      const labelNames = (meta.labels ?? [])
-        .map((l) => l.name)
-        .filter((n): n is string => typeof n === "string")
+      const labelNames = (meta.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === "string")
       if (!passesLabelGate(labelNames, costControls.runOnLabels)) {
-        console.log(JSON.stringify({
-          event: "pr-review-skipped",
-          reason: "label-gate",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          pr_labels: labelNames,
-          run_on_labels: [...costControls.runOnLabels],
-        }))
+        console.log(
+          JSON.stringify({
+            event: "pr-review-skipped",
+            reason: "label-gate",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            pr_labels: labelNames,
+            run_on_labels: [...costControls.runOnLabels],
+          }),
+        )
         telemetry.fellBackReason = "label_gate_skip"
         // SIG-224 Phase 0 follow-along: thread `reviewMeta` so the
         // Check Run renders "Approved — no issues found · Sigilix
@@ -438,8 +456,20 @@ export async function handlePrReviewEnsemble(
     // deterministicChecks / secretScan / router writes) by reference; the final
     // (post-dispatcher) router flows out for the orchestral router-empty gate below.
     const packed = await packAndRoute({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, orchCtrl, meta,
-      fullDiff, sigilixConfig, shouldLoadAiInstructions, costControls, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      orchCtrl,
+      meta,
+      fullDiff,
+      sigilixConfig,
+      shouldLoadAiInstructions,
+      costControls,
+      telemetry,
     })
     sigilixConfig = packed.sigilixConfig
     const {
@@ -483,7 +513,7 @@ export async function handlePrReviewEnsemble(
       // dynamic dispatcher starts skipping legitimately-not-applicable
       // specialists more often, this path will fire more often, and the
       // wrong "couldn't review" surface would be customer-visible noise.
-      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+      telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
       return finalize(telemetry, env, "skipped", cache, {
         event: "APPROVE",
@@ -499,8 +529,21 @@ export async function handlePrReviewEnsemble(
     // returns the retrieval cache so the orchestrator's `let cache` (the finally-
     // cleanup reads its stats) is reassigned — the 12a pre-try-let pattern.
     const evidence = await gatherRetrievalEvidence({
-      env, client, owner, repo, prNumber, headSha, ensembleConfig, perfCtx, orchCtrl,
-      meta, sigilixConfig, router, diff, filePaths, telemetry,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      ensembleConfig,
+      perfCtx,
+      orchCtrl,
+      meta,
+      sigilixConfig,
+      router,
+      diff,
+      filePaths,
+      telemetry,
     })
     cache = evidence.cache
     const {
@@ -525,13 +568,31 @@ export async function handlePrReviewEnsemble(
     // are reassigned. The graph-context-format + ast-scan-gate pure helpers
     // relocated to the domain (re-exported below to preserve the public surface).
     const graphEvidence = await gatherGraphEvidence({
-      env, client, owner, repo, prNumber, headSha,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
       ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
-      ensembleConfig, meta, sigilixConfig, diff, fullDiff, wasTruncated, reviewable,
-      filePaths, splitFiles, sharedChunksForOverlap, astFilesByPath, astCache,
-      astRulesConfig, orchCtrl,
+      ensembleConfig,
+      meta,
+      sigilixConfig,
+      diff,
+      fullDiff,
+      wasTruncated,
+      reviewable,
+      filePaths,
+      splitFiles,
+      sharedChunksForOverlap,
+      astFilesByPath,
+      astCache,
+      astRulesConfig,
+      orchCtrl,
       ...(args.graphMetricsSink !== undefined ? { graphMetricsSink: args.graphMetricsSink } : {}),
-      ...(args.graphExpansionMetricsSink !== undefined ? { graphExpansionMetricsSink: args.graphExpansionMetricsSink } : {}),
+      ...(args.graphExpansionMetricsSink !== undefined
+        ? { graphExpansionMetricsSink: args.graphExpansionMetricsSink }
+        : {}),
       telemetry,
     })
     runnerEvidenceBadge = graphEvidence.runnerEvidenceBadge
@@ -562,14 +623,49 @@ export async function handlePrReviewEnsemble(
     // two closures are RETURNED (they hide their captures); every other value the
     // downstream phases consume flows out unchanged.
     const prompts = await assembleSpecialistPrompts({
-      env, client, owner, repo, prNumber, headSha, mode, orchCtrlSignal: orchCtrl.signal,
-      meta, sigilixConfig, diff, fullDiff, fullPrDiff, filePaths, splitFiles,
-      filesAfterFilter, reviewedFiles, matchedPathInstructions, scopedRulesBlock,
-      openPrsForStack, deterministicHits, secretHits, depVulnFindings, depVulnBlock,
-      retrievalSnapshot, perfRetrievalSnapshot, logicSymbolSnapshot, sharedChunksForOverlap,
-      astFilesByPath, astCache, astRulesConfig, asymmetryMode, toctouMode, namespace,
-      astResult, sarifFindings, sarifBlock, docsCoverageHit, perfBudgetsHit, coverageResult,
-      graphCtxForPrompt, graphContextNodesForEvidence, graphBlastCallerPaths,
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      mode,
+      orchCtrlSignal: orchCtrl.signal,
+      meta,
+      sigilixConfig,
+      diff,
+      fullDiff,
+      fullPrDiff,
+      filePaths,
+      splitFiles,
+      filesAfterFilter,
+      reviewedFiles,
+      matchedPathInstructions,
+      scopedRulesBlock,
+      openPrsForStack,
+      deterministicHits,
+      secretHits,
+      depVulnFindings,
+      depVulnBlock,
+      retrievalSnapshot,
+      perfRetrievalSnapshot,
+      logicSymbolSnapshot,
+      sharedChunksForOverlap,
+      astFilesByPath,
+      astCache,
+      astRulesConfig,
+      asymmetryMode,
+      toctouMode,
+      namespace,
+      astResult,
+      sarifFindings,
+      sarifBlock,
+      docsCoverageHit,
+      perfBudgetsHit,
+      coverageResult,
+      graphCtxForPrompt,
+      graphContextNodesForEvidence,
+      graphBlastCallerPaths,
       graphBlastDependentPaths,
     })
     const {
@@ -637,31 +733,32 @@ export async function handlePrReviewEnsemble(
     // moved verbatim to ensemble/app/adjudicate. The phase mutates `telemetry`
     // (synthesizer re-point + postValidation) and `validated` (in-place clamps)
     // by reference; the consensus outputs flow downstream unchanged.
-    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } = adjudicateFindings({
-      env,
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      ensembleConfig,
-      telemetry,
-      validationSink: args.validationSink,
-      sigilixConfig,
-      fullPrDiff,
-      wasTruncated,
-      droppedTooLarge,
-      reviewable,
-      astFilesByPath,
-      astCache,
-      astResult,
-      coverageGapSet,
-      securityManifest,
-      changedLineTextByPath,
-      testingEvidencePackWithCoverage,
-      synthInputVerdicts,
-      effectiveSynthVerdict,
-      effectiveSynthProvenance,
-    })
+    const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } =
+      adjudicateFindings({
+        env,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        ensembleConfig,
+        telemetry,
+        validationSink: args.validationSink,
+        sigilixConfig,
+        fullPrDiff,
+        wasTruncated,
+        droppedTooLarge,
+        reviewable,
+        astFilesByPath,
+        astCache,
+        astResult,
+        coverageGapSet,
+        securityManifest,
+        changedLineTextByPath,
+        testingEvidencePackWithCoverage,
+        synthInputVerdicts,
+        effectiveSynthVerdict,
+        effectiveSynthProvenance,
+      })
 
     // ARC-280: shadow-mode branch deleted. The dual-mode routing
     // (shadow vs post) is gone — post is the only mode. The
@@ -687,7 +784,11 @@ export async function handlePrReviewEnsemble(
       // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
       await handleStaleHead({
-        env, owner, repo, prNumber, installationId,
+        env,
+        owner,
+        repo,
+        prNumber,
+        installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta2.head.sha,
         baseSha: meta2.base?.sha ?? null,
@@ -794,7 +895,11 @@ export async function handlePrReviewEnsemble(
     if (mergeGuard.shouldSkip) {
       telemetry.fellBackReason = "merged_during_review"
       const out = await submitMergedOnApprove({
-        client, owner, repo, prNumber, headSha,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
         stage: "pre-submit",
         mergedAtMs: mergeGuard.mergedAtMs,
         startMs,
@@ -803,8 +908,13 @@ export async function handlePrReviewEnsemble(
         // CR PR #104 Major catch: same post-submit verification as the
         // pre-fanout branch above. See that block for the rationale.
         await verifyReviewPersisted(
-          client, owner, repo, prNumber, out.reviewId,
-          "merged-on-approve-pre-submit", out.state,
+          client,
+          owner,
+          repo,
+          prNumber,
+          out.reviewId,
+          "merged-on-approve-pre-submit",
+          out.state,
         )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
@@ -929,7 +1039,7 @@ export async function handlePrReviewEnsemble(
       deterministicErroredReviewMeta,
     })
   } catch (e) {
-    telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+    telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
     telemetry.internalError = e instanceof Error ? e.message : String(e)
     // ARC-280 follow-up: the internal_error path doesn't post a

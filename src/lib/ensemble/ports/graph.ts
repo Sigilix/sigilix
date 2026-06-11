@@ -6,10 +6,7 @@
 // Types only; the payload vocabulary comes from the `@/shared/domain/graph-context`
 // leaf, never the `@/do/repo-graph` infra layer.
 
-import type {
-  GraphContextNode,
-  GraphContextExpansion,
-} from "@/src/shared/domain/graph-context"
+import type { GraphContextNode, GraphContextExpansion } from "@/src/shared/domain/graph-context"
 
 export interface GraphPort {
   /**

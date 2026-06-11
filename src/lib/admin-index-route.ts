@@ -49,12 +49,7 @@ export async function handleAdminIndexRoute(request: Request, env: Env): Promise
     return json({ error: "github_app_not_configured" }, 503)
   }
 
-  const installationId = await resolveRepoInstallationId(
-    env.GITHUB_APP_ID,
-    env.GITHUB_PRIVATE_KEY,
-    owner,
-    repo,
-  )
+  const installationId = await resolveRepoInstallationId(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY, owner, repo)
   if (installationId === null) {
     return json({ error: "installation_not_found", detail: `app not installed on ${owner}/${repo}` }, 404)
   }
@@ -110,10 +105,7 @@ export async function handleAdminBackfillRoute(request: Request, env: Env): Prom
  * structured summary so the operator can re-run on the specific
  * `failed` repos.
  */
-export async function handleAdminMigrateToRepoIdRoute(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+export async function handleAdminMigrateToRepoIdRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_ADMIN_TOKEN
   if (!token) {
     return json({ error: "admin_endpoint_not_configured" }, 503)
@@ -173,10 +165,7 @@ export async function handleAdminMigrateToRepoIdRoute(
  * after a 7-day safety window — this PR explicitly does NOT touch
  * legacy keys.
  */
-export async function handleAdminMigrateReviewMemoryToRepoIdRoute(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+export async function handleAdminMigrateReviewMemoryToRepoIdRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_ADMIN_TOKEN
   if (!token) {
     return json({ error: "admin_endpoint_not_configured" }, 503)
@@ -191,16 +180,11 @@ export async function handleAdminMigrateReviewMemoryToRepoIdRoute(
   const url = new URL(request.url)
   const installationIdRaw = url.searchParams.get("installationId")?.trim()
   const installationId =
-    installationIdRaw === undefined ||
-    installationIdRaw === null ||
-    installationIdRaw === ""
+    installationIdRaw === undefined || installationIdRaw === null || installationIdRaw === ""
       ? NaN
       : Number(installationIdRaw)
   if (!Number.isInteger(installationId) || installationId <= 0) {
-    return json(
-      { error: "missing_or_invalid_installation_id", detail: "pass ?installationId=N" },
-      400,
-    )
+    return json({ error: "missing_or_invalid_installation_id", detail: "pass ?installationId=N" }, 400)
   }
   const dryRun = url.searchParams.get("dryRun") === "true"
 

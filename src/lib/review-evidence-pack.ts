@@ -83,9 +83,7 @@ export interface BuildDynamicReviewEvidencePackArgs {
   astCache?: AstCache
 }
 
-export function dynamicReviewEvidenceMode(
-  env: DynamicReviewEvidenceEnv,
-): DynamicReviewEvidenceMode {
+export function dynamicReviewEvidenceMode(env: DynamicReviewEvidenceEnv): DynamicReviewEvidenceMode {
   const v = (env.OPENCLAW_DYNAMIC_REVIEW_EVIDENCE ?? "").trim().toLowerCase()
   if (v === "post") return "post"
   if (v === "shadow") return "shadow"
@@ -96,9 +94,7 @@ export function dynamicReviewEvidenceEnabled(env: DynamicReviewEvidenceEnv): boo
   return dynamicReviewEvidenceMode(env) !== "off"
 }
 
-export function buildDynamicReviewEvidencePack(
-  args: BuildDynamicReviewEvidencePackArgs,
-): DynamicReviewEvidencePack {
+export function buildDynamicReviewEvidencePack(args: BuildDynamicReviewEvidencePackArgs): DynamicReviewEvidencePack {
   const maxCards = clampPositiveInt(args.maxCards, DEFAULT_MAX_CARDS)
   const reviewablePathSet = new Set(args.reviewablePaths ?? [...args.filesByPath.keys()])
   const cards: DynamicReviewEvidenceCard[] = []
@@ -121,41 +117,41 @@ export function buildDynamicReviewEvidencePack(
 
     for (const symbol of symbols) {
       if (cards.length >= maxCards) break
-      const changedLinesForSymbol = changedLinesWithinSpan(
-        pathChangedLines,
-        symbol.startLine,
-        symbol.endLine,
-      )
+      const changedLinesForSymbol = changedLinesWithinSpan(pathChangedLines, symbol.startLine, symbol.endLine)
       const uncovered = changedLinesForSymbol.filter((line) => !coveredChangedLines.has(line))
       if (uncovered.length === 0) continue
       const linesForCard = uncovered.slice(0, MAX_CHANGED_LINES_PER_CARD)
       for (const line of linesForCard) coveredChangedLines.add(line)
-      cards.push(buildCard({
-        path,
-        source,
-        changedLinesForCard: linesForCard,
-        symbol,
-        graphNodes: args.graphNodes ?? [],
-        blastCallerPaths: args.blastCallerPaths ?? [],
-        blastDependentPaths: args.blastDependentPaths ?? [],
-        retrievalChunks: args.retrievalChunks ?? [],
-        testingEvidence: args.testingEvidence,
-      }))
+      cards.push(
+        buildCard({
+          path,
+          source,
+          changedLinesForCard: linesForCard,
+          symbol,
+          graphNodes: args.graphNodes ?? [],
+          blastCallerPaths: args.blastCallerPaths ?? [],
+          blastDependentPaths: args.blastDependentPaths ?? [],
+          retrievalChunks: args.retrievalChunks ?? [],
+          testingEvidence: args.testingEvidence,
+        }),
+      )
     }
 
     const remainingChangedLines = pathChangedLines.filter((line) => !coveredChangedLines.has(line))
     if (cards.length < maxCards && remainingChangedLines.length > 0) {
-      cards.push(buildCard({
-        path,
-        source,
-        changedLinesForCard: remainingChangedLines.slice(0, MAX_CHANGED_LINES_PER_CARD),
-        symbol: null,
-        graphNodes: args.graphNodes ?? [],
-        blastCallerPaths: args.blastCallerPaths ?? [],
-        blastDependentPaths: args.blastDependentPaths ?? [],
-        retrievalChunks: args.retrievalChunks ?? [],
-        testingEvidence: args.testingEvidence,
-      }))
+      cards.push(
+        buildCard({
+          path,
+          source,
+          changedLinesForCard: remainingChangedLines.slice(0, MAX_CHANGED_LINES_PER_CARD),
+          symbol: null,
+          graphNodes: args.graphNodes ?? [],
+          blastCallerPaths: args.blastCallerPaths ?? [],
+          blastDependentPaths: args.blastDependentPaths ?? [],
+          retrievalChunks: args.retrievalChunks ?? [],
+          testingEvidence: args.testingEvidence,
+        }),
+      )
     }
   }
 
@@ -173,9 +169,7 @@ export function renderDynamicReviewEvidenceBlock(pack: DynamicReviewEvidencePack
 
   for (let i = 0; i < pack.cards.length; i++) {
     const card = pack.cards[i]!
-    const subject = card.symbolName
-      ? `${card.symbolKind ?? "symbol"} \`${card.symbolName}\``
-      : "changed file region"
+    const subject = card.symbolName ? `${card.symbolKind ?? "symbol"} \`${card.symbolName}\`` : "changed file region"
     lines.push(
       `Card ${i + 1}: ${card.path}:${card.startLine}-${card.endLine} — ${subject}`,
       `Changed lines: ${card.changedLines.join(", ")}`,
@@ -261,16 +255,12 @@ function sortedChangedLines(changedLines: ChangedLines, path: string): number[] 
   return [...(changedLines.get(path) ?? [])].sort((a, b) => a - b)
 }
 
-function changedLinesWithinSpan(
-  changedLines: readonly number[],
-  startLine: number,
-  endLine: number,
-): number[] {
+function changedLinesWithinSpan(changedLines: readonly number[], startLine: number, endLine: number): number[] {
   return changedLines.filter((line) => line >= startLine && line <= endLine)
 }
 
 function compareSymbolsBySpecificity(a: GraphSymbol, b: GraphSymbol): number {
-  const spanDiff = (a.endLine - a.startLine) - (b.endLine - b.startLine)
+  const spanDiff = a.endLine - a.startLine - (b.endLine - b.startLine)
   if (spanDiff !== 0) return spanDiff
   const startDiff = a.startLine - b.startLine
   if (startDiff !== 0) return startDiff
@@ -383,18 +373,13 @@ function chunkExcerpt(content: string, symbolPattern: RegExp | null): string {
     if (hit >= 0) start = Math.max(0, hit - 2)
   }
   const excerpt = lines.slice(start, start + MAX_RETRIEVAL_EXCERPT_LINES).join("\n")
-  return excerpt.length > MAX_RETRIEVAL_EXCERPT_CHARS
-    ? `${excerpt.slice(0, MAX_RETRIEVAL_EXCERPT_CHARS)}…`
-    : excerpt
+  return excerpt.length > MAX_RETRIEVAL_EXCERPT_CHARS ? `${excerpt.slice(0, MAX_RETRIEVAL_EXCERPT_CHARS)}…` : excerpt
 }
 
 function identifierPattern(identifier: string | null): RegExp | null {
   if (identifier === null || identifier.length === 0) return null
   const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(
-    `(?<![$_\\p{ID_Continue}\\u200C\\u200D])${escaped}(?![$_\\p{ID_Continue}\\u200C\\u200D])`,
-    "u",
-  )
+  return new RegExp(`(?<![$_\\p{ID_Continue}\\u200C\\u200D])${escaped}(?![$_\\p{ID_Continue}\\u200C\\u200D])`, "u")
 }
 
 function buildTestingContext(
@@ -418,9 +403,7 @@ function buildTestingContext(
 
   const helperCoverage = testingEvidence.helperCoverageBySource[path]
   if (helperCoverage) {
-    const helpers = helperCoverage.helpers.length > 0
-      ? ` helpers=${helperCoverage.helpers.slice(0, 3).join(",")}`
-      : ""
+    const helpers = helperCoverage.helpers.length > 0 ? ` helpers=${helperCoverage.helpers.slice(0, 3).join(",")}` : ""
     const glue = helperCoverage.structurallyGlue ? " structurallyGlue=true" : ""
     helperCoverageRefs.push(`helperCoverage:${path}:${helperCoverage.status}${helpers}${glue}`)
   }
@@ -467,7 +450,10 @@ function longestBacktickRun(text: string): number {
 }
 
 function indentBlockLines(text: string, prefix: string): string {
-  return text.split("\n").map((line) => `${prefix}${line}`).join("\n")
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n")
 }
 
 function clampPositiveInt(value: number | undefined, fallback: number): number {

@@ -9,11 +9,7 @@ import {
   pruneStaleSignals,
   unionRecords,
 } from "@/src/lib/review-memory/storage"
-import type {
-  ReviewMemoryRecord,
-  ReviewMemorySignal,
-  ReviewMemoryStorageScope,
-} from "@/src/lib/review-memory/types"
+import type { ReviewMemoryRecord, ReviewMemorySignal, ReviewMemoryStorageScope } from "@/src/lib/review-memory/types"
 import type { Env } from "@/src/shared/types/env"
 
 // ─── KV stub matching the existing project convention ─────────
@@ -52,8 +48,7 @@ function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
   return { OPENCLAW_STATE: kv } as unknown as Env
 }
 
-const SAMPLE_SHA256 =
-  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+const SAMPLE_SHA256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
 function makeSignal(over: Partial<ReviewMemorySignal> = {}): ReviewMemorySignal {
   return {
@@ -70,9 +65,9 @@ function makeSignal(over: Partial<ReviewMemorySignal> = {}): ReviewMemorySignal 
 
 describe("buildKey", () => {
   it("category scope: review-memory:<owner>/<repo>:cat:<category>", () => {
-    expect(
-      buildKey("acme", "site", { kind: "category", category: "performance" }),
-    ).toBe("review-memory:acme/site:cat:performance")
+    expect(buildKey("acme", "site", { kind: "category", category: "performance" })).toBe(
+      "review-memory:acme/site:cat:performance",
+    )
   })
 
   it("path-category scope: review-memory:<owner>/<repo>:path:<sha256>:cat:<category>", () => {
@@ -92,9 +87,9 @@ describe("buildKey", () => {
     // architectural-misunderstanding patterns (PR #202 "tenant
     // isolation", PR #203 "ownership validation") — the dismissals
     // need a category to land under, and "architecture" is it.
-    expect(
-      buildKey("acme", "site", { kind: "category", category: "architecture" }),
-    ).toBe("review-memory:acme/site:cat:architecture")
+    expect(buildKey("acme", "site", { kind: "category", category: "architecture" })).toBe(
+      "review-memory:acme/site:cat:architecture",
+    )
     expect(
       buildKey("acme", "site", {
         kind: "path-category",
@@ -295,32 +290,30 @@ describe("appendSignal", () => {
     const seed: ReviewMemoryRecord = {
       schemaVersion: 1,
       category: "logic",
-      signals: [
-        makeSignal({ ts: oldTs, commentId: 1 }),
-        makeSignal({ ts: recent, commentId: 2 }),
-      ],
+      signals: [makeSignal({ ts: oldTs, commentId: 1 }), makeSignal({ ts: recent, commentId: 2 })],
       lastUpdatedTs: oldTs,
     }
     store.set(buildKey(owner, repo, scope), JSON.stringify(seed))
     const env = makeEnv(kv)
     await appendSignal(env, owner, repo, scope, makeSignal({ commentId: 3 }))
     const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
-    expect(stored.signals.length).toBe(2)  // 200d-old pruned, kept #2 + #3
-    expect(stored.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
-      .toEqual([2, 3])
+    expect(stored.signals.length).toBe(2) // 200d-old pruned, kept #2 + #3
+    expect(stored.signals.map((s: ReviewMemorySignal) => s.commentId).sort()).toEqual([2, 3])
   })
 
   it("FIFO-caps at 50 signals — 51st write evicts the oldest", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     // Pre-seed 50 sorted-by-ts signals
-    const baseMs = Date.now() - 60 * 24 * 60 * 60 * 1000  // 60 days ago
+    const baseMs = Date.now() - 60 * 24 * 60 * 60 * 1000 // 60 days ago
     const signals: ReviewMemorySignal[] = []
     for (let i = 0; i < 50; i++) {
-      signals.push(makeSignal({
-        ts: new Date(baseMs + i * 60_000).toISOString(),
-        commentId: 1000 + i,
-      }))
+      signals.push(
+        makeSignal({
+          ts: new Date(baseMs + i * 60_000).toISOString(),
+          commentId: 1000 + i,
+        }),
+      )
     }
     const seed: ReviewMemoryRecord = {
       schemaVersion: 1,
@@ -331,10 +324,16 @@ describe("appendSignal", () => {
     store.set(buildKey(owner, repo, scope), JSON.stringify(seed))
 
     // 51st append
-    await appendSignal(env, owner, repo, scope, makeSignal({
-      ts: new Date().toISOString(),
-      commentId: 9999,
-    }))
+    await appendSignal(
+      env,
+      owner,
+      repo,
+      scope,
+      makeSignal({
+        ts: new Date().toISOString(),
+        commentId: 9999,
+      }),
+    )
     const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
     expect(stored.signals.length).toBe(50)
     // oldest (commentId 1000) dropped
@@ -391,10 +390,7 @@ describe("pruneStaleSignals (pure)", () => {
     const now = Date.now()
     const old = new Date(now - 200 * 24 * 60 * 60 * 1000).toISOString()
     const recent = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
-    const r = rec([
-      makeSignal({ ts: old, commentId: 1 }),
-      makeSignal({ ts: recent, commentId: 2 }),
-    ])
+    const r = rec([makeSignal({ ts: old, commentId: 1 }), makeSignal({ ts: recent, commentId: 2 })])
     const out = pruneStaleSignals(r, now)
     expect(out.signals.length).toBe(1)
     expect(out.signals[0]?.commentId).toBe(2)
@@ -404,15 +400,12 @@ describe("pruneStaleSignals (pure)", () => {
     const now = Date.now()
     const old = new Date(now - 200 * 24 * 60 * 60 * 1000).toISOString()
     const recent = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
-    const r = rec([
-      makeSignal({ ts: old, commentId: 1 }),
-      makeSignal({ ts: recent, commentId: 2 }),
-    ])
+    const r = rec([makeSignal({ ts: old, commentId: 1 }), makeSignal({ ts: recent, commentId: 2 })])
     const inputBefore = JSON.stringify(r)
     const a = pruneStaleSignals(r, now)
     const b = pruneStaleSignals(r, now)
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
-    expect(JSON.stringify(r)).toBe(inputBefore)  // input not mutated
+    expect(JSON.stringify(r)).toBe(inputBefore) // input not mutated
   })
 
   it("handles empty signals array", () => {
@@ -424,7 +417,7 @@ describe("pruneStaleSignals (pure)", () => {
     const now = Date.now()
     const sixtyOneDaysOld = new Date(now - 61 * 24 * 60 * 60 * 1000).toISOString()
     const r = rec([makeSignal({ ts: sixtyOneDaysOld })])
-    const out = pruneStaleSignals(r, now, 60)  // hard 60d retention
+    const out = pruneStaleSignals(r, now, 60) // hard 60d retention
     expect(out.signals.length).toBe(0)
   })
 })
@@ -433,9 +426,9 @@ describe("pruneStaleSignals (pure)", () => {
 
 describe("buildRepoIdKey (SIG-247 Phase 1)", () => {
   it("category scope: review-memory:repo:<id>:cat:<category>", () => {
-    expect(
-      buildRepoIdKey(42, { kind: "category", category: "performance" }),
-    ).toBe("review-memory:repo:42:cat:performance")
+    expect(buildRepoIdKey(42, { kind: "category", category: "performance" })).toBe(
+      "review-memory:repo:42:cat:performance",
+    )
   })
 
   it("path-category scope carries the full sha256 in the key", () => {
@@ -449,9 +442,9 @@ describe("buildRepoIdKey (SIG-247 Phase 1)", () => {
   })
 
   it("accepts the SIG-247 Phase 0 'architecture' category", () => {
-    expect(
-      buildRepoIdKey(42, { kind: "category", category: "architecture" }),
-    ).toBe("review-memory:repo:42:cat:architecture")
+    expect(buildRepoIdKey(42, { kind: "category", category: "architecture" })).toBe(
+      "review-memory:repo:42:cat:architecture",
+    )
   })
 })
 
@@ -468,8 +461,7 @@ describe("unionRecords (pure, SIG-247 Phase 1)", () => {
       schemaVersion: 1,
       category: "logic",
       signals,
-      lastUpdatedTs: signals[signals.length - 1]?.ts
-        ?? new Date().toISOString(),
+      lastUpdatedTs: signals[signals.length - 1]?.ts ?? new Date().toISOString(),
     }
   }
 
@@ -514,13 +506,8 @@ describe("unionRecords (pure, SIG-247 Phase 1)", () => {
     // first when overflow happens.
     const validNewer = new Date(Date.now() - 500).toISOString()
     const validOlder = new Date(Date.now() - 5000).toISOString()
-    const a = rec([
-      makeSignal({ commentId: 1, ts: validOlder }),
-      makeSignal({ commentId: 2, ts: "garbage" }),
-    ])
-    const b = rec([
-      makeSignal({ commentId: 3, ts: validNewer }),
-    ])
+    const a = rec([makeSignal({ commentId: 1, ts: validOlder }), makeSignal({ commentId: 2, ts: "garbage" })])
+    const b = rec([makeSignal({ commentId: 3, ts: validNewer })])
     const out = unionRecords(a, b, scope)
     expect(out?.signals).toHaveLength(3)
     // Order: validNewer (3), validOlder (1), garbage (2)
@@ -546,14 +533,18 @@ describe("unionRecords (pure, SIG-247 Phase 1)", () => {
     const aSignals: ReviewMemorySignal[] = []
     const bSignals: ReviewMemorySignal[] = []
     for (let i = 0; i < 30; i++) {
-      aSignals.push(makeSignal({
-        commentId: 1000 + i,
-        ts: new Date(baseMs + i * 1000).toISOString(),
-      }))
-      bSignals.push(makeSignal({
-        commentId: 2000 + i,
-        ts: new Date(baseMs + (i + 30) * 1000).toISOString(),
-      }))
+      aSignals.push(
+        makeSignal({
+          commentId: 1000 + i,
+          ts: new Date(baseMs + i * 1000).toISOString(),
+        }),
+      )
+      bSignals.push(
+        makeSignal({
+          commentId: 2000 + i,
+          ts: new Date(baseMs + (i + 30) * 1000).toISOString(),
+        }),
+      )
     }
     const out = unionRecords(rec(aSignals), rec(bSignals), scope)
     expect(out?.signals).toHaveLength(50)
@@ -720,9 +711,7 @@ describe("appendSignal — SIG-247 Phase 1 dual-write", () => {
   it("writes BOTH legacy and repo-id keys when repoId is positive-integer", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
-    const out = await appendSignal(
-      env, owner, repo, scope, makeSignal(), repoId,
-    )
+    const out = await appendSignal(env, owner, repo, scope, makeSignal(), repoId)
     expect(out.written).toBe(true)
     expect(out.repoIdPresent).toBe(true)
     expect(out.legacyWritten).toBe(true)
@@ -801,7 +790,7 @@ describe("appendSignal — SIG-247 Phase 1 dual-write", () => {
     expect(first.signalCount).toBe(1)
     const second = await appendSignal(env, owner, repo, scope, signal, repoId)
     expect(second.skippedDuplicate).toBe(true)
-    expect(second.signalCount).toBe(1)  // unchanged
+    expect(second.signalCount).toBe(1) // unchanged
     const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
     expect(stored.signals).toHaveLength(1)
   })
@@ -829,10 +818,8 @@ describe("appendSignal — SIG-247 Phase 1 dual-write", () => {
     await appendSignal(env, owner, repo, scope, makeSignal({ commentId: 3 }), repoId)
     const legacyStored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
     const newStored = JSON.parse(store.get(buildRepoIdKey(repoId, scope))!)
-    expect(legacyStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
-      .toEqual([1, 2, 3])
-    expect(newStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
-      .toEqual([1, 2, 3])
+    expect(legacyStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort()).toEqual([1, 2, 3])
+    expect(newStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort()).toEqual([1, 2, 3])
   })
 })
 
@@ -925,7 +912,7 @@ describe("readMemory — SIG-247 Phase 1 read-union", () => {
     store.set(buildRepoIdKey(repoId, scope), JSON.stringify(newRec))
     const out = await readMemory(env, owner, repo, scope)
     expect(out?.signals).toHaveLength(1)
-    expect(out?.signals[0]?.commentId).toBe(1)  // legacy only; new key ignored
+    expect(out?.signals[0]?.commentId).toBe(1) // legacy only; new key ignored
   })
 
   it("both empty → returns null", async () => {

@@ -7,12 +7,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
-import type {
-  RepoGraphDO,
-  UpsertFileGraphArgs,
-  GraphContextNode,
-  GraphContextExpansion,
-} from "@/src/do/repo-graph"
+import type { RepoGraphDO, UpsertFileGraphArgs, GraphContextNode, GraphContextExpansion } from "@/src/do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
 // Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,
@@ -20,47 +15,25 @@ import type {
 // methods on the stub and need the type-check against RepoGraphDO's public
 // interface.  The cast is safe: wrangler.toml binds exactly RepoGraphDO to
 // the REPO_GRAPH_DO name.
-function graphStub(
-  env: Env,
-  owner: string,
-  repo: string,
-): DurableObjectStub<RepoGraphDO> {
+function graphStub(env: Env, owner: string, repo: string): DurableObjectStub<RepoGraphDO> {
   const ns = env.REPO_GRAPH_DO as unknown as DurableObjectNamespace<RepoGraphDO>
   const id = ns.idFromName(indexNamespace(owner, repo))
   return ns.get(id)
 }
 
-export async function writeFileGraph(
-  env: Env,
-  owner: string,
-  repo: string,
-  args: UpsertFileGraphArgs,
-): Promise<void> {
+export async function writeFileGraph(env: Env, owner: string, repo: string, args: UpsertFileGraphArgs): Promise<void> {
   await graphStub(env, owner, repo).upsertFileGraph(args)
 }
 
-export async function commitGraph(
-  env: Env,
-  owner: string,
-  repo: string,
-  runId: string,
-): Promise<void> {
+export async function commitGraph(env: Env, owner: string, repo: string, runId: string): Promise<void> {
   await graphStub(env, owner, repo).commitGraphVersion(runId)
 }
 
-export async function debugActiveGraphVersion(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<string | null> {
+export async function debugActiveGraphVersion(env: Env, owner: string, repo: string): Promise<string | null> {
   return graphStub(env, owner, repo).debugActiveVersion()
 }
 
-export async function deleteGraph(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<void> {
+export async function deleteGraph(env: Env, owner: string, repo: string): Promise<void> {
   await graphStub(env, owner, repo).deleteRepoGraph()
 }
 

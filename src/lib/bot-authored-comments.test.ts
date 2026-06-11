@@ -38,11 +38,7 @@ function makeKvStub(): KvStub {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
     },
-    async put(
-      key: string,
-      value: string,
-      options?: { expirationTtl?: number }
-    ): Promise<void> {
+    async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
       store.set(key, value)
       puts.push({ key, value, options })
     },

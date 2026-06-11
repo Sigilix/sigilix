@@ -79,25 +79,27 @@ describe("parseConfidence", () => {
 
 describe("parseCiTriageResponse", () => {
   it("parses a valid structured diagnosis with patch data", () => {
-    const parsed = parseCiTriageResponse(JSON.stringify({
-      rootCause: "The test still expects the old return shape.",
-      suggestedFix: "Update `tests/report.test.ts:42` to expect `regions`.",
-      affectedFiles: ["tests/report.test.ts", "src/report.ts"],
-      failureExcerpt: "TS2339: Property 'region' does not exist on type 'Report'",
-      patches: [
-        {
-          path: "tests/report.test.ts",
-          line: 42,
-          replacement: "expect(result.regions).toEqual([\"iad\"])",
-        },
-        {
-          path: "src/report.ts",
-          line: 18,
-          replacement: "return { regions, metadata }",
-        },
-      ],
-      confidence: "high",
-    }))
+    const parsed = parseCiTriageResponse(
+      JSON.stringify({
+        rootCause: "The test still expects the old return shape.",
+        suggestedFix: "Update `tests/report.test.ts:42` to expect `regions`.",
+        affectedFiles: ["tests/report.test.ts", "src/report.ts"],
+        failureExcerpt: "TS2339: Property 'region' does not exist on type 'Report'",
+        patches: [
+          {
+            path: "tests/report.test.ts",
+            line: 42,
+            replacement: 'expect(result.regions).toEqual(["iad"])',
+          },
+          {
+            path: "src/report.ts",
+            line: 18,
+            replacement: "return { regions, metadata }",
+          },
+        ],
+        confidence: "high",
+      }),
+    )
 
     expect(parsed).toMatchObject({
       rootCause: "The test still expects the old return shape.",
@@ -110,7 +112,7 @@ describe("parseCiTriageResponse", () => {
       {
         path: "tests/report.test.ts",
         line: 42,
-        replacement: "expect(result.regions).toEqual([\"iad\"])",
+        replacement: 'expect(result.regions).toEqual(["iad"])',
       },
       {
         path: "src/report.ts",
@@ -130,13 +132,15 @@ describe("parseCiTriageResponse", () => {
   })
 
   it("accepts a structured diagnosis with no patch data", () => {
-    const parsed = parseCiTriageResponse(JSON.stringify({
-      rootCause: "The lint step fails on a renamed rule.",
-      suggestedFix: "Update the eslint config to use the renamed rule.",
-      affectedFiles: ["eslint.config.js"],
-      failureExcerpt: "Definition for rule 'local/no-legacy-rule' was not found.",
-      confidence: "Medium",
-    }))
+    const parsed = parseCiTriageResponse(
+      JSON.stringify({
+        rootCause: "The lint step fails on a renamed rule.",
+        suggestedFix: "Update the eslint config to use the renamed rule.",
+        affectedFiles: ["eslint.config.js"],
+        failureExcerpt: "Definition for rule 'local/no-legacy-rule' was not found.",
+        confidence: "Medium",
+      }),
+    )
 
     expect(parsed).toEqual({
       rootCause: "The lint step fails on a renamed rule.",
@@ -166,26 +170,26 @@ describe("parseCiTriageResponse", () => {
 \`\`\``)
 
     expect(parsed?.affectedFiles).toEqual(["src/api.ts"])
-    expect(parsed?.patches).toEqual([
-      { path: "src/api.ts", line: 12, replacement: "callApi(req)" },
-    ])
+    expect(parsed?.patches).toEqual([{ path: "src/api.ts", line: 12, replacement: "callApi(req)" }])
   })
 
   it("rejects unsafe patch paths and oversized replacements", () => {
-    const parsed = parseCiTriageResponse(JSON.stringify({
-      rootCause: "A caller still passes the deleted argument.",
-      affectedFiles: ["src/api.ts"],
-      failureExcerpt: "Expected 1 arguments, but got 2.",
-      confidence: "high",
-      patches: [
-        { path: "src/api.ts", line: 12, replacement: "callApi(req)" },
-        { path: "src\\windows.ts", line: 20, replacement: "callApi(req)" },
-        { path: "../.env", line: 1, replacement: "secret" },
-        { path: "/tmp/file.ts", line: 1, replacement: "secret" },
-        { path: "src//api.ts", line: 12, replacement: "callApi(req)" },
-        { path: "src/huge.ts", line: 1, replacement: "x".repeat(5001) },
-      ],
-    }))
+    const parsed = parseCiTriageResponse(
+      JSON.stringify({
+        rootCause: "A caller still passes the deleted argument.",
+        affectedFiles: ["src/api.ts"],
+        failureExcerpt: "Expected 1 arguments, but got 2.",
+        confidence: "high",
+        patches: [
+          { path: "src/api.ts", line: 12, replacement: "callApi(req)" },
+          { path: "src\\windows.ts", line: 20, replacement: "callApi(req)" },
+          { path: "../.env", line: 1, replacement: "secret" },
+          { path: "/tmp/file.ts", line: 1, replacement: "secret" },
+          { path: "src//api.ts", line: 12, replacement: "callApi(req)" },
+          { path: "src/huge.ts", line: 1, replacement: "x".repeat(5001) },
+        ],
+      }),
+    )
 
     expect(parsed?.patches).toEqual([
       { path: "src/api.ts", line: 12, replacement: "callApi(req)" },
@@ -205,9 +209,7 @@ describe("renderCiTriageComment", () => {
       suggestedFix: "Update `src/index.ts:7` to import `createClient`.",
       affectedFiles: ["src/index.ts"],
       failureExcerpt: "Module has no exported member 'client'.",
-      patches: [
-        { path: "src/index.ts", line: 7, replacement: "import { createClient } from './client'" },
-      ],
+      patches: [{ path: "src/index.ts", line: 7, replacement: "import { createClient } from './client'" }],
       confidence: "high",
     })
 
@@ -246,12 +248,14 @@ describe("renderCiTriageComment", () => {
 
 describe("buildCiTriageCommentFromModelResponse", () => {
   it("uses structured rendering when JSON parses", () => {
-    const out = buildCiTriageCommentFromModelResponse(JSON.stringify({
-      rootCause: "A required env var is now missing.",
-      affectedFiles: [],
-      failureExcerpt: "Missing OPENCLAW_TOKEN",
-      confidence: "medium",
-    }))
+    const out = buildCiTriageCommentFromModelResponse(
+      JSON.stringify({
+        rootCause: "A required env var is now missing.",
+        affectedFiles: [],
+        failureExcerpt: "Missing OPENCLAW_TOKEN",
+        confidence: "medium",
+      }),
+    )
 
     expect(out?.confidence).toBe("medium")
     expect(out?.diagnosis?.rootCause).toBe("A required env var is now missing.")

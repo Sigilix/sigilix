@@ -73,8 +73,22 @@ export function findingKey(finding: Pick<PrReviewFinding, "path" | "line" | "hea
 const CODE_TOKEN = /`([^`\n]{1,80})`/g
 const IDENTIFIER = /[A-Za-z_$][\w$]*/
 const STOP_TOKENS = new Set([
-  "if", "for", "while", "return", "true", "false", "null", "undefined",
-  "const", "let", "var", "function", "this", "new", "await", "async",
+  "if",
+  "for",
+  "while",
+  "return",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "const",
+  "let",
+  "var",
+  "function",
+  "this",
+  "new",
+  "await",
+  "async",
 ])
 
 /** Extract code-like tokens the finding cites in its headline/body. */
@@ -167,7 +181,10 @@ export function verifyFinding(
 
 /** The finding shape `selectRefutedInlineDemotions` needs (a verifiable finding
  *  plus the eligibility fields). `startLine` gates the range fail-open below. */
-type DemotableFinding = Pick<PrReviewFinding, "path" | "line" | "headline" | "body" | "score" | "category" | "startLine">
+type DemotableFinding = Pick<
+  PrReviewFinding,
+  "path" | "line" | "headline" | "body" | "score" | "category" | "startLine"
+>
 
 /**
  * SIG-285 PR 4: of the currently-INLINE findings, which are demotable — i.e. a

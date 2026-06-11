@@ -6,11 +6,7 @@
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { parseSigilixConfig } from "@/src/shared/domain/config/parse"
-import {
-  EMPTY_CONFIG,
-  SIGILIX_CONFIG_PATH,
-  type SigilixConfig,
-} from "@/src/shared/domain/config/types"
+import { EMPTY_CONFIG, SIGILIX_CONFIG_PATH, type SigilixConfig } from "@/src/shared/domain/config/types"
 
 /**
  * Fetch and parse the per-repo `sigilix.json` config at the given ref.

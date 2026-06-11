@@ -47,7 +47,12 @@ export function isBranchStateRepo(repo: string): boolean {
   const parts = repo.split("/")
   const segment = parts[1]
   const encodedBranch = parts[2]
-  return parts.length === 3 && segment === BRANCH_STATE_SEGMENT && typeof encodedBranch === "string" && encodedBranch.length > 0
+  return (
+    parts.length === 3 &&
+    segment === BRANCH_STATE_SEGMENT &&
+    typeof encodedBranch === "string" &&
+    encodedBranch.length > 0
+  )
 }
 
 export interface BranchNamespace {
@@ -111,13 +116,7 @@ export async function resolveIndexTarget(args: {
   }
 }
 
-const DEFAULT_TRACKED_BRANCHES = new Set([
-  "dev",
-  "develop",
-  "development",
-  "staging",
-  "stage",
-])
+const DEFAULT_TRACKED_BRANCHES = new Set(["dev", "develop", "development", "staging", "stage"])
 
 export function parseTrackedBranches(value: string | undefined): Set<string> {
   const out = new Set(DEFAULT_TRACKED_BRANCHES)
@@ -129,10 +128,7 @@ export function parseTrackedBranches(value: string | undefined): Set<string> {
   return out
 }
 
-export function isTrackedLongLivedBranch(
-  branch: string,
-  configuredBranches: string | undefined,
-): boolean {
+export function isTrackedLongLivedBranch(branch: string, configuredBranches: string | undefined): boolean {
   return parseTrackedBranches(configuredBranches).has(branch.trim().toLowerCase())
 }
 

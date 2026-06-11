@@ -79,9 +79,11 @@ describe("parseSigilixConfig — happy paths", () => {
   })
 
   it("does not treat fully-invalid non-empty customLabels as an empty allowlist", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      customLabels: [{ name: "bug" }],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        customLabels: [{ name: "bug" }],
+      }),
+    )
     expect(result).toEqual({})
   })
 
@@ -90,16 +92,20 @@ describe("parseSigilixConfig — happy paths", () => {
   })
 
   it("drops empty-string per-role rules (treats as absent)", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      rules: { logic: "", security: "real" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        rules: { logic: "", security: "real" },
+      }),
+    )
     expect(result).toEqual({ rules: { security: "real" } })
   })
 
   it("drops the rules block entirely when every role is empty/absent", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      rules: { logic: "", security: "", performance: "", tests: "" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        rules: { logic: "", security: "", performance: "", tests: "" },
+      }),
+    )
     expect(result).toEqual({})
   })
 })
@@ -126,24 +132,30 @@ describe("parseSigilixConfig — defensive returns null", () => {
     // Non-string guidance, non-object rules, non-string rule values —
     // all dropped without erroring (forward-compat: unknown future
     // shapes shouldn't break review pipelines).
-    const result = parseSigilixConfig(JSON.stringify({
-      guidance: 42,
-      rules: "not-an-object",
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        guidance: 42,
+        rules: "not-an-object",
+      }),
+    )
     expect(result).toEqual({})
   })
 
   it("drops non-string per-role rule values", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      rules: { logic: 42, security: "real-string", performance: null, tests: ["array"] },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        rules: { logic: 42, security: "real-string", performance: null, tests: ["array"] },
+      }),
+    )
     expect(result).toEqual({ rules: { security: "real-string" } })
   })
 
   it("ignores rule keys that aren't a known specialist role", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      rules: { logic: "real", unknownRole: "ignored" },
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        rules: { logic: "real", unknownRole: "ignored" },
+      }),
+    )
     expect(result).toEqual({ rules: { logic: "real" } })
   })
 })
@@ -152,23 +164,29 @@ describe("parseSigilixConfig — defensive returns null", () => {
 
 describe("parseSigilixConfig — pathFilters (ARC-176)", () => {
   it("accepts an array of glob patterns", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathFilters: ["dist/**", "**/*.lock", "!critical/important.lock"],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathFilters: ["dist/**", "**/*.lock", "!critical/important.lock"],
+      }),
+    )
     expect(result?.pathFilters).toEqual(["dist/**", "**/*.lock", "!critical/important.lock"])
   })
 
   it("drops empty-string entries", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathFilters: ["", "dist/**", ""],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathFilters: ["", "dist/**", ""],
+      }),
+    )
     expect(result?.pathFilters).toEqual(["dist/**"])
   })
 
   it("drops the array entirely when all entries are empty/non-string", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathFilters: ["", null, 42, ""],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathFilters: ["", null, 42, ""],
+      }),
+    )
     expect(result?.pathFilters).toBeUndefined()
   })
 
@@ -182,19 +200,21 @@ describe("parseSigilixConfig — pathInstructions", () => {
   const codePoints = (s: string): number => [...s].length
 
   it("accepts path-scoped guidance with role-specific rules", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        {
-          paths: [" src/auth/** ", "src/auth/**", "workers/**"],
-          guidance: " Treat as security-sensitive request handling. ",
-          rules: {
-            security: "Block missing authorization checks.",
-            tests: "Require integration tests for auth flows.",
-            unknown: "ignored",
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          {
+            paths: [" src/auth/** ", "src/auth/**", "workers/**"],
+            guidance: " Treat as security-sensitive request handling. ",
+            rules: {
+              security: "Block missing authorization checks.",
+              tests: "Require integration tests for auth flows.",
+              unknown: "ignored",
+            },
           },
-        },
-      ],
-    }))
+        ],
+      }),
+    )
     expect(result?.pathInstructions).toEqual([
       {
         paths: ["src/auth/**", "workers/**"],
@@ -208,14 +228,16 @@ describe("parseSigilixConfig — pathInstructions", () => {
   })
 
   it("accepts CodeRabbit-shaped path/instructions aliases", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        {
-          path: "tests/**",
-          instructions: "Review test names and edge cases.",
-        },
-      ],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          {
+            path: "tests/**",
+            instructions: "Review test names and edge cases.",
+          },
+        ],
+      }),
+    )
     expect(result?.pathInstructions).toEqual([
       {
         paths: ["tests/**"],
@@ -225,15 +247,17 @@ describe("parseSigilixConfig — pathInstructions", () => {
   })
 
   it("drops malformed or empty path instruction entries", () => {
-    const result = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        null,
-        { paths: [] },
-        { paths: ["src/**"], guidance: "" },
-        { paths: ["src/**"], rules: { security: "" } },
-        { paths: ["src/**"], rules: { logic: "Real rule." } },
-      ],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          null,
+          { paths: [] },
+          { paths: ["src/**"], guidance: "" },
+          { paths: ["src/**"], rules: { security: "" } },
+          { paths: ["src/**"], rules: { logic: "Real rule." } },
+        ],
+      }),
+    )
     expect(result?.pathInstructions).toEqual([
       {
         paths: ["src/**"],
@@ -266,15 +290,16 @@ describe("parseSigilixConfig — pathInstructions", () => {
   })
 
   it("caps each pathInstructions entry at 50 paths", () => {
-    const makePaths = (prefix: string, n: number) =>
-      Array.from({ length: n }, (_, i) => `src/${prefix}/${i}/**`)
-    const result = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        { paths: makePaths("below", 49), guidance: "below" },
-        { paths: makePaths("at", 50), guidance: "at" },
-        { paths: makePaths("above", 51), guidance: "above" },
-      ],
-    }))
+    const makePaths = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `src/${prefix}/${i}/**`)
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          { paths: makePaths("below", 49), guidance: "below" },
+          { paths: makePaths("at", 50), guidance: "at" },
+          { paths: makePaths("above", 51), guidance: "above" },
+        ],
+      }),
+    )
 
     expect(result?.pathInstructions?.[0]?.paths).toHaveLength(49)
     expect(result?.pathInstructions?.[1]?.paths).toHaveLength(50)
@@ -287,13 +312,15 @@ describe("parseSigilixConfig — pathInstructions", () => {
     const below = "b".repeat(3999)
     const at = "a".repeat(4000)
     const above = "x".repeat(4001)
-    const result = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        { paths: ["src/below/**"], guidance: below, rules: { security: below } },
-        { paths: ["src/at/**"], guidance: at, rules: { security: at } },
-        { paths: ["src/above/**"], guidance: above, rules: { security: above } },
-      ],
-    }))
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          { paths: ["src/below/**"], guidance: below, rules: { security: below } },
+          { paths: ["src/at/**"], guidance: at, rules: { security: at } },
+          { paths: ["src/above/**"], guidance: above, rules: { security: above } },
+        ],
+      }),
+    )
 
     expect(codePoints(result?.pathInstructions?.[0]?.guidance ?? "")).toBe(3999)
     expect(codePoints(result?.pathInstructions?.[0]?.rules?.security ?? "")).toBe(3999)
@@ -311,12 +338,14 @@ describe("parseSigilixConfig — pathInstructions", () => {
 
 describe("resolvePathInstructionsForChangedPaths", () => {
   it("returns only instructions whose globs match changed paths", () => {
-    const config = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        { paths: ["src/auth/**"], guidance: "Auth rules." },
-        { paths: ["docs/**"], guidance: "Docs rules." },
-      ],
-    }))
+    const config = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          { paths: ["src/auth/**"], guidance: "Auth rules." },
+          { paths: ["docs/**"], guidance: "Docs rules." },
+        ],
+      }),
+    )
     const matches = resolvePathInstructionsForChangedPaths(config, [
       "src/auth/login.ts",
       "src/auth/session.ts",
@@ -334,17 +363,19 @@ describe("resolvePathInstructionsForChangedPaths", () => {
 
 describe("renderPathInstructionsForPrompt", () => {
   it("renders role-specific rules without leaking unrelated role rules", () => {
-    const config = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        {
-          paths: ["src/auth/**"],
-          rules: {
-            security: "Block unsafe token handling.",
-            tests: "Require auth-flow coverage.",
+    const config = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          {
+            paths: ["src/auth/**"],
+            rules: {
+              security: "Block unsafe token handling.",
+              tests: "Require auth-flow coverage.",
+            },
           },
-        },
-      ],
-    }))
+        ],
+      }),
+    )
     const matches = resolvePathInstructionsForChangedPaths(config, ["src/auth/login.ts"])
     const securityBlock = renderPathInstructionsForPrompt(matches, "security")
     expect(securityBlock).toContain("[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]")
@@ -356,18 +387,20 @@ describe("renderPathInstructionsForPrompt", () => {
   })
 
   it("renders all matched role rules for the synthesizer", () => {
-    const config = parseSigilixConfig(JSON.stringify({
-      pathInstructions: [
-        {
-          paths: ["src/auth/**"],
-          guidance: "Auth code is sensitive.",
-          rules: {
-            security: "Block unsafe token handling.",
-            tests: "Require auth-flow coverage.",
+    const config = parseSigilixConfig(
+      JSON.stringify({
+        pathInstructions: [
+          {
+            paths: ["src/auth/**"],
+            guidance: "Auth code is sensitive.",
+            rules: {
+              security: "Block unsafe token handling.",
+              tests: "Require auth-flow coverage.",
+            },
           },
-        },
-      ],
-    }))
+        ],
+      }),
+    )
     const matches = resolvePathInstructionsForChangedPaths(config, ["src/auth/login.ts"])
     const block = renderPathInstructionsForPrompt(matches)
     expect(block).toContain("Guidance: Auth code is sensitive.")
@@ -431,10 +464,14 @@ describe("loadSigilixConfig — fail-open contract", () => {
   })
 
   it("returns the parsed config on the happy path", async () => {
-    const client = fakeClient(vi.fn().mockResolvedValue(JSON.stringify({
-      guidance: "Be terse.",
-      rules: { logic: "Flag long fns." },
-    })))
+    const client = fakeClient(
+      vi.fn().mockResolvedValue(
+        JSON.stringify({
+          guidance: "Be terse.",
+          rules: { logic: "Flag long fns." },
+        }),
+      ),
+    )
     const result = await loadSigilixConfig(client, "owner", "repo", "deadbeef")
     expect(result).toEqual<SigilixConfig>({
       guidance: "Be terse.",
@@ -442,4 +479,3 @@ describe("loadSigilixConfig — fail-open contract", () => {
     })
   })
 })
-

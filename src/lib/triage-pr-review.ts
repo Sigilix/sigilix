@@ -56,11 +56,7 @@ import type { FindingCategory } from "@/src/shared/domain/finding-category"
 export { FINDING_CATEGORIES }
 export type { FindingCategory }
 
-import {
-  STACK_ORIGINS,
-  REVIEW_FINDING_SCOPES,
-  hasStructuredFix,
-} from "@/src/shared/domain/pr-review-finding"
+import { STACK_ORIGINS, REVIEW_FINDING_SCOPES, hasStructuredFix } from "@/src/shared/domain/pr-review-finding"
 import type {
   StackOrigin,
   ReviewFindingScope,
@@ -141,8 +137,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
   if (!Number.isFinite(confidenceRaw) || confidenceRaw < 1 || confidenceRaw > 5) return null
   const confidence = Math.round(confidenceRaw)
 
-  const confidenceReason =
-    typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
+  const confidenceReason = typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
 
   const findings: PrReviewFinding[] = []
   const rawFindings = Array.isArray(obj.findings) ? obj.findings : []
@@ -167,20 +162,15 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       : "logic"
     const startLineRaw = Number(finding.startLine)
     const validStartLine =
-      Number.isFinite(startLineRaw) && startLineRaw > 0 && startLineRaw < line
-        ? Math.floor(startLineRaw)
-        : null
+      Number.isFinite(startLineRaw) && startLineRaw > 0 && startLineRaw < line ? Math.floor(startLineRaw) : null
     // ARC-182: read stackOrigin if present. Absent → leave undefined
     // (no-stack PR or model omitted it). Present-but-unknown enum
     // value → normalize to "current-pr" (the safe default per the
     // stack-awareness prompt instruction).
-    const stackOriginRaw =
-      typeof finding.stackOrigin === "string" ? finding.stackOrigin.trim() : ""
+    const stackOriginRaw = typeof finding.stackOrigin === "string" ? finding.stackOrigin.trim() : ""
     let stackOrigin: StackOrigin | undefined
     if (stackOriginRaw.length > 0) {
-      stackOrigin = STACK_ORIGINS.has(stackOriginRaw as StackOrigin)
-        ? (stackOriginRaw as StackOrigin)
-        : "current-pr"
+      stackOrigin = STACK_ORIGINS.has(stackOriginRaw as StackOrigin) ? (stackOriginRaw as StackOrigin) : "current-pr"
     }
     const finalFinding: PrReviewFinding = {
       path,
@@ -266,9 +256,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     const replIsString = typeof replRaw === "string"
     const replIsEmpty = replIsString && replRaw.trim().length === 0
     const replIsNonEmpty =
-      replIsString &&
-      replRaw.trim().length > 0 &&
-      countReplacementLines(replRaw) <= MAX_SUGGESTED_REPLACEMENT_LINES
+      replIsString && replRaw.trim().length > 0 && countReplacementLines(replRaw) <= MAX_SUGGESTED_REPLACEMENT_LINES
 
     if (kindRaw === "delete" && replIsEmpty) {
       finalFinding.kind = "delete"
@@ -316,8 +304,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       if (!c || typeof c !== "object") continue
       const rec = c as Record<string, unknown>
       const path = typeof rec.path === "string" ? rec.path.trim() : ""
-      const line =
-        typeof rec.line === "number" && Number.isFinite(rec.line) ? Math.trunc(rec.line) : 0
+      const line = typeof rec.line === "number" && Number.isFinite(rec.line) ? Math.trunc(rec.line) : 0
       const hypothesis = typeof rec.hypothesis === "string" ? rec.hypothesis.trim() : ""
       const mitigation = typeof rec.mitigation === "string" ? rec.mitigation.trim() : ""
       if (path && line > 0 && hypothesis && mitigation) {
@@ -405,10 +392,7 @@ export {
   collectCitedLineText,
   isCommentAnchorable,
 } from "./ensemble/render/finding-format"
-export type {
-  ProposedChangeScopeMismatch,
-  BodyFindingLinkContext,
-} from "./ensemble/render/finding-format"
+export type { ProposedChangeScopeMismatch, BodyFindingLinkContext } from "./ensemble/render/finding-format"
 export {
   formatAiAgentPromptBlock,
   formatFindingComment,
@@ -416,9 +400,7 @@ export {
   CHECK_ANNOTATION_TEXT_LIMIT,
   CHECK_ANNOTATION_TITLE_LIMIT,
 } from "./ensemble/render/finding-comment"
-export type {
-  ReviewSuggestionEmission,
-} from "./ensemble/render/finding-comment"
+export type { ReviewSuggestionEmission } from "./ensemble/render/finding-comment"
 export {
   renderDeltaBadge,
   renderCoverageLine,
@@ -430,11 +412,7 @@ export {
   renderFixPlan,
   renderFixPlanTable,
 } from "./ensemble/render/review-body"
-export type {
-  DeltaBadgeCounts,
-  ProvenanceCtx,
-  RenderBodyArgs,
-} from "./ensemble/render/review-body"
+export type { DeltaBadgeCounts, ProvenanceCtx, RenderBodyArgs } from "./ensemble/render/review-body"
 export {
   buildReviewSubmission,
   buildReviewSubmissionWithMetadata,
@@ -449,7 +427,4 @@ export type {
   PreviewReviewSubmissionEventArgs,
   PreviewFallbackSubmissionEventArgs,
 } from "./ensemble/render/submission"
-export {
-  buildFallbackSubmission,
-  buildFallbackBody,
-} from "./ensemble/render/fallback"
+export { buildFallbackSubmission, buildFallbackBody } from "./ensemble/render/fallback"

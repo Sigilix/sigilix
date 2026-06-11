@@ -17,16 +17,8 @@
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { isAuthorAllowedForSlashCommand } from "./slash-commands"
-import {
-  LEGACY_REVIEW_BODY_MARKER,
-  SIGILIX_BOT_LOGIN,
-  SIGILIX_REVIEW_BODY_MARKER,
-} from "./dismiss-prior-reviews"
-import {
-  type DismissReason,
-  isDismissReason,
-  parseDismissReason,
-} from "./dismiss-reasons"
+import { LEGACY_REVIEW_BODY_MARKER, SIGILIX_BOT_LOGIN, SIGILIX_REVIEW_BODY_MARKER } from "./dismiss-prior-reviews"
+import { type DismissReason, isDismissReason, parseDismissReason } from "./dismiss-reasons"
 
 const REPLY_MARKER = "<!-- sigilix:gh-mention-reply -->"
 const DISMISS_IN_PROGRESS_TTL = 60 * 15
@@ -97,9 +89,7 @@ export function parseReviewDismissDedupeRecord(value: string | null): ReviewDism
   if (record.kind === DISMISS_IN_PROGRESS_KIND) {
     return {
       kind: DISMISS_IN_PROGRESS_KIND,
-      ...(typeof record.token === "string" && record.token.length > 0
-        ? { token: record.token }
-        : {}),
+      ...(typeof record.token === "string" && record.token.length > 0 ? { token: record.token } : {}),
       ...(typeof record.createdAt === "number" ? { createdAt: record.createdAt } : {}),
     }
   }
@@ -109,14 +99,12 @@ export function parseReviewDismissDedupeRecord(value: string | null): ReviewDism
   // SIG-173: optional reason — present on records written after this PR
   // ships; absent on legacy records (caller falls back to "unlabeled").
   const dismissReason = isDismissReason((record as { dismissReason?: unknown }).dismissReason)
-    ? ((record as { dismissReason: DismissReason }).dismissReason)
+    ? (record as { dismissReason: DismissReason }).dismissReason
     : undefined
   return {
     kind: DISMISS_DEDUPE_KIND,
     result: record.result,
-    ...(typeof record.replyCommentId === "number"
-      ? { replyCommentId: record.replyCommentId }
-      : {}),
+    ...(typeof record.replyCommentId === "number" ? { replyCommentId: record.replyCommentId } : {}),
     ...(dismissReason ? { dismissReason } : {}),
   }
 }
@@ -125,10 +113,7 @@ type ReviewDismissLock =
   | { acquired: true; token: string }
   | { acquired: false; record: ReviewDismissDedupeRecord | null }
 
-export async function acquireReviewDismissInProgressLock(
-  kv: KVNamespace,
-  key: string,
-): Promise<ReviewDismissLock> {
+export async function acquireReviewDismissInProgressLock(kv: KVNamespace, key: string): Promise<ReviewDismissLock> {
   const before = parseReviewDismissDedupeRecord(await kv.get(key))
   if (before) return { acquired: false, record: before }
 
@@ -150,11 +135,7 @@ export async function acquireReviewDismissInProgressLock(
   return { acquired: false, record: after }
 }
 
-export async function releaseReviewDismissInProgressLock(
-  kv: KVNamespace,
-  key: string,
-  token: string,
-): Promise<void> {
+export async function releaseReviewDismissInProgressLock(kv: KVNamespace, key: string, token: string): Promise<void> {
   try {
     const current = parseReviewDismissDedupeRecord(await kv.get(key))
     if (current?.kind === DISMISS_IN_PROGRESS_KIND && current.token === token) {
@@ -250,9 +231,7 @@ function stripReasonWrappers(rest: string): string {
  *
  * Pure — exported for tests.
  */
-export function parseDismissCommand(
-  question: string,
-): { kind: "dismiss"; reason: DismissReason } | null {
+export function parseDismissCommand(question: string): { kind: "dismiss"; reason: DismissReason } | null {
   const normalized = question
     .trim()
     .toLowerCase()
@@ -305,10 +284,7 @@ export function isReviewDismissRequest(question: string): boolean {
  *
  * Pure — exported for tests.
  */
-export function preferPersistedReason(
-  record: ReviewDismissDedupeRecord | null,
-  fresh: DismissReason,
-): DismissReason {
+export function preferPersistedReason(record: ReviewDismissDedupeRecord | null, fresh: DismissReason): DismissReason {
   if (record?.kind === DISMISS_DEDUPE_KIND) {
     return record.dismissReason ?? "unlabeled"
   }
@@ -320,9 +296,7 @@ export function preferPersistedReason(
  * boundary as slash commands: only users GitHub marks as repo owner,
  * organization member, or explicit collaborator can run it.
  */
-export function isAuthorAllowedForReviewDismiss(
-  association: string | null | undefined,
-): boolean {
+export function isAuthorAllowedForReviewDismiss(association: string | null | undefined): boolean {
   return isAuthorAllowedForSlashCommand(association)
 }
 
@@ -337,30 +311,38 @@ export async function dismissLatestBlockingSigilixReview(args: {
     reviews = await args.client.listPullRequestReviews(args.owner, args.repo, args.prNumber)
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
-    console.warn(JSON.stringify({
-      event: "gh-mention-dismiss-list-failed",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      err: error,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "gh-mention-dismiss-list-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        err: error,
+      }),
+    )
     return { kind: "list-failed", error }
   }
 
   const target = reviews
-    .filter((r) =>
-      r.state === "CHANGES_REQUESTED" &&
-      r.user?.login === SIGILIX_BOT_LOGIN &&
-      (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
-        r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
+    .filter(
+      (r) =>
+        r.state === "CHANGES_REQUESTED" &&
+        r.user?.login === SIGILIX_BOT_LOGIN &&
+        (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) || r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
     )
     // Review IDs are monotonic; sort defensively instead of relying on
     // REST list ordering when choosing the latest blocking Sigilix review.
     .sort((a, b) => b.id - a.id)[0]
 
   if (!target) {
-    console.log(JSON.stringify({
-      event: "gh-mention-dismiss-no-blocking-review",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "gh-mention-dismiss-no-blocking-review",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+      }),
+    )
     return { kind: "not-found" }
   }
 
@@ -372,20 +354,28 @@ export async function dismissLatestBlockingSigilixReview(args: {
       target.id,
       "Dismissed by explicit @sigilix dismiss request.",
     )
-    console.log(JSON.stringify({
-      event: "gh-mention-dismissed-blocking-review",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      review_id: target.id,
-    }))
+    console.log(
+      JSON.stringify({
+        event: "gh-mention-dismissed-blocking-review",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        review_id: target.id,
+      }),
+    )
     return { kind: "dismissed", reviewId: target.id }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
-    console.warn(JSON.stringify({
-      event: "gh-mention-dismiss-failed",
-      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
-      review_id: target.id,
-      err: error,
-    }))
+    console.warn(
+      JSON.stringify({
+        event: "gh-mention-dismiss-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        review_id: target.id,
+        err: error,
+      }),
+    )
     return { kind: "dismiss-failed", reviewId: target.id, error }
   }
 }
@@ -399,10 +389,7 @@ export async function dismissLatestBlockingSigilixReview(args: {
  * `"unlabeled"` — we skip the reason line in that case so the reply stays
  * clean for the common path.
  */
-export function formatReviewDismissReply(
-  result: ReviewDismissResult,
-  reason: DismissReason = "unlabeled",
-): string {
+export function formatReviewDismissReply(result: ReviewDismissResult, reason: DismissReason = "unlabeled"): string {
   const reasonSuffix = reason !== "unlabeled" ? ` (reason: ${reason})` : ""
   switch (result.kind) {
     case "dismissed":

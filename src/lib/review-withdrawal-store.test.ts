@@ -42,9 +42,7 @@ function makeKvStub() {
       store.delete(key)
     },
     async list({ prefix }: { prefix: string }): Promise<{ keys: { name: string }[] }> {
-      const keys = [...store.keys()]
-        .filter((k) => k.startsWith(prefix))
-        .map((name) => ({ name }))
+      const keys = [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name }))
       return { keys }
     },
   }
@@ -59,8 +57,14 @@ function makeEnv(kv: ReturnType<typeof makeKvStub>["kv"]): Env {
 
 describe("tokenize", () => {
   it("lowercases, splits on non-word, drops short tokens + pure digits", () => {
-    expect([...tokenize("Add a missing null check on req.body!")].sort())
-      .toEqual(["add", "body", "check", "missing", "null", "req"])
+    expect([...tokenize("Add a missing null check on req.body!")].sort()).toEqual([
+      "add",
+      "body",
+      "check",
+      "missing",
+      "null",
+      "req",
+    ])
   })
 
   it("dedupes repeated tokens via Set semantics", () => {
@@ -95,7 +99,8 @@ describe("jaccardSimilarity", () => {
 
 describe("stripBodyForMatching", () => {
   it("strips HTML comment markers + suggestion blocks + code fences + URLs", () => {
-    const body = "<!-- sigilix:pr-review-finding -->\n**testing:** lacks coverage\n\n```suggestion\nfoo()\n```\n\nSee [the docs](https://example.com/x)."
+    const body =
+      "<!-- sigilix:pr-review-finding -->\n**testing:** lacks coverage\n\n```suggestion\nfoo()\n```\n\nSee [the docs](https://example.com/x)."
     const stripped = stripBodyForMatching(body)
     expect(stripped).not.toContain("<!--")
     expect(stripped).not.toContain("```")
@@ -177,14 +182,25 @@ describe("filterWithdrawnFindings", () => {
       bodySnapshot: "scheduled handler lacks coverage for gating success and error paths",
       // Recent dismissal so it's inside the decay window (the wrapper uses
       // Date.now() internally — an epoch-0 timestamp would read as decayed).
-      withdrawnAt: Date.now(), withdrawnByCommentId: 1, prHeadSha: "x", reason: "mention-reply-accepted",
+      withdrawnAt: Date.now(),
+      withdrawnByCommentId: 1,
+      prHeadSha: "x",
+      reason: "mention-reply-accepted",
     },
   ]
 
   it("drops findings that match a withdrawal", () => {
     const findings = [
-      { path: "src/index.ts", line: 962, body: "the scheduled handler lacks coverage for its gating success and error paths" },
-      { path: "src/index.ts", line: 200, body: "unrelated logic concern about the cron tick guard" },
+      {
+        path: "src/index.ts",
+        line: 962,
+        body: "the scheduled handler lacks coverage for its gating success and error paths",
+      },
+      {
+        path: "src/index.ts",
+        line: 200,
+        body: "unrelated logic concern about the cron tick guard",
+      },
     ]
     const { kept, suppressed } = filterWithdrawnFindings(findings, withdrawals)
     expect(kept).toHaveLength(1)
@@ -252,14 +268,26 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
   it("isolates by PR number — load returns only the requested PR's records", async () => {
     const env = makeEnv(kv)
     await writeWithdrawal({
-      env, owner: "Sigilix", repo: "sigilix", prNumber: 138,
-      path: "src/a.ts", line: 1, bodySnapshot: "first concern",
-      withdrawnByCommentId: 1, prHeadSha: "x",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 138,
+      path: "src/a.ts",
+      line: 1,
+      bodySnapshot: "first concern",
+      withdrawnByCommentId: 1,
+      prHeadSha: "x",
     })
     await writeWithdrawal({
-      env, owner: "Sigilix", repo: "sigilix", prNumber: 139,
-      path: "src/b.ts", line: 2, bodySnapshot: "second concern",
-      withdrawnByCommentId: 2, prHeadSha: "y",
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 139,
+      path: "src/b.ts",
+      line: 2,
+      bodySnapshot: "second concern",
+      withdrawnByCommentId: 2,
+      prHeadSha: "y",
     })
     const pr138 = await loadWithdrawals(env, "Sigilix", "sigilix", 138)
     expect(pr138).toHaveLength(1)
@@ -270,14 +298,21 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
     const throwingEnv = {
       OPENCLAW_STATE: {
         ...kv,
-        put: async () => { throw new Error("KV unreachable") },
+        put: async () => {
+          throw new Error("KV unreachable")
+        },
       },
     } as unknown as Env
     const ok = await writeWithdrawal({
       env: throwingEnv,
-      owner: "o", repo: "r", prNumber: 1,
-      path: "p", line: 1, bodySnapshot: "b",
-      withdrawnByCommentId: 1, prHeadSha: "s",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      path: "p",
+      line: 1,
+      bodySnapshot: "b",
+      withdrawnByCommentId: 1,
+      prHeadSha: "s",
     })
     expect(ok).toBe(false)
   })
@@ -286,7 +321,9 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
     const throwingEnv = {
       OPENCLAW_STATE: {
         ...kv,
-        list: async () => { throw new Error("KV unreachable") },
+        list: async () => {
+          throw new Error("KV unreachable")
+        },
       },
     } as unknown as Env
     const out = await loadWithdrawals(throwingEnv, "o", "r", 1)
@@ -299,9 +336,15 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
     await kv.put("withdrawal:o:r:1:1", JSON.stringify({ not: "a withdrawal" }))
     await kv.put("withdrawal:o:r:1:2", "not even valid json {{{")
     await writeWithdrawal({
-      env, owner: "o", repo: "r", prNumber: 1,
-      path: "src/x.ts", line: 10, bodySnapshot: "valid",
-      withdrawnByCommentId: 3, prHeadSha: "s",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      path: "src/x.ts",
+      line: 10,
+      bodySnapshot: "valid",
+      withdrawnByCommentId: 3,
+      prHeadSha: "s",
     })
     const out = await loadWithdrawals(env, "o", "r", 1)
     expect(out).toHaveLength(1)
@@ -316,9 +359,15 @@ describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
     const { kv } = makeKvStub()
     const env = makeEnv(kv)
     await writeWithdrawal({
-      env, owner: "o", repo: "r", prNumber: 1,
-      path: "src/x.ts", line: 1, bodySnapshot: "concern",
-      withdrawnByCommentId: 1, prHeadSha: "s",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      path: "src/x.ts",
+      line: 1,
+      bodySnapshot: "concern",
+      withdrawnByCommentId: 1,
+      prHeadSha: "s",
       dismissReason: "too-minor",
     })
     const out = await loadWithdrawals(env, "o", "r", 1)
@@ -330,9 +379,15 @@ describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv)
     await writeWithdrawal({
-      env, owner: "o", repo: "r", prNumber: 1,
-      path: "src/x.ts", line: 1, bodySnapshot: "concern",
-      withdrawnByCommentId: 1, prHeadSha: "s",
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      path: "src/x.ts",
+      line: 1,
+      bodySnapshot: "concern",
+      withdrawnByCommentId: 1,
+      prHeadSha: "s",
     })
     const raw = store.get("withdrawal:o:r:1:1")
     expect(raw).toBeTruthy()
@@ -352,8 +407,12 @@ describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
     await kv.put(
       "withdrawal:o:r:1:42",
       JSON.stringify({
-        path: "src/x.ts", line: 1, bodySnapshot: "concern",
-        withdrawnAt: 1700000000000, withdrawnByCommentId: 42, prHeadSha: "s",
+        path: "src/x.ts",
+        line: 1,
+        bodySnapshot: "concern",
+        withdrawnAt: 1700000000000,
+        withdrawnByCommentId: 42,
+        prHeadSha: "s",
         reason: "mention-reply-accepted",
       }),
     )
@@ -369,8 +428,12 @@ describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
     await kv.put(
       "withdrawal:o:r:1:43",
       JSON.stringify({
-        path: "src/x.ts", line: 1, bodySnapshot: "concern",
-        withdrawnAt: 1700000000000, withdrawnByCommentId: 43, prHeadSha: "s",
+        path: "src/x.ts",
+        line: 1,
+        bodySnapshot: "concern",
+        withdrawnAt: 1700000000000,
+        withdrawnByCommentId: 43,
+        prHeadSha: "s",
         reason: "mention-reply-accepted",
         dismissReason: "not-a-real-label",
       }),
@@ -396,7 +459,9 @@ describe("computeContentFingerprint", () => {
     const base = await computeContentFingerprint("security", "src/index.ts", "Possible secret leaked here.")
     expect(await computeContentFingerprint("logic", "src/index.ts", "Possible secret leaked here.")).not.toBe(base)
     expect(await computeContentFingerprint("security", "src/other.ts", "Possible secret leaked here.")).not.toBe(base)
-    expect(await computeContentFingerprint("security", "src/index.ts", "A totally different concern entirely.")).not.toBe(base)
+    expect(
+      await computeContentFingerprint("security", "src/index.ts", "A totally different concern entirely."),
+    ).not.toBe(base)
   })
 
   it("ignores body drift beyond the first 80 chars (stable prefix)", async () => {
@@ -422,30 +487,37 @@ describe("findingMatchesWithdrawal — SIG-217 fingerprint short-circuit", () =>
   it("matches on fingerprint even when line drifts past tolerance AND body is disjoint", () => {
     // Different line (well past ±5) and a body that shares no tokens — the
     // Jaccard path would REJECT this. Fingerprint match must still suppress.
-    expect(findingMatchesWithdrawal(
-      { path: "src/index.ts", line: 712, body: "completely unrelated wording", contentFingerprint: "f".repeat(64) },
-      withdrawal,
-    )).toBe(true)
+    expect(
+      findingMatchesWithdrawal(
+        {
+          path: "src/index.ts",
+          line: 712,
+          body: "completely unrelated wording",
+          contentFingerprint: "f".repeat(64),
+        },
+        withdrawal,
+      ),
+    ).toBe(true)
   })
 
   it("falls back to Jaccard when fingerprints are absent on either side", () => {
     const noFp: WithdrawalRecord = { ...withdrawal, contentFingerprint: undefined }
-    expect(findingMatchesWithdrawal(
-      { path: "src/index.ts", line: 667, body: "the original conceded body" },
-      noFp,
-    )).toBe(true)
+    expect(
+      findingMatchesWithdrawal({ path: "src/index.ts", line: 667, body: "the original conceded body" }, noFp),
+    ).toBe(true)
     // Disjoint body + no fingerprint → no match.
-    expect(findingMatchesWithdrawal(
-      { path: "src/index.ts", line: 667, body: "zzz qqq vvv unrelated" },
-      noFp,
-    )).toBe(false)
+    expect(findingMatchesWithdrawal({ path: "src/index.ts", line: 667, body: "zzz qqq vvv unrelated" }, noFp)).toBe(
+      false,
+    )
   })
 
   it("does NOT match when fingerprints differ and Jaccard/line fail", () => {
-    expect(findingMatchesWithdrawal(
-      { path: "src/index.ts", line: 712, body: "unrelated", contentFingerprint: "a".repeat(64) },
-      withdrawal,
-    )).toBe(false)
+    expect(
+      findingMatchesWithdrawal(
+        { path: "src/index.ts", line: 712, body: "unrelated", contentFingerprint: "a".repeat(64) },
+        withdrawal,
+      ),
+    ).toBe(false)
   })
 })
 
@@ -510,11 +582,17 @@ describe("writeWithdrawal + loadWithdrawal — SIG-217 fingerprint round-trip", 
     const env = makeEnv(kv)
     const fp = await computeContentFingerprint("security", "src/index.ts", "JSDoc list flagged as a secret token.")
     await writeWithdrawal({
-      env, owner: "o", repo: "r", prNumber: 1,
-      path: "src/index.ts", line: 667,
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      path: "src/index.ts",
+      line: 667,
       bodySnapshot: "JSDoc list flagged as a secret token.",
-      withdrawnByCommentId: 42, prHeadSha: "sha-1",
-      contentFingerprint: fp, score: 0,
+      withdrawnByCommentId: 42,
+      prHeadSha: "sha-1",
+      contentFingerprint: fp,
+      score: 0,
     })
     const loaded = await loadWithdrawals(env, "o", "r", 1)
     expect(loaded).toHaveLength(1)
@@ -522,7 +600,15 @@ describe("writeWithdrawal + loadWithdrawal — SIG-217 fingerprint round-trip", 
     expect(loaded[0]!.dismissedScore).toBe(0)
     // Re-fire on the next push: new id, drifted line, escalated to P0 — same fp.
     const { kept, suppressed } = filterWithdrawnFindingsDetailed(
-      [{ path: "src/index.ts", line: 669, body: "now reported as a P0 secret!!", contentFingerprint: fp, score: 5 }],
+      [
+        {
+          path: "src/index.ts",
+          line: 669,
+          body: "now reported as a P0 secret!!",
+          contentFingerprint: fp,
+          score: 5,
+        },
+      ],
       loaded,
     )
     expect(kept).toHaveLength(0)
@@ -558,7 +644,7 @@ describe("filterWithdrawnFindingsDetailed — SIG-217 Part B decay window", () =
   it("LETS THROUGH and flags decayExpired just past the window", () => {
     const now = withdrawal.withdrawnAt + DECAY_MS + 1
     const { kept, suppressed, decayExpired } = filterWithdrawnFindingsDetailed([finding], [withdrawal], now)
-    expect(kept).toHaveLength(1)          // no longer muted
+    expect(kept).toHaveLength(1) // no longer muted
     expect(suppressed).toHaveLength(0)
     expect(decayExpired).toHaveLength(1)
     expect(decayExpired[0]!.viaFingerprint).toBe(true)

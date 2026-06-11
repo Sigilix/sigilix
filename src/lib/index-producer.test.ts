@@ -11,15 +11,14 @@
 //   - isIndexerEnabled (flag gate)
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  enqueueIndexJobsForRepos,
-  isIndexerEnabled,
-  parseFullName,
-} from "@/src/lib/index-producer"
+import { enqueueIndexJobsForRepos, isIndexerEnabled, parseFullName } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 
-function makeEnv(over: Partial<Env> = {}, sendImpl?: (msg: unknown) => Promise<void> | void): {
+function makeEnv(
+  over: Partial<Env> = {},
+  sendImpl?: (msg: unknown) => Promise<void> | void,
+): {
   env: Env
   sent: JobMessage[]
 } {
@@ -203,10 +202,7 @@ describe("enqueueIndexJobsForRepos", () => {
     expect(result.attempted).toBe(2)
     expect(result.succeeded).toBe(2)
     expect(sent).toHaveLength(2)
-    expect(sent.map((m) => (m.type === "index-repo" ? m.repo : null))).toEqual([
-      "repo-a",
-      "repo-e",
-    ])
+    expect(sent.map((m) => (m.type === "index-repo" ? m.repo : null))).toEqual(["repo-a", "repo-e"])
   })
 
   it("skips sensitive repos and counts them separately", async () => {

@@ -42,9 +42,7 @@ export {
   type FileGraph,
 } from "./graph-extract-types"
 
-const KNOWN_EXTS: ReadonlySet<string> = new Set([
-  ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
-])
+const KNOWN_EXTS: ReadonlySet<string> = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"])
 
 function sourceExt(path: string): SourceExt | null {
   const dot = path.lastIndexOf(".")
@@ -106,12 +104,7 @@ function extractJsTsFileGraph(path: string, content: string, astCache?: AstCache
   // Pass 2: collect symbols. loc.start.line is 1-based (acorn with
   // locations:true). column is 0-based.
   const symbols: GraphSymbol[] = []
-  const push = (
-    name: string,
-    kind: SymbolKind,
-    locNode: AstNode,
-    exported: boolean,
-  ): void => {
+  const push = (name: string, kind: SymbolKind, locNode: AstNode, exported: boolean): void => {
     if (!name) return
     const s = locNode.loc.start
     const e = locNode.loc.end
@@ -270,9 +263,7 @@ function extractJsTsFileGraph(path: string, content: string, astCache?: AstCache
   // arrow-function consts (kind "variable", e.g. `const f = () => {}`) are NOT captured
   // here — a known recall gap, deferred pending Phase 2 shadow telemetry. Prefer-missing
   // over false: widening to "variable" risks false edges for non-callable consts.
-  const localFns = new Set(
-    symbols.filter((s) => s.kind === "function").map((s) => s.name),
-  )
+  const localFns = new Set(symbols.filter((s) => s.kind === "function").map((s) => s.name))
 
   const callEdges: CallEdge[] = []
   walkAst(ast, {

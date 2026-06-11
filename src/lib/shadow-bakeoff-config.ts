@@ -20,13 +20,7 @@ import type { ModelConfig } from "./triage-pr-review-ensemble"
 
 export type ShadowRole = "logic" | "security" | "performance" | "tests" | "synth"
 
-const SHADOW_ROLES: ReadonlySet<ShadowRole> = new Set([
-  "logic",
-  "security",
-  "performance",
-  "tests",
-  "synth",
-])
+const SHADOW_ROLES: ReadonlySet<ShadowRole> = new Set(["logic", "security", "performance", "tests", "synth"])
 
 /**
  * Candidate per-role ModelConfig to bake off vs. production.
@@ -111,10 +105,7 @@ export function parseShadowEnabledRoles(raw: string | undefined): Set<ShadowRole
  * when shadow is disabled for that role on this run. Used by the
  * orchestrator to gate dispatch (no fan-out for null).
  */
-export function resolveShadowConfig(
-  role: ShadowRole,
-  enabled: ReadonlySet<ShadowRole>,
-): ModelConfig | null {
+export function resolveShadowConfig(role: ShadowRole, enabled: ReadonlySet<ShadowRole>): ModelConfig | null {
   if (!enabled.has(role)) return null
   return SHADOW_BAKEOFF_LINEUP[role]
 }

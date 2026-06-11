@@ -23,12 +23,17 @@ import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
 const SLICE_MAX = 200
 const LOOP_TYPES: ReadonlySet<string> = new Set([
-  "ForStatement", "ForInStatement", "ForOfStatement",
-  "WhileStatement", "DoWhileStatement",
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
 ])
 const FUNCTION_BOUNDARY_TYPES: ReadonlySet<string> = new Set([
-  "FunctionDeclaration", "FunctionExpression",
-  "ArrowFunctionExpression", "MethodDefinition",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "MethodDefinition",
 ])
 
 function sliceEvidence(source: string, node: AstNode): string {
@@ -79,7 +84,7 @@ function collectDeclaredNames(node: AstNode, names: Set<string>): void {
     collectPatternNames(node.param as AstNode, names)
   }
   // Inner loop variables: `for (const x of …)` / `for (let i = …)`.
-  if ((t === "ForOfStatement" || t === "ForInStatement" || t === "ForStatement")) {
+  if (t === "ForOfStatement" || t === "ForInStatement" || t === "ForStatement") {
     const left = (node.left ?? node.init) as AstNode | undefined
     if (left?.type === "VariableDeclaration") collectDeclaredNames(left, names)
   }
@@ -107,8 +112,11 @@ function spreadSelfAssignName(node: AstNode): string | null {
   for (const el of elements) {
     if (!el) continue
     // ObjectExpression spreads are `SpreadElement` in acorn (`...obj`).
-    if (el.type === "SpreadElement" && (el.argument as AstNode)?.type === "Identifier"
-      && (el.argument as AstNode).name === name) {
+    if (
+      el.type === "SpreadElement" &&
+      (el.argument as AstNode)?.type === "Identifier" &&
+      (el.argument as AstNode).name === name
+    ) {
       return name
     }
   }
@@ -166,7 +174,8 @@ export const noSpreadAccumulatorInLoop: AstRule = {
     walk(node, 0, new Set())
     if (hits.length === 0) return null
     return hits.map((h) => ({
-      message: "Rebuilding a collection with a spread (`acc = [...acc, …]`) on each iteration is O(n²) over the loop. Mutate in place (`acc.push(…)`) or build once after the loop.",
+      message:
+        "Rebuilding a collection with a spread (`acc = [...acc, …]`) on each iteration is O(n²) over the loop. Mutate in place (`acc.push(…)`) or build once after the loop.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,

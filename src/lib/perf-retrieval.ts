@@ -43,9 +43,30 @@ const MAX_FUNCTION_NAMES = 20
  * `catch (`). Dropped so the changed-function list stays clean.
  */
 const CONTROL_FLOW_STOPWORDS: ReadonlySet<string> = new Set([
-  "if", "for", "while", "switch", "catch", "return", "function", "await",
-  "const", "let", "var", "else", "do", "with", "throw", "typeof", "new",
-  "yield", "case", "void", "delete", "in", "of", "instanceof",
+  "if",
+  "for",
+  "while",
+  "switch",
+  "catch",
+  "return",
+  "function",
+  "await",
+  "const",
+  "let",
+  "var",
+  "else",
+  "do",
+  "with",
+  "throw",
+  "typeof",
+  "new",
+  "yield",
+  "case",
+  "void",
+  "delete",
+  "in",
+  "of",
+  "instanceof",
   // not control-flow, but `constructor(...) {` is method-shaped noise.
   "constructor",
 ])
@@ -108,16 +129,11 @@ export function extractChangedFunctionNames(diff: string): string[] {
  * function names. Guaranteed to differ from the bare base query so the
  * embedded vector lands on perf-relevant code.
  */
-export function buildPerfRetrievalQuery(
-  baseQuery: string,
-  changedFunctionNames: readonly string[],
-): string {
+export function buildPerfRetrievalQuery(baseQuery: string, changedFunctionNames: readonly string[]): string {
   const parts: string[] = []
   const trimmedBase = baseQuery.trim()
   if (trimmedBase.length > 0) parts.push(trimmedBase)
-  parts.push(
-    `Performance review — look for: ${PERF_RETRIEVAL_KEYWORDS.join(", ")}.`,
-  )
+  parts.push(`Performance review — look for: ${PERF_RETRIEVAL_KEYWORDS.join(", ")}.`)
   if (changedFunctionNames.length > 0) {
     parts.push(`Changed functions: ${changedFunctionNames.join(", ")}.`)
   }
@@ -140,10 +156,7 @@ export function buildPerfRetrievalQuery(
  *     that lowers the budget to 2 degrades cleanly to the shared
  *     snapshot.
  */
-export function shouldRunPerfRetrieval(
-  specialists: readonly string[],
-  budgetRemaining: number,
-): boolean {
+export function shouldRunPerfRetrieval(specialists: readonly string[], budgetRemaining: number): boolean {
   return specialists.includes("performance") && budgetRemaining > 2
 }
 
@@ -153,10 +166,7 @@ export function shouldRunPerfRetrieval(
  * shared preflight snapshot so the perf role is never worse off than
  * the others. Extracted for unit-testability.
  */
-export function resolvePerfSnapshot(
-  formattedPerf: string,
-  sharedSnapshot: string,
-): string {
+export function resolvePerfSnapshot(formattedPerf: string, sharedSnapshot: string): string {
   return formattedPerf.length > 0 ? formattedPerf : sharedSnapshot
 }
 
@@ -168,10 +178,6 @@ export function resolvePerfSnapshot(
  * from the orchestrator's per-role message builder so the per-role
  * selection contract is unit-testable in isolation.
  */
-export function selectRetrievalSnapshotForRole(
-  role: string,
-  perfSnapshot: string,
-  sharedSnapshot: string,
-): string {
+export function selectRetrievalSnapshotForRole(role: string, perfSnapshot: string, sharedSnapshot: string): string {
   return role === "performance" ? perfSnapshot : sharedSnapshot
 }

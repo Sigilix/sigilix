@@ -7,12 +7,7 @@ import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-f
 import { evaluateSecurityUsage } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
-export type SecurityOverfireClass =
-  | "command-mention"
-  | "xss-mention"
-  | "doc-mention"
-  | "command-injection"
-  | "xss"
+export type SecurityOverfireClass = "command-mention" | "xss-mention" | "doc-mention" | "command-injection" | "xss"
 
 export interface SecurityOverfireCase {
   id: string
@@ -59,8 +54,7 @@ function samePath(found: string, expected: string): boolean {
   const eParts = e.split("/")
   if (fParts.length < 2 || eParts.length < 2) return false
   return (
-    fParts[fParts.length - 1] === eParts[eParts.length - 1] &&
-    fParts[fParts.length - 2] === eParts[eParts.length - 2]
+    fParts[fParts.length - 1] === eParts[eParts.length - 1] && fParts[fParts.length - 2] === eParts[eParts.length - 2]
   )
 }
 
@@ -94,10 +88,7 @@ export function applySecurityUsageGate(
   return findings.filter((f) => evaluateSecurityUsage(toPrReviewFinding(f), { addedLineTextByLine }).keep)
 }
 
-export function scoreCase(
-  c: SecurityOverfireCase,
-  findings: readonly SecurityScoredFinding[],
-): SecurityCaseResult {
+export function scoreCase(c: SecurityOverfireCase, findings: readonly SecurityScoredFinding[]): SecurityCaseResult {
   const onPath = findings.filter((f) => isSecurityBlocker(f) && onTarget(c, f))
   if (c.label === "safe") {
     return {
@@ -152,19 +143,21 @@ export function aggregate(results: readonly SecurityCaseResult[]): SecurityAggre
   }
 }
 
-const execFact = (path: string, line: number): string => [
-  "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
-  "Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO deterministic scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
-  "",
-  `- \`ast:no-exec-shell-interpolation:ast/no-exec-shell-interpolation/sig311/${line}\` — ${path}:${line} [proposed CWE-78]: child_process exec with a dynamic shell command`,
-].join("\n")
+const execFact = (path: string, line: number): string =>
+  [
+    "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
+    'Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding\'s `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO deterministic scanner can detect, set `evidenceId: "NONE"` and justify in the body why no deterministic check exists.',
+    "",
+    `- \`ast:no-exec-shell-interpolation:ast/no-exec-shell-interpolation/sig311/${line}\` — ${path}:${line} [proposed CWE-78]: child_process exec with a dynamic shell command`,
+  ].join("\n")
 
-const xssFact = (path: string, line: number): string => [
-  "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
-  "Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO deterministic scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
-  "",
-  `- \`ast:no-dangerous-html-dynamic:ast/no-dangerous-html-dynamic/sig311/${line}\` — ${path}:${line} [proposed CWE-79]: dynamic HTML write sink`,
-].join("\n")
+const xssFact = (path: string, line: number): string =>
+  [
+    "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
+    'Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding\'s `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO deterministic scanner can detect, set `evidenceId: "NONE"` and justify in the body why no deterministic check exists.',
+    "",
+    `- \`ast:no-dangerous-html-dynamic:ast/no-dangerous-html-dynamic/sig311/${line}\` — ${path}:${line} [proposed CWE-79]: dynamic HTML write sink`,
+  ].join("\n")
 
 export const SECURITY_OVERFIRE_CASES: SecurityOverfireCase[] = [
   {

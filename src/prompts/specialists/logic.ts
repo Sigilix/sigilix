@@ -15,10 +15,7 @@ import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./share
  * prompt size reasonable.
  */
 function renderLogicExamplesBlock(): string {
-  const lines: string[] = [
-    "[LOGIC FEW-SHOT EXEMPLARS — calibrate what to flag vs. skip; do NOT copy verbatim]",
-    "",
-  ]
+  const lines: string[] = ["[LOGIC FEW-SHOT EXEMPLARS — calibrate what to flag vs. skip; do NOT copy verbatim]", ""]
   for (const ex of logicExamples.examples) {
     const verb = ex.emit ? "EMIT" : "SKIP"
     lines.push(`- ${verb}: ${ex.situation}`)

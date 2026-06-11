@@ -31,7 +31,10 @@ const DAY_MS = 86_400_000
 const MIN_PER_ARM = 30
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
 }
 
 function parseWindowDays(raw: string | null): number | null {
@@ -94,10 +97,17 @@ export async function handleGraphExpansionAbMetricsRoute(request: Request, env: 
     ),
   ]
   if (repos.length === 0 || repos.some((r) => !/^[^/\s]+\/[^/\s]+$/.test(r))) {
-    return json({ error: "invalid_repo", detail: "?repo=owner/repo is required (repeatable / comma-separated for rename aliases)" }, 400)
+    return json(
+      {
+        error: "invalid_repo",
+        detail: "?repo=owner/repo is required (repeatable / comma-separated for rename aliases)",
+      },
+      400,
+    )
   }
   const windowDays = parseWindowDays(params.get("window"))
-  if (windowDays === null) return json({ error: "invalid_window", detail: `window must be 1-${MAX_WINDOW_DAYS} days` }, 400)
+  if (windowDays === null)
+    return json({ error: "invalid_window", detail: `window must be 1-${MAX_WINDOW_DAYS} days` }, 400)
 
   const listed = await listKeys(env, TELEMETRY_PREFIX, TELEMETRY_LIST_SCAN)
   const matched = listed.filter((k) => {
@@ -139,8 +149,7 @@ export async function handleGraphExpansionAbMetricsRoute(request: Request, env: 
   const t = withRates(treatment)
   const c = withRates(control)
   const haveData = treatment.reviews >= MIN_PER_ARM && control.reviews >= MIN_PER_ARM
-  const deltaMeanHighSev =
-    t.meanHighSev !== null && c.meanHighSev !== null ? t.meanHighSev - c.meanHighSev : null
+  const deltaMeanHighSev = t.meanHighSev !== null && c.meanHighSev !== null ? t.meanHighSev - c.meanHighSev : null
 
   return json(
     {

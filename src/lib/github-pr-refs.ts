@@ -12,8 +12,7 @@
 // Refs are deduped by `owner/repo/number` and capped at 2 per call to
 // defend against link-spam comments.
 
-const URL_PATTERN =
-  /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g
+const URL_PATTERN = /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g
 
 // Negative lookbehind for "word char" so we match `PR #N`, `(PR #N)`,
 // `[PR #N]`, `,PR #N`, etc., but NOT `MyPR #N` / `aPR #N`. Catches
@@ -29,10 +28,7 @@ export interface PrRef {
   source: "url" | "bare-pr-n"
 }
 
-export function extractPullRequestRefs(
-  text: string,
-  inferRepo: () => { owner: string; repo: string } | null
-): PrRef[] {
+export function extractPullRequestRefs(text: string, inferRepo: () => { owner: string; repo: string } | null): PrRef[] {
   if (!text) return []
 
   const out: PrRef[] = []

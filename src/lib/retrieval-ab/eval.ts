@@ -130,8 +130,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.length > 
 // Line numbers are 1-based integers. Reject fractional / non-positive values
 // outright rather than truncating them — `Math.trunc(10.9) === 10` would
 // silently relocate a malformed row onto a real line and forge a match.
-const int = (v: unknown): number | null =>
-  typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null
+const int = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null)
 
 export function parseGroundTruthJsonl(text: string): ParseResult<GroundTruthItem> {
   return parseJsonlLines<GroundTruthItem>(text, (o) => {
@@ -153,9 +152,7 @@ export function parseArmFindingsJsonl(text: string): ParseResult<ArmFinding> {
     if (pr === null || file === null || line === null) return null
     if (armRaw !== "vector" && armRaw !== "hybrid") return null
     const category = str(o.category)
-    return category !== null
-      ? { pr, arm: armRaw, file, line, category }
-      : { pr, arm: armRaw, file, line }
+    return category !== null ? { pr, arm: armRaw, file, line, category } : { pr, arm: armRaw, file, line }
   })
 }
 
@@ -279,17 +276,29 @@ export function computeAbReport(
   // Ship only on a real, sufficiently-powered >10% relative lift. A lift from
   // a zero vector baseline (relativeLift null) ships only if hybrid F1 is
   // actually positive — degenerate, but don't divide by zero.
-  const meetsBar =
-    relativeLift === null ? hybrid.f1 > 0 && vector.f1 === 0 : relativeLift >= SHIP_F1_RELATIVE_LIFT
+  const meetsBar = relativeLift === null ? hybrid.f1 > 0 && vector.f1 === 0 : relativeLift >= SHIP_F1_RELATIVE_LIFT
   const shipHybrid = meetsBar && !underpowered
 
   const reason = underpowered
     ? `underpowered: ${prCount} PRs < ${minPrs} required — collect more before deciding`
     : shipHybrid
-      ? `hybrid F1 ${(hybrid.f1).toFixed(3)} vs vector ${(vector.f1).toFixed(3)} = ${relativeLift === null ? "∞" : (relativeLift * 100).toFixed(1) + "%"} relative lift ≥ ${(SHIP_F1_RELATIVE_LIFT * 100).toFixed(0)}% → ship hybrid as default`
-      : `hybrid F1 ${(hybrid.f1).toFixed(3)} vs vector ${(vector.f1).toFixed(3)} = ${relativeLift === null ? "n/a" : (relativeLift * 100).toFixed(1) + "%"} relative lift < ${(SHIP_F1_RELATIVE_LIFT * 100).toFixed(0)}% → keep behind the OPENCLAW_RETRIEVAL_HYBRID flag`
+      ? `hybrid F1 ${hybrid.f1.toFixed(3)} vs vector ${vector.f1.toFixed(3)} = ${relativeLift === null ? "∞" : (relativeLift * 100).toFixed(1) + "%"} relative lift ≥ ${(SHIP_F1_RELATIVE_LIFT * 100).toFixed(0)}% → ship hybrid as default`
+      : `hybrid F1 ${hybrid.f1.toFixed(3)} vs vector ${vector.f1.toFixed(3)} = ${relativeLift === null ? "n/a" : (relativeLift * 100).toFixed(1) + "%"} relative lift < ${(SHIP_F1_RELATIVE_LIFT * 100).toFixed(0)}% → keep behind the OPENCLAW_RETRIEVAL_HYBRID flag`
 
-  return { prCount, vector, hybrid, decision: { shipHybrid, vectorF1: vector.f1, hybridF1: hybrid.f1, f1Delta, relativeLift, underpowered, reason } }
+  return {
+    prCount,
+    vector,
+    hybrid,
+    decision: {
+      shipHybrid,
+      vectorF1: vector.f1,
+      hybridF1: hybrid.f1,
+      f1Delta,
+      relativeLift,
+      underpowered,
+      reason,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -318,8 +327,21 @@ export function formatAbMarkdown(r: AbReport): string {
 }
 
 export function formatAbCsv(r: AbReport): string {
-  const header = "arm,tp,fp,fn,precision,recall,f1,precision_ci_lower,precision_ci_upper,recall_ci_lower,recall_ci_upper"
+  const header =
+    "arm,tp,fp,fn,precision,recall,f1,precision_ci_lower,precision_ci_upper,recall_ci_lower,recall_ci_upper"
   const row = (m: ArmMetrics): string =>
-    [m.arm, m.tp, m.fp, m.fn, m.precision.toFixed(4), m.recall.toFixed(4), m.f1.toFixed(4), m.precisionCI.lower.toFixed(4), m.precisionCI.upper.toFixed(4), m.recallCI.lower.toFixed(4), m.recallCI.upper.toFixed(4)].join(",")
+    [
+      m.arm,
+      m.tp,
+      m.fp,
+      m.fn,
+      m.precision.toFixed(4),
+      m.recall.toFixed(4),
+      m.f1.toFixed(4),
+      m.precisionCI.lower.toFixed(4),
+      m.precisionCI.upper.toFixed(4),
+      m.recallCI.lower.toFixed(4),
+      m.recallCI.upper.toFixed(4),
+    ].join(",")
   return [header, row(r.vector), row(r.hybrid)].join("\n")
 }

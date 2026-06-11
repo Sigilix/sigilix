@@ -21,6 +21,8 @@ export type RunnerEvidenceState =
       state: "verified"
       /** The verified SARIF (the stored, integrity-checked body). */
       sarif: string
+      /** Optional runner coverage manifest stored with the receipt body. */
+      scanManifest?: string
       /** BOUND value from the receipt — render THIS, never the SARIF's own. */
       repository: string
       /** OIDC-signed merge sha (== the PR's merge_commit_sha at review time). */

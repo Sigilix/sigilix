@@ -260,13 +260,20 @@ describe("resolveTaxonomy — Sigilix runner metadata", () => {
     expect(r.source).toBe("deterministic-tool")
   })
 
-  it("routes all first-slice tools with engine-owned role policy", () => {
+  it("routes runner catalog tools with catalog-owned role policy", () => {
     const cases = [
       ["semgrep", ["security"]],
       ["eslint", ["logic"]],
       ["ruff", ["logic", "performance"]],
       ["actionlint", ["logic", "security"]],
       ["shellcheck", ["security", "logic"]],
+      ["gitleaks", ["security"]],
+      ["osv-scanner", ["security"]],
+      ["checkov", ["security"]],
+      ["trivy", ["security"]],
+      ["zizmor", ["security", "logic"]],
+      ["hadolint", ["logic", "security"]],
+      ["tflint", ["logic", "security"]],
     ] as const
 
     for (const [toolId, roleHints] of cases) {

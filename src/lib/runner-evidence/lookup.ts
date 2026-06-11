@@ -42,6 +42,8 @@ export type RunnerEvidenceState =
       state: "verified"
       /** The verified SARIF (the stored, integrity-checked body). */
       sarif: string
+      /** Optional runner coverage manifest stored with the receipt body. */
+      scanManifest?: string
       /** BOUND values from the receipt — render THESE, never the SARIF's own. */
       repository: string
       /** The OIDC-signed merge sha (== the PR's merge_commit_sha at review time). */
@@ -163,7 +165,7 @@ export async function lookupRunnerEvidence(
 
   // Fetch the bulky SARIF body by the receipt's exact (repoId, sha, run) key.
   const kvKey = `runner-receipt:repo:${repositoryId}:${row.sha}:${row.runId}:${row.runAttempt}`
-  let body: { sarif?: unknown } | null = null
+  let body: { sarif?: unknown; scanManifest?: unknown } | null = null
   try {
     body = (await env.OPENCLAW_STATE.get(kvKey, "json")) as { sarif?: unknown } | null
   } catch {
@@ -182,6 +184,21 @@ export async function lookupRunnerEvidence(
     return { state: "evidence-pending", reason: "integrity-mismatch" }
   }
 
+  let scanManifest: string | undefined
+  if (row.scanManifestSha256 || body.scanManifest !== undefined) {
+    if (typeof body.scanManifest !== "string") {
+      return { state: "evidence-pending", reason: "scan-manifest-missing" }
+    }
+    if (!row.scanManifestSha256) {
+      return { state: "evidence-pending", reason: "scan-manifest-unbound" }
+    }
+    const manifestHash = await sha256Hex(body.scanManifest)
+    if (manifestHash !== row.scanManifestSha256) {
+      return { state: "evidence-pending", reason: "scan-manifest-integrity-mismatch" }
+    }
+    scanManifest = body.scanManifest
+  }
+
   // Believability boundary: SARIF-internal consistency with the bound merge/repo.
   const consistency = validateRunnerSarifConsistency(body.sarif, {
     sha: row.sha,
@@ -194,6 +211,7 @@ export async function lookupRunnerEvidence(
   return {
     state: "verified",
     sarif: body.sarif,
+    ...(scanManifest !== undefined ? { scanManifest } : {}),
     repository: row.repository, // BOUND value — never the SARIF's self-described repo
     sha: row.sha,
     pullNumber: row.pullNumber,

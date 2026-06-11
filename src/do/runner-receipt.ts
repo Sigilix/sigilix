@@ -31,6 +31,8 @@ const DAY_MS = 86_400_000
 // `scrubbed_sha256` is the hash of the SCRUBBED SARIF persisted to KV (the raw
 // `sarif_sha256` is the GitHub-attested identity, but the stored body is
 // scrubbed, so consumption integrity-checks against this one).
+// `scan_manifest_sha256` binds optional coverage metadata to the same receipt
+// so a KV/body or artifact swap cannot fabricate which tools ran.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS receipts (
   repository_id TEXT NOT NULL,
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   run_attempt TEXT NOT NULL,
   sarif_sha256 TEXT NOT NULL,
   scrubbed_sha256 TEXT NOT NULL,
+  scan_manifest_sha256 TEXT NOT NULL DEFAULT '',
   pull_number INTEGER NOT NULL,
   repository TEXT NOT NULL,
   job_workflow_ref TEXT NOT NULL,
@@ -69,6 +72,8 @@ export interface ClaimReceiptArgs {
   /** SHA-256 (hex) of the SCRUBBED SARIF persisted to KV — integrity of the
    *  stored body, so consumption can verify it before trusting it as evidence. */
   scrubbedSha256: string
+  /** SHA-256 (hex) of the normalized scan manifest persisted to KV, when present. */
+  scanManifestSha256?: string | undefined
   repository: string
   jobWorkflowRef: string
   runnerEnvironment: string
@@ -84,6 +89,7 @@ export interface RunnerReceiptRow {
   runAttempt: string
   sarifSha256: string
   scrubbedSha256: string
+  scanManifestSha256?: string | undefined
   repository: string
   jobWorkflowRef: string
   runnerEnvironment: string
@@ -114,6 +120,8 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       const cols = new Set([...sql.exec<{ name: string }>("PRAGMA table_info(receipts)")].map((r) => r.name))
       if (!cols.has("scrubbed_sha256"))
         sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
+      if (!cols.has("scan_manifest_sha256"))
+        sql.exec("ALTER TABLE receipts ADD COLUMN scan_manifest_sha256 TEXT NOT NULL DEFAULT ''")
       if (!cols.has("pull_number")) sql.exec("ALTER TABLE receipts ADD COLUMN pull_number INTEGER NOT NULL DEFAULT 0")
       sql.exec(PULL_INDEX) // safe now — pull_number is guaranteed to exist
       this.ready = true
@@ -135,9 +143,10 @@ export class RunnerReceiptDO extends DurableObject<Env> {
     let result: ClaimReceiptResult = { outcome: "accepted" }
 
     this.ctx.storage.transactionSync(() => {
+      const scanManifestSha256 = args.scanManifestSha256 ?? ""
       const existing = [
-        ...sql.exec<{ sarif_sha256: string }>(
-          `SELECT sarif_sha256 FROM receipts
+        ...sql.exec<{ sarif_sha256: string; scan_manifest_sha256: string }>(
+          `SELECT sarif_sha256, scan_manifest_sha256 FROM receipts
            WHERE repository_id = ? AND sha = ? AND run_id = ? AND run_attempt = ?`,
           args.repositoryId,
           args.sha,
@@ -149,15 +158,16 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       if (!existing) {
         sql.exec(
           `INSERT INTO receipts
-             (repository_id, sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
+             (repository_id, sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256, scan_manifest_sha256,
               pull_number, repository, job_workflow_ref, runner_environment, ingested_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args.repositoryId,
           args.sha,
           args.runId,
           args.runAttempt,
           args.sarifSha256,
           args.scrubbedSha256,
+          scanManifestSha256,
           args.pullNumber,
           args.repository,
           args.jobWorkflowRef,
@@ -165,7 +175,7 @@ export class RunnerReceiptDO extends DurableObject<Env> {
           at,
         )
         result = { outcome: "accepted" }
-      } else if (existing.sarif_sha256 === args.sarifSha256) {
+      } else if (existing.sarif_sha256 === args.sarifSha256 && existing.scan_manifest_sha256 === scanManifestSha256) {
         result = { outcome: "duplicate" }
       } else {
         result = { outcome: "conflict", existingSarifSha256: existing.sarif_sha256 }
@@ -217,12 +227,13 @@ export class RunnerReceiptDO extends DurableObject<Env> {
         run_attempt: string
         sarif_sha256: string
         scrubbed_sha256: string
+        scan_manifest_sha256: string
         repository: string
         job_workflow_ref: string
         runner_environment: string
         ingested_at: number
       }>(
-        `SELECT sha, pull_number, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
+        `SELECT sha, pull_number, run_id, run_attempt, sarif_sha256, scrubbed_sha256, scan_manifest_sha256,
                 repository, job_workflow_ref, runner_environment, ingested_at
          FROM receipts WHERE repository_id = ? AND pull_number = ?
          ORDER BY ingested_at DESC LIMIT 1`,
@@ -238,6 +249,7 @@ export class RunnerReceiptDO extends DurableObject<Env> {
           runAttempt: r.run_attempt,
           sarifSha256: r.sarif_sha256,
           scrubbedSha256: r.scrubbed_sha256,
+          ...(r.scan_manifest_sha256 ? { scanManifestSha256: r.scan_manifest_sha256 } : {}),
           repository: r.repository,
           jobWorkflowRef: r.job_workflow_ref,
           runnerEnvironment: r.runner_environment,

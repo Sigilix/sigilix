@@ -27,6 +27,7 @@ const SARIF = JSON.stringify({
     },
   ],
 })
+const SCAN_MANIFEST = JSON.stringify({ schemaVersion: 1, tools: [], summary: {} })
 
 function makeEnv(opts: { row?: unknown; rowThrows?: boolean; body?: unknown; bodyThrows?: boolean }): Env {
   const ns = {
@@ -47,13 +48,14 @@ function makeEnv(opts: { row?: unknown; rowThrows?: boolean; body?: unknown; bod
   return { RUNNER_RECEIPT_DO: ns, OPENCLAW_STATE: kv } as unknown as Env
 }
 
-const baseRow = (scrubbedSha256: string) => ({
+const baseRow = (scrubbedSha256: string, scanManifestSha256?: string) => ({
   sha: "mergedead",
   pullNumber: 7,
   runId: "1",
   runAttempt: "1",
   sarifSha256: "rawhash",
   scrubbedSha256,
+  scanManifestSha256,
   repository: "Sigilix/sigilix",
   jobWorkflowRef: "sigilix/runner/.github/workflows/scan.yml@v1",
   runnerEnvironment: "github-hosted",
@@ -62,7 +64,10 @@ const baseRow = (scrubbedSha256: string) => ({
 
 describe("lookupRunnerEvidence", () => {
   it("verified: DO row + matching merge sha + body hash + consistent SARIF → renders BOUND values", async () => {
-    const env = makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } })
+    const env = makeEnv({
+      row: baseRow(await sha256(SARIF), await sha256(SCAN_MANIFEST)),
+      body: { sarif: SARIF, scanManifest: SCAN_MANIFEST },
+    })
     const r = await lookupRunnerEvidence(env, "424242", 7, "mergedead")
     expect(r).toMatchObject({
       state: "verified",
@@ -71,7 +76,10 @@ describe("lookupRunnerEvidence", () => {
       pullNumber: 7,
       runId: "1",
     })
-    if (r.state === "verified") expect(r.sarif).toBe(SARIF)
+    if (r.state === "verified") {
+      expect(r.sarif).toBe(SARIF)
+      expect(r.scanManifest).toBe(SCAN_MANIFEST)
+    }
   })
 
   it("runner-absent: no row, and (fail-closed) empty repositoryId / non-PR / missing merge sha", async () => {
@@ -110,6 +118,45 @@ describe("lookupRunnerEvidence", () => {
       "mergedead",
     )
     expect(r).toMatchObject({ state: "evidence-pending", reason: "integrity-mismatch" })
+  })
+
+  it("evidence-pending when a stored scan manifest does not match the receipt hash", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({
+        row: baseRow(await sha256(SARIF), await sha256(JSON.stringify({ schemaVersion: 1, tools: [] }))),
+        body: { sarif: SARIF, scanManifest: SCAN_MANIFEST },
+      }),
+      "424242",
+      7,
+      "mergedead",
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "scan-manifest-integrity-mismatch" })
+  })
+
+  it("evidence-pending when the receipt binds a manifest hash but the KV body lacks the manifest", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({
+        row: baseRow(await sha256(SARIF), await sha256(SCAN_MANIFEST)),
+        body: { sarif: SARIF },
+      }),
+      "424242",
+      7,
+      "mergedead",
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "scan-manifest-missing" })
+  })
+
+  it("evidence-pending when the KV body has a manifest that is not bound by the receipt row", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({
+        row: baseRow(await sha256(SARIF)),
+        body: { sarif: SARIF, scanManifest: SCAN_MANIFEST },
+      }),
+      "424242",
+      7,
+      "mergedead",
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "scan-manifest-unbound" })
   })
 
   it("evidence-pending (DEMOTED) when the SARIF's revisionId != the bound merge sha", async () => {

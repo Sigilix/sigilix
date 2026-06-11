@@ -68,6 +68,15 @@ describe("RunnerReceiptDO.claimReceipt", () => {
     expect(await d.claimReceipt(base)).toEqual({ outcome: "duplicate" })
   })
 
+  it("same key + same SARIF hash + different scan manifest hash is a conflict", async () => {
+    const d = makeDo()
+    await d.claimReceipt({ ...base, scanManifestSha256: "manifest-A" })
+    expect(await d.claimReceipt({ ...base, scanManifestSha256: "manifest-B" })).toEqual({
+      outcome: "conflict",
+      existingSarifSha256: "hash-A",
+    })
+  })
+
   it("same key + DIFFERENT hash is a conflict — and does NOT overwrite", async () => {
     const d = makeDo()
     await d.claimReceipt(base)
@@ -144,7 +153,7 @@ describe("RunnerReceiptDO.claimReceipt", () => {
 describe("RunnerReceiptDO.queryReceiptByPull (review join)", () => {
   it("returns the receipt for a (repository_id, pull_number) review join", async () => {
     const d = makeDo()
-    await d.claimReceipt(base)
+    await d.claimReceipt({ ...base, scanManifestSha256: "manifest-A" })
     expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({
       sha: "deadbeef",
       pullNumber: 7,
@@ -152,6 +161,7 @@ describe("RunnerReceiptDO.queryReceiptByPull (review join)", () => {
       runAttempt: "1",
       sarifSha256: "hash-A",
       scrubbedSha256: "scrub-A",
+      scanManifestSha256: "manifest-A",
       repository: "Sigilix/sigilix",
     })
   })

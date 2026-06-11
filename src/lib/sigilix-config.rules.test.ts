@@ -25,6 +25,8 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
           ruff: { enabled: true },
           actionlint: { enabled: false },
           shellcheck: { enabled: true },
+          checkov: { enabled: true },
+          "osv-scanner": { enabled: false },
         },
       }),
     )
@@ -34,6 +36,8 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
       ruff: { enabled: true },
       actionlint: { enabled: false },
       shellcheck: { enabled: true },
+      checkov: { enabled: true },
+      "osv-scanner": { enabled: false },
     })
   })
 
@@ -72,7 +76,7 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
     const cfg = parseSigilixConfig(
       JSON.stringify({
         linters: {
-          biome: { enabled: true },
+          markdownlint: { enabled: true },
           prettier: false,
         },
       }),
@@ -82,33 +86,34 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
 })
 
 describe("resolveLintersConfig (SIG-107)", () => {
-  it("defaults every known linter to enabled", () => {
-    const expected = {
-      semgrep: { enabled: true },
-      eslint: { enabled: true },
-      ruff: { enabled: true },
-      actionlint: { enabled: true },
-      shellcheck: { enabled: true },
-    }
-    expect(resolveLintersConfig(null)).toEqual(expected)
-    expect(resolveLintersConfig({} as SigilixConfig)).toEqual(expected)
+  it("uses the default profile instead of defaulting every known linter to enabled", () => {
+    const defaults = resolveLintersConfig(null)
+    expect(defaults.semgrep).toEqual({ enabled: true })
+    expect(defaults.eslint).toEqual({ enabled: true })
+    expect(defaults.ruff).toEqual({ enabled: true })
+    expect(defaults.actionlint).toEqual({ enabled: true })
+    expect(defaults.shellcheck).toEqual({ enabled: true })
+    expect(defaults.gitleaks).toEqual({ enabled: true })
+    expect(defaults["osv-scanner"]).toEqual({ enabled: true })
+    expect(defaults.checkov).toEqual({ enabled: false })
+    expect(defaults.trivy).toEqual({ enabled: false })
+    expect(defaults.tflint).toEqual({ enabled: false })
+    expect(resolveLintersConfig({} as SigilixConfig)).toEqual(defaults)
   })
 
-  it("respects explicit disabled values while defaulting absent linters to enabled", () => {
-    expect(
-      resolveLintersConfig({
-        linters: {
-          eslint: { enabled: false },
-          shellcheck: { enabled: false },
-        },
-      } as SigilixConfig),
-    ).toEqual({
-      semgrep: { enabled: true },
-      eslint: { enabled: false },
-      ruff: { enabled: true },
-      actionlint: { enabled: true },
-      shellcheck: { enabled: false },
-    })
+  it("respects explicit values while defaulting absent linters from the profile", () => {
+    const resolved = resolveLintersConfig({
+      linters: {
+        eslint: { enabled: false },
+        shellcheck: { enabled: false },
+        checkov: { enabled: true },
+      },
+    } as SigilixConfig)
+    expect(resolved.eslint).toEqual({ enabled: false })
+    expect(resolved.shellcheck).toEqual({ enabled: false })
+    expect(resolved.checkov).toEqual({ enabled: true })
+    expect(resolved.trivy).toEqual({ enabled: false })
+    expect(resolved.semgrep).toEqual({ enabled: true })
   })
 })
 

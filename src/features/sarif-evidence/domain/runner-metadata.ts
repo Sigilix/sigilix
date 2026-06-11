@@ -1,11 +1,12 @@
+import { isRunnerToolId, rolesForRunnerTool, type RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 import type { RoleHint } from "./types"
+
+export { RUNNER_TOOL_IDS } from "@/src/shared/domain/runner-tool-catalog"
+export type { RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
 export const RUNNER_METADATA_SCHEMA_VERSION = 1
 export const RUNNER_METADATA_SOURCE = "deterministic-tool"
 
-export const RUNNER_TOOL_IDS = ["semgrep", "eslint", "ruff", "actionlint", "shellcheck"] as const
-
-export type RunnerToolId = (typeof RUNNER_TOOL_IDS)[number]
 export type RunnerMetadataSource = typeof RUNNER_METADATA_SOURCE
 export type RunnerMetadataErrorReason = "absent-metadata" | "unknown-schema-version" | "unknown-tool" | "invalid-source"
 
@@ -33,20 +34,8 @@ export type ParseRunnerMetadataResult =
       source?: unknown
     }
 
-const ROLE_HINTS_BY_TOOL: Record<RunnerToolId, RoleHint[]> = {
-  semgrep: ["security"],
-  eslint: ["logic"],
-  ruff: ["logic", "performance"],
-  actionlint: ["logic", "security"],
-  shellcheck: ["security", "logic"],
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
-function isRunnerToolId(value: unknown): value is RunnerToolId {
-  return typeof value === "string" && (RUNNER_TOOL_IDS as readonly string[]).includes(value)
 }
 
 function parseDroppedResults(value: unknown, toolId: RunnerToolId): RunnerDroppedResults | undefined {
@@ -61,7 +50,7 @@ function parseDroppedResults(value: unknown, toolId: RunnerToolId): RunnerDroppe
 }
 
 export function roleHintsForRunnerTool(toolId: RunnerToolId): RoleHint[] {
-  return [...ROLE_HINTS_BY_TOOL[toolId]]
+  return rolesForRunnerTool(toolId) as RoleHint[]
 }
 
 export function parseRunnerMetadata(properties: unknown): ParseRunnerMetadataResult {

@@ -21,6 +21,7 @@ import type { GitHubOidcClaims } from "./runner-oidc/types"
 import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-cache"
 import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
+import { RUNNER_TOOL_IDS, isRunnerToolId, type RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES
 // (8 MiB): a receipt the ingest accepts but consumption later rejects as
@@ -30,6 +31,9 @@ import { claimRunnerReceipt } from "./runner-receipt-client"
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 /** A JWT is ~1–2 KB; reject an absurd Authorization header before verifying. */
 const MAX_TOKEN_BYTES = 8 * 1024
+/** The manifest is audit metadata, not another findings channel. */
+const MAX_SCAN_MANIFEST_BYTES = 64 * 1024
+const MAX_SCAN_MANIFEST_PATH_CHARS = 1024
 /** Audit-receipt retention (the replay guard lives in the DO at 7 d). */
 const RECEIPT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -72,6 +76,91 @@ function nonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0
 }
 
+const SCAN_MANIFEST_STATUSES = ["disabled", "missing-output", "invalid-output", "empty", "produced"] as const
+type ScanManifestStatus = (typeof SCAN_MANIFEST_STATUSES)[number]
+const SCAN_MANIFEST_STATUS_SET: ReadonlySet<string> = new Set(SCAN_MANIFEST_STATUSES)
+
+interface NormalizedScanManifestTool {
+  toolId: RunnerToolId
+  enabled: boolean
+  status: ScanManifestStatus
+  runCount?: number
+  resultCount?: number
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function scanManifestSummary(tools: readonly NormalizedScanManifestTool[]): Record<string, number> {
+  const summary = { enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 }
+  for (const tool of tools) {
+    if (!tool.enabled) continue
+    summary.enabled += 1
+    if (tool.status === "missing-output") summary.missing += 1
+    else if (tool.status === "invalid-output") summary.invalid += 1
+    else if (tool.status === "empty" || tool.status === "produced") summary[tool.status] += 1
+  }
+  return summary
+}
+
+function normalizeScanManifest(raw: string): string | null {
+  if (new TextEncoder().encode(raw).byteLength > MAX_SCAN_MANIFEST_BYTES) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!isObject(parsed)) return null
+    const manifest = parsed as Record<string, unknown>
+    if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.tools)) return null
+    if (manifest.tools.length > RUNNER_TOOL_IDS.length) return null
+
+    const seen = new Set<RunnerToolId>()
+    const tools: NormalizedScanManifestTool[] = []
+    for (const rawTool of manifest.tools) {
+      if (!isObject(rawTool)) return null
+      const toolId = rawTool.toolId
+      if (!isRunnerToolId(toolId) || seen.has(toolId)) return null
+      seen.add(toolId)
+      if (typeof rawTool.enabled !== "boolean") return null
+      const status = rawTool.status
+      if (typeof status !== "string" || !SCAN_MANIFEST_STATUS_SET.has(status)) return null
+      if (!rawTool.enabled && status !== "disabled") return null
+      if (rawTool.enabled && status === "disabled") return null
+      if (
+        rawTool.path !== undefined &&
+        (typeof rawTool.path !== "string" || rawTool.path.length > MAX_SCAN_MANIFEST_PATH_CHARS)
+      ) {
+        return null
+      }
+      const tool: NormalizedScanManifestTool = {
+        toolId,
+        enabled: rawTool.enabled,
+        status: status as ScanManifestStatus,
+      }
+      if (rawTool.runCount !== undefined) {
+        if (!isNonNegativeSafeInteger(rawTool.runCount)) return null
+        tool.runCount = rawTool.runCount
+      }
+      if (rawTool.resultCount !== undefined) {
+        if (!isNonNegativeSafeInteger(rawTool.resultCount)) return null
+        tool.resultCount = rawTool.resultCount
+      }
+      tools.push(tool)
+    }
+
+    return JSON.stringify({
+      schemaVersion: 1,
+      tools,
+      summary: scanManifestSummary(tools),
+    })
+  } catch {
+    return null
+  }
+}
+
 /**
  * Read the request body as text, enforcing a BYTE cap as the stream is consumed
  * (so an oversized body is aborted, not fully buffered). Returns `null` once the
@@ -111,6 +200,9 @@ async function readBodyCapped(request: Request, maxBytes: number): Promise<strin
 
 interface IngestEnvelope {
   sarif: string
+  /** Optional runner coverage manifest. Stored with the receipt body so
+   *  downstream consumers can distinguish empty scans from missing tools. */
+  scanManifest?: string
   /** The run's `owner/repo` — bound to the token's `repository` claim (anti-spoof). */
   repository: string
   /** The run's commit sha (== github.sha; the MERGE commit for a PR) — bound to
@@ -199,8 +291,16 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
     if (!nonEmptyString(o.sarif) || !nonEmptyString(o.repository) || !nonEmptyString(o.sha)) {
       return json({ error: "bad-envelope", reason: "sarif, repository, sha required" }, 400)
     }
+    let scanManifest: string | undefined
+    if (o.scanManifest !== undefined) {
+      if (!nonEmptyString(o.scanManifest)) return json({ error: "bad-scan-manifest" }, 400)
+      const normalized = normalizeScanManifest(o.scanManifest)
+      if (normalized === null) return json({ error: "bad-scan-manifest" }, 400)
+      scanManifest = normalized
+    }
     envelope = {
       sarif: o.sarif,
+      ...(scanManifest !== undefined ? { scanManifest } : {}),
       repository: o.repository,
       sha: o.sha,
       repositoryId: typeof o.repositoryId === "string" ? o.repositoryId : undefined,
@@ -247,6 +347,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // the GitHub-attested receipt identity.
   const scrubbedSarif = scrubSecrets(envelope.sarif)
   const scrubbedSha256 = await sha256Hex(scrubbedSarif)
+  const scanManifestSha256 = envelope.scanManifest ? await sha256Hex(envelope.scanManifest) : undefined
   // The REVIEW-JOIN key is the PR number, parsed from the SIGNED `claims.ref`
   // (`refs/pull/{N}/merge`) — NEVER the untrusted body (CR-4: a body head_sha let
   // a same-repo run retarget another PR's review). The replay key stays
@@ -272,6 +373,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       runAttempt,
       sarifSha256,
       scrubbedSha256,
+      scanManifestSha256,
       repository: tokenRepository,
       jobWorkflowRef: typeof claims.job_workflow_ref === "string" ? claims.job_workflow_ref : "",
       runnerEnvironment: typeof claims.runner_environment === "string" ? claims.runner_environment : "",
@@ -327,7 +429,9 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
             runnerEnvironment: claims.runner_environment,
             sarifSha256,
             scrubbedSha256,
+            scanManifestSha256,
             sarif: scrubbedSarif,
+            scanManifest: envelope.scanManifest,
             ingestedAt: new Date().toISOString(),
           }),
           { expirationTtl: RECEIPT_TTL_SECONDS },

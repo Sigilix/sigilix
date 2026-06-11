@@ -6,6 +6,7 @@
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { ResolvedPerfBudgets } from "@/src/shared/domain/perf-budgets"
 import { DEFAULT_PRE_MERGE_GATES_CONFIG, type ResolvedPreMergeGatesConfig } from "@/src/shared/domain/pre-merge-gates"
+import { defaultEnabledForRunnerTool } from "@/src/shared/domain/runner-tool-catalog"
 import { pathMatchesAny } from "@/src/shared/util/path-glob"
 import {
   LINTER_IDS,
@@ -383,14 +384,15 @@ export type ResolvedLintersConfig = Record<LinterId, { enabled: boolean }>
 
 /**
  * SIG-107: resolve linter enablement to a complete known-tool map.
- * Default-on: only an explicit `enabled: false` disables a tool.
+ * Defaults are profile-driven so new catalog entries stay opt-in until
+ * explicitly promoted.
  */
 export function resolveLintersConfig(config: SigilixConfig | null): ResolvedLintersConfig {
   const cfg = config?.linters
   const out = {} as ResolvedLintersConfig
   for (const id of LINTER_IDS) {
-    // Missing entries, including invalid entries dropped by the parser, default on.
-    out[id] = { enabled: cfg?.[id]?.enabled !== false }
+    const configured = cfg?.[id]?.enabled
+    out[id] = { enabled: configured ?? defaultEnabledForRunnerTool(id) }
   }
   return out
 }

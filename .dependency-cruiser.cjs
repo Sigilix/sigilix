@@ -66,26 +66,17 @@ module.exports = {
       from: { path: `${UNIT}/domain/`, pathNot: TEST },
       to: { path: L("app", "adapters", "render") },
     },
-    // app never touches render — render is the outermost output layer; app
-    // produces the data, render formats it. Banned outright (type or value).
+    // app depends on domain + ports only — never a concrete adapter or render
+    // (type or value). Adapters are injected at the composition root, typed by
+    // a port (src/shared/ports/), so an app layer never names a concrete
+    // adapter even in a parameter type.
     {
-      name: "app-not-render",
-      comment: "app/ must not import render/ (the outermost output layer) — type or value. COMPLIANCE.md §1.",
-      severity: "error",
-      from: { path: `${UNIT}/app/`, pathNot: TEST },
-      to: { path: L("render") },
-    },
-    // app is where concrete adapters are *injected*, so it may hold an
-    // adapter's TYPE (the injected param) but must not take a runtime
-    // dependency on it — no value import of a concrete adapter. Type-only
-    // edges are exempt; value edges are not.
-    {
-      name: "app-no-adapter-value",
+      name: "app-not-adapters-render",
       comment:
-        "app/ may depend on domain + ports and receive injected adapters by type, but must not value-import a concrete adapter. COMPLIANCE.md §1.",
+        "app/ depends on domain + ports only — never a concrete adapter or render. Adapters are injected, typed by a port (src/shared/ports/). COMPLIANCE.md §1.",
       severity: "error",
       from: { path: `${UNIT}/app/`, pathNot: TEST },
-      to: { path: L("adapters"), dependencyTypesNot: ["type-only"] },
+      to: { path: L("adapters", "render") },
     },
     // adapters implement ports against the world; they must not import app/render.
     {

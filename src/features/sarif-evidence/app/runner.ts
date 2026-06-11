@@ -15,7 +15,7 @@
 // inline comments — that's deferred to v2 (auto-inline NOT wired in
 // v1 per spec §3.5).
 
-import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { GitHubFileReaderPort } from "@/src/shared/ports/github"
 import type { Env } from "@/src/shared/types/env"
 import { parseSarif } from "@/src/features/sarif-evidence/domain/sarif-parser"
 import { normalizeSarifPath } from "@/src/features/sarif-evidence/domain/path-normalize"
@@ -82,7 +82,7 @@ export interface ResolvedSarifConfig {
 
 export interface RunSarifEvidenceArgs {
   env: Env
-  client: GitHubClient
+  client: GitHubFileReaderPort
   owner: string
   repo: string
   prNumber: number
@@ -166,7 +166,7 @@ function emitStaleTelemetryIfNeeded(
 }
 
 async function fetchReportRaw(
-  client: GitHubClient,
+  client: GitHubFileReaderPort,
   owner: string,
   repo: string,
   path: string,

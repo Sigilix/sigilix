@@ -3,7 +3,12 @@
 // served via a stubbed global fetch). Mocks: the receipt DO + the KV binding.
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
+import {
+  handleRunnerIngestRoute,
+  normalizeScanManifest,
+  scanManifestSummary,
+  type NormalizedScanManifestTool,
+} from "@/src/lib/runner-ingest-route"
 import { __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
 import { RunnerReceiptDO } from "@/src/do/runner-receipt"
 import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
@@ -180,6 +185,99 @@ const envelope = (over: Record<string, unknown> = {}) => ({
   repository: "Sigilix/sigilix",
   sha: "deadbeef",
   ...over,
+})
+
+describe("scanManifestSummary", () => {
+  it("counts enabled produced, empty, missing, and invalid tools while skipping disabled tools", () => {
+    const tools: NormalizedScanManifestTool[] = [
+      { toolId: "semgrep", enabled: true, status: "produced", resultCount: 2 },
+      { toolId: "eslint", enabled: true, status: "empty", resultCount: 0 },
+      { toolId: "ruff", enabled: true, status: "missing-output" },
+      { toolId: "shellcheck", enabled: true, status: "invalid-output" },
+      { toolId: "actionlint", enabled: false, status: "disabled" },
+    ]
+
+    expect(scanManifestSummary(tools)).toEqual({ enabled: 4, produced: 1, empty: 1, missing: 1, invalid: 1 })
+  })
+
+  it("skips contradictory enabled+disabled entries defensively", () => {
+    const tools = [{ toolId: "semgrep", enabled: true, status: "disabled" }] as NormalizedScanManifestTool[]
+
+    expect(scanManifestSummary(tools)).toEqual({ enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 })
+  })
+
+  it("returns zero counts for an empty manifest", () => {
+    expect(scanManifestSummary([])).toEqual({ enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 })
+  })
+})
+
+describe("normalizeScanManifest", () => {
+  const rawManifest = (tools: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ schemaVersion: 1, tools, summary: { stale: true }, ...extra })
+
+  it("normalizes tools, strips runner paths, and recomputes summary", () => {
+    const normalized = normalizeScanManifest(
+      rawManifest([
+        {
+          toolId: "semgrep",
+          enabled: true,
+          status: "produced",
+          path: "/tmp/runner/sarif/semgrep.sarif",
+          runCount: 1,
+          resultCount: 2,
+        },
+        { toolId: "eslint", enabled: false, status: "disabled" },
+      ]),
+    )
+
+    expect(normalized).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [
+          { toolId: "semgrep", enabled: true, status: "produced", runCount: 1, resultCount: 2 },
+          { toolId: "eslint", enabled: false, status: "disabled" },
+        ],
+        summary: { enabled: 1, produced: 1, empty: 0, missing: 0, invalid: 0 },
+      }),
+    )
+  })
+
+  it("accepts an empty tools array and recomputes zero summary counts", () => {
+    expect(normalizeScanManifest(rawManifest([]))).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [],
+        summary: { enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 },
+      }),
+    )
+  })
+
+  it("rejects malformed manifest structure and tool entries", () => {
+    const invalidManifests = [
+      "{",
+      "x".repeat(64 * 1024 + 1),
+      JSON.stringify({ schemaVersion: 2, tools: [] }),
+      JSON.stringify({ schemaVersion: 1, tools: "semgrep" }),
+      rawManifest(Array.from({ length: 14 }, () => ({ toolId: "semgrep", enabled: true, status: "empty" }))),
+      rawManifest([null]),
+      rawManifest([{ toolId: "bandit", enabled: true, status: "empty" }]),
+      rawManifest([
+        { toolId: "semgrep", enabled: true, status: "empty" },
+        { toolId: "semgrep", enabled: true, status: "empty" },
+      ]),
+      rawManifest([{ toolId: "semgrep", status: "empty" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "unknown" }]),
+      rawManifest([{ toolId: "semgrep", enabled: false, status: "empty" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "disabled" }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", path: "x".repeat(1025) }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", runCount: -1 }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", resultCount: 1.5 }]),
+    ]
+
+    for (const manifest of invalidManifests) {
+      expect(normalizeScanManifest(manifest)).toBeNull()
+    }
+  })
 })
 
 afterEach(() => {

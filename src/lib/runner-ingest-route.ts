@@ -80,7 +80,7 @@ const SCAN_MANIFEST_STATUSES = ["disabled", "missing-output", "invalid-output", 
 type ScanManifestStatus = (typeof SCAN_MANIFEST_STATUSES)[number]
 const SCAN_MANIFEST_STATUS_SET: ReadonlySet<string> = new Set(SCAN_MANIFEST_STATUSES)
 
-interface NormalizedScanManifestTool {
+export interface NormalizedScanManifestTool {
   toolId: RunnerToolId
   enabled: boolean
   status: ScanManifestStatus
@@ -96,10 +96,10 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
-function scanManifestSummary(tools: readonly NormalizedScanManifestTool[]): Record<string, number> {
+export function scanManifestSummary(tools: readonly NormalizedScanManifestTool[]): Record<string, number> {
   const summary = { enabled: 0, produced: 0, empty: 0, missing: 0, invalid: 0 }
   for (const tool of tools) {
-    if (!tool.enabled) continue
+    if (!tool.enabled || tool.status === "disabled") continue
     summary.enabled += 1
     if (tool.status === "missing-output") summary.missing += 1
     else if (tool.status === "invalid-output") summary.invalid += 1
@@ -108,7 +108,7 @@ function scanManifestSummary(tools: readonly NormalizedScanManifestTool[]): Reco
   return summary
 }
 
-function normalizeScanManifest(raw: string): string | null {
+export function normalizeScanManifest(raw: string): string | null {
   if (new TextEncoder().encode(raw).byteLength > MAX_SCAN_MANIFEST_BYTES) return null
   try {
     const parsed = JSON.parse(raw) as unknown

@@ -24,6 +24,30 @@
             "botCategories": [
               "testing"
             ]
+          },
+          {
+            "allKeywords": [
+              "untested"
+            ],
+            "botCategories": [
+              "testing"
+            ]
+          },
+          {
+            "allKeywords": [
+              "not integration-tested"
+            ],
+            "botCategories": [
+              "testing"
+            ]
+          },
+          {
+            "allKeywords": [
+              "not tested"
+            ],
+            "botCategories": [
+              "testing"
+            ]
           }
         ]
       }

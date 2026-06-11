@@ -21,3 +21,4 @@ worker-configuration.d.ts
 # (findings-source.jsonl is the immutable input per LABELING_GUIDE.md
 # §7e; labels.csv / labels-claude.csv are the labeled outputs).
 !.claude/research/sig-161-labeling/
+e2e/.fixture-eval-out/

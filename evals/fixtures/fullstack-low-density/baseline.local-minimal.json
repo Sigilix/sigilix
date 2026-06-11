@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "fixture": "fullstack-low-density",
+  "context": "minimal",
+  "repeats": 4,
+  "perRow": {
+    "r1": 1
+  },
+  "aggregate": {
+    "recallMean": 0.05,
+    "precisionMean": 1,
+    "highSevFpTotal": 0
+  },
+  "generatedAt": "2026-06-11T06:09:11.089Z"
+}

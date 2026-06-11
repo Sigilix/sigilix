@@ -22,7 +22,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
 import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
-import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "@/src/prompts/specialists/shared"
+import { INVARIANT_FAMILIES, buildInvariantFamilyPrompt } from "@/src/prompts/specialists/invariant-lens"
 import { scoreFixture } from "@/evals/scorer"
 import {
   rowFlips,
@@ -50,51 +50,6 @@ const OUT_DIR = join(process.cwd(), "e2e", ".fixture-eval-out")
 // narrow question swept exhaustively beats one broad mandate). Families
 // are generic (taxonomy-derived, not fixture-coached). Calls run
 // concurrently; output contract identical (prod shared blocks).
-const INVARIANT_FAMILIES: ReadonlyArray<{ id: string; charge: string }> = [
-  {
-    id: "units",
-    charge:
-      "UNITS & REPRESENTATION: a single canonical unit/representation per quantity (e.g. integer minor units for money, one timestamp format, one ID shape). Find every producer/consumer in the diff that disagrees with the convention the diff itself establishes.",
-  },
-  {
-    id: "data-scoping",
-    charge:
-      "DATA SCOPING: when any endpoint restricts data access by an ownership key (tenant/customer/user scoping in its query or handler), EVERY sibling endpoint touching the same data class must scope the same way. Enumerate every data-touching endpoint in the diff and check each one against the scoping rule the most-careful sibling establishes.",
-  },
-  {
-    id: "discriminant-totality",
-    charge:
-      "DISCRIMINANT TOTALITY: for every discriminated union / enum / event-type field declared in the diff, every consumer must handle or explicitly reject each arm. List the arms, list the consumers, and flag any consumer that silently treats all arms the same.",
-  },
-  {
-    id: "error-contracts",
-    charge:
-      "ERROR CONTRACTS: sibling handlers establish status/shape conventions for not-found / invalid-input / failure paths. Enumerate each handler's failure paths and flag any that return the success shape or status on a failure path the siblings handle properly.",
-  },
-  {
-    id: "crypto-integrity",
-    charge:
-      "CRYPTO/INTEGRITY DISCIPLINE: signatures/HMACs must be computed over exactly the bytes received (never a re-serialization); secrets must fail closed when unconfigured; comparisons must be constant-time. Check every signature/secret/comparison site in the diff against these.",
-  },
-  {
-    id: "wire-contracts",
-    charge:
-      "WIRE/TYPE CONTRACTS: declared types/interfaces/casing versus what the code actually returns, casts, or serializes. Flag every raw cast or response that bypasses the declared shape (a cast that silences the type system is a violation site, not a style choice).",
-  },
-]
-
-function familyPrompt(family: { id: string; charge: string }): string {
-  return `${SHARED_NEGATIVE_CONSTRAINTS}
-
-You are a CONSISTENCY AUDITOR with exactly ONE charge in this review. Other reviewers cover everything else; you must NOT report anything outside your charge.
-
-YOUR CHARGE — ${family.charge}
-
-Method: derive the concrete rule(s) of your charge from THIS diff (the diff's own types, contracts, and most-careful sibling code define the convention), then sweep EVERY changed file for violations of those rules — especially sites that look locally fine and are only wrong relative to the rule established elsewhere. Quote both sides in each finding: the rule-establishing site and the violating site. Report ONLY grounded violations of your charge; if the diff establishes no such rule and contains no violation, return zero findings — an empty result is a correct result.
-
-${SHARED_OUTPUT_INSTRUCTIONS}`
-}
-
 describe.skipIf(!API_KEY)(`SIG-395 invariant lens prototype — ${FIXTURE_NAME} (LIVE)`, () => {
   it(
     `pass1 + invariant lens ×${REPEATS}, scored against the frozen truth`,
@@ -123,7 +78,7 @@ describe.skipIf(!API_KEY)(`SIG-395 invariant lens prototype — ${FIXTURE_NAME} 
                   role: "logic", // strongest reasoning model config
                   shadowConfig: SPECIALIST_CONFIGS.logic,
                   apiKey: API_KEY!,
-                  systemPrompt: familyPrompt(family),
+                  systemPrompt: buildInvariantFamilyPrompt(family),
                   userMessage,
                   chatEnabled: "on",
                   signal: AbortSignal.timeout(PER_ROLE_TIMEOUT_MS),

@@ -29,6 +29,7 @@ import type { TrustLedgerMode } from "./gates/trust-ledger-thread"
 import type { ClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import type { PrecisionMode } from "@/src/features/precision-profile"
 import type { ResweepMode } from "./resweep"
+import type { InvariantLensMode } from "./invariant-lens"
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 
@@ -115,6 +116,9 @@ export interface EnsembleFeatureFlags {
   /** Normalized `OPENCLAW_RESWEEP_MODE` (SIG-393): "off" | "shadow" | "on",
    *  default "off". Gates the region re-sweep second pass pre-synth. */
   resweepMode: ResweepMode
+  /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
+   *  "on", default "off". Gates the concurrent invariant-lens auditors. */
+  invariantLensMode: InvariantLensMode
 }
 
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed

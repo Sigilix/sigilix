@@ -79,6 +79,37 @@
               "insert"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "paidcents",
+              "double-count"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "double-counts"
+            ],
+            "notKeywords": [
+              "balance",
+              "refund"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "unawaited",
+              "insert"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "floating",
+              "insert"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -162,19 +193,34 @@
             "allKeywords": [
               "unhandled rejection"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "floating",
+              "insert",
+              "unawaited"
+            ]
           },
           {
             "allKeywords": [
               "error middleware"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "floating",
+              "insert",
+              "unawaited"
+            ]
           },
           {
             "allKeywords": [
               "try/catch"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "floating",
+              "insert",
+              "unawaited"
+            ]
           }
         ]
       }
@@ -337,20 +383,41 @@
             "allKeywords": [
               "alreadyrefunded"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "concurrent",
+              "race",
+              "simultaneous",
+              "toctou",
+              "transaction"
+            ]
           },
           {
             "allKeywords": [
               "over-refund"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "concurrent",
+              "race",
+              "simultaneous",
+              "toctou",
+              "transaction"
+            ]
           },
           {
             "allKeywords": [
               "exceed",
               "refund"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "concurrent",
+              "race",
+              "simultaneous",
+              "toctou",
+              "transaction"
+            ]
           }
         ]
       }
@@ -377,6 +444,12 @@
             "allKeywords": [
               "dedup",
               "event.id"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "not idempotent"
             ],
             "scope": "excerpt"
           }
@@ -454,6 +527,26 @@
             "notKeywords": [
               "not awaited",
               "missing await"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "any positive payment"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "regardless of",
+              "amount_cents"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "paid",
+              "zero or negative"
             ],
             "scope": "excerpt"
           }
@@ -581,6 +674,32 @@
               "sql"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "leaks all payments"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "authorization",
+              "payments list"
+            ],
+            "notKeywords": [
+              "sql"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "authorization",
+              "list endpoint"
+            ],
+            "notKeywords": [
+              "sql"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -636,13 +755,27 @@
             "allKeywords": [
               "refundid"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "concurrent",
+              "race",
+              "simultaneous",
+              "toctou",
+              "transaction"
+            ]
           },
           {
             "allKeywords": [
               "refundedcents"
             ],
-            "scope": "excerpt"
+            "scope": "excerpt",
+            "notKeywords": [
+              "concurrent",
+              "race",
+              "simultaneous",
+              "toctou",
+              "transaction"
+            ]
           }
         ]
       }
@@ -867,6 +1000,41 @@
             "botCategories": [
               "testing"
             ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "auth-stub-convention",
+      "title": "Claims against the stub's header-based auth middleware \u2014 axiomatic in this benchmark (same family as the documented req.auth! safe idiom), neither a planted bug nor a trap",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "client-supplied header"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "x-customer-id",
+              "trust"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "header",
+              "sole identity"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "trusts",
+              "header"
+            ],
+            "scope": "excerpt"
           }
         ]
       }

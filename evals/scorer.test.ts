@@ -137,14 +137,15 @@ describe("classifyFinding", () => {
     expect(v).toEqual({ kind: "bug", id: "x1" })
   })
 
-  it("ambiguity (one finding matching two rows) throws instead of tie-breaking", () => {
-    const ambiguous: FixtureGroundTruth = {
+  it("a compound finding matching two BUG rows credits both (two root causes, two rows)", () => {
+    const compound: FixtureGroundTruth = {
       ...SYNTH_TRUTH,
       bugs: SYNTH_TRUTH.bugs.map((b) => (b.id === "x2" ? { ...b, match: { anyOf: [{ allKeywords: ["beta"] }] } } : b)),
     }
-    expect(() => classifyFinding(ambiguous, finding({ ref: "f1", bodyText: "alpha and beta" }))).toThrow(
-      /ambiguous equivalence/,
-    )
+    const v = classifyFinding(compound, finding({ ref: "f1", bodyText: "alpha and beta" }))
+    expect(v).toEqual({ kind: "bug", id: "x1", bugIds: ["x1", "x2"] })
+    const s = scoreFixture(compound, "sigilix", [finding({ ref: "f1", bodyText: "alpha and beta" })])
+    expect(s.overall.caughtIds).toEqual(["x1", "x2"])
   })
 
   it("a bug-and-trap double match also throws", () => {

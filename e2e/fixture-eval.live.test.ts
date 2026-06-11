@@ -23,17 +23,12 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
-import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
-import type { SpecialistRole } from "@/src/lib/ensemble-router"
 import { scoreFixture } from "@/evals/scorer"
-import { shadowFindingsToFixtureFindings, unionFixtureFindings, type LocalRawFinding } from "@/evals/local-adapter"
-import type { FixtureFinding } from "@/evals/fixture-types"
+import { unionFixtureFindings } from "@/evals/local-adapter"
 import { foldRuns, formatLocalEvalReport, loadFixture, type RepeatOutcome } from "@/e2e/fixture-eval-lib"
+import { PER_ROLE_TIMEOUT_MS, buildFixtureMessage, rolesFromEnv, runRole } from "@/e2e/fixture-eval-runner"
 
 const API_KEY = process.env.OLLAMA_API_KEY
-const PER_ROLE_TIMEOUT_MS = 280_000
 const FIXTURE_NAME = process.env.FIXTURE_EVAL_FIXTURE ?? "fullstack-pr20-dense"
 const REPEATS = (() => {
   const raw = process.env.FIXTURE_EVAL_REPEATS
@@ -46,54 +41,8 @@ const REPEATS = (() => {
   }
   return parsed
 })()
-const ALL_ROLES: SpecialistRole[] = ["logic", "security", "performance", "tests"]
-const ROLES: SpecialistRole[] = (() => {
-  const raw = process.env.FIXTURE_EVAL_ROLES
-  if (!raw) return ALL_ROLES
-  const picked = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s): s is SpecialistRole => (ALL_ROLES as string[]).includes(s))
-  return picked.length > 0 ? picked : ALL_ROLES
-})()
+const ROLES = rolesFromEnv(process.env.FIXTURE_EVAL_ROLES)
 const OUT_DIR = join(process.cwd(), "e2e", ".fixture-eval-out")
-
-function configFor(role: SpecialistRole) {
-  const override = process.env[`FIXTURE_EVAL_MODEL_${role.toUpperCase()}`]?.trim()
-  // Override nulls the fallback so every scored run is the requested model
-  // (a fallback would silently mix a second model in) — LOGIC_RECALL_MODEL rule.
-  return override ? { ...SPECIALIST_CONFIGS[role], primary: override, fallback: null } : SPECIALIST_CONFIGS[role]
-}
-
-async function runRole(
-  role: SpecialistRole,
-  userMessage: string,
-  apiKey: string,
-): Promise<{ findings: FixtureFinding[]; errored: boolean; elapsedMs: number }> {
-  try {
-    const r = await runShadowSpecialist({
-      role,
-      shadowConfig: configFor(role),
-      apiKey,
-      systemPrompt: SPECIALIST_PROMPTS[role],
-      userMessage,
-      chatEnabled: "on",
-      signal: AbortSignal.timeout(PER_ROLE_TIMEOUT_MS),
-      perfCtx: { owner: "eval", repo: "fixture-eval", prNumber: 0, headSha: "0".repeat(40) },
-    })
-    // logic-recall-eval rule: a non-throwing failure (parse-fail / timeout)
-    // must not read as "the model found nothing" — flag the role errored.
-    const errored = !r.verdictOk || r.failureReason !== undefined
-    const raw = (r.rawFindings ?? []) as readonly LocalRawFinding[]
-    return {
-      findings: errored ? [] : shadowFindingsToFixtureFindings(role, raw),
-      errored,
-      elapsedMs: r.elapsedMs,
-    }
-  } catch {
-    return { findings: [], errored: true, elapsedMs: 0 }
-  }
-}
 
 describe.skipIf(!API_KEY)(`local fixture eval — ${FIXTURE_NAME} (LIVE)`, () => {
   it(
@@ -101,22 +50,15 @@ describe.skipIf(!API_KEY)(`local fixture eval — ${FIXTURE_NAME} (LIVE)`, () =>
     { timeout: (PER_ROLE_TIMEOUT_MS + 30_000) * REPEATS },
     async () => {
       const fixture = loadFixture(FIXTURE_NAME)
-      const userMessage = buildSpecialistInitialMessage({
-        prNumber: 0,
-        // The PR's REAL title — what the bots saw on the benchmark run.
-        // Faithful input; names no specific planted bug.
-        title: fixture.prTitle,
-        body: "",
-        diff: fixture.diff,
-        retrievalSnapshot: "",
-        namespace: "eval",
-      })
+      // The PR's REAL title — what the bots saw on the benchmark run.
+      // Faithful input; names no specific planted bug.
+      const userMessage = buildFixtureMessage({ title: fixture.prTitle, diff: fixture.diff })
       mkdirSync(OUT_DIR, { recursive: true })
 
       const outcomes: RepeatOutcome[] = []
       for (let repeat = 1; repeat <= REPEATS; repeat++) {
         const startedAt = Date.now()
-        const roleRuns = await Promise.all(ROLES.map((role) => runRole(role, userMessage, API_KEY!)))
+        const roleRuns = await Promise.all(ROLES.map((role) => runRole({ role, userMessage, apiKey: API_KEY! })))
         const erroredRoles = ROLES.filter((_, i) => roleRuns[i]!.errored)
         const union = unionFixtureFindings(roleRuns.map((r) => r.findings))
         // Persist findings BEFORE scoring: an ambiguity throw (the scorer's

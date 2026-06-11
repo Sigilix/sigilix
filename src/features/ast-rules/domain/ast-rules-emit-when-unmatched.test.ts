@@ -121,12 +121,12 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
   it("clamps a logic warning-emit finding from P1 (score 4) to P2 (score 3)", () => {
     const f = [{ path: "a.ts", line: 21, category: "logic", score: 4 }]
     expect(clampAstEmitScores(f, [ast({})])).toBe(1)
-    expect(f[0].score).toBe(3)
+    expect(f[0]!.score).toBe(3)
   })
   it("does NOT clamp a security error-emit finding (P0 sink stays P0)", () => {
     const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "error" })])).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
   it("does NOT clamp a SPECIALIST-backed security P0 co-located with a WARNING/security emit (SIG-312: the model escalates a real XSS)", () => {
     // specialist-backed = sourceFindingIds references a real specialist finding
@@ -134,7 +134,7 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
     const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
     const prov = [{ sourceFindingIds: ["security-1"] }]
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
   it("DOES clamp a deterministic-ONLY security advisory (no specialist source) to P2 (CodeRabbit #296)", () => {
     // no specialist backing (empty / ast-only sourceFindingIds) → the advisory
@@ -142,7 +142,7 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
     const f = [{ path: "a.ts", line: 20, category: "security", score: 4 }]
     const prov = [{ sourceFindingIds: ["ast/no-dangerous-html-dynamic/abc/20"] }]
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(1)
-    expect(f[0].score).toBe(3)
+    expect(f[0]!.score).toBe(3)
   })
   it("does NOT clamp a finding on a different path / category / out-of-window line", () => {
     const f = [
@@ -156,7 +156,7 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
   it("does NOT raise a score below the ceiling", () => {
     const f = [{ path: "a.ts", line: 20, category: "logic", score: 2 }]
     expect(clampAstEmitScores(f, [ast({})])).toBe(0)
-    expect(f[0].score).toBe(2)
+    expect(f[0]!.score).toBe(2)
   })
 })
 
@@ -204,6 +204,7 @@ describe("emitWhenUnmatched — ast-only provenance survives validateForSubmissi
           },
         ],
       },
+      elapsedMs: 0,
     },
   ]
   const call = (astFindingIds?: readonly string[]) =>

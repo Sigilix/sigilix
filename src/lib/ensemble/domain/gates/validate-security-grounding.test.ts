@@ -33,8 +33,10 @@ const CREDENTIAL_LINE = 'const apiKey = "AKIAIOSFODNN7EXAMPLE"'
 // The #243 FP: a line the bot misread as a secret leak — no credential token.
 const CLEAN_LINE = "  console.log(payload.length)"
 
-function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
-  return {
+type FindingOverrides = { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined }
+
+function finding(overrides: FindingOverrides = {}): PrReviewFinding {
+  const base: PrReviewFinding = {
     path: PATH,
     line: 17,
     score: 3,
@@ -42,8 +44,14 @@ function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
     cweId: "CWE-798", // → secrets-exposure bucket
     headline: "hardcoded credential leaked",
     body: "An `apiKey` literal is committed to source.",
-    ...overrides,
   }
+  // Strip explicit `undefined`s so the result stays valid under
+  // exactOptionalPropertyTypes (explicit `undefined` == field omitted).
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function added(lineText: string, line = 17, path = PATH): ReadonlyMap<string, ReadonlyMap<number, string>> {
@@ -57,16 +65,22 @@ function ctx(overrides: Partial<SecurityGroundingContext> = {}): SecurityGroundi
   }
 }
 
-function secretFact(overrides: Partial<SecurityFact> = {}): SecurityFact {
-  return {
+type FactOverrides = { [K in keyof SecurityFact]?: SecurityFact[K] | undefined }
+
+function secretFact(overrides: FactOverrides = {}): SecurityFact {
+  const base: SecurityFact = {
     evidenceId: "secret:aws-access-key:abc123:17",
     tool: "secret",
     path: PATH,
     line: 17,
     cwe: "CWE-798",
     summary: "AWS access key id",
-    ...overrides,
   }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 // ─────────────────────────────────────────────────────────────────────

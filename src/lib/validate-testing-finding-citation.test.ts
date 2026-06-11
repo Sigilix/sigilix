@@ -226,7 +226,7 @@ function makeSpecialistVerdicts(): Array<{
 
 function makeProvenance(count: number, sourceId = "tests-0"): SynthesizerProvenance {
   const findings = Array.from({ length: count }, () => ({
-    sourceSpecialists: ["tests"] as const,
+    sourceSpecialists: ["tests"] as SynthesizerProvenance["findings"][number]["sourceSpecialists"],
     sourceFindingIds: [sourceId],
     action: "kept" as const,
     verifiedViaRetrieval: false,

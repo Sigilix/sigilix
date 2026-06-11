@@ -43,7 +43,7 @@ const ok = <T>(items: T[]) => ({ items, complete: true })
 const okManifest = () => ({
   kind: "ok" as const,
   manifest: {
-    v: 1,
+    v: 1 as const,
     repo: "r",
     owner: "o",
     headSha: "h",

@@ -60,7 +60,7 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
       ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    expect(out.counts.security["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.counts.security!["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
   })
 
   it("enforce event (dropped:true) increments wouldDrop only", async () => {
@@ -71,7 +71,7 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
       events: [{ kind: "gate-rejection", gate: "tests", reason: "vague-insufficient-test", dropped: true }],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    expect(out.counts.tests["vague-insufficient-test"]).toEqual({ wouldDrop: 1, kept: 0 })
+    expect(out.counts.tests!["vague-insufficient-test"]).toEqual({ wouldDrop: 1, kept: 0 })
   })
 
   it("accumulates same (day,gate,reason) across batches", async () => {
@@ -88,7 +88,7 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
       events: [{ kind: "gate-rejection", gate: "logic", reason: "unanchored-logic-claim", dropped: true }],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    expect(out.counts.logic["unanchored-logic-claim"]).toEqual({ wouldDrop: 2, kept: 1 })
+    expect(out.counts.logic!["unanchored-logic-claim"]).toEqual({ wouldDrop: 2, kept: 1 })
   })
 
   it("excludes days outside the requested window", async () => {
@@ -105,7 +105,7 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
     // Only the 2026-05-22 event is within the 7-day window ending 2026-05-22.
-    expect(out.counts.perf["path-not-changed"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.counts.perf!["path-not-changed"]).toEqual({ wouldDrop: 1, kept: 1 })
     expect(out.window).toEqual({ days: 7, startDay: "2026-05-16", endDay: "2026-05-22" })
   })
 
@@ -117,7 +117,7 @@ describe("ValidationMetricsDO.recordBatch + query", () => {
       events: [{ kind: "gate-rejection", gate: "coverage", reason: "uncited-gap", dropped: false }],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    expect(out.counts.coverage["uncited-gap"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.counts.coverage!["uncited-gap"]).toEqual({ wouldDrop: 1, kept: 1 })
   })
 
   it("tracks last-seen head SHA per PR (latest wins)", async () => {
@@ -444,11 +444,11 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
     // gate × category, summed over reasons
-    expect(out.byCategory.security.security).toEqual({ wouldDrop: 1, kept: 1 })
-    expect(out.byCategory.security.testing).toEqual({ wouldDrop: 2, kept: 2 })
+    expect(out.byCategory.security!.security).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.byCategory.security!.testing).toEqual({ wouldDrop: 2, kept: 2 })
     // the existing per-reason rollup is untouched (coexists)
-    expect(out.counts.security["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
-    expect(out.counts.security["no-credential-token"]).toEqual({ wouldDrop: 2, kept: 2 })
+    expect(out.counts.security!["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.counts.security!["no-credential-token"]).toEqual({ wouldDrop: 2, kept: 2 })
   })
 
   it("enforce (dropped:true) increments wouldDrop only in byCategory", async () => {
@@ -467,7 +467,7 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
       ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
-    expect(out.byCategory.logic.logic).toEqual({ wouldDrop: 1, kept: 0 })
+    expect(out.byCategory.logic!.logic).toEqual({ wouldDrop: 1, kept: 0 })
   })
 
   it("does NOT create a category row when the event carries no category", async () => {
@@ -486,7 +486,7 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
     })
     const out = await do_.query({ windowDays: 7, nowIso: at })
     // still recorded in the per-reason counts...
-    expect(out.counts["verification-refuted"]["refuted-citation"]).toEqual({
+    expect(out.counts["verification-refuted"]!["refuted-citation"]).toEqual({
       wouldDrop: 1,
       kept: 0,
     })
@@ -523,7 +523,7 @@ describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
       ],
     })
     const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
-    expect(out.byCategory.perf.performance).toEqual({ wouldDrop: 1, kept: 1 }) // only the in-window one
+    expect(out.byCategory.perf!.performance).toEqual({ wouldDrop: 1, kept: 1 }) // only the in-window one
   })
 
   it("GC drops category buckets older than retention", async () => {

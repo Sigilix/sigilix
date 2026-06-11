@@ -13,6 +13,7 @@ import {
   writeRepoIndexVectors,
   appendVectorCoverage,
   type RepoIndexVectorsV1,
+  type ReadResult,
 } from "@/src/lib/repo-index-vectors"
 import type { Env } from "@/src/shared/types/env"
 
@@ -283,6 +284,7 @@ describe("computeMerge — run-aware semantics", () => {
   const base = {
     owner: "Sigilix",
     repo: "sigilix",
+    githubRepoId: undefined,
     runId: "run-A",
     activeRunId: "run-A" as string | null,
   }
@@ -427,14 +429,15 @@ describe("computeMerge — run-aware semantics", () => {
   })
 
   it("supersedes when the active-run lease names the incoming run (SIG-136 re-index)", () => {
-    const existing = {
+    const existing: ReadResult = {
       kind: "ok",
       vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } },
-    } as const
+    }
     const out = computeMerge({
       existing,
       owner: "o",
       repo: "r",
+      githubRepoId: undefined,
       runId: "new",
       idsByPathSlice: { "a.ts": ["id2"] },
       activeRunId: "new",
@@ -442,14 +445,15 @@ describe("computeMerge — run-aware semantics", () => {
     expect(out.action).toBe("superseded")
   })
   it("stale-skips when a DIFFERENT run holds the lease (redelivery / superseded)", () => {
-    const existing = {
+    const existing: ReadResult = {
       kind: "ok",
       vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } },
-    } as const
+    }
     const out = computeMerge({
       existing,
       owner: "o",
       repo: "r",
+      githubRepoId: undefined,
       runId: "old",
       idsByPathSlice: { "a.ts": ["id1"] },
       activeRunId: "newer",
@@ -461,6 +465,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: { kind: "missing" },
       owner: "o",
       repo: "r",
+      githubRepoId: undefined,
       runId: "run-1",
       idsByPathSlice: { "a.ts": ["id1"] },
       activeRunId: "run-2",
@@ -472,6 +477,7 @@ describe("computeMerge — run-aware semantics", () => {
       existing: { kind: "missing" },
       owner: "o",
       repo: "r",
+      githubRepoId: undefined,
       runId: "run-1",
       idsByPathSlice: { "a.ts": ["id1"] },
       activeRunId: "run-1",
@@ -479,14 +485,15 @@ describe("computeMerge — run-aware semantics", () => {
     expect(out.action).toBe("created")
   })
   it("extends a continuation shard of the same run", () => {
-    const existing = {
+    const existing: ReadResult = {
       kind: "ok",
       vectors: { v: 1, owner: "o", repo: "r", runId: "run-1", byPath: { "a.ts": ["id1"] } },
-    } as const
+    }
     const out = computeMerge({
       existing,
       owner: "o",
       repo: "r",
+      githubRepoId: undefined,
       runId: "run-1",
       idsByPathSlice: { "b.ts": ["id2"] },
       activeRunId: "run-1",

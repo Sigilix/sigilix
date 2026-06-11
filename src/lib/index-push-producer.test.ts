@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const { mockGetInstallationToken, mockGetRepository, mockListOpenPullRequests } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
+  mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
   mockListOpenPullRequests: vi.fn(),
 }))
@@ -137,6 +137,7 @@ afterEach(() => {
 const baseArgs = {
   owner: "Sigilix",
   repo: "sigilix",
+  repoId: undefined,
   installationId: 99,
 }
 

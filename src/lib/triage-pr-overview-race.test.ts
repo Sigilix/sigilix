@@ -13,7 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "fake-token")
 const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn()
 const mockGetPullRequestCommits = vi.fn()
@@ -21,17 +21,19 @@ const mockListIssueComments = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
-const mockGetFileContent = vi.fn(async () => null)
+const mockGetFileContent = vi.fn(
+  async (_owner: string, _repo: string, _path: string, _ref?: string): Promise<string | null> => null,
+)
 // ARC-263: handlePrOverview now also calls listPullRequestFiles for
 // the walkthrough cache. Default to an empty list — the race tests
 // don't care about per-file caching; they assert dedupe/race behavior.
-const mockListPullRequestFiles = vi.fn(async () => [])
+const mockListPullRequestFiles = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => [])
 // SIG-216 CR fix-up: the read-after-write idempotency rescan
 // (`findExistingOverviewComment`) calls `listIssueCommentsPage`.
 // Default the page mock to an empty array so the existing tests
 // — which expect a clean POST when both scans see no marker —
 // land in the create branch with the final rescan returning null.
-const mockListIssueCommentsPage = vi.fn(async () => [])
+const mockListIssueCommentsPage = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => [])
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -50,7 +52,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
-      getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
+      getFileContent: (...args: unknown[]) => mockGetFileContent(...(args as Parameters<typeof mockGetFileContent>)),
     })),
   }
 })
@@ -154,7 +156,7 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
         patch: "@@ -1 +1 @@",
       },
     ])
-    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string, ref: string) => {
+    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string, ref?: string) => {
       if (path === ".github/CODEOWNERS" && ref === "b".repeat(40)) {
         return "*.ts @fallback\n/src/** @alice @bob @acme/platform\n"
       }

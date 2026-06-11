@@ -70,13 +70,12 @@ function stack(parentNumber: number | null): StackContext {
       : {
           number: parentNumber,
           title: `PR #${parentNumber}`,
-          headSha: "1234567",
-          baseSha: "0000000",
           baseRef: "main",
           headRef: `feature-${parentNumber}`,
+          headRepo: "Sigilix/sigilix",
+          baseRepo: "Sigilix/sigilix",
           author: "alice",
-          state: "open" as const,
-          isDraft: false,
+          updatedAt: "2026-05-01T00:00:00Z",
         }
   return {
     isStacked: parentNumber !== null,
@@ -87,6 +86,8 @@ function stack(parentNumber: number | null): StackContext {
     children: [],
     root: parent,
     cycleDetected: false,
+    stackWalkCapped: false,
+    hasUpstackFork: false,
   }
 }
 

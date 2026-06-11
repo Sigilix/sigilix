@@ -112,9 +112,9 @@ const WINDOW = {
 function comparison(
   role: string,
   ts: string,
-  overrides: Partial<ShadowVerdictComparisonEvent> = {},
+  overrides: { [K in keyof ShadowVerdictComparisonEvent]?: ShadowVerdictComparisonEvent[K] | undefined } = {},
 ): ShadowVerdictComparisonEvent {
-  return {
+  const base: ShadowVerdictComparisonEvent = {
     event: "shadow-verdict-comparison",
     ts,
     role,
@@ -130,8 +130,12 @@ function comparison(
     score4PlusProdOnlyCount: 0,
     score4PlusShadowOnlyCount: 0,
     shadowFailureReason: null,
-    ...overrides,
   }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function attempt(role: string, ts: string, elapsedMs: number): ShadowAttemptCompletedEvent {

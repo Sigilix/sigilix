@@ -64,15 +64,21 @@ function defaultConfig(over: Partial<ResolvedReviewMemoryConfig> = {}): Resolved
   }
 }
 
-function makeSignal(over: Partial<ReviewMemorySignal> = {}): ReviewMemorySignal {
-  return {
+function makeSignal(
+  over: { [K in keyof ReviewMemorySignal]?: ReviewMemorySignal[K] | undefined } = {},
+): ReviewMemorySignal {
+  const base: ReviewMemorySignal = {
     ts: new Date().toISOString(),
     prNumber: 1,
     commentId: 100,
     fid: "abc1234567890def",
     kind: "dismissed-textual",
-    ...over,
   }
+  for (const [key, value] of Object.entries(over)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function rec(

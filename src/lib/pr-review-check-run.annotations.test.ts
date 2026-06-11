@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const { mockGetInstallationToken, mockCreateCheckRun, mockUpdateCheckRun, mockListCheckRunsForRef } = vi.hoisted(
   () => ({
-    mockGetInstallationToken: vi.fn(async () => "test-token"),
+    mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
     mockCreateCheckRun: vi.fn(),
     mockUpdateCheckRun: vi.fn(),
     mockListCheckRunsForRef: vi.fn(),

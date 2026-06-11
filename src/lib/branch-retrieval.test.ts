@@ -22,7 +22,7 @@ describe("mergeBranchAware", () => {
     const out = mergeBranchAware(main, branch, new Set(["a.ts"]))
     const aPaths = out.filter((c) => c.path === "a.ts")
     expect(aPaths).toHaveLength(1)
-    expect(aPaths[0].content).toBe("HEAD")
+    expect(aPaths[0]!.content).toBe("HEAD")
     expect(out.some((c) => c.path === "b.ts")).toBe(true)
   })
 
@@ -83,9 +83,9 @@ describe("retrieveBranchChunks", () => {
     ]
     const out = retrieveBranchChunks(q, set, 3)
     expect(out.map((c) => c.path)).toEqual(["near.ts", "mid.ts", "far.ts"])
-    expect(out[0].score).toBeCloseTo(1, 5)
-    expect(out[1].score).toBeCloseTo(Math.SQRT1_2, 5)
-    expect(out[0].content).toBe("NEAR")
+    expect(out[0]!.score).toBeCloseTo(1, 5)
+    expect(out[1]!.score).toBeCloseTo(Math.SQRT1_2, 5)
+    expect(out[0]!.content).toBe("NEAR")
   })
 
   it("respects topK", () => {
@@ -140,8 +140,8 @@ describe("prepareBranchSet", () => {
     }
     const set = await prepareBranchSet(ai, files)
     expect(set.length).toBeGreaterThan(0)
-    expect(set[0].vector).toHaveLength(768)
-    expect(set[0].chunk.path).toBe("a.ts")
+    expect(set[0]!.vector).toHaveLength(768)
+    expect(set[0]!.chunk.path).toBe("a.ts")
   })
 
   it("returns [] (never throws) when embedding fails", async () => {
@@ -181,7 +181,7 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
           .filter(Boolean)) {
           let h = 0
           for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) >>> 0
-          v[h % 768] += 1
+          v[h % 768] = (v[h % 768] ?? 0) + 1
         }
         return v
       }
@@ -198,8 +198,8 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
 
     const qVec = await embedText(fakeAi, "where is computeWasteFactor defined")
     const branchChunks = retrieveBranchChunks(qVec, branchVectors, 6)
-    expect(branchChunks[0].path).toBe("src/util.ts")
-    expect(branchChunks[0].content).toContain("computeWasteFactor")
+    expect(branchChunks[0]!.path).toBe("src/util.ts")
+    expect(branchChunks[0]!.content).toContain("computeWasteFactor")
 
     // Stale main copy of the same path must be displaced by head content.
     const staleMain = [

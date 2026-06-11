@@ -16,14 +16,14 @@ describe("clampTrivialSyncIoSeverity", () => {
     // the execSync is at line 7, the finding anchors at 9 — within the ±2 window
     const alt = lines("src/report.ts", [[7, `  return execSync("/usr/bin/usage-report --version").toString().trim();`]])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(2)
+    expect(f[0]!.score).toBe(2)
   })
 
   it("normalizes whitespace-padded paths before matching trivial sync-IO evidence", () => {
     const f = [{ path: "  src/report.ts  ", line: 9, category: "performance", score: 5 }]
     const alt = lines("src/report.ts", [[7, `  return execSync("/usr/bin/usage-report --version").toString().trim();`]])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(2)
+    expect(f[0]!.score).toBe(2)
   })
 
   it("falls back to a raw padded map key when the normalized key is unavailable", () => {
@@ -32,7 +32,7 @@ describe("clampTrivialSyncIoSeverity", () => {
       [7, `  return execSync("/usr/bin/usage-report --version").toString().trim();`],
     ])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(2)
+    expect(f[0]!.score).toBe(2)
   })
 
   it("does NOT cap an INTERPOLATED exec (the real command injection — B1)", () => {
@@ -41,7 +41,7 @@ describe("clampTrivialSyncIoSeverity", () => {
       [17, "  const out = execSync(`/usr/bin/usage-report --account ${accountId} --format ${fmt}`);"],
     ])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
 
   it("does NOT cap a real readFileSync blocking finding (no probe flag — B7)", () => {
@@ -50,14 +50,14 @@ describe("clampTrivialSyncIoSeverity", () => {
       [13, `  const tpl = readFileSync(path.join(__dirname, "templates", name), "utf8");`],
     ])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
 
   it("does NOT cap a heavy CONSTANT command that is not a version/help probe", () => {
     const f = [{ path: "a.ts", line: 1, category: "performance", score: 5 }]
     const alt = lines("a.ts", [[1, `execSync("convert input.png output.jpg");`]])
     expect(clampTrivialSyncIoSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
 
   it("only clamps sev>=4 (P0/P1); leaves score-3 (P2) and lower untouched (CodeRabbit #298)", () => {
@@ -82,7 +82,7 @@ describe("clampTrivialSyncIoSeverity", () => {
   it("no-ops without the line map", () => {
     const f = [{ path: "a.ts", line: 1, category: "performance", score: 5 }]
     expect(clampTrivialSyncIoSeverity(f, undefined)).toBe(0)
-    expect(f[0].score).toBe(5)
+    expect(f[0]!.score).toBe(5)
   })
 })
 
@@ -108,7 +108,7 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(3)
+    expect(f[0]!.score).toBe(3)
   })
 
   it("normalizes whitespace-padded finding paths before matching live-eval harness evidence", () => {
@@ -130,7 +130,7 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(3)
+    expect(f[0]!.score).toBe(3)
   })
 
   it("caps when the serial-eval intent is visible in the finding text instead of added lines", () => {
@@ -153,7 +153,7 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
-    expect(f[0].score).toBe(3)
+    expect(f[0]!.score).toBe(3)
   })
 
   it("does NOT cap production N+1 fanout even when a comment says sequential by design", () => {
@@ -175,7 +175,7 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(4)
+    expect(f[0]!.score).toBe(4)
   })
 
   it("does NOT cap a live test serial await without explicit eval-rate-limit intent", () => {
@@ -197,7 +197,7 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(4)
+    expect(f[0]!.score).toBe(4)
   })
 
   it("does NOT cap a different real perf bug in a live-eval file with serial intent nearby", () => {
@@ -221,6 +221,6 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     ])
 
     expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(4)
+    expect(f[0]!.score).toBe(4)
   })
 })

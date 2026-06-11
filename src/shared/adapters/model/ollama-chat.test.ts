@@ -417,7 +417,7 @@ describe("chat() — request shape", () => {
       ],
     })
     expect(captured).not.toBeNull()
-    const c = captured as Record<string, unknown>
+    const c = captured as unknown as Record<string, unknown>
     expect(c.tools).toEqual([
       {
         type: "function",
@@ -445,7 +445,7 @@ describe("chat() — request shape", () => {
       tools: [],
       format: { type: "object", properties: { answer: { type: "string" } } },
     })
-    const c = captured as Record<string, unknown>
+    const c = captured as unknown as Record<string, unknown>
     expect(c.tools).toBeUndefined()
     expect(c.format).toEqual({ type: "object", properties: { answer: { type: "string" } } })
   })

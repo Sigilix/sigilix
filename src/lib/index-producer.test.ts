@@ -77,7 +77,9 @@ describe("isIndexerEnabled", () => {
     expect(isIndexerEnabled({ OPENCLAW_INDEXER_ENABLED: "ON" })).toBe(false)
     expect(isIndexerEnabled({ OPENCLAW_INDEXER_ENABLED: "true" })).toBe(false)
     expect(isIndexerEnabled({ OPENCLAW_INDEXER_ENABLED: "" })).toBe(false)
-    expect(isIndexerEnabled({ OPENCLAW_INDEXER_ENABLED: undefined })).toBe(false)
+    expect(
+      isIndexerEnabled({ OPENCLAW_INDEXER_ENABLED: undefined } as unknown as Pick<Env, "OPENCLAW_INDEXER_ENABLED">),
+    ).toBe(false)
     expect(isIndexerEnabled({})).toBe(false)
   })
 })

@@ -252,7 +252,7 @@ describe("classifySynthOutcome (ARC-278)", () => {
     verdict: { summary: "x".repeat(20), confidence: 4, confidenceReason: "y", findings: [] },
     provenance: { findings: [], dropped: [] },
     elapsedMs: 100,
-  } as const
+  }
 
   it("returns `ok` when output has verdict + provenance and no failure reason", () => {
     expect(classifySynthOutcome(okSynth, false)).toBe("ok")

@@ -39,7 +39,7 @@ function makeDo() {
   return new GraphMetricsDO(state as unknown as DurableObjectState, {} as Env)
 }
 
-function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}, doInstance = makeDo()): Env {
   const ns = { idFromName: (_: string) => "id", get: (_: unknown) => doInstance }
   return {
     OPENCLAW_VALIDATION_METRICS_TOKEN: TOKEN,
@@ -102,6 +102,6 @@ describe("handleGraphMetricsRoute", () => {
     expect(body.reviews).toBe(1)
     expect(body.averages.jaccard).toBeCloseTo(0.5)
     expect(body.modeReviews.shadow).toBe(1)
-    expect(body.lastSeenPrHeads[0].headSha).toBe("abc")
+    expect(body.lastSeenPrHeads[0]!.headSha).toBe("abc")
   })
 })

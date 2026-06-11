@@ -40,7 +40,7 @@ describe("classifyEnsembleError — TRANSIENT triggers", () => {
 
 describe("classifyEnsembleError — TERMINAL triggers", () => {
   it("HTTP 422 invalid-anchor from submitReview → terminal", () => {
-    const err = new GitHubHttpError(422, "Unprocessable Entity (invalid line)", null)
+    const err = new GitHubHttpError(422, "Unprocessable Entity (invalid line)")
     expect(classifyEnsembleError(err)).toBe("terminal")
   })
 

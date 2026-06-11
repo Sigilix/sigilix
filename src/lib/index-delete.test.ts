@@ -24,7 +24,7 @@ import { repoIndexManifestKey } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey } from "@/src/lib/repo-index-vectors"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import type { Env } from "@/src/shared/types/env"
-import { makeKvStub, makeEnv, manifest, vectors } from "@/src/lib/index-delete.test-helpers"
+import { makeKvStub, makeEnv, manifest, vectors, type KvListPage } from "@/src/lib/index-delete.test-helpers"
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -655,7 +655,7 @@ describe("handleInstallReposRemoved", () => {
         { full_name: "Acme/repo-a" },
         { full_name: "Acme/repo-b" },
         { full_name: "invalid no slash" },
-        { name: "no full_name" },
+        { name: "no full_name" } as { full_name?: string },
       ],
     })
     expect(results.length).toBe(2)

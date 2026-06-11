@@ -278,7 +278,7 @@ describe("SIG-349 — measured model lineup", () => {
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).
-    const perRole = (c: { retries: number; fallback?: string }) => 1 + c.retries + (c.fallback ? 1 : 0)
+    const perRole = (c: { retries: number; fallback?: string | null }) => 1 + c.retries + (c.fallback ? 1 : 0)
     const expected =
       perRole(SPECIALIST_CONFIGS.logic) +
       perRole(SPECIALIST_CONFIGS.security) +

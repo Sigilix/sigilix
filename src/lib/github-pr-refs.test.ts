@@ -29,7 +29,7 @@ describe("extractPullRequestRefs", () => {
       noInfer,
     )
     expect(refs).toHaveLength(1)
-    expect(refs[0].number).toBe(5)
+    expect(refs[0]!.number).toBe(5)
   })
 
   it("caps at 2 unique refs", () => {
@@ -54,7 +54,7 @@ describe("extractPullRequestRefs", () => {
   it("matches 'pull request #N' variant", () => {
     const refs = extractPullRequestRefs("see pull request #99", arcInfer)
     expect(refs).toHaveLength(1)
-    expect(refs[0].number).toBe(99)
+    expect(refs[0]!.number).toBe(99)
   })
 
   it("never matches bare '#N' without 'PR ' prefix (Linear issue ID safety)", () => {

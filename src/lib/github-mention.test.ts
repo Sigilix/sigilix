@@ -143,6 +143,7 @@ describe("formatReply", () => {
       answer: "Fixed — guard now uses `<=` on `bounds.length`.",
       confidence: 5,
       abstain: false,
+      verdict: "answer",
     })
     expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
     expect(out).toContain("Fixed — guard now uses")
@@ -150,7 +151,7 @@ describe("formatReply", () => {
 
   it("preserves the model's Markdown verbatim under the marker", () => {
     const answer = "Returns `null` when `x` is empty — see `src/lib/foo.ts:42`."
-    const out = formatReply({ answer, confidence: 3, abstain: false })
+    const out = formatReply({ answer, confidence: 3, abstain: false, verdict: "answer" })
     expect(out.endsWith(answer)).toBe(true)
   })
 })
@@ -408,7 +409,8 @@ describe("review dismiss dedupe records", () => {
       kind: "review-dismiss-in-progress",
       token: "lock-token-1",
     })
-    expect(typeof parsed?.createdAt).toBe("number")
+    expect(parsed?.kind).toBe("review-dismiss-in-progress")
+    expect(typeof (parsed?.kind === "review-dismiss-in-progress" ? parsed.createdAt : undefined)).toBe("number")
   })
 
   it("round-trips result records before and after a reply is posted", () => {
@@ -719,7 +721,7 @@ describe("handleGithubMention dismiss path", () => {
     // env binds VALIDATION_METRICS_DO so we exercise the real call site,
     // not the swallowed-error fallback).
     expect(metricsBatches).toHaveLength(1)
-    expect(metricsBatches[0].events).toEqual([{ kind: "dismissal-reason", reason: "too-minor" }])
+    expect(metricsBatches[0]!.events).toEqual([{ kind: "dismissal-reason", reason: "too-minor" }])
   })
 })
 

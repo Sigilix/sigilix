@@ -52,8 +52,8 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
     await do_.record({ ...base, state: "verified", occurredAt: T })
     await do_.record({ ...base, prNumber: 8, state: "runner-absent", occurredAt: T })
     const out = await do_.query({ windowDays: 7, nowIso: T })
-    expect(out.counts.verified[""]).toBe(1)
-    expect(out.counts["runner-absent"][""]).toBe(1)
+    expect(out.counts.verified![""]).toBe(1)
+    expect(out.counts["runner-absent"]![""]).toBe(1)
   })
 
   it("buckets evidence-pending by its reason", async () => {
@@ -79,16 +79,16 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
       occurredAt: T,
     })
     const out = await do_.query({ windowDays: 7, nowIso: T })
-    expect(out.counts["evidence-pending"]["merge-sha-unavailable"]).toBe(1)
-    expect(out.counts["evidence-pending"]["merge-sha-mismatch"]).toBe(2)
+    expect(out.counts["evidence-pending"]!["merge-sha-unavailable"]).toBe(1)
+    expect(out.counts["evidence-pending"]!["merge-sha-mismatch"]).toBe(2)
   })
 
   it("collapses a stray reason on verified/runner-absent to the empty key (never a phantom reason bucket)", async () => {
     const { do_ } = makeDoInstance()
     await do_.record({ ...base, state: "verified", reason: "should-be-ignored", occurredAt: T })
     const out = await do_.query({ windowDays: 7, nowIso: T })
-    expect(out.counts.verified[""]).toBe(1)
-    expect(out.counts.verified["should-be-ignored"]).toBeUndefined()
+    expect(out.counts.verified![""]).toBe(1)
+    expect(out.counts.verified!["should-be-ignored"]).toBeUndefined()
   })
 
   it("tracks the per-repo LATEST state (a newer observation supersedes)", async () => {
@@ -113,7 +113,7 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.repoPresence).toHaveLength(0)
     // …but the daily count is still recorded.
-    expect(out.counts["runner-absent"][""]).toBe(1)
+    expect(out.counts["runner-absent"]![""]).toBe(1)
   })
 
   it("excludes counts outside the trailing window", async () => {
@@ -121,7 +121,7 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
     await do_.record({ ...base, state: "verified", occurredAt: "2026-05-20T12:00:00.000Z" }) // 10 days before
     await do_.record({ ...base, prNumber: 8, state: "verified", occurredAt: T })
     const out = await do_.query({ windowDays: 7, nowIso: T })
-    expect(out.counts.verified[""]).toBe(1) // only the in-window one
+    expect(out.counts.verified![""]).toBe(1) // only the in-window one
     expect(out.window).toEqual({ days: 7, startDay: "2026-05-24", endDay: "2026-05-30" })
   })
 

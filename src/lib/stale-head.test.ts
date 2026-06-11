@@ -24,7 +24,7 @@ const {
   mockUpdateIssueComment,
   mockEnqueuePrReviewJob,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
+  mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockListIssueComments: vi.fn(),
   mockCreateIssueComment: vi.fn(),
   mockUpdateIssueComment: vi.fn(),
@@ -190,8 +190,8 @@ describe("handleStaleHead — sticky comment (exhausted retry budget)", () => {
       source: "phase3",
     })
 
-    expect(result.posted).toBe("failed")
-    if (result.posted === "failed") {
+    expect("posted" in result && result.posted).toBe("failed")
+    if ("posted" in result && result.posted === "failed") {
       expect(result.reason).toContain("403")
     }
   })
@@ -298,7 +298,7 @@ describe("handleStaleHead — ARC-251 auto-requeue (depth < MAX_STALE_HEAD_REQUE
       source: "phase3",
     })
 
-    expect(result.posted).toBe("created")
+    expect("posted" in result && result.posted).toBe("created")
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
     expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
   })

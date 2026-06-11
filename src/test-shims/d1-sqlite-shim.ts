@@ -23,7 +23,7 @@ class D1StmtShim {
 
   async run(): Promise<D1Result> {
     const stmt = this.db.prepare(this.sql)
-    const info = stmt.run(...(this.params as unknown[]))
+    const info = stmt.run(...(this.params as Parameters<typeof stmt.run>))
     return {
       success: true,
       results: [],
@@ -36,7 +36,7 @@ class D1StmtShim {
 
   async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
     const stmt = this.db.prepare(this.sql)
-    const rows = stmt.all(...(this.params as unknown[])) as T[]
+    const rows = stmt.all(...(this.params as Parameters<typeof stmt.all>)) as T[]
     return {
       success: true,
       results: rows,
@@ -46,7 +46,7 @@ class D1StmtShim {
 
   async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
     const stmt = this.db.prepare(this.sql)
-    const row = stmt.get(...(this.params as unknown[])) as Record<string, unknown> | undefined
+    const row = stmt.get(...(this.params as Parameters<typeof stmt.get>)) as Record<string, unknown> | undefined
     if (row == null) return null
     if (colName) return (row[colName] ?? null) as T
     return row as T

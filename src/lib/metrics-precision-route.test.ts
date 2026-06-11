@@ -7,7 +7,7 @@ import type { Env } from "@/src/shared/types/env"
 
 const TOKEN = "metrics-token"
 
-function makeEnv(overrides: Partial<Env> = {}) {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}) {
   const store = new Map<string, string>()
   const kv = {
     async get(k: string) {

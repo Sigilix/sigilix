@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit && eslint . && vitest run",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "build": "tsc --noEmit && tsc -p tsconfig.workers.json --noEmit && eslint . && vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.workers.json --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",

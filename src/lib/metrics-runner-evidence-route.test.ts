@@ -40,7 +40,7 @@ function makeDo(): RunnerEvidenceMetricsDO {
   return new RunnerEvidenceMetricsDO(state as unknown as DurableObjectState, {} as Env)
 }
 
-function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}, doInstance = makeDo()): Env {
   const ns = { idFromName: (_: string) => "id", get: (_: unknown) => doInstance }
   return {
     OPENCLAW_VALIDATION_METRICS_TOKEN: TOKEN,
@@ -94,9 +94,9 @@ describe("handleRunnerEvidenceMetricsRoute", () => {
       window: { days: number }
     }
     expect(body.mode).toBe("post")
-    expect(body.counts.verified[""]).toBe(1)
-    expect(body.counts["evidence-pending"]["merge-sha-unavailable"]).toBe(1)
-    expect(body.counts["runner-absent"][""]).toBe(1)
+    expect(body.counts.verified![""]).toBe(1)
+    expect(body.counts["evidence-pending"]!["merge-sha-unavailable"]).toBe(1)
+    expect(body.counts["runner-absent"]![""]).toBe(1)
     expect(body.window.days).toBe(7)
     const sigilix = body.repoPresence.find((p) => p.repo === "sigilix")
     expect(sigilix?.lastState).toBe("verified")

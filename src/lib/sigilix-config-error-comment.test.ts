@@ -48,7 +48,7 @@ const args = {
 
 describe("postConfigErrorComment", () => {
   it("posts a new comment when KV is empty AND no prior comment exists", async () => {
-    const create = vi.fn(async () => ({ id: 100 }))
+    const create = vi.fn(async (..._args: unknown[]) => ({ id: 100 }))
     const client = fakeClient({ createIssueComment: create })
     const { stub, store } = fakeKV()
     const result = await postConfigErrorComment({ env: makeEnv(stub), client, ...args })
@@ -56,7 +56,7 @@ describe("postConfigErrorComment", () => {
     if (result.kind !== "posted") return
     expect(result.commentId).toBe(100)
     expect(create).toHaveBeenCalledOnce()
-    const body = create.mock.calls[0][3] as string
+    const body = create.mock.calls[0]![3] as string
     expect(body).toContain(`<!-- sigilix:config-error:${args.headSha.slice(0, 7)} -->`)
     expect(body).toContain("Sigilix config parse error")
     expect(body).toContain("JSON parse failed: unexpected token")
@@ -141,7 +141,7 @@ describe("postConfigErrorComment", () => {
   })
 
   it("truncates raw config snippet to 500 chars + marker", async () => {
-    const create = vi.fn(async () => ({ id: 100 }))
+    const create = vi.fn(async (..._args: unknown[]) => ({ id: 100 }))
     const client = fakeClient({ createIssueComment: create })
     const { stub } = fakeKV()
     const longRaw = "x".repeat(2000)
@@ -151,7 +151,7 @@ describe("postConfigErrorComment", () => {
       ...args,
       raw: longRaw,
     })
-    const body = create.mock.calls[0][3] as string
+    const body = create.mock.calls[0]![3] as string
     // Snippet section should not contain the full 2000-char body
     expect(body).toContain("…[truncated]")
     // No raw character should appear MORE than ~500 times

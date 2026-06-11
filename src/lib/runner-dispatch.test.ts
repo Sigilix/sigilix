@@ -15,7 +15,7 @@ const check: RunnerCheckSpec = {
 function mockFetch(status: number, captured: { url?: string; init?: RequestInit } = {}): typeof fetch {
   return (async (url: string, init?: RequestInit) => {
     captured.url = url
-    captured.init = init
+    if (init !== undefined) captured.init = init
     return new Response(status === 204 ? null : "err", { status })
   }) as unknown as typeof fetch
 }

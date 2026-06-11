@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mockGetInstallationToken = vi.fn(async () => "test-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
 const mockListPullFilesForManifest = vi.fn()
 const mockGetMergeBase = vi.fn()
 const mockGetReview = vi.fn()
@@ -202,7 +202,7 @@ describe("handlePrStaleMark — review-target PATCH", () => {
     await handlePrStaleMark(baseArgs(env, m))
 
     expect(mockUpdateReviewBody).toHaveBeenCalledOnce()
-    const args = mockUpdateReviewBody.mock.calls[0]
+    const args = mockUpdateReviewBody.mock.calls[0]!
     expect(args[3]).toBe(4242) // reviewId
     expect(args[4]).toContain("<!-- sigilix:stale-marker:start -->")
     expect(args[4]).toContain("This review is stale")
@@ -272,7 +272,7 @@ describe("handlePrStaleMark — issue-comment-target PATCH", () => {
     await handlePrStaleMark(baseArgs(env, m))
 
     expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
-    const args = mockUpdateIssueComment.mock.calls[0]
+    const args = mockUpdateIssueComment.mock.calls[0]!
     expect(args[2]).toBe(999) // commentId
     expect(args[3]).toContain("<!-- sigilix:stale-marker:start -->")
   })
@@ -386,7 +386,7 @@ describe("handlePrStaleMark — failures + retries", () => {
     await handlePrStaleMark(baseArgs(env, m))
 
     expect(mockUpdateReviewBody).toHaveBeenCalledOnce()
-    const newBody = mockUpdateReviewBody.mock.calls[0][4] as string
+    const newBody = mockUpdateReviewBody.mock.calls[0]![4] as string
     const startMatches = newBody.match(/sigilix:stale-marker:start/g) ?? []
     const endMatches = newBody.match(/sigilix:stale-marker:end/g) ?? []
     expect(startMatches.length).toBe(1)

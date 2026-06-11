@@ -23,8 +23,12 @@ import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 const PATH = "src/lib/orders.ts"
 
-function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
-  return {
+type FindingOverrides = Omit<Partial<PrReviewFinding>, "complexityEstimate"> & {
+  complexityEstimate?: string | undefined
+}
+
+function finding(overrides: FindingOverrides = {}): PrReviewFinding {
+  const base: PrReviewFinding = {
     path: PATH,
     line: 17,
     score: 4,
@@ -32,8 +36,14 @@ function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
     headline: "N+1 query awaiting `db.query` for each item in `rows`",
     body: "The loop over `rows` awaits a query per iteration; batch it instead.",
     complexityEstimate: "O(n): one round-trip per item in `rows`",
-    ...overrides,
   }
+  // Apply overrides, dropping explicit `undefined` so the result stays valid
+  // under exactOptionalPropertyTypes (explicit `undefined` == field omitted).
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function evidence(overrides: Partial<PerfEvidence> = {}): PerfEvidence {

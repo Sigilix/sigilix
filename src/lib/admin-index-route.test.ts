@@ -18,7 +18,7 @@ import type { JobMessage } from "@/src/shared/types/job"
 const mockResolve = vi.mocked(resolveRepoInstallationId)
 const TOKEN = "admin-token"
 
-function makeEnv(overrides: Partial<Env> = {}): { env: Env; sent: JobMessage[] } {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): { env: Env; sent: JobMessage[] } {
   const sent: JobMessage[] = []
   const env = {
     OPENCLAW_ADMIN_TOKEN: TOKEN,

@@ -251,11 +251,14 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
 // SIG-161 PR 4a — gate-score blend (DESIGN.md §5). Hand-tuned coefficients
 // in v1; PR 4c replaces this with a logistic regression fit on labels.
 describe("computeGateScore (SIG-161 §5)", () => {
-  const f = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
-    ...baseFinding,
-    score: 3,
-    ...overrides,
-  })
+  const f = (overrides: { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } = {}): PrReviewFinding => {
+    const base: PrReviewFinding = { ...baseFinding, score: 3 }
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+      else (base as unknown as Record<string, unknown>)[key] = value
+    }
+    return base
+  }
 
   it("clamps to [0, 1]", () => {
     // Maximal inputs (conf 5 + evidence + 3-way agreement + score 5):
@@ -490,11 +493,14 @@ describe("hasRequiredEvidence (SIG-161 §5)", () => {
 // helper so the verdict + divergence-payload computation is
 // independently testable.
 describe("computeShadowGateDivergence (SIG-161 PR 4b)", () => {
-  const f = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
-    ...baseFinding,
-    score: 3,
-    ...overrides,
-  })
+  const f = (overrides: { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } = {}): PrReviewFinding => {
+    const base: PrReviewFinding = { ...baseFinding, score: 3 }
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+      else (base as unknown as Record<string, unknown>)[key] = value
+    }
+    return base
+  }
 
   it("returns no divergence when the gate agrees with the legacy verdict (both REQUEST_CHANGES)", () => {
     // Confidence-5, score-5, evidence, multi-spec → gateScore = 1.0,
@@ -592,7 +598,7 @@ describe("computeShadowGateDivergence (SIG-161 PR 4b)", () => {
     const result = computeShadowGateDivergence({
       renderable: [fScored, fNaN],
       unanchored: [],
-      provenance: [{ sourceSpecialists: ["tests"] }, { sourceSpecialists: undefined }],
+      provenance: [{ sourceSpecialists: ["tests"] }, {}],
       threshold: 0.85,
       legacyEvent: "APPROVE", // synthetic: pretend legacy approved
     })

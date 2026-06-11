@@ -130,7 +130,7 @@ describe("handleGitHubAuthKickoff", () => {
 
   it("fails 503 when GITHUB_OAUTH_CLIENT_ID is unset", async () => {
     const kv = makeKV()
-    const e = { ...env(kv), GITHUB_OAUTH_CLIENT_ID: undefined }
+    const { GITHUB_OAUTH_CLIENT_ID: _clientId, ...e } = env(kv)
     const res = await handleGitHubAuthKickoff(new Request("https://app.sigilix.ai/auth/github"), e)
     expect(res.status).toBe(503)
   })
@@ -141,7 +141,7 @@ describe("handleGitHubAuthKickoff", () => {
     await handleGitHubAuthKickoff(req, env(kv))
     const stored = [...kv._store.values()][0]
     expect(stored).toBeTruthy()
-    const parsed = JSON.parse(stored)
+    const parsed = JSON.parse(stored!)
     expect(parsed.redirectAfter).toBe("/dashboard")
   })
 })

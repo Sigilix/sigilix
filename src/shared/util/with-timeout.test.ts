@@ -23,7 +23,7 @@ describe("withTimeout", () => {
       return "never"
     }, 20)
     await expect(promise).rejects.toThrow(/aborted/)
-    expect(observedSignal?.aborted).toBe(true)
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true)
   })
 
   it("propagates non-Abort errors and clears the timer", async () => {

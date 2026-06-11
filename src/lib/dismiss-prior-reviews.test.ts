@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const { mockListPullRequestReviews, mockDismissReview } = vi.hoisted(() => ({
   mockListPullRequestReviews: vi.fn(),
-  mockDismissReview: vi.fn(async () => undefined),
+  mockDismissReview: vi.fn(async (..._args: unknown[]) => undefined),
 }))
 
 vi.mock("@/src/shared/adapters/github", async () => {

@@ -720,7 +720,7 @@ describe("recoverTruncatedSynthFindings", () => {
     expect(out.findings).toHaveLength(5)
     expect(out.provenanceFindings).toHaveLength(5)
     // the kept prefix is preserved.
-    expect((out.findings[0] as { id: string }).id).toBe("security-0")
+    expect((out.findings[0] as unknown as { id: string }).id).toBe("security-0")
     // a recovered finding carries the specialist's real fields.
     expect(out.findings[2]?.headline).toBe("N+1 in computeBalance")
   })
@@ -822,7 +822,7 @@ describe("SIG-317 recovery → degraded floor composition (alignment contract)",
     expect(floored.provenanceFindings).toHaveLength(2)
     expect(floored.findings.length).toBe(floored.provenanceFindings.length) // aligned
     // The restored finding is paired with ITS OWN provenance, not the AST orphan.
-    expect((floored.findings[1] as { id: string }).id).toBe("performance-0")
+    expect((floored.findings[1] as unknown as { id: string }).id).toBe("performance-0")
     expect(floored.provenanceFindings[1]?.sourceFindingIds).toEqual(["performance-0"])
   })
 

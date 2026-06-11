@@ -15,7 +15,7 @@ import { DYNAMIC_HTML_SINK_RULE_ID } from "@/src/features/ast-rules/domain/scan-
 function secretHit(overrides: Partial<SecretHit> = {}): SecretHit {
   return {
     ruleId: "generic-api-key",
-    category: "generic",
+    category: "generic-token",
     severity: "error",
     path: "src/config.ts",
     line: 42,
@@ -44,8 +44,8 @@ function depVuln(overrides: Partial<DepVulnFinding> = {}): DepVulnFinding {
   } as DepVulnFinding
 }
 
-function sarifFinding(overrides: Partial<SarifFinding> = {}): SarifFinding {
-  return {
+function sarifFinding(overrides: { [K in keyof SarifFinding]?: SarifFinding[K] | undefined } = {}): SarifFinding {
+  const base: Record<string, unknown> = {
     ruleId: "sql-injection",
     severity: "error",
     roleHint: "security",
@@ -54,8 +54,14 @@ function sarifFinding(overrides: Partial<SarifFinding> = {}): SarifFinding {
     line: 17,
     message: "Possible SQL injection",
     toolName: "Trivy",
-    ...overrides,
-  } as SarifFinding
+  }
+  // Strip explicit `undefined` so a `line: undefined` override yields the
+  // path-only shape (field absent), matching the production read path.
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete base[key]
+    else base[key] = value
+  }
+  return base as unknown as SarifFinding
 }
 
 function astFinding(overrides: Partial<AstFinding> = {}): AstFinding {
@@ -92,7 +98,7 @@ describe("buildSecurityFactManifest", () => {
     expect(m.manifest.size).toBe(1)
     const [id] = [...m.manifest.keys()]
     expect(id).toMatch(/^secret:generic-api-key:[0-9a-f]{12}:42$/)
-    const fact = m.manifest.get(id)!
+    const fact = m.manifest.get(id!)!
     expect(fact.tool).toBe("secret")
     expect(fact.path).toBe("src/config.ts")
     expect(fact.line).toBe(42)
@@ -103,7 +109,7 @@ describe("buildSecurityFactManifest", () => {
     const m = await buildSecurityFactManifest({ ...EMPTY, depVulnFindings: [depVuln()] })
     const [id] = [...m.manifest.keys()]
     expect(id).toMatch(/^depvuln:GHSA-xxxx-yyyy-zzzz:[0-9a-f]{12}$/)
-    const fact = m.manifest.get(id)!
+    const fact = m.manifest.get(id!)!
     expect(fact.tool).toBe("depvuln")
     expect(fact.path).toBe("package.json")
     expect(fact.line).toBeNull()
@@ -113,7 +119,7 @@ describe("buildSecurityFactManifest", () => {
     const m = await buildSecurityFactManifest({ ...EMPTY, sarifFindings: [sarifFinding()] })
     const [id] = [...m.manifest.keys()]
     expect(id).toMatch(/^sarif:sql-injection:[0-9a-f]{12}:17$/)
-    expect(m.manifest.get(id)!.line).toBe(17)
+    expect(m.manifest.get(id!)!.line).toBe(17)
   })
 
   it("builds a sarif evidenceId WITHOUT a trailing line for path-only findings", async () => {
@@ -123,14 +129,14 @@ describe("buildSecurityFactManifest", () => {
     })
     const [id] = [...m.manifest.keys()]
     expect(id).toMatch(/^sarif:sql-injection:[0-9a-f]{12}$/)
-    expect(m.manifest.get(id)!.line).toBeNull()
+    expect(m.manifest.get(id!)!.line).toBeNull()
   })
 
   it("builds an ast evidenceId reusing the stable astFindingId", async () => {
     const m = await buildSecurityFactManifest({ ...EMPTY, astSecurityFindings: [astFinding()] })
     const [id] = [...m.manifest.keys()]
     expect(id).toBe("ast:eval-call:ast/eval-call/abc1234/9")
-    expect(m.manifest.get(id)!.line).toBe(9)
+    expect(m.manifest.get(id!)!.line).toBe(9)
   })
 
   it("#64: stamps CWE-79 on the dynamic-HTML-sink AST fact (routes a confirmed XSS to the xss bucket)", async () => {
@@ -147,14 +153,14 @@ describe("buildSecurityFactManifest", () => {
       ],
     })
     const [id] = [...m.manifest.keys()]
-    expect(m.manifest.get(id)!.cwe).toBe("CWE-79")
+    expect(m.manifest.get(id!)!.cwe).toBe("CWE-79")
     expect(m.render()).toContain("[proposed CWE-79]")
   })
 
   it("#64: does NOT stamp a CWE on a non-XSS AST fact (e.g. eval-call) — scoped to the sink rule", async () => {
     const m = await buildSecurityFactManifest({ ...EMPTY, astSecurityFindings: [astFinding()] })
     const [id] = [...m.manifest.keys()]
-    expect(m.manifest.get(id)!.cwe).toBeUndefined()
+    expect(m.manifest.get(id!)!.cwe).toBeUndefined()
   })
 
   it("produces a DETERMINISTIC id for the same fact across two builds (hash stability)", async () => {

@@ -26,6 +26,7 @@ import {
   walkIndexableFiles,
   type TreeEntry,
 } from "@/src/lib/indexer"
+import type { Chunk } from "@/src/lib/chunk-core"
 
 describe("CHUNKER_VERSION constant", () => {
   it("is pinned at 2 — bump invalidates the index (SIG-133 split-not-drop)", () => {
@@ -355,7 +356,7 @@ describe("chunkId", () => {
   it("SIG-133: a normal chunk's id is unaffected by the fragmentIndex change (still content-addressed)", async () => {
     const base = { path: "x.ts", lineStart: 1, lineEnd: 30, content: "hello" }
     const withUndef = await chunkId("ns", base)
-    const explicitUndef = await chunkId("ns", { ...base, fragmentIndex: undefined })
+    const explicitUndef = await chunkId("ns", { ...base, fragmentIndex: undefined } as unknown as Chunk)
     expect(withUndef).toBe(explicitUndef)
   })
 

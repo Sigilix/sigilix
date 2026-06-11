@@ -55,7 +55,7 @@ describe("updateReviewBody", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 42, body: "new" }))
     const c = newClient()
     await c.updateReviewBody("o", "r", 7, 42, "new")
-    const call = fetchSpy.mock.calls[0]
+    const call = fetchSpy.mock.calls[0]!
     const url =
       typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
     const init = call[1] as RequestInit | undefined
@@ -151,7 +151,7 @@ describe("listPullFilesForManifest", () => {
     )
     const c = newClient()
     const out = await c.listPullFilesForManifest("o", "r", 1)
-    expect(out.entries[0].status).toBe("removed")
+    expect(out.entries[0]!.status).toBe("removed")
   })
 })
 

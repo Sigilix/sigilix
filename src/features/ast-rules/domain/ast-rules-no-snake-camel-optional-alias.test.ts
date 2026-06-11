@@ -41,7 +41,7 @@ describe("no-snake-camel-optional-alias — positive (snake-required + camel-opt
   it("sets endLine on a multi-line alias property signature (CodeRabbit #294)", () => {
     const hits = runRule("interface C {\n  reply_count: number;\n  replyCount?:\n    number;\n}")
     expect(hits.length).toBe(1)
-    expect(hits[0].endLine).toBeGreaterThan(hits[0].line)
+    expect(hits[0]!.endLine).toBeGreaterThan(hits[0]!.line)
   })
 })
 

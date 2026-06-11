@@ -44,7 +44,10 @@ beforeAll(async () => {
   jwk = { kid: KID, kty: j.kty!, n: j.n!, e: j.e!, alg: "RS256", use: "sig" }
 })
 
-async function signToken(claims: Partial<GitHubOidcClaims>, kid = KID): Promise<string> {
+async function signToken(
+  claims: { [K in keyof GitHubOidcClaims]?: GitHubOidcClaims[K] | undefined },
+  kid = KID,
+): Promise<string> {
   const input = `${b64urlJson({ alg: "RS256", kid })}.${b64urlJson(claims)}`
   const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(input))
   return `${input}.${b64url(new Uint8Array(sig))}`

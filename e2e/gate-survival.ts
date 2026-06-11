@@ -28,56 +28,15 @@ import { buildChangedLineTextByPath } from "@/src/lib/ensemble/domain/gates/vali
 import { computeTestToSourceAddedRatio } from "@/src/lib/ensemble/domain/gates/test-ratio-damper"
 import { runAstRules, createAstCache } from "@/src/features/ast-rules"
 import { resolveAstRulesConfig } from "@/src/lib/sigilix-config"
-import { assignStableFindingIds } from "@/src/lib/ensemble/domain/findings"
-import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
-import type { PrReviewFinding, PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
+import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import { scoreFixture } from "@/evals/scorer"
 import { shadowFindingsToFixtureFindings } from "@/evals/local-adapter"
-import type { FixtureFinding, FixtureGroundTruth, Severity } from "@/evals/fixture-types"
+import type { FixtureFinding, FixtureGroundTruth } from "@/evals/fixture-types"
 import { FIXTURES_DIR } from "@/e2e/fixture-eval-lib"
+import { prodEnvFromWrangler, rebuildSpecialistVerdicts, roleOf } from "@/e2e/replay-shared"
 
 const FIXTURE = "fullstack-pr20-dense"
-const ROLES = ["logic", "security", "performance", "tests"] as const
-type Role = (typeof ROLES)[number]
-
-function scoreForSeverity(sev: Severity | null): number {
-  return sev === "P0" ? 5 : sev === "P1" ? 4 : sev === "P2" ? 3 : 2
-}
-
-/** ref prefix → which specialist verdict the finding belongs to. */
-function roleOf(ref: string): Role {
-  for (const r of ROLES) {
-    if (ref.startsWith(r) || ref.startsWith(`resweep-${r}`)) return r
-  }
-  return "logic" // invariant-lens candidates merge into logic (the engine's rule)
-}
-
-function toPrFinding(f: FixtureFinding): PrReviewFinding {
-  const headline = f.excerpt.replace(/^\*\*|\*\*$/g, "")
-  const body = f.bodyText.startsWith(f.excerpt) ? f.bodyText.slice(f.excerpt.length).trim() : f.bodyText
-  const category =
-    f.botCategory === "testing" || f.botCategory === "performance" || f.botCategory === "security"
-      ? f.botCategory
-      : "logic"
-  return {
-    path: f.path ?? "",
-    line: f.line ?? 1,
-    score: scoreForSeverity(f.severity),
-    category: category as PrReviewFinding["category"],
-    headline,
-    body: body.length > 0 ? body : headline,
-  }
-}
-
-/** wrangler.toml [vars] → the env object parseEnsembleConfig expects. */
-function prodEnvFromWrangler(): Record<string, string> {
-  const toml = readFileSync(join(process.cwd(), "wrangler.toml"), "utf8")
-  const env: Record<string, string> = {}
-  for (const m of toml.matchAll(/^(OPENCLAW_[A-Z0-9_]+)\s*=\s*"([^"]*)"/gm)) {
-    env[m[1]!] = m[2]!
-  }
-  return env
-}
 
 async function main(): Promise<void> {
   const inputs = process.argv.slice(2)
@@ -143,21 +102,7 @@ async function main(): Promise<void> {
     const captured = JSON.parse(readFileSync(input, "utf8")) as FixtureFinding[]
     // Rebuild per-role specialist verdicts with REAL stable ids so the
     // hallucination guard's provenance check sees traceable sources.
-    const byRole = new Map<Role, PrReviewFinding[]>()
-    for (const f of captured) {
-      const role = roleOf(f.ref)
-      byRole.set(role, [...(byRole.get(role) ?? []), toPrFinding(f)])
-    }
-    const specialistVerdicts: CollectedVerdict[] = [...byRole.entries()].map(([role, findings]) => ({
-      role,
-      verdict: assignStableFindingIds(role, {
-        summary: "replay",
-        confidence: 3,
-        confidenceReason: "replay",
-        findings,
-      } as PrReviewVerdict),
-      elapsedMs: 0,
-    }))
+    const specialistVerdicts = rebuildSpecialistVerdicts(captured)
     const synthFindings = specialistVerdicts.flatMap((v) => v.verdict!.findings)
     const provenance: SynthesizerProvenance = {
       findings: synthFindings.map((f) => ({

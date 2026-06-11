@@ -5,7 +5,13 @@
 // pinned here so CI covers it without the key.
 
 import { describe, expect, it } from "vitest"
-import { foldRuns, formatLocalEvalReport, loadFixture, type RepeatOutcome } from "@/e2e/fixture-eval-lib"
+import {
+  foldRuns,
+  formatLocalEvalReport,
+  loadFixture,
+  splitSectionIntoRegions,
+  type RepeatOutcome,
+} from "@/e2e/fixture-eval-lib"
 import { scoreFixture } from "@/evals/scorer"
 import { shadowFindingsToFixtureFindings } from "@/evals/local-adapter"
 
@@ -25,6 +31,74 @@ describe("loadFixture", () => {
 
   it("throws a freeze-the-diff error when a fixture has no pr.diff", () => {
     expect(() => loadFixture("does-not-exist")).toThrow()
+  })
+})
+
+describe("splitSectionIntoRegions", () => {
+  const section = (added: number) =>
+    [
+      "diff --git a/x.ts b/x.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/x.ts",
+      "@@ -0,0 +1," + added + " @@",
+      ...Array.from({ length: added }, (_, i) => `+line ${i + 1}`),
+    ].join("\n")
+
+  it("keeps small files whole with the full new-line span", () => {
+    const regions = splitSectionIntoRegions("x.ts", section(40))
+    expect(regions).toHaveLength(1)
+    expect(regions[0]!.label).toBe("x.ts")
+    expect(regions[0]!.newLineRange).toEqual([1, 40])
+  })
+
+  it("windows a big file with overlap; spans are monotonic and overlap-contiguous", () => {
+    const regions = splitSectionIntoRegions("x.ts", section(183))
+    expect(regions.length).toBeGreaterThan(2)
+    for (let i = 0; i < regions.length; i++) {
+      const [lo, hi] = regions[i]!.newLineRange
+      expect(lo).toBeLessThanOrEqual(hi)
+      if (i > 0) {
+        const [prevLo, prevHi] = regions[i - 1]!.newLineRange
+        expect(lo).toBeGreaterThan(prevLo) // strictly advancing — no infinite loop
+        expect(lo).toBeLessThanOrEqual(prevHi + 1) // no coverage gap (overlap or contiguous)
+      }
+    }
+    expect(regions[regions.length - 1]!.newLineRange[1]).toBe(183)
+    expect(regions[0]!.label).toBe("x.ts#w1")
+  })
+
+  it("terminates even when windowAdded <= overlapAdded (the step-back bound)", () => {
+    const regions = splitSectionIntoRegions("x.ts", section(30), {
+      maxAddedLines: 10,
+      windowAdded: 5,
+      overlapAdded: 9,
+    })
+    expect(regions.length).toBeGreaterThan(0)
+    expect(regions.length).toBeLessThan(60)
+  })
+
+  it("tracks new-file line numbers across multiple @@ hunks", () => {
+    const multi = [
+      "diff --git a/y.ts b/y.ts",
+      "--- a/y.ts",
+      "+++ b/y.ts",
+      "@@ -1,2 +10,3 @@",
+      " ctx",
+      "+added at 11",
+      " ctx",
+      "@@ -20,2 +50,3 @@",
+      " ctx",
+      "+added at 51",
+      " ctx",
+    ].join("\n")
+    const [region] = splitSectionIntoRegions("y.ts", multi)
+    expect(region!.newLineRange).toEqual([10, 52])
+  })
+
+  it("a section with no hunks falls back to a whole-file region", () => {
+    const [region] = splitSectionIntoRegions("z.ts", "diff --git a/z.ts b/z.ts\n+++ b/z.ts")
+    expect(region!.label).toBe("z.ts")
   })
 })
 

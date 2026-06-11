@@ -37,6 +37,118 @@ export function loadFixture(name: string): LoadedFixture {
   return { name, truth, diff, prTitle: FIXTURE_PR_TITLES[name] ?? `Review fixture ${name}` }
 }
 
+/**
+ * SIG-393: split a unified diff into per-file slices, keyed by the
+ * new-side path. Pure string surgery — the re-sweep prototype scopes
+ * its second pass to one region's diff slice.
+ */
+export function splitDiffByFile(diff: string): Map<string, string> {
+  const out = new Map<string, string>()
+  const sections = diff.split(/^(?=diff --git )/m).filter((s) => s.startsWith("diff --git "))
+  for (const section of sections) {
+    const m = /^\+\+\+ b\/(.+)$/m.exec(section)
+    if (m?.[1]) out.set(m[1], section)
+  }
+  return out
+}
+
+/**
+ * SIG-393 finer-granularity experiment: a re-sweepable region — either a
+ * whole small file or a windowed slice of a large one. `newLineRange` is
+ * the new-file line span the window covers (used to filter which pass-1
+ * findings belong to this region's "already found" list).
+ */
+export interface DiffRegion {
+  label: string
+  path: string
+  slice: string
+  newLineRange: [number, number]
+}
+
+/**
+ * Split one file's diff section into regions. Files at or under
+ * `maxAddedLines` stay whole (last night's K=8 showed file-level works
+ * for small files — all stable flips were in 40-line refunds.ts). Bigger
+ * files get overlapping windows of ~`windowAdded` added lines, because a
+ * 183-line file re-sweep re-saturates exactly like the original pass
+ * (b4/b17/b19/b20 stayed ≤1/8).
+ */
+export function splitSectionIntoRegions(
+  path: string,
+  section: string,
+  opts: { maxAddedLines?: number; windowAdded?: number; overlapAdded?: number } = {},
+): DiffRegion[] {
+  const maxAddedLines = opts.maxAddedLines ?? 80
+  const windowAdded = opts.windowAdded ?? 55
+  const overlapAdded = opts.overlapAdded ?? 8
+
+  const lines = section.split("\n")
+  const firstHunk = lines.findIndex((l) => l.startsWith("@@"))
+  if (firstHunk === -1) {
+    return [{ label: path, path, slice: section, newLineRange: [1, Number.MAX_SAFE_INTEGER] }]
+  }
+  const header = lines.slice(0, firstHunk).join("\n")
+
+  // Walk hunk lines tracking new-file line numbers; collect (raw, newLineNo).
+  const entries: Array<{ raw: string; newLine: number | null; added: boolean }> = []
+  let newLine = 0
+  for (const raw of lines.slice(firstHunk)) {
+    if (raw.startsWith("@@")) {
+      const m = /\+(\d+)/.exec(raw)
+      newLine = m?.[1] ? Number(m[1]) - 1 : newLine
+      entries.push({ raw, newLine: null, added: false })
+      continue
+    }
+    if (raw.startsWith("-")) {
+      entries.push({ raw, newLine: null, added: false })
+      continue
+    }
+    newLine += 1
+    entries.push({ raw, newLine, added: raw.startsWith("+") })
+  }
+
+  const totalAdded = entries.filter((e) => e.added).length
+  if (totalAdded <= maxAddedLines) {
+    const span = entries.filter((e) => e.newLine !== null)
+    const lo = span[0]?.newLine ?? 1
+    const hi = span[span.length - 1]?.newLine ?? lo
+    return [{ label: path, path, slice: section, newLineRange: [lo, hi] }]
+  }
+
+  const regions: DiffRegion[] = []
+  let start = 0
+  let part = 1
+  while (start < entries.length) {
+    let added = 0
+    let end = start
+    while (end < entries.length && added < windowAdded) {
+      if (entries[end]!.added) added += 1
+      end += 1
+    }
+    const window = entries.slice(start, end)
+    const span = window.filter((e) => e.newLine !== null)
+    const lo = span[0]?.newLine ?? 1
+    const hi = span[span.length - 1]?.newLine ?? lo
+    regions.push({
+      label: `${path}#w${part}`,
+      path,
+      slice: `${header}\n@@ window ${part}: new-file lines ${lo}-${hi} @@\n${window.map((e) => e.raw).join("\n")}`,
+      newLineRange: [lo, hi],
+    })
+    if (end >= entries.length) break
+    // Step back `overlapAdded` added lines so window seams don't hide a bug.
+    let back = end
+    let backAdded = 0
+    while (back > start + 1 && backAdded < overlapAdded) {
+      back -= 1
+      if (entries[back]!.added) backAdded += 1
+    }
+    start = back
+    part += 1
+  }
+  return regions
+}
+
 // ─── per-run folding + report ─────────────────────────────────────
 
 export interface RepeatOutcome {

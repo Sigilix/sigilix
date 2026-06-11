@@ -70,14 +70,30 @@ export function classifyFinding(truth: FixtureGroundTruth, finding: FixtureFindi
   }
   const bugHits = truth.bugs.filter((b) => ruleMatches(b.match, b.paths, finding))
   const trapHits = truth.traps.filter((t) => ruleMatches(t.match, t.paths, finding))
-  const hits = [...bugHits.map((b) => b.id), ...trapHits.map((t) => t.id)]
-  if (hits.length > 1) {
+  // Bug↔trap (or trap↔trap) ambiguity is a RULES error: the same claim
+  // cannot be both a real bug and a safe-code false alarm — tighten until
+  // it maps one way. Multi-BUG matches are different: with excerpt-scoped
+  // rules a multi-match means a genuinely COMPOUND headline ("not
+  // idempotent and vulnerable to SQL injection") naming several planted
+  // bugs — two root causes, two fixes, two rows. Credit them all; the
+  // finding's display verdict carries the first id, `bugIds` the full set.
+  if (trapHits.length > 0 && bugHits.length > 0) {
     throw new Error(
       `ambiguous equivalence: finding ${finding.ref} (${finding.path ?? "?"}:${String(finding.line)}) ` +
-        `matches ${hits.join(", ")} — tighten the rules (notKeywords) until it maps to one row`,
+        `matches bug(s) ${bugHits.map((b) => b.id).join(",")} AND trap(s) ${trapHits.map((t) => t.id).join(",")} — ` +
+        `tighten the rules (notKeywords) until it maps one way`,
+    )
+  }
+  if (trapHits.length > 1) {
+    throw new Error(
+      `ambiguous equivalence: finding ${finding.ref} (${finding.path ?? "?"}:${String(finding.line)}) ` +
+        `matches traps ${trapHits.map((t) => t.id).join(", ")} — tighten the rules`,
     )
   }
   if (bugHits.length === 1) return { kind: "bug", id: bugHits[0]!.id }
+  if (bugHits.length > 1) {
+    return { kind: "bug", id: bugHits[0]!.id, bugIds: bugHits.map((b) => b.id) }
+  }
   if (trapHits.length === 1) return { kind: "trap", id: trapHits[0]!.id }
   return { kind: "unmatched" }
 }
@@ -109,7 +125,9 @@ export function scoreFixture(truth: FixtureGroundTruth, tool: Tool, findings: Fi
     verdict: classifyFinding(truth, f),
   }))
 
-  const caughtIds = new Set(scored.flatMap((s) => (s.verdict.kind === "bug" ? [s.verdict.id] : [])))
+  const caughtIds = new Set(
+    scored.flatMap((s) => (s.verdict.kind === "bug" ? (s.verdict.bugIds ?? [s.verdict.id]) : [])),
+  )
   const trapFlags = scored.filter((s) => s.verdict.kind === "trap")
   const unmatched = scored.filter((s) => s.verdict.kind === "unmatched")
   const outOfScope = scored.filter((s) => s.verdict.kind === "out_of_scope")

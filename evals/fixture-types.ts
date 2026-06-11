@@ -122,7 +122,14 @@ export interface FixtureFinding {
 
 /** How one finding was classified by the scorer. */
 export type FindingVerdict =
-  | { kind: "bug"; id: string }
+  | {
+      kind: "bug"
+      id: string
+      /** All bug rows this finding credits. Usually [id]; longer for a
+       *  COMPOUND headline naming several planted bugs at once (two root
+       *  causes in one finding = two rows caught). */
+      bugIds?: string[]
+    }
   | { kind: "trap"; id: string }
   | { kind: "out_of_scope"; id: string }
   | { kind: "unmatched" }

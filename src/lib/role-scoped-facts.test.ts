@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest"
 import { buildFactsByRole } from "@/src/lib/role-scoped-facts"
 import type { AstFinding } from "@/src/features/ast-rules/domain/types"
+import type { SarifFinding } from "@/src/features/sarif-evidence"
 
 function ast(overrides: Partial<AstFinding> = {}): AstFinding {
   return {
@@ -20,10 +21,24 @@ function ast(overrides: Partial<AstFinding> = {}): AstFinding {
   } as AstFinding
 }
 
+function sarif(overrides: Partial<SarifFinding> = {}): SarifFinding {
+  return {
+    ruleId: "sarif-rule",
+    severity: "warning",
+    roleHint: "security",
+    category: "vulnerability",
+    path: "src/x.ts",
+    line: 1,
+    message: "sarif msg",
+    toolName: "Tool",
+    ...overrides,
+  }
+}
+
 const baseInputs = {
   secretScanBlock: "[SECRET SCAN] leaked key",
   depVulnBlock: "[DEP VULN] CVE-1",
-  sarifBlock: "[SARIF] iac issue",
+  sarifFindings: [sarif({ ruleId: "security-sarif", roleHint: "security", toolName: "Semgrep" })],
   deterministicBlock: "[DETERMINISTIC] regex hit",
   docsCoverageBlock: "[DOCS COVERAGE] missing doc",
   coverageGapBlock: "[COVERAGE GAPS] uncovered lines",
@@ -35,7 +50,7 @@ const baseInputs = {
 describe("buildFactsByRole — no cross-domain leak", () => {
   it("routes security facts (secret/dep-vuln/sarif/manifest) ONLY to the security role", () => {
     const f = buildFactsByRole(baseInputs)
-    for (const sec of ["[SECRET SCAN]", "[DEP VULN]", "[SARIF]", "[SECURITY EVIDENCE MANIFEST]"]) {
+    for (const sec of ["[SECRET SCAN]", "[DEP VULN]", "security-sarif", "[SECURITY EVIDENCE MANIFEST]"]) {
       expect(f.security).toContain(sec)
       expect(f.logic).not.toContain(sec)
       expect(f.performance).not.toContain(sec)
@@ -96,17 +111,106 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.tests).not.toContain("perf-rule")
   })
 
+  it("routes legacy security-only SARIF only to security", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [sarif({ ruleId: "legacy-security", roleHint: "security", toolName: "Semgrep" })],
+    })
+    expect(f.security).toContain("legacy-security")
+    expect(f.logic).not.toContain("legacy-security")
+    expect(f.performance).not.toContain("legacy-security")
+    expect(f.tests).not.toContain("legacy-security")
+  })
+
+  it("routes ESLint logic SARIF to logic and not security/performance/tests", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [
+        sarif({
+          ruleId: "eslint-logic",
+          roleHint: "logic",
+          roleHints: ["logic"],
+          toolId: "eslint",
+          source: "deterministic-tool",
+          toolName: "ESLint",
+        }),
+      ],
+    })
+    expect(f.logic).toContain("eslint-logic")
+    expect(f.security).not.toContain("eslint-logic")
+    expect(f.performance).not.toContain("eslint-logic")
+    expect(f.tests).not.toContain("eslint-logic")
+  })
+
+  it("routes Ruff logic+performance SARIF to logic and performance, not security/tests", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [
+        sarif({
+          ruleId: "ruff-dual",
+          roleHint: "logic",
+          roleHints: ["logic", "performance"],
+          toolId: "ruff",
+          source: "deterministic-tool",
+          toolName: "Ruff",
+        }),
+      ],
+    })
+    expect(f.logic).toContain("ruff-dual")
+    expect(f.performance).toContain("ruff-dual")
+    expect(f.security).not.toContain("ruff-dual")
+    expect(f.tests).not.toContain("ruff-dual")
+  })
+
+  it("routes Actionlint logic+security SARIF to logic and security", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [
+        sarif({
+          ruleId: "actionlint-dual",
+          roleHint: "logic",
+          roleHints: ["logic", "security"],
+          toolId: "actionlint",
+          source: "deterministic-tool",
+          toolName: "Actionlint",
+        }),
+      ],
+    })
+    expect(f.logic).toContain("actionlint-dual")
+    expect(f.security).toContain("actionlint-dual")
+    expect(f.performance).not.toContain("actionlint-dual")
+    expect(f.tests).not.toContain("actionlint-dual")
+  })
+
+  it("keeps the security manifest block security-only", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      secretScanBlock: "",
+      depVulnBlock: "",
+      deterministicBlock: "",
+      docsCoverageBlock: "",
+      coverageGapBlock: "",
+      perfBudgetBlock: "",
+      sarifFindings: [sarif({ ruleId: "logic-only", roleHint: "logic", roleHints: ["logic"], toolName: "ESLint" })],
+    })
+    expect(f.security).toContain("[SECURITY EVIDENCE MANIFEST]")
+    expect(f.logic).toContain("logic-only")
+    expect(f.logic).not.toContain("[SECURITY EVIDENCE MANIFEST]")
+    expect(f.performance).not.toContain("[SECURITY EVIDENCE MANIFEST]")
+    expect(f.tests).not.toContain("[SECURITY EVIDENCE MANIFEST]")
+  })
+
   it("yields an empty block for a role with no facts (omit-when-empty)", () => {
     const f = buildFactsByRole({
       secretScanBlock: "",
       depVulnBlock: "",
-      sarifBlock: "",
       deterministicBlock: "",
       docsCoverageBlock: "",
       coverageGapBlock: "",
       securityManifestBlock: "",
       perfBudgetBlock: "",
       astFindings: [],
+      sarifFindings: [],
     })
     expect(f.security).toBe("")
     expect(f.logic).toBe("")

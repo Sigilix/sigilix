@@ -179,7 +179,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     namespace,
     astResult,
     sarifFindings,
-    sarifBlock,
     docsCoverageHit,
     perfBudgetsHit,
     coverageResult,
@@ -203,11 +202,10 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   const securityManifest = await buildSecurityFactManifest({
     secretHits,
     depVulnFindings,
-    // M3 (review): scope SARIF to roleHint==="security" so the security
-    // manifest never carries a logic/perf SARIF fact. All current SARIF
-    // rules are security-domain, so this is a no-op today, but it makes
-    // the contract explicit + matches how the AST findings are split.
-    sarifFindings: sarifFindings.filter((f) => f.roleHint === "security"),
+    sarifFindings: sarifFindings.filter((f) => {
+      const roles = f.roleHints ?? [f.roleHint]
+      return roles.includes("security")
+    }),
     astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
   })
   // SIG-108: route deterministic facts to their owning specialist — no
@@ -266,7 +264,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   const factsByRole = buildFactsByRole({
     secretScanBlock,
     depVulnBlock,
-    sarifBlock,
+    sarifFindings,
     deterministicBlock,
     docsCoverageBlock,
     coverageGapBlock,

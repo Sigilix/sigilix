@@ -42,7 +42,6 @@ const MAX_FINDINGS_PER_SCAN = 200
 const STALE_REPORT_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000
 const EVIDENCE_MAX_CHARS = 200
 const RULE_HELP_MAX_CHARS = 500
-const MAX_RENDERABLE_DROPPED_RESULTS = 1000
 
 export type ScanSkipReason =
   | "disabled-config"
@@ -148,7 +147,6 @@ function resolveDroppedResultsForRun(
   if (!parsed.ok) return undefined
   const droppedResults = parsed.metadata.droppedResults
   if (droppedResults === undefined) return undefined
-  if (droppedResults.droppedCount > MAX_RENDERABLE_DROPPED_RESULTS) return undefined
   if (droppedResults.keptCount !== undefined && droppedResults.keptCount !== resultCount) return undefined
   return droppedResults
 }

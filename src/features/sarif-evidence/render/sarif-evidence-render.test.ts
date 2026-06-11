@@ -102,6 +102,25 @@ describe("renderSarifFindingsForPrompt", () => {
       F({ toolId: "eslint", droppedResults: { toolId: "eslint", droppedCount: 4, keptCount: 9 } }),
     ])
     expect(out).toContain("dropped_results: 4 dropped, 9 kept")
+    expect(out.match(/dropped_results:/g)).toHaveLength(1)
+  })
+
+  it("keeps dropped-result summaries visible when the carrier finding is capped out", () => {
+    const cappedFindings = Array.from({ length: 10 }, (_, i) =>
+      F({ ruleId: `kept-${i}`, severity: "error", path: "src/a.ts" }),
+    )
+    const carrier = F({
+      ruleId: "carrier",
+      severity: "info",
+      path: "src/a.ts",
+      toolId: "eslint",
+      droppedResults: { toolId: "eslint", droppedCount: 42, keptCount: 11 },
+    })
+
+    const out = renderSarifFindingsForPrompt([...cappedFindings, carrier])
+
+    expect(out).not.toContain("rule_id: carrier")
+    expect(out).toContain("dropped_results: eslint: 42 dropped, 11 kept")
   })
 
   it("omits evidence line when absent", () => {

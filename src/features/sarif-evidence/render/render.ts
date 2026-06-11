@@ -51,10 +51,33 @@ function formatDroppedResults(finding: SarifFinding): string | null {
   return `${dropped.droppedCount} dropped${kept}`
 }
 
+function formatDroppedResultsSummary(finding: SarifFinding): string | null {
+  const dropped = finding.droppedResults
+  if (dropped === undefined) return null
+  const droppedResults = formatDroppedResults(finding)
+  if (droppedResults === null) return null
+  return `${dropped.toolId}: ${droppedResults}`
+}
+
+function collectCapExcludedDroppedResults(sorted: readonly SarifFinding[], capped: readonly SarifFinding[]): string[] {
+  const cappedFindings = new Set(capped)
+  const seen = new Set<string>()
+  const summaries: string[] = []
+  for (const finding of sorted) {
+    if (finding.droppedResults === undefined || cappedFindings.has(finding)) continue
+    const summary = formatDroppedResultsSummary(finding)
+    if (summary === null || seen.has(summary)) continue
+    seen.add(summary)
+    summaries.push(summary)
+  }
+  return summaries
+}
+
 export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]): string {
   if (findings.length === 0) return ""
   const sorted = sortBySeverityThenPath(findings)
   const capped = applyPerFileCap(sorted)
+  const capExcludedDroppedResults = collectCapExcludedDroppedResults(sorted, capped)
   const lines: string[] = []
   lines.push("[SARIF EVIDENCE — pre-LLM]")
   const droppedByCap = sorted.length - capped.length
@@ -63,6 +86,9 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
       ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
       : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
   lines.push(summary)
+  for (const droppedResults of capExcludedDroppedResults) {
+    lines.push(`dropped_results: ${droppedResults}`)
+  }
   lines.push("")
   for (const f of capped) {
     lines.push(`- rule_id: ${f.ruleId}`)

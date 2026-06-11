@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 20,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20",
+  "collectedAt": "2026-06-11T03:12:41.927Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3386283896,
+        "path": "server/payments.ts",
+        "line": 178,
+        "excerpt": "**SQL injection in webhook handler via string interpolation of event.invoiceId**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283896",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3386283904,
+        "path": "server/payments.ts",
+        "line": 148,
+        "excerpt": "**N+1 query loop fetches refunds one payment at a time**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283904",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3386283910,
+        "path": "server/payments.ts",
+        "line": 136,
+        "excerpt": "**SQL injection in GET /api/payments via string interpolation of idsParam into IN clause**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283910",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3386283916,
+        "path": "server/payments.ts",
+        "line": 30,
+        "excerpt": "**Missing authorization check on POST /api/invoices/:id/charge — any authenticated user can charge any invoice**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283916",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3386283922,
+        "path": "server/payments.ts",
+        "line": 44,
+        "excerpt": "**Race condition: payment INSERT is not awaited before SUM query, causing missed status flip**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283922",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s6",
+        "tool": "sigilix",
+        "commentId": 3386283924,
+        "path": "server/payments.ts",
+        "line": 182,
+        "excerpt": "**New payments module with multiple branches, parser/coercion logic, and a security-sensitive webhook handler ships with zero tests**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283924",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s7",
+        "tool": "sigilix",
+        "commentId": 3386283928,
+        "path": "server/payments.ts",
+        "line": 50,
+        "excerpt": "**Charge handler reports `paidCents` including the new amount before the INSERT is durable**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283928",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s8",
+        "tool": "sigilix",
+        "commentId": 3386283935,
+        "path": "server/payments.ts",
+        "line": 131,
+        "excerpt": "**Pagination offset is off-by-one: `page * limit` skips the first page's results**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283935",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s9",
+        "tool": "sigilix",
+        "commentId": 3386283942,
+        "path": "server/refunds.ts",
+        "line": 11,
+        "excerpt": "**Floating-point precision loss in `computeRefundCents`: `amountDollars * 100` can produce non-integer cents**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283942",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s10",
+        "tool": "sigilix",
+        "commentId": 3386283950,
+        "path": "server/payments.ts",
+        "line": 178,
+        "excerpt": "**Webhook handler is not idempotent: no deduplication on `event.id`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283950",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s11",
+        "tool": "sigilix",
+        "commentId": 3386283955,
+        "path": "server/auth.ts",
+        "line": 28,
+        "excerpt": "**New auth middleware with a critical authentication branch ships without tests**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283955",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s12",
+        "tool": "sigilix",
+        "commentId": 3386283961,
+        "path": "server/refunds.ts",
+        "line": 38,
+        "excerpt": "**New refund module with a dollars-to-cents conversion function and a database write path ships without tests**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283961",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s13",
+        "tool": "sigilix",
+        "commentId": 3386283963,
+        "path": "server/payments.ts",
+        "line": 149,
+        "excerpt": "**N+1 query loop fetches refunds one payment at a time**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283963",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s14",
+        "tool": "sigilix",
+        "commentId": 3386283970,
+        "path": "server/payments.ts",
+        "line": 51,
+        "excerpt": "**Charge handler flips invoice status to `'paid'` unconditionally when `paidCents > 0`, ignoring the invoice's `amount_cents`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283970",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s15",
+        "tool": "sigilix",
+        "commentId": 3386283979,
+        "path": "server/api.ts",
+        "line": 9,
+        "excerpt": "**New Express middleware setup in api.ts ships without tests**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386283979",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3386170252,
+        "path": "server/payments.ts",
+        "line": 180,
+        "excerpt": "**SQL Injection via template literal in webhook handler**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170252"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3386170373,
+        "path": "server/payments.ts",
+        "line": 48,
+        "excerpt": "Missing `await` on the payment INSERT means the subsequent `SUM` query runs before the row is visible. The code compensates by adding `amountCents` manually, but under concurrent requests both calls would read the same stale sum and independently add the same amount — double-cou…",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170373"
+      },
+      {
+        "ref": "g3",
+        "tool": "greptile",
+        "commentId": 3386170502,
+        "path": "server/payments.ts",
+        "line": 141,
+        "excerpt": "Wrong pagination offset for 1-based pages. With the current formula `page * limit`, page 1 gives offset 20, page 2 gives offset 40 — so the first page of results is always skipped.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170502"
+      },
+      {
+        "ref": "g4",
+        "tool": "greptile",
+        "commentId": 3386170635,
+        "path": "server/payments.ts",
+        "line": 54,
+        "excerpt": "An invoice is flipped to `paid` as soon as `paidCents > 0`, meaning a single-cent partial payment settles the full invoice regardless of its `amount_cents`. The condition should require the running total to reach or exceed the invoice face value.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170635"
+      },
+      {
+        "ref": "g5",
+        "tool": "greptile",
+        "commentId": 3386170746,
+        "path": "server/refunds.ts",
+        "line": 8,
+        "excerpt": "**Refund API accepts dollars; charge API accepts cents**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170746"
+      },
+      {
+        "ref": "g6",
+        "tool": "greptile",
+        "commentId": 3386170830,
+        "path": "server/payments.ts",
+        "line": 166,
+        "excerpt": "**Webhook HMAC is over re-serialised JSON, not raw bytes**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170830"
+      },
+      {
+        "ref": "g7",
+        "tool": "greptile",
+        "commentId": 3386170951,
+        "path": "server/payments.ts",
+        "line": 36,
+        "excerpt": "**Charge endpoint does not scope by `customer_id`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386170951"
+      },
+      {
+        "ref": "g8",
+        "tool": "greptile",
+        "commentId": 3386171075,
+        "path": "server/payments.ts",
+        "line": 36,
+        "excerpt": "The charge endpoint returns HTTP 200 with an error body when the invoice is not found. Clients relying on the HTTP status code won't see the failure.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386171075"
+      },
+      {
+        "ref": "g9",
+        "tool": "greptile",
+        "commentId": 3386171235,
+        "path": "server/payments.ts",
+        "line": 180,
+        "excerpt": "**Webhook idempotency is not actually enforced by `event.id`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/20#discussion_r3386171235"
+      }
+    ]
+  },
+  "items": []
+}

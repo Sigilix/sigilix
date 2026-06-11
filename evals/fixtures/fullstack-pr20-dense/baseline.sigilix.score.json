@@ -1,0 +1,357 @@
+{
+  "fixture": "fullstack-pr20-dense",
+  "tool": "sigilix",
+  "overall": {
+    "caught": 8,
+    "total": 20,
+    "recall": 0.4,
+    "caughtIds": [
+      "b1",
+      "b2",
+      "b3",
+      "b6",
+      "b7",
+      "b9",
+      "b11",
+      "b13"
+    ],
+    "missedIds": [
+      "b4",
+      "b5",
+      "b8",
+      "b10",
+      "b12",
+      "b14",
+      "b15",
+      "b16",
+      "b17",
+      "b18",
+      "b19",
+      "b20"
+    ]
+  },
+  "highSeverity": {
+    "caught": 7,
+    "total": 15,
+    "recall": 0.4666666666666667,
+    "caughtIds": [
+      "b1",
+      "b2",
+      "b6",
+      "b7",
+      "b9",
+      "b11",
+      "b13"
+    ],
+    "missedIds": [
+      "b8",
+      "b10",
+      "b12",
+      "b14",
+      "b15",
+      "b16",
+      "b19",
+      "b20"
+    ]
+  },
+  "byTier": {
+    "EASY": {
+      "caught": 2,
+      "total": 4,
+      "recall": 0.5,
+      "caughtIds": [
+        "b1",
+        "b3"
+      ],
+      "missedIds": [
+        "b4",
+        "b5"
+      ]
+    },
+    "MEDIUM": {
+      "caught": 3,
+      "total": 8,
+      "recall": 0.375,
+      "caughtIds": [
+        "b2",
+        "b6",
+        "b7"
+      ],
+      "missedIds": [
+        "b8",
+        "b14",
+        "b16",
+        "b17",
+        "b20"
+      ]
+    },
+    "UNGODLY": {
+      "caught": 3,
+      "total": 7,
+      "recall": 0.42857142857142855,
+      "caughtIds": [
+        "b9",
+        "b11",
+        "b13"
+      ],
+      "missedIds": [
+        "b10",
+        "b12",
+        "b15",
+        "b19"
+      ]
+    },
+    "LOW": {
+      "caught": 0,
+      "total": 1,
+      "recall": 0,
+      "caughtIds": [],
+      "missedIds": [
+        "b18"
+      ]
+    }
+  },
+  "precision": 0.9090909090909091,
+  "precisionNumerator": 10,
+  "precisionDenominator": 11,
+  "highSevFalsePositives": [
+    {
+      "ref": "s3",
+      "path": "server/payments.ts",
+      "line": 136,
+      "excerpt": "**SQL injection in GET /api/payments via string interpolation of idsParam into IN clause**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "trap",
+        "id": "t1"
+      }
+    }
+  ],
+  "trapFlags": [
+    {
+      "ref": "s3",
+      "path": "server/payments.ts",
+      "line": 136,
+      "excerpt": "**SQL injection in GET /api/payments via string interpolation of idsParam into IN clause**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "trap",
+        "id": "t1"
+      }
+    }
+  ],
+  "unmatched": [],
+  "outOfScope": [
+    {
+      "ref": "s6",
+      "path": "server/payments.ts",
+      "line": 182,
+      "excerpt": "**New payments module with multiple branches, parser/coercion logic, and a security-sensitive webhook handler ships with zero tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s11",
+      "path": "server/auth.ts",
+      "line": 28,
+      "excerpt": "**New auth middleware with a critical authentication branch ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s12",
+      "path": "server/refunds.ts",
+      "line": 38,
+      "excerpt": "**New refund module with a dollars-to-cents conversion function and a database write path ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s15",
+      "path": "server/api.ts",
+      "line": 9,
+      "excerpt": "**New Express middleware setup in api.ts ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "ref": "s1",
+      "path": "server/payments.ts",
+      "line": 178,
+      "excerpt": "**SQL injection in webhook handler via string interpolation of event.invoiceId**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "bug",
+        "id": "b1"
+      }
+    },
+    {
+      "ref": "s2",
+      "path": "server/payments.ts",
+      "line": 148,
+      "excerpt": "**N+1 query loop fetches refunds one payment at a time**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b3"
+      }
+    },
+    {
+      "ref": "s3",
+      "path": "server/payments.ts",
+      "line": 136,
+      "excerpt": "**SQL injection in GET /api/payments via string interpolation of idsParam into IN clause**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "trap",
+        "id": "t1"
+      }
+    },
+    {
+      "ref": "s4",
+      "path": "server/payments.ts",
+      "line": 30,
+      "excerpt": "**Missing authorization check on POST /api/invoices/:id/charge — any authenticated user can charge any invoice**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "bug",
+        "id": "b9"
+      }
+    },
+    {
+      "ref": "s5",
+      "path": "server/payments.ts",
+      "line": 44,
+      "excerpt": "**Race condition: payment INSERT is not awaited before SUM query, causing missed status flip**",
+      "severity": "P0",
+      "verdict": {
+        "kind": "bug",
+        "id": "b2"
+      }
+    },
+    {
+      "ref": "s6",
+      "path": "server/payments.ts",
+      "line": 182,
+      "excerpt": "**New payments module with multiple branches, parser/coercion logic, and a security-sensitive webhook handler ships with zero tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s7",
+      "path": "server/payments.ts",
+      "line": 50,
+      "excerpt": "**Charge handler reports `paidCents` including the new amount before the INSERT is durable**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b2"
+      }
+    },
+    {
+      "ref": "s8",
+      "path": "server/payments.ts",
+      "line": 131,
+      "excerpt": "**Pagination offset is off-by-one: `page * limit` skips the first page's results**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b7"
+      }
+    },
+    {
+      "ref": "s9",
+      "path": "server/refunds.ts",
+      "line": 11,
+      "excerpt": "**Floating-point precision loss in `computeRefundCents`: `amountDollars * 100` can produce non-integer cents**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b6"
+      }
+    },
+    {
+      "ref": "s10",
+      "path": "server/payments.ts",
+      "line": 178,
+      "excerpt": "**Webhook handler is not idempotent: no deduplication on `event.id`**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b11"
+      }
+    },
+    {
+      "ref": "s11",
+      "path": "server/auth.ts",
+      "line": 28,
+      "excerpt": "**New auth middleware with a critical authentication branch ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s12",
+      "path": "server/refunds.ts",
+      "line": 38,
+      "excerpt": "**New refund module with a dollars-to-cents conversion function and a database write path ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    },
+    {
+      "ref": "s13",
+      "path": "server/payments.ts",
+      "line": 149,
+      "excerpt": "**N+1 query loop fetches refunds one payment at a time**",
+      "severity": "P1",
+      "verdict": {
+        "kind": "bug",
+        "id": "b3"
+      }
+    },
+    {
+      "ref": "s14",
+      "path": "server/payments.ts",
+      "line": 51,
+      "excerpt": "**Charge handler flips invoice status to `'paid'` unconditionally when `paidCents > 0`, ignoring the invoice's `amount_cents`**",
+      "severity": "P2",
+      "verdict": {
+        "kind": "bug",
+        "id": "b13"
+      }
+    },
+    {
+      "ref": "s15",
+      "path": "server/api.ts",
+      "line": 9,
+      "excerpt": "**New Express middleware setup in api.ts ships without tests**",
+      "severity": "P3",
+      "verdict": {
+        "kind": "out_of_scope",
+        "id": "testing-coverage"
+      }
+    }
+  ]
+}

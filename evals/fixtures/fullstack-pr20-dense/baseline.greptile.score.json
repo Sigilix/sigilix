@@ -1,0 +1,222 @@
+{
+  "fixture": "fullstack-pr20-dense",
+  "tool": "greptile",
+  "overall": {
+    "caught": 9,
+    "total": 20,
+    "recall": 0.45,
+    "caughtIds": [
+      "b1",
+      "b2",
+      "b4",
+      "b6",
+      "b7",
+      "b9",
+      "b11",
+      "b13",
+      "b20"
+    ],
+    "missedIds": [
+      "b3",
+      "b5",
+      "b8",
+      "b10",
+      "b12",
+      "b14",
+      "b15",
+      "b16",
+      "b17",
+      "b18",
+      "b19"
+    ]
+  },
+  "highSeverity": {
+    "caught": 8,
+    "total": 15,
+    "recall": 0.5333333333333333,
+    "caughtIds": [
+      "b1",
+      "b2",
+      "b6",
+      "b7",
+      "b9",
+      "b11",
+      "b13",
+      "b20"
+    ],
+    "missedIds": [
+      "b8",
+      "b10",
+      "b12",
+      "b14",
+      "b15",
+      "b16",
+      "b19"
+    ]
+  },
+  "byTier": {
+    "EASY": {
+      "caught": 2,
+      "total": 4,
+      "recall": 0.5,
+      "caughtIds": [
+        "b1",
+        "b4"
+      ],
+      "missedIds": [
+        "b3",
+        "b5"
+      ]
+    },
+    "MEDIUM": {
+      "caught": 4,
+      "total": 8,
+      "recall": 0.5,
+      "caughtIds": [
+        "b2",
+        "b6",
+        "b7",
+        "b20"
+      ],
+      "missedIds": [
+        "b8",
+        "b14",
+        "b16",
+        "b17"
+      ]
+    },
+    "UNGODLY": {
+      "caught": 3,
+      "total": 7,
+      "recall": 0.42857142857142855,
+      "caughtIds": [
+        "b9",
+        "b11",
+        "b13"
+      ],
+      "missedIds": [
+        "b10",
+        "b12",
+        "b15",
+        "b19"
+      ]
+    },
+    "LOW": {
+      "caught": 0,
+      "total": 1,
+      "recall": 0,
+      "caughtIds": [],
+      "missedIds": [
+        "b18"
+      ]
+    }
+  },
+  "precision": 1,
+  "precisionNumerator": 9,
+  "precisionDenominator": 9,
+  "highSevFalsePositives": [],
+  "trapFlags": [],
+  "unmatched": [],
+  "outOfScope": [],
+  "findings": [
+    {
+      "ref": "g1",
+      "path": "server/payments.ts",
+      "line": 180,
+      "excerpt": "**SQL Injection via template literal in webhook handler**",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b1"
+      }
+    },
+    {
+      "ref": "g2",
+      "path": "server/payments.ts",
+      "line": 48,
+      "excerpt": "Missing `await` on the payment INSERT means the subsequent `SUM` query runs before the row is visible. The code compensates by adding `amountCents` manually, but under concurrent requests both calls would read the same stale sum and independently add the same amount — double-cou…",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b2"
+      }
+    },
+    {
+      "ref": "g3",
+      "path": "server/payments.ts",
+      "line": 141,
+      "excerpt": "Wrong pagination offset for 1-based pages. With the current formula `page * limit`, page 1 gives offset 20, page 2 gives offset 40 — so the first page of results is always skipped.",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b7"
+      }
+    },
+    {
+      "ref": "g4",
+      "path": "server/payments.ts",
+      "line": 54,
+      "excerpt": "An invoice is flipped to `paid` as soon as `paidCents > 0`, meaning a single-cent partial payment settles the full invoice regardless of its `amount_cents`. The condition should require the running total to reach or exceed the invoice face value.",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b13"
+      }
+    },
+    {
+      "ref": "g5",
+      "path": "server/refunds.ts",
+      "line": 8,
+      "excerpt": "**Refund API accepts dollars; charge API accepts cents**",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b6"
+      }
+    },
+    {
+      "ref": "g6",
+      "path": "server/payments.ts",
+      "line": 166,
+      "excerpt": "**Webhook HMAC is over re-serialised JSON, not raw bytes**",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b20"
+      }
+    },
+    {
+      "ref": "g7",
+      "path": "server/payments.ts",
+      "line": 36,
+      "excerpt": "**Charge endpoint does not scope by `customer_id`**",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b9"
+      }
+    },
+    {
+      "ref": "g8",
+      "path": "server/payments.ts",
+      "line": 36,
+      "excerpt": "The charge endpoint returns HTTP 200 with an error body when the invoice is not found. Clients relying on the HTTP status code won't see the failure.",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b4"
+      }
+    },
+    {
+      "ref": "g9",
+      "path": "server/payments.ts",
+      "line": 180,
+      "excerpt": "**Webhook idempotency is not actually enforced by `event.id`**",
+      "severity": null,
+      "verdict": {
+        "kind": "bug",
+        "id": "b11"
+      }
+    }
+  ]
+}

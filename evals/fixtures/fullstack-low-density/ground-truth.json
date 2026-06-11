@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "fixture": "fullstack-low-density",
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 17,
+  "headSha": "3a5bd42",
+  "bugs": [
+    {
+      "id": "r1",
+      "title": "New webhook handler ships without tests",
+      "paths": [
+        "server/webhooks.ts"
+      ],
+      "tier": "EASY",
+      "category": "tests",
+      "severity": "P3",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "without tests"
+            ],
+            "botCategories": [
+              "testing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "r2",
+      "title": "Action null/undefined silently treated as no-op",
+      "paths": [
+        "server/webhooks.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P2",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "null/undefined"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "silences null"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "r3",
+      "title": "req.body undefined without express.json middleware",
+      "paths": [
+        "server/webhooks.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "logic",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "req.body",
+              "undefined"
+            ],
+            "notKeywords": [
+              "null/undefined",
+              "signature",
+              "silences"
+            ]
+          },
+          {
+            "allKeywords": [
+              "express.json"
+            ],
+            "notKeywords": [
+              "null/undefined",
+              "signature",
+              "silences"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "r4",
+      "title": "Missing GitHub webhook signature verification",
+      "paths": [
+        "server/webhooks.ts"
+      ],
+      "tier": "MEDIUM",
+      "category": "security",
+      "severity": "P1",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "signature"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "r5",
+      "title": "Actions gated only by action string, not webhook event type",
+      "paths": [
+        "server/webhooks.ts"
+      ],
+      "tier": "UNGODLY",
+      "category": "logic",
+      "severity": "P2",
+      "match": {
+        "anyOf": [
+          {
+            "allKeywords": [
+              "event type"
+            ]
+          },
+          {
+            "allKeywords": [
+              "x-github-event"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "traps": [],
+  "outOfScope": []
+}

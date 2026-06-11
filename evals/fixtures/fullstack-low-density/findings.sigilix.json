@@ -1,0 +1,26 @@
+[
+  {
+    "ref": "s1",
+    "tool": "sigilix",
+    "commentId": 3346360287,
+    "path": "server/webhooks.ts",
+    "line": 1,
+    "excerpt": "**New webhook handler ships without tests**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360287",
+    "botCategory": "testing",
+    "bodyText": "<a href=\"#\"><img alt=\"P1\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/p1.svg\" align=\"top\"></a> <a href=\"#\"><img alt=\"TESTING\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/testing.svg\" align=\"top\"></a><a href=\"#\"><img alt=\"GROUNDED\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/trust-grounded.svg\" align=\"top\"></a> **New webhook handler ships without tests**\n\n\n\n\n\nThe `POST /api/webhooks/github` endpoint has conditional branching on the `action` field that returns different HTTP status codes and JSON bodies. No test file exists in this PR to verify this logic works correctly — a regression in the action handling would go undetected.\n\n<details><summary>Prompt To Fix With AI</summary>\n\n```text\nThis is a comment left during a code review.\nPath: server/webhooks.ts\nLine: 1\n\nComment:\n**New webhook handler ships without tests**\n\nThe `POST /api/webhooks/github` endpoint has conditional branching on the `action` field that returns different HTTP status codes and JSON bodies. No test file exists in this PR to verify this logic works correctly — a regression in the action handling would go undetected.\n\nHow can I resolve this? If you propose a fix, please make it concise.\n```\n\n</details>",
+    "severity": "P1"
+  },
+  {
+    "ref": "s2",
+    "tool": "sigilix",
+    "commentId": 3346360289,
+    "path": "server/webhooks.ts",
+    "line": null,
+    "excerpt": "**Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**",
+    "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360289",
+    "botCategory": "logic",
+    "bodyText": "<a href=\"#\"><img alt=\"P2\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/p2.svg\" align=\"top\"></a> <a href=\"#\"><img alt=\"LOGIC\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/logic.svg\" align=\"top\"></a><a href=\"#\"><img alt=\"GROUNDED\" src=\"https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/trust-grounded.svg\" align=\"top\"></a> **Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**\n\n\n\n\n\nIf `req.body.action` is `null` or missing, the code converts it to an empty string and treats it like a known no‑op action, returning 200 ignored. This hides malformed webhook deliveries, preventing proper error reporting and making debugging difficult.\n\n**Example:**\n```text\ninput: POST body {\"action\": null, \"repository\": {...}}\nactual: res.status(200).json({ ignored: true })\nexpected: res.status(400).json({ error: \"invalid payload\" }) or at minimum a logged warning\n```\n\n**Suggested fix:**\n```ts\nconst maybeAction = (req.body as { action?: unknown })?.action; if (typeof maybeAction !== 'string' || maybeAction.length === 0) { console.warn('webhook missing action'); return res.status(400).json({ error: 'missing action' }); } const action = maybeAction;\n```\n\n<details><summary>Prompt To Fix With AI</summary>\n\n```text\nThis is a comment left during a code review.\nPath: server/webhooks.ts\nLine: 27-28\n\nComment:\n**Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**\n\nIf `req.body.action` is `null` or missing, the code converts it to an empty string and treats it like a known no‑op action, returning 200 ignored. This hides malformed webhook deliveries, preventing proper error reporting and making debugging difficult.\n\nExample:\ninput: POST body {\"action\": null, \"repository\": {...}}\nactual: res.status(200).json({ ignored: true })\nexpected: res.status(400).json({ error: \"invalid payload\" }) or at minimum a logged warning\n\nSuggested fix shape:\nconst maybeAction = (req.body as { action?: unknown })?.action; if (typeof maybeAction !== 'string' || maybeAction.length === 0) { console.warn('webhook missing action'); return res.status(400).json({ error: 'missing action' }); } const action = maybeAction;\n\nHow can I resolve this? If you propose a fix, please make it concise.\n```\n\n</details>",
+    "severity": "P2"
+  }
+]

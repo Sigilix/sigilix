@@ -90,6 +90,20 @@ describe("renderSarifFindingsForPrompt", () => {
     expect(out).toContain("evidence: snippet")
   })
 
+  it("renders compact deterministic source/tool labels when metadata is present", () => {
+    const out = renderSarifFindingsForPrompt([
+      F({ toolName: "ESLint", toolId: "eslint", source: "deterministic-tool" }),
+    ])
+    expect(out).toContain("source: deterministic-tool/eslint")
+  })
+
+  it("renders compact dropped-result summaries when metadata is present", () => {
+    const out = renderSarifFindingsForPrompt([
+      F({ toolId: "eslint", droppedResults: { toolId: "eslint", droppedCount: 4, keptCount: 9 } }),
+    ])
+    expect(out).toContain("dropped_results: 4 dropped, 9 kept")
+  })
+
   it("omits evidence line when absent", () => {
     const out = renderSarifFindingsForPrompt([F({ evidence: undefined })])
     expect(out).not.toContain("evidence:")
@@ -136,6 +150,21 @@ describe("renderSarifFindingsAsJsonForSynth", () => {
     expect(parsed.sarif_findings[0]!.category).toBe("license")
     expect(parsed.sarif_findings[0]!.role_hint).toBe("security")
     expect(parsed.sarif_findings[0]!.tool).toBe("Trivy")
+  })
+
+  it("preserves deterministic metadata and dropped-result summaries in structured output", () => {
+    const out = renderSarifFindingsAsJsonForSynth([
+      F({
+        toolName: "ESLint",
+        toolId: "eslint",
+        source: "deterministic-tool",
+        droppedResults: { toolId: "eslint", droppedCount: 2 },
+      }),
+    ])
+    const parsed = JSON.parse(out) as { sarif_findings: Array<Record<string, unknown>> }
+    expect(parsed.sarif_findings[0]!.source).toBe("deterministic-tool")
+    expect(parsed.sarif_findings[0]!.tool_id).toBe("eslint")
+    expect(parsed.sarif_findings[0]!.dropped_results).toEqual({ tool_id: "eslint", dropped_count: 2 })
   })
 
   it("appends SBOM summary AFTER the JSON block when present", () => {

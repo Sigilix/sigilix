@@ -12,6 +12,12 @@ export type SarifFindingCategory = "iac" | "misconfiguration" | "vulnerability" 
 export type RoleHint = "security" | "logic" | "performance" | "tests"
 export type SarifEvidenceSource = "deterministic-tool"
 
+export interface SarifDroppedResults {
+  toolId: string
+  droppedCount: number
+  keptCount?: number
+}
+
 /** Run-level taxonomy table. SARIF puts the canonical taxonomy
  *  identifiers (e.g. CWE, OWASP, Trivy's misconfiguration registry)
  *  here so per-result `taxa[]` references can be de-referenced into
@@ -147,6 +153,8 @@ export interface SarifFinding {
   source?: SarifEvidenceSource
   /** Non-fatal metadata warning; legacy taxonomy fallback still applies. */
   schemaWarning?: string
+  /** Compact run-level summary of deterministic results withheld before SARIF emission. */
+  droppedResults?: SarifDroppedResults
   /** Post-normalization repo-relative path (spec §4.4). */
   path: string
   /** 1-based start line. Some IaC findings have no line — runner

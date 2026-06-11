@@ -39,6 +39,18 @@ function applyPerFileCap(findings: readonly SarifFinding[]): SarifFinding[] {
   return out
 }
 
+function formatSourceLabel(finding: SarifFinding): string | null {
+  if (finding.source === undefined || finding.toolId === undefined) return null
+  return `${finding.source}/${finding.toolId}`
+}
+
+function formatDroppedResults(finding: SarifFinding): string | null {
+  const dropped = finding.droppedResults
+  if (dropped === undefined) return null
+  const kept = typeof dropped.keptCount === "number" ? `, ${dropped.keptCount} kept` : ""
+  return `${dropped.droppedCount} dropped${kept}`
+}
+
 export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]): string {
   if (findings.length === 0) return ""
   const sorted = sortBySeverityThenPath(findings)
@@ -58,6 +70,10 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
     lines.push(`  category: ${f.category}`)
     lines.push(`  role_hint: ${f.roleHint}`)
     lines.push(`  tool: ${f.toolName}`)
+    const sourceLabel = formatSourceLabel(f)
+    if (sourceLabel !== null) lines.push(`  source: ${sourceLabel}`)
+    const droppedResults = formatDroppedResults(f)
+    if (droppedResults !== null) lines.push(`  dropped_results: ${droppedResults}`)
     lines.push(`  path: ${f.path}${typeof f.line === "number" ? `:${f.line}` : ""}`)
     lines.push(`  message: ${f.message}`)
     if (f.evidence) lines.push(`  evidence: ${f.evidence}`)
@@ -83,6 +99,17 @@ export function renderSarifFindingsAsJsonForSynth(findings: readonly SarifFindin
       }
       if (typeof f.line === "number") out.line = f.line
       if (f.evidence) out.evidence = f.evidence
+      if (f.source !== undefined) out.source = f.source
+      if (f.toolId !== undefined) out.tool_id = f.toolId
+      if (f.roleHints !== undefined) out.role_hints = f.roleHints
+      if (f.schemaWarning !== undefined) out.schema_warning = f.schemaWarning
+      if (f.droppedResults !== undefined) {
+        out.dropped_results = {
+          tool_id: f.droppedResults.toolId,
+          dropped_count: f.droppedResults.droppedCount,
+          ...(f.droppedResults.keptCount !== undefined ? { kept_count: f.droppedResults.keptCount } : {}),
+        }
+      }
       return out
     })
   }

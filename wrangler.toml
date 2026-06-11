@@ -685,6 +685,10 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
 # schema change, no migration. Default-off in dev/test (the env var
 # is unset there).
 OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
+# SIG-393: region re-sweep — shadow soak (full fan-out + telemetry on dense
+# PRs, candidates NOT merged; zero posted-output change). Promotion to "on"
+# is gated on the fixture-clone delta + post-gate FP flat + p50 unmoved.
+OPENCLAW_RESWEEP_MODE = "shadow"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

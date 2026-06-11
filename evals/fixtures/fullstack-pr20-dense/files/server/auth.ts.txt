@@ -1,0 +1,28 @@
+import type { Request, Response, NextFunction } from "express";
+
+// Augments Express's Request with the e2e app's auth context. The caller's
+// customer id rides in a header so the example stays self-contained without a
+// login flow; real deployments swap in the platform session middleware.
+declare global {
+  namespace Express {
+    interface Request {
+      auth?: { customerId: string };
+    }
+  }
+}
+
+export function authenticate(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const customerId = req.header("x-customer-id");
+  if (!customerId) {
+    res.status(401).json({ error: "unauthenticated" });
+    return;
+  }
+  req.auth = { customerId };
+  next();
+}
+
+export {};

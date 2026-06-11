@@ -1,0 +1,39 @@
+import express from "express";
+import { Pool } from "pg";
+import type { Invoice, InvoiceList, InvoiceStatus } from "@shared/types";
+import { payments } from "./payments";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const app = express();
+app.use(express.json());
+app.use(payments);
+
+const VALID_STATUSES: InvoiceStatus[] = ["draft", "open", "paid"];
+
+app.get("/api/invoices", async (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : null;
+  if (status && !VALID_STATUSES.includes(status as InvoiceStatus)) {
+    return res.status(400).json({ error: "invalid status" });
+  }
+  const { rows } = status
+    ? await pool.query(
+        "SELECT id, amount_cents, status, customer_name FROM invoices WHERE status = $1 ORDER BY id LIMIT 100",
+        [status],
+      )
+    : await pool.query(
+        "SELECT id, amount_cents, status, customer_name FROM invoices ORDER BY id LIMIT 100",
+      );
+  const invoices: Invoice[] = rows.map((r) => ({
+    id: r.id,
+    amountCents: r.amount_cents,
+    status: r.status,
+    customerName: r.customer_name,
+  }));
+  const totalCents = invoices.reduce((sum, inv) => sum + inv.amountCents, 0);
+  const body: InvoiceList = {
+    invoices,
+    total: invoices.length,
+    summary: { totalCents, count: invoices.length },
+  };
+  res.json(body);
+});

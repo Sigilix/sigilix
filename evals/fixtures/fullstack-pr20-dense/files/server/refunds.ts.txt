@@ -1,0 +1,40 @@
+import { Pool } from "pg";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Convert a refund request into a stored amount. Refund amounts arrive as a
+// dollars figure on the wire and are persisted in the cents column.
+export function computeRefundCents(amountDollars: number): number {
+  return amountDollars * 100;
+}
+
+export interface RefundOutcome {
+  refundId: string;
+  refundedCents: number;
+}
+
+// Issue a refund against a payment and report the new refunded total.
+export async function issueRefund(
+  invoiceId: string,
+  paymentId: string,
+  amountDollars: number,
+): Promise<RefundOutcome> {
+  const refundCents = computeRefundCents(amountDollars);
+
+  // Read the amount already refunded so the caller can show the running total.
+  const prior = await pool.query(
+    "SELECT COALESCE(SUM(amount_cents), 0)::int AS refunded FROM refunds WHERE payment_id = $1",
+    [paymentId],
+  );
+  const alreadyRefunded: number = prior.rows[0].refunded;
+
+  const inserted = await pool.query(
+    "INSERT INTO refunds (invoice_id, payment_id, amount_cents) VALUES ($1, $2, $3) RETURNING id",
+    [invoiceId, paymentId, refundCents],
+  );
+
+  return {
+    refundId: inserted.rows[0].id,
+    refundedCents: alreadyRefunded + refundCents,
+  };
+}

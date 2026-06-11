@@ -274,7 +274,6 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       finalFinding.suggestedReplacement = replRaw
     }
     findings.push(finalFinding)
-    if (findings.length >= 8) break
   }
 
   // SIG-282: parse the security specialist's explicit false-positive

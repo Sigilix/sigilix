@@ -59,7 +59,7 @@ import { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import { type RouterDecision } from "@/src/lib/ensemble-router"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { RETRIEVAL_PREFLIGHT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
-import { type EnsembleRunCtx, emitPhaseCompleted } from "@/src/lib/ensemble-perf-telemetry"
+import { type EnsembleRunCtx, emitPhaseCompleted, emitSubphaseCompleted } from "@/src/lib/ensemble-perf-telemetry"
 import { TOP_K_BRANCH } from "@/src/lib/ensemble/domain/retrieval-constants"
 
 type AstRulesConfig = ReturnType<typeof resolveAstRulesConfig>
@@ -270,6 +270,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // the other deterministic blocks.
   const depVulnEnabled = sigilixConfig.depVulnScan?.enabled !== false
   const baseShaForDepVuln = meta.base?.sha ?? ""
+  const depVulnStartedAtMs = Date.now()
   const depVulnResult = await runDepVulnScan({
     env,
     client,
@@ -290,6 +291,12 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
         depsScanned: depVulnResult.depsScanned,
         manifestsScanned: depVulnResult.manifestsScanned,
       }
+  // SIG-374: sub-span timing inside the context-gather lump (sizes SIG-373).
+  emitSubphaseCompleted(perfCtx, "dep_vuln_scan", depVulnStartedAtMs, {
+    skipped: depVulnResult.skipped,
+    findingsCount: depVulnFindings.length,
+    ...(depVulnResult.skipped ? {} : { manifestsScanned: depVulnResult.manifestsScanned }),
+  })
 
   // ─── ARC-181: AST rule-pack scan ────────────────────────────
   // Pre-LLM AST scan over pathFiltered JS/TS files.
@@ -335,15 +342,24 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
       wantLogicClaimRefutation) &&
     jsTsPaths.length > 0
   ) {
+    const astFetchStartedAtMs = Date.now()
     const fetchResults = await mapWithConcurrency(jsTsPaths, 5, async (p) => {
       const src = await client.getFileContent(owner, repo, p, headSha)
       return { p, src }
     })
+    let astBytesFetched = 0
     for (const r of fetchResults) {
       if (r.status === "fulfilled" && typeof r.value.src === "string") {
         astFilesByPath.set(r.value.p, r.value.src)
+        astBytesFetched += r.value.src.length
       }
     }
+    // SIG-374: source fetch only — parsing is lazy in the AST consumers
+    // (covered by deterministic_scans), hence "ast_source_fetch".
+    emitSubphaseCompleted(perfCtx, "ast_source_fetch", astFetchStartedAtMs, {
+      filesCount: astFilesByPath.size,
+      bytesFetched: astBytesFetched,
+    })
   }
 
   // SIG-336: one parse-once AST cache for the whole review. Every acorn

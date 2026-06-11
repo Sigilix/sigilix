@@ -111,6 +111,61 @@ export async function recordPhase<T>(ctx: EnsembleRunCtx, phase: EnsemblePhase, 
   }
 }
 
+// ─── ensemble-subphase-completed (SIG-374) ──────────────────────────
+
+/** SIG-374: sub-spans inside the `preflight_retrieval` / context-gather
+ *  lump, so the dark middle decomposes below the phase level. Same
+ *  exhaustive-union convention as `EnsemblePhase`. `ast_source_fetch`
+ *  is named honestly: it covers the JS/TS source fetch + cache
+ *  creation; actual parsing happens lazily in the AST consumers and is
+ *  covered by `deterministic_scans`. */
+export type EnsembleSubphase = "dep_vuln_scan" | "ast_source_fetch" | "graph_retrieval" | "runner_evidence"
+
+export function emitSubphaseCompleted(
+  ctx: EnsembleRunCtx,
+  subphase: EnsembleSubphase,
+  startedAtMs: number,
+  counts: Record<string, number | boolean> = {},
+  endedAtMs: number = Date.now(),
+): void {
+  console.log(
+    JSON.stringify({
+      event: "ensemble-subphase-completed",
+      ...correlationFields(ctx),
+      subphase,
+      startedAtMs,
+      endedAtMs,
+      durationMs: endedAtMs - startedAtMs,
+      ...counts,
+    }),
+  )
+}
+
+// ─── github-file-fetch-summary (SIG-374) ────────────────────────────
+
+/** SIG-374: per-review GitHub fetch-overlap summary (sizes SIG-371's
+ *  memoization win). The GitHubClient adapter only counts (it imports
+ *  no telemetry — dependency rule); the app layer reads the counter at
+ *  review end and emits this once per review. */
+export function emitGithubFileFetchSummary(
+  ctx: EnsembleRunCtx,
+  summary: {
+    totalCalls: number
+    uniqueKeys: number
+    dupCalls: number
+    topDupPaths: readonly string[]
+    prMetaCalls: number
+  },
+): void {
+  console.log(
+    JSON.stringify({
+      event: "github-file-fetch-summary",
+      ...correlationFields(ctx),
+      ...summary,
+    }),
+  )
+}
+
 // ─── model-attempt-completed ────────────────────────────────────────
 
 /** Phase of the ensemble that owns this attempt. `specialist` covers

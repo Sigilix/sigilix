@@ -214,6 +214,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
     newState.alarmKind = "watchdog"
     await this.ctx.storage.setAlarm(watchdogAt)
     await this.ctx.storage.put(STATE_KEY, newState)
+    // SIG-374: stamp send time + attempt on every queue send so the
+    // consumer can compute queue wait and attribute attempts.
+    const enqueuedAtMs = Date.now()
     await this.env.OPENCLAW_JOBS.send({
       type: "pr-review",
       owner: body.owner,
@@ -222,6 +225,8 @@ export class PrReviewRunDO extends DurableObject<Env> {
       headSha: body.headSha,
       installationId: body.installationId,
       runId,
+      enqueuedAtMs,
+      attempt: newState.attempts,
       // ARC-251: forward requeue depth so the consumer side keeps
       // the cap accurate across the initial enqueue path too.
       ...(body.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth } : {}),
@@ -241,6 +246,14 @@ export class PrReviewRunDO extends DurableObject<Env> {
       runId,
       headSha: body.headSha,
       action: decision.action,
+      // SIG-374: queue-wait correlation (joins pr-review-webhook-arrived
+      // via deliveryId; queueWaitMs lands on do-review-run-timing).
+      // staleHeadRequeueDepth reads `body` — the SAME source the queue
+      // message forwards — so the logged value can never diverge from
+      // the in-flight message.
+      enqueuedAtMs,
+      deliveryId: body.deliveryId,
+      ...(body.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth } : {}),
     })
 
     const resp: EnqueueResponse = {
@@ -707,6 +720,10 @@ export class PrReviewRunDO extends DurableObject<Env> {
       headSha: state.headSha,
       installationId: state.installationId,
       runId: state.runId,
+      // SIG-374: retry-alarm sends get queue timing + attempt
+      // attribution too — the >900s e2e tail is exactly these.
+      enqueuedAtMs: Date.now(),
+      attempt: newAttempts,
       // ARC-251 Codex BLOCKER #2: rebuild the message from RunState
       // INCLUDING the stale-head requeue depth. Without this the cap
       // resets to 0 every time the watchdog/retry alarm fires.

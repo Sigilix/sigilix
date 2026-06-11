@@ -11,6 +11,8 @@ import {
   type ModelAttemptEvent,
   type DoReviewRunTiming,
   emitPhaseCompleted,
+  emitSubphaseCompleted,
+  emitGithubFileFetchSummary,
   recordPhase,
   emitModelAttempt,
   emitSpecialistFanoutSummary,
@@ -73,6 +75,54 @@ describe("emitPhaseCompleted", () => {
     expect(event["durationMs"]).toBeGreaterThanOrEqual(0)
     // Sanity check: defaulted end can't precede the recorded start.
     expect(event["endedAtMs"] as number).toBeGreaterThanOrEqual(before)
+  })
+})
+
+// ─── ensemble-subphase-completed (SIG-374) ───────────────────────────
+
+describe("emitSubphaseCompleted", () => {
+  it("emits the subphase payload with correlation fields, timing, and extra counts", () => {
+    emitSubphaseCompleted(CTX, "dep_vuln_scan", 2_000, { skipped: false, manifestsScanned: 3 }, 2_450)
+    const event = lastLogged()
+    expect(event["event"]).toBe("ensemble-subphase-completed")
+    expect(event["owner"]).toBe("Sigilix")
+    expect(event["headSha"]).toBe("abcdef1")
+    expect(event["subphase"]).toBe("dep_vuln_scan")
+    expect(event["startedAtMs"]).toBe(2_000)
+    expect(event["endedAtMs"]).toBe(2_450)
+    expect(event["durationMs"]).toBe(450)
+    expect(event["skipped"]).toBe(false)
+    expect(event["manifestsScanned"]).toBe(3)
+  })
+
+  it("defaults endedAtMs to Date.now() and counts to empty", () => {
+    const before = Date.now()
+    emitSubphaseCompleted(CTX, "ast_source_fetch", before)
+    const event = lastLogged()
+    expect(event["subphase"]).toBe("ast_source_fetch")
+    expect(event["durationMs"]).toBeGreaterThanOrEqual(0)
+  })
+})
+
+// ─── github-file-fetch-summary (SIG-374) ─────────────────────────────
+
+describe("emitGithubFileFetchSummary", () => {
+  it("emits the per-review fetch-overlap rollup", () => {
+    emitGithubFileFetchSummary(CTX, {
+      totalCalls: 12,
+      uniqueKeys: 9,
+      dupCalls: 3,
+      topDupPaths: ["src/a.ts@abc", "src/b.ts@abc"],
+      prMetaCalls: 2,
+    })
+    const event = lastLogged()
+    expect(event["event"]).toBe("github-file-fetch-summary")
+    expect(event["headSha"]).toBe("abcdef1")
+    expect(event["totalCalls"]).toBe(12)
+    expect(event["uniqueKeys"]).toBe(9)
+    expect(event["dupCalls"]).toBe(3)
+    expect(event["topDupPaths"]).toEqual(["src/a.ts@abc", "src/b.ts@abc"])
+    expect(event["prMetaCalls"]).toBe(2)
   })
 })
 

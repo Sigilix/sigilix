@@ -50,12 +50,51 @@ import { GitHubHttpError } from "./github-errors"
 
 const GITHUB_API = "https://api.github.com"
 
+// SIG-374: fetch-overlap counter cap — far above any real review's
+// distinct (path, ref) count; purely a runaway-memory backstop.
+const MAX_FETCH_OVERLAP_KEYS = 5_000
+
 export class GitHubClient {
   private readonly token: string
+  // SIG-374: instance-scoped fetch-overlap counters (sizes SIG-371/372's
+  // dedupe win). Instance-scoped, never module-level — Workers global
+  // state is per-isolate, not per-request. The adapter only counts; the
+  // app layer reads `fetchOverlapSummary()` at review end and emits the
+  // telemetry event (this module imports no telemetry — dependency rule).
+  // Capped: past MAX_FETCH_OVERLAP_KEYS unique keys, new keys are dropped
+  // (counted in `fetchKeysDropped`) so a pathological huge-PR review
+  // can't grow measurement memory and perturb the latency being measured.
+  private readonly fileFetchCounts = new Map<string, number>()
+  private fetchKeysDropped = 0
+  private prMetaCalls = 0
 
   constructor({ token }: GitHubClientOptions) {
     if (!token) throw new Error("GitHubClient: missing token")
     this.token = token
+  }
+
+  /** SIG-374: read-only overlap rollup for the per-review telemetry summary. */
+  fetchOverlapSummary(): {
+    totalCalls: number
+    uniqueKeys: number
+    dupCalls: number
+    topDupPaths: string[]
+    prMetaCalls: number
+  } {
+    let totalCalls = 0
+    const dups: Array<{ key: string; extra: number }> = []
+    for (const [key, count] of this.fileFetchCounts) {
+      totalCalls += count
+      if (count > 1) dups.push({ key, extra: count - 1 })
+    }
+    dups.sort((x, y) => y.extra - x.extra)
+    return {
+      totalCalls,
+      uniqueKeys: this.fileFetchCounts.size,
+      dupCalls: totalCalls - this.fileFetchCounts.size,
+      topDupPaths: dups.slice(0, 5).map((d) => d.key),
+      prMetaCalls: this.prMetaCalls,
+    }
   }
 
   /** Raw REST GET that parses JSON. Throws on !ok. */
@@ -127,6 +166,7 @@ export class GitHubClient {
     prNumber: number,
     opts?: { signal?: AbortSignal },
   ): Promise<PullRequestMeta> {
+    this.prMetaCalls += 1
     return this.restGet<PullRequestMeta>(`/repos/${owner}/${repo}/pulls/${prNumber}`, opts)
   }
 
@@ -382,6 +422,13 @@ export class GitHubClient {
     ref: string,
     opts?: { signal?: AbortSignal },
   ): Promise<string | null> {
+    const overlapKey = `${path}@${ref}`
+    const priorCount = this.fileFetchCounts.get(overlapKey)
+    if (priorCount !== undefined || this.fileFetchCounts.size < MAX_FETCH_OVERLAP_KEYS) {
+      this.fileFetchCounts.set(overlapKey, (priorCount ?? 0) + 1)
+    } else {
+      this.fetchKeysDropped += 1
+    }
     const escaped = encodeURIComponent(path).replace(/%2F/g, "/")
     let res: ContentsResponse
     try {

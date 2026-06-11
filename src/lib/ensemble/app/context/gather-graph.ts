@@ -60,6 +60,7 @@ import { graphExpansionMode, injectArm } from "@/src/lib/graph-expansion-mode"
 import type { GraphContextNode } from "@/src/do/repo-graph"
 import { edgeWeight, hopDecay } from "@/src/lib/graph-scoring"
 import { withTimeout } from "@/src/shared/util/with-timeout"
+import { emitSubphaseCompleted } from "@/src/lib/ensemble-perf-telemetry"
 import { GRAPH_EXPANSION_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import {
   GRAPH_BLAST_PROMPT_CAP,
@@ -133,6 +134,12 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   let graphBlastContextString = ""
   if (ensembleConfig.flags.graphRetrievalEnabled) {
     const graphRpcBudgetMs = ensembleConfig.tunables.graphRpcTimeoutMs
+    // SIG-374: sub-span timing for the graph DO RPC + shaping (distinct
+    // from the deterministic_scans phase and the shadow graph-expansion
+    // events). Emitted in the finally so the error path gets a real
+    // duration too.
+    const graphStartedAtMs = Date.now()
+    let graphRetrievalOk = true
     try {
       // Seed from deduplicated chunk paths of the merged hit set.
       const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
@@ -277,6 +284,12 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
       graphBlastCallerPaths = []
       graphBlastDependentPaths = []
       graphBlastContextString = ""
+      graphRetrievalOk = false
+    } finally {
+      emitSubphaseCompleted({ owner, repo, prNumber, headSha }, "graph_retrieval", graphStartedAtMs, {
+        ok: graphRetrievalOk,
+        nodesInjected: graphNodePaths.length,
+      })
     }
   }
   // In post mode, inject graph context into logic+tests specialists
@@ -783,6 +796,9 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
       if (metricTimer !== undefined) clearTimeout(metricTimer)
     }
   }
+  // SIG-374: sub-span timing for the SARIF/runner-evidence fetch+parse
+  // (sizes SIG-373's parallelization of the pre-fanout IO chain).
+  const runnerEvidenceStartedAtMs = Date.now()
   const sarifResult = await runSarifEvidence({
     env,
     client,
@@ -796,6 +812,10 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
     ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
   })
   const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
+  emitSubphaseCompleted({ owner, repo, prNumber, headSha }, "runner_evidence", runnerEvidenceStartedAtMs, {
+    skipped: sarifResult.skipped,
+    findingsCount: sarifFindings.length,
+  })
   const deterministicCheckAnnotations = buildSarifCheckAnnotations(sarifFindings)
   // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
   // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif

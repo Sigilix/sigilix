@@ -270,10 +270,22 @@ describe("runSarifEvidence — runner metadata", () => {
 
   it("accepts runner first-slice tool metadata without runner-supplied role hints", async () => {
     const runs = [
-      { toolId: "semgrep", toolName: "Semgrep", path: "src/security.ts", line: 1, ruleId: "typescript.express.security" },
+      {
+        toolId: "semgrep",
+        toolName: "Semgrep",
+        path: "src/security.ts",
+        line: 1,
+        ruleId: "typescript.express.security",
+      },
       { toolId: "eslint", toolName: "ESLint", path: "src/app.js", line: 2, ruleId: "no-undef" },
       { toolId: "ruff", toolName: "Ruff", path: "src/app.py", line: 3, ruleId: "PERF401" },
-      { toolId: "actionlint", toolName: "actionlint", path: ".github/workflows/ci.yml", line: 4, ruleId: "syntax-check" },
+      {
+        toolId: "actionlint",
+        toolName: "actionlint",
+        path: ".github/workflows/ci.yml",
+        line: 4,
+        ruleId: "syntax-check",
+      },
       { toolId: "shellcheck", toolName: "ShellCheck", path: "scripts/build.sh", line: 5, ruleId: "SC2086" },
     ].map(({ toolId, toolName, path, line, ruleId }) => ({
       tool: { driver: { name: toolName, properties: runnerMetadata(toolId) } },

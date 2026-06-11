@@ -8,7 +8,7 @@
   "bugs": [
     {
       "id": "b1",
-      "title": "SQL injection \u2014 event.invoiceId string-interpolated into the webhook UPDATE",
+      "title": "SQL injection — event.invoiceId string-interpolated into the webhook UPDATE",
       "paths": [
         "server/payments.ts"
       ],
@@ -116,7 +116,7 @@
     },
     {
       "id": "b3",
-      "title": "N+1 \u2014 await inside for...of enriching each payment with refunds",
+      "title": "N+1 — await inside for...of enriching each payment with refunds",
       "paths": [
         "server/payments.ts"
       ],
@@ -216,7 +216,7 @@
     },
     {
       "id": "b5",
-      "title": "No try/catch + no error middleware \u2014 DB error becomes unhandled rejection/hang",
+      "title": "No try/catch + no error middleware — DB error becomes unhandled rejection/hang",
       "paths": [
         "server/payments.ts",
         "server/api.ts"
@@ -297,7 +297,7 @@
     },
     {
       "id": "b7",
-      "title": "Pagination OFFSET page*limit \u2014 page 1 skips the first page",
+      "title": "Pagination OFFSET page*limit — page 1 skips the first page",
       "paths": [
         "server/payments.ts"
       ],
@@ -331,7 +331,7 @@
     },
     {
       "id": "b8",
-      "title": "Raw snake_case rows cast as unknown as Payment[] \u2014 wire contract is camelCase",
+      "title": "Raw snake_case rows cast as unknown as Payment[] — wire contract is camelCase",
       "paths": [
         "server/payments.ts"
       ],
@@ -363,7 +363,7 @@
     },
     {
       "id": "b9",
-      "title": "IDOR \u2014 charge looks up invoice by :id only, never scopes to req.auth.customerId",
+      "title": "IDOR — charge looks up invoice by :id only, never scopes to req.auth.customerId",
       "paths": [
         "server/payments.ts"
       ],
@@ -407,7 +407,7 @@
     },
     {
       "id": "b10",
-      "title": "Over-refund \u2014 alreadyRefunded read but never used to cap the refund",
+      "title": "Over-refund — alreadyRefunded read but never used to cap the refund",
       "paths": [
         "server/refunds.ts"
       ],
@@ -461,7 +461,7 @@
     },
     {
       "id": "b11",
-      "title": "Webhook idempotency violation \u2014 event.id never stored/checked; retry double-applies",
+      "title": "Webhook idempotency violation — event.id never stored/checked; retry double-applies",
       "paths": [
         "server/payments.ts"
       ],
@@ -489,13 +489,20 @@
               "not idempotent"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "idempoten",
+              "dedup"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
     },
     {
       "id": "b12",
-      "title": "Refund read-modify-write race \u2014 SELECT SUM then INSERT without txn/lock",
+      "title": "Refund read-modify-write race — SELECT SUM then INSERT without txn/lock",
       "paths": [
         "server/refunds.ts"
       ],
@@ -527,7 +534,7 @@
     },
     {
       "id": "b13",
-      "title": "Wrong paid predicate \u2014 flips invoice to paid when paidCents>0 instead of >= amount_cents",
+      "title": "Wrong paid predicate — flips invoice to paid when paidCents>0 instead of >= amount_cents",
       "paths": [
         "server/payments.ts"
       ],
@@ -592,7 +599,7 @@
     },
     {
       "id": "b14",
-      "title": "Hardcoded fallback secret whsec_test_placeholder does not fail closed \u2014 forgeable signature",
+      "title": "Hardcoded fallback secret whsec_test_placeholder does not fail closed — forgeable signature",
       "paths": [
         "server/payments.ts"
       ],
@@ -627,7 +634,7 @@
     },
     {
       "id": "b15",
-      "title": "IDOR \u2014 refund endpoint never scopes invoice/payment to req.auth.customerId; paymentId unchecked against :id",
+      "title": "IDOR — refund endpoint never scopes invoice/payment to req.auth.customerId; paymentId unchecked against :id",
       "paths": [
         "server/payments.ts",
         "server/refunds.ts"
@@ -673,7 +680,7 @@
     },
     {
       "id": "b16",
-      "title": "IDOR \u2014 /api/payments lists ALL customers' payments; ?ids= fetches arbitrary payments",
+      "title": "IDOR — /api/payments lists ALL customers' payments; ?ids= fetches arbitrary payments",
       "paths": [
         "server/payments.ts"
       ],
@@ -743,7 +750,7 @@
     },
     {
       "id": "b17",
-      "title": "amountCents from body unvalidated \u2014 NaN/negative/float writes",
+      "title": "amountCents from body unvalidated — NaN/negative/float writes",
       "paths": [
         "server/payments.ts"
       ],
@@ -819,7 +826,7 @@
     },
     {
       "id": "b19",
-      "title": "Webhook ignores event.type \u2014 refund.succeeded wrongly marks the invoice paid",
+      "title": "Webhook ignores event.type — refund.succeeded wrongly marks the invoice paid",
       "paths": [
         "server/payments.ts"
       ],
@@ -853,7 +860,7 @@
     },
     {
       "id": "b20",
-      "title": "Webhook HMAC computed over JSON.stringify(req.body) \u2014 re-serialized JSON, not raw bytes",
+      "title": "Webhook HMAC computed over JSON.stringify(req.body) — re-serialized JSON, not raw bytes",
       "paths": [
         "server/payments.ts"
       ],
@@ -1027,7 +1034,7 @@
   "outOfScope": [
     {
       "id": "testing-coverage",
-      "title": "True 'ships without tests' coverage observations \u2014 not rows in the hand-scored bug table",
+      "title": "True 'ships without tests' coverage observations — not rows in the hand-scored bug table",
       "match": {
         "anyOf": [
           {
@@ -1037,13 +1044,31 @@
             "botCategories": [
               "testing"
             ]
+          },
+          {
+            "allKeywords": [
+              "no test coverage"
+            ],
+            "botCategories": [
+              "testing"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "without test"
+            ],
+            "botCategories": [
+              "testing"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
     },
     {
       "id": "auth-stub-convention",
-      "title": "Claims against the stub's header-based auth middleware \u2014 axiomatic in this benchmark (same family as the documented req.auth! safe idiom), neither a planted bug nor a trap",
+      "title": "Claims against the stub's header-based auth middleware — axiomatic in this benchmark (same family as the documented req.auth! safe idiom), neither a planted bug nor a trap",
       "match": {
         "anyOf": [
           {

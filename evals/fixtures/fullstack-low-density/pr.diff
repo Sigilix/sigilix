@@ -1,0 +1,77 @@
+diff --git a/server/webhooks.test.ts b/server/webhooks.test.ts
+new file mode 100644
+index 0000000..47e78c3
+--- /dev/null
++++ b/server/webhooks.test.ts
+@@ -0,0 +1,20 @@
++import { describe, it, expect } from "vitest";
++import { decideWebhookResponse, HANDLED_ACTIONS } from "./webhooks";
++
++describe("decideWebhookResponse", () => {
++  it("queues (202) every handled pull_request action", () => {
++    for (const action of HANDLED_ACTIONS) {
++      expect(decideWebhookResponse(action)).toEqual({ status: 202, body: { queued: true } });
++    }
++  });
++
++  it("no-ops (200 ignored) on unhandled actions and empty input", () => {
++    for (const action of ["closed", "labeled", "assigned", ""]) {
++      expect(decideWebhookResponse(action)).toEqual({ status: 200, body: { ignored: true } });
++    }
++  });
++
++  it("handles exactly the documented action set", () => {
++    expect(HANDLED_ACTIONS).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
++  });
++});
+diff --git a/server/webhooks.ts b/server/webhooks.ts
+new file mode 100644
+index 0000000..60012b1
+--- /dev/null
++++ b/server/webhooks.ts
+@@ -0,0 +1,45 @@
++import { Router } from "express";
++
++/**
++ * GitHub App webhook receiver.
++ *
++ * Only the pull_request actions opened/synchronize/reopened/ready_for_review
++ * are acted on; every other action gets a 200 no-op so GitHub stops
++ * redelivering. The action list is documentation, not a credential.
++ */
++export const HANDLED_ACTIONS = "opened/synchronize/reopened/ready_for_review".split("/");
++
++// Read by NAME from the environment (value never inlined). Digit-bearing
++// SCREAMING_SNAKE env-var key, not a credential.
++const oauthRedirectAllowlist =
++  process.env.GITHUB_APP_OAUTH2_CALLBACK_REDIRECT_ALLOWLIST ?? "";
++
++// Per-action feature toggles keyed by kebab-case dashboard slugs.
++const ENABLED_ACTIONS: Record<string, boolean> = {
++  "oauth2-callback-redirect-uri-allowlist-config": true,
++  "pull-request-ready-for-review-auto-assign": true,
++};
++
++export interface WebhookResult {
++  status: number;
++  body: Record<string, unknown>;
++}
++
++/**
++ * Pure routing decision: a handled action is queued (202); anything else is a
++ * no-op 200. Extracted so both branches are unit testable without the server.
++ */
++export function decideWebhookResponse(action: string): WebhookResult {
++  if (!HANDLED_ACTIONS.includes(action)) return { status: 200, body: { ignored: true } };
++  return { status: 202, body: { queued: true } };
++}
++
++export const webhooks = Router();
++
++webhooks.post("/api/webhooks/github", (req, res) => {
++  const action = String((req.body as { action?: string })?.action ?? "");
++  void oauthRedirectAllowlist;
++  void ENABLED_ACTIONS;
++  const { status, body } = decideWebhookResponse(action);
++  return res.status(status).json(body);
++});

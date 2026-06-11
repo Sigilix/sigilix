@@ -27,7 +27,8 @@
     "retrieval-ab-report": "tsx scripts/retrieval-ab-report.ts",
     "phase4-calibrate": "tsx scripts/phase4-calibrate.ts",
     "collect-sig-161-findings": "tsx scripts/collect-sig-161-findings.ts",
-    "regenerate-badge-paths": "tsx scripts/generate-badge-glyph-paths.ts"
+    "regenerate-badge-paths": "tsx scripts/generate-badge-glyph-paths.ts",
+    "fixture-eval": "vitest run e2e/fixture-eval.live.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

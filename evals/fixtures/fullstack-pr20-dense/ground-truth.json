@@ -97,12 +97,14 @@
           {
             "allKeywords": [
               "n+1"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "refunds one payment at a time"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -159,17 +161,20 @@
           {
             "allKeywords": [
               "unhandled rejection"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "error middleware"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "try/catch"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -189,17 +194,20 @@
             "allKeywords": [
               "dollars",
               "cents"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "floating-point"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "float"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -219,18 +227,21 @@
             "allKeywords": [
               "pagination",
               "offset"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "page * limit"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "off-by-one",
               "page"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -249,17 +260,20 @@
           {
             "allKeywords": [
               "snake_case"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "camelcase"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "as unknown as payment"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -282,7 +296,8 @@
             ],
             "notKeywords": [
               "refund endpoint"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -291,7 +306,8 @@
             ],
             "notKeywords": [
               "refund endpoint"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -300,7 +316,8 @@
             ],
             "notKeywords": [
               "refund endpoint"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -319,18 +336,21 @@
           {
             "allKeywords": [
               "alreadyrefunded"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "over-refund"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "exceed",
               "refund"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -377,17 +397,20 @@
           {
             "allKeywords": [
               "race"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "concurrent"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "transaction"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -455,7 +478,8 @@
             "notKeywords": [
               "sql",
               "idempoten"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -465,7 +489,8 @@
             "notKeywords": [
               "sql",
               "idempoten"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -490,7 +515,8 @@
             "notKeywords": [
               "charge endpoint",
               "charge looks"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -499,7 +525,8 @@
             ],
             "notKeywords": [
               "charge"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -508,7 +535,8 @@
             ],
             "notKeywords": [
               "charge"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -531,7 +559,8 @@
             ],
             "notKeywords": [
               "sql"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -540,7 +569,8 @@
             ],
             "notKeywords": [
               "sql"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -549,7 +579,8 @@
             ],
             "notKeywords": [
               "sql"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -569,19 +600,22 @@
             "allKeywords": [
               "amountcents",
               "unvalidated"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "amountcents",
               "validation"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "amountcents",
               "negative"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -601,12 +635,14 @@
           {
             "allKeywords": [
               "refundid"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "refundedcents"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -629,7 +665,8 @@
             "notKeywords": [
               "idempoten",
               "dedup"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -638,7 +675,8 @@
             "notKeywords": [
               "idempoten",
               "dedup"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -657,24 +695,28 @@
           {
             "allKeywords": [
               "re-serial"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "reserial"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "hmac",
               "raw bytes"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "stringify(req.body)",
               "signature"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -730,7 +772,8 @@
             ],
             "notKeywords": [
               "charge"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -739,7 +782,8 @@
             ],
             "notKeywords": [
               "charge"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -748,7 +792,8 @@
             ],
             "notKeywords": [
               "charge"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -766,13 +811,15 @@
             "allKeywords": [
               "balance",
               "float"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
               "balance",
               "overflow"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -790,7 +837,8 @@
             "allKeywords": [
               "limit",
               "coercion"
-            ]
+            ],
+            "scope": "excerpt"
           },
           {
             "allKeywords": [
@@ -799,7 +847,8 @@
             ],
             "notKeywords": [
               "amountcents"
-            ]
+            ],
+            "scope": "excerpt"
           }
         ]
       }

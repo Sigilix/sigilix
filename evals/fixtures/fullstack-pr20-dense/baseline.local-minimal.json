@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "fixture": "fullstack-pr20-dense",
+  "context": "minimal",
+  "repeats": 8,
+  "perRow": {
+    "b1": 8,
+    "b2": 6,
+    "b3": 8,
+    "b6": 8,
+    "b7": 8,
+    "b9": 8,
+    "b13": 5,
+    "b14": 6,
+    "b15": 7,
+    "b11": 4,
+    "b16": 2,
+    "b18": 1
+  },
+  "aggregate": {
+    "recallMean": 0.4437500000000001,
+    "precisionMean": 0.7190656565656566,
+    "highSevFpTotal": 31
+  },
+  "generatedAt": "2026-06-11T06:08:45.743Z"
+}

@@ -9,10 +9,108 @@ import {
   passesLabelGate,
   resolveAstRulesConfig,
   resolveCostControlsConfig,
+  resolveLintersConfig,
   resolveSarifEvidenceConfig,
   resolveCoverageConfig,
   type SigilixConfig,
 } from "@/src/lib/sigilix-config"
+
+describe("parseSigilixConfig — linters (SIG-107)", () => {
+  it("parses object config for known linter ids", () => {
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        linters: {
+          semgrep: { enabled: true },
+          eslint: { enabled: false },
+          ruff: { enabled: true },
+          actionlint: { enabled: false },
+          shellcheck: { enabled: true },
+        },
+      }),
+    )
+    expect(cfg?.linters).toEqual({
+      semgrep: { enabled: true },
+      eslint: { enabled: false },
+      ruff: { enabled: true },
+      actionlint: { enabled: false },
+      shellcheck: { enabled: true },
+    })
+  })
+
+  it("parses strict boolean shorthand for known linter ids", () => {
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        linters: {
+          eslint: true,
+          ruff: false,
+        },
+      }),
+    )
+    expect(cfg?.linters).toEqual({
+      eslint: { enabled: true },
+      ruff: { enabled: false },
+    })
+  })
+
+  it("drops invalid linter values without failing the whole config", () => {
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        guidance: "keep reviewing",
+        linters: {
+          eslint: { enabled: "false" },
+          ruff: "true",
+          semgrep: { enabled: true, futureField: "ignored" },
+          shellcheck: null,
+        },
+      }),
+    )
+    expect(cfg?.guidance).toBe("keep reviewing")
+    expect(cfg?.linters).toEqual({ semgrep: { enabled: true } })
+  })
+
+  it("drops unknown linter ids and omits linters when no valid entries remain", () => {
+    const cfg = parseSigilixConfig(
+      JSON.stringify({
+        linters: {
+          biome: { enabled: true },
+          prettier: false,
+        },
+      }),
+    )
+    expect(cfg?.linters).toBeUndefined()
+  })
+})
+
+describe("resolveLintersConfig (SIG-107)", () => {
+  it("defaults every known linter to enabled", () => {
+    const expected = {
+      semgrep: { enabled: true },
+      eslint: { enabled: true },
+      ruff: { enabled: true },
+      actionlint: { enabled: true },
+      shellcheck: { enabled: true },
+    }
+    expect(resolveLintersConfig(null)).toEqual(expected)
+    expect(resolveLintersConfig({} as SigilixConfig)).toEqual(expected)
+  })
+
+  it("respects explicit disabled values while defaulting absent linters to enabled", () => {
+    expect(
+      resolveLintersConfig({
+        linters: {
+          eslint: { enabled: false },
+          shellcheck: { enabled: false },
+        },
+      } as SigilixConfig),
+    ).toEqual({
+      semgrep: { enabled: true },
+      eslint: { enabled: false },
+      ruff: { enabled: true },
+      actionlint: { enabled: true },
+      shellcheck: { enabled: false },
+    })
+  })
+})
 
 describe("parseSigilixConfig — astRules (ARC-181)", () => {
   it("captures astRules.enabled: false", () => {

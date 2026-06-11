@@ -7,9 +7,11 @@ import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { parseDeterministicChecks } from "@/src/shared/domain/deterministic-checks"
 import {
   KNOWN_MODELS,
+  LINTER_IDS,
   SPECIALIST_ROLES,
   type DispatcherConfig,
   type DispatcherSafetyNetPattern,
+  type LinterId,
   type ReviewMemoryCategoryRef,
   type SarifFindingCategoryRef,
   type SigilixCommandConfig,
@@ -125,8 +127,28 @@ function parsePathInstructions(v: unknown): SigilixPathInstruction[] {
 }
 
 const SPECIALIST_ROLE_SET: ReadonlySet<SpecialistRole> = new Set(SPECIALIST_ROLES)
+const LINTER_ID_SET: ReadonlySet<LinterId> = new Set(LINTER_IDS)
 
 const DISPATCHER_MAX_ADDITIONAL_PATTERNS = 50
+
+function parseLintersConfig(v: unknown): SigilixConfig["linters"] | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const out: NonNullable<SigilixConfig["linters"]> = {}
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (!LINTER_ID_SET.has(key as LinterId)) continue
+    const id = key as LinterId
+    if (typeof value === "boolean") {
+      out[id] = { enabled: value }
+      continue
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue
+    const rec = value as Record<string, unknown>
+    if (typeof rec.enabled === "boolean") {
+      out[id] = { enabled: rec.enabled }
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 /**
  * SIG-224: parse the optional `dispatcher` block of `sigilix.json`.
@@ -523,6 +545,8 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.sarifEvidence = sarifOut
     }
   }
+  const linters = parseLintersConfig(obj.linters)
+  if (linters !== undefined) out.linters = linters
   // SIG-118: coverage — coverage-diff ingestion (default OFF). Only the
   // literal "github-actions-artifact" opts in; anything else (including
   // the explicit "off") leaves the resolver on its default-OFF path.

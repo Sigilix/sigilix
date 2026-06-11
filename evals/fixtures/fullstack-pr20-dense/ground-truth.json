@@ -173,6 +173,43 @@
               "balance"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "success shape",
+              "not-found"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection",
+              "balance"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "success shape",
+              "not found"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection",
+              "balance"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "200",
+              "not-found"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection",
+              "balance",
+              "customer_id"
+            ],
+            "scope": "excerpt"
           }
         ]
       }

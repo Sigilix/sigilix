@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // fetchPullRequestContext + getInstallationToken + GitHubClient.
 const mockRetrieveChunks = vi.fn()
 const mockFetchPullRequestContext = vi.fn()
-const mockGetInstallationToken = vi.fn(async () => "test-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
 const mockGetFileContent = vi.fn()
 
 vi.mock("@/src/lib/retrieval", async () => {

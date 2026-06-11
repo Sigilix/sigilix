@@ -124,7 +124,7 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
 
   it("requires finding scope so constrained generation chooses the review surface", () => {
     const props = PR_REVIEW_SCHEMA.properties.findings.items.properties as Record<string, unknown>
-    const required = PR_REVIEW_SCHEMA.properties.findings.items.required as string[]
+    const required = PR_REVIEW_SCHEMA.properties.findings.items.required as readonly string[]
     expect(props.scope).toEqual({ type: "string", enum: ["line", "file", "pr", "comment"] })
     expect(required).toContain("scope")
   })

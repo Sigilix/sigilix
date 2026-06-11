@@ -6,7 +6,7 @@ import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 const reviewable = parseDiffToReviewablePositions(
   "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,0 +1,2 @@\n+const x = 1\n+const y = 2\n",
 )
-function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
+function finding(over: { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } = {}): PrReviewFinding {
   return {
     path: "src/a.ts",
     line: 1,

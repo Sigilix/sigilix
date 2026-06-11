@@ -182,7 +182,7 @@ describe("RepoGraphDO.contextForVectorHits", () => {
     })
 
     expect(ctx.nodes).toHaveLength(1)
-    const node = ctx.nodes[0]
+    const node = ctx.nodes[0]!
     expect(node.path).toBe("src/b.ts")
     expect(node.symbolId).toBeNull()
     expect(node.name).toBeNull()

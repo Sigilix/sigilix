@@ -72,7 +72,7 @@ describe("VERIFIED proof — full datapath: receipt → confirmed → runner-con
       trustLedger: true,
     }).submission.body
     expect(body).toContain("**Proof**")
-    expect(body.toLowerCase()).toContain("verified")
+    expect(body!.toLowerCase()).toContain("verified")
   })
 
   it("the SAME finding renders only MODEL when no receipt corroborates it (the prod reality)", () => {

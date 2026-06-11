@@ -61,32 +61,32 @@ describe("readGateMode (SIG-161)", () => {
 describe("readGateThreshold (SIG-161)", () => {
   it("returns DEFAULT_GATE_THRESHOLD (1.0) when KV is empty", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue(null)
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue(null)
     expect(await readGateThreshold(env)).toBe(DEFAULT_GATE_THRESHOLD)
     expect(env.OPENCLAW_STATE.get).toHaveBeenCalledWith(GATE_THRESHOLD_KV_KEY)
   })
 
   it("parses a numeric value from KV", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("0.85")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("0.85")
     expect(await readGateThreshold(env)).toBe(0.85)
   })
 
   it("clamps out-of-range values silently", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("2.5")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("2.5")
     expect(await readGateThreshold(env)).toBe(1.0)
   })
 
   it("clamps negative values to 0", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("-0.5")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("-0.5")
     expect(await readGateThreshold(env)).toBe(0)
   })
 
   it("falls back to default on unparseable value", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("not-a-number")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("not-a-number")
     expect(await readGateThreshold(env)).toBe(DEFAULT_GATE_THRESHOLD)
   })
 
@@ -98,7 +98,7 @@ describe("readGateThreshold (SIG-161)", () => {
     for (const blank of ["", "   ", "\t\n"]) {
       __resetGateConfigCacheForTests()
       const env = makeEnv()
-      vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue(blank)
+      vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue(blank)
       expect(await readGateThreshold(env)).toBe(DEFAULT_GATE_THRESHOLD)
     }
   })
@@ -109,8 +109,8 @@ describe("readGateThreshold (SIG-161)", () => {
     // prevents that — two different bindings get independent entries.
     const envA = makeEnv()
     const envB = makeEnv()
-    vi.mocked(envA.OPENCLAW_STATE.get).mockResolvedValue("0.85")
-    vi.mocked(envB.OPENCLAW_STATE.get).mockResolvedValue("0.65")
+    vi.mocked(envA.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("0.85")
+    vi.mocked(envB.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("0.65")
     expect(await readGateThreshold(envA)).toBe(0.85)
     expect(await readGateThreshold(envB)).toBe(0.65)
     // Re-read each — both should hit their own cached slot, not leak.
@@ -122,13 +122,13 @@ describe("readGateThreshold (SIG-161)", () => {
 
   it("survives a KV read throw", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockRejectedValue(new Error("kv down"))
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockRejectedValue(new Error("kv down"))
     expect(await readGateThreshold(env)).toBe(DEFAULT_GATE_THRESHOLD)
   })
 
   it("caches the result for 60s (subsequent reads don't hit KV)", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("0.85")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("0.85")
     await readGateThreshold(env)
     await readGateThreshold(env)
     await readGateThreshold(env)
@@ -147,7 +147,9 @@ describe("readGateThreshold (SIG-161)", () => {
     const pending = new Promise<string>((resolve) => {
       resolveGet = resolve
     })
-    vi.mocked(env.OPENCLAW_STATE.get).mockReturnValue(pending as unknown as Promise<string>)
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockReturnValue(
+      pending as unknown as Promise<string>,
+    )
 
     // Two concurrent readers — both should see kind:"pending" and await
     // the same Promise, NOT fire a second KV.get.
@@ -170,33 +172,35 @@ describe("readGateModel (SIG-161)", () => {
 
   it("returns null when KV is empty (PR 4a default — no model committed yet)", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue(null)
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue(null)
     expect(await readGateModel(env)).toBeNull()
     expect(env.OPENCLAW_STATE.get).toHaveBeenCalledWith(GATE_MODEL_KV_KEY)
   })
 
   it("parses a valid model artifact", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue(JSON.stringify(validModel))
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue(
+      JSON.stringify(validModel),
+    )
     const out = await readGateModel(env)
     expect(out).toEqual(validModel)
   })
 
   it("returns null on malformed JSON", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue("{ not json")
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue("{ not json")
     expect(await readGateModel(env)).toBeNull()
   })
 
   it("survives a KV read throw", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockRejectedValue(new Error("kv down"))
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockRejectedValue(new Error("kv down"))
     expect(await readGateModel(env)).toBeNull()
   })
 
   it("caches the null result so repeat absence doesn't re-hit KV", async () => {
     const env = makeEnv()
-    vi.mocked(env.OPENCLAW_STATE.get).mockResolvedValue(null)
+    vi.mocked(env.OPENCLAW_STATE.get as (key: string) => Promise<string | null>).mockResolvedValue(null)
     await readGateModel(env)
     await readGateModel(env)
     expect(env.OPENCLAW_STATE.get).toHaveBeenCalledTimes(1)

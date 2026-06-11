@@ -12,7 +12,7 @@ import type { AstFinding } from "@/src/features/ast-rules/domain/types"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }
 
-function makeClient(submitReview = vi.fn(async () => ({ id: 1, state: "COMMENTED" }))): {
+function makeClient(submitReview = vi.fn(async (..._args: unknown[]) => ({ id: 1, state: "COMMENTED" }))): {
   client: GitHubClient
   submitReview: typeof submitReview
 } {

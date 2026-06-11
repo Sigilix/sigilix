@@ -35,7 +35,7 @@ const {
   mockListPullRequestReviews,
   mockCreateIssueComment,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
+  mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockChat: vi.fn(),
   mockGetPullRequest: vi.fn(),
   mockGetPullRequestDiff: vi.fn(),

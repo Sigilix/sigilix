@@ -55,7 +55,7 @@ function dismissal(fid: string, opts: Partial<FpRateDismissal> = {}): FpRateDism
     fid,
     prNumber: opts.prNumber ?? 1,
     commentId: opts.commentId ?? Math.floor(fid.charCodeAt(0)),
-    dismissReason: opts.dismissReason,
+    ...(opts.dismissReason !== undefined ? { dismissReason: opts.dismissReason } : {}),
     tsMs: opts.tsMs ?? 1_000_000,
   }
 }

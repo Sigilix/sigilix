@@ -74,7 +74,10 @@ const BASE_SHA = "b".repeat(40)
 const RUN_ID = "11111111-1111-4111-8111-111111111111"
 const CONSUMER_ID = "consumer-abc"
 
-function seedState(store: Map<string, unknown>, over: Partial<RunState> = {}): RunState {
+function seedState(
+  store: Map<string, unknown>,
+  over: { [K in keyof RunState]?: RunState[K] | undefined } = {},
+): RunState {
   const s: RunState = {
     schemaVersion: 1,
     owner: "Sigilix",
@@ -91,7 +94,10 @@ function seedState(store: Map<string, unknown>, over: Partial<RunState> = {}): R
     alarmTargetRunId: RUN_ID,
     alarmKind: "liveness",
     consumerId: CONSUMER_ID,
-    ...over,
+  }
+  for (const [key, value] of Object.entries(over)) {
+    if (value === undefined) delete (s as unknown as Record<string, unknown>)[key]
+    else (s as unknown as Record<string, unknown>)[key] = value
   }
   store.set("state", s)
   return s

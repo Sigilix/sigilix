@@ -39,7 +39,7 @@ async function genKey(): Promise<{ privateKey: CryptoKey; jwk: Jwk }> {
 }
 
 async function signToken(
-  claims: Partial<GitHubOidcClaims>,
+  claims: { [K in keyof GitHubOidcClaims]?: GitHubOidcClaims[K] | undefined },
   privateKey: CryptoKey,
   header: Record<string, unknown> = { alg: "RS256", kid: KID },
 ): Promise<string> {
@@ -341,7 +341,8 @@ describe("validateRunnerProvenance", () => {
       reason: "sha-mismatch",
     })
     // a missing repository claim must not silently pass the binding.
-    expect(validateRunnerProvenance({ ...baseClaims, repository: undefined }, EXP)).toEqual({
+    const { repository: _repository, ...noRepoClaims } = baseClaims
+    expect(validateRunnerProvenance(noRepoClaims, EXP)).toEqual({
       ok: false,
       reason: "repository-mismatch",
     })

@@ -540,7 +540,7 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       headSha: "abc1234",
       unanchored,
       trustLedger: true,
-    }).submission.body
+    }).submission.body!
     const pillIdx = body.indexOf("trust-grounded")
     const headlineIdx = body.indexOf("evidence rendered without redaction")
     expect(pillIdx).toBeGreaterThanOrEqual(0)

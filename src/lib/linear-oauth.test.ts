@@ -50,7 +50,7 @@ describe("getAppActorToken", () => {
 
   it("fetches a fresh token when KV is empty", async () => {
     const kv = makeKV()
-    const fetchSpy = vi.fn(async () => ({
+    const fetchSpy = vi.fn(async (..._args: unknown[]) => ({
       ok: true,
       json: async () => ({ access_token: "new-token", expires_in: 2_592_000 }),
     }))
@@ -60,7 +60,7 @@ describe("getAppActorToken", () => {
 
     expect(token).toBe("new-token")
     expect(fetchSpy).toHaveBeenCalledOnce()
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit]
     expect(url).toBe("https://api.linear.app/oauth/token")
     expect(init.method).toBe("POST")
     expect(String(init.body)).toContain("grant_type=client_credentials")

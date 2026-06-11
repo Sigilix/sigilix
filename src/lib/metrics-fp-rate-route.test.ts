@@ -29,7 +29,10 @@ function makeKv(records: Record<string, unknown>) {
   }
 }
 
-function makeEnv(records: Record<string, unknown> = {}, overrides: Partial<Env> = {}): Env {
+function makeEnv(
+  records: Record<string, unknown> = {},
+  overrides: { [K in keyof Env]?: Env[K] | undefined } = {},
+): Env {
   return {
     OPENCLAW_VALIDATION_METRICS_TOKEN: TOKEN,
     OPENCLAW_STATE: makeKv(records),

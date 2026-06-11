@@ -12,6 +12,7 @@ vi.mock("@/src/shared/adapters/model/ollama-chat", () => ({
 }))
 
 import { chat } from "@/src/shared/adapters/model"
+import type { ChatArgs, ChatResult } from "@/src/shared/ports/model"
 
 const CTX: EnsembleRunCtx = {
   owner: "Sigilix",
@@ -66,13 +67,13 @@ function shadowAttemptEvents(): Array<Record<string, unknown>> {
 }
 
 function slowShadowChat(delay: number, content: string) {
-  return (args: { signal?: AbortSignal }) =>
+  return (args: ChatArgs): Promise<ChatResult> =>
     new Promise((resolve, reject) => {
       let settled = false
       const t = setTimeout(() => {
         if (settled) return
         settled = true
-        resolve({ message: { role: "assistant", content } })
+        resolve({ message: { role: "assistant", content }, hasToolCalls: false })
       }, delay)
       args.signal?.addEventListener(
         "abort",
@@ -91,6 +92,7 @@ describe("runShadowSpecialist", () => {
   it("returns the verdict + emits one shadow-model-attempt-completed event on primary success", async () => {
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_VERDICT_JSON },
+      hasToolCalls: false,
     })
     const result = await runShadowSpecialist({
       role: "security",
@@ -126,6 +128,7 @@ describe("runShadowSpecialist", () => {
     vi.mocked(chat).mockRejectedValueOnce(new Error("503 again"))
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_VERDICT_JSON },
+      hasToolCalls: false,
     })
     const result = await runShadowSpecialist({
       role: "tests",
@@ -169,6 +172,7 @@ describe("runShadowSpecialist", () => {
   it("honors shadowConfig.perAttemptTimeoutMs in attempt telemetry", async () => {
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_VERDICT_JSON },
+      hasToolCalls: false,
     })
     const result = await runShadowSpecialist({
       role: "tests",
@@ -272,6 +276,7 @@ describe("apples-to-apples format constraint", () => {
   it("passes PR_REVIEW_SCHEMA to chat for specialists + undefined for synth", async () => {
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_VERDICT_JSON },
+      hasToolCalls: false,
     })
     await runShadowSpecialist({
       role: "logic",
@@ -285,6 +290,7 @@ describe("apples-to-apples format constraint", () => {
     })
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_SYNTH_JSON },
+      hasToolCalls: false,
     })
     await runShadowSynth({
       shadowConfig: { primary: "deepseek-v4-flash:cloud", retries: 0, fallback: null },
@@ -314,6 +320,7 @@ describe("runShadowSynth", () => {
   it("returns verdict + findings on synth success", async () => {
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_SYNTH_JSON },
+      hasToolCalls: false,
     })
     const result = await runShadowSynth({
       shadowConfig: {
@@ -339,6 +346,7 @@ describe("runShadowSynth", () => {
   it("honors shadowConfig.perAttemptTimeoutMs in synth attempt telemetry", async () => {
     vi.mocked(chat).mockResolvedValueOnce({
       message: { role: "assistant", content: VALID_SYNTH_JSON },
+      hasToolCalls: false,
     })
     const result = await runShadowSynth({
       shadowConfig: {

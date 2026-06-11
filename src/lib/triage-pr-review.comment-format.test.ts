@@ -310,7 +310,7 @@ describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
   })
 
   it("uses a single-line range when startLine is absent or equal to line", () => {
-    const single: PrReviewFinding = { ...f, startLine: undefined }
+    const { startLine: _startLine, ...single } = f
     expect(formatAiAgentPromptBlock(single)).toContain("Line: 50")
   })
 
@@ -552,17 +552,25 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
       ]),
     ],
   ])
-  const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
-    path: "src/a.ts",
-    line: 10,
-    score: 4,
-    category: "logic",
-    headline: "use nullish fallback",
-    body: "`compute()` can return undefined.",
-    kind: "replace",
-    suggestedReplacement: "  const x = compute() ?? 0",
-    ...overrides,
-  })
+  const finding = (
+    overrides: { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } = {},
+  ): PrReviewFinding => {
+    const base: PrReviewFinding = {
+      path: "src/a.ts",
+      line: 10,
+      score: 4,
+      category: "logic",
+      headline: "use nullish fallback",
+      body: "`compute()` can return undefined.",
+      kind: "replace",
+      suggestedReplacement: "  const x = compute() ?? 0",
+    }
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+      else (base as unknown as Record<string, unknown>)[key] = value
+    }
+    return base
+  }
   const submit = (f: PrReviewFinding) =>
     buildReviewSubmissionWithMetadata({
       verdict: {

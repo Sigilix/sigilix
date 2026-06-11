@@ -13,7 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "fake-token")
 // SIG-91 follow-up: findExistingOverviewCommentId now paginates via
 // listIssueCommentsPage so it can short-circuit on first marker hit
 // and cap at MAX_COMMENT_SCAN_PAGES. Default mock returns an empty
@@ -57,7 +57,7 @@ import type { Env } from "@/src/shared/types/env"
 function makeKvStub() {
   const store = new Map<string, string>()
   const getMock = vi.fn(async (key: string): Promise<string | null> => store.get(key) ?? null)
-  const putMock = vi.fn(async (key: string, value: string): Promise<void> => {
+  const putMock = vi.fn(async (key: string, value: string, _options?: { expirationTtl?: number }): Promise<void> => {
     store.set(key, value)
   })
   const deleteMock = vi.fn(async (key: string): Promise<void> => {

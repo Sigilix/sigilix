@@ -17,6 +17,12 @@ import {
 import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
 import { readVerificationMode, readReanchorEnabled } from "@/src/lib/verification/mode"
 import type { Env } from "@/src/shared/types/env"
+import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
+
+type DemotableFinding = Pick<
+  PrReviewFinding,
+  "path" | "line" | "headline" | "body" | "score" | "category" | "startLine"
+>
 
 // New side: line 9 = context, line 10 = the injection, line 11 = a safe line.
 const DIFF = `diff --git a/src/db.ts b/src/db.ts
@@ -112,7 +118,9 @@ describe("verifyFinding", () => {
     const d = buildAddedLineTextByLine(
       "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n+const r = db.query(userId)\n",
     )
-    expect(verifyFinding({ path: "x.ts", line: 1, headline: "injection via `db.query`" }, d).verdict).toBe("confirmed")
+    expect(verifyFinding({ path: "x.ts", line: 1, headline: "injection via `db.query`", body: "" }, d).verdict).toBe(
+      "confirmed",
+    )
   })
 })
 
@@ -127,17 +135,7 @@ describe("findingKey", () => {
 
 describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", () => {
   // Reuse the DIFF index: line 10 holds `userId`, line 11 does not.
-  const fd = (
-    over: Partial<{
-      path: string
-      line: number
-      startLine: number
-      headline: string
-      body: string
-      score: number
-      category: string
-    }>,
-  ) => ({
+  const fd = (over: Partial<DemotableFinding>): DemotableFinding => ({
     path: "src/db.ts",
     line: 11,
     headline: "",
@@ -197,7 +195,7 @@ describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", ()
       selectRefutedInlineDemotions([fd({ line: 10, headline: "`userId`", category: "security", score: 4 })], index),
     ).toEqual([]) // confirmed
     expect(
-      selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "tests", score: 5 })], index),
+      selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "testing", score: 5 })], index),
     ).toEqual([]) // wrong category
   })
 
@@ -306,17 +304,7 @@ describe("planReanchor (SIG-285 inline-first — the re-anchor decision)", () =>
 
 describe("applyReanchors (SIG-285 enforce — the in-place mutation)", () => {
   const always = () => true // substantive
-  const fd = (
-    over: Partial<{
-      path: string
-      line: number
-      startLine: number
-      headline: string
-      body: string
-      score: number
-      category: string
-    }>,
-  ) => ({
+  const fd = (over: Partial<DemotableFinding>): DemotableFinding => ({
     path: "src/db.ts",
     line: 11,
     headline: "",

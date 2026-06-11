@@ -24,8 +24,10 @@ import type { SecurityFact } from "@/src/lib/security-evidence-manifest"
 
 // A self-originated security finding: a CWE claim with no manifest evidenceId.
 // Defaults to the SSRF hallucination shape (sev>=4, no independentAssessment).
-function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
-  return {
+type FindingOverrides = { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined }
+
+function finding(overrides: FindingOverrides = {}): PrReviewFinding {
+  const base: PrReviewFinding = {
     path: "src/parse/ndjson.ts",
     line: 17,
     score: 4,
@@ -34,8 +36,14 @@ function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
     body: "The decode path is driven by an attacker-controlled header.",
     cweId: "CWE-918",
     evidenceId: "NONE",
-    ...overrides,
   }
+  // Strip explicit `undefined`s so the result stays valid under
+  // exactOptionalPropertyTypes (explicit `undefined` == field omitted).
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 describe("parseRefutationSurvivalMode", () => {
@@ -156,9 +164,9 @@ function run(args: {
     },
     reviewable: makeReviewable(),
     specialistVerdicts: makeSpecialistVerdicts(args.sourceRationale),
-    securityManifest: args.securityManifest,
+    ...(args.securityManifest !== undefined ? { securityManifest: args.securityManifest } : {}),
     refutationSurvivalMode: args.mode,
-    onRefutationSurvivalFindingDropped: args.onDrop,
+    ...(args.onDrop !== undefined ? { onRefutationSurvivalFindingDropped: args.onDrop } : {}),
     trustLedgerEnabled: true,
   })
 }
@@ -365,16 +373,20 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
 
 // ── Performance lens (self-originated = no co-located AST hit) ────
 
-function perfFinding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
-  return {
+function perfFinding(overrides: FindingOverrides = {}): PrReviewFinding {
+  const base: PrReviewFinding = {
     path: "src/parse/ndjson.ts",
     line: 17,
     score: 4,
     category: "performance",
     headline: "recomputes the HMAC key on every call",
     body: "No caching of the imported key on the hot path.",
-    ...overrides,
   }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function makePerfSpecialistVerdicts(perfRationale?: string): SpecialistVerdictsArg {
@@ -439,7 +451,7 @@ function runPerf(args: {
     specialistVerdicts: makePerfSpecialistVerdicts(args.sourceRationale),
     perfEvidence,
     refutationSurvivalMode: args.mode,
-    onRefutationSurvivalFindingDropped: args.onDrop,
+    ...(args.onDrop !== undefined ? { onRefutationSurvivalFindingDropped: args.onDrop } : {}),
     trustLedgerEnabled: true,
   })
 }

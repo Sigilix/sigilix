@@ -38,7 +38,7 @@ function run(results: SarifRun["results"], artifacts?: SarifRun["artifacts"]): S
   } as SarifRun
 }
 
-function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
+function finding(over: { [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } = {}): PrReviewFinding {
   return {
     path: "src/auth.ts",
     line: 42,

@@ -40,7 +40,7 @@ function makeDo() {
   return new ValidationMetricsDO(state as unknown as DurableObjectState, {} as Env)
 }
 
-function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}, doInstance = makeDo()): Env {
   const ns = {
     idFromName: (_: string) => "id",
     get: (_: unknown) => doInstance,
@@ -162,8 +162,8 @@ describe("handleTestSuppressionsMetricsRoute", () => {
       suppressionRate: 0.5,
     })
     expect(body.reasons["fabricated-evidence-id"]).toBeUndefined() // security gate not projected
-    expect(body.byCategory.testing.wouldDrop).toBe(2)
-    expect(body.byCategory.testing.kept).toBe(1)
+    expect(body.byCategory.testing!.wouldDrop).toBe(2)
+    expect(body.byCategory.testing!.kept).toBe(1)
     expect(body.totals.wouldDrop).toBe(2)
     expect(body.totals.kept).toBe(1)
     expect(body.totals.suppressionRate).toBeCloseTo(0.6667, 4)

@@ -5,17 +5,23 @@ import { describe, expect, it } from "vitest"
 import { buildSarifCheckAnnotations } from "@/src/features/sarif-evidence/render/annotations"
 import type { SarifFinding } from "@/src/features/sarif-evidence/domain/types"
 
-const F = (overrides: Partial<SarifFinding> = {}): SarifFinding => ({
-  ruleId: "R1",
-  severity: "warning",
-  roleHint: "security",
-  category: "vulnerability",
-  path: "src/app.ts",
-  line: 10,
-  message: "scanner finding",
-  toolName: "Semgrep",
-  ...overrides,
-})
+const F = (overrides: { [K in keyof SarifFinding]?: SarifFinding[K] | undefined } = {}): SarifFinding => {
+  const base: Record<string, unknown> = {
+    ruleId: "R1",
+    severity: "warning",
+    roleHint: "security",
+    category: "vulnerability",
+    path: "src/app.ts",
+    line: 10,
+    message: "scanner finding",
+    toolName: "Semgrep",
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete base[key]
+    else base[key] = value
+  }
+  return base as unknown as SarifFinding
+}
 
 describe("buildSarifCheckAnnotations", () => {
   it("returns no annotations for empty SARIF findings", () => {
@@ -157,7 +163,7 @@ describe("buildSarifCheckAnnotations", () => {
     const annotations = buildSarifCheckAnnotations([F({ ruleName: "x".repeat(500) })])
 
     expect(annotations[0]?.title).toHaveLength(240)
-    expect(annotations[0]?.title.endsWith("...")).toBe(true)
+    expect(annotations[0]?.title?.endsWith("...")).toBe(true)
   })
 
   it("truncates long messages to GitHub's annotation text budget", () => {

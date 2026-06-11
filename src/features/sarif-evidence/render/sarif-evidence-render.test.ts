@@ -7,17 +7,23 @@ import {
 } from "@/src/features/sarif-evidence/render/render"
 import type { SarifFinding, SbomSummary } from "@/src/features/sarif-evidence/domain/types"
 
-const F = (overrides: Partial<SarifFinding> = {}): SarifFinding => ({
-  ruleId: "X",
-  severity: "warning",
-  roleHint: "security",
-  category: "vulnerability",
-  path: "src/a.ts",
-  line: 1,
-  message: "default",
-  toolName: "Trivy",
-  ...overrides,
-})
+const F = (overrides: { [K in keyof SarifFinding]?: SarifFinding[K] | undefined } = {}): SarifFinding => {
+  const base: Record<string, unknown> = {
+    ruleId: "X",
+    severity: "warning",
+    roleHint: "security",
+    category: "vulnerability",
+    path: "src/a.ts",
+    line: 1,
+    message: "default",
+    toolName: "Trivy",
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete base[key]
+    else base[key] = value
+  }
+  return base as unknown as SarifFinding
+}
 
 describe("renderSarifFindingsForPrompt", () => {
   it("empty findings → empty string", () => {
@@ -121,15 +127,15 @@ describe("renderSarifFindingsAsJsonForSynth", () => {
     const out = renderSarifFindingsAsJsonForSynth([F({ ruleId: "Z", message: "m" })])
     const parsed = JSON.parse(out) as { sarif_findings: Array<Record<string, unknown>> }
     expect(parsed.sarif_findings.length).toBe(1)
-    expect(parsed.sarif_findings[0].rule_id).toBe("Z")
+    expect(parsed.sarif_findings[0]!.rule_id).toBe("Z")
   })
 
   it("preserves structured fields including tool + category + role_hint", () => {
     const out = renderSarifFindingsAsJsonForSynth([F({ ruleId: "X", category: "license", roleHint: "security" })])
     const parsed = JSON.parse(out) as { sarif_findings: Array<Record<string, unknown>> }
-    expect(parsed.sarif_findings[0].category).toBe("license")
-    expect(parsed.sarif_findings[0].role_hint).toBe("security")
-    expect(parsed.sarif_findings[0].tool).toBe("Trivy")
+    expect(parsed.sarif_findings[0]!.category).toBe("license")
+    expect(parsed.sarif_findings[0]!.role_hint).toBe("security")
+    expect(parsed.sarif_findings[0]!.tool).toBe("Trivy")
   })
 
   it("appends SBOM summary AFTER the JSON block when present", () => {

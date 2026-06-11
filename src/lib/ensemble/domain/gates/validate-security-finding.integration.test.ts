@@ -48,7 +48,7 @@ function makeSpecialistVerdictsWithSecuritySource(
 }
 
 function makeSpecialistVerdictsWithSecuritySources(
-  sources: Array<Partial<PrReviewFinding> & { id: string }>,
+  sources: Array<{ [K in keyof PrReviewFinding]?: PrReviewFinding[K] | undefined } & { id: string }>,
 ): SpecialistVerdictsArg {
   return [
     {

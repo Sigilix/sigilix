@@ -127,7 +127,7 @@ function rowsCursor<T extends AnyRow>(rows: T[], read = rows.length): SqlCursor<
       if (rows.length !== 1) {
         throw new Error(`SqlCursor.one(): expected exactly 1 row, got ${rows.length}`)
       }
-      return rows[0]
+      return rows[0]!
     },
     raw: function* () {
       for (const row of rows) yield Object.values(row)
@@ -194,7 +194,7 @@ export class NodeSqliteStorage {
       // INSERT / UPDATE / DELETE / CREATE … (single statement, no
       // semicolons — node:sqlite prepare rejects multi-statement).
       const result = stmt.run(...(bindings as Parameters<typeof stmt.run>))
-      return emptyCursor(result.changes) as SqlCursor<T>
+      return emptyCursor(Number(result.changes)) as SqlCursor<T>
     }
   }
 

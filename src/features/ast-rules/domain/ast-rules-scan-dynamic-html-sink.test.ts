@@ -80,8 +80,8 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
   it("flags dangerouslySetInnerHTML of a member access", () => {
     const hits = scanDynamicHtmlSinks(`return <div dangerouslySetInnerHTML={{ __html: c.bodyHtml }} />`)
     expect(hits.length).toBe(1)
-    expect(hits[0].line).toBe(1)
-    expect(hits[0].message).toMatch(/XSS/)
+    expect(hits[0]!.line).toBe(1)
+    expect(hits[0]!.message).toMatch(/XSS/)
   })
   it("flags innerHTML / outerHTML assignment of a member access", () => {
     expect(scanDynamicHtmlSinks(`el.innerHTML = data.userHtml`).length).toBe(1)
@@ -127,8 +127,8 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
     ].join("\n")
     const hits = scanDynamicHtmlSinks(src)
     expect(hits.length).toBe(1)
-    expect(hits[0].line).toBe(3) // the `dangerouslySetInnerHTML` line
-    expect(hits[0].endLine).toBeGreaterThan(hits[0].line) // spans to the `}}`
+    expect(hits[0]!.line).toBe(3) // the `dangerouslySetInnerHTML` line
+    expect(hits[0]!.endLine).toBeGreaterThan(hits[0]!.line) // spans to the `}}`
   })
   it("does NOT flag a line-commented-out sink, but does NOT false-skip a real sink after a URL (CodeRabbit #296)", () => {
     expect(scanDynamicHtmlSinks(`  // el.innerHTML = c.bodyHtml`).length).toBe(0)

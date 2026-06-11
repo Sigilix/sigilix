@@ -909,12 +909,17 @@ describe("renderTestingEvidenceBlock — M2 fence collision in embedded content"
 
 describe("SIG-128 helper-coverage annotation", () => {
   const emptyFetch = { contentByPath: {}, failedPaths: [], truncatedPaths: [], totalChars: 0 }
-  function packWith(coverage: Record<string, { status: "all" | "partial" | "none"; helpers: string[] }>) {
+  function packWith(
+    coverage: Record<string, { status: "all" | "partial" | "none"; helpers: string[]; structurallyGlue?: boolean }>,
+  ) {
+    const normalized = Object.fromEntries(
+      Object.entries(coverage).map(([k, v]) => [k, { structurallyGlue: false, ...v }]),
+    )
     const base = buildTestingEvidencePack({
       splitFilePaths: ["src/lib/ensemble.ts", "src/lib/branch-retrieval.ts", "tests/branch-retrieval.test.ts"],
       reviewedFilePaths: ["src/lib/ensemble.ts", "src/lib/branch-retrieval.ts", "tests/branch-retrieval.test.ts"],
     })
-    return mergeHelperCoverage(base, coverage)
+    return mergeHelperCoverage(base, normalized)
   }
   it("renders an 'all delegates' note for an all-status ->NONE source", () => {
     const pack = packWith({
@@ -941,7 +946,7 @@ describe("SIG-128 helper-coverage annotation", () => {
     })
     expect(base.helperCoverageBySource).toEqual({})
     const merged = mergeHelperCoverage(base, {
-      "src/lib/ensemble.ts": { status: "all", helpers: [] },
+      "src/lib/ensemble.ts": { status: "all", helpers: [], structurallyGlue: false },
     })
     expect(base.helperCoverageBySource).toEqual({})
     expect(merged.helperCoverageBySource["src/lib/ensemble.ts"]?.status).toBe("all")

@@ -15,7 +15,7 @@ const {
   mockGetFileContent,
   mockGenerate,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "fake-token"),
+  mockGetInstallationToken: vi.fn(async (_args: unknown) => "fake-token"),
   mockGetPullRequest: vi.fn(),
   mockGetPullRequestDiff: vi.fn(),
   mockListRepositoryLabels: vi.fn(),

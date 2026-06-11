@@ -222,7 +222,7 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
 
     const { env, graphDeletedNamespaces } = makeEnv({ kv })
     // Explicitly confirm the flag is absent on the env stub.
-    expect((env as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
+    expect((env as unknown as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
 
     await deleteRepoIndex({
       env,

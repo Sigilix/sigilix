@@ -191,6 +191,11 @@ describe("emitShadowVerdictComparison", () => {
       shadowOnlyCount: 2,
       prodScoreHistogram: { 1: 0, 2: 1, 3: 1, 4: 1, 5: 0 },
       shadowScoreHistogram: { 1: 0, 2: 1, 3: 2, 4: 1, 5: 0 },
+      score4PlusOverlapCount: 1,
+      score4PlusProdOnlyCount: 0,
+      score4PlusShadowOnlyCount: 0,
+      score4PlusProdFindingsCount: 1,
+      score4PlusShadowFindingsCount: 1,
       shadowFailureReason: null,
     }
     emitShadowVerdictComparison(CTX, comp)

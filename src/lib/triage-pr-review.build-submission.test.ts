@@ -325,8 +325,8 @@ describe("buildReviewSubmission", () => {
     // The notice sits up top, under the headline lead line — assert it's in the
     // first third of the body, not buried (robust to renderer rerouting; no
     // dependence on a downstream "Fix Plan" anchor that may be absent).
-    expect(out.submission.body.indexOf("not reviewed")).toBeGreaterThanOrEqual(0)
-    expect(out.submission.body.indexOf("not reviewed")).toBeLessThan(out.submission.body.length / 3)
+    expect(out.submission.body!.indexOf("not reviewed")).toBeGreaterThanOrEqual(0)
+    expect(out.submission.body!.indexOf("not reviewed")).toBeLessThan(out.submission.body!.length / 3)
   })
 
   it("SIG-245: singular phrasing for one dropped file; no notice when nothing dropped", () => {
@@ -379,6 +379,7 @@ describe("buildReviewSubmission", () => {
         findings: [],
       },
       unanchored: [],
+      prAuthor: null,
       headSha: "abc",
       eventOverride: "COMMENT",
       notReviewedFiles: ["src/services/exec.ts"],
@@ -562,6 +563,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     path: "src/lib/foo.ts",
     line: 42,
     score: 4,
+    category: "logic",
     headline: "off-by-one in clampIndex",
     body: "Use `<=` instead of `<`.",
   }
@@ -569,6 +571,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     path: "src/lib/foo.ts",
     line: 1370,
     score: 3,
+    category: "logic",
     headline: "lacks integration tests for the queue consumer",
     body: "Add an end-to-end test exercising the consumer.",
   }
@@ -613,6 +616,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       path: "src/lib/foo.ts",
       line: 1370,
       score: 4,
+      category: "logic",
       headline: "race in the queue consumer",
       body: "Guard the check-then-act.",
     }
@@ -658,7 +662,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       headSha: "abc",
     })
     expect(withMap.comments).toHaveLength(2)
-    expect(withMap.comments?.map((c) => c.line).sort((a, b) => a - b)).toEqual([42, 1370])
+    expect(withMap.comments?.map((c) => c.line).sort((a, b) => a! - b!)).toEqual([42, 1370])
     // Neither block finding is double-rendered into the body.
     expect(withMap.body).not.toContain("Review Body Findings")
   })
@@ -730,6 +734,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       line: 1370,
       startLine: 1368,
       score: 4,
+      category: "logic",
       headline: "close the missing guard",
       body: "Add the early return.",
       suggestedReplacement: "  if (!ok) return\n}",
@@ -768,6 +773,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       path: "src/lib/foo.ts",
       line: 30,
       score: 4,
+      category: "logic",
       headline: "the new handler ignores idempotency",
       body: "Wrap the call in a dedupe gate.",
     }
@@ -797,6 +803,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       path: "src/lib/foo.ts",
       line: 1000,
       score: 3,
+      category: "complexity",
       headline: "complexity creeping in this block",
       body: "Consider extracting a helper.",
     }
@@ -824,6 +831,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       path: "src/lib/foo.ts",
       line: 9999,
       score: 3,
+      category: "complexity",
       headline: "structural concern with the file",
       body: "Worth splitting.",
     }
@@ -855,6 +863,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       line: 700,
       startLine: 698,
       score: 5,
+      category: "logic",
       headline: "off-by-one in the loop bound",
       body: "Replace `<` with `<=`.",
       suggestedReplacement: "  for (let i = 0; i <= n; i++) {",

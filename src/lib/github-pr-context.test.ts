@@ -55,8 +55,8 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   } as Env
 }
 
-function makeMeta(overrides: Partial<PullRequestMeta> = {}): PullRequestMeta {
-  return {
+function makeMeta(overrides: { [K in keyof PullRequestMeta]?: PullRequestMeta[K] | undefined } = {}): PullRequestMeta {
+  const base: PullRequestMeta = {
     number: 162,
     title: "Port headless logic to Rust",
     body: "Issue body text",
@@ -66,8 +66,12 @@ function makeMeta(overrides: Partial<PullRequestMeta> = {}): PullRequestMeta {
     state: "closed",
     merged_at: "2026-04-29T12:00:00Z",
     changed_files: 4,
-    ...overrides,
   }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 function abortError(): Error {

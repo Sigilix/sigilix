@@ -6,11 +6,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 // runs. The factory below closes over them via arrow-function
 // indirection so the mock is hoisting-safe (matches existing
 // triage-pr-review-stale-head.test.ts pattern).
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "fake-token")
 const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn()
 const mockCreateIssueComment = vi.fn()
-const mockUpdatePullRequestBody = vi.fn(async () => undefined)
+const mockUpdatePullRequestBody = vi.fn(async (..._args: unknown[]) => undefined)
 const mockGenerate = vi.fn()
 const mockLoadSigilixConfig = vi.fn()
 

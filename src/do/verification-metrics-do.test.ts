@@ -65,7 +65,7 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
       { verdict: "inconclusive", category: "logic", occurredAt: T },
       ...Array.from({ length: 6 }, () => ({
         verdict: "no-check" as const,
-        category: "logic",
+        category: "logic" as const,
         occurredAt: T,
       })),
     ])

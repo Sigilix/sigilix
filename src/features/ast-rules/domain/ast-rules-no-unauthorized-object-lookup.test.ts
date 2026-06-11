@@ -252,10 +252,10 @@ router.get("/keys/:id", async (req, res) => {
 });`
     const hits = runRule(src)
     expect(hits.length).toBe(1)
-    expect(hits[0].message).toMatch(/IDOR|CWE-639|object-level authorization/i)
+    expect(hits[0]!.message).toMatch(/IDOR|CWE-639|object-level authorization/i)
     // the query spans line 4; anchor must be a real line with endLine >= line.
-    expect(hits[0].line).toBe(4)
-    expect(hits[0].endLine ?? hits[0].line).toBeGreaterThanOrEqual(hits[0].line)
+    expect(hits[0]!.line).toBe(4)
+    expect(hits[0]!.endLine ?? hits[0]!.line).toBeGreaterThanOrEqual(hits[0]!.line)
   })
 })
 

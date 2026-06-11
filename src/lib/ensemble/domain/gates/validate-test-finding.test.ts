@@ -506,11 +506,11 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
       body: "The new orchestrator wiring in `src/lib/ensemble.ts` has no sibling test file in this PR.",
       evidenceRefs: ["siblingMapping:src/lib/ensemble.ts->NONE"],
     })
-  const orchPack = (coverage?: HelperCoverage) =>
+  const orchPack = (coverage?: Partial<HelperCoverage> & Pick<HelperCoverage, "status" | "helpers">) =>
     pack({
       sourceFilesChanged: ["src/lib/ensemble.ts"],
       siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
-      helperCoverageBySource: coverage ? { "src/lib/ensemble.ts": coverage } : {},
+      helperCoverageBySource: coverage ? { "src/lib/ensemble.ts": { structurallyGlue: false, ...coverage } } : {},
     })
 
   it("DROPS a glue ->NONE finding when helper-coverage status is 'all'", () => {
@@ -632,7 +632,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
         siblingMappings: [{ source: "src/lib/ensemble.ts", test: "tests/ensemble.test.ts" }],
         inspectedTestFiles: ["tests/ensemble.test.ts"],
         helperCoverageBySource: {
-          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: false },
         },
       }),
     )
@@ -702,7 +702,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
         siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
         inspectedTestFiles: ["tests/ensemble.test.ts"],
         helperCoverageBySource: {
-          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: false },
         },
       }),
     )

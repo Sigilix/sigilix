@@ -13,7 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mockGetInstallationToken = vi.fn(async () => "fake-token")
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "fake-token")
 const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn()
 const mockGetPullRequestCommits = vi.fn()
@@ -21,12 +21,12 @@ const mockListIssueComments = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
-const mockListPullRequestFiles = vi.fn(async () => [])
+const mockListPullRequestFiles = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => [])
 // SIG-216 CR fix-up: the read-after-write idempotency rescan
 // (`findExistingOverviewComment`) calls `listIssueCommentsPage`.
 // Default to empty so the stale-head tests' create-path runs land
 // in the create branch with the final rescan returning null.
-const mockListIssueCommentsPage = vi.fn(async () => [])
+const mockListIssueCommentsPage = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => [])
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),

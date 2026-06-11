@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { validateForSubmission, type SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
-import { type PrReviewFinding } from "@/src/lib/triage-pr-review"
+import { type PrReviewFinding, type PrReviewVerdict } from "@/src/lib/triage-pr-review"
 import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import { baseFinding, baseVerdict } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
@@ -66,9 +66,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       provenanceFindings: [],
       provenanceDropped: [
         {
-          specialist: "logic",
           sourceFindingId: "logic-0",
-          headline: "off-by-one in `clampIndex`",
           reason: "duplicate",
         },
       ],
@@ -110,7 +108,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       headline: "Command injection sink via shell interpolation in `exec`",
       body: "`re.exec(line)` executes attacker-controlled input as a shell command.",
     }
-    const synthOutput = () => ({
+    const synthOutput = (): { verdict: PrReviewVerdict; provenance: SynthesizerProvenance } => ({
       verdict: {
         summary: "ok",
         confidence: 4,
@@ -781,7 +779,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     const lineOneReviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]]])
     // Fresh per call — the line-1 demote site annotates the finding object IN
     // PLACE, so a shared fixture would leak the mutation between the two tests.
-    const mkSynthOutput = () => ({
+    const mkSynthOutput = (): { verdict: PrReviewVerdict; provenance: SynthesizerProvenance } => ({
       verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 4 }] },
       provenance: {
         findings: [

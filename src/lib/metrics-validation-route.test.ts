@@ -40,7 +40,7 @@ function makeDo() {
 }
 
 /** Env with a DO namespace stub whose every id resolves to one shared DO. */
-function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}, doInstance = makeDo()): Env {
   const ns = {
     idFromName: (_: string) => "id",
     get: (_: unknown) => doInstance,
@@ -110,9 +110,9 @@ describe("handleValidationMetricsRoute", () => {
     expect(body.window.days).toBe(14)
     expect(body.modes.tests).toBe("enforce")
     expect(body.modes.security).toBe("shadow")
-    expect(body.counts.security["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
-    expect(body.counts.tests["missing-path"]).toEqual({ wouldDrop: 1, kept: 0 })
-    expect(body.lastSeenPrHeads[0].headSha).toBe("abc")
+    expect(body.counts.security!["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(body.counts.tests!["missing-path"]).toEqual({ wouldDrop: 1, kept: 0 })
+    expect(body.lastSeenPrHeads[0]!.headSha).toBe("abc")
   })
 
   it("200 surfaces the per-category over-fire rollup (byCategory)", async () => {
@@ -145,8 +145,8 @@ describe("handleValidationMetricsRoute", () => {
     const body = (await res.json()) as {
       byCategory: Record<string, Record<string, { wouldDrop: number; kept: number }>>
     }
-    expect(body.byCategory.security.testing).toEqual({ wouldDrop: 1, kept: 1 })
-    expect(body.byCategory.security.security).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(body.byCategory.security!.testing).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(body.byCategory.security!.security).toEqual({ wouldDrop: 1, kept: 1 })
   })
 
   it("defaults to a 7-day window when unspecified", async () => {

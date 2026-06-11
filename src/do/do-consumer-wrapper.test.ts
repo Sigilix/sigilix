@@ -17,8 +17,8 @@ type PrReviewJob = Extract<JobMessage, { type: "pr-review" }>
 const SAMPLE_RUN_ID = "11111111-1111-4111-8111-111111111111"
 const SAMPLE_HEAD_SHA = "a".repeat(40)
 
-function makeJob(over: Partial<PrReviewJob> = {}): PrReviewJob {
-  return {
+function makeJob(over: { [K in keyof PrReviewJob]?: PrReviewJob[K] | undefined } = {}): PrReviewJob {
+  const base: PrReviewJob = {
     type: "pr-review",
     owner: "Sigilix",
     repo: "sigilix",
@@ -26,8 +26,12 @@ function makeJob(over: Partial<PrReviewJob> = {}): PrReviewJob {
     headSha: SAMPLE_HEAD_SHA,
     installationId: 99,
     runId: SAMPLE_RUN_ID,
-    ...over,
   }
+  for (const [key, value] of Object.entries(over)) {
+    if (value === undefined) delete (base as unknown as Record<string, unknown>)[key]
+    else (base as unknown as Record<string, unknown>)[key] = value
+  }
+  return base
 }
 
 interface DoCall {

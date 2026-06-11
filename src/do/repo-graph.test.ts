@@ -81,8 +81,8 @@ describe("NodeSqliteStorage adapter", () => {
     )
     const rows = cursor.toArray()
     expect(rows).toHaveLength(1)
-    expect(rows[0].val).toBe("hello")
-    expect(typeof rows[0].id).toBe("number")
+    expect(rows[0]!.val).toBe("hello")
+    expect(typeof rows[0]!.id).toBe("number")
   })
 
   it("Fix 1: UPDATE … RETURNING yields updated rows", () => {
@@ -95,7 +95,7 @@ describe("NodeSqliteStorage adapter", () => {
     )
     const rows = cursor.toArray()
     expect(rows).toHaveLength(1)
-    expect(rows[0].val).toBe("updated")
+    expect(rows[0]!.val).toBe("updated")
   })
 
   // Fix 2: nested transactionSync must not throw "cannot start a

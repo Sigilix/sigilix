@@ -40,7 +40,7 @@ function makeDo() {
 }
 
 /** Env with a DO namespace stub whose every id resolves to one shared DO. */
-function makeEnv(overrides: Partial<Env> = {}, doInstance = makeDo()): Env {
+function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}, doInstance = makeDo()): Env {
   const ns = {
     idFromName: (_: string) => "id",
     get: (_: unknown) => doInstance,

@@ -35,7 +35,7 @@ function makeKvStub() {
       return store.get(key) ?? null
     },
     async put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void> {
-      puts.push({ key, value, opts })
+      puts.push({ key, value, ...(opts !== undefined ? { opts } : {}) })
       store.set(key, value)
     },
     async delete(key: string): Promise<void> {
@@ -501,7 +501,7 @@ describe("findingMatchesWithdrawal — SIG-217 fingerprint short-circuit", () =>
   })
 
   it("falls back to Jaccard when fingerprints are absent on either side", () => {
-    const noFp: WithdrawalRecord = { ...withdrawal, contentFingerprint: undefined }
+    const { contentFingerprint: _contentFingerprint, ...noFp } = withdrawal
     expect(
       findingMatchesWithdrawal({ path: "src/index.ts", line: 667, body: "the original conceded body" }, noFp),
     ).toBe(true)
@@ -565,7 +565,7 @@ describe("filterWithdrawnFindingsDetailed — re-fire + escalation telemetry fla
   })
 
   it("does NOT flag escalation for a Jaccard-only (non-fingerprint) match", () => {
-    const noFp: WithdrawalRecord = { ...withdrawal, contentFingerprint: undefined }
+    const { contentFingerprint: _contentFingerprint, ...noFp } = withdrawal
     const { suppressed } = filterWithdrawnFindingsDetailed(
       [{ path: "src/index.ts", line: 667, body: "stripped original", score: 5 }],
       [noFp],

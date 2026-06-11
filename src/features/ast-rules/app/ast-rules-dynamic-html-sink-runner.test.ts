@@ -36,11 +36,11 @@ describe("runAstRules — SIG-312 dynamic-HTML-sink emission", () => {
     expect(html.length).toBe(1)
     // SIG-312: warning (P2 advisory), not error — a line-scan can't prove the
     // value is untrusted vs a trusted constant table.
-    expect(html[0].severity).toBe("warning")
-    expect(html[0].roleHint).toBe("security")
-    expect(html[0].emitWhenUnmatched).toBe(true)
-    expect(html[0].line).toBe(1)
-    expect(html[0].astFindingId).toMatch(/^ast\/no-dangerous-html-dynamic\//)
+    expect(html[0]!.severity).toBe("warning")
+    expect(html[0]!.roleHint).toBe("security")
+    expect(html[0]!.emitWhenUnmatched).toBe(true)
+    expect(html[0]!.line).toBe(1)
+    expect(html[0]!.astFindingId).toMatch(/^ast\/no-dangerous-html-dynamic\//)
   })
 
   it("is suppressible via config.disabledRules (CodeRabbit #296)", async () => {

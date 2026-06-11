@@ -162,6 +162,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
     const fallback = buildFallbackSubmission({
       verdict,
       unanchored: [],
+      prAuthor: null,
       headSha: "abc",
     })
     expect(fallback.event).toBe("APPROVE")
@@ -188,6 +189,7 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
     const fallback = buildFallbackSubmission({
       verdict,
       unanchored: [],
+      prAuthor: null,
       headSha: "abc",
     })
     expect(fallback.event).toBe("COMMENT")
@@ -665,7 +667,7 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
       headSha,
       ...(ctx ? { linkContext: ctx } : {}),
     }
-    return buildReviewSubmission(args).body
+    return buildReviewSubmission(args).body!
   }
 
   it("emits a clickable [path:line](github-blob-url) link when linkContext is threaded (line scope)", () => {
@@ -759,7 +761,7 @@ describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)
       headSha,
       ...(ctx ? { linkContext: ctx } : {}),
     }
-    return buildReviewSubmission(args).body
+    return buildReviewSubmission(args).body!
   }
 
   it("URL-encodes spaces in path segments (space → %20) without encoding the / separator", () => {

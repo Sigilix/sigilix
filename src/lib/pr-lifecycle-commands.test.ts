@@ -61,8 +61,9 @@ function makeKv(): MockKv {
   const asEnv = {
     get: async (key: string): Promise<string | null> => store.get(key)?.value ?? null,
     put: async (key: string, value: string, opts?: { expirationTtl?: number }) => {
-      store.set(key, { value, ttl: opts?.expirationTtl })
-      putCalls.push({ key, value, ttl: opts?.expirationTtl })
+      const ttl = opts?.expirationTtl
+      store.set(key, { value, ...(ttl !== undefined ? { ttl } : {}) })
+      putCalls.push({ key, value, ...(ttl !== undefined ? { ttl } : {}) })
     },
     delete: async (key: string) => {
       store.delete(key)

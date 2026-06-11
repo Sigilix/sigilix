@@ -54,11 +54,11 @@ describe("injectUnmatchedAstEmits", () => {
     })
     expect(r.injected).toHaveLength(1)
     expect(r.findings).toHaveLength(1)
-    expect(r.findings[0].score).toBe(3)
-    expect(r.findings[0].category).toBe("logic")
-    expect(r.findings[0].path).toBe("src/ui/cart.tsx")
-    expect(r.findings[0].line).toBe(42)
-    expect(r.provenanceFindings[0].sourceFindingIds).toEqual(["ast/cents-as-dollars/ab12cd3/42"])
+    expect(r.findings[0]!.score).toBe(3)
+    expect(r.findings[0]!.category).toBe("logic")
+    expect(r.findings[0]!.path).toBe("src/ui/cart.tsx")
+    expect(r.findings[0]!.line).toBe(42)
+    expect(r.provenanceFindings[0]!.sourceFindingIds).toEqual(["ast/cents-as-dollars/ab12cd3/42"])
     // index-parallel alignment preserved
     expect(r.findings.length).toBe(r.provenanceFindings.length)
   })
@@ -69,7 +69,7 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [ast({ severity: "info" })],
     })
-    expect(r.findings[0].score).toBe(2)
+    expect(r.findings[0]!.score).toBe(2)
   })
 
   it("does NOT inject an `error`-severity emit (out of scope — sorts first, has SIG-309 path)", () => {
@@ -152,8 +152,8 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [ast({ line: 42, endLine: 45 })],
     })
-    expect(r.findings[0].line).toBe(45) // last line of the span
-    expect(r.findings[0].startLine).toBe(42) // first line
+    expect(r.findings[0]!.line).toBe(45) // last line of the span
+    expect(r.findings[0]!.startLine).toBe(42) // first line
   })
 
   it("range-overlap coverage: a multi-line existing finding whose span overlaps the emit covers it", () => {
@@ -174,8 +174,8 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [ast()],
     })
-    expect(r.findings[0].headline).toBe("Cents value `total` rendered as dollars in JSX.")
-    expect(r.findings[0].body).toContain("Divide by 100")
+    expect(r.findings[0]!.headline).toBe("Cents value `total` rendered as dollars in JSX.")
+    expect(r.findings[0]!.body).toContain("Divide by 100")
   })
 
   it("uses the leading `Label:` as the headline so the preview stays crisp (Part C)", () => {
@@ -189,9 +189,9 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [labeled],
     })
-    expect(r.findings[0].headline).toBe("Type-contract drift")
+    expect(r.findings[0]!.headline).toBe("Type-contract drift")
     // the full hedged prose stays in the body (the preview reads as a finding, not noise).
-    expect(r.findings[0].body).toContain("not a member")
+    expect(r.findings[0]!.body).toContain("not a member")
   })
 
   it("attaches the AST evidence slice as `astEvidence` on the injected finding (Part B)", () => {
@@ -200,7 +200,7 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [ast({ evidence: "<h1>{userTotal}</h1>" })],
     })
-    expect(r.findings[0].astEvidence).toBe("<h1>{userTotal}</h1>")
+    expect(r.findings[0]!.astEvidence).toBe("<h1>{userTotal}</h1>")
   })
 
   it("omits astEvidence when the candidate carries none", () => {
@@ -209,7 +209,7 @@ describe("injectUnmatchedAstEmits", () => {
       provenanceFindings: [],
       astFindings: [ast()],
     })
-    expect(r.findings[0].astEvidence).toBeUndefined()
+    expect(r.findings[0]!.astEvidence).toBeUndefined()
   })
 
   it("honors a custom lineTolerance (Sigilix #330)", () => {

@@ -60,8 +60,8 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     expect(result.droppedForFailedTestValidation).toBe(1)
     expect(result.verdict.findings).toHaveLength(0) // left the inline set
     expect(result.unanchoredFindings).toHaveLength(1) // demoted to the body, NOT dropped
-    expect(result.unanchoredFindings[0].headline).toBe("Module needs more tests")
-    expect(result.unanchoredFindings[0].score).toBe(3) // capped to exactly 3 — non-blocking (below the score>=4 floor)
+    expect(result.unanchoredFindings[0]!.headline).toBe("Module needs more tests")
+    expect(result.unanchoredFindings[0]!.score).toBe(3) // capped to exactly 3 — non-blocking (below the score>=4 floor)
     // CR #284: the demote clones — the original synth finding (which aliases
     // telemetry.synthesizer.verdict) must NOT be mutated by the score-cap.
     expect(f.score).toBe(4)
@@ -96,7 +96,7 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     })
     expect(result.verdict.findings).toHaveLength(0) // CR #284: not dual-placed — removed from inline
     expect(result.unanchoredFindings).toHaveLength(1)
-    expect(result.unanchoredFindings[0].trust).toEqual({
+    expect(result.unanchoredFindings[0]!.trust).toEqual({
       tier: "body-only-ungrounded",
       surface: "body",
       demoteReason: "tests-coverage",
@@ -298,7 +298,7 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
       testToSourceRatio: 0.5,
     })
     expect(result.verdict.findings).toHaveLength(1)
-    expect(result.verdict.findings[0].score).toBe(3) // 4 → 3 (P2 → P3 de-emphasis)
+    expect(result.verdict.findings[0]!.score).toBe(3) // 4 → 3 (P2 → P3 de-emphasis)
     expect(f.score).toBe(4) // clone-safe: the synth-aliased finding is untouched
   })
 
@@ -314,7 +314,7 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
       testingEvidence: pack(),
       testToSourceRatio: 0.2,
     })
-    expect(result.verdict.findings[0].score).toBe(4)
+    expect(result.verdict.findings[0]!.score).toBe(4)
   })
 
   it("AC #3: does NOT damp a non-testing finding even on a test-heavy PR", () => {
@@ -353,7 +353,7 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
       testingEvidence: pack(),
       testToSourceRatio: 0.9,
     })
-    expect(result.verdict.findings[0].score).toBe(4)
+    expect(result.verdict.findings[0]!.score).toBe(4)
   })
 
   it("AC #3: defaults to no damping when testToSourceRatio is omitted", () => {
@@ -367,6 +367,6 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
       specialistVerdicts: makeSpecialistVerdicts(),
       testingEvidence: pack(),
     })
-    expect(result.verdict.findings[0].score).toBe(4)
+    expect(result.verdict.findings[0]!.score).toBe(4)
   })
 })

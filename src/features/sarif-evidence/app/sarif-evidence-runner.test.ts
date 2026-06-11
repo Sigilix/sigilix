@@ -131,10 +131,10 @@ describe("runSarifEvidence — finding emission", () => {
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].category).toBe("iac")
-    expect(r.findings[0].roleHint).toBe("security")
-    expect(r.findings[0].severity).toBe("error")
-    expect(r.findings[0].toolName).toBe("Trivy")
+    expect(r.findings[0]!.category).toBe("iac")
+    expect(r.findings[0]!.roleHint).toBe("security")
+    expect(r.findings[0]!.severity).toBe("error")
+    expect(r.findings[0]!.toolName).toBe("Trivy")
   })
 
   it("path-only fallback for line-less IaC findings", async () => {
@@ -156,7 +156,7 @@ describe("runSarifEvidence — finding emission", () => {
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].line).toBeUndefined()
+    expect(r.findings[0]!.line).toBeUndefined()
   })
 
   it("drops findings whose path is unchanged", async () => {
@@ -277,7 +277,7 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
     if (r.skipped) return
     // RULE-A error kept; RULE-B note dropped
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].ruleId).toBe("RULE-A")
+    expect(r.findings[0]!.ruleId).toBe("RULE-A")
   })
 
   it("severityThreshold info keeps note-level findings", async () => {
@@ -558,8 +558,8 @@ describe("runSarifEvidence — license routes to security (NOT logic)", () => {
     })
     if (r.skipped) return
     expect(r.findings.length).toBe(1)
-    expect(r.findings[0].category).toBe("license")
-    expect(r.findings[0].roleHint).toBe("security")
+    expect(r.findings[0]!.category).toBe("license")
+    expect(r.findings[0]!.roleHint).toBe("security")
   })
 })
 

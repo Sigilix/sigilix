@@ -40,7 +40,7 @@ function makeKvStub(): KvStub {
     },
     async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
       store.set(key, value)
-      puts.push({ key, value, options })
+      puts.push({ key, value, ...(options !== undefined ? { options } : {}) })
     },
     async delete(key: string): Promise<void> {
       store.delete(key)
@@ -74,8 +74,8 @@ describe("markBotAuthoredComment", () => {
     await markBotAuthoredComment(kv, "comment-abc-123")
     expect(store.has(`${BOT_AUTHORED_KV_PREFIX}:comment-abc-123`)).toBe(true)
     expect(puts).toHaveLength(1)
-    expect(puts[0].key).toBe(`${BOT_AUTHORED_KV_PREFIX}:comment-abc-123`)
-    expect(puts[0].options?.expirationTtl).toBe(BOT_AUTHORED_TTL_SECONDS)
+    expect(puts[0]!.key).toBe(`${BOT_AUTHORED_KV_PREFIX}:comment-abc-123`)
+    expect(puts[0]!.options?.expirationTtl).toBe(BOT_AUTHORED_TTL_SECONDS)
   })
 
   it("does not throw on empty / whitespace commentId (defensive no-op)", async () => {

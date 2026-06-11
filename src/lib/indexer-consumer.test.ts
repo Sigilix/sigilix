@@ -25,16 +25,16 @@ const {
   mockCommitGraph,
   mockDebugActiveGraphVersion,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
+  mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
   mockGetBranch: vi.fn(),
   mockGetRepoTree: vi.fn(),
   mockGetFileContent: vi.fn(),
   mockAiRun: vi.fn(),
-  mockVectorizeUpsert: vi.fn(async () => ({ ids: [], count: 0 })),
-  mockWriteFileGraph: vi.fn(async () => undefined),
-  mockCommitGraph: vi.fn(async () => undefined),
-  mockDebugActiveGraphVersion: vi.fn(async () => null),
+  mockVectorizeUpsert: vi.fn(async (..._args: unknown[]) => ({ ids: [], count: 0 })),
+  mockWriteFileGraph: vi.fn(async (..._args: unknown[]) => undefined),
+  mockCommitGraph: vi.fn(async (..._args: unknown[]) => undefined),
+  mockDebugActiveGraphVersion: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
@@ -156,7 +156,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function bootstrapJob(over: Partial<JobMessage & { type: "index-repo" }> = {}): JobMessage {
+type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
+
+function bootstrapJob(over: Partial<IndexRepoMessage> = {}): IndexRepoMessage {
   return {
     type: "index-repo",
     owner: "Sigilix",
@@ -164,7 +166,7 @@ function bootstrapJob(over: Partial<JobMessage & { type: "index-repo" }> = {}): 
     installationId: 99,
     reason: "install",
     ...over,
-  } as JobMessage
+  }
 }
 
 describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {

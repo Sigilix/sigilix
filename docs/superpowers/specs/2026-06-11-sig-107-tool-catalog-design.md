@@ -38,6 +38,8 @@ Reference:
 - Do not run untrusted code in Sigilix-managed infrastructure for v1.
 - Do not add custom rule packs for any linter in v1.
 - Do not make deterministic tool failures fail the caller's CI.
+- Do not create or keep any SIG-107 source, test, workflow, script, or docs file over the
+  `COMPLIANCE.md` 1,000-line budget. Split helpers/tests before they approach the cap.
 - Do not touch `src/lib/ensemble/app/specialists.ts` or
   `src/lib/ensemble/app/context/gather-graph.ts` for this work. Linear explicitly marked them
   off-limits for SIG-107 because SIG-393 is active there and both files are close to the line
@@ -206,7 +208,7 @@ Engine changes stay in pure/shared and existing SARIF feature modules:
   `sigilixToolId`, `sigilixSource`, and `sigilixDroppedResults`.
 - Add engine-owned tool routing so Sigilix runner metadata selects the routing policy, but the
   runner does not dictate specialist roles.
-- Render `source: deterministic` and `source_tool: <linterId>` in specialist and synth SARIF
+- Render `source: deterministic` and tool labels such as `source_tool: eslint` in specialist and synth SARIF
   blocks.
 - Route SARIF facts by role instead of treating the whole SARIF block as security-only.
 - Emit telemetry for unknown schema versions and dropped deterministic results.

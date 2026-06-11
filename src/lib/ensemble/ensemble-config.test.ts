@@ -205,6 +205,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_REVIEW_MANIFEST_ENABLED: "off",
       // SIG-393: region re-sweep rollout flag.
       OPENCLAW_RESWEEP_MODE: "Shadow",
+      // SIG-395: invariant-lens rollout flag.
+      OPENCLAW_INVARIANT_LENS_MODE: "ON",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -239,6 +241,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       synthBypassEnabled: scanMode(env.OPENCLAW_SYNTH_BYPASS_ENABLED) === "on",
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
+      invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
     })
   })
 
@@ -272,6 +275,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       synthBypassEnabled: false,
       reviewManifestEnabled: true,
       resweepMode: "off",
+      invariantLensMode: "off",
     })
   })
 

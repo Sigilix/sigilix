@@ -63,6 +63,7 @@ import { buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { runResweepPhase } from "./resweep"
+import { applyInvariantLens, startInvariantLens } from "./invariant-lens"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
@@ -378,6 +379,25 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         },
       )
     return { role, ctrl, promise }
+  })
+
+  // SIG-395: start the invariant-lens auditors NOW — no pass-1 input
+  // needed, so they run concurrent with the fan-out (~zero wall-clock).
+  // Applied after the coverage gate; off = settled no-op handle.
+  const invariantLens = startInvariantLens({
+    env,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    mode: ensembleConfig.flags.invariantLensMode,
+    perfCtx,
+    orchCtrl,
+    diff,
+    // Deliberately NOT run through applyLogicPromptBudget: the trim exists
+    // for the logic specialist's uniquely-large prompt; the auditors are
+    // single-charge calls, and the e2e harness measures this exact message.
+    userMessage: appendRoleRule(messageForRole("logic"), "logic", sigilixConfig),
   })
 
   // SIG-235 quorum collector. Drains role promises one at a time;
@@ -780,21 +800,10 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   // finding can't sneak past the bypass gate — CR phase-end catch on
   // PR #188.
   // ─── SIG-393: region re-sweep (effort-gated second pass) ───────
-  //
-  // Dense PRs saturate the lens — it finds the loudest bug per region and
-  // stops. When the deterministic gate fires (clustered findings + breadth/
-  // risk), each already-flagged file gets a scoped follow-up pass; in `on`
-  // mode the candidates merge into the role verdicts HERE so they flow
-  // through the unchanged synth + validation + grounding + verification
-  // stack (the gates are the precision backstop — never bypassed). `shadow`
-  // runs + telemeters without merging; `off` is inert. Measured on the
-  // frozen dense fixture before this code existed: +2.75 rows/run at K=8.
-  //
-  // BUDGET: the re-sweep fan-out runs INSIDE the orchestrator wall (~895s)
-  // and costs ~90-170s on a dense PR — in shadow mode that latency is paid
-  // for zero output change (the price of the rollout guarantee). The orch
-  // abort degrades a mid-flight re-sweep to passthrough; watch
-  // `resweep-summary.elapsedMs` during the shadow soak before flipping on.
+  // Scoped follow-up over already-flagged files; candidates flow through
+  // the UNCHANGED gate stack (no bypass). shadow = telemetry only; off =
+  // inert. Evidence + budget notes (runs inside the ~895s wall, ~90-170s
+  // on dense PRs): docs/superpowers/specs/2026-06-11-sig-393-region-resweep-spec.md
   const resweep = await runResweepPhase({
     env,
     owner,
@@ -808,7 +817,18 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     diff,
     succeeded,
   })
-  const verdictsForSynth = resweep.verdicts as CollectedVerdict[]
+  // SIG-395: lens merge/telemetry — AFTER the re-sweep so each lever
+  // matches how it was validated (re-sweep regions come from pass-1).
+  const lensApplied = await applyInvariantLens({
+    lens: invariantLens,
+    succeeded: resweep.verdicts,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    diff,
+  })
+  const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
 
   const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)
 

@@ -36,6 +36,9 @@ const makeReport = (results: object[], extras: object = {}): string =>
 const diffWithChange = (path: string, line: number): string =>
   `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -${line},0 +${line},1 @@\n+const x = 1\n`
 
+const diffWithChanges = (entries: Array<{ path: string; line: number }>): string =>
+  entries.map(({ path, line }) => diffWithChange(path, line)).join("\n")
+
 const fakeClient = (raw: string | null): GitHubClient =>
   ({ getFileContent: async () => raw }) as unknown as GitHubClient
 
@@ -263,5 +266,50 @@ describe("runSarifEvidence — runner metadata", () => {
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.map((f) => f.droppedResults).filter(Boolean)).toHaveLength(1)
+  })
+
+  it("accepts runner first-slice tool metadata without runner-supplied role hints", async () => {
+    const runs = [
+      { toolId: "semgrep", toolName: "Semgrep", path: "src/security.ts", line: 1, ruleId: "typescript.express.security" },
+      { toolId: "eslint", toolName: "ESLint", path: "src/app.js", line: 2, ruleId: "no-undef" },
+      { toolId: "ruff", toolName: "Ruff", path: "src/app.py", line: 3, ruleId: "PERF401" },
+      { toolId: "actionlint", toolName: "actionlint", path: ".github/workflows/ci.yml", line: 4, ruleId: "syntax-check" },
+      { toolId: "shellcheck", toolName: "ShellCheck", path: "scripts/build.sh", line: 5, ruleId: "SC2086" },
+    ].map(({ toolId, toolName, path, line, ruleId }) => ({
+      tool: { driver: { name: toolName, properties: runnerMetadata(toolId) } },
+      results: [
+        {
+          ruleId,
+          level: "warning",
+          message: { text: `${toolId} finding` },
+          locations: [{ physicalLocation: { artifactLocation: { uri: path }, region: { startLine: line } } }],
+        },
+      ],
+    }))
+    const report = JSON.stringify({ version: "2.1.0", runs })
+    const r = await runSarifEvidence({
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: diffWithChanges([
+        { path: "src/security.ts", line: 1 },
+        { path: "src/app.js", line: 2 },
+        { path: "src/app.py", line: 3 },
+        { path: ".github/workflows/ci.yml", line: 4 },
+        { path: "scripts/build.sh", line: 5 },
+      ]),
+      config: DEFAULT_CONFIG,
+    })
+    expect(r.skipped).toBe(false)
+    if (r.skipped) return
+    const byTool = new Map(r.findings.map((f) => [f.toolId, f]))
+    expect(byTool.get("semgrep")?.roleHints).toEqual(["security"])
+    expect(byTool.get("eslint")?.roleHints).toEqual(["logic"])
+    expect(byTool.get("ruff")?.roleHints).toEqual(["logic", "performance"])
+    expect(byTool.get("actionlint")?.roleHints).toEqual(["logic", "security"])
+    expect(byTool.get("shellcheck")?.roleHints).toEqual(["security", "logic"])
+    for (const toolId of ["semgrep", "eslint", "ruff", "actionlint", "shellcheck"]) {
+      expect(byTool.get(toolId)?.source).toBe("deterministic-tool")
+    }
   })
 })

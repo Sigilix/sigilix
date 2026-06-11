@@ -62,6 +62,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
+import { runResweepPhase } from "./resweep"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
@@ -778,7 +779,38 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   // hypothetical extreme-token-pressure case dropping a `score >= 4`
   // finding can't sneak past the bypass gate — CR phase-end catch on
   // PR #188.
-  const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
+  // ─── SIG-393: region re-sweep (effort-gated second pass) ───────
+  //
+  // Dense PRs saturate the lens — it finds the loudest bug per region and
+  // stops. When the deterministic gate fires (clustered findings + breadth/
+  // risk), each already-flagged file gets a scoped follow-up pass; in `on`
+  // mode the candidates merge into the role verdicts HERE so they flow
+  // through the unchanged synth + validation + grounding + verification
+  // stack (the gates are the precision backstop — never bypassed). `shadow`
+  // runs + telemeters without merging; `off` is inert. Measured on the
+  // frozen dense fixture before this code existed: +2.75 rows/run at K=8.
+  //
+  // BUDGET: the re-sweep fan-out runs INSIDE the orchestrator wall (~895s)
+  // and costs ~90-170s on a dense PR — in shadow mode that latency is paid
+  // for zero output change (the price of the rollout guarantee). The orch
+  // abort degrades a mid-flight re-sweep to passthrough; watch
+  // `resweep-summary.elapsedMs` during the shadow soak before flipping on.
+  const resweep = await runResweepPhase({
+    env,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    mode: ensembleConfig.flags.resweepMode,
+    maxRegions: ensembleConfig.tunables.resweepMaxRegions,
+    perfCtx,
+    orchCtrl,
+    diff,
+    succeeded,
+  })
+  const verdictsForSynth = resweep.verdicts as CollectedVerdict[]
+
+  const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)
 
   // SIG-318 (PR 12c): the SYNTHESIZE phase (synth-bypass / synth + retry ladder
   // + telemetry + parse-fail bail + summary) moved to ensemble/app/synthesize.
@@ -808,7 +840,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     filePaths,
     shadowEnabledRoles,
     router,
-    succeeded,
+    succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
@@ -835,7 +867,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
 
   return {
     kind: "ok" as const,
-    succeeded,
+    succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
     synthOutput: { verdict: synthPhase.synthVerdict, provenance: synthPhase.synthProvenance },

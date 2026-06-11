@@ -10,6 +10,7 @@
 // (SIG-318 PR 3+): PR 3 = AST scan modes, PR 4 = validator gate modes; feature
 // flags + tunables follow, after which the single parse call hoists to the edge.
 
+import { parseResweepMode } from "./domain/resweep"
 import { parseSecurityValidatorMode } from "./domain/gates/validate-security-finding"
 import { parseTestsValidatorMode } from "./domain/gates/validate-test-finding"
 import { parseLogicValidatorMode } from "./domain/gates/validate-logic-finding"
@@ -41,6 +42,9 @@ import type { AstScanMode, EnsembleConfig } from "./domain/config"
 export interface EnsembleConfigEnv {
   // AST security-scan modes (PR 3)
   OPENCLAW_AUTHZ_IDOR_SCAN?: string | undefined
+  // SIG-393 region re-sweep
+  OPENCLAW_RESWEEP_MODE?: string | undefined
+  OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
   OPENCLAW_WEAK_RANDOM_SCAN?: string | undefined
   OPENCLAW_OPEN_REDIRECT_SCAN?: string | undefined
   OPENCLAW_SSRF_SCAN?: string | undefined
@@ -104,6 +108,8 @@ function parseIntEnv(raw: string | undefined, fallback: number): number {
 
 // Pre-flight retrieval call-cap default (was god-file-local, SIG-318 PR 5c).
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
+// SIG-393: re-sweep fan-out cap — regions × roles bounds the second pass.
+const DEFAULT_RESWEEP_MAX_REGIONS = 6
 
 export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
   return {
@@ -166,6 +172,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       graphRetrievalMode: parseGraphRetrievalMode(env.OPENCLAW_GRAPH_RETRIEVAL),
       synthBypassEnabled: parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED),
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
+      // SIG-393: region re-sweep rollout flag (off → shadow → on).
+      resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
     },
     tunables: {
       maxRetrieveCallsPerPr: parseIntEnv(
@@ -173,6 +181,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
         DEFAULT_MAX_RETRIEVE_CALLS_PER_PR,
       ),
       graphRpcTimeoutMs: parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS),
+      resweepMaxRegions: parseIntEnv(env.OPENCLAW_RESWEEP_MAX_REGIONS, DEFAULT_RESWEEP_MAX_REGIONS),
     },
   }
 }

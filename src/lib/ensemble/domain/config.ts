@@ -28,6 +28,7 @@ import type { AstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
 import type { TrustLedgerMode } from "./gates/trust-ledger-thread"
 import type { ClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import type { PrecisionMode } from "@/src/features/precision-profile"
+import type { ResweepMode } from "./resweep"
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 
@@ -111,6 +112,9 @@ export interface EnsembleFeatureFlags {
   /** `OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off"` (ARC-184). The review-provenance
    *  manifest kill-switch — default-on; "off" short-circuits the manifest write. */
   reviewManifestEnabled: boolean
+  /** Normalized `OPENCLAW_RESWEEP_MODE` (SIG-393): "off" | "shadow" | "on",
+   *  default "off". Gates the region re-sweep second pass pre-synth. */
+  resweepMode: ResweepMode
 }
 
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed
@@ -120,6 +124,8 @@ export interface EnsembleTunables {
   maxRetrieveCallsPerPr: number
   /** Graph-RPC budget in ms (`OPENCLAW_GRAPH_RPC_TIMEOUT_MS`, default `GRAPH_RPC_TIMEOUT_MS` = 2500). */
   graphRpcTimeoutMs: number
+  /** SIG-393: max regions one re-sweep may fan out over (default 6). */
+  resweepMaxRegions: number
 }
 
 /** The parse-once, typed view of the ensemble's env-derived settings. Grows by

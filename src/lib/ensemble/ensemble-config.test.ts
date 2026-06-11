@@ -203,6 +203,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_GRAPH_RETRIEVAL: "shadow",
       OPENCLAW_SYNTH_BYPASS_ENABLED: "on",
       OPENCLAW_REVIEW_MANIFEST_ENABLED: "off",
+      // SIG-393: region re-sweep rollout flag.
+      OPENCLAW_RESWEEP_MODE: "Shadow",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -236,6 +238,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       graphRetrievalMode: scanMode(env.OPENCLAW_GRAPH_RETRIEVAL),
       synthBypassEnabled: scanMode(env.OPENCLAW_SYNTH_BYPASS_ENABLED) === "on",
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
+      resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
     })
   })
 
@@ -268,6 +271,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       graphRetrievalMode: "off",
       synthBypassEnabled: false,
       reviewManifestEnabled: true,
+      resweepMode: "off",
     })
   })
 
@@ -328,6 +332,8 @@ describe("SIG-318 parseEnsembleConfig — numeric tunables (PR 5c)", () => {
     expect(parseEnsembleConfig({}).tunables).toEqual({
       maxRetrieveCallsPerPr: 3,
       graphRpcTimeoutMs: 2500,
+      // SIG-393: re-sweep region fan-out cap.
+      resweepMaxRegions: 6,
     })
   })
 

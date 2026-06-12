@@ -242,7 +242,13 @@ describe("SIG-349 — measured model lineup", () => {
     // critical merge path entirely. Cross-provider fallback retained.
     expect(SYNTHESIZER_CONFIG.primary).toBe("gpt-oss:120b-cloud")
     expect(SYNTHESIZER_CONFIG.fallback).toBe("deepseek-v4-flash:cloud")
-    expect(SYNTHESIZER_CONFIG.retries).toBe(1)
+    // SIG-392 (2026-06-11): per-attempt 60s → 150s + same-model retry dropped
+    // (the SIG-287 logic-role fast-fallback shape). The 60s cap was killing
+    // healthy slow-tail gpt-oss attempts at exactly 60,006ms; the ladder must
+    // fit the 325s synth phase, so 150+150 (primary+fallback) replaces
+    // 60+60+60 (primary+retry+fallback).
+    expect(SYNTHESIZER_CONFIG.retries).toBe(0)
+    expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
     // Cross-provider invariant: synth primary and fallback MUST NOT
     // share the same provider prefix. If a future bump ever picks
     // a same-provider fallback again, this assertion catches it at
@@ -255,7 +261,7 @@ describe("SIG-349 — measured model lineup", () => {
     expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16 after SIG-348 tests retry removal)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (14 after SIG-392 synth retry removal)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if
@@ -269,12 +275,13 @@ describe("SIG-349 — measured model lineup", () => {
     //   security:    primary + 1 retry + fallback             = 3
     //   performance: primary + 1 retry + fallback             = 3
     //   tests:       primary + fallback (retries:0)           = 2 (SIG-348)
-    //   synth:       primary + 1 retry + fallback             = 3 (attempt 1)
-    //   synth retry: primary + 1 retry + fallback             = 3 (ARC-278
+    //   synth:       primary + fallback (retries:0)           = 2 (SIG-392,
+    //                per-attempt 60s→150s — 3×150 would not fit the phase)
+    //   synth retry: primary + fallback                       = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 16.  Down from 17 — SIG-348 removed tests' same-model retry and
-    //   preserved cross-provider fallback as the runtime rescue path.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
+    //   total: 14.  Down from 16 — SIG-392 removed synth's same-model retry
+    //   (both attempt ladders) and preserved cross-provider fallback.
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(14)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

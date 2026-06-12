@@ -261,7 +261,7 @@ describe("SIG-349 — measured model lineup", () => {
     expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16 after SIG-348 tests retry removal)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (14 after SIG-392 synth retry removal)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if

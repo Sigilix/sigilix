@@ -473,6 +473,19 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
       // vary per call. Returns null on local timeout (so callers
       // don't have to discriminate between catch and `failureReason:
       // "aborted"` shapes). Re-throws on orchestrator-wall abort.
+      // SIG-392: flat source findings ({id,path,line,headline}) for provenance
+      // RECONSTRUCTION — when the synth model emits a valid verdict but omits
+      // the provenance block (gemma large-payload behavior), the runner rebuilds
+      // it by co-location instead of failing the synth to the deepseek fallback.
+      const provenanceSources = synthInputVerdicts.flatMap((v) =>
+        (v.verdict?.findings ?? []).map((f) => ({
+          id: f.id,
+          path: f.path,
+          line: f.line,
+          headline: f.headline,
+        })),
+      )
+
       const attemptSynth = async (
         userMessage: string,
         timeoutMs: number,
@@ -494,6 +507,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
                 // ARC-283 Phase B1b: same correlation context as the
                 // specialist fan-out above.
                 perfCtx,
+                provenanceSources,
                 ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
               }),
             timeoutMs,

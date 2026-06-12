@@ -20,12 +20,16 @@ import type { ChatMessage } from "@/src/shared/ports/model"
 import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "@/src/lib/ensemble/domain/model-policy"
 import { PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
+import {
+  reconstructSynthProvenance,
+  type ProvenanceSource,
+} from "@/src/lib/ensemble/domain/synth-provenance-reconstruct"
 // SIG-386 (PR1): the pure `isPermanentFailure` classifier moved to a sibling
 // leaf to land this adapter at <=1k lines. Re-exported below so the public
 // surface (and the importers + vi.mock paths pinned to this module) are
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
-import { isPermanentFailure } from "./model-provider-internals"
-export { isPermanentFailure } from "./model-provider-internals"
+import { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
+export { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
@@ -795,6 +799,15 @@ export interface SynthesizerRunArgs {
    * shape + purpose as `SpecialistRunArgs.perfCtx`.
    */
   perfCtx: EnsembleRunCtx
+  /**
+   * SIG-392: flat source specialist findings ({id, path, line, headline}) used
+   * to RECONSTRUCT provenance when the model emits a valid verdict but omits
+   * the `provenance` block (gemma large-payload behavior). When provided and
+   * the model's provenance is absent/invalid, the parse rebuilds it by
+   * co-location instead of failing the whole synth to fallback. Omitted →
+   * current strict behavior (invalid provenance → parse null → retry/fallback).
+   */
+  provenanceSources?: ReadonlyArray<ProvenanceSource>
 }
 
 interface SynthesizerRunOutput {
@@ -817,14 +830,36 @@ interface SynthParsedOutput {
   provenance: SynthesizerProvenance
 }
 
-export function parseSynthAnswer(content: string): SynthParsedOutput | null {
+export function parseSynthAnswer(
+  content: string,
+  provenanceSources?: ReadonlyArray<ProvenanceSource>,
+): SynthParsedOutput | null {
   // Expect `{verdict: PrReviewVerdict, provenance: {...}}`.
   const parsed = parseFirstJsonObject(content)
   if (!parsed) return null
   const verdict = parsePrReviewResponse(JSON.stringify(parsed.verdict))
   if (!verdict) return null
-  if (!isValidProvenance(parsed.provenance)) return null
-  return { verdict, provenance: parsed.provenance }
+  if (isValidProvenance(parsed.provenance)) return { verdict, provenance: parsed.provenance }
+  // SIG-392: the verdict parsed but provenance is absent/malformed (gemma drops
+  // the block on large payloads). Rather than fail the whole synth to the
+  // deepseek fallback, RECONSTRUCT provenance by co-locating each verdict
+  // finding with its real source (recall- + precision-safe vs the
+  // hallucination guard — unmatched findings get [] and are dropped exactly as
+  // a hallucination would be). Only when sources are supplied; otherwise keep
+  // the strict null so the retry/fallback ladder runs as before.
+  if (provenanceSources && provenanceSources.length > 0) {
+    const { provenance, matched, unmatched } = reconstructSynthProvenance(verdict.findings, provenanceSources)
+    console.log(
+      JSON.stringify({
+        event: "pr-review-synth-provenance-reconstructed",
+        verdictFindings: verdict.findings.length,
+        matched,
+        unmatchedDropped: unmatched,
+      }),
+    )
+    return { verdict, provenance }
+  }
+  return null
 }
 
 /**
@@ -861,7 +896,7 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
     signal: args.signal,
     chatEnabled: args.chatEnabled,
     format: undefined,
-    parseAnswer: parseSynthAnswer,
+    parseAnswer: (content: string) => parseSynthAnswer(content, args.provenanceSources),
     parseFailureLabel: "synth_failed_parse",
     startedAt: t0,
     // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
@@ -954,46 +989,4 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
   if (failureReason) result.failureReason = failureReason
   if (outcome.failureRawAnswer) result.failureRawAnswer = outcome.failureRawAnswer
   return result
-}
-
-function isValidProvenance(value: unknown): value is SynthesizerProvenance {
-  // CR PR #35 catch: tighten shape check beyond "are findings + dropped
-  // arrays?" — without this, a payload like `{findings:[{}], dropped:[]}`
-  // passes and validateForSubmission then crashes
-  // on `provenance.findings[i].sourceFindingIds.length` (undefined).
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false
-  const v = value as Record<string, unknown>
-  if (!Array.isArray(v.findings) || !Array.isArray(v.dropped)) {
-    return false
-  }
-  // Each provenance.findings[i] must have an array sourceFindingIds.
-  // The hallucination guard in validateForSubmission relies on this.
-  for (const f of v.findings) {
-    if (!f || typeof f !== "object" || Array.isArray(f)) return false
-    const entry = f as Record<string, unknown>
-    if (!Array.isArray(entry.sourceFindingIds)) return false
-    if (!entry.sourceFindingIds.every((id) => typeof id === "string")) return false
-  }
-  // dropped entries are looser — they're informational only and never
-  // dereferenced into the customer-facing verdict, but still validate
-  // for shape stability.
-  for (const d of v.dropped) {
-    if (!d || typeof d !== "object" || Array.isArray(d)) return false
-  }
-  // ARC-189: `softened` is OPTIONAL on the wire (synth outputs from
-  // pre-v2 prompts omit it). When present, must be an array of
-  // object-shaped entries. The renderer dereferences
-  // `softened[i].sourceFindingId` to look up the corresponding
-  // finding for score-decrement, so we tighten the per-item check
-  // to require a string-shaped sourceFindingId — same belt-and-
-  // suspenders pattern as the findings.sourceFindingIds[] guard.
-  if (v.softened !== undefined) {
-    if (!Array.isArray(v.softened)) return false
-    for (const s of v.softened) {
-      if (!s || typeof s !== "object" || Array.isArray(s)) return false
-      const entry = s as Record<string, unknown>
-      if (typeof entry.sourceFindingId !== "string") return false
-    }
-  }
-  return true
 }

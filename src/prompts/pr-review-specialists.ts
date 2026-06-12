@@ -41,6 +41,59 @@ export const SPECIALIST_PROMPTS: Record<SpecialistRole, string> = {
   tests: TESTS_PROMPT,
 }
 
+// SIG-392: recall-eliciting directive appended to the logic prompt when
+// OPENCLAW_LOGIC_RECALL_MODE === "on". Measured (per-PR logic bake-off on the
+// dense fixture, K=6, citation-judged): the default FP-disciplined prompt yields
+// 6.0/20 logic recall; this suffix lifts v4-pro to ~16/20 and catches the
+// frontier rows (b5/b10/b19/b20) it was "blind" to — at the same model, no
+// migration. It deliberately trades specialist-stage precision for recall (the
+// two are coupled at the prompt level); precision is the downstream gates' job
+// (the engine's existing thesis). It flagged 0/4 fixture traps + 0 hallucinations
+// in audit — its added "FP" is redundancy (same-class cross-handler findings),
+// addressed by a class-collapse gate, NOT by softening this directive.
+export const LOGIC_RECALL_SUFFIX = `
+─────────────────────────────────────────────────────────────────────
+RECALL DIRECTIVE:
+Your objective is RECALL. Surface EVERY plausible logic/correctness defect,
+INCLUDING subtle and lower-confidence ones (score them 2). A downstream layer
+removes false positives, so do NOT self-censor or stop early — on a target-rich
+diff, expect 10+ real defects, and conditional bugs (races, unhandled errors,
+over-refund-on-retry, bypassable signature checks, wrong edge values) COUNT —
+report them.
+Do NOT trust comments, names, or claimed behavior ("idempotent", "validated",
+"authorized") — verify from the actual code only.
+TWO limits only (these do NOT reduce recall — apply them after you have found
+everything):
+  (a) report each distinct ROOT-CAUSE bug exactly ONCE — never the same defect
+      under two findings;
+  (b) do not emit a finding that is PURE style/naming/formatting with no wrong
+      runtime behavior.
+Systematically check the diff for each of these defect classes and report every
+REAL, demonstrable instance:
+- an awaited DB/IO call in an async handler with NO enclosing try/catch / error
+  wrapper (a rejection becomes an unhandled rejection / hung request)
+- a request field/param used without validation (negative, NaN, missing, wrong type)
+- read-modify-write without a transaction/lock (SELECT-then-INSERT/UPDATE races)
+- a query/mutation not scoped to the authenticated owner (IDOR / cross-tenant)
+- a predicate compared against the wrong value ("> 0" vs "≥ total")
+- off-by-one in pagination/offset/indexing
+- a response shape that does not match its declared wire type
+- a value read or computed but never USED to constrain the operation
+- a handler that acts without checking an event/message "type" discriminator
+- a signature/HMAC computed over RE-SERIALIZED data instead of the raw bytes
+─────────────────────────────────────────────────────────────────────`
+
+/** Resolve a specialist's system prompt, applying the SIG-392 recall directive
+ *  to the LOGIC prompt when `recallOn` (OPENCLAW_LOGIC_RECALL_MODE === "on").
+ *  All other roles + the default mode return the base prompt unchanged.
+ *  Applied at the PROD specialist fanout only for now; the ARC-283 shadow path
+ *  and the SIG-393 re-sweep phase intentionally stay on the base prompt (so the
+ *  shadow bake-off stays a pure model diff and re-sweep is a separate rollout). */
+export function specialistSystemPrompt(role: SpecialistRole, recallOn: boolean): string {
+  if (recallOn && role === "logic") return `${LOGIC_PROMPT}\n${LOGIC_RECALL_SUFFIX}`
+  return SPECIALIST_PROMPTS[role]
+}
+
 // ─── initial user message builders ─────────────────────────────────────
 
 export interface SpecialistInitialMessageCtx {

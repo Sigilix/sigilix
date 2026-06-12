@@ -122,6 +122,10 @@ export interface EnsembleFeatureFlags {
   reviewManifestEnabled: boolean
   /** Normalized `OPENCLAW_RESWEEP_MODE` (SIG-393): "off" | "shadow" | "on",
    *  default "off". Gates the region re-sweep second pass pre-synth. */
+  /** `OPENCLAW_LOGIC_RECALL_MODE === "on"` (SIG-392). Appends the recall-
+   *  eliciting directive to the logic specialist's prompt (~6→16/20 logic
+   *  recall on the dense fixture; precision is the downstream gates' job). */
+  logicRecallEnabled: boolean
   resweepMode: ResweepMode
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */

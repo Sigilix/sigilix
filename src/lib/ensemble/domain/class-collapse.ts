@@ -2,17 +2,28 @@
 //
 // The recall-eliciting logic prompt (OPENCLAW_LOGIC_RECALL_MODE) reports the
 // SAME bug-CLASS once per occurrence — measured: "an awaited DB/IO call with no
-// try/catch" emitted as 6 separate findings, one per handler at lines spanning
-// the file. The class SURVIVES every existing mechanism: the near-dup collapse
-// requires same path + |Δline|<=5 (these are the same class >5 lines apart,
-// across handlers), and coverage-stamp-collapse only handles the testing class.
-// So the guarantee is code: 3+ findings of one curated class (anywhere in the
-// PR) collapse into one pr-scope finding listing every location. Runs as the
-// stage AFTER collapseCoverageStamps in applyRecallFloors — same
-// no-resurrection-by-ordering guarantee. Mirrors coverage-stamp-collapse.
-// Spec: docs/superpowers/specs/2026-06-12-sig392-class-collapse-gate-spec.md
+// try/catch" emitted as 6 near-identical findings, one per handler. The class
+// SURVIVES every existing mechanism: near-dup collapse requires same path +
+// |Δline|<=5 (these are the same class >5 lines apart, across handlers), and
+// coverage-stamp-collapse only handles the testing class.
+//
+// RECALL-SAFETY (the hard constraint — collapsing must NEVER drop a distinct
+// bug): "same class" is NOT enough. A finding "no try/catch on the webhook —
+// the customer is billed again" is a double-charge bug that merely mentions the
+// class. So a member is collapsed ONLY when it is LEXICALLY NEAR-IDENTICAL to
+// the keeper (headline-Jaccard >= CLASS_HEADLINE_JACCARD) — genuine same-stamp
+// redundancy — never on the class signature alone. Plus: candidates are capped
+// at score <= CLASS_COLLAPSE_MAX_SCORE (a score>=4 finding asserts severity and
+// is never folded), the curated negative gate excludes named-consequence
+// findings, and every dropped finding's FULL HEADLINE is preserved in the
+// survivor body + telemetry (so a mis-merge is auditable, never silent).
+//
+// Runs as the final stage in applyRecallFloors, after coverage-stamp-collapse —
+// same no-resurrection-by-ordering guarantee. Spec:
+// docs/superpowers/specs/2026-06-12-sig392-class-collapse-gate-spec.md
 
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { headlineJaccard } from "@/src/lib/ensemble/domain/near-dup-collapse"
 
 /** Curated collapsible classes. START with the one observed offender
  *  (missing-error-handling); add classes only as shadow telemetry surfaces
@@ -26,16 +37,28 @@ const CLASS_SIGNATURES: ReadonlyArray<{ id: string; re: RegExp }> = [
 ]
 
 // A finding that names a SPECIFIC downstream consequence is a distinct bug, not
-// a pure class stamp — never collapse it (a "no try/catch → double-charge"
-// finding is the double-charge bug, not generic missing-error-handling). The
-// falsifier for edits is the pinned regression in class-collapse.test.ts.
+// a pure class stamp. The headline-Jaccard floor below is the PRIMARY guard
+// (distinct consequences are worded differently → low similarity); this token
+// list is a cheap secondary filter for the most dangerous consequence words.
 const SPECIFIC_CONSEQUENCE_TOKENS =
-  /(double[-\s]?(charge|count|appl)|data\s+loss|loses?\s+|injection|race|over[-\s]?refund|wrong|incorrect|leaks?|bypass|off[-\s]by[-\s]one|overflow|stale|deadlock)/i
+  /(double[-\s]?(charge|count|appl|bill)|billed\s+(again|twice)|sent\s+twice|data\s+loss|\bloses?\b|\bcorrupts?\b|\bduplicate\b|\bmismatch\b|\binjection\b|\brace\b|over[-\s]?refund|\bwrong\b|\bincorrect\b|\bleaks?\b|\bbypass\b|\bunauthenticated\b|\bunauthori[sz]ed\b|off[-\s]by[-\s]one|\boverflow\b|\bstale\b|\bdeadlock\b|never\s+(released|closed|committed)|committed\s+(even|when))/i
 
-/** The collapsible class of a finding, or null. Gated on the HEADLINE only
- *  (the recall prompt emits an unstable `error-handling` category not in the
- *  standard set, so category is not a reliable signal here). */
+/** Minimum same-class, near-identical findings to collapse — 3+, so a PAIR
+ *  stays the near-dup collapse's job and a lone instance is untouched. */
+export const CLASS_COLLAPSE_MIN = 3
+/** Candidates above this score assert real severity and are NEVER folded. */
+export const CLASS_COLLAPSE_MAX_SCORE = 3
+/** Headline-similarity floor: a member collapses only if it is this close to
+ *  the keeper. Genuine same-class stamps are near-identical; distinct bugs that
+ *  merely share the class phrase are not. */
+export const CLASS_HEADLINE_JACCARD = 0.6
+
+/** The collapsible class of a finding, or null. A COLLAPSE CANDIDATE: matches a
+ *  curated class signature, scores <= the ceiling, and names no specific
+ *  downstream consequence. (Candidacy is necessary but not sufficient — the
+ *  Jaccard floor in `collapseClassRedundantFindings` is the actual merge gate.) */
 export function collapsibleClassOf(f: PrReviewFinding): string | null {
+  if (f.score > CLASS_COLLAPSE_MAX_SCORE) return null
   const headline = f.headline ?? ""
   if (SPECIFIC_CONSEQUENCE_TOKENS.test(headline)) return null
   for (const c of CLASS_SIGNATURES) {
@@ -44,31 +67,33 @@ export function collapsibleClassOf(f: PrReviewFinding): string | null {
   return null
 }
 
-/** Minimum same-class findings to collapse — 3+, so a PAIR stays the near-dup
- *  collapse's job and a lone instance is untouched. */
-export const CLASS_COLLAPSE_MIN = 3
-
 export interface ClassCollapseResult<P> {
   findings: PrReviewFinding[]
   provenanceFindings: P[]
-  collapsed: ReadonlyArray<{ classId: string; keptHeadline: string; collapsedCount: number; locations: string[] }>
+  collapsed: ReadonlyArray<{
+    classId: string
+    keptHeadline: string
+    collapsedCount: number
+    droppedHeadlines: string[]
+    locations: string[]
+  }>
 }
 
 /**
- * Collapse each curated class with `>= CLASS_COLLAPSE_MIN` findings into ONE
- * pr-scope survivor: the highest-score finding of the class survives (tie →
- * earliest index) with one appended body line listing the other findings'
- * `path:line` locations and the ascending union of all collapsed provenance
- * sourceFindingIds. Distinct classes collapse independently. Below-threshold
- * classes + every non-class finding pass through untouched; the no-collapse
- * case returns the inputs by reference. `findings[i]` ↔ `provenanceFindings[i]`
- * alignment is preserved. Recall-safe: one survivor still represents the class.
+ * Collapse, per curated class, the cluster of `>= CLASS_COLLAPSE_MIN` candidate
+ * findings that are LEXICALLY NEAR-IDENTICAL to the class's highest-score
+ * candidate (headline-Jaccard `>= CLASS_HEADLINE_JACCARD`) into ONE pr-scope
+ * survivor. The survivor takes the MAX member score, lists every dropped
+ * finding's FULL headline + `path:line` in its body, unions all collapsed
+ * provenance ids, and is `scopeLocked`. Candidates that are NOT near-identical
+ * to the keeper are left UNTOUCHED (a distinct bug is never folded). Below the
+ * threshold (or no similar cluster) returns the inputs by reference.
+ * `findings[i]` ↔ `provenanceFindings[i]` alignment is preserved.
  */
 export function collapseClassRedundantFindings<P extends { sourceFindingIds: ReadonlyArray<string> }>(
   findings: ReadonlyArray<PrReviewFinding>,
   provenanceFindings: ReadonlyArray<P>,
 ): ClassCollapseResult<P> {
-  // Group finding indexes by collapsible class.
   const byClass = new Map<string, number[]>()
   for (let i = 0; i < findings.length; i++) {
     const cls = collapsibleClassOf(findings[i]!)
@@ -78,75 +103,72 @@ export function collapseClassRedundantFindings<P extends { sourceFindingIds: Rea
     byClass.set(cls, arr)
   }
 
-  // Per class: the kept index + the dropped indexes (only for classes at/above
-  // the threshold). Distinct classes are independent.
-  const keepByClass = new Map<string, number>()
   const droppedSet = new Set<number>()
-  const collapsed: Array<{ classId: string; keptHeadline: string; collapsedCount: number; locations: string[] }> = []
+  // keepIdx → { classId, droppedIdxs }
+  const survivors = new Map<number, { classId: string; dropped: number[] }>()
   for (const [classId, idxs] of byClass) {
     if (idxs.length < CLASS_COLLAPSE_MIN) continue
+    // keeper = highest-score candidate (tie → earliest index).
     let keepIdx = idxs[0]!
     for (const i of idxs) {
       if (findings[i]!.score > findings[keepIdx]!.score) keepIdx = i
     }
-    keepByClass.set(classId, keepIdx)
-    const dropped = idxs.filter((i) => i !== keepIdx)
-    for (const i of dropped) droppedSet.add(i)
-    const locations = [...new Set(dropped.map((i) => `${findings[i]!.path}:${findings[i]!.line}`))].sort()
-    collapsed.push({ classId, keptHeadline: findings[keepIdx]!.headline, collapsedCount: dropped.length, locations })
-  }
-
-  if (collapsed.length === 0) {
-    return {
-      findings: findings as PrReviewFinding[],
-      provenanceFindings: provenanceFindings as P[],
-      collapsed: [],
-    }
-  }
-
-  // Union of every collapsed class's provenance ids, keyed to its survivor.
-  const mergedIdsByKeep = new Map<number, string[]>()
-  for (const [classId, keepIdx] of keepByClass) {
-    const idxs = byClass.get(classId)!
-    mergedIdsByKeep.set(
-      keepIdx,
-      [...new Set(idxs.flatMap((i) => provenanceFindings[i]?.sourceFindingIds ?? []))].sort(),
+    // collapse ONLY the cluster near-identical to the keeper.
+    const keepHeadline = findings[keepIdx]!.headline ?? ""
+    const cluster = idxs.filter(
+      (i) => i === keepIdx || headlineJaccard(findings[i]!.headline ?? "", keepHeadline) >= CLASS_HEADLINE_JACCARD,
     )
-  }
-  const locationsByKeep = new Map<number, string[]>()
-  for (const c of collapsed) {
-    // find this class's keep index
-    const keepIdx = keepByClass.get(c.classId)!
-    locationsByKeep.set(keepIdx, c.locations)
+    if (cluster.length < CLASS_COLLAPSE_MIN) continue // not enough genuine same-stamp → safe no-op
+    const dropped = cluster.filter((i) => i !== keepIdx)
+    for (const i of dropped) droppedSet.add(i)
+    survivors.set(keepIdx, { classId, dropped })
   }
 
+  if (survivors.size === 0) {
+    return { findings: findings as PrReviewFinding[], provenanceFindings: provenanceFindings as P[], collapsed: [] }
+  }
+
+  const collapsedTelemetry: ClassCollapseResult<P>["collapsed"] = []
   const outFindings: PrReviewFinding[] = []
   const outProvenance: P[] = []
   for (let i = 0; i < findings.length; i++) {
     if (droppedSet.has(i)) continue
-    const mergedIds = mergedIdsByKeep.get(i)
-    if (mergedIds !== undefined) {
+    const meta = survivors.get(i)
+    if (meta !== undefined) {
       const kept = findings[i]!
-      const locs = locationsByKeep.get(i) ?? []
+      const droppedHeadlines = meta.dropped.map((d) => findings[d]!.headline)
+      const locations = [...new Set(meta.dropped.map((d) => `${findings[d]!.path}:${findings[d]!.line}`))].sort()
+      const maxScore = meta.dropped.reduce((s, d) => Math.max(s, findings[d]!.score), kept.score)
+      const mergedIds = [
+        ...new Set([i, ...meta.dropped].flatMap((d) => provenanceFindings[d]?.sourceFindingIds ?? [])),
+      ].sort()
       const survivor: PrReviewFinding = {
         ...kept,
+        score: maxScore,
         scope: "pr",
         // Lock the scope so the inline-first promotion does not anchor this
         // aggregate to the one kept finding's inherited line.
         scopeLocked: true,
-        body: locs.length > 0 ? `${kept.body}\n\nAlso at: ${locs.map((l) => `\`${l}\``).join(", ")}` : kept.body,
+        body:
+          droppedHeadlines.length > 0
+            ? `${kept.body}\n\nSame issue also at: ${meta.dropped
+                .map((d) => `${findings[d]!.headline} (\`${findings[d]!.path}:${findings[d]!.line}\`)`)
+                .join("; ")}`
+            : kept.body,
       }
       outFindings.push(survivor)
       outProvenance.push({ ...(provenanceFindings[i] as P), sourceFindingIds: mergedIds })
+      collapsedTelemetry.push({
+        classId: meta.classId,
+        keptHeadline: kept.headline,
+        collapsedCount: meta.dropped.length,
+        droppedHeadlines: droppedHeadlines.slice(0, 10),
+        locations: locations.slice(0, 10),
+      })
     } else {
       outFindings.push(findings[i]!)
       outProvenance.push(provenanceFindings[i] ?? ({ sourceFindingIds: [] } as unknown as P))
     }
   }
-  // Telemetry cardinality cap: first 10 locations per class.
-  return {
-    findings: outFindings,
-    provenanceFindings: outProvenance,
-    collapsed: collapsed.map((c) => ({ ...c, locations: c.locations.slice(0, 10) })),
-  }
+  return { findings: outFindings, provenanceFindings: outProvenance, collapsed: collapsedTelemetry }
 }

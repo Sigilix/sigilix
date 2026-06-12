@@ -110,6 +110,20 @@
               "insert"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "paid total",
+              "stale"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "before inserting",
+              "stale"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -758,6 +772,13 @@
               "negative"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "amountcents",
+              "validate"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -1036,6 +1057,15 @@
           {
             "allKeywords": [
               "untested"
+            ],
+            "botCategories": [
+              "testing"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "without a single test"
             ],
             "botCategories": [
               "testing"

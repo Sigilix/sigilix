@@ -65,6 +65,9 @@ export function parseRunnerMetadata(properties: unknown): ParseRunnerMetadataRes
   if (schemaVersion !== RUNNER_METADATA_SCHEMA_VERSION) {
     return { ok: false, reason: "unknown-schema-version", schemaVersion }
   }
+  // Trust boundary: safe-but-uncataloged tool IDs are allowed in scan
+  // manifests for forward-compatible receipts, but only cataloged tools may
+  // claim deterministic-tool SARIF metadata and catalog-owned role routing.
   if (!isRunnerToolId(toolId)) {
     return { ok: false, reason: "unknown-tool", toolId }
   }

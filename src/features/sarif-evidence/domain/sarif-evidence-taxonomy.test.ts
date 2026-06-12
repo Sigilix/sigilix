@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest"
 import { parseRunnerMetadata } from "@/src/features/sarif-evidence/domain/runner-metadata"
 import { resolveTaxonomy } from "@/src/features/sarif-evidence/domain/taxonomy"
 import type { SarifResult, SarifRule, SarifTaxa } from "@/src/features/sarif-evidence/domain/types"
+import { RUNNER_TOOL_CATALOG } from "@/src/shared/domain/runner-tool-catalog"
 
 const emptyResult: SarifResult = { message: { text: "x" } }
 
@@ -152,10 +153,10 @@ describe("parseRunnerMetadata", () => {
     expect(
       parseRunnerMetadata({
         sigilixSchemaVersion: 1,
-        sigilixToolId: "biome",
+        sigilixToolId: "bad/tool",
         sigilixSource: "deterministic-tool",
       }),
-    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "biome" })
+    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "bad/tool" })
     expect(
       parseRunnerMetadata({
         sigilixSchemaVersion: 1,
@@ -169,17 +170,17 @@ describe("parseRunnerMetadata", () => {
     expect(
       parseRunnerMetadata({
         sigilixSchemaVersion: 2,
-        sigilixToolId: "biome",
+        sigilixToolId: "future-lint",
         sigilixSource: "repo-tool",
       }),
     ).toEqual({ ok: false, reason: "unknown-schema-version", schemaVersion: 2 })
     expect(
       parseRunnerMetadata({
         sigilixSchemaVersion: 1,
-        sigilixToolId: "biome",
+        sigilixToolId: "bad/tool",
         sigilixSource: "repo-tool",
       }),
-    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "biome" })
+    ).toEqual({ ok: false, reason: "unknown-tool", toolId: "bad/tool" })
   })
 
   it("accepts valid metadata with ignored extra keys and optional dropped-result counts", () => {
@@ -217,6 +218,21 @@ describe("parseRunnerMetadata", () => {
         source: "deterministic-tool",
         roleHints: ["logic", "performance"],
       },
+    })
+  })
+
+  it("rejects safe but uncataloged runner tool metadata until the worker catalogs it", () => {
+    expect(
+      parseRunnerMetadata({
+        sigilixSchemaVersion: 1,
+        sigilixToolId: "future-lint",
+        sigilixSource: "deterministic-tool",
+        sigilixDroppedResults: { droppedCount: 1, keptCount: 2 },
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "unknown-tool",
+      toolId: "future-lint",
     })
   })
 })
@@ -261,30 +277,15 @@ describe("resolveTaxonomy — Sigilix runner metadata", () => {
   })
 
   it("routes runner catalog tools with catalog-owned role policy", () => {
-    const cases = [
-      ["semgrep", ["security"]],
-      ["eslint", ["logic"]],
-      ["ruff", ["logic", "performance"]],
-      ["actionlint", ["logic", "security"]],
-      ["shellcheck", ["security", "logic"]],
-      ["gitleaks", ["security"]],
-      ["osv-scanner", ["security"]],
-      ["checkov", ["security"]],
-      ["trivy", ["security"]],
-      ["zizmor", ["security", "logic"]],
-      ["hadolint", ["logic", "security"]],
-      ["tflint", ["logic", "security"]],
-    ] as const
-
-    for (const [toolId, roleHints] of cases) {
+    for (const { id: toolId, roles } of RUNNER_TOOL_CATALOG) {
       const r = resolveTaxonomy({
         result: emptyResult,
         rule: { id: "X" },
         toolName: toolId,
         toolDriverProperties: metadata(toolId),
       })
-      expect(r.roleHints).toEqual(roleHints)
-      expect(r.roleHint).toBe(roleHints[0])
+      expect(r.roleHints).toEqual(roles)
+      expect(r.roleHint).toBe(roles[0])
       expect(r.toolId).toBe(toolId)
       expect(r.source).toBe("deterministic-tool")
     }
@@ -305,17 +306,20 @@ describe("resolveTaxonomy — Sigilix runner metadata", () => {
     })
   })
 
-  it("unknown tool and invalid source fall back without setting toolId/source", () => {
-    const unknownTool = resolveTaxonomy({
+  it("safe uncataloged tool metadata falls back to legacy routing without trusted deterministic metadata", () => {
+    const futureTool = resolveTaxonomy({
       result: emptyResult,
-      rule: { id: "CVE-2024-1234" },
-      toolName: "Biome",
-      toolDriverProperties: metadata("biome"),
+      rule: { id: "X" },
+      toolName: "FutureLint",
+      toolDriverProperties: metadata("future-lint"),
     })
-    expect(unknownTool.roleHint).toBe("security")
-    expect(unknownTool.toolId).toBeUndefined()
-    expect(unknownTool.source).toBeUndefined()
+    expect(futureTool.roleHint).toBe("security")
+    expect(futureTool.roleHints).toBeUndefined()
+    expect(futureTool.toolId).toBeUndefined()
+    expect(futureTool.source).toBeUndefined()
+  })
 
+  it("invalid source falls back without setting toolId/source", () => {
     const invalidSource = resolveTaxonomy({
       result: emptyResult,
       rule: { id: "X", properties: { tags: ["License"] } },

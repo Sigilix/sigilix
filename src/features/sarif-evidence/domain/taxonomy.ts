@@ -19,7 +19,6 @@
 
 import { parseRunnerMetadata } from "./runner-metadata"
 import type { SarifFindingCategory, SarifResult, SarifRule, SarifTaxa, RoleHint, SarifEvidenceSource } from "./types"
-import type { RunnerToolId } from "./runner-metadata"
 
 export interface TaxonomyResolution {
   category: SarifFindingCategory
@@ -28,7 +27,7 @@ export interface TaxonomyResolution {
   /** Whether the rule was tagged as SBOM — runner filters these out
    *  of findings (SBOM is metadata, not a finding; spec §3.6a). */
   isSbom: boolean
-  toolId?: RunnerToolId
+  toolId?: string
   source?: SarifEvidenceSource
   schemaWarning?: "unknown-schema-version"
 }
@@ -151,11 +150,12 @@ function applyRunnerMetadata(
         source: runnerMetadata.metadata.source,
       }
     }
-    const [primaryRole] = runnerMetadata.metadata.roleHints
+    const roleHints = runnerMetadata.metadata.roleHints
+    const [primaryRole] = roleHints
     return {
       ...legacy,
       roleHint: primaryRole ?? legacy.roleHint,
-      roleHints: [...runnerMetadata.metadata.roleHints],
+      roleHints: [...roleHints],
       toolId: runnerMetadata.metadata.toolId,
       source: runnerMetadata.metadata.source,
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { runSarifEvidence, type ResolvedSarifConfig } from "@/src/features/sarif-evidence/app/runner"
+import { RUNNER_TOOL_CATALOG } from "@/src/shared/domain/runner-tool-catalog"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 
@@ -268,29 +269,16 @@ describe("runSarifEvidence — runner metadata", () => {
     expect(r.findings.map((f) => f.droppedResults).filter(Boolean)).toHaveLength(1)
   })
 
-  it("accepts runner first-slice tool metadata without runner-supplied role hints", async () => {
-    const runs = [
-      {
-        toolId: "semgrep",
-        toolName: "Semgrep",
-        path: "src/security.ts",
-        line: 1,
-        ruleId: "typescript.express.security",
-      },
-      { toolId: "eslint", toolName: "ESLint", path: "src/app.js", line: 2, ruleId: "no-undef" },
-      { toolId: "ruff", toolName: "Ruff", path: "src/app.py", line: 3, ruleId: "PERF401" },
-      {
-        toolId: "actionlint",
-        toolName: "actionlint",
-        path: ".github/workflows/ci.yml",
-        line: 4,
-        ruleId: "syntax-check",
-      },
-      { toolId: "shellcheck", toolName: "ShellCheck", path: "scripts/build.sh", line: 5, ruleId: "SC2086" },
-      { toolId: "gitleaks", toolName: "gitleaks", path: "src/secrets.ts", line: 6, ruleId: "gitleaks:generic" },
-      { toolId: "osv-scanner", toolName: "OSV-Scanner", path: "package-lock.json", line: 7, ruleId: "GHSA-xxxx" },
-      { toolId: "checkov", toolName: "Checkov", path: "main.tf", line: 8, ruleId: "CKV_AWS_1" },
-    ].map(({ toolId, toolName, path, line, ruleId }) => ({
+  it("accepts current runner tool metadata without runner-supplied role hints", async () => {
+    const toolRuns = RUNNER_TOOL_CATALOG.map((entry, index) => ({
+      toolId: entry.id,
+      toolName: entry.displayName,
+      path: `src/${entry.id}.txt`,
+      line: index + 1,
+      ruleId: `${entry.id}/rule`,
+      roleHints: entry.roles,
+    }))
+    const runs = toolRuns.map(({ toolId, toolName, path, line, ruleId }) => ({
       tool: { driver: { name: toolName, properties: runnerMetadata(toolId) } },
       results: [
         {
@@ -306,40 +294,42 @@ describe("runSarifEvidence — runner metadata", () => {
       env: fakeEnv,
       client: fakeClient(report),
       ...CTX,
-      diff: diffWithChanges([
-        { path: "src/security.ts", line: 1 },
-        { path: "src/app.js", line: 2 },
-        { path: "src/app.py", line: 3 },
-        { path: ".github/workflows/ci.yml", line: 4 },
-        { path: "scripts/build.sh", line: 5 },
-        { path: "src/secrets.ts", line: 6 },
-        { path: "package-lock.json", line: 7 },
-        { path: "main.tf", line: 8 },
-      ]),
+      diff: diffWithChanges(toolRuns.map(({ path, line }) => ({ path, line }))),
       config: DEFAULT_CONFIG,
     })
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     const byTool = new Map(r.findings.map((f) => [f.toolId, f]))
-    expect(byTool.get("semgrep")?.roleHints).toEqual(["security"])
-    expect(byTool.get("eslint")?.roleHints).toEqual(["logic"])
-    expect(byTool.get("ruff")?.roleHints).toEqual(["logic", "performance"])
-    expect(byTool.get("actionlint")?.roleHints).toEqual(["logic", "security"])
-    expect(byTool.get("shellcheck")?.roleHints).toEqual(["security", "logic"])
-    expect(byTool.get("gitleaks")?.roleHints).toEqual(["security"])
-    expect(byTool.get("osv-scanner")?.roleHints).toEqual(["security"])
-    expect(byTool.get("checkov")?.roleHints).toEqual(["security"])
-    for (const toolId of [
-      "semgrep",
-      "eslint",
-      "ruff",
-      "actionlint",
-      "shellcheck",
-      "gitleaks",
-      "osv-scanner",
-      "checkov",
-    ]) {
+    for (const { toolId, roleHints } of toolRuns) {
+      expect(byTool.get(toolId)?.roleHints).toEqual(roleHints)
       expect(byTool.get(toolId)?.source).toBe("deterministic-tool")
     }
+  })
+
+  it("keeps safe uncataloged runner metadata on the legacy taxonomy path", async () => {
+    const report = makeReport(
+      [
+        {
+          ruleId: "future-rule",
+          level: "warning",
+          message: { text: "future tool finding" },
+          locations: [{ physicalLocation: { artifactLocation: { uri: "src/future.txt" }, region: { startLine: 9 } } }],
+        },
+      ],
+      { tool: { driver: { name: "FutureLint", properties: runnerMetadata("future-lint") } } },
+    )
+    const r = await runSarifEvidence({
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: diffWithChange("src/future.txt", 9),
+      config: DEFAULT_CONFIG,
+    })
+    expect(r.skipped).toBe(false)
+    if (r.skipped) return
+    expect(r.findings[0]!.toolId).toBeUndefined()
+    expect(r.findings[0]!.source).toBeUndefined()
+    expect(r.findings[0]!.roleHint).toBe("security")
+    expect(r.findings[0]!.roleHints).toBeUndefined()
   })
 })

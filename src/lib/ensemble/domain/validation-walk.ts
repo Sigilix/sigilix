@@ -360,6 +360,9 @@ function applyHardDropGates(
         )
         f = { ...f, category: "logic" }
       } else {
+        // INVARIANT (Sigilix #497): this `else` is load-bearing — a finding
+        // the branch above just reclassified must NEVER also demote. If these
+        // branches are ever split, keep them mutually exclusive.
         const demoted = args.securityValidatorMode === "enforce"
         state.droppedForFailedValidation++
         args.onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: demoted })

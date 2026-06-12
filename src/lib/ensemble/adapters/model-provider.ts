@@ -205,7 +205,6 @@ export const SYNTHESIZER_CONFIG: ModelConfig = {
   // a 4-verdict synth payload). Codex's HIGHEST-priority swap per
   // ARC-292: "Moonshot capacity dip burned 6m16s on PR #97."
   primary: "gpt-oss:120b-cloud",
-  retries: 1,
   // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
   // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
   // PROVIDER as primary (both Moonshot). When Moonshot had a bad few
@@ -231,6 +230,19 @@ export const SYNTHESIZER_CONFIG: ModelConfig = {
   // vs the pre-fix:
   //   Total:           ~362s (180s × 2 outer attempts) → skip-notice
   fallback: "deepseek-v4-flash:cloud",
+  // SIG-392 (2026-06-11): per-attempt 60s (default) → 150s, same-model retry
+  // dropped — the logic-role SIG-287 "fast-fallback" shape. The 60s cap was
+  // killing healthy slow-tail attempts (gpt-oss synth runs 45-52s typical on
+  // dense payloads; K=12 replays showed aborts at exactly 60,006ms mid-
+  // generation, 0-17% per session — the synth "capacity" problem). 150s gives
+  // the tail 3× headroom and makes 100-150s-class models eligible synth
+  // candidates. Ladder fits the phase: primary 150 + fallback 150 ≈ 301s ≤
+  // SYNTHESIZER_TIMEOUT_MS (325s); 3×150 would not, so the retry rung goes
+  // (with tail room it rarely rescued anything cross-provider fallback
+  // doesn't). The ARC-278 OUTER retry (attempt2, 160s phase) now fits one
+  // primary rung — acceptable for the constrained re-emission path.
+  retries: 0,
+  perAttemptTimeoutMs: 150_000,
 }
 
 /**

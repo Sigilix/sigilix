@@ -73,6 +73,11 @@ export const noDoubleCastThroughUnknown: AstRule = {
     // the operand, not a TSAsExpression, so it never matches here.)
     if (!inner || inner.type !== "TSAsExpression") return null
     if (!isUnknownOrAny(inner.typeAnnotation)) return null
+    // `this as unknown as T` is self-rebinding (mixin composition, builder
+    // `this`-recasts), NEVER data-shape contract drift — exclude it. Removes
+    // the most common idiomatic double-cast with zero loss to the b8 class
+    // (code review #500).
+    if (inner.expression?.type === "ThisExpression") return null
     const target = namedTargetTypeName(node.typeAnnotation)
     if (target === null) return null
     const launder = inner.typeAnnotation?.type === "TSAnyKeyword" ? "any" : "unknown"

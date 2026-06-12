@@ -61,6 +61,10 @@ describe("no-double-cast-through-unknown — negative (no flag)", () => {
   it("does NOT flag when there is no cast at all", () => {
     expect(runRule(`const x = rows; res.json(x);`).length).toBe(0)
   })
+  it("does NOT flag `this as unknown as T` (self-rebinding, never contract drift)", () => {
+    expect(runRule(`const self = this as unknown as Builder;`).length).toBe(0)
+    expect(runRule(`function f() { return (this as unknown as TypedEmitter<E>).emit("x"); }`).length).toBe(0)
+  })
 })
 
 describe("no-double-cast-through-unknown — rule contract", () => {

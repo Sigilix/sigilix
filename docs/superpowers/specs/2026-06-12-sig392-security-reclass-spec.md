@@ -42,12 +42,13 @@ any surface; rollback is one line; the next probes measure it directly.
 
 ## Flag coupling (review MEDIUM, #497) + follow-ups
 
-- **OPENCLAW_REFUTATION_SURVIVAL_MODE coupling**: in `enforce`, SIG-325 would
-  re-demote reclassified findings lacking `independentAssessment` — exactly
-  the protected class. Currently `shadow` (no-op). Before flipping that flag,
-  decide whether `failureExample` should satisfy SIG-325's
-  mechanism-articulation requirement. Pinned by an interaction test + noted
-  in wrangler.toml and at the walk fork.
+- **OPENCLAW_REFUTATION_SURVIVAL_MODE coupling — RESOLVED structurally**: a
+  reclassified finding is exempt from the SIG-325 backstop (a local
+  `reclassifiedFromSecurity` flag in the same walk iteration) — the reclass
+  is the controlling adjudication of its evidence-absence; double-demoting
+  the same finding for the same reason would defeat SIG-392 on the enforce
+  flip. All non-reclassified security findings face SIG-325 unchanged.
+  Pinned by interaction tests in both modes.
 - Follow-up (LOW): reclassification volume is invisible to
   `/metrics/validation` per-category rollups (forks before the drop
   callback); the `pr-review-security-reclassified-logic` console event is the

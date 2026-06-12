@@ -189,11 +189,12 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "logic" }))
   })
 
-  it("SIG-392 × SIG-325 coupling pin: refutation-survival ENFORCE re-demotes a reclassified finding lacking independentAssessment — resolve the coupling BEFORE flipping that flag (wrangler note)", () => {
-    // This is the documented hazard, pinned so a future flag flip surfaces
-    // here: the reclassified finding is self-originated (no resolving
-    // evidence) and carries no independentAssessment, so SIG-325-enforce
-    // takes it back out of the inline surface that SIG-392 just won.
+  it("SIG-392 × SIG-325 coupling RESOLVED: refutation-survival ENFORCE no longer re-demotes a reclassified finding (the reclass is the controlling adjudication)", () => {
+    // Review #497's MEDIUM, fixed structurally: the reclass branch exempts
+    // its finding from the SIG-325 backstop — same evidence-absence, already
+    // adjudicated under stricter conditions (enforce + concrete mechanism).
+    // Without the exemption, SIG-325-enforce would re-demote this exact
+    // shape and silently defeat SIG-392.
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -217,8 +218,9 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       refutationSurvivalMode: "enforce",
       trustLedgerEnabled: true,
     })
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "logic" }))
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("SIG-392 reclass ON: a mechanism-less failing finding still DEMOTES exactly as before (the wall stands)", () => {

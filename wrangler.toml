@@ -619,9 +619,10 @@ OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
 # stands). Enforce-direct (founder call): demote≠drop — these findings already
 # POST in the body, so this changes placement, not FP count. Rollback: remove
 # the line (off = byte-identical demote behavior).
-# ⚠ COUPLED to OPENCLAW_REFUTATION_SURVIVAL_MODE (currently "shadow"): in
-# "enforce", SIG-325 would re-demote reclassified findings that lack
-# independentAssessment — resolve the coupling before flipping that flag.
+# SIG-325 interplay (resolved): a reclassified finding is EXEMPT from the
+# refutation-survival backstop (the reclass is the controlling adjudication
+# of its evidence-absence), so flipping REFUTATION_SURVIVAL_MODE to enforce
+# cannot re-demote it. Pinned by interaction tests.
 OPENCLAW_SECURITY_RECLASS = "on"
 
 # SIG-111 / SIG-245: tests-specialist coverage-FP gate. The dominant labeled-FP

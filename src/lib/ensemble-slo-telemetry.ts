@@ -51,6 +51,13 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   "glm-5.1:cloud": { inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },
   "qwen3:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 0.9 },
   "minimax:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 1.1 },
+  // SIG-392: the synth primary (swapped from gpt-oss:120b). gemma4:31b is the
+  // SMALLEST model in the lineup (31B vs the 100-670B others), so it sits at
+  // the low end of the estimate table. Without this row the synth's most-
+  // frequent call fell through to DEFAULT_PRICING (0.6/2.5) — hiding the ~4×
+  // per-call cost drop the swap measured. Estimate sized so the synth cost line
+  // on the dashboard reflects the real drop, not the over-estimating default.
+  "gemma4:31b": { inputPerMTokUsd: 0.15, outputPerMTokUsd: 0.6 },
 }
 
 /** Applied to any model not in `MODEL_PRICING`. Sized at the high end of

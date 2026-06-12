@@ -254,6 +254,17 @@
               "invoice not found"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "success shape",
+              "404"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection"
+            ],
+            "scope": "excerpt"
           }
         ]
       }

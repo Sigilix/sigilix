@@ -40,6 +40,15 @@ Recall-safe by construction: the class is out-of-scope in benchmark ground
 truth and the content is preserved (one finding, all paths listed). Identity
 fast path: 0-1 stamps → inputs returned by reference.
 
+**Known measurement caveat (code review, recorded):** the eval scorer matches
+findings to ground-truth rows by `finding.path` — collapsed stamps' paths
+live in the survivor's BODY, which the matcher never reads. If a fixture
+ever plants 2+ separately-tracked coverage bugs on DIFFERENT files, the
+collapse would leave only the survivor's path matchable (a measurement
+recall loss). All current fixtures carry at most one tests-category GT row,
+verified against both frozen corpora; add a guard (or scorer body-path
+fallback) before authoring such a fixture.
+
 ## Calibration (real findings pinned as tests)
 
 MUST collapse: probe #28's three stamps ("Entire payments module ships

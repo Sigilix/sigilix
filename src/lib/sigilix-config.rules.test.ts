@@ -23,10 +23,12 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
           semgrep: { enabled: true },
           eslint: { enabled: false },
           ruff: { enabled: true },
+          sqlfluff: { enabled: false },
           actionlint: { enabled: false },
           shellcheck: { enabled: true },
           checkov: { enabled: true },
           "osv-scanner": { enabled: false },
+          swiftlint: { enabled: true },
         },
       }),
     )
@@ -34,10 +36,12 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
       semgrep: { enabled: true },
       eslint: { enabled: false },
       ruff: { enabled: true },
+      sqlfluff: { enabled: false },
       actionlint: { enabled: false },
       shellcheck: { enabled: true },
       checkov: { enabled: true },
       "osv-scanner": { enabled: false },
+      swiftlint: { enabled: true },
     })
   })
 
@@ -77,12 +81,16 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
       JSON.stringify({
         linters: {
           markdownlint: { enabled: true },
+          swiftlint: { enabled: true },
           "future-lint": { enabled: false },
           prettier: false,
         },
       }),
     )
-    expect(cfg?.linters).toEqual({ markdownlint: { enabled: true } })
+    expect(cfg?.linters).toEqual({
+      markdownlint: { enabled: true },
+      swiftlint: { enabled: true },
+    })
   })
 })
 
@@ -96,6 +104,9 @@ describe("resolveLintersConfig (SIG-107)", () => {
     expect(defaults.shellcheck).toEqual({ enabled: true })
     expect(defaults.gitleaks).toEqual({ enabled: true })
     expect(defaults["osv-scanner"]).toEqual({ enabled: true })
+    expect(defaults.buf).toEqual({ enabled: true })
+    expect(defaults["prisma-lint"]).toEqual({ enabled: true })
+    expect(defaults.swiftlint).toEqual({ enabled: true })
     expect(defaults.checkov).toEqual({ enabled: false })
     expect(defaults.trivy).toEqual({ enabled: false })
     expect(defaults.tflint).toEqual({ enabled: true })

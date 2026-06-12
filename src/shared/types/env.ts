@@ -308,6 +308,11 @@ export interface Env {
   // endpoint (shares OPENCLAW_VALIDATION_METRICS_TOKEN).
   RUNNER_EVIDENCE_METRICS_DO: DurableObjectNamespace
 
+  // SIG-107: single global DO holding accepted runner scan-manifest telemetry
+  // by deterministic tool/status. Read via GET /metrics/runner-tools (shares
+  // OPENCLAW_VALIDATION_METRICS_TOKEN). Telemetry-only; never affects ingest.
+  RUNNER_TOOL_METRICS_DO: DurableObjectNamespace
+
   // SIG-285 PR 2: single global DO holding rolling verification-by-execution
   // verdict counters (confirmed / refuted / inconclusive / no-check × category).
   // Read via GET /metrics/verification (shares OPENCLAW_VALIDATION_METRICS_TOKEN).

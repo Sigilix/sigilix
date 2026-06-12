@@ -93,3 +93,51 @@ curl -s -H "authorization: Bearer $TOKEN" \
 - `repoPresence` = which repos are live + their latest observed state.
 
 `window` accepts `1`–`30` (days), default `7`.
+
+## Tool telemetry — `GET /metrics/runner-tools`
+
+Accepted runner receipts can also carry a normalized scan manifest. The worker
+records that manifest into `RunnerToolMetricsDO` with one row per tool/status,
+so dogfood can see which tools are enabled, missing output, invalid, empty, or
+producing findings before adding more catalog entries.
+
+```sh
+curl -s -H "authorization: Bearer $TOKEN" \
+  "https://sigilix.dan-martinezjulio.workers.dev/metrics/runner-tools?window=7d" | jq
+```
+
+```jsonc
+{
+  "window": { "days": 7, "startDay": "…", "endDay": "…" },
+  "manifestReceipts": 12,
+  "toolRows": 360,
+  "tools": [
+    {
+      "toolId": "eslint",
+      "statuses": { "produced": 5, "empty": 7 },
+      "enabledReceipts": 12,
+      "runCount": 12,
+      "resultCount": 19
+    }
+  ],
+  "latestByRepo": [
+    {
+      "owner": "Sigilix",
+      "repo": "sigilix",
+      "toolId": "eslint",
+      "enabled": true,
+      "status": "produced",
+      "runCount": 1,
+      "resultCount": 3,
+      "lastSeenAt": "…"
+    }
+  ]
+}
+```
+
+- **Tool coverage** = `enabledReceipts` and `statuses` by tool. `missing-output`
+  or `invalid-output` means the runner catalog entry is not yet dependable.
+- **Signal volume** = `resultCount`; high `empty` plus low `resultCount` means a
+  tool may still be useful but has not produced dogfood evidence in-window.
+- Duplicate receipt retries do not increment this metric; only the first
+  accepted receipt for a runner attempt records the manifest.

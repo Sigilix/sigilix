@@ -13,6 +13,7 @@ describe("SARIF finding role helpers", () => {
 
   it("falls back to roleHint when roleHints is missing or empty", () => {
     expect(rolesForSarifFinding({ roleHint: "security" })).toEqual(["security"])
+    expect(rolesForSarifFinding({ roleHint: "security", roleHints: undefined })).toEqual(["security"])
     expect(rolesForSarifFinding({ roleHint: "security", roleHints: [] })).toEqual(["security"])
     expect(sarifFindingHasRole({ roleHint: "security", roleHints: [] }, "security")).toBe(true)
   })

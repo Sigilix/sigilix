@@ -610,6 +610,16 @@ OPENCLAW_REFUTATION_SURVIVAL_MODE = "shadow"
 # sensitive) — migrated here as a reviewable, version-controlled var. Rollback:
 # set "shadow" (or remove the line). Read via `/metrics/validation` modes.security.
 OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
+# SIG-392 (2026-06-12, e2e-frontend#20): at the SIG-108 evidence gate's demote
+# branch, a failing sev>=4 security finding that articulates a CONCRETE
+# mechanism (non-empty failureExample) is recategorized to `logic` and kept
+# INLINE instead of body-demoted — the security-shaped-logic-bug class (key
+# collisions, authz-by-construction) that can never carry scanner evidence.
+# Mechanism-less findings demote exactly as before (the confabulated-CWE wall
+# stands). Enforce-direct (founder call): demote≠drop — these findings already
+# POST in the body, so this changes placement, not FP count. Rollback: remove
+# the line (off = byte-identical demote behavior).
+OPENCLAW_SECURITY_RECLASS = "on"
 
 # SIG-111 / SIG-245: tests-specialist coverage-FP gate. The dominant labeled-FP
 # class (21/31 in the SIG-161 corpus) is the tests specialist over-firing "X

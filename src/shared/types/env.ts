@@ -400,6 +400,14 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SECURITY_VALIDATOR_MODE enforce`.
   OPENCLAW_SECURITY_VALIDATOR_MODE?: string
 
+  // SIG-392: "on" → at the SIG-108 evidence gate's demote branch, a failing
+  // sev>=4 security finding carrying a concrete mechanism (non-empty
+  // failureExample) is RECATEGORIZED to `logic` and kept inline instead of
+  // body-demoted (the security-shaped-logic-bug class — key collisions,
+  // authz-by-construction — that can never have scanner evidence).
+  // Anything else → off (byte-identical demote behavior).
+  OPENCLAW_SECURITY_RECLASS?: string
+
   // SIG-111 / SIG-245: tests-finding specificity gate mode. "shadow"
   // (default; any value other than "enforce") counts + telemeters what
   // the gate WOULD demote without acting; "enforce" DEMOTES sev>=4

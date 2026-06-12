@@ -56,6 +56,13 @@ export interface AstScanModes {
  *  validator's own exported mode union. */
 export interface EnsembleValidatorModes {
   securityValidatorMode: SecurityValidatorMode
+  /** SIG-392: at the SIG-108 evidence gate's demote branch, recategorize a
+   *  failing sev>=4 security finding to `logic` and keep it INLINE when it
+   *  carries a concrete mechanism (non-empty failureExample) — the
+   *  security-shaped-logic-bug class (key collisions, authz-by-construction)
+   *  that can never have scanner evidence. Mechanism-less findings demote
+   *  exactly as before (the anti-hallucination wall is untouched). */
+  securityReclassEnabled: boolean
   testsValidatorMode: TestsValidatorMode
   logicValidatorMode: LogicValidatorMode
   logicRefutationMode: LogicRefutationMode

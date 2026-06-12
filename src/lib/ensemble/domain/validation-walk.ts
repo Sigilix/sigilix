@@ -337,15 +337,42 @@ function applyHardDropGates(
       // callback semantics are unchanged: `dropped` = the enforce action fired
       // (now a demote). Currently shadow in prod, so this is inert until the
       // enforce flip.
-      const demoted = args.securityValidatorMode === "enforce"
-      state.droppedForFailedValidation++
-      args.onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: demoted })
-      if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "security-evidence" })
-        state.unanchoredFindings.push(f)
-        return { kind: "continue" }
+      // SIG-392 (e2e-frontend#20): security-shaped LOGIC bugs — key
+      // collisions, authz-by-construction — can NEVER carry scanner
+      // evidence, so the evidence gate body-demoted a true P1 with a
+      // concrete repro attached ("silent" to external evaluators). When the
+      // failing finding articulates a concrete mechanism (non-empty
+      // failureExample), recategorize to `logic` and keep it INLINE — it
+      // already passed the hallucination guard and still faces the
+      // grounding machinery. Mechanism-less findings fall through to the
+      // demote unchanged: the confabulated-CWE wall stands.
+      const failureExample = typeof f.failureExample === "string" ? f.failureExample.trim() : ""
+      if (args.securityReclassEnabled && args.securityValidatorMode === "enforce" && failureExample.length > 0) {
+        console.log(
+          JSON.stringify({
+            event: "pr-review-security-reclassified-logic",
+            path: f.path,
+            line: f.line,
+            score: f.score,
+            headline: (f.headline ?? "").slice(0, 100),
+            gateReason: decision.reason,
+          }),
+        )
+        f = { ...f, category: "logic" }
+      } else {
+        // INVARIANT (Sigilix #497): this `else` is load-bearing — a finding
+        // the branch above just reclassified must NEVER also demote. If these
+        // branches are ever split, keep them mutually exclusive.
+        const demoted = args.securityValidatorMode === "enforce"
+        state.droppedForFailedValidation++
+        args.onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: demoted })
+        if (demoted) {
+          if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "security-evidence" })
+          state.unanchoredFindings.push(f)
+          return { kind: "continue" }
+        }
+        // shadow mode: fall through and keep the finding inline.
       }
-      // shadow mode: fall through and keep the finding inline.
     }
   }
 

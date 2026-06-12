@@ -330,6 +330,8 @@ export type ValidateForSubmissionArgs = {
    * `shadow` for the cautious staged rollout.
    */
   securityValidatorMode?: SecurityValidatorMode
+  /** SIG-392: reclass-to-logic at the evidence gate's demote branch. */
+  securityReclassEnabled?: boolean
   /**
    * SIG-108: optional telemetry callback fired once per security
    * finding the gate flagged (whether or not it was actually dropped —
@@ -694,6 +696,7 @@ export interface ResolvedValidationArgs {
   securityManifest: Map<string, SecurityFact> | undefined
   doClassSpans: ReadonlyMap<string, readonly LineSpan[]>
   securityValidatorMode: SecurityValidatorMode
+  securityReclassEnabled: boolean
   onSecurityFindingDropped: ValidateForSubmissionArgs["onSecurityFindingDropped"]
   testsValidatorMode: TestsValidatorMode
   onTestFindingDropped: ValidateForSubmissionArgs["onTestFindingDropped"]

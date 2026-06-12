@@ -97,6 +97,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
     // without re-testing the parser internals (those have their own suites).
     const env = {
       OPENCLAW_SECURITY_VALIDATOR_MODE: "enforce",
+      OPENCLAW_SECURITY_RECLASS: "on",
       OPENCLAW_TESTS_VALIDATOR_MODE: "shadow",
       OPENCLAW_LOGIC_VALIDATOR_MODE: "enforce",
       OPENCLAW_LOGIC_REFUTATION_MODE: "shadow",
@@ -111,6 +112,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
     }
     expect(parseEnsembleConfig(env).validatorModes).toEqual({
       securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      securityReclassEnabled: true,
       testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
       logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
       logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
@@ -134,6 +136,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
     // field fails `toEqual`) AND that the absent case routes through every parser.
     expect(parseEnsembleConfig({}).validatorModes).toEqual({
       securityValidatorMode: parseSecurityValidatorMode(undefined),
+      securityReclassEnabled: false,
       testsValidatorMode: parseTestsValidatorMode(undefined),
       logicValidatorMode: parseLogicValidatorMode(undefined),
       logicRefutationMode: parseLogicRefutationMode(undefined),

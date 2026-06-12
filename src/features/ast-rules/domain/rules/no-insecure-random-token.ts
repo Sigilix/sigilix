@@ -23,6 +23,7 @@
 //   - The fix is unambiguous: Web Crypto (`crypto.getRandomValues`,
 //     `crypto.randomUUID`) / `node:crypto.randomBytes`.
 
+import { isCredentialName } from "@/src/features/ast-rules/domain/credential-names"
 import type { AstRule, AstRuleHit, RuleContext } from "@/src/features/ast-rules/domain/types"
 import type { AstNode } from "@/src/features/ast-rules/domain/walker"
 
@@ -33,21 +34,6 @@ const FUNCTION_TYPES: ReadonlySet<string> = new Set([
   "ArrowFunctionExpression",
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.mock\.|\.fixture\.|(^|\/)(__tests__|__mocks__|tests?|fixtures?|mocks?)\/)/
-
-// STRONG, low-ambiguity credential suffixes — a name ending in one is always a
-// secret (`clientSecret`, `apiKey`, `resetPassword`, `csrfNonce`, `sessionId`).
-// Suffix-matched on a normalized (lowercased, non-alphanumeric-stripped) name,
-// so `api_key`/`apiKey` both match while generic `key`/`id`/`index` do NOT.
-const STRONG_CREDENTIAL_SUFFIX_RE =
-  /(?:secret|password|passwd|pwd|apikey|privatekey|accesskey|csrf|otp|nonce|verificationcode|sessionid)$/
-// "token" is AMBIGUOUS — a credential (`authToken`, `resetToken`) OR a non-secret
-// cursor (`nextToken`, `cancelToken`, `pageToken`). Treat `…token` as a secret
-// UNLESS prefixed by a known non-secret qualifier (parser/stream/cancel/paging).
-const NON_SECRET_TOKEN_PREFIX_RE =
-  /(?:cancel|cancellation|next|prev|previous|peek|match|page|continuation|pagination|stream|parse|lex|scan|sync|abort|design|css)$/
-// "salt" is AMBIGUOUS — a crypto salt vs chemistry/culinary words that merely
-// END in "salt" (`basalt`, `seaSalt`, `rockSalt`). Match only the crypto sense.
-const CRYPTO_SALT_RE = /(?:password|passwd|pw|hash|crypto|bcrypt|scrypt|pbkdf2|auth)salt$/
 
 function idName(n: AstNode | undefined): string | null {
   return n && n.type === "Identifier" ? (n.name as string) : null
@@ -60,20 +46,6 @@ function keyName(n: AstNode | undefined): string | null {
   if (n.type === "Identifier") return n.name as string
   if (n.type === "Literal" && typeof n.value === "string") return n.value
   return null
-}
-
-/** Does a normalized identifier name a credential / secret? (CWE-338 sink.) */
-function isCredentialName(name: string | null | undefined): boolean {
-  if (!name) return false
-  const n = name.toLowerCase().replace(/[^a-z0-9]/g, "")
-  if (STRONG_CREDENTIAL_SUFFIX_RE.test(n)) return true
-  // …token: secret unless qualified by a non-secret cursor/paging/cancel prefix.
-  if (n.endsWith("token")) {
-    return !NON_SECRET_TOKEN_PREFIX_RE.test(n.slice(0, -"token".length))
-  }
-  // …salt: only the crypto sense, or the bare word `salt`.
-  if (n === "salt" || CRYPTO_SALT_RE.test(n)) return true
-  return false
 }
 
 function sliceOf(source: string, node: AstNode | undefined): string {

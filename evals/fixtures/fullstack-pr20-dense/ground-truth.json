@@ -37,6 +37,17 @@
               "idsparam"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "string interpolation",
+              "sql"
+            ],
+            "notKeywords": [
+              "idsparam",
+              "in clause"
+            ],
+            "scope": "excerpt"
           }
         ]
       }

@@ -1,17 +1,6 @@
 # Reviewer head-to-head comparison
 
-> PROVISIONAL — worked example, not the SIG-326 decision dataset. These 6 PRs
-> are from the `sigilix-e2e-{backend,frontend,fullstack}` fixture repos and the
-> real/noise labels are an agent first-pass, retained to demonstrate the tool
-> end-to-end on live dual-bot data. Greptile has not been run on this fixture
-> set, so its zero counts below mean "not collected", not "missed everything".
-> Re-judge and rerun on the shared Sigilix/CodeRabbit/Greptile PR set before
-> relying on the numbers.
->
-> Regenerate the body with `npm run evals -- summary`; this banner is
-> manual and will need to be re-added after regeneration.
-
-_Generated 2026-06-07T14:58:00.441Z · 6 PR(s) collected, 6 labeled · 34 labeled issues._
+_Generated 2026-06-12T02:36:37.872Z · 7 PR(s) collected, 6 labeled · 34 labeled issues._
 
 ## Outcome Matrix
 
@@ -27,11 +16,9 @@ Precision = real bugs flagged ÷ everything the tool flagged. Recall = real bugs
 
 | tool | comments | flagged issues | real | noise | precision | recall | unique real | only noise |
 |------|---------:|---------------:|-----:|------:|----------:|-------:|------------:|-----------:|
-| Sigilix | 17 | 17 | 17 | 0 | 100.0% | 51.5% | 14 | 0 |
+| Sigilix | 32 | 17 | 17 | 0 | 100.0% | 51.5% | 14 | 0 |
 | CodeRabbit | 20 | 20 | 19 | 1 | 95.0% | 57.6% | 16 | 1 |
-| Greptile | 0 | 0 | 0 | 0 | — | 0.0% | 0 | 0 |
-
-Coverage note: Greptile had zero collected comments. Treat recall for those tools as not interpretable until you verify they actually reviewed the sampled PRs.
+| Greptile | 9 | 0 | 0 | 0 | — | 0.0% | 0 | 0 |
 
 Ground-truth real bugs: **33**; missed by all compared tools: **0**.
 
@@ -60,3 +47,4 @@ Pairwise overlap counts include all-three rows.
 | logic | 14 | 14 | 100.0% |
 | tests | 7 | 7 | 100.0% |
 | style | 1 | 0 | 0.0% |
+

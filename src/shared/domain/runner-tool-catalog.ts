@@ -11,9 +11,13 @@ export interface RunnerToolCatalogEntry {
 // catalog controls config and specialist routing for cataloged tool metadata.
 export const RUNNER_TOOL_CATALOG = [
   { id: "semgrep", displayName: "Semgrep", roles: ["security"], defaultEnabled: true },
+  // Runner-owned OpenGrep defaults are security-audit/OWASP rulesets.
+  { id: "opengrep", displayName: "OpenGrep", roles: ["security"], defaultEnabled: true },
   { id: "eslint", displayName: "ESLint", roles: ["logic"], defaultEnabled: true },
   { id: "tsc", displayName: "TypeScript Compiler", roles: ["logic"], defaultEnabled: true },
   { id: "ruff", displayName: "Ruff", roles: ["logic", "performance"], defaultEnabled: true },
+  // Brakeman reports Rails security warnings.
+  { id: "brakeman", displayName: "Brakeman", roles: ["security"], defaultEnabled: true },
   { id: "pylint", displayName: "Pylint", roles: ["logic"], defaultEnabled: true },
   { id: "flake8", displayName: "Flake8", roles: ["logic"], defaultEnabled: true },
   { id: "knip", displayName: "Knip", roles: ["logic"], defaultEnabled: true },

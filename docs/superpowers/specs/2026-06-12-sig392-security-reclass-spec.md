@@ -13,9 +13,12 @@ evidence, and the NONE+justification authz path didn't admit it either.
 
 In the gate's demote branch (validation-walk.ts SIG-108 else): when the
 failing finding carries a CONCRETE MECHANISM — non-empty trimmed
-`failureExample` — RECATEGORIZE to `category:"logic"` and keep it inline
-(it then faces the logic-class machinery: the grounding gate stays enforce,
-hallucination guard already passed). Findings WITHOUT a concrete mechanism
+`failureExample` — RECATEGORIZE to `category:"logic"` and keep it inline.
+Review-verified walk truth: downstream gates key on provenance source roles
+(`security-N` ids), NOT category — so the reclassified finding still faces
+the SECURITY backstops (SIG-325 refutation-survival, grounding/usage demote
+gates) under the logic label; the logic-id gates (SIG-109/308/328) do not
+fire on it. That is the intended machinery. Findings WITHOUT a concrete mechanism
 demote exactly as today — the anti-hallucination wall (the confabulated
 SSRF/path-traversal class) is untouched.
 
@@ -36,6 +39,21 @@ any surface; rollback is one line; the next probes measure it directly.
 - A fabricated failureExample on a confabulated finding is the residual
   risk — bounded: the finding was already customer-visible in the body, and
   the grounding gate + dismissal corpus remain the backstops.
+
+## Flag coupling (review MEDIUM, #497) + follow-ups
+
+- **OPENCLAW_REFUTATION_SURVIVAL_MODE coupling**: in `enforce`, SIG-325 would
+  re-demote reclassified findings lacking `independentAssessment` — exactly
+  the protected class. Currently `shadow` (no-op). Before flipping that flag,
+  decide whether `failureExample` should satisfy SIG-325's
+  mechanism-articulation requirement. Pinned by an interaction test + noted
+  in wrangler.toml and at the walk fork.
+- Follow-up (LOW): reclassification volume is invisible to
+  `/metrics/validation` per-category rollups (forks before the drop
+  callback); the `pr-review-security-reclassified-logic` console event is the
+  only counter. Wire into the metrics DO if promotion sizing needs it.
+- Follow-up (LOW, accepted): reclassified findings train the `logic`
+  precision-profile EMA, not `security`.
 
 ## Tests
 

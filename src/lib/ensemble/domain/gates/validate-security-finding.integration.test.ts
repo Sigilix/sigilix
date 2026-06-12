@@ -161,6 +161,66 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
+  it("SIG-392 × SIG-325 coupling: refutation-survival SHADOW keeps the reclassified finding inline (current prod)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "orgId='ab', userId='c' → key 'abc'; orgId='a', userId='bc' → key 'abc'",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      refutationSurvivalMode: "shadow",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "logic" }))
+  })
+
+  it("SIG-392 × SIG-325 coupling pin: refutation-survival ENFORCE re-demotes a reclassified finding lacking independentAssessment — resolve the coupling BEFORE flipping that flag (wrangler note)", () => {
+    // This is the documented hazard, pinned so a future flag flip surfaces
+    // here: the reclassified finding is self-originated (no resolving
+    // evidence) and carries no independentAssessment, so SIG-325-enforce
+    // takes it back out of the inline surface that SIG-392 just won.
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "orgId='ab', userId='c' → key 'abc'; orgId='a', userId='bc' → key 'abc'",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      refutationSurvivalMode: "enforce",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.unanchoredFindings).toHaveLength(1)
+  })
+
   it("SIG-392 reclass ON: a mechanism-less failing finding still DEMOTES exactly as before (the wall stands)", () => {
     const onDrop = vi.fn()
     const result = validateForSubmission({

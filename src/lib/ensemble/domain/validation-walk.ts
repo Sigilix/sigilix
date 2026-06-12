@@ -343,9 +343,21 @@ function applyHardDropGates(
       // concrete repro attached ("silent" to external evaluators). When the
       // failing finding articulates a concrete mechanism (non-empty
       // failureExample), recategorize to `logic` and keep it INLINE — it
-      // already passed the hallucination guard and still faces the
-      // grounding machinery. Mechanism-less findings fall through to the
-      // demote unchanged: the confabulated-CWE wall stands.
+      // already passed the hallucination guard, and (review-verified) it
+      // STILL faces the security backstops under the logic label: the
+      // downstream gates key on provenance source roles (`security-N` ids),
+      // not category, so SIG-325 refutation-survival and the grounding/usage
+      // demote gates all still apply. Mechanism-less findings fall through
+      // to the demote unchanged: the confabulated-CWE wall stands.
+      //
+      // ⚠ FLAG COUPLING (code review #497): SIG-325 runs right after this
+      // gate and, in `enforce`, body-demotes self-originated sev>=4 security
+      // findings lacking `independentAssessment` — which re-demotes exactly
+      // the findings this branch reclassifies. Today
+      // OPENCLAW_REFUTATION_SURVIVAL_MODE is "shadow" (no-op). Before
+      // flipping it to enforce, decide whether failureExample should satisfy
+      // SIG-325's mechanism-articulation requirement — the interaction test
+      // in validate-security-finding.integration.test.ts pins both modes.
       const failureExample = typeof f.failureExample === "string" ? f.failureExample.trim() : ""
       if (args.securityReclassEnabled && args.securityValidatorMode === "enforce" && failureExample.length > 0) {
         console.log(

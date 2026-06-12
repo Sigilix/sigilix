@@ -47,6 +47,8 @@ import { noSsti } from "./rules/no-ssti"
 import { noNosqlInjection } from "./rules/no-nosql-injection"
 import { noPrototypePollution } from "./rules/no-prototype-pollution"
 import { noXxe } from "./rules/no-xxe"
+// SIG-392 (b14): deterministic fail-open hardcoded-secret floor (CWE-798).
+import { noHardcodedSecretFallback } from "./rules/no-hardcoded-secret-fallback"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -105,6 +107,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noPrototypePollution,
   // security-specialist deterministic XXE floor (CWE-611, severity: warning).
   noXxe,
+  // SIG-392 (b14): security-specialist deterministic fail-open hardcoded-secret floor (CWE-798, severity: warning).
+  noHardcodedSecretFallback,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

@@ -20,6 +20,16 @@ describe("runner-tool-catalog", () => {
     ["flake8", true, ["logic"]],
     ["knip", true, ["logic"]],
     ["golangci-lint", true, ["logic"]],
+    ["buf", true, ["logic"]],
+    ["sqlfluff", true, ["logic"]],
+    ["prisma-lint", true, ["logic"]],
+    ["rubocop", true, ["logic"]],
+    ["phpstan", true, ["logic"]],
+    ["phpmd", true, ["logic"]],
+    ["phpcs", true, ["logic"]],
+    ["clippy", true, ["logic"]],
+    ["detekt", true, ["logic"]],
+    ["swiftlint", true, ["logic"]],
     ["actionlint", true, ["logic", "security"]],
     ["shellcheck", true, ["security", "logic"]],
     ["gitleaks", true, ["security"]],
@@ -43,7 +53,7 @@ describe("runner-tool-catalog", () => {
   ] as const
 
   it("mirrors the current runner tool ids, defaults, and role routing", () => {
-    expect(RUNNER_TOOL_CATALOG).toHaveLength(30)
+    expect(RUNNER_TOOL_CATALOG).toHaveLength(40)
     expect(RUNNER_TOOL_CATALOG.map(({ id, defaultEnabled, roles }) => [id, defaultEnabled, roles])).toEqual(
       expectedCatalog,
     )
@@ -55,6 +65,9 @@ describe("runner-tool-catalog", () => {
     expect(isRunnerToolId("opengrep")).toBe(true)
     expect(isRunnerToolId("tsc")).toBe(true)
     expect(isRunnerToolId("brakeman")).toBe(true)
+    expect(isRunnerToolId("buf")).toBe(true)
+    expect(isRunnerToolId("phpstan")).toBe(true)
+    expect(isRunnerToolId("swiftlint")).toBe(true)
     expect(isRunnerToolId("biome")).toBe(true)
     expect(isRunnerToolId("checkmake")).toBe(true)
     expect(isRunnerToolId("trivy")).toBe(true)

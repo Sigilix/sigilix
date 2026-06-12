@@ -198,13 +198,14 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
 }
 
 export const SYNTHESIZER_CONFIG: ModelConfig = {
-  // SIG-234 lineup swap (2026-05-26): synth primary moves to
-  // `gpt-oss:120b-cloud` — open-weight, medium-usage, removes
-  // Moonshot from the customer-visible critical merge path entirely.
-  // Format-tested clean (1.3s on a small prompt; expected 25-75s on
-  // a 4-verdict synth payload). Codex's HIGHEST-priority swap per
-  // ARC-292: "Moonshot capacity dip burned 6m16s on PR #97."
-  primary: "gpt-oss:120b-cloud",
+  // SIG-392 swap (2026-06-11): gpt-oss:120b-cloud → gemma4:31b. Won the
+  // uncapped shared-prompt bake-off ON THE INCUMBENT'S PROMPT on every axis:
+  // raw retention 12-13/20 vs ~8 (floored 13/20, zero post-floor drops 8/8),
+  // floored hi-sev FP 4.1 vs 6.3, aborts 0/8 vs 0-17%, latency 28-56s typ
+  // (110s outlier fits the 150s cap), honest categorized drop reasons — at
+  // ~4× lower cost (31B vs 120B). K=12 two-union confirm in SIG-392.
+  // (History: gpt-oss replaced kimi-k2.6 2026-05-26, SIG-234/ARC-292.)
+  primary: "gemma4:31b",
   // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
   // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
   // PROVIDER as primary (both Moonshot). When Moonshot had a bad few

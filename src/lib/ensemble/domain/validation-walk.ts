@@ -299,6 +299,11 @@ function applyHardDropGates(
     return { kind: "continue" }
   }
 
+  // SIG-392: set when the SIG-108 demote branch below reclassifies this
+  // finding security→logic; exempts it from the SIG-325 backstop (same
+  // evidence-absence, already adjudicated — see comment at the fork).
+  let reclassifiedFromSecurity = false
+
   // SIG-108: security evidence gate. Applies ONLY to findings whose
   // derived role set includes `security` (from provenance, NOT from
   // `finding.category` alone — Codex #3: a merged security+logic
@@ -343,11 +348,23 @@ function applyHardDropGates(
       // concrete repro attached ("silent" to external evaluators). When the
       // failing finding articulates a concrete mechanism (non-empty
       // failureExample), recategorize to `logic` and keep it INLINE — it
-      // already passed the hallucination guard and still faces the
-      // grounding machinery. Mechanism-less findings fall through to the
-      // demote unchanged: the confabulated-CWE wall stands.
+      // already passed the hallucination guard, and (review-verified) it
+      // STILL faces the security backstops under the logic label: the
+      // downstream gates key on provenance source roles (`security-N` ids),
+      // not category, so SIG-325 refutation-survival and the grounding/usage
+      // demote gates all still apply. Mechanism-less findings fall through
+      // to the demote unchanged: the confabulated-CWE wall stands.
+      //
+      // SIG-325 exemption (resolves code review #497's MEDIUM): the SIG-325
+      // backstop below is SKIPPED for a finding this branch reclassified —
+      // this branch IS the controlling adjudication of its evidence-absence
+      // (enforce mode + concrete mechanism required); a second body-demote of
+      // the same finding for the same reason would silently defeat SIG-392
+      // the moment REFUTATION_SURVIVAL_MODE flips to enforce. All
+      // non-reclassified security findings face SIG-325 unchanged.
       const failureExample = typeof f.failureExample === "string" ? f.failureExample.trim() : ""
       if (args.securityReclassEnabled && args.securityValidatorMode === "enforce" && failureExample.length > 0) {
+        reclassifiedFromSecurity = true
         console.log(
           JSON.stringify({
             event: "pr-review-security-reclassified-logic",
@@ -389,6 +406,7 @@ function applyHardDropGates(
   // the security evidence gate; `off` skips entirely.
   if (
     args.refutationSurvivalMode !== "off" &&
+    !reclassifiedFromSecurity &&
     sourceRolesInclude(sourceIds, "security") &&
     isSelfOriginatedSecurityFinding(f, args.securityManifest)
   ) {

@@ -13,9 +13,12 @@ evidence, and the NONE+justification authz path didn't admit it either.
 
 In the gate's demote branch (validation-walk.ts SIG-108 else): when the
 failing finding carries a CONCRETE MECHANISM — non-empty trimmed
-`failureExample` — RECATEGORIZE to `category:"logic"` and keep it inline
-(it then faces the logic-class machinery: the grounding gate stays enforce,
-hallucination guard already passed). Findings WITHOUT a concrete mechanism
+`failureExample` — RECATEGORIZE to `category:"logic"` and keep it inline.
+Review-verified walk truth: downstream gates key on provenance source roles
+(`security-N` ids), NOT category — so the reclassified finding still faces
+the SECURITY backstops (SIG-325 refutation-survival, grounding/usage demote
+gates) under the logic label; the logic-id gates (SIG-109/308/328) do not
+fire on it. That is the intended machinery. Findings WITHOUT a concrete mechanism
 demote exactly as today — the anti-hallucination wall (the confabulated
 SSRF/path-traversal class) is untouched.
 
@@ -36,6 +39,22 @@ any surface; rollback is one line; the next probes measure it directly.
 - A fabricated failureExample on a confabulated finding is the residual
   risk — bounded: the finding was already customer-visible in the body, and
   the grounding gate + dismissal corpus remain the backstops.
+
+## Flag coupling (review MEDIUM, #497) + follow-ups
+
+- **OPENCLAW_REFUTATION_SURVIVAL_MODE coupling — RESOLVED structurally**: a
+  reclassified finding is exempt from the SIG-325 backstop (a local
+  `reclassifiedFromSecurity` flag in the same walk iteration) — the reclass
+  is the controlling adjudication of its evidence-absence; double-demoting
+  the same finding for the same reason would defeat SIG-392 on the enforce
+  flip. All non-reclassified security findings face SIG-325 unchanged.
+  Pinned by interaction tests in both modes.
+- Follow-up (LOW): reclassification volume is invisible to
+  `/metrics/validation` per-category rollups (forks before the drop
+  callback); the `pr-review-security-reclassified-logic` console event is the
+  only counter. Wire into the metrics DO if promotion sizing needs it.
+- Follow-up (LOW, accepted): reclassified findings train the `logic`
+  precision-profile EMA, not `security`.
 
 ## Tests
 

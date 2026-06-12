@@ -161,6 +161,68 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
+  it("SIG-392 × SIG-325 coupling: refutation-survival SHADOW keeps the reclassified finding inline (current prod)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "orgId='ab', userId='c' → key 'abc'; orgId='a', userId='bc' → key 'abc'",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      refutationSurvivalMode: "shadow",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "logic" }))
+  })
+
+  it("SIG-392 × SIG-325 coupling RESOLVED: refutation-survival ENFORCE no longer re-demotes a reclassified finding (the reclass is the controlling adjudication)", () => {
+    // Review #497's MEDIUM, fixed structurally: the reclass branch exempts
+    // its finding from the SIG-325 backstop — same evidence-absence, already
+    // adjudicated under stricter conditions (enforce + concrete mechanism).
+    // Without the exemption, SIG-325-enforce would re-demote this exact
+    // shape and silently defeat SIG-392.
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "orgId='ab', userId='c' → key 'abc'; orgId='a', userId='bc' → key 'abc'",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      refutationSurvivalMode: "enforce",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "logic" }))
+    expect(result.unanchoredFindings).toHaveLength(0)
+  })
+
   it("SIG-392 reclass ON: a mechanism-less failing finding still DEMOTES exactly as before (the wall stands)", () => {
     const onDrop = vi.fn()
     const result = validateForSubmission({

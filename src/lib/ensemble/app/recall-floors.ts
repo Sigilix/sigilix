@@ -30,6 +30,7 @@ import {
 } from "@/src/lib/degraded-finding-floor"
 import { collapseNearDuplicateFindings } from "@/src/lib/ensemble/domain/near-dup-collapse"
 import { collapseCoverageStamps } from "@/src/lib/ensemble/domain/coverage-stamp-collapse"
+import { collapseClassRedundantFindings } from "@/src/lib/ensemble/domain/class-collapse"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 /** The synth-input verdicts produced by `buildSynthInputVerdicts(succeeded)`. */
@@ -288,6 +289,31 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
           prNumber,
           headSha: headSha.slice(0, 7),
           ...collapsed.collapsed,
+        }),
+      )
+    }
+  }
+
+  // SIG-392: class-redundancy collapse — 3+ findings of one curated class (e.g.
+  // "missing error handling" reported once per handler) become ONE pr-scope
+  // finding listing every location. The recall-eliciting logic prompt
+  // (OPENCLAW_LOGIC_RECALL_MODE) generates this same-class redundancy across
+  // handlers, which the near-dup collapse (|Δline|<=5) can't reach. Final stage,
+  // after coverage-stamp — same no-resurrection ordering. Recall-safe (one
+  // survivor per class); a no-op below 3 same-class findings.
+  {
+    const collapsed = collapseClassRedundantFindings(effectiveSynthVerdict.findings, effectiveSynthProvenance.findings)
+    if (collapsed.collapsed.length > 0) {
+      effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: collapsed.findings }
+      effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: collapsed.provenanceFindings }
+      console.log(
+        JSON.stringify({
+          event: "pr-review-class-redundancy-collapsed",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          collapsed: collapsed.collapsed,
         }),
       )
     }

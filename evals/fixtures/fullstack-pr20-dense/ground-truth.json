@@ -472,28 +472,7 @@
         "anyOf": [
           {
             "allKeywords": [
-              "idempoten",
-              "event.id"
-            ],
-            "scope": "excerpt"
-          },
-          {
-            "allKeywords": [
-              "dedup",
-              "event.id"
-            ],
-            "scope": "excerpt"
-          },
-          {
-            "allKeywords": [
-              "not idempotent"
-            ],
-            "scope": "excerpt"
-          },
-          {
-            "allKeywords": [
-              "idempoten",
-              "dedup"
+              "idempoten"
             ],
             "scope": "excerpt"
           }
@@ -1047,7 +1026,7 @@
           },
           {
             "allKeywords": [
-              "no test coverage"
+              "test coverage"
             ],
             "botCategories": [
               "testing"
@@ -1056,7 +1035,7 @@
           },
           {
             "allKeywords": [
-              "without test"
+              "untested"
             ],
             "botCategories": [
               "testing"

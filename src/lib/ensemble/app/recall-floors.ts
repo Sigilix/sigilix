@@ -29,6 +29,7 @@ import {
   injectUnmatchedAstEmits,
 } from "@/src/lib/degraded-finding-floor"
 import { collapseNearDuplicateFindings } from "@/src/lib/ensemble/domain/near-dup-collapse"
+import { collapseCoverageStamps } from "@/src/lib/ensemble/domain/coverage-stamp-collapse"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 /** The synth-input verdicts produced by `buildSynthInputVerdicts(succeeded)`. */
@@ -264,6 +265,29 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
           prNumber,
           headSha: headSha.slice(0, 7),
           pairs: collapsed.collapsedPairs,
+        }),
+      )
+    }
+  }
+
+  // SIG-392: cross-file coverage-stamp collapse — 2+ pure "ships without
+  // tests" observations become ONE pr-scope finding listing every path (the
+  // class PR #494's real-world batch measured as "the entire precision
+  // gap"; the tests gate demotes-not-drops it and the near-dup collapse
+  // can't reach across files). Same final-stage ordering guarantee.
+  {
+    const collapsed = collapseCoverageStamps(effectiveSynthVerdict.findings, effectiveSynthProvenance.findings)
+    if (collapsed.collapsed !== null) {
+      effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: collapsed.findings }
+      effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: collapsed.provenanceFindings }
+      console.log(
+        JSON.stringify({
+          event: "pr-review-coverage-stamps-collapsed",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          ...collapsed.collapsed,
         }),
       )
     }

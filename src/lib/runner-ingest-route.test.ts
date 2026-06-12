@@ -11,6 +11,7 @@ import {
 } from "@/src/lib/runner-ingest-route"
 import { __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
 import { RunnerReceiptDO } from "@/src/do/runner-receipt"
+import { RUNNER_TOOL_IDS } from "@/src/shared/domain/runner-tool-catalog"
 import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
@@ -252,15 +253,62 @@ describe("normalizeScanManifest", () => {
     )
   })
 
+  it("accepts the full current runner manifest plus safe future tool ids", () => {
+    const tools = [
+      ...RUNNER_TOOL_IDS.map((toolId) => ({
+        toolId,
+        enabled: true,
+        status: "empty",
+        path: `/tmp/runner/sarif/${toolId}.sarif`,
+        runCount: 0,
+        resultCount: 0,
+      })),
+      {
+        toolId: "future-lint",
+        enabled: true,
+        status: "produced",
+        path: "/tmp/runner/sarif/future-lint.sarif",
+        runCount: 1,
+        resultCount: 2,
+      },
+    ]
+
+    const normalized = normalizeScanManifest(rawManifest(tools))
+
+    expect(normalized).not.toBeNull()
+    const parsed = JSON.parse(normalized ?? "{}") as {
+      tools: Array<{ toolId: string; path?: string }>
+      summary: Record<string, number>
+    }
+    expect(parsed.tools).toHaveLength(RUNNER_TOOL_IDS.length + 1)
+    expect(parsed.tools.find((tool) => tool.toolId === "future-lint")).toEqual({
+      toolId: "future-lint",
+      enabled: true,
+      status: "produced",
+      runCount: 1,
+      resultCount: 2,
+    })
+    expect(parsed.tools.some((tool) => tool.path !== undefined)).toBe(false)
+    expect(parsed.summary).toEqual({
+      enabled: RUNNER_TOOL_IDS.length + 1,
+      produced: 1,
+      empty: RUNNER_TOOL_IDS.length,
+      missing: 0,
+      invalid: 0,
+    })
+  })
+
   it("rejects malformed manifest structure and tool entries", () => {
     const invalidManifests = [
       "{",
       "x".repeat(64 * 1024 + 1),
       JSON.stringify({ schemaVersion: 2, tools: [] }),
       JSON.stringify({ schemaVersion: 1, tools: "semgrep" }),
-      rawManifest(Array.from({ length: 14 }, () => ({ toolId: "semgrep", enabled: true, status: "empty" }))),
+      rawManifest(
+        Array.from({ length: 65 }, (_, index) => ({ toolId: `tool-${index}`, enabled: true, status: "empty" })),
+      ),
       rawManifest([null]),
-      rawManifest([{ toolId: "bandit", enabled: true, status: "empty" }]),
+      rawManifest([{ toolId: "bad/tool", enabled: true, status: "empty" }]),
       rawManifest([
         { toolId: "semgrep", enabled: true, status: "empty" },
         { toolId: "semgrep", enabled: true, status: "empty" },
@@ -272,6 +320,7 @@ describe("normalizeScanManifest", () => {
       rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", path: "x".repeat(1025) }]),
       rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", runCount: -1 }]),
       rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", resultCount: 1.5 }]),
+      rawManifest([{ toolId: "semgrep", enabled: true, status: "empty", resultCount: 1_000_001 }]),
     ]
 
     for (const manifest of invalidManifests) {
@@ -368,12 +417,12 @@ describe("handleRunnerIngestRoute", () => {
     expect(res.status).toBe(400)
   })
 
-  it("400 on malformed or unknown-tool scan manifests before claiming a receipt", async () => {
+  it("400 on malformed or unsafe-tool scan manifests before claiming a receipt", async () => {
     stubJwksFetch()
     const tok = await signToken(baseClaims)
     for (const scanManifest of [
       JSON.stringify({ schemaVersion: 1, tools: [null], summary: {} }),
-      JSON.stringify({ schemaVersion: 1, tools: [{ toolId: "bandit", enabled: true, status: "empty" }] }),
+      JSON.stringify({ schemaVersion: 1, tools: [{ toolId: "bad/tool", enabled: true, status: "empty" }] }),
       JSON.stringify({
         schemaVersion: 1,
         tools: [
@@ -443,6 +492,51 @@ describe("handleRunnerIngestRoute", () => {
     const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { scanManifest?: string }
     expect(stored.scanManifest).toBe(EXPECTED_SCAN_MANIFEST)
     expect(stored.scanManifest).not.toContain("path")
+  })
+
+  it("200 accepted for current runner and safe future scan-manifest tools", async () => {
+    stubJwksFetch()
+    const { ns, store } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const tok = await signToken(baseClaims)
+    const scanManifest = JSON.stringify({
+      schemaVersion: 1,
+      tools: [
+        {
+          toolId: "biome",
+          enabled: true,
+          status: "empty",
+          path: "/tmp/runner/sarif/biome.sarif",
+          runCount: 0,
+          resultCount: 0,
+        },
+        {
+          toolId: "future-lint",
+          enabled: true,
+          status: "produced",
+          path: "/tmp/runner/sarif/future-lint.sarif",
+          runCount: 1,
+          resultCount: 2,
+        },
+      ],
+      summary: { enabled: 999, produced: 999, empty: 999, missing: 999, invalid: 999 },
+    })
+
+    const res = await handleRunnerIngestRoute(post(envelope({ scanManifest }), tok), makeEnv({}, ns, kvWrap.kv))
+
+    expect(res.status).toBe(200)
+    expect(store.size).toBe(1)
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { scanManifest?: string }
+    expect(stored.scanManifest).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        tools: [
+          { toolId: "biome", enabled: true, status: "empty", runCount: 0, resultCount: 0 },
+          { toolId: "future-lint", enabled: true, status: "produced", runCount: 1, resultCount: 2 },
+        ],
+        summary: { enabled: 2, produced: 1, empty: 1, missing: 0, invalid: 0 },
+      }),
+    )
   })
 
   it("derives the review-join pull_number from the SIGNED claims.ref (refs/pull/N/merge), NOT the body (CR-4)", async () => {

@@ -21,7 +21,7 @@ import type { GitHubOidcClaims } from "./runner-oidc/types"
 import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-cache"
 import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
-import { RUNNER_TOOL_IDS, isRunnerToolId, type RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
+import { isSafeRunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES
 // (8 MiB): a receipt the ingest accepts but consumption later rejects as
@@ -33,6 +33,9 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_TOKEN_BYTES = 8 * 1024
 /** The manifest is audit metadata, not another findings channel. */
 const MAX_SCAN_MANIFEST_BYTES = 64 * 1024
+/** Allows runner catalog growth without letting a receipt carry unbounded audit rows. */
+const MAX_SCAN_MANIFEST_TOOLS = 64
+const MAX_SCAN_MANIFEST_COUNT = 1_000_000
 const MAX_SCAN_MANIFEST_PATH_CHARS = 1024
 /** Audit-receipt retention (the replay guard lives in the DO at 7 d). */
 const RECEIPT_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -81,7 +84,7 @@ type ScanManifestStatus = (typeof SCAN_MANIFEST_STATUSES)[number]
 const SCAN_MANIFEST_STATUS_SET: ReadonlySet<string> = new Set(SCAN_MANIFEST_STATUSES)
 
 export interface NormalizedScanManifestTool {
-  toolId: RunnerToolId
+  toolId: string
   enabled: boolean
   status: ScanManifestStatus
   runCount?: number
@@ -92,8 +95,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
-function isNonNegativeSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+function isNonNegativeManifestCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_SCAN_MANIFEST_COUNT
 }
 
 export function scanManifestSummary(tools: readonly NormalizedScanManifestTool[]): Record<string, number> {
@@ -115,14 +118,14 @@ export function normalizeScanManifest(raw: string): string | null {
     if (!isObject(parsed)) return null
     const manifest = parsed as Record<string, unknown>
     if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.tools)) return null
-    if (manifest.tools.length > RUNNER_TOOL_IDS.length) return null
+    if (manifest.tools.length > MAX_SCAN_MANIFEST_TOOLS) return null
 
-    const seen = new Set<RunnerToolId>()
+    const seen = new Set<string>()
     const tools: NormalizedScanManifestTool[] = []
     for (const rawTool of manifest.tools) {
       if (!isObject(rawTool)) return null
       const toolId = rawTool.toolId
-      if (!isRunnerToolId(toolId) || seen.has(toolId)) return null
+      if (!isSafeRunnerToolId(toolId) || seen.has(toolId)) return null
       seen.add(toolId)
       if (typeof rawTool.enabled !== "boolean") return null
       const status = rawTool.status
@@ -135,17 +138,20 @@ export function normalizeScanManifest(raw: string): string | null {
       ) {
         return null
       }
+      // Runner-local paths are useful for runner-side debugging only. Do not
+      // persist them in the receipt; downstream consumers must never treat a
+      // manifest path as a worker-readable path.
       const tool: NormalizedScanManifestTool = {
         toolId,
         enabled: rawTool.enabled,
         status: status as ScanManifestStatus,
       }
       if (rawTool.runCount !== undefined) {
-        if (!isNonNegativeSafeInteger(rawTool.runCount)) return null
+        if (!isNonNegativeManifestCount(rawTool.runCount)) return null
         tool.runCount = rawTool.runCount
       }
       if (rawTool.resultCount !== undefined) {
-        if (!isNonNegativeSafeInteger(rawTool.resultCount)) return null
+        if (!isNonNegativeManifestCount(rawTool.resultCount)) return null
         tool.resultCount = rawTool.resultCount
       }
       tools.push(tool)

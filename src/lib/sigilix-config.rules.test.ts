@@ -72,16 +72,17 @@ describe("parseSigilixConfig — linters (SIG-107)", () => {
     expect(cfg?.linters).toEqual({ semgrep: { enabled: true } })
   })
 
-  it("drops unknown linter ids and omits linters when no valid entries remain", () => {
+  it("drops unknown linter ids while keeping newly cataloged linters", () => {
     const cfg = parseSigilixConfig(
       JSON.stringify({
         linters: {
           markdownlint: { enabled: true },
+          "future-lint": { enabled: false },
           prettier: false,
         },
       }),
     )
-    expect(cfg?.linters).toBeUndefined()
+    expect(cfg?.linters).toEqual({ markdownlint: { enabled: true } })
   })
 })
 
@@ -97,7 +98,7 @@ describe("resolveLintersConfig (SIG-107)", () => {
     expect(defaults["osv-scanner"]).toEqual({ enabled: true })
     expect(defaults.checkov).toEqual({ enabled: false })
     expect(defaults.trivy).toEqual({ enabled: false })
-    expect(defaults.tflint).toEqual({ enabled: false })
+    expect(defaults.tflint).toEqual({ enabled: true })
     expect(resolveLintersConfig({} as SigilixConfig)).toEqual(defaults)
   })
 

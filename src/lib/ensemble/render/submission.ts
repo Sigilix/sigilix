@@ -225,13 +225,17 @@ interface PreparedReviewSubmissionFindings {
 }
 
 // SIG-281 PR B (Rec 3): cap the number of inline review comments a
-// single review posts, so a large PR doesn't bury the diff under dozens
-// of threads. Overflow is demoted to the review body (never dropped),
-// prioritized so the highest-severity / highest-confidence findings keep
-// their inline thread. 15 = the upper end of the proposed 10-15 range,
-// chosen to minimize SIG-247 marker loss (markers are inline-only) while
-// still bounding inline noise. No sigilix.json config in PR B.
-const MAX_INLINE_COMMENTS = 15
+// single review posts. SIG-392 (2026-06-12): raised 15 → 50 — effectively
+// uncapped. The 15-cap was demoting REAL findings to the body summary
+// (un-anchored, easy to miss), which artificially suppressed posted recall;
+// since precision is gate-controlled (grounding / refute / dedup / class-
+// collapse — the recall-prompt audit posted ~0 genuine FP), every real finding
+// SHOULD keep its inline thread, not be buried. 50 is NOT a recall limit (no
+// real PR surfaces 50 gate-survived findings) — it's a pathological-runaway
+// backstop (a malformed synth verdict can't post hundreds of comments). Below
+// 50 the behavior is "post every finding inline." Overflow (50+) is still
+// demoted to the body, never dropped, prioritized by severity/confidence.
+const MAX_INLINE_COMMENTS = 50
 
 // SIG-281 PR B (Rec 5): a finding is "grounded enough to keep inline"
 // when it carries a committable fix (suggestedReplacement / deletion) OR

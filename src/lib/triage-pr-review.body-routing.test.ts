@@ -496,32 +496,46 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     expect(out.body).toContain("src/lib/foo.ts:9")
   })
 
-  it("Rec 3: caps inline comments at 15 and demotes the overflow to the body (never dropped)", () => {
-    const findings = Array.from({ length: 18 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
+  it("Rec 3 (SIG-392): does NOT cap a dense PR inline — every real finding keeps its thread", () => {
+    // 18 gate-survived findings — all stay inline now (cap raised to a 50
+    // pathological backstop; precision is gate-controlled, so surfacing real
+    // findings inline is right). None demoted to the body.
+    const findings = Array.from({ length: 18 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `f-${i}` }))
     const out = buildReviewSubmissionWithMetadata({
       verdict: mkVerdict(findings),
       prAuthor: "a",
       headSha: "abc",
     })
-    expect(out.submission.comments).toHaveLength(15)
-    expect(out.bodyOnlyFindings).toHaveLength(3) // 18 - 15, never dropped
+    expect(out.submission.comments).toHaveLength(18)
+    expect(out.bodyOnlyFindings).toHaveLength(0)
+  })
+
+  it("Rec 3 (SIG-392): the pathological backstop still demotes overflow above 50 to the body (never dropped)", () => {
+    const findings = Array.from({ length: 52 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: mkVerdict(findings),
+      prAuthor: "a",
+      headSha: "abc",
+    })
+    expect(out.submission.comments).toHaveLength(50)
+    expect(out.bodyOnlyFindings).toHaveLength(2) // 52 - 50, never dropped
     expect(out.submission.body).toContain("inline comment cap exceeded; shown here")
   })
 
-  it("Rec 3: prioritizes higher-severity findings to keep inline; the lowest-severity blocker overflows", () => {
-    const high = Array.from({ length: 15 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `high-${i}` }))
+  it("Rec 3: at the backstop, prioritizes higher-severity findings to keep inline; the lowest-severity blocker overflows", () => {
+    const high = Array.from({ length: 50 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `high-${i}` }))
     const low = lf({ score: 4, line: 999, headline: "low-priority blocker" })
     const out = buildReviewSubmissionWithMetadata({
       verdict: mkVerdict([low, ...high]),
       prAuthor: "a",
       headSha: "abc",
     })
-    expect(out.submission.comments).toHaveLength(15)
+    expect(out.submission.comments).toHaveLength(50)
     expect(out.bodyOnlyFindings.map((f) => f.headline)).toContain("low-priority blocker")
   })
 
-  it("Rec 3: the cap keeps inlineOriginalIndex aligned so each kept comment carries ITS SIG-247 marker", () => {
-    const findings = Array.from({ length: 16 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
+  it("Rec 3: under the backstop, inlineOriginalIndex stays aligned so each kept comment carries ITS SIG-247 marker", () => {
+    const findings = Array.from({ length: 51 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
     const markers = findings.map(
       (_, i) =>
         `<!-- sigilix:fid:${String(i).padStart(16, "0")}:cat:logic:sev:error:path:${String(i).padStart(12, "0")} -->`,
@@ -532,7 +546,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
       headSha: "abc",
       findingMarkers: markers,
     })
-    expect(out.comments).toHaveLength(15)
+    expect(out.comments).toHaveLength(50)
     for (const c of out.comments ?? []) {
       const idx = Number(/cap-(\d+)/.exec(c.body)?.[1])
       expect(c.body).toContain(markers[idx])
@@ -540,10 +554,10 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
   })
 
   it("believability floor: a score >= 4 finding demoted to the body by the cap still REQUEST_CHANGES", () => {
-    // 16 blockers — one overflows to the body, but inlineFindings is still
-    // non-empty so the gate blocks; even an all-overflow case would block
-    // via the body-only score>=4 floor (covered in PR A).
-    const findings = Array.from({ length: 16 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
+    // 52 blockers — 2 overflow the 50 backstop to the body, but inlineFindings
+    // is still non-empty so the gate blocks; even an all-overflow case would
+    // block via the body-only score>=4 floor (covered in PR A).
+    const findings = Array.from({ length: 52 }, (_, i) => lf({ score: 5, line: 100 + i, headline: `cap-${i}` }))
     const out = submit(findings)
     expect(out.event).toBe("REQUEST_CHANGES")
   })

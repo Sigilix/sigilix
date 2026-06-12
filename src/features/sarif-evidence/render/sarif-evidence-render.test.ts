@@ -7,6 +7,9 @@ import {
 } from "@/src/features/sarif-evidence/render/render"
 import type { SarifFinding, SbomSummary } from "@/src/features/sarif-evidence/domain/types"
 
+const TRIAGE_NOTE =
+  "Deterministic tool output is evidence, not a final verdict; inspect/refute against visible code, and refute only with proof, before emitting."
+
 const F = (overrides: { [K in keyof SarifFinding]?: SarifFinding[K] | undefined } = {}): SarifFinding => {
   const base: Record<string, unknown> = {
     ruleId: "X",
@@ -33,6 +36,8 @@ describe("renderSarifFindingsForPrompt", () => {
   it("emits canonical header + finding stanza", () => {
     const out = renderSarifFindingsForPrompt([F({ ruleId: "R1", message: "msg" })])
     expect(out).toContain("[SARIF EVIDENCE — pre-LLM]")
+    expect(out).toContain(`1 finding surfaced from SARIF. ${TRIAGE_NOTE}`)
+    expect(out).not.toContain("not shown or inspected")
     expect(out).toContain("rule_id: R1")
     expect(out).toContain("severity: warning")
     expect(out).toContain("category: vulnerability")
@@ -66,6 +71,10 @@ describe("renderSarifFindingsForPrompt", () => {
     }
     expect(count).toBe(10)
     expect(out).toContain("dropped by per-file render cap")
+    expect(out).toContain("not shown or inspected")
+    expect(out).toContain(
+      `10 findings surfaced from SARIF (5 additional dropped by per-file render cap; not shown or inspected). ${TRIAGE_NOTE}`,
+    )
   })
 
   it("does NOT cap per-file when paths differ", () => {
@@ -95,6 +104,16 @@ describe("renderSarifFindingsForPrompt", () => {
       F({ toolName: "ESLint", toolId: "eslint", source: "deterministic-tool" }),
     ])
     expect(out).toContain("source: deterministic-tool/eslint")
+  })
+
+  it("frames deterministic tool output as candidate evidence, not an unquestionable verdict", () => {
+    const out = renderSarifFindingsForPrompt([
+      F({ toolName: "PHPStan", toolId: "phpstan", source: "deterministic-tool", ruleId: "phpstan/type-error" }),
+    ])
+    expect(out).toContain("Deterministic tool output is evidence, not a final verdict")
+    expect(out).toContain("inspect/refute against visible code")
+    expect(out).toContain("refute only with proof")
+    expect(out).not.toContain("do NOT question them")
   })
 
   it("renders compact dropped-result summaries when metadata is present", () => {

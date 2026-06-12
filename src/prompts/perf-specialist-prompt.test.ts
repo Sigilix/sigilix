@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "@/src/prompts/pr-review-specialists"
+import { RUNNER_TOOL_EVIDENCE_INSTRUCTIONS } from "@/src/prompts/specialists/shared"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import perfExamples from "@/src/prompts/perf-examples.json"
@@ -81,6 +82,73 @@ describe("performance specialist prompt", () => {
   })
 })
 
+describe("runner tool evidence prompt contract", () => {
+  it("uses the shared runner tool evidence block as the single source of truth", () => {
+    expect(RUNNER_TOOL_EVIDENCE_INSTRUCTIONS.length).toBeGreaterThan(100)
+    for (const role of ["logic", "security", "performance", "tests"] as const) {
+      expect(SPECIALIST_PROMPTS[role]).toContain(RUNNER_TOOL_EVIDENCE_INSTRUCTIONS)
+    }
+  })
+
+  it("reaches every specialist so all routed runner findings are triaged consistently", () => {
+    for (const role of ["logic", "security", "performance", "tests"] as const) {
+      expect(SPECIALIST_PROMPTS[role]).toContain("RUNNER TOOL EVIDENCE")
+      expect(SPECIALIST_PROMPTS[role]).toContain("source: deterministic-tool/<toolId>")
+      expect(SPECIALIST_PROMPTS[role]).toContain("candidate evidence, not a final verdict")
+      expect(SPECIALIST_PROMPTS[role]).toContain(
+        "Do NOT suppress independent real bugs just because no tool emitted them",
+      )
+    }
+  })
+
+  it("tells specialists to inspect and refute tool-backed candidates before emitting", () => {
+    const prompt = SPECIALIST_PROMPTS.logic
+    expect(prompt).toContain("Use `rule_id`, `tool`, `source`, `path`, `message`, and `evidence`")
+    expect(prompt).toContain("Inspect the visible diff/context before emitting")
+    expect(prompt).toContain("Refute only with specific, verifiable evidence")
+    expect(prompt).toContain("stay in your lane")
+  })
+
+  it("makes refutation proof-only and recall-safe when tool evidence is uncertain", () => {
+    const prompt = SPECIALIST_PROMPTS.security
+    expect(prompt).toContain("Refute only with specific, verifiable evidence from the visible code")
+    expect(prompt).toContain("If you cannot prove it safe, emit it in your lane")
+    expect(prompt).not.toContain("obvious safe cases")
+    expect(prompt).toContain("documentation-only examples")
+    expect(prompt).toContain("test fixture data that is not used by production")
+    expect(prompt).toContain("Do NOT refute generated production code")
+    expect(prompt).toContain("partially applies or is lower severity than reported")
+    expect(prompt).toContain("emit it with an adjusted score")
+  })
+
+  it("prevents cross-domain runner findings from being dropped by mutual deferral", () => {
+    const prompt = SPECIALIST_PROMPTS.performance
+    expect(prompt).toContain("If a tool finding spans multiple domains")
+    expect(prompt).toContain("emit when your specialist lens is a plausible primary lens")
+    expect(prompt).toContain("When in doubt, emit rather than drop")
+    expect(prompt).toContain("supplements, and does not override, the role-specific gates")
+    expect(prompt).toContain("If you are certain it belongs entirely to another lane, skip it")
+    expect(prompt).toContain("For the tests specialist, emit-rather-than-drop applies only to plausible testing gaps")
+    expect(prompt).not.toContain("dead paths")
+    expect(prompt).not.toContain("role-mismatched output")
+  })
+
+  it("keeps high-confidence deterministic tool findings from being discounted", () => {
+    const prompt = SPECIALIST_PROMPTS.logic
+    expect(prompt).toContain("High-confidence deterministic findings")
+    expect(prompt).toContain("type, parse, syntax, or schema errors")
+    expect(prompt).toContain("near-certain evidence of a tool-detected issue")
+    expect(prompt).toContain("Even near-certain tool findings can be false positives")
+    expect(prompt).toContain("verify the finding applies to the actual diff before emitting")
+  })
+
+  it("requires score adjustments to follow the role scoring rubric", () => {
+    const prompt = SPECIALIST_PROMPTS.logic
+    expect(prompt).toContain("Use your role's normal scoring rubric")
+    expect(prompt).toContain("explain the adjustment in the finding body")
+  })
+})
+
 describe("security specialist prompt — SIG-282 output fields", () => {
   const prompt = SPECIALIST_PROMPTS.security
 
@@ -142,6 +210,10 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
 })
 
 describe("PROMPT_VERSION", () => {
+  it("is bumped to v31 for SIG-107 runner tool evidence instructions", () => {
+    expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(31)
+  })
+
   it("is at least 25 (SIG-342 bumped 24->25 for perf calibration)", () => {
     // SIG-110 bumped 3->4; SIG-125 bumped 4->5; SIG-162 bumped 5->6;
     // SIG-161 PR 4b bumped 6->7; SIG-342 bumped 24->25. Assert the

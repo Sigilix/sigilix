@@ -12,6 +12,8 @@
 import type { SarifFinding, SbomSummary } from "@/src/features/sarif-evidence/domain/types"
 
 const PER_FILE_RENDER_CAP = 10
+const SARIF_EVIDENCE_TRIAGE_NOTE =
+  "Deterministic tool output is evidence, not a final verdict; inspect/refute against visible code, and refute only with proof, before emitting."
 
 const SEVERITY_RANK: Record<SarifFinding["severity"], number> = {
   error: 2,
@@ -83,8 +85,8 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
   const droppedByCap = sorted.length - capped.length
   const summary =
     droppedByCap > 0
-      ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
-      : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
+      ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap; not shown or inspected). ${SARIF_EVIDENCE_TRIAGE_NOTE}`
+      : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. ${SARIF_EVIDENCE_TRIAGE_NOTE}`
   lines.push(summary)
   for (const droppedResults of capExcludedDroppedResults) {
     lines.push(`dropped_results: ${droppedResults}`)

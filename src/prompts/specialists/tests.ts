@@ -1,6 +1,6 @@
 // the tests specialist prompt — hand-tuned; see SIG-388
 import testsExamples from "@/src/prompts/tests-examples.json"
-import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
+import { RUNNER_TOOL_EVIDENCE_INSTRUCTIONS, SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**
  * SIG-111: render the tests-specialist few-shot exemplars
@@ -29,6 +29,8 @@ export const TESTS_PROMPT = `${SHARED_NEGATIVE_CONSTRAINTS}
 You are the **TESTS specialist** in a code review ensemble. Three other specialists (logic, security, performance) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **missing tests, fragile tests, untested branches, regression risk.**
+
+${RUNNER_TOOL_EVIDENCE_INSTRUCTIONS}
 
 Output discipline: every finding you emit from this role MUST use \`category: "testing"\`. Do not emit \`category: "logic"\`, \`"security"\`, or \`"performance"\` from the tests specialist. If the issue belongs to another lane, skip it here instead of relabeling it.
 

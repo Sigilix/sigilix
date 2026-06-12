@@ -75,7 +75,10 @@ function collectCapExcludedDroppedResults(sorted: readonly SarifFinding[], cappe
   return summaries
 }
 
-export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]): string {
+export function renderSarifFindingsForPrompt(
+  findings: readonly SarifFinding[],
+  options: { activeRoleHint?: SarifFinding["roleHint"] } = {},
+): string {
   if (findings.length === 0) return ""
   const sorted = sortBySeverityThenPath(findings)
   const capped = applyPerFileCap(sorted)
@@ -96,7 +99,9 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
     lines.push(`- rule_id: ${f.ruleId}`)
     lines.push(`  severity: ${f.severity}`)
     lines.push(`  category: ${f.category}`)
-    lines.push(`  role_hint: ${f.roleHint}`)
+    // `activeRoleHint` is display-only for role-scoped specialist blocks:
+    // the original SARIF finding keeps its primary role for synth/manifest paths.
+    lines.push(`  role_hint: ${options.activeRoleHint ?? f.roleHint}`)
     lines.push(`  tool: ${f.toolName}`)
     const sourceLabel = formatSourceLabel(f)
     if (sourceLabel !== null) lines.push(`  source: ${sourceLabel}`)

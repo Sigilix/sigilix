@@ -42,6 +42,8 @@ const EMIT_RULES = new Set([
   "no-prototype-pollution",
   // the XXE floor (CWE-611, security/warning — FP-safe at P2).
   "no-xxe",
+  // SIG-392 (b14): the fail-open hardcoded-secret floor (CWE-798, security/warning — FP-safe at P2).
+  "no-hardcoded-secret-fallback",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

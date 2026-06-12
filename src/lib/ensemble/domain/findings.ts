@@ -208,6 +208,16 @@ export function computeFindingDelta(
   currentKeys: ReadonlySet<string>,
   priorFindings: ReadonlyArray<{ key: string; path: string }>,
   changedPaths: ReadonlySet<string>,
+  opts?: {
+    /** SIG-392 (e2e-frontend#20 double-review): the prior manifest's headSha
+     *  equals the current head — the code did NOT change, so an absent prior
+     *  finding is RUN-TO-RUN DRAW VARIANCE, never evidence of a fix. The
+     *  path-in-diff test is trivially true on a same-head rerun (the diff vs
+     *  base is identical), which mislabeled real catches "likely-fixed" and
+     *  erased them (the warmup rerun fires this path by design). Same-head ⇒
+     *  classify absent findings as carried-over. */
+    sameHead?: boolean
+  },
 ): FindingDelta {
   const priorKeys = new Set(priorFindings.map((f) => f.key))
   let newCount = 0
@@ -227,7 +237,7 @@ export function computeFindingDelta(
   let carriedOverCount = 0
   for (const p of priorFindings) {
     if (currentKeys.has(p.key)) continue
-    if (changedPathsLower.has(p.path.toLowerCase())) likelyFixedCount += 1
+    if (!opts?.sameHead && changedPathsLower.has(p.path.toLowerCase())) likelyFixedCount += 1
     else carriedOverCount += 1
   }
   return { newCount, stillOpenCount, likelyFixedCount, carriedOverCount }

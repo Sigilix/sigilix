@@ -218,6 +218,31 @@ describe("computeFindingDelta", () => {
     expect(delta.carriedOverCount).toBe(1)
   })
 
+  it("SIG-392 same-head guard: a same-SHA rerun never claims likely-fixed (e2e-frontend#20 regression)", () => {
+    // The real incident: review #2 fired 110s after review #1 on the
+    // IDENTICAL head (warmup rerun), drew differently, and the path-in-diff
+    // test — trivially true on a same-head rerun — relabeled review #1's
+    // real catches (incl. the planted T4 cache-key collision) "4 likely-
+    // fixed". Same head ⇒ absent findings are draw variance → carried-over.
+    const currentKeys = new Set(["k-unbounded-map"])
+    const priorFindings = [
+      prior("k-unbounded-map", "src/api/membership-cache.ts"), // re-found → still-open
+      prior("k-cache-key-collision", "src/api/membership-cache.ts"), // draw variance
+      prior("k-ttl-eviction", "src/api/membership-cache.ts"),
+    ]
+    const changedPaths = new Set(["src/api/membership-cache.ts"]) // same diff vs base — trivially contains every path
+
+    const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths, { sameHead: true })
+
+    expect(delta.likelyFixedCount).toBe(0)
+    expect(delta.carriedOverCount).toBe(2)
+    expect(delta.stillOpenCount).toBe(1)
+
+    // and WITHOUT the guard the same inputs mislabel (the bug being pinned):
+    const unguarded = computeFindingDelta(currentKeys, priorFindings, changedPaths)
+    expect(unguarded.likelyFixedCount).toBe(2)
+  })
+
   it("never claims a finding is fixed when its path isn't in the changed set (incremental-review safety)", () => {
     const currentKeys = new Set(["k1"])
     const priorFindings = [prior("k-gone", "src/untouched.ts")]

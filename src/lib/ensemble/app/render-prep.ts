@@ -887,7 +887,12 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
       // diffs without reviewable positions correctly fall out
       // (we had no signal on them).
       const changedPaths = new Set(reviewable.keys())
-      const delta = computeFindingDelta(currentKeySet, priorRead.manifest.findings, changedPaths)
+      // SIG-392: a same-head rerun (warmup rerun, manual /sigilix review)
+      // must never claim "likely-fixed" — the code didn't change; absent
+      // findings are draw variance and classify as carried-over.
+      const delta = computeFindingDelta(currentKeySet, priorRead.manifest.findings, changedPaths, {
+        sameHead: priorRead.manifest.headSha === headSha,
+      })
       // Promote to the renderer-facing shape. We still gate the
       // observability log on the same "any signal" predicate as
       // `renderDeltaBadge` so a no-change second review doesn't

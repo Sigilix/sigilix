@@ -43,6 +43,8 @@ import type { AstScanMode, EnsembleConfig } from "./domain/config"
 export interface EnsembleConfigEnv {
   // AST security-scan modes (PR 3)
   OPENCLAW_AUTHZ_IDOR_SCAN?: string | undefined
+  // SIG-392 recall-eliciting logic prompt
+  OPENCLAW_LOGIC_RECALL_MODE?: string | undefined
   // SIG-393 region re-sweep
   OPENCLAW_RESWEEP_MODE?: string | undefined
   OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
@@ -177,6 +179,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       synthBypassEnabled: parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED),
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
+      // SIG-392: recall-eliciting logic prompt (default off).
+      logicRecallEnabled: env.OPENCLAW_LOGIC_RECALL_MODE === "on",
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),

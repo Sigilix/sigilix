@@ -36,7 +36,7 @@ import { applyLogicPromptBudget } from "@/src/lib/logic-prompt-budget"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { type SarifFinding, runSarifEvidence } from "@/src/features/sarif-evidence"
 import { runAstRules } from "@/src/features/ast-rules"
-import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
+import { SPECIALIST_PROMPTS, specialistSystemPrompt } from "@/src/prompts/pr-review-specialists"
 import {
   type EnsembleRunCtx,
   computeSpecialistFanoutSummary,
@@ -314,7 +314,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         runSpecialist({
           role,
           apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: SPECIALIST_PROMPTS[role],
+          systemPrompt: specialistSystemPrompt(role, ensembleConfig.flags.logicRecallEnabled),
           // SIG-113: tests specialist gets the testing-evidence
           // block; other specialists get the classification block.
           initialMessage,

@@ -20,6 +20,8 @@ const EMIT_RULES = new Set([
   "no-disabled-tls-reject-unauthorized",
   // SIG-310: the contract-drift type-pattern (logic/warning — FP-safe at P2).
   "no-snake-camel-optional-alias",
+  // SIG-392 (b8): the runtime launder-cast contract-drift (logic/warning — FP-safe at P2).
+  "no-double-cast-through-unknown",
   // SIG-314: the IDOR/BOLA floor (security/warning — FP-safe at P2).
   "no-unauthorized-object-lookup",
   // the weak-randomness floor (CWE-338, security/warning — FP-safe at P2).

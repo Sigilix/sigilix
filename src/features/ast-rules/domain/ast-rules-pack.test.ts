@@ -38,7 +38,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 34 rules in the canonical order", () => {
+  it("exports exactly 35 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -67,6 +67,8 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-sync-io-in-request-path",
       // SIG-310
       "no-snake-camel-optional-alias",
+      // SIG-392 (b8): runtime launder-cast contract-drift (logic/warning).
+      "no-double-cast-through-unknown",
       // SIG-314: deterministic IDOR/BOLA floor (security/warning).
       "no-unauthorized-object-lookup",
       // deterministic weak-randomness floor (CWE-338, security/warning).
@@ -116,6 +118,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-n-plus-one-call-in-loop": { severity: "warning", roleHint: "performance" },
       "no-sync-io-in-request-path": { severity: "warning", roleHint: "performance" },
       "no-snake-camel-optional-alias": { severity: "warning", roleHint: "logic" },
+      "no-double-cast-through-unknown": { severity: "warning", roleHint: "logic" },
       "no-unauthorized-object-lookup": { severity: "warning", roleHint: "security" },
       "no-insecure-random-token": { severity: "warning", roleHint: "security" },
       "no-open-redirect": { severity: "warning", roleHint: "security" },

@@ -128,7 +128,13 @@ export function collapseClassRedundantFindings<P extends { sourceFindingIds: Rea
     return { findings: findings as PrReviewFinding[], provenanceFindings: provenanceFindings as P[], collapsed: [] }
   }
 
-  const collapsedTelemetry: ClassCollapseResult<P>["collapsed"] = []
+  const collapsedTelemetry: Array<{
+    classId: string
+    keptHeadline: string
+    collapsedCount: number
+    droppedHeadlines: string[]
+    locations: string[]
+  }> = []
   const outFindings: PrReviewFinding[] = []
   const outProvenance: P[] = []
   for (let i = 0; i < findings.length; i++) {

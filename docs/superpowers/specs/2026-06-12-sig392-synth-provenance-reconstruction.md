@@ -19,10 +19,15 @@ synth-input specialist verdicts, threaded via `SynthesizerRunArgs`.
 
 Reconstruction (pure, `domain/synth-provenance-reconstruct.ts`): for each
 verdict finding, match source findings by `path` AND `|line - srcLine| <= 5`
-AND headline token-Jaccard >= 0.25 (reuse the near-dup-collapse tokenizer);
-`sourceFindingIds` = matched source ids (ascending). `dropped: []`,
-`softened: []`. A verdict finding matching NO source gets `sourceFindingIds:
-[]`.
+(line proximity only — NOT headline). `sourceFindingIds` = co-located source
+ids (ascending); `dropped: []`; `softened` omitted. A verdict finding matching
+NO source gets `sourceFindingIds: []`.
+
+**Matcher decision (revised from the original draft):** headline token-Jaccard
+was REJECTED as a match gate — the synth rewrites wording, so a real rephrased
+finding would score below any threshold and be wrongly dropped (a recall
+regression). Co-location alone answers the guard's question. Trade-off
+recorded below.
 
 ## Recall/precision safety (the trust-model argument)
 
@@ -40,6 +45,22 @@ AND headline token-Jaccard >= 0.25 (reuse the near-dup-collapse tokenizer);
   correctness/security regression.
 - Only fires when the verdict ALREADY parsed cleanly — garbage output still
   returns null → normal retry/fallback.
+
+**Known precision hole (code review #501, rated LOW / acceptable):** when TWO
+distinct bugs co-locate (same path, ±5 lines — e.g. the webhook
+idempotency + event-type pair) and gemma both omits provenance AND emits both,
+a verdict finding gets BOTH source ids; the downstream evidence backfill
+(`buildFindingEvidenceRecord` / `backfillIndependentAssessmentFromSources`)
+could then copy the wrong source's CWE/evidence/rationale onto a real finding.
+This is a misattributed label on a GROUNDED finding, never a fabricated finding
+(the guard contract — "a real source exists nearby" — still holds), and is
+strictly tighter than the deepseek-fallback baseline it replaces. **Probe-gated
+follow-up:** if the next dense probe shows reconstruction firing often on
+multi-bug-per-line payloads, add headline-Jaccard as a TIEBREAKER (rank
+co-located sources, prefer the semantic match; keep all only when none clearly
+wins) — NOT as a gate. Deferred because a mistuned tiebreaker can wrongly drop
+a real source (the correct source often scores ~0.2 on synth-reworded
+headlines), which is worse than the bounded mislabel.
 
 ## Telemetry + gating
 

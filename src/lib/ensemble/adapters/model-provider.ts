@@ -970,6 +970,11 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
   // returns null for either case, but we lose the distinction inside the
   // retry helper. Re-parse the raw answer here to label the failure
   // accurately (CR PR #35 catch — telemetry consumers need this split).
+  // SIG-392: with `provenanceSources` supplied, the common "valid verdict /
+  // omitted provenance" case is now INTERCEPTED by reconstruction (returns a
+  // verdict → not a failure), so this `synth_invalid_provenance` label now
+  // fires only when sources were empty or the verdict itself failed to parse —
+  // expect it to trend toward zero in dashboards, not that it's broken.
   let failureReason = outcome.failureReason ?? "synth_failed_parse"
   if (outcome.failureRawAnswer) {
     const parsed = parseFirstJsonObject(outcome.failureRawAnswer)

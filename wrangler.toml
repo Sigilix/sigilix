@@ -764,6 +764,20 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 # unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
 # (inert); both are safe one-line changes.
 OPENCLAW_INVARIANT_LENS_MODE = "on"
+# SIG-392 — recall-eliciting LOGIC prompt (#508). "on" appends the recall
+# directive to the logic specialist's system prompt. Per-PR logic bake-off
+# (dense fixture, K=6, citation-judged): default prompt 6.0/20 logic recall →
+# this prompt ~16/20, catching the frontier rows (b5/b10/b19/b20) the default
+# was blind to — SAME model (deepseek-v4-pro), no migration. It trades
+# specialist-stage precision for recall (the two are coupled at the prompt
+# level); the downstream gates are the precision backstop, and the SIG-392
+# class-collapse gate (#510) absorbs the same-class redundancy it produces (0/4
+# fixture traps flagged, 0 hallucinations in audit). FLIPPING TO "on" for the
+# full-pipeline validation probe: measure posted recall vs posted hi-sev FP on
+# a fresh dense-fixture clone (`evals score --pr --baseline`) + p50 unmoved.
+# Rollback = flip to "off" (inert, byte-identical to the default prompt) — a
+# safe one-line change.
+OPENCLAW_LOGIC_RECALL_MODE = "on"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

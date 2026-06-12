@@ -28,6 +28,7 @@ import {
   recoverTruncatedSynthFindings,
   injectUnmatchedAstEmits,
 } from "@/src/lib/degraded-finding-floor"
+import { collapseNearDuplicateFindings } from "@/src/lib/ensemble/domain/near-dup-collapse"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 /** The synth-input verdicts produced by `buildSynthInputVerdicts(succeeded)`. */
@@ -241,6 +242,30 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
           findings: floored.provenanceFindings,
         }
       }
+    }
+  }
+
+  // SIG-392: deterministic near-duplicate collapse — the FINAL floor stage,
+  // deliberately AFTER every restore/inject above so a floor-restored twin
+  // gets collapsed too and nothing downstream re-restores (validate/post
+  // follow). Prompt-side DEDUPE demonstrably doesn't bind across synth
+  // models; this is the code-side guarantee. Recall-safe: one of each pair
+  // survives with the union of both provenance rows' sourceFindingIds.
+  {
+    const collapsed = collapseNearDuplicateFindings(effectiveSynthVerdict.findings, effectiveSynthProvenance.findings)
+    if (collapsed.collapsedPairs.length > 0) {
+      effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: collapsed.findings }
+      effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: collapsed.provenanceFindings }
+      console.log(
+        JSON.stringify({
+          event: "pr-review-near-dup-collapsed",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          pairs: collapsed.collapsedPairs,
+        }),
+      )
     }
   }
 

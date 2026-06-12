@@ -225,7 +225,7 @@ describe("SIG-349 — measured model lineup", () => {
     expect(new Set(primaries).size).toBe(4)
   })
 
-  it("synthesizer uses gpt-oss:120b primary + DeepSeek-flash cross-provider fallback (SIG-234)", () => {
+  it("synthesizer uses gemma4:31b primary + DeepSeek-flash cross-provider fallback (SIG-392)", () => {
     // ARC-291 (PR #97 hot-fix): synth fallback was kimi-k2.5:cloud
     // (same Moonshot provider as primary). When Moonshot had a bad
     // few minutes, both primary AND fallback failed identically →

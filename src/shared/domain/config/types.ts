@@ -540,7 +540,8 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   "deepseek-v4-pro:cloud", // logic primary (2026-06-05) + security fallback
   "deepseek-v4-flash:cloud", // security + tests primary (reasoner), synth fallback
   "minimax-m3:cloud", // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
-  "gpt-oss:120b-cloud", // synth primary
+  "gpt-oss:120b-cloud", // former synth primary (kept valid for user configs)
+  "gemma4:31b", // synth primary (SIG-392 swap, 2026-06-11)
 ])
 
 export const EMPTY_CONFIG: SigilixConfig = {}

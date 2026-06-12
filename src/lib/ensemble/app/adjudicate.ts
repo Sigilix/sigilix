@@ -215,6 +215,7 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     // body are suppressed (the binding is the trust boundary).
     durableObjectClassSpans: doClassSpans,
     securityValidatorMode: ensembleConfig.validatorModes.securityValidatorMode,
+    securityReclassEnabled: ensembleConfig.validatorModes.securityReclassEnabled,
     onSecurityFindingDropped: (finding, info) => {
       console.log(
         JSON.stringify({

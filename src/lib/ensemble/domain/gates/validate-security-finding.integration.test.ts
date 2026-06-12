@@ -122,6 +122,97 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(dropped[0]).toEqual({ reason: "fabricated-evidence-id", dropped: true })
   })
 
+  it("SIG-392 reclass ON: a failing sev>=4 security finding WITH a concrete failureExample is recategorized to logic and stays INLINE (e2e-frontend#20 regression)", () => {
+    // The real incident shape: the planted T4 cache-key collision — security
+    // sev4, no scanner evidence can exist, concrete repro attached — was
+    // body-demoted and scored "silent" by the #494 batch.
+    const onDrop = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "orgId='ab', userId='c' → key 'abc'; orgId='a', userId='bc' → key 'abc' (collision)",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      onSecurityFindingDropped: onDrop,
+      trustLedgerEnabled: true,
+    })
+    // recategorized, NOT demoted: inline, category flipped, no drop counter,
+    // no callback, no body row
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(
+      expect.objectContaining({ category: "logic", path: "src/db.ts", line: 17 }),
+    )
+    expect(result.droppedForFailedValidation).toBe(0)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(onDrop).not.toHaveBeenCalled()
+  })
+
+  it("SIG-392 reclass ON: a mechanism-less failing finding still DEMOTES exactly as before (the wall stands)", () => {
+    const onDrop = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      securityReclassEnabled: true,
+      onSecurityFindingDropped: onDrop,
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.unanchoredFindings[0]).toEqual(expect.objectContaining({ category: "security" }))
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it("SIG-392 reclass OFF (default): failureExample alone changes nothing — byte-identical demote", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              evidenceId: "sarif:fake:000000000000:17",
+              failureExample: "concrete repro present but flag off",
+            }),
+          ],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.unanchoredFindings).toHaveLength(1)
+  })
+
   it("ENFORCE + ledger OFF: still DEMOTES to the body but leaves the finding un-annotated (no trust)", () => {
     const result = validateForSubmission({
       synthOutput: {

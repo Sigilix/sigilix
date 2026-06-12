@@ -58,6 +58,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_XXE_SCAN?: string | undefined
   // validator gate modes (PR 4)
   OPENCLAW_SECURITY_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_SECURITY_RECLASS?: string | undefined
   OPENCLAW_TESTS_VALIDATOR_MODE?: string | undefined
   OPENCLAW_LOGIC_VALIDATOR_MODE?: string | undefined
   OPENCLAW_LOGIC_REFUTATION_MODE?: string | undefined
@@ -129,6 +130,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
     },
     validatorModes: {
       securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      securityReclassEnabled: (env.OPENCLAW_SECURITY_RECLASS ?? "").trim().toLowerCase() === "on",
       testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
       logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
       logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),

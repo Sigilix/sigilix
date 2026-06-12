@@ -20,14 +20,14 @@
 
 import type { SpecialistRole } from "./ensemble-router"
 import { renderAstFindingsForPrompt, type AstFinding } from "@/src/features/ast-rules"
-import { renderSarifFindingsForPrompt, type SarifFinding } from "@/src/features/sarif-evidence"
+import { renderSarifFindingsForPrompt, sarifFindingHasRole, type SarifFinding } from "@/src/features/sarif-evidence"
 
 export interface RoleScopedFactInputs {
   /** ARC-187 secret-scan hits block (security). */
   secretScanBlock: string
   /** ARC-186 dependency-vulnerability block (security). */
   depVulnBlock: string
-  /** ARC-188 SARIF evidence findings, split here by `roleHints ?? [roleHint]`. */
+  /** ARC-188 SARIF evidence findings, split here by non-empty `roleHints` or `roleHint`. */
   sarifFindings: readonly SarifFinding[]
   /** ARC-193 regex deterministic-checks block (logic). */
   deterministicBlock: string
@@ -62,10 +62,8 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
     renderAstFindingsForPrompt(inputs.astFindings.filter((f) => f.roleHint === role))
   const sarifBlock = (role: SpecialistRole): string =>
     renderSarifFindingsForPrompt(
-      inputs.sarifFindings.filter((f) => {
-        const roles = f.roleHints ?? [f.roleHint]
-        return roles.includes(role)
-      }),
+      inputs.sarifFindings.filter((f) => sarifFindingHasRole(f, role)),
+      { activeRoleHint: role },
     )
 
   return {

@@ -1,6 +1,6 @@
 // the performance specialist prompt — hand-tuned; see SIG-388
 import perfExamples from "@/src/prompts/perf-examples.json"
-import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
+import { RUNNER_TOOL_EVIDENCE_INSTRUCTIONS, SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**
  * SIG-110: render the performance-specialist few-shot exemplars
@@ -36,6 +36,8 @@ export const PERFORMANCE_PROMPT = `${SHARED_NEGATIVE_CONSTRAINTS}
 You are the **PERFORMANCE specialist** in a code review ensemble. Three other specialists (logic, security, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **complexity, expensive calls, concurrency, timeouts, rate limits.**
+
+${RUNNER_TOOL_EVIDENCE_INSTRUCTIONS}
 
 Find performance regressions and operational-behavior-under-load issues:
 - algorithmic complexity (O(n²) where O(n) is reachable, accidental O(n³) from nested loops over the same set)

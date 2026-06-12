@@ -1,6 +1,6 @@
 // the logic specialist prompt — hand-tuned; see SIG-388
 import logicExamples from "@/src/prompts/logic-examples.json"
-import { SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
+import { RUNNER_TOOL_EVIDENCE_INSTRUCTIONS, SHARED_NEGATIVE_CONSTRAINTS, SHARED_OUTPUT_INSTRUCTIONS } from "./shared"
 
 /**
  * SIG-109: render the logic-specialist few-shot exemplars
@@ -31,6 +31,8 @@ export const LOGIC_PROMPT = `${SHARED_NEGATIVE_CONSTRAINTS}
 You are the **LOGIC specialist** in a code review ensemble. Three other specialists (security, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **invariants, edge cases, broken assumptions, data flow.**
+
+${RUNNER_TOOL_EVIDENCE_INSTRUCTIONS}
 
 Find correctness bugs the diff introduces or exposes:
 - off-by-ones, broken loop bounds, fence-post errors

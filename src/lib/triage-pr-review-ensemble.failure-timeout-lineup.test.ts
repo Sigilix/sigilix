@@ -240,7 +240,10 @@ describe("SIG-349 — measured model lineup", () => {
     // SIG-234 (2026-05-26): synth primary moved kimi-k2.6 →
     // gpt-oss:120b. Removes Moonshot from the customer-visible
     // critical merge path entirely. Cross-provider fallback retained.
-    expect(SYNTHESIZER_CONFIG.primary).toBe("gpt-oss:120b-cloud")
+    // SIG-392 (2026-06-11): primary gpt-oss:120b-cloud → gemma4:31b — won the
+    // uncapped shared-prompt bake-off on every axis (retention, FP, aborts,
+    // latency, drop-reason honesty) at ~4× lower cost; see SYNTHESIZER_CONFIG.
+    expect(SYNTHESIZER_CONFIG.primary).toBe("gemma4:31b")
     expect(SYNTHESIZER_CONFIG.fallback).toBe("deepseek-v4-flash:cloud")
     // SIG-392 (2026-06-11): per-attempt 60s → 150s + same-model retry dropped
     // (the SIG-287 logic-role fast-fallback shape). The 60s cap was killing

@@ -30,6 +30,7 @@ import {
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
+import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
 import { handleVerificationMetricsRoute } from "@/src/lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "@/src/lib/metrics-dismissals-route"
 import { handlePrecisionMetricsRoute } from "@/src/lib/metrics-precision-route"
@@ -194,6 +195,12 @@ export default {
       return handleRunnerEvidenceMetricsRoute(request, env)
     }
 
+    // SIG-107: authenticated read of accepted runner scan-manifest telemetry,
+    // grouped by deterministic tool and output status.
+    if (request.method === "GET" && url.pathname === "/metrics/runner-tools") {
+      return handleRunnerToolsMetricsRoute(request, env)
+    }
+
     // SIG-285 PR 2: authenticated read of the rolling verification-by-execution
     // verdict distribution (the refutable-FP fraction).
     if (request.method === "GET" && url.pathname === "/metrics/verification") {
@@ -204,7 +211,7 @@ export default {
     // customer's CI POSTs its SARIF + a GitHub OIDC token here; the token IS the
     // auth (verified + provenance-gated inside the handler), not a static bearer.
     if (request.method === "POST" && url.pathname === "/runner/ingest") {
-      return handleRunnerIngestRoute(request, env)
+      return handleRunnerIngestRoute(request, env, ctx)
     }
 
     // SIG-156: authenticated manual (re)index trigger.
@@ -513,6 +520,11 @@ export { ValidationMetricsDO } from "./do/validation-metrics"
 // RUNNER_EVIDENCE_METRICS_DO entry + the sig-184-metrics-v1 new_sqlite_classes
 // migration in wrangler.toml.
 export { RunnerEvidenceMetricsDO } from "./do/runner-evidence-metrics"
+
+// SIG-107: RunnerToolMetricsDO — rolling accepted scan-manifest telemetry
+// (SQLite). Registered via the [[durable_objects.bindings]]
+// RUNNER_TOOL_METRICS_DO entry + the sig-107-tool-metrics-v1 migration.
+export { RunnerToolMetricsDO } from "./do/runner-tool-metrics"
 
 // SIG-285 PR 2: VerificationMetricsDO — rolling verification verdict telemetry
 // (SQLite). Registered via the [[durable_objects.bindings]]

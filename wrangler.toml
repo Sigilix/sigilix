@@ -157,6 +157,13 @@ class_name = "RunnerReceiptDO"
 name = "RUNNER_EVIDENCE_METRICS_DO"
 class_name = "RunnerEvidenceMetricsDO"
 
+# SIG-107: single global DO holding accepted runner scan-manifest telemetry by
+# deterministic tool/status. Read via GET /metrics/runner-tools (same
+# OPENCLAW_VALIDATION_METRICS_TOKEN bearer as the other /metrics/* endpoints).
+[[durable_objects.bindings]]
+name = "RUNNER_TOOL_METRICS_DO"
+class_name = "RunnerToolMetricsDO"
+
 # SIG-285 PR 2: single global DO holding rolling verification-by-execution
 # verdict counters (confirmed/refuted/inconclusive/no-check × category daily
 # buckets, 35-day retention). Read via GET /metrics/verification (same
@@ -222,6 +229,12 @@ new_sqlite_classes = ["VerificationMetricsDO"]
 [[migrations]]
 tag = "sig-286-metrics-v1"
 new_sqlite_classes = ["GraphExpansionMetricsDO"]
+
+# SIG-107: RunnerToolMetricsDO uses SQLite storage. Forward-only; reverting is
+# safe (accepted scan-manifest telemetry only, no review behavior depends on it).
+[[migrations]]
+tag = "sig-107-tool-metrics-v1"
+new_sqlite_classes = ["RunnerToolMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

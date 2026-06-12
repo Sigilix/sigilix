@@ -21,6 +21,7 @@ import type { GitHubOidcClaims } from "./runner-oidc/types"
 import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-cache"
 import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
+import { recordRunnerToolManifestMetric } from "./runner-tool-metrics-client"
 import { isSafeRunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES
@@ -167,6 +168,82 @@ export function normalizeScanManifest(raw: string): string | null {
   }
 }
 
+type NormalizedScanManifestToolsResult =
+  | { ok: true; tools: NormalizedScanManifestTool[] }
+  | { ok: false; tools: NormalizedScanManifestTool[] }
+
+function normalizedScanManifestTools(raw: string): NormalizedScanManifestToolsResult {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!isObject(parsed)) return { ok: false, tools: [] }
+    const tools = parsed.tools
+    if (!Array.isArray(tools)) return { ok: false, tools: [] }
+    return { ok: true, tools: tools as NormalizedScanManifestTool[] }
+  } catch {
+    return { ok: false, tools: [] }
+  }
+}
+
+function splitRepository(repository: string): { owner: string; repo: string } {
+  const m = /^([^/]+)\/([^/]+)$/.exec(repository)
+  if (!m) return { owner: "", repo: "" }
+  return { owner: m[1]!, repo: m[2]! }
+}
+
+function scheduleRunnerToolMetrics(args: {
+  ctx: ExecutionContext
+  env: Env
+  repository: string
+  repositoryId: string
+  occurredAt: string
+  sha: string
+  scanManifest: string
+}): void {
+  const { owner, repo } = splitRepository(args.repository)
+  const parsed = normalizedScanManifestTools(args.scanManifest)
+  const task = (async () => {
+    if (!parsed.ok) {
+      console.warn(
+        JSON.stringify({
+          event: "runner-tool-metrics-manifest-parse-failed",
+          repositoryId: args.repositoryId,
+          sha: args.sha,
+          manifestBytes: new TextEncoder().encode(args.scanManifest).byteLength,
+        }),
+      )
+      return
+    }
+    if (owner === "" || repo === "") {
+      console.warn(
+        JSON.stringify({
+          event: "runner-tool-metrics-repository-parse-failed",
+          repositoryId: args.repositoryId,
+          sha: args.sha,
+          repository: args.repository,
+        }),
+      )
+      return
+    }
+    await recordRunnerToolManifestMetric(args.env, {
+      owner,
+      repo,
+      occurredAt: args.occurredAt,
+      tools: parsed.tools,
+    })
+  })().catch((err) => {
+    const error = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    console.warn(
+      JSON.stringify({
+        event: "runner-tool-metrics-record-failed",
+        repositoryId: args.repositoryId,
+        sha: args.sha,
+        error,
+      }),
+    )
+  })
+  args.ctx.waitUntil(task)
+}
+
 /**
  * Read the request body as text, enforcing a BYTE cap as the stream is consumed
  * (so an oversized body is aborted, not fully buffered). Returns `null` once the
@@ -219,7 +296,7 @@ interface IngestEnvelope {
   repositoryId?: string | undefined
 }
 
-export async function handleRunnerIngestRoute(request: Request, env: Env): Promise<Response> {
+export async function handleRunnerIngestRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   // (1) Config gate — the audience and the pinned workflow-ref must both be set
   // (they come from the Sigilix runner repo; until then every ingest is 503).
   const expectedAudience = env.OPENCLAW_RUNNER_OIDC_AUDIENCE?.trim()
@@ -366,6 +443,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // non-safe-integer pull_number is meaningless; treat it as a non-PR run).
   const parsedPull = refMatch ? Number(refMatch[1]) : 0
   const pullNumber = Number.isSafeInteger(parsedPull) ? parsedPull : 0
+  const ingestedAt = new Date().toISOString()
 
   // (9) Atomic single-use claim. The DO row IS the defensible receipt; it's
   // keyed off VERIFIED claims (post-provenance these equal the envelope's).
@@ -438,7 +516,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
             scanManifestSha256,
             sarif: scrubbedSarif,
             scanManifest: envelope.scanManifest,
-            ingestedAt: new Date().toISOString(),
+            ingestedAt,
           }),
           { expirationTtl: RECEIPT_TTL_SECONDS },
         )
@@ -469,6 +547,36 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       runnerEnvironment: claims.runner_environment,
     }),
   )
+
+  if (claim.outcome === "accepted" && envelope.scanManifest !== undefined) {
+    if (ctx === undefined) {
+      console.warn(
+        JSON.stringify({
+          event: "runner-tool-metrics-ctx-missing",
+          repositoryId,
+          sha: tokenSha,
+        }),
+      )
+    } else if (env.RUNNER_TOOL_METRICS_DO === undefined) {
+      console.warn(
+        JSON.stringify({
+          event: "runner-tool-metrics-binding-missing",
+          repositoryId,
+          sha: tokenSha,
+        }),
+      )
+    } else {
+      scheduleRunnerToolMetrics({
+        ctx,
+        env,
+        repository: tokenRepository,
+        repositoryId,
+        occurredAt: ingestedAt,
+        sha: tokenSha,
+        scanManifest: envelope.scanManifest,
+      })
+    }
+  }
 
   return json(
     {

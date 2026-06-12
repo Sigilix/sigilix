@@ -11,6 +11,7 @@ import {
 } from "@/src/lib/runner-ingest-route"
 import { __resetJwksCacheForTests } from "@/src/lib/runner-oidc/jwks-cache"
 import { RunnerReceiptDO } from "@/src/do/runner-receipt"
+import { RunnerToolMetricsDO } from "@/src/do/runner-tool-metrics"
 import { RUNNER_TOOL_IDS } from "@/src/shared/domain/runner-tool-catalog"
 import type { GitHubOidcClaims, Jwk } from "@/src/lib/runner-oidc/types"
 import type { Env } from "@/src/shared/types/env"
@@ -136,6 +137,56 @@ function makeReceiptDo() {
   }
 }
 
+function makeRunnerToolMetricsDo() {
+  const sqlStorage = new NodeSqliteStorage()
+  let alarmAt: number | null = null
+  const state = {
+    storage: {
+      sql: sqlStorage,
+      transactionSync<T>(fn: () => T): T {
+        return sqlStorage.transactionSync(fn)
+      },
+      async get(): Promise<unknown> {
+        return undefined
+      },
+      async put(): Promise<void> {},
+      async delete(): Promise<boolean> {
+        return false
+      },
+      async setAlarm(t: number): Promise<void> {
+        alarmAt = t
+      },
+      async getAlarm(): Promise<number | null> {
+        return alarmAt
+      },
+      async deleteAlarm(): Promise<void> {
+        alarmAt = null
+      },
+    },
+    id: { toString: () => "global", name: "global" },
+  }
+  const do_ = new RunnerToolMetricsDO(state as unknown as DurableObjectState, {} as Env)
+  return {
+    do_,
+    ns: { idFromName: (_: string) => "id", get: (_: unknown) => do_ },
+  }
+}
+
+function makeExecutionContext() {
+  const tasks: Promise<unknown>[] = []
+  return {
+    ctx: {
+      waitUntil(task: Promise<unknown>): void {
+        tasks.push(task)
+      },
+      passThroughOnException(): void {},
+    } as unknown as ExecutionContext,
+    async flush(): Promise<void> {
+      await Promise.all(tasks)
+    },
+  }
+}
+
 function makeKv() {
   const store = new Map<string, string>()
   return {
@@ -151,12 +202,18 @@ function makeKv() {
   }
 }
 
-function makeEnv(over: Partial<Record<keyof Env, unknown>>, receiptNs: unknown, kv: unknown): Env {
+function makeEnv(
+  over: Partial<Record<keyof Env, unknown>>,
+  receiptNs: unknown,
+  kv: unknown,
+  runnerToolMetricsNs?: unknown,
+): Env {
   return {
     OPENCLAW_RUNNER_OIDC_AUDIENCE: AUD,
     OPENCLAW_RUNNER_WORKFLOW_REF: WORKFLOW,
     OPENCLAW_STATE: kv,
     RUNNER_RECEIPT_DO: receiptNs,
+    ...(runnerToolMetricsNs !== undefined ? { RUNNER_TOOL_METRICS_DO: runnerToolMetricsNs } : {}),
     ...over,
   } as unknown as Env
 }
@@ -475,11 +532,15 @@ describe("handleRunnerIngestRoute", () => {
     stubJwksFetch()
     const { ns, store } = makeReceiptDo()
     const kvWrap = makeKv()
+    const metrics = makeRunnerToolMetricsDo()
+    const runCtx = makeExecutionContext()
     const tok = await signToken(baseClaims)
     const res = await handleRunnerIngestRoute(
       post(envelope({ scanManifest: VALID_SCAN_MANIFEST }), tok),
-      makeEnv({}, ns, kvWrap.kv),
+      makeEnv({}, ns, kvWrap.kv, metrics.ns),
+      runCtx.ctx,
     )
+    await runCtx.flush()
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({
       ok: true,
@@ -498,6 +559,8 @@ describe("handleRunnerIngestRoute", () => {
     stubJwksFetch()
     const { ns, store } = makeReceiptDo()
     const kvWrap = makeKv()
+    const metrics = makeRunnerToolMetricsDo()
+    const runCtx = makeExecutionContext()
     const tok = await signToken(baseClaims)
     const scanManifest = JSON.stringify({
       schemaVersion: 1,
@@ -522,7 +585,12 @@ describe("handleRunnerIngestRoute", () => {
       summary: { enabled: 999, produced: 999, empty: 999, missing: 999, invalid: 999 },
     })
 
-    const res = await handleRunnerIngestRoute(post(envelope({ scanManifest }), tok), makeEnv({}, ns, kvWrap.kv))
+    const res = await handleRunnerIngestRoute(
+      post(envelope({ scanManifest }), tok),
+      makeEnv({}, ns, kvWrap.kv, metrics.ns),
+      runCtx.ctx,
+    )
+    await runCtx.flush()
 
     expect(res.status).toBe(200)
     expect(store.size).toBe(1)
@@ -537,6 +605,67 @@ describe("handleRunnerIngestRoute", () => {
         summary: { enabled: 2, produced: 1, empty: 1, missing: 0, invalid: 0 },
       }),
     )
+  })
+
+  it("records accepted scan manifests into runner-tool metrics without double-counting duplicate receipts", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const metrics = makeRunnerToolMetricsDo()
+    const tok = await signToken(baseClaims)
+    const env = makeEnv({}, ns, kvWrap.kv, metrics.ns)
+    const scanManifest = JSON.stringify({
+      schemaVersion: 1,
+      tools: [
+        { toolId: "semgrep", enabled: true, status: "produced", runCount: 1, resultCount: 2 },
+        { toolId: "eslint", enabled: true, status: "empty", runCount: 1, resultCount: 0 },
+      ],
+    })
+
+    const firstCtx = makeExecutionContext()
+    expect((await handleRunnerIngestRoute(post(envelope({ scanManifest }), tok), env, firstCtx.ctx)).status).toBe(200)
+    await firstCtx.flush()
+
+    const duplicateCtx = makeExecutionContext()
+    expect((await handleRunnerIngestRoute(post(envelope({ scanManifest }), tok), env, duplicateCtx.ctx)).status).toBe(
+      200,
+    )
+    await duplicateCtx.flush()
+
+    const out = await metrics.do_.query({ windowDays: 7 })
+    expect(out.manifestReceipts).toBe(1)
+    expect(out.toolRows).toBe(2)
+    expect(out.tools.find((tool) => tool.toolId === "semgrep")).toMatchObject({
+      statuses: { produced: 1 },
+      resultCount: 2,
+    })
+    expect(out.tools.find((tool) => tool.toolId === "eslint")).toMatchObject({
+      statuses: { empty: 1 },
+      resultCount: 0,
+    })
+  })
+
+  it("logs a specific warning when scan-manifest metrics binding is missing", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const runCtx = makeExecutionContext()
+    const tok = await signToken(baseClaims)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    try {
+      const res = await handleRunnerIngestRoute(
+        post(envelope({ scanManifest: VALID_SCAN_MANIFEST }), tok),
+        makeEnv({}, ns, kvWrap.kv),
+        runCtx.ctx,
+      )
+      await runCtx.flush()
+
+      expect(res.status).toBe(200)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('"event":"runner-tool-metrics-binding-missing"'))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("derives the review-join pull_number from the SIGNED claims.ref (refs/pull/N/merge), NOT the body (CR-4)", async () => {
@@ -692,25 +821,39 @@ describe("handleRunnerIngestRoute", () => {
     const realDo = new RunnerReceiptDO(doState as unknown as DurableObjectState, {} as Env)
     const ns = { idFromName: (id: string) => ({ id }), get: () => realDo }
     const kvWrap = makeKv()
-    const env = makeEnv({}, ns, kvWrap.kv)
+    const metrics = makeRunnerToolMetricsDo()
+    const env = makeEnv({}, ns, kvWrap.kv, metrics.ns)
     const tok = await signToken(baseClaims)
-    const outcome = async (req: Request) =>
-      ((await (await handleRunnerIngestRoute(req, env)).json()) as { outcome: string }).outcome
+    const scanManifest = JSON.stringify({
+      schemaVersion: 1,
+      tools: [{ toolId: "semgrep", enabled: true, status: "produced", runCount: 1, resultCount: 2 }],
+    })
+    const outcome = async (req: Request) => {
+      const runCtx = makeExecutionContext()
+      const res = await handleRunnerIngestRoute(req, env, runCtx.ctx)
+      await runCtx.flush()
+      return ((await res.json()) as { outcome: string }).outcome
+    }
 
-    expect(await outcome(post(envelope(), tok))).toBe("accepted")
-    expect(await outcome(post(envelope(), tok))).toBe("duplicate") // real DO single-use
+    expect(await outcome(post(envelope({ scanManifest }), tok))).toBe("accepted")
+    expect(await outcome(post(envelope({ scanManifest }), tok))).toBe("duplicate") // real DO single-use
+    expect((await metrics.do_.query({ windowDays: 7 })).manifestReceipts).toBe(1)
     // same run, DIFFERENT SARIF → conflict (does not overwrite)
     expect(
+      // Conflicts should never record tool metrics, but the real route still
+      // receives an ExecutionContext in production.
       (
         await handleRunnerIngestRoute(
-          post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], x: 1 }) }), tok),
+          post(envelope({ sarif: JSON.stringify({ version: "2.1.0", runs: [], x: 1 }), scanManifest }), tok),
           env,
+          makeExecutionContext().ctx,
         )
       ).status,
     ).toBe(409)
     // re-run (incremented run_attempt) → a new accepted receipt
     const rerun = await signToken({ ...baseClaims, run_attempt: "2" })
-    expect(await outcome(post(envelope(), rerun))).toBe("accepted")
+    expect(await outcome(post(envelope({ scanManifest }), rerun))).toBe("accepted")
+    expect((await metrics.do_.query({ windowDays: 7 })).manifestReceipts).toBe(2)
   })
 
   // — ordering / config-gate contract locks (CodeRabbit) —

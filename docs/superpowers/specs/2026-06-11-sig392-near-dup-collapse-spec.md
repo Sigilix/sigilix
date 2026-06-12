@@ -37,7 +37,7 @@ Collapse action (recall-safe by construction):
   (preservesSourceMechanism), so the union alone would not suffice; ordering
   makes it airtight. Pinned by a chained floor→collapse unit test.**
 - per-collapse telemetry: a `pr-review-near-dup-collapsed` event logs
-  (keptId, droppedHeadline, jaccard, sharedSource) for threshold sweeps
+  (keptHeadline, droppedHeadline, jaccard, sharedSource) for threshold sweeps
   (Kimi condition — observable without code change)
 - the collapsed finding's body is NOT merged into the kept one (kept finding
   unchanged — no text surgery)

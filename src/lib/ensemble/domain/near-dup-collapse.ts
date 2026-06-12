@@ -123,6 +123,9 @@ export function collapseNearDuplicateFindings<P extends { sourceFindingIds: Read
   const collapsedPairs: CollapsedPair[] = []
   for (let i = 0; i < findings.length; i++) {
     const finding = findings[i]!
+    // Fallback row for a findings/provenance length mismatch: safe ONLY
+    // because a sourceFindingIds-length-0 row is always dropped by the
+    // downstream hallucination guard before any other P field is read.
     const provenance = provenanceFindings[i] ?? ({ sourceFindingIds: [] } as unknown as P)
     let absorbed = false
     for (const s of survivors) {

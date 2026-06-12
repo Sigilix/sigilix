@@ -725,12 +725,18 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 #               UNCHANGED validation/grounding/verification gates — no
 #               gate bypass, no new posting surface.
 #
-# Rollout: shadow soak alongside SIG-393's, then JOINT promotion of both
-# levers — one enforce flip, one frozen-fixture clone delta
-# (`evals score --pr --baseline`), post-gate high-sev FP flat, default-lane
-# p50 unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
+# Rollout (REVISED 2026-06-11, SIG-392 floored K=12 measurement): the JOINT
+# promotion is SPLIT — the two levers have opposite FP profiles at the prod
+# seam. Lens union: floored 13/20 recall @ hi-sev FP 4.1-5 (within the ≤6.5
+# bar) on the gemma4:31b synth, K=12 grade. Re-sweep union: FP 15-18 restored
+# by the SIG-351 source floor (model-independent) → SIG-393 stays "shadow"
+# until source-level FP discipline lands. LENS-FIRST flip to "on" here; note
+# shadow already RUNS all lens calls (merge-only difference), so this flip
+# adds zero call volume / zero wall-clock. Promotion probe: fresh fixture
+# clone via `evals score --pr --baseline` + hi-sev FP within bar + p50
+# unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
 # (inert); both are safe one-line changes.
-OPENCLAW_INVARIANT_LENS_MODE = "shadow"
+OPENCLAW_INVARIANT_LENS_MODE = "on"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

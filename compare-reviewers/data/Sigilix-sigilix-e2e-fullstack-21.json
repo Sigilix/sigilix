@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 21,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21",
+  "collectedAt": "2026-06-12T01:54:55.617Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393617564,
+        "path": "server/api.ts",
+        "line": 26,
+        "excerpt": "**Client-supplied `isAdmin` field used for server-side authorization**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393617564",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393617571,
+        "path": "server/api.ts",
+        "line": 28,
+        "excerpt": "**Authorization gate trusts client-supplied `isAdmin` boolean**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393617571",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393617574,
+        "path": "server/api.ts",
+        "line": 31,
+        "excerpt": "**New destructive endpoint ships without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393617574",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3393617581,
+        "path": "server/api.ts",
+        "line": 30,
+        "excerpt": "**DELETE query succeeds silently when invoice does not exist**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393617581",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3393617584,
+        "path": "server/api.ts",
+        "line": 30,
+        "excerpt": "**Route parameter `:id` is not validated before use in SQL**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393617584",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393622969,
+        "path": "server/api.ts",
+        "line": 7,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393622969"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393622974,
+        "path": "server/api.ts",
+        "line": 32,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393622974"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "s2",
+        "c1",
+        "c2"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "server trusts client-supplied `isAdmin` — authz bypass on delete"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s4"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "DELETE succeeds silently on a missing invoice (no 404)"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s5"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "FP: \":id not validated before SQL\" — the query is parameterized (`$1`)"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s3"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: delete endpoint \"untested\""
+    }
+  ]
+}

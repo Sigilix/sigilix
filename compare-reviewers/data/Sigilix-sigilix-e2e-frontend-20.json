@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 20,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20",
+  "collectedAt": "2026-06-12T01:54:54.054Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393519449,
+        "path": "src/api/membership-cache.ts",
+        "line": 7,
+        "excerpt": "**Cache lacks TTL/eviction, leading to stale permissions and unbounded memory growth**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393519449",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393519450,
+        "path": "src/api/membership-cache.ts",
+        "line": 7,
+        "excerpt": "**Module-level `cache` Map grows without bound — no eviction or TTL**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393519450",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393519458,
+        "path": "src/api/membership-cache.ts",
+        "line": 38,
+        "excerpt": "**New exported module with fetch, caching, and error paths has no test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393519458",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3393529980,
+        "path": "src/api/membership-cache.ts",
+        "line": 7,
+        "excerpt": "**Module-level `Map` cache grows without bound — no eviction or TTL**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393529980",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3393529991,
+        "path": "src/api/membership-cache.ts",
+        "line": 38,
+        "excerpt": "**New membership-cache module ships without test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393529991",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393527387,
+        "path": "src/api/membership-cache.ts",
+        "line": 7,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393527387"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393527395,
+        "path": "src/api/membership-cache.ts",
+        "line": 12,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393527395"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "c2"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "membership cache key collision — `orgId+userId` no delimiter (T4; CodeRabbit only)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s1",
+        "s2",
+        "s4"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "membership cache unbounded / no-TTL (Sigilix; stale-perms + memory)"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "c1"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "enhancement: dedupe in-flight requests"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s3",
+        "s5"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: membership-cache \"untested\""
+    }
+  ]
+}

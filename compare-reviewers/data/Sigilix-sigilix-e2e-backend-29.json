@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 29,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29",
+  "collectedAt": "2026-06-12T01:54:46.555Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393365436,
+        "path": "src/routes/digest.ts",
+        "line": 17,
+        "excerpt": "**Missing authorization check — any authenticated user can query any user's activity count**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365436",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393365441,
+        "path": "src/routes/digest.ts",
+        "line": 21,
+        "excerpt": "**N+1 DB queries: one `await query` per user ID in the `/digest` handler loop**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365441",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393365449,
+        "path": "src/routes/digest.ts",
+        "line": 41,
+        "excerpt": "**`applyOrderedSteps` passes `step.params` directly to `query`, but `query` expects a flat bind array — nested arrays break the SQL bind**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365449",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3393365453,
+        "path": "src/routes/digest.ts",
+        "line": 41,
+        "excerpt": "**New digest endpoint and `applyOrderedSteps` export ship without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365453",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3393365456,
+        "path": "src/routes/digest.ts",
+        "line": 41,
+        "excerpt": "**applyOrderedSteps accepts arbitrary SQL strings — design risk if exposed to untrusted callers**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365456",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s6",
+        "tool": "sigilix",
+        "commentId": 3393365458,
+        "path": "src/server.ts",
+        "line": 18,
+        "excerpt": "**New route mount in `src/server.ts` has no integration test**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393365458",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393367715,
+        "path": "src/routes/digest.ts",
+        "line": 17,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393367715"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393367723,
+        "path": "src/routes/digest.ts",
+        "line": 29,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393367723"
+      },
+      {
+        "ref": "c3",
+        "tool": "coderabbit",
+        "commentId": 3393367726,
+        "path": "src/routes/digest.ts",
+        "line": 26,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393367726"
+      },
+      {
+        "ref": "c4",
+        "tool": "coderabbit",
+        "commentId": 3393367732,
+        "path": "src/routes/digest.ts",
+        "line": 43,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393367732"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393372489,
+        "path": "src/routes/digest.ts",
+        "line": 26,
+        "excerpt": "**N+1 queries per request**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393372489"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393372591,
+        "path": "src/routes/digest.ts",
+        "line": 43,
+        "excerpt": "**Raw-SQL executor exported from a web route file**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393372591"
+      },
+      {
+        "ref": "g3",
+        "tool": "greptile",
+        "commentId": 3393372640,
+        "path": "src/routes/digest.ts",
+        "line": 17,
+        "excerpt": "No upper bound on the number of user IDs is enforced. Even after the N+1 issue is fixed, an unbounded array can generate a very large `ANY($1)` array parameter and result set. Capping the input to the documented maximum keeps behaviour predictable.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/29#discussion_r3393372640"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s2",
+        "c3",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "N+1 serial `await` per user id in /digest"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "c1",
+        "g3"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "unbounded `userIds` array — no input cap"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "over-fire: \"authz on activity count\" — team widget, debatable"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s3"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "speculative: nested-array bind (`params` is a flat array by contract)"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "s5"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "over-cautious: `applyOrderedSteps` \"arbitrary SQL\" is by design"
+    },
+    {
+      "id": 6,
+      "findings": [
+        "c2"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "unhandled-rejection / authz bundle"
+    },
+    {
+      "id": 7,
+      "findings": [
+        "c4"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "\"add transaction wrapping\" suggestion — not a defect"
+    },
+    {
+      "id": 8,
+      "findings": [
+        "g2"
+      ],
+      "outcome": "noise",
+      "category": "style",
+      "note": "raw-SQL executor exported from a route file"
+    },
+    {
+      "id": 9,
+      "findings": [
+        "s4",
+        "s6"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: \"untested\""
+    }
+  ]
+}

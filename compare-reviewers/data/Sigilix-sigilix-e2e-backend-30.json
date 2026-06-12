@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 30,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30",
+  "collectedAt": "2026-06-12T01:54:47.807Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393365459,
+        "path": "src/rate-limit.ts",
+        "line": 34,
+        "excerpt": "**Refill discards sub‑interval remainder, causing systematic token loss**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393365459",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393365467,
+        "path": "src/rate-limit.ts",
+        "line": 14,
+        "excerpt": "**Unbounded `Map` in `TokenBucket` causes memory leak under load**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393365467",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393365469,
+        "path": "src/rate-limit.ts",
+        "line": 54,
+        "excerpt": "**New token‑bucket rate limiter ships without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393365469",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3393365471,
+        "path": "src/server.ts",
+        "line": 17,
+        "excerpt": "**Rate‑limit middleware integration in server has no test**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393365471",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393370830,
+        "path": "src/rate-limit.ts",
+        "line": 15,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _🏗️ Heavy lift_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393370830"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393370833,
+        "path": "src/rate-limit.ts",
+        "line": 35,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393370833"
+      },
+      {
+        "ref": "c3",
+        "tool": "coderabbit",
+        "commentId": 3393370842,
+        "path": "src/server.ts",
+        "line": 17,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393370842"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393376653,
+        "path": "src/rate-limit.ts",
+        "line": 34,
+        "excerpt": "Advance `lastRefill` by whole intervals rather than snapping it to `now`. This keeps the refill window anchored to a fixed grid instead of sliding forward on every hit, so users are never penalized with a longer-than-`intervalMs` wait between refills.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393376653"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393376715,
+        "path": "src/rate-limit.ts",
+        "line": 15,
+        "excerpt": "**Unbounded `buckets` map grows forever**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393376715"
+      },
+      {
+        "ref": "g3",
+        "tool": "greptile",
+        "commentId": 3393376755,
+        "path": "src/rate-limit.ts",
+        "line": 50,
+        "excerpt": "**`req.ip` fallback reaches dead code — all requests are already authenticated**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/30#discussion_r3393376755"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c2",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "token-bucket refill discards sub-interval remainder → rate drift (T4)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2",
+        "c1",
+        "g2"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "unbounded `buckets` Map — memory growth"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "c3"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "rate limiter runs after auth — can't protect against auth brute-force"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "g3"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "minor: `req.ip` fallback unreachable (all requests authed)"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "s3",
+        "s4"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: \"untested\""
+    }
+  ]
+}

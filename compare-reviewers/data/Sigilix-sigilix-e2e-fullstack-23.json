@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 23,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23",
+  "collectedAt": "2026-06-12T01:54:58.643Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393673727,
+        "path": "server/api.ts",
+        "line": 29,
+        "excerpt": "**Missing authentication and authorization on refund-quote endpoint**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23#discussion_r3393673727",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393673735,
+        "path": "shared/refund.ts",
+        "line": 18,
+        "excerpt": "**New financial computation function ships without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23#discussion_r3393673735",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393673742,
+        "path": "shared/refund.ts",
+        "line": 18,
+        "excerpt": "**Floating-point precision loss in prorated refund calculation**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23#discussion_r3393673742",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393682904,
+        "path": "server/api.ts",
+        "line": 35,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23#discussion_r3393682904"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393682923,
+        "path": "server/api.ts",
+        "line": 35,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/23#discussion_r3393682923"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s3"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "float-money precision in `proratedRefundCents` (Sigilix only)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "c1"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "invalid proration window / div-by-zero (`daysTotal=0`) not rejected"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "refund-quote endpoint exposes invoice data with no auth"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "c2"
+      ],
+      "outcome": "noise",
+      "category": "style",
+      "note": "\"return documented field name\" — minor naming"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "s2"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: refund fn \"untested\""
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 17,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/17",
+  "collectedAt": "2026-06-12T01:54:49.351Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393469122,
+        "path": "src/components/UserBio.tsx",
+        "line": 15,
+        "excerpt": "**New `UserBio` component ships without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/17#discussion_r3393469122",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393475865,
+        "path": "src/components/UserBio.tsx",
+        "line": 14,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/17#discussion_r3393475865"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393475784,
+        "path": "src/components/UserBio.tsx",
+        "line": 14,
+        "excerpt": "**Stored XSS via unsanitized user HTML**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/17#discussion_r3393475784"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393475835,
+        "path": "src/components/UserBio.tsx",
+        "line": 13,
+        "excerpt": "`EDITOR_TIP_HTML` is a static string that bypasses React's auto-escaping for no gain. Converting it to a JSX element is idiomatic, keeps escape-safety in React's hands, and removes the only `dangerouslySetInnerHTML` call that is safe to eliminate.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/17#discussion_r3393475835"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "c1",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "stored XSS via unsanitized `bioHtml` (Sigilix caught it in its summary, not inline)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "g2"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "trap: flags the SAFE static `EDITOR_TIP_HTML` constant"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: UserBio \"untested\" — Sigilix's only inline finding"
+    }
+  ]
+}

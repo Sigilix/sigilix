@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 28,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28",
+  "collectedAt": "2026-06-12T01:54:45.207Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393232463,
+        "path": "src/routes/coupons.ts",
+        "line": 12,
+        "excerpt": "**Missing authorization check — any authenticated user can redeem any coupon code**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393232463",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393232473,
+        "path": "src/routes/coupons.ts",
+        "line": 36,
+        "excerpt": "**New coupon redemption endpoint ships without tests for its two reachable branches**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393232473",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393232479,
+        "path": "src/server.ts",
+        "line": 18,
+        "excerpt": "**New route registration in server.ts has no test verifying the coupon endpoint is mounted**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393232479",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393235203,
+        "path": "src/routes/coupons.ts",
+        "line": 34,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393235203"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393239884,
+        "path": "src/routes/coupons.ts",
+        "line": 35,
+        "excerpt": "**TOCTOU race — stock can go negative**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393239884"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393239918,
+        "path": "src/routes/coupons.ts",
+        "line": 36,
+        "excerpt": "**Unhandled promise rejections on DB errors**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393239918"
+      },
+      {
+        "ref": "g3",
+        "tool": "greptile",
+        "commentId": 3393239975,
+        "path": "src/routes/coupons.ts",
+        "line": 33,
+        "excerpt": "**No per-user duplicate-redemption guard**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/28#discussion_r3393239975"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "c1",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "TOCTOU race — coupon stock can go negative under concurrency"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "over-fire: \"any user can redeem any coupon\" — redemption is open to users by design"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "g3"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "speculative: no per-user duplicate-redemption guard"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "g2"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "\"unhandled promise rejections\" — pre-existing repo pattern"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "s2",
+        "s3"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: redeem endpoint/mount \"untested\""
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 18,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18",
+  "collectedAt": "2026-06-12T01:54:50.907Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393474789,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "**`useEffect` has an empty dependency array but reads `userId` — stale data on prop change**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393474789",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393474802,
+        "path": "src/components/UserDetail.tsx",
+        "line": 35,
+        "excerpt": "**New `UserDetail` component has no test coverage for its three runtime states**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393474802",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3393484387,
+        "path": "src/components/UserDetail.tsx",
+        "line": 15,
+        "excerpt": "**`useEffect` never re‑fetches when `userId` changes**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393484387",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3393484394,
+        "path": "src/components/UserDetail.tsx",
+        "line": 15,
+        "excerpt": "**`useEffect` missing `userId` dependency causes stale data and redundant fetches**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393484394",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3393484400,
+        "path": "src/components/UserDetail.tsx",
+        "line": 35,
+        "excerpt": "**New `UserDetail` component has no test coverage despite multiple runtime branches**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393484400",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393477072,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393477072"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393479369,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "The effect dependency array is empty, so the fetch only runs once on mount. When `userId` changes — which the JSDoc says happens every time the user clicks the list — the effect never re-runs and the component keeps displaying the first user's data indefinitely.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393479369"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393479437,
+        "path": "src/components/UserDetail.tsx",
+        "line": 15,
+        "excerpt": "When `userId` changes the effect re-runs, but `user` is never cleared first. Because `user` is still non-null, the `if (!user) return <p>Loading…</p>` branch is skipped and the previous user's name and bio remain visible during the in-flight request. Adding `setUser(null)` along…",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393479437"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "s3",
+        "s4",
+        "c1",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "useEffect missing `userId` dep → stale on prop change (Sigilix posted 3 near-dupes)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "g2"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "stale UI not cleared during in-flight fetch on userId change (Greptile unique)"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s2",
+        "s5"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: UserDetail \"untested\""
+    }
+  ]
+}

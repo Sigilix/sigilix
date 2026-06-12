@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 22,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/22",
+  "collectedAt": "2026-06-12T01:54:57.216Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393619460,
+        "path": "web/InvoiceFooter.tsx",
+        "line": 18,
+        "excerpt": "**New `InvoiceFooter` component ships without any test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/22#discussion_r3393619460",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "trap: \"InvoiceFooter untested\" — pure glue over a same-PR tested helper (SIG-347 over-fire)"
+    }
+  ]
+}

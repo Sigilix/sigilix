@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 19,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19",
+  "collectedAt": "2026-06-12T01:54:52.519Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3393510890,
+        "path": "src/components/Dashboard.tsx",
+        "line": 14,
+        "excerpt": "**Inline object in `useEffect` dependency array triggers `getUsers` on every render**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3393510890",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3393510900,
+        "path": "src/components/Dashboard.tsx",
+        "line": 40,
+        "excerpt": "**New Dashboard component has no test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3393510900",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393515120,
+        "path": "src/components/Dashboard.tsx",
+        "line": 26,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3393515120"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c1"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "inline `fetchOptions` object → effect refires/refetches every render"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: Dashboard \"untested\""
+    }
+  ]
+}

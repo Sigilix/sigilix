@@ -83,6 +83,15 @@ export interface PrReviewFinding {
    *   - "comment" — webhook/comment/review-event concern; body only.
    */
   scope?: ReviewFindingScope
+  /**
+   * SIG-392: internal runtime flag — when true, the engine deliberately set
+   * `scope` and `normalizeFindingScopeForAnchorability` must NOT re-derive it.
+   * Set on engine-MANUFACTURED cross-file findings (the coverage-stamp-collapse
+   * survivor, which is `scope:"pr"` but inherits one kept stamp's path/line);
+   * without this, the inline-first promotion would wrongly anchor a multi-file
+   * aggregate to a single line. Never set from model output; never rendered.
+   */
+  scopeLocked?: boolean
   score: number
   category: FindingCategory
   headline: string

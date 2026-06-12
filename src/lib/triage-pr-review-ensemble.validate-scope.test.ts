@@ -118,6 +118,21 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       reviewable,
       specialistVerdicts,
     })
+    // survives to the body (not dropped), scope unchanged
+    const stillThere = [...out.verdict.findings, ...out.unanchoredFindings].find((f) => f.line === 999)
+    expect(stillThere?.scope).toBe("pr")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("SIG-392: a scopeLocked pr finding is NEVER promoted even when its line anchors (coverage-collapse survivor)", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "pr", scopeLocked: true }),
+      reviewable,
+      specialistVerdicts,
+    })
     expect(out.verdict.findings.find((f) => f.scope === "line")).toBeUndefined()
     const flips = logSpy.mock.calls
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))

@@ -285,6 +285,11 @@ export function normalizeFindingScopeForAnchorability(
   finding: PrReviewFinding,
   reviewable: ReviewableMap,
 ): PrReviewFinding {
+  // SIG-392: engine-manufactured scope (the coverage-stamp-collapse cross-file
+  // survivor) is deliberate — never re-derive it. Without this, inline-first
+  // promotion would anchor a multi-file "Also uncovered: …" aggregate to the
+  // one kept stamp's line.
+  if (finding.scopeLocked) return finding
   // Comment-scoped findings (GitHub bot-command / review-event behavior)
   // are never code anchors — leave alone.
   if (finding.scope === "comment") return finding

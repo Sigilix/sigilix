@@ -74,6 +74,10 @@ export function collapseCoverageStamps<P extends { sourceFindingIds: ReadonlyArr
   const survivor: PrReviewFinding = {
     ...kept,
     scope: "pr",
+    // SIG-392: lock the scope so the inline-first promotion
+    // (normalizeFindingScopeForAnchorability) does not anchor this cross-file
+    // aggregate to the one kept stamp's inherited line.
+    scopeLocked: true,
     body:
       otherPaths.length > 0
         ? `${kept.body}\n\nAlso uncovered: ${otherPaths.map((p) => `\`${p}\``).join(", ")}`

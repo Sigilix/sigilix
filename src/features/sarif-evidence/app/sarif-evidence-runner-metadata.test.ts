@@ -98,6 +98,52 @@ describe("runSarifEvidence — runner metadata", () => {
     expect(r.findings[0]!.roleHints).toEqual(["logic", "performance"])
   })
 
+  it("preserves OpenGrep and Brakeman metadata through the real SARIF path", async () => {
+    const toolRuns = [
+      { toolId: "opengrep", toolName: "OpenGrep", path: "src/app.ts", line: 4, ruleId: "javascript.lang.security" },
+      { toolId: "brakeman", toolName: "Brakeman", path: "app/models/user.rb", line: 9, ruleId: "SQL Injection" },
+    ]
+    const metadataByTool = new Map(toolRuns.map(({ toolId }) => [toolId, runnerMetadata(toolId)]))
+    for (const { toolId } of toolRuns) {
+      expect(metadataByTool.get(toolId)).toMatchObject({
+        sigilixSchemaVersion: 1,
+        sigilixToolId: toolId,
+        sigilixSource: "deterministic-tool",
+      })
+    }
+    const report = JSON.stringify({
+      version: "2.1.0",
+      runs: toolRuns.map(({ toolId, toolName, path, line, ruleId }) => ({
+        tool: { driver: { name: toolName, properties: metadataByTool.get(toolId) } },
+        results: [
+          {
+            ruleId,
+            level: "warning",
+            message: { text: `${toolId} finding` },
+            locations: [{ physicalLocation: { artifactLocation: { uri: path }, region: { startLine: line } } }],
+          },
+        ],
+      })),
+    })
+    const r = await runSarifEvidence({
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: diffWithChanges(toolRuns.map(({ path, line }) => ({ path, line }))),
+      config: DEFAULT_CONFIG,
+    })
+    expect(r.skipped).toBe(false)
+    if (r.skipped) return
+    const byTool = new Map(r.findings.map((f) => [f.toolId, f]))
+    for (const { toolId } of toolRuns) {
+      const finding = byTool.get(toolId)
+      expect(finding?.toolId).toBe(toolId)
+      expect(finding?.roleHint).toBe("security")
+      expect(finding?.roleHints).toEqual(["security"])
+      expect(finding?.source).toBe("deterministic-tool")
+    }
+  })
+
   it("falls back to legacy taxonomy and records a schema warning for unknown metadata schema", async () => {
     const report = makeReport(
       [

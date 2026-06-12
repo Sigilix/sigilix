@@ -11,9 +11,11 @@ import {
 describe("runner-tool-catalog", () => {
   const expectedCatalog = [
     ["semgrep", true, ["security"]],
+    ["opengrep", true, ["security"]],
     ["eslint", true, ["logic"]],
     ["tsc", true, ["logic"]],
     ["ruff", true, ["logic", "performance"]],
+    ["brakeman", true, ["security"]],
     ["pylint", true, ["logic"]],
     ["flake8", true, ["logic"]],
     ["knip", true, ["logic"]],
@@ -41,6 +43,7 @@ describe("runner-tool-catalog", () => {
   ] as const
 
   it("mirrors the current runner tool ids, defaults, and role routing", () => {
+    expect(RUNNER_TOOL_CATALOG).toHaveLength(30)
     expect(RUNNER_TOOL_CATALOG.map(({ id, defaultEnabled, roles }) => [id, defaultEnabled, roles])).toEqual(
       expectedCatalog,
     )
@@ -49,7 +52,9 @@ describe("runner-tool-catalog", () => {
 
   it("recognizes only cataloged runner tool ids", () => {
     expect(isRunnerToolId("semgrep")).toBe(true)
+    expect(isRunnerToolId("opengrep")).toBe(true)
     expect(isRunnerToolId("tsc")).toBe(true)
+    expect(isRunnerToolId("brakeman")).toBe(true)
     expect(isRunnerToolId("biome")).toBe(true)
     expect(isRunnerToolId("checkmake")).toBe(true)
     expect(isRunnerToolId("trivy")).toBe(true)

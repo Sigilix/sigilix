@@ -34,6 +34,8 @@ import { noNPlusOneCallInLoop } from "./rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
 // SIG-310: contract-drift type-pattern detector.
 import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias"
+// SIG-392 (b8): runtime double-assertion contract-drift detector.
+import { noDoubleCastThroughUnknown } from "./rules/no-double-cast-through-unknown"
 // SIG-314: deterministic IDOR/BOLA floor (security, warning/P2-capped).
 import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
 import { noInsecureRandomToken } from "./rules/no-insecure-random-token"
@@ -81,6 +83,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noSyncIoInRequestPath,
   // SIG-310: logic-specialist contract-drift type-pattern (severity: warning).
   noSnakeCamelOptionalAlias,
+  // SIG-392 (b8): logic-specialist runtime launder-cast contract-drift (severity: warning).
+  noDoubleCastThroughUnknown,
   // SIG-314: security-specialist deterministic IDOR/BOLA floor (severity: warning).
   noUnauthorizedObjectLookup,
   // security-specialist deterministic weak-randomness floor (CWE-338, severity: warning).

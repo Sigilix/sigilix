@@ -285,13 +285,26 @@ export function normalizeFindingScopeForAnchorability(
   finding: PrReviewFinding,
   reviewable: ReviewableMap,
 ): PrReviewFinding {
-  // PR-level / comment-level findings: leave alone — they aren't
-  // anchorable by definition.
-  if (finding.scope === "pr" || finding.scope === "comment") return finding
+  // SIG-392: engine-manufactured scope (the coverage-stamp-collapse cross-file
+  // survivor) is deliberate — never re-derive it. Without this, inline-first
+  // promotion would anchor a multi-file "Also uncovered: …" aggregate to the
+  // one kept stamp's line.
+  if (finding.scopeLocked) return finding
+  // Comment-scoped findings (GitHub bot-command / review-event behavior)
+  // are never code anchors — leave alone.
+  if (finding.scope === "comment") return finding
   // Already line-scoped: leave alone.
   if (finding.scope === "line") return finding
 
-  // File-scoped (or scope omitted): check if it's actually anchorable.
+  // SIG-392 (runner#25): file-scoped, PR-scoped, OR scope-omitted findings
+  // are ALL candidates for inline promotion when they carry a concrete,
+  // anchorable line range — the founder's inline-first rule: ANY anchorable
+  // finding goes inline. The synth mis-scopes line-specific findings as `pr`
+  // (e.g. "untested error paths in run_pylint.sh:60-67"), which used to route
+  // them to the body verbatim — model under-anchoring, not a real PR-level
+  // finding. A genuine PR-level finding (no line, or a line that does not
+  // resolve to a RIGHT-side hunk) still falls through unchanged to the body.
+  // Identical anchorability test + 422-safety as the file-scope path below.
   const path = typeof finding.path === "string" ? finding.path.trim() : ""
   if (path.length === 0) return finding
   if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return finding

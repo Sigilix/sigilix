@@ -89,6 +89,19 @@ describe("collapseCoverageStamps", () => {
     })
   })
 
+  it("SIG-392 inline-first interaction: the cross-file survivor is scopeLocked so it is never promoted to inline", () => {
+    const real = finding({ category: "logic", score: 5, headline: "SQL injection in webhook handler" })
+    const out = collapseCoverageStamps(
+      [stampA, real, stampB, stampC],
+      [prov(["tests-0"]), prov(["logic-1"]), prov(["tests-2"]), prov(["tests-5"])],
+    )
+    const survivor = out.findings.find((f) => f.category === "testing")!
+    // pr-scoped AND scopeLocked → normalizeFindingScopeForAnchorability skips it
+    // even though its inherited line could anchor (it lists OTHER files in body).
+    expect(survivor.scope).toBe("pr")
+    expect(survivor.scopeLocked).toBe(true)
+  })
+
   it("a lone stamp passes through untouched (inputs by reference)", () => {
     const input = [stampA, finding({ category: "logic", headline: "real" })]
     const provs = [prov(["t-0"]), prov(["l-0"])]

@@ -224,6 +224,25 @@
               "customer_id"
             ],
             "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "success shape",
+              "not found"
+            ],
+            "notKeywords": [
+              "authorization",
+              "injection",
+              "balance"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "success shape",
+              "invoice not found"
+            ],
+            "scope": "excerpt"
           }
         ]
       }
@@ -280,7 +299,8 @@
       "id": "b6",
       "title": "Refund amount treated as dollars *100 (float, no rounding) against the cents-on-the-wire contract",
       "paths": [
-        "server/refunds.ts"
+        "server/refunds.ts",
+        "server/payments.ts"
       ],
       "tier": "MEDIUM",
       "category": "logic",
@@ -303,6 +323,16 @@
           {
             "allKeywords": [
               "float"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "dollars",
+              "cents"
+            ],
+            "notKeywords": [
+              "balance"
             ],
             "scope": "excerpt"
           }
@@ -619,6 +649,20 @@
             "notKeywords": [
               "sql",
               "idempoten"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "placeholder",
+              "failing open"
+            ],
+            "scope": "excerpt"
+          },
+          {
+            "allKeywords": [
+              "hardcoded placeholder",
+              "secret"
             ],
             "scope": "excerpt"
           }

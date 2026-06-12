@@ -210,6 +210,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_RESWEEP_MODE: "Shadow",
       // SIG-395: invariant-lens rollout flag.
       OPENCLAW_INVARIANT_LENS_MODE: "ON",
+      // SIG-392: recall-eliciting logic prompt (=== "on").
+      OPENCLAW_LOGIC_RECALL_MODE: "on",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -245,6 +247,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
       invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
+      logicRecallEnabled: env.OPENCLAW_LOGIC_RECALL_MODE === "on",
     })
   })
 
@@ -279,6 +282,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: true,
       resweepMode: "off",
       invariantLensMode: "off",
+      logicRecallEnabled: false,
     })
   })
 

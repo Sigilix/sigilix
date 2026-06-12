@@ -3,7 +3,7 @@
 // cross-tier field-name drift), and that both are phrased FP-safe (grounded).
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS } from "@/src/prompts/pr-review-specialists"
+import { SPECIALIST_PROMPTS, LOGIC_RECALL_SUFFIX, specialistSystemPrompt } from "@/src/prompts/pr-review-specialists"
 
 describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => {
   const logic = SPECIALIST_PROMPTS.logic
@@ -59,5 +59,29 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
     expect(logic).toContain("case-insensitive search")
     expect(logic).toContain("empty queries returning no rows")
     expect(logic).toContain("explicit contract, test, API comment, or requirement")
+  })
+})
+
+describe("specialistSystemPrompt — SIG-392 recall-mode flag", () => {
+  it("default (recallOn=false) returns the base prompt unchanged for every role", () => {
+    for (const role of ["logic", "security", "performance", "tests"] as const) {
+      expect(specialistSystemPrompt(role, false)).toBe(SPECIALIST_PROMPTS[role])
+    }
+  })
+
+  it("recallOn=true appends EXACTLY the recall directive to the LOGIC prompt", () => {
+    const logic = specialistSystemPrompt("logic", true)
+    // exact pin: base prompt + "\n" + the suffix, nothing more (a changed joiner
+    // or a duplicated/edited suffix fails here).
+    expect(logic).toBe(`${SPECIALIST_PROMPTS.logic}\n${LOGIC_RECALL_SUFFIX}`)
+    expect(logic).toContain("RECALL DIRECTIVE")
+    expect(logic).toContain("do NOT self-censor or stop early")
+  })
+
+  it("recallOn=true does NOT alter the non-logic roles", () => {
+    for (const role of ["security", "performance", "tests"] as const) {
+      expect(specialistSystemPrompt(role, true)).toBe(SPECIALIST_PROMPTS[role])
+      expect(specialistSystemPrompt(role, true)).not.toContain("RECALL DIRECTIVE")
+    }
   })
 })

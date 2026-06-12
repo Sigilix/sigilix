@@ -381,6 +381,10 @@ export interface Env {
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.
   OPENCLAW_ADMIN_TOKEN?: string
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
+  /** SIG-392: recall-eliciting logic-specialist prompt — "on" appends the recall
+   *  directive to the logic prompt (~6→16/20 logic recall on the dense fixture).
+   *  Default off. Precision is the downstream gates' job. */
+  OPENCLAW_LOGIC_RECALL_MODE?: string
   /** SIG-393: region re-sweep mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */

@@ -87,14 +87,37 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
     })
   })
 
-  it("leaves pr scope alone even when line is in a hunk", () => {
+  it("SIG-392 (runner#25): flips pr → line when an anchorable line is in a hunk (inline-first)", () => {
+    // The runner#25 incident: the synth scoped a line-specific testing
+    // finding (run_pylint.sh:60-67) as `pr`, routing it to the body. The
+    // founder's inline-first rule promotes any anchorable finding inline.
     const out = validateForSubmission({
       synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "pr" }),
       reviewable,
       specialistVerdicts,
     })
-    // pr-scope findings are unanchorable by definition; the line
-    // validity check downstream routes them to unanchoredFindings.
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.scope).toBe("line")
+    expect(out.unanchoredFindings).toHaveLength(0)
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(1)
+    expect(JSON.parse(flips[0]!) as Record<string, unknown>).toMatchObject({
+      event: "pr-review-scope-normalized-to-line",
+      fromScope: "pr",
+      line: 42,
+    })
+  })
+
+  it("SIG-392: leaves a GENUINE pr-level finding alone when its line is NOT in any hunk", () => {
+    // A real PR-level finding (line doesn't resolve to a RIGHT-side hunk)
+    // still routes to the body — promotion is anchorability-gated, not blanket.
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 999, score: 4, scope: "pr" }),
+      reviewable,
+      specialistVerdicts,
+    })
     expect(out.verdict.findings.find((f) => f.scope === "line")).toBeUndefined()
     const flips = logSpy.mock.calls
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))

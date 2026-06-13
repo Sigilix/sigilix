@@ -132,6 +132,88 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     })
   })
 
+  it("posted result with post-review work waits before completing the check", async () => {
+    const reviewMeta = { event: "APPROVE" as const, findingsCount: 0 }
+    let resolvePostReviewWork: (value: { status: "completed" }) => void = () => {
+      throw new Error("post-review resolver was not assigned")
+    }
+    const order: string[] = []
+    const postReviewWork = new Promise<{ status: "completed" }>((resolve) => {
+      resolvePostReviewWork = resolve
+    }).then((value) => {
+      order.push("post-review-work")
+      return value
+    })
+    completeCheckRunMock.mockImplementation(async () => {
+      order.push("complete-check")
+    })
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+      postReviewWork,
+    })
+
+    const dispatched = dispatchJob(job, makeEnv())
+    await Promise.resolve()
+
+    expect(completeCheckRunMock).not.toHaveBeenCalled()
+    resolvePostReviewWork({ status: "completed" })
+    await dispatched
+    expect(order).toEqual(["post-review-work", "complete-check"])
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "success",
+      surface: "comments",
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
+    })
+  })
+
+  it("posted result with failed post-review work blocks the check", async () => {
+    const reviewMeta = { event: "APPROVE" as const, findingsCount: 0 }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+      postReviewWork: Promise.resolve({ status: "failed", error: "amendment post failed" }),
+    })
+
+    await dispatchJob(job, makeEnv())
+
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "blocked",
+      surface: "comments",
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
+    })
+  })
+
+  it("posted result with hanging post-review work times out fail-closed", async () => {
+    vi.useFakeTimers()
+    try {
+      const reviewMeta = { event: "APPROVE" as const, findingsCount: 0 }
+      handlePrReviewEnsembleMock.mockResolvedValue({
+        status: "posted",
+        telemetry: {},
+        reviewMeta,
+        postReviewWork: new Promise(() => undefined),
+      })
+
+      const dispatched = dispatchJob(job, makeEnv())
+      await vi.advanceTimersByTimeAsync(120_000)
+      await dispatched
+
+      expect(completeCheckRunMock).toHaveBeenCalledWith({
+        handle: HANDLE,
+        conclusion: "blocked",
+        surface: "comments",
+        reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // ARC-279: when the ensemble had to use the comment fallback
   // (formal review submit silently rejected), the Check Run reflects
   // that the normal pipeline didn't run — even though synth's body

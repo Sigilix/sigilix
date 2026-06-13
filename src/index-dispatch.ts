@@ -50,6 +50,24 @@ import {
 import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
 
+const POST_REVIEW_WORK_TIMEOUT_MS = 120_000
+type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
+
+async function waitForPostReviewWork(work: Promise<PostReviewWorkOutcome>): Promise<PostReviewWorkOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<PostReviewWorkOutcome>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ status: "failed", error: `post-review-work-timeout:${POST_REVIEW_WORK_TIMEOUT_MS}` }),
+      POST_REVIEW_WORK_TIMEOUT_MS,
+    )
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
  * Used by pr-review-rerun and pr-improve queue handlers so the user
@@ -83,6 +101,36 @@ export async function postSlashCommandAck(
  */
 export function prMetaIsClosedOrMerged(pr: { merged_at?: string | null; state?: "open" | "closed" }): boolean {
   return pr.merged_at != null || pr.state === "closed"
+}
+
+async function postReviewWorkBlocked(
+  work: Promise<{ status: "completed" } | { status: "failed"; error: string }> | undefined,
+  tag: { owner: string; repo: string; prNumber: number; headSha: string },
+): Promise<boolean> {
+  if (work === undefined) return false
+  try {
+    const outcome = await waitForPostReviewWork(work)
+    if (outcome.status !== "failed") return false
+    console.error(
+      JSON.stringify({
+        event: "pr-review-post-review-work-blocked",
+        ...tag,
+        headSha: tag.headSha.slice(0, 7),
+        error: outcome.error,
+      }),
+    )
+    return true
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "pr-review-post-review-work-threw",
+        ...tag,
+        headSha: tag.headSha.slice(0, 7),
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return true
+  }
 }
 
 /**
@@ -341,13 +389,19 @@ export async function dispatchJob(
         try {
           const result = await handlePrReviewEnsemble(baseArgs)
           if (result.status === "posted") {
+            const blocked = await postReviewWorkBlocked(result.postReviewWork, {
+              owner: job.owner,
+              repo: job.repo,
+              prNumber: job.prNumber,
+              headSha: job.headSha,
+            })
             // ARC-279: when the ensemble used the comment fallback
             // (formal review submit was silently rejected), the
             // Check Run should reflect that the normal pipeline
             // didn't run — even though the synth body posted as a
             // PR comment. `failure` + reviewMeta.surface === "comment"
             // routes to the "see PR comment" title.
-            conclusion = result.reviewMeta?.surface === "comment" ? "failure" : "success"
+            conclusion = blocked ? "blocked" : result.reviewMeta?.surface === "comment" ? "failure" : "success"
             reviewMeta = result.reviewMeta
             return
           }

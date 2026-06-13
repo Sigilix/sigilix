@@ -86,6 +86,8 @@ export interface ReviewMeta {
   runnerEvidence?: "verified" | "evidence-pending"
 }
 
+export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
+
 /**
  * The review-result contract, generic over the telemetry type the handler holds.
  * The god-file binds `Tel = EnsembleTelemetry` (the concrete, public
@@ -99,6 +101,8 @@ export interface EnsembleResult<Tel = FinalizeTelemetry> {
   /** ARC-276/279/280: set on `posted` (real review or comment
    *  fallback) AND on `errored` when a skip-notice was posted. */
   reviewMeta?: ReviewMeta
+  /** Merge-gated follow-up work that must finish before the dispatcher completes the Check Run. */
+  postReviewWork?: Promise<PostReviewWorkOutcome>
 }
 
 /**

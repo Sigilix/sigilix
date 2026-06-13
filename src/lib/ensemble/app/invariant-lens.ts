@@ -141,7 +141,7 @@ export async function applyInvariantLens(args: {
   prNumber: number
   headSha: string
   diff: string
-  executionLane?: "default" | "background"
+  executionLane?: "default" | "background" | "amendment"
   recallContract?: InvariantLensRecallContract
 }): Promise<InvariantLensApplyResult> {
   const passthrough: InvariantLensApplyResult = { verdicts: args.succeeded, lensFindingIds: [] }

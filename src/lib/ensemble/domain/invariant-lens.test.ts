@@ -60,8 +60,27 @@ describe("decideInvariantExecution", () => {
     })
   })
 
+  it("allows pending-check amendments only when mode=on and the merge-gated lane is available", () => {
+    const supported = {
+      mode: "on",
+      recallContract: "pending-check-amendment",
+      amendmentLaneAvailable: true,
+    } as Parameters<typeof decideInvariantExecution>[0] & { amendmentLaneAvailable: true }
+
+    expect(decideInvariantExecution(supported)).toEqual({
+      kind: "amendment",
+      effectiveRecallContract: "pending-check-amendment",
+    })
+  })
+
   it("fails closed for pending-check amendments even when the lens is in shadow mode", () => {
-    expect(decideInvariantExecution({ mode: "shadow", recallContract: "pending-check-amendment" })).toEqual({
+    const supported = {
+      mode: "shadow",
+      recallContract: "pending-check-amendment",
+      amendmentLaneAvailable: true,
+    } as Parameters<typeof decideInvariantExecution>[0] & { amendmentLaneAvailable: true }
+
+    expect(decideInvariantExecution(supported)).toEqual({
       kind: "blocking",
       effectiveRecallContract: "blocking",
       refusalReason: "pending-check-amendment-unavailable",

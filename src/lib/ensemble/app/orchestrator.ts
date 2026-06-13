@@ -45,6 +45,7 @@ import { assembleSpecialistPrompts } from "./context/assemble-prompts"
 import { prepareRender } from "./render-prep"
 import { verifyAndBuildSubmission } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
+import { attachInvariantLensAmendmentWork } from "./invariant-lens-amendment"
 import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
@@ -625,14 +626,11 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       shadowMemoriesForPhase3,
       effectiveSynthVerdict,
       effectiveSynthProvenance,
+      invariantLensAmendmentWork,
     } = specialistsPhase
 
     // ─── Post-synthesis validation ─────────────────────────────
-    // SIG-318 (PR 12a): the adjudicate phase — validateForSubmission, the
-    // AST-emit + performance severity clamps, and the consensus re-ranking —
-    // moved verbatim to ensemble/app/adjudicate. The phase mutates `telemetry`
-    // (synthesizer re-point + postValidation) and `validated` (in-place clamps)
-    // by reference; the consensus outputs flow downstream unchanged.
+    // SIG-318 (PR 12a): validation, severity clamps, and consensus ranking live in ./adjudicate.
     const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } =
       adjudicateFindings({
         env,
@@ -878,65 +876,67 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     })
     findingMarkers = findingMarkersAfterBuild
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)
-    // SIG-318 (PR 12f): the PUBLISH phase — inline PR-overview render + post-overview
-    // stale-head guard (#3), pre-submit dismiss, the submit + 4-level fallback ladder
-    // (inline → comment-fallback / 422 → anchorless → comment-fallback), and per-path
-    // post-submit persistence — lives in ensemble/app/publish. Every terminal path
-    // returns `finalize(...)`, so it returns the `EnsembleResult` directly; its two
-    // submit-ladder rethrows propagate OUT to this outer catch (publish adds no catch).
-    return await publishReviewSubmission({
-      env,
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      installationId,
-      staleHeadRequeueDepth,
-      repoId: args.repoId,
-      client,
-      sigilixConfig,
-      meta,
-      perfCtx,
-      telemetry,
-      startMs,
-      cache,
-      fullPrDiff,
-      stack,
-      coverage,
-      deltaCounts,
-      filesDroppedFromReview,
-      currentFindingsForManifest,
-      reviewManifestEnabled: ensembleConfig.flags.reviewManifestEnabled,
-      reviewEventOverride,
-      trustLedgerMode,
-      showEvidence,
-      runnerEvidenceBadge,
-      submissionVerdict,
-      renderableUnanchoredForSubmission,
-      primaryEvent,
-      primaryAffordance,
-      prepareFallbackAffordance,
-      submissionBuild,
-      submission,
-      bodyOnlyAnnotations,
-      allFindingAnnotations,
-      checkAnnotationMeta,
-      reviewOutputSurface,
-      maybePostAstAutoInline,
-      deterministicCheckAnnotationMeta,
-      deterministicErroredReviewMeta,
-    })
+    // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, and persistence.
+    return attachInvariantLensAmendmentWork(
+      await publishReviewSubmission({
+        env,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+        staleHeadRequeueDepth,
+        repoId: args.repoId,
+        client,
+        sigilixConfig,
+        meta,
+        perfCtx,
+        telemetry,
+        startMs,
+        cache,
+        fullPrDiff,
+        stack,
+        coverage,
+        deltaCounts,
+        filesDroppedFromReview,
+        currentFindingsForManifest,
+        reviewManifestEnabled: ensembleConfig.flags.reviewManifestEnabled,
+        reviewEventOverride,
+        trustLedgerMode,
+        showEvidence,
+        runnerEvidenceBadge,
+        submissionVerdict,
+        renderableUnanchoredForSubmission,
+        primaryEvent,
+        primaryAffordance,
+        prepareFallbackAffordance,
+        submissionBuild,
+        submission,
+        bodyOnlyAnnotations,
+        allFindingAnnotations,
+        checkAnnotationMeta,
+        reviewOutputSurface,
+        maybePostAstAutoInline,
+        deterministicCheckAnnotationMeta,
+        deterministicErroredReviewMeta,
+      }),
+      {
+        env,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        lensWork: invariantLensAmendmentWork,
+        reviewable,
+        addedLineTextByLine,
+      },
+    )
   } catch (e) {
     telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
     telemetry.internalError = e instanceof Error ? e.message : String(e)
-    // ARC-280 follow-up: the internal_error path doesn't post a
-    // skip-notice because the catch may have fired BEFORE the
-    // client/auth was built (so the `bailWithSkipNotice` closure
-    // isn't reachable from here). The dispatcher's `errored` →
-    // `failure` Check Run mapping renders a generic "Review
-    // failed" title, which is accurate for this case — the on-
-    // call team needs to look at telemetry to know what failed.
+    // ARC-280 follow-up: internal_error may fire before client/auth exists, so no skip-notice here.
     return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
   } finally {
     clearTimeout(orchTimer)

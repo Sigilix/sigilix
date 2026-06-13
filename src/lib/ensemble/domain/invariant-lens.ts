@@ -26,6 +26,7 @@ export function parseInvariantLensRecallContract(raw: string | undefined): Invar
 
 export type InvariantLensExecutionDecision =
   | { kind: "background"; effectiveRecallContract: "shadow-background" }
+  | { kind: "amendment"; effectiveRecallContract: "pending-check-amendment" }
   | {
       kind: "blocking"
       effectiveRecallContract: "blocking"
@@ -41,8 +42,12 @@ export type InvariantLensExecutionDecision =
 export function decideInvariantExecution(args: {
   mode: InvariantLensMode
   recallContract: InvariantLensRecallContract
+  amendmentLaneAvailable?: boolean
 }): InvariantLensExecutionDecision {
   if (args.recallContract === "pending-check-amendment") {
+    if (args.mode === "on" && args.amendmentLaneAvailable === true) {
+      return { kind: "amendment", effectiveRecallContract: "pending-check-amendment" }
+    }
     return {
       kind: "blocking",
       effectiveRecallContract: "blocking",

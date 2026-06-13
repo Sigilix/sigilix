@@ -303,6 +303,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         )
       }
     }
+    // SIG-287: role's bounded reasoning level — empty map by default → think:false.
+    const reasoningForRole = ensembleConfig.flags.reasoningByRole.get(role)
     const promise = withComposedTimeout(
       // Use the composed signal `withComposedTimeout` provides — it
       // aborts on EITHER the per-specialist 270s timer OR the outer
@@ -320,6 +322,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           initialMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
+          // SIG-287: per-role bounded reasoning (resolved above; default-off → omitted).
+          ...(reasoningForRole !== undefined ? { reasoning: reasoningForRole } : {}),
           // ARC-283 Phase B1b: thread the orchestrator's perfCtx
           // through so per-attempt `model-attempt-completed` events
           // share correlation fields with the surrounding ensemble

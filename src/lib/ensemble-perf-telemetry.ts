@@ -215,6 +215,11 @@ export interface ModelAttemptEvent {
   /** SIG-212: token usage reported by Ollama (`eval_count`). Same
    *  optionality semantics as `inputTokens`. */
   outputTokens?: number
+  /** SIG-287 (reasoning-on harness): cumulative LENGTH of the model's
+   *  `thinking`/CoT field for this attempt (char count only — never the
+   *  text). Lets the soak size reasoning time per role. Absent on the
+   *  default-off `think:false` path (no reasoning emitted). */
+  thinkingChars?: number
 }
 
 export function emitModelAttempt(ctx: EnsembleRunCtx, info: ModelAttemptEvent): void {

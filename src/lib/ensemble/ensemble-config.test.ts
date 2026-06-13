@@ -254,6 +254,11 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
           env.OPENCLAW_SECURITY_RECALL_MODE === "on" ? "security" : null,
         ].filter((r): r is "logic" | "security" => r !== null),
       ),
+      // SIG-287: reasoning-on harness defaults EMPTY — this env block leaves
+      // OPENCLAW_REASONING_MODE unset, so the per-role map stays empty (every
+      // call is `think:false`, byte-identical to today). The dedicated
+      // reasoning-parse suite below covers the populated cases.
+      reasoningByRole: new Map(),
     })
   })
 
@@ -289,6 +294,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       resweepMode: "off",
       invariantLensMode: "off",
       recallRoles: new Set(),
+      // SIG-287: reasoning-on harness defaults to an empty map (off).
+      reasoningByRole: new Map(),
     })
   })
 
@@ -330,6 +337,79 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     const env = { OPENCLAW_RECEIPTJOIN_MODE: "  ENFORCE  ", OPENCLAW_TRUST_LEDGER: "On" }
     expect(parseEnsembleConfig(env).flags.receiptJoinMode).toBe(parseReceiptJoinMode("  ENFORCE  "))
     expect(parseEnsembleConfig(env).flags.trustLedgerMode).toBe(parseTrustLedgerMode("On"))
+  })
+})
+
+describe("SIG-287 parseEnsembleConfig — reasoningByRole (reasoning-on harness)", () => {
+  it("defaults to an empty map when OPENCLAW_REASONING_MODE is unset (byte-identical default-off)", () => {
+    expect(parseEnsembleConfig({}).flags.reasoningByRole).toEqual(new Map())
+  })
+
+  it("stays empty when mode is unset even if roles/level are set (mode is the master switch)", () => {
+    // The per-role + level vars are inert without the master switch on — so a
+    // stale OPENCLAW_REASONING_ROLES can never silently enable reasoning.
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_ROLES: "security,logic",
+      OPENCLAW_REASONING_LEVEL: "high",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map())
+  })
+
+  it("stays empty when mode is explicitly off", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "off",
+      OPENCLAW_REASONING_ROLES: "security",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map())
+  })
+
+  it("populates the listed roles at the default level 'high' when mode=on and no level set", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "security,tests",
+    }).flags
+    expect(c.reasoningByRole).toEqual(
+      new Map([
+        ["security", "high"],
+        ["tests", "high"],
+      ]),
+    )
+  })
+
+  it("honors an explicit level for every enabled role", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "logic",
+      OPENCLAW_REASONING_LEVEL: "medium",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map([["logic", "medium"]]))
+  })
+
+  it("normalizes mode/roles/level with trim + lowercase and ignores unknown role tokens", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "  ON  ",
+      OPENCLAW_REASONING_ROLES: " Security , bogus , Tests ",
+      OPENCLAW_REASONING_LEVEL: "  LOW ",
+    }).flags
+    // "bogus" is dropped; the two valid roles land at the normalized level.
+    expect(c.reasoningByRole).toEqual(
+      new Map([
+        ["security", "low"],
+        ["tests", "low"],
+      ]),
+    )
+  })
+
+  it("disables reasoning entirely (empty map) when an explicit level is invalid — never reaches the adapter's think", () => {
+    // Codex sign-off: an arbitrary string must NOT flow into `think`. An
+    // explicit-but-invalid level returns the empty map (off), not a partial
+    // enablement at a bad level.
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "security",
+      OPENCLAW_REASONING_LEVEL: "ultra",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map())
   })
 })
 

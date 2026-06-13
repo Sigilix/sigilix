@@ -389,6 +389,20 @@ export interface Env {
    *  appends the security recall directive (targets the b16 list-authz + b20
    *  HMAC-reserialized frontier). Default off. Precision is the gates' job. */
   OPENCLAW_SECURITY_RECALL_MODE?: string
+  /** SIG-287 (reasoning-on harness): master switch for per-role DeepSeek
+   *  reasoning — "on" enables the `reasoningByRole` map (built from
+   *  `OPENCLAW_REASONING_ROLES` + `OPENCLAW_REASONING_LEVEL`); anything else
+   *  (default) leaves it EMPTY → every call stays `think:false`, byte-identical
+   *  to today. Rolled out per-role + measured, never a global flip. */
+  OPENCLAW_REASONING_MODE?: string
+  /** SIG-287: comma-separated specialist roles to enable bounded reasoning on
+   *  when `OPENCLAW_REASONING_MODE === "on"` (e.g. "security" then "security,tests").
+   *  Empty/unset with mode on → no roles (still default-off in effect). Unknown
+   *  tokens are ignored. */
+  OPENCLAW_REASONING_ROLES?: string
+  /** SIG-287: bounded reasoning level applied to every enabled role —
+   *  "high" (default) | "medium" | "low". Never `think:true` (unbounded). */
+  OPENCLAW_REASONING_LEVEL?: string
   /** SIG-393: region re-sweep mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */

@@ -45,6 +45,10 @@ interface OllamaChatChunk {
     role?: string
     content?: string
     tool_calls?: ToolCall[]
+    // SIG-287 (reasoning-on harness): the `/api/chat` schema nests the
+    // reasoning CoT under `message.thinking` (vs the top-level `thinking`
+    // on `/api/generate`). We read its LENGTH ONLY (never the text).
+    thinking?: string
   }
   done?: boolean
   error?: string
@@ -93,7 +97,12 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     // aborts it. `format` is omitted on tool-call turns (so those keep their
     // thinking); set only alongside `format` here. Non-reasoning models ignore
     // `think`, so this is safe.
-    requestBody.think = false
+    //
+    // SIG-287 reopener (reasoning-on harness): `args.reasoning` opts a role
+    // into a BOUNDED reasoning level (`think:"high"|"medium"|"low"`); undefined
+    // → `think:false` EXACTLY as before (byte-identical default-off). See the
+    // matching note in ollama.ts.
+    requestBody.think = args.reasoning ?? false
   }
 
   try {
@@ -115,12 +124,17 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
       throw new Error("Ollama response missing body")
     }
 
-    const { message, usage } = await accumulateStream(res.body)
-    return {
+    const { message, usage, thinkingChars } = await accumulateStream(res.body)
+    const result: ChatResult = {
       message,
       hasToolCalls: Array.isArray(message.tool_calls) && message.tool_calls.length > 0,
       usage,
     }
+    // SIG-287: surface the thinking-char count only when the model reasoned;
+    // omitted on the default-off `think:false` path so the result is
+    // byte-identical to before for non-reasoning calls.
+    if (thinkingChars > 0) result.thinkingChars = thinkingChars
+    return result
   } finally {
     clearTimeout(timer)
     args.signal?.removeEventListener("abort", onExternalAbort)
@@ -145,7 +159,9 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
  * If a chunk has an `error` field, throw — that propagates to the agent
  * loop's `chat_error` mapping.
  */
-async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ message: ChatMessage; usage: LlmUsage }> {
+async function accumulateStream(
+  body: ReadableStream<Uint8Array>,
+): Promise<{ message: ChatMessage; usage: LlmUsage; thinkingChars: number }> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -153,6 +169,10 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ mes
   let lastToolCallsSnapshot: ToolCall[] | undefined = undefined
   let done = false
   let saw = false
+  // SIG-287 (reasoning-on harness): cumulative LENGTH of `message.thinking`
+  // across chunks (CoT arrives as deltas like `content`). Char count only —
+  // the text is never retained.
+  let thinkingChars = 0
   // SIG-212: token usage counters from the final `done: true` chunk.
   let promptEvalCount: number | undefined
   let evalCount: number | undefined
@@ -190,6 +210,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ mes
         if (typeof msg.content === "string") {
           accumulatedContent += msg.content
         }
+        if (typeof msg.thinking === "string") thinkingChars += msg.thinking.length
         if (Array.isArray(msg.tool_calls)) {
           // SNAPSHOT — replace, don't append.
           lastToolCallsSnapshot = msg.tool_calls
@@ -209,6 +230,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ mes
       const msg = chunk.message
       if (msg) {
         if (typeof msg.content === "string") accumulatedContent += msg.content
+        if (typeof msg.thinking === "string") thinkingChars += msg.thinking.length
         if (Array.isArray(msg.tool_calls)) lastToolCallsSnapshot = msg.tool_calls
       }
       captureCounts(chunk)
@@ -230,5 +252,5 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ mes
   const usage: LlmUsage = {}
   if (promptEvalCount !== undefined) usage.inputTokens = promptEvalCount
   if (evalCount !== undefined) usage.outputTokens = evalCount
-  return { message, usage }
+  return { message, usage, thinkingChars }
 }

@@ -16,6 +16,12 @@ export interface LlmUsage {
 export interface GenerateResult {
   text: string
   usage: LlmUsage
+  /** SIG-287 (reasoning-on harness): cumulative LENGTH of the model's
+   *  `thinking` field across the stream — never the CoT text itself, only
+   *  its char count, so the soak can size reasoning time per role without
+   *  ever logging chain-of-thought. Omitted when the model emitted no
+   *  thinking (the default-off `think:false` path → 0 or absent). */
+  thinkingChars?: number
 }
 
 export interface GenerateArgs {
@@ -47,6 +53,16 @@ export interface GenerateArgs {
    * first wins.
    */
   signal?: AbortSignal
+  /**
+   * SIG-287 (reasoning-on harness): the bounded DeepSeek reasoning level.
+   * Set on a schema-constrained (`format`) call to send `think:"<level>"`
+   * instead of the default `think:false`; undefined → `think:false` (the
+   * byte-identical current behavior). `"high" | "medium" | "low"` are the
+   * BOUNDED levels (a finite CoT then the answer) — never `think:true`
+   * (unbounded), which SIG-287 proved stalls the per-attempt cap. Ignored
+   * on free-form (format-less) calls, which keep the model default.
+   */
+  reasoning?: "high" | "medium" | "low"
 }
 
 export interface ChatMessage {
@@ -108,6 +124,11 @@ export interface ChatArgs {
   /** External AbortSignal. Composed with `timeoutMs` — either source
    *  aborts the request. Loop callers pass their loop-wide signal here. */
   signal?: AbortSignal
+  /** SIG-287 (reasoning-on harness): bounded DeepSeek reasoning level for a
+   *  schema-constrained (`format`) call. Same semantics as `GenerateArgs.reasoning`
+   *  — undefined → `think:false` (byte-identical current behavior); set →
+   *  `think:"<level>"`. Ignored on format-less / tool-call turns. */
+  reasoning?: "high" | "medium" | "low"
 }
 
 export interface ChatResult {
@@ -124,6 +145,12 @@ export interface ChatResult {
    *  exists for real LLM round-trips. Aggregators treat each missing
    *  field within `usage` as "no data," not zero. */
   usage?: LlmUsage
+  /** SIG-287 (reasoning-on harness): cumulative LENGTH of the assistant
+   *  message's `thinking` field across the stream — char count only, never
+   *  the CoT text. Omitted when the model emitted no thinking (default-off
+   *  `think:false` path). Optional so test mocks / non-Ollama producers
+   *  needn't supply it. */
+  thinkingChars?: number
 }
 
 /**

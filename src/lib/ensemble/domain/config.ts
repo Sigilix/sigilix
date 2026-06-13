@@ -39,6 +39,11 @@ import type { MinSpecialistsEarlyExitMode } from "./policy"
  *  `applyAstScanGate(...)`). */
 export type AstScanMode = string
 
+/** SIG-287 (reasoning-on harness): the BOUNDED DeepSeek reasoning levels a role
+ *  may opt into. Never `true` (unbounded) — the per-attempt cap can't out-wait
+ *  an unbounded CoT (the SIG-287 stall). Matches `GenerateArgs.reasoning`. */
+export type ReasoningLevel = "high" | "medium" | "low"
+
 /** The AST security-scanner modes, one per scanner rule. */
 export interface AstScanModes {
   authzIdor: AstScanMode
@@ -129,6 +134,12 @@ export interface EnsembleFeatureFlags {
    *  recall-eliciting directive is appended to that specialist's prompt
    *  (precision is the downstream gates' job). Rolled out one role at a time. */
   recallRoles: ReadonlySet<SpecialistRole>
+  /** SIG-287 (reasoning-on harness): roles whose model calls send a bounded
+   *  `think:"<level>"` on the PRIMARY attempt (fallback always stays
+   *  `think:false`). Built from `OPENCLAW_REASONING_MODE` + the role/level
+   *  vars; EMPTY by default → every call is `think:false`, byte-identical to
+   *  today. Mirrors `recallRoles`' per-role rollout shape. */
+  reasoningByRole: ReadonlyMap<SpecialistRole, ReasoningLevel>
   resweepMode: ResweepMode
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */

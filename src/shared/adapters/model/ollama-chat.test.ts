@@ -103,7 +103,12 @@ describe("chat() — SIG-287 think:false on schema-constrained calls", () => {
     })
   }
 
-  it("sets think:false (disables the reasoning phase) when a format is passed", async () => {
+  it("sets think:false (explicitly, not omitted) when a format is passed and reasoning is unset — byte-identical default-off", async () => {
+    // SIG-287 reopener: `args.reasoning ?? false` must STILL send an explicit
+    // `think:false` (present in the body, value false) on the default-off
+    // path — the exact wire shape the prior hardcoded `think = false`
+    // produced. Asserting both presence AND value pins that `think` is not
+    // silently omitted now.
     const captured: { body?: Record<string, unknown> } = {}
     mockCaptureOnce(captured)
     await chat({
@@ -113,7 +118,35 @@ describe("chat() — SIG-287 think:false on schema-constrained calls", () => {
       chatEnabled: "on",
       format: { type: "object" },
     })
+    expect("think" in (captured.body ?? {})).toBe(true)
     expect(captured.body?.think).toBe(false)
+  })
+
+  it('passes think:"high" through when reasoning:"high" is set on a format call (SIG-287 reopener)', async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await chat({
+      model: "deepseek-v4-flash:cloud",
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      format: { type: "object" },
+      reasoning: "high",
+    })
+    expect(captured.body?.think).toBe("high")
+  })
+
+  it("ignores reasoning on free-form (no format) calls — think stays omitted", async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await chat({
+      model: "deepseek-v4-flash:cloud",
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "chat" }],
+      chatEnabled: "on",
+      reasoning: "high",
+    })
+    expect("think" in (captured.body ?? {})).toBe(false)
   })
 
   it("omits think on free-form (no format) calls — those keep the model's default thinking", async () => {
@@ -126,6 +159,48 @@ describe("chat() — SIG-287 think:false on schema-constrained calls", () => {
       chatEnabled: "on",
     })
     expect("think" in (captured.body ?? {})).toBe(false)
+  })
+})
+
+describe("chat() — SIG-287 thinking-stream accumulation (reasoning-on)", () => {
+  it("returns message.content + the cumulative message.thinking length, NOT the CoT text (SIG-287 regression shape)", async () => {
+    // /api/chat nests the reasoning CoT under `message.thinking` (vs the
+    // top-level field on /api/generate). The exact SIG-287 failure shape: the
+    // model streams thinking FIRST (zero content), then the structured answer.
+    // accumulateStream must accumulate `message.content` AND tally the
+    // `message.thinking` LENGTH across delta chunks (length only — never kept).
+    mockFetchOnce(
+      makeStream([
+        JSON.stringify({ message: { role: "assistant", content: "", thinking: "first " }, done: false }),
+        JSON.stringify({ message: { role: "assistant", content: "", thinking: "then more" }, done: false }),
+        JSON.stringify({ message: { role: "assistant", content: '{"verdict":' }, done: false }),
+        JSON.stringify({ message: { role: "assistant", content: '"ok"}' }, done: true }),
+      ]),
+    )
+    const result = await chat({
+      model: "deepseek-v4-flash:cloud",
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      format: { type: "object" },
+      reasoning: "high",
+    })
+    expect(result.message.content).toBe('{"verdict":"ok"}')
+    // "first " (6) + "then more" (9) = 15 chars.
+    expect(result.thinkingChars).toBe(15)
+  })
+
+  it("omits thinkingChars entirely on the default-off path (no thinking emitted)", async () => {
+    mockFetchOnce(makeStream([JSON.stringify({ message: { role: "assistant", content: "answer" }, done: true })]))
+    const result = await chat({
+      model: FAKE_MODEL,
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      format: { type: "object" },
+    })
+    expect(result.message.content).toBe("answer")
+    expect(result).not.toHaveProperty("thinkingChars")
   })
 })
 

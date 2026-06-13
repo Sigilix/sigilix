@@ -24,6 +24,11 @@ interface OllamaStreamChunk {
   response?: string
   done?: boolean
   error?: string
+  // SIG-287 (reasoning-on harness): when `think` is on, a reasoning model
+  // streams its chain-of-thought here (separate from `response`). We read
+  // its LENGTH ONLY (never the text) so the soak can size reasoning time
+  // per role without logging CoT.
+  thinking?: string
   // SIG-212: token usage counters. Present on the final `done: true`
   // chunk per the Ollama API. Surface them on `GenerateResult.usage`
   // so the ensemble's `model-attempt-completed` events can record
@@ -40,6 +45,7 @@ export async function generate({
   timeoutMs = 600_000,
   format,
   signal,
+  reasoning,
 }: GenerateArgs): Promise<GenerateResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -80,7 +86,14 @@ export async function generate({
     // for any structured call — we want the JSON answer, not the CoT. Mirrors
     // the `temperature→0 when format` rule above (deterministic structured
     // output). Free-form (format-less) calls keep the default thinking.
-    requestBody.think = false
+    //
+    // SIG-287 reopener (reasoning-on harness): `reasoning` opts a role into a
+    // BOUNDED reasoning level (`think:"high"|"medium"|"low"`) — a finite CoT
+    // then the answer, which fits the per-attempt cap (unlike `think:true`,
+    // the unbounded mode that originally stalled the cap). When `reasoning`
+    // is undefined this is `think:false` EXACTLY as before — byte-identical
+    // to the prior hardcoded value, so default-off changes nothing.
+    requestBody.think = reasoning ?? false
   }
 
   try {
@@ -130,6 +143,10 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<Gener
   let accumulated = ""
   let done = false
   let saw = false
+  // SIG-287 (reasoning-on harness): cumulative LENGTH of the `thinking`
+  // field across chunks. We add up char counts as the CoT streams (it
+  // arrives as deltas, same as `response`) and NEVER retain the text.
+  let thinkingChars = 0
   // SIG-212: Ollama emits the token counts on the final `done: true`
   // chunk. Tracking them across all chunks is defensive — only the
   // last non-zero values are used.
@@ -168,6 +185,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<Gener
       if (typeof chunk.response === "string") {
         accumulated += chunk.response
       }
+      if (typeof chunk.thinking === "string") thinkingChars += chunk.thinking.length
       captureCounts(chunk)
       if (chunk.done) done = true
     }
@@ -180,6 +198,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<Gener
       const chunk = JSON.parse(tail) as OllamaStreamChunk
       if (chunk.error) throw new Error(`Ollama stream error: ${chunk.error.slice(0, 500)}`)
       if (typeof chunk.response === "string") accumulated += chunk.response
+      if (typeof chunk.thinking === "string") thinkingChars += chunk.thinking.length
       captureCounts(chunk)
       saw = true
     } catch {
@@ -193,5 +212,10 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<Gener
   const usage: LlmUsage = {}
   if (promptEvalCount !== undefined) usage.inputTokens = promptEvalCount
   if (evalCount !== undefined) usage.outputTokens = evalCount
-  return { text: accumulated, usage }
+  const result: GenerateResult = { text: accumulated, usage }
+  // SIG-287: surface the thinking-char count only when the model actually
+  // reasoned. Omitted on the default-off `think:false` path (count stays 0)
+  // so the result shape is byte-identical to before for non-reasoning calls.
+  if (thinkingChars > 0) result.thinkingChars = thinkingChars
+  return result
 }

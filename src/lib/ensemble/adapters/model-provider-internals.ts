@@ -8,6 +8,39 @@
 
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 
+/** The settled-failure shape `runWithRetryAndFallback` returns (verdict null +
+ *  the surrounding telemetry). Generic over the parsed-answer type so the
+ *  specialist (`PrReviewVerdict`) and synth (`SynthParsedOutput`) paths share it. */
+export interface RetryFailureResult<T> {
+  verdict: T | null
+  failureReason?: string
+  failureRawAnswer?: string
+  elapsedMs: number
+  modelUsed: string
+  attemptsUsed: number
+}
+
+// SIG-287: relocated from model-provider.ts to keep that adapter <=1k lines
+// (the SIG-386 pattern). Pure failure-wrapper; body byte-identical to the
+// private helper it replaces. `model-provider.ts` imports it.
+export function wrapFailure<T>(
+  reason: string,
+  rawAnswer: string | undefined,
+  modelUsed: string,
+  attemptsUsed: number,
+  startedAt: number,
+): RetryFailureResult<T> {
+  const out: RetryFailureResult<T> = {
+    verdict: null,
+    elapsedMs: Date.now() - startedAt,
+    modelUsed,
+    attemptsUsed,
+  }
+  if (reason) out.failureReason = reason
+  if (rawAnswer) out.failureRawAnswer = rawAnswer
+  return out
+}
+
 /**
  * Classify a failure reason as permanent (don't retry, don't fall back)
  * vs transient (retry primary, then try fallback).

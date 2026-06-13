@@ -39,7 +39,7 @@ import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
 import type { Env } from "@/src/shared/types/env"
-import type { AstScanMode, EnsembleConfig } from "./domain/config"
+import type { AstScanMode, EnsembleConfig, ReasoningLevel } from "./domain/config"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 
 /** SIG-392: the set of specialist roles whose `OPENCLAW_<ROLE>_RECALL_MODE` is
@@ -51,6 +51,32 @@ function buildRecallRoles(env: EnsembleConfigEnv): ReadonlySet<SpecialistRole> {
   return roles
 }
 
+const REASONING_LEVELS: ReadonlySet<string> = new Set<ReasoningLevel>(["high", "medium", "low"])
+const REASONING_ROLE_NAMES: ReadonlySet<string> = new Set<SpecialistRole>(["logic", "security", "performance", "tests"])
+
+/** SIG-287 (reasoning-on harness): the per-role bounded-reasoning map. EMPTY
+ *  (→ every call stays `think:false`, byte-identical to today) unless
+ *  `OPENCLAW_REASONING_MODE === "on"`. When on, the enabled roles are the
+ *  validated tokens of `OPENCLAW_REASONING_ROLES` (comma list) and the level is
+ *  the validated `OPENCLAW_REASONING_LEVEL` (default "high"). Per Codex sign-off
+ *  the inputs are validated STRICTLY: an unknown role token is ignored, and an
+ *  explicitly-set-but-invalid level disables reasoning entirely (returns empty)
+ *  rather than letting an arbitrary string reach the adapter's `think`. Mirrors
+ *  `buildRecallRoles`' per-role rollout shape. */
+function buildReasoningByRole(env: EnsembleConfigEnv): ReadonlyMap<SpecialistRole, ReasoningLevel> {
+  const byRole = new Map<SpecialistRole, ReasoningLevel>()
+  if ((env.OPENCLAW_REASONING_MODE ?? "").trim().toLowerCase() !== "on") return byRole
+  const rawLevel = (env.OPENCLAW_REASONING_LEVEL ?? "").trim().toLowerCase()
+  // Default "high" when unset; an explicit-but-invalid level → off (empty map).
+  if (rawLevel !== "" && !REASONING_LEVELS.has(rawLevel)) return byRole
+  const level: ReasoningLevel = rawLevel === "" ? "high" : (rawLevel as ReasoningLevel)
+  for (const token of (env.OPENCLAW_REASONING_ROLES ?? "").split(",")) {
+    const role = token.trim().toLowerCase()
+    if (REASONING_ROLE_NAMES.has(role)) byRole.set(role as SpecialistRole, level)
+  }
+  return byRole
+}
+
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
  *  Declared at the edge (it names framework/env details) — never in the domain. */
 export interface EnsembleConfigEnv {
@@ -59,6 +85,10 @@ export interface EnsembleConfigEnv {
   // SIG-392 recall-eliciting logic prompt
   OPENCLAW_LOGIC_RECALL_MODE?: string | undefined
   OPENCLAW_SECURITY_RECALL_MODE?: string | undefined
+  // SIG-287 reasoning-on harness (per-role bounded reasoning; default off)
+  OPENCLAW_REASONING_MODE?: string | undefined
+  OPENCLAW_REASONING_ROLES?: string | undefined
+  OPENCLAW_REASONING_LEVEL?: string | undefined
   // SIG-393 region re-sweep
   OPENCLAW_RESWEEP_MODE?: string | undefined
   OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
@@ -199,6 +229,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
       recallRoles: buildRecallRoles(env),
+      // SIG-287: per-role bounded reasoning (default off → empty map).
+      reasoningByRole: buildReasoningByRole(env),
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),

@@ -93,6 +93,8 @@ export interface EnsembleHandlerArgs {
    * GET /metrics/graph-expansion. Optional for non-dispatcher callers (tests).
    */
   graphExpansionMetricsSink?: GraphExpansionSample[]
+  /** Optional Worker lifetime hook for telemetry-only background work. */
+  backgroundWaitUntil?: (promise: Promise<void>) => void
   /**
    * SIG-247 Phase 1: GitHub's immutable `repo.id`, threaded from
    * the webhook payload via JobMessage → baseArgs → here. Passed

@@ -62,7 +62,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
-import { scheduleResweepForSynth } from "./resweep-scheduler"
+import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
 import { applyInvariantLens, startInvariantLens } from "./invariant-lens"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
@@ -138,6 +138,7 @@ export interface SpecialistsArgs<R> {
   sarifFindings: readonly SarifFinding[]
   sarifResult: SarifResult
   filePaths: string[]
+  backgroundWaitUntil?: (promise: Promise<void>) => void
 }
 
 export type SpecialistsPhaseResult<R> =
@@ -182,6 +183,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     sarifFindings,
     sarifResult,
     filePaths,
+    backgroundWaitUntil,
   } = a
   // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
   // prod Promise.allSettled below so both lineups run in parallel
@@ -809,14 +811,13 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     orchCtrl,
     diff,
     succeeded,
+    ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
-  const resweepVerdicts = resweep.kind === "shadow-scheduled" ? resweep.passthrough.verdicts : resweep.result.verdicts
-  const resweepFindingIds =
-    resweep.kind === "shadow-scheduled" ? resweep.passthrough.resweepFindingIds : resweep.result.resweepFindingIds
+  const resweepForSynth = resweepResultForSynth(resweep)
   // SIG-395: lens merge/telemetry — after re-sweep; shadow uses pass-1.
   const lensApplied = await applyInvariantLens({
     lens: invariantLens,
-    succeeded: resweepVerdicts,
+    succeeded: resweepForSynth.verdicts,
     owner,
     repo,
     prNumber,
@@ -858,7 +859,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
-    leverOrigins: buildLeverOrigins(resweepFindingIds, lensApplied.lensFindingIds),
+    leverOrigins: buildLeverOrigins(resweepForSynth.resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }

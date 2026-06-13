@@ -1,15 +1,24 @@
 import { runResweepPhase, type ResweepArgs, type ResweepResult } from "./resweep"
 import type { ResweepMode } from "@/src/lib/ensemble/domain/resweep"
 
+type BackgroundWaitUntil = (promise: Promise<void>) => void
+
 interface ResweepForSynthArgs<T> {
   mode: ResweepMode
   passthrough: T
   run: () => Promise<T>
   onShadowComplete?: (result: T) => void
   onShadowError?: (err: unknown) => void
+  backgroundWaitUntil?: BackgroundWaitUntil
 }
 
-export type ResweepForSynthResult<T> = { kind: "resolved"; result: T } | { kind: "shadow-scheduled"; passthrough: T }
+export type ResweepForSynthResult<T> =
+  | { kind: "resolved"; result: T }
+  | { kind: "shadow-scheduled"; passthrough: T; shadowWork: Promise<void> }
+
+export function resweepResultForSynth<T>(resweep: ResweepForSynthResult<T>): T {
+  return resweep.kind === "shadow-scheduled" ? resweep.passthrough : resweep.result
+}
 
 export async function resolveResweepForSynth<T>(args: ResweepForSynthArgs<T>): Promise<ResweepForSynthResult<T>> {
   if (args.mode === "off") return { kind: "resolved", result: args.passthrough }
@@ -33,22 +42,41 @@ export async function resolveResweepForSynth<T>(args: ResweepForSynthArgs<T>): P
     }
   }
 
-  setTimeout(() => {
-    void Promise.resolve()
-      .then(args.run)
-      .then((result) => {
-        try {
-          args.onShadowComplete?.(result)
-        } catch (err) {
-          reportShadowError(err)
-        }
-      }, reportShadowError)
-      .catch(reportShadowError)
-  }, 0)
-  return { kind: "shadow-scheduled", passthrough: args.passthrough }
+  // Deliberately resolves after logging failures: shadow telemetry must not
+  // reject through waitUntil and convert a posted review into a queue failure.
+  const shadowWork = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      void Promise.resolve()
+        .then(args.run)
+        .then((result) => {
+          try {
+            args.onShadowComplete?.(result)
+          } catch (err) {
+            reportShadowError(err)
+          }
+        }, reportShadowError)
+        .catch(reportShadowError)
+        .finally(resolve)
+    }, 0)
+  })
+  // In production queue runs this pins the background task to the Worker
+  // lifetime; test and legacy callers can omit it and still inspect shadowWork.
+  try {
+    args.backgroundWaitUntil?.(shadowWork)
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "resweep-shadow-background-registration-failed",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+  return { kind: "shadow-scheduled", passthrough: args.passthrough, shadowWork }
 }
 
-export async function scheduleResweepForSynth(args: ResweepArgs): Promise<ResweepForSynthResult<ResweepResult>> {
+export type ScheduleResweepArgs = ResweepArgs & { backgroundWaitUntil?: BackgroundWaitUntil }
+
+export function scheduleResweepForSynth(args: ScheduleResweepArgs): Promise<ResweepForSynthResult<ResweepResult>> {
   const startedAtMs = Date.now()
   const correlation = {
     owner: args.owner,
@@ -60,6 +88,7 @@ export async function scheduleResweepForSynth(args: ResweepArgs): Promise<Reswee
     mode: args.mode,
     passthrough: { verdicts: args.succeeded, resweepFindingIds: [] },
     run: () => runResweepPhase(args),
+    ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     onShadowComplete: (result) => {
       console.log(
         JSON.stringify({

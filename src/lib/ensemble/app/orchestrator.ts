@@ -614,6 +614,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       sarifFindings,
       sarifResult,
       filePaths,
+      ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     })
     if (specialistsPhase.kind === "exit") return specialistsPhase.result
     const {

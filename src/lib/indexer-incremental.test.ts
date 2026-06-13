@@ -10,6 +10,7 @@ const {
   mockVectorizeUpsert,
   mockVectorizeDeleteByIds,
   mockDebugActiveGraphVersion,
+  mockDeleteLexicalIds,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
@@ -25,6 +26,7 @@ const {
   ),
   mockVectorizeDeleteByIds: vi.fn(async (..._args: unknown[]) => undefined),
   mockDebugActiveGraphVersion: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
+  mockDeleteLexicalIds: vi.fn(async (..._args: unknown[]): Promise<number> => 0),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
@@ -62,7 +64,15 @@ vi.mock("@/src/lib/repo-graph-client", () => ({
   debugActiveGraphVersion: (...args: unknown[]) => mockDebugActiveGraphVersion(...args),
 }))
 
-import { handleIndexRepoJob } from "@/src/lib/indexer"
+vi.mock("@/src/lib/lexical-index", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/lexical-index")>("@/src/lib/lexical-index")
+  return {
+    ...actual,
+    deleteLexicalIds: (...args: unknown[]) => mockDeleteLexicalIds(...args),
+  }
+})
+
+import { chunkFile, chunkId, handleIndexRepoJob } from "@/src/lib/indexer"
 import { collectPushChangedPaths } from "@/src/lib/index-producer"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
@@ -194,6 +204,7 @@ beforeEach(() => {
   mockVectorizeUpsert.mockReset().mockResolvedValue({ ids: [], count: 0 })
   mockVectorizeDeleteByIds.mockReset().mockResolvedValue(undefined)
   mockDebugActiveGraphVersion.mockReset().mockResolvedValue(null)
+  mockDeleteLexicalIds.mockReset().mockResolvedValue(0)
 })
 
 describe("handleIndexRepoJob — incremental push indexing", () => {
@@ -247,7 +258,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
 
     await handleIndexRepoJob({ job: sent[0] as Extract<JobMessage, { type: "index-repo" }>, env })
 
-    expect(mockGetFileContent).toHaveBeenCalledTimes(1)
+    expect(mockGetFileContent).toHaveBeenCalledTimes(2)
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
     expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
   })
@@ -296,7 +307,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
 
     await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
 
-    expect(mockGetFileContent).toHaveBeenCalledTimes(1)
+    expect(mockGetFileContent).toHaveBeenCalledTimes(2)
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
     expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
     expect(mockVectorizeDeleteByIds).toHaveBeenCalledWith(["old-changed-id", "old-deleted-id"])
@@ -319,6 +330,120 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(vectors.byPath["src/changed.ts"]).not.toContain("old-changed-id")
     const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
     expect(deletedIds).not.toEqual(expect.arrayContaining(vectors.byPath["src/changed.ts"] ?? []))
+  })
+
+  it("refreshes metadata without walking the tree when changed paths cannot affect the index", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: ["package-lock.json"],
+          remove: ["assets/logo.png"],
+        },
+      },
+      env,
+    })
+
+    expect(mockGetRepoTree).not.toHaveBeenCalled()
+    expect(mockGetFileContent).not.toHaveBeenCalled()
+    expect(mockAiRun).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(mockVectorizeDeleteByIds).not.toHaveBeenCalled()
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+    expect(manifest.fileCount).toBe(3)
+    expect(manifest.chunkCount).toBe(3)
+
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(vectors.runId).not.toBe("old-run")
+    expect(vectors.byPath).toEqual({
+      "src/changed.ts": ["old-changed-id"],
+      "src/deleted.ts": ["old-deleted-id"],
+      "src/unchanged.ts": ["old-unchanged-id"],
+    })
+  })
+
+  it("cleans stale stored ids for removed non-indexable paths without walking the tree", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const lexicalDb = {} as D1Database
+    ;(env as Env & { OPENCLAW_LEXICAL_INDEX: D1Database }).OPENCLAW_LEXICAL_INDEX = lexicalDb
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    vectors.byPath["assets/logo.png"] = ["stale-nonindexable-id"]
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: ["package-lock.json"],
+          remove: ["assets/logo.png"],
+        },
+      },
+      env,
+    })
+
+    expect(mockGetRepoTree).not.toHaveBeenCalled()
+    expect(mockGetFileContent).not.toHaveBeenCalled()
+    expect(mockAiRun).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(mockVectorizeDeleteByIds).toHaveBeenCalledWith(["stale-nonindexable-id"])
+    expect(mockDeleteLexicalIds).toHaveBeenCalledWith(lexicalDb, ["stale-nonindexable-id"])
+
+    const stored = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(stored.byPath["assets/logo.png"]).toBeUndefined()
+    expect(stored.byPath["src/changed.ts"]).toEqual(["old-changed-id"])
+    expect(stored.byPath["src/deleted.ts"]).toEqual(["old-deleted-id"])
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.chunkCount).toBe(3)
+  })
+
+  it("falls back to full indexing when scoped rule files change", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: [".sigilix/rules/security.md"],
+          remove: [],
+        },
+      },
+      env,
+    })
+
+    expect(mockGetRepoTree).toHaveBeenCalled()
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+  })
+
+  it("reuses unchanged chunk ids instead of re-embedding touched files", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const changedContent = "export const changed = 1\n"
+    const existingId = await chunkId("sigilix/sigilix", chunkFile("src/changed.ts", changedContent)[0]!)
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    vectors.byPath["src/changed.ts"] = [existingId]
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(1)
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
+    expect(mockAiRun).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(mockVectorizeDeleteByIds).toHaveBeenCalledWith(["old-deleted-id"])
+
+    const stored = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(stored.byPath["src/changed.ts"]).toEqual([existingId])
+    expect(stored.byPath["src/deleted.ts"]).toBeUndefined()
   })
 
   it("logs when lexical cleanup is skipped because the D1 binding is absent", async () => {
@@ -456,7 +581,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
       getImpl: async (key, store) => {
         if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
         activeReads += 1
-        if (activeReads < 5) return store.get(key) ?? null
+        if (activeReads < 6) return store.get(key) ?? null
         return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
       },
     })
@@ -478,7 +603,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
       getImpl: async (key, store) => {
         if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
         activeReads += 1
-        if (activeReads < 6) return store.get(key) ?? null
+        if (activeReads < 7) return store.get(key) ?? null
         return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
       },
     })

@@ -92,6 +92,7 @@ export {
   astChunkingEnabled,
   computeRunId,
   walkIndexableFiles,
+  isPotentiallyIndexablePath,
   chunkId,
   shouldSkipForLength,
 } from "@/src/lib/indexer-internals"

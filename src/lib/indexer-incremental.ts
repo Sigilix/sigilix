@@ -10,8 +10,16 @@ import { debugActiveGraphVersion } from "@/src/lib/repo-graph-client"
 import { deleteLexicalIds } from "@/src/lib/lexical-index"
 import { processSlice } from "@/src/lib/indexer-slice"
 import { persistManifest } from "@/src/lib/indexer-persist"
-import { type IndexableFile, walkIndexableFiles } from "@/src/lib/indexer-internals"
+import {
+  type IndexableFile,
+  chunkId,
+  isPotentiallyIndexablePath,
+  walkIndexableFiles,
+} from "@/src/lib/indexer-internals"
 import { readRepoIndexVectors, writeRepoIndexVectors, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
+import { chunkFile, type Chunk } from "@/src/lib/chunk-core"
+import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
+import { classifyRuleFilePath } from "@/src/lib/scoped-rules"
 
 const MAX_INCREMENTAL_CHANGED_PATHS = 200
 const VECTORIZE_DELETE_BATCH = 100
@@ -55,6 +63,17 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     )
     return false
   }
+  if (changedIncludesScopedRules(changed)) {
+    console.log(
+      JSON.stringify({
+        event: "index-incremental-fallback-scoped-rules-changed",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+      }),
+    )
+    return false
+  }
 
   const vectorsRead = await readRepoIndexVectors(args.env, args.owner, args.target.stateRepo)
   if (vectorsRead.kind !== "ok") return false
@@ -62,6 +81,10 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
 
   const graphRunId = await preservedGraphRunId(args, prior)
   if (graphRunId === null) return false
+
+  if (!changedTouchesPotentialIndex(changed)) {
+    return await handleNoopIncremental(args, prior, vectorsRead.vectors, graphRunId, changed)
+  }
 
   const tree = await args.client.getRepoTree(args.owner, args.repo, args.treeSha)
   if (!tree || tree.truncated) return false
@@ -88,6 +111,25 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     return true
   }
 
+  const reuse = await splitReusedFiles({
+    args,
+    files: filesToProcess,
+    existingByPath: vectorsRead.vectors.byPath,
+  })
+  const activeAfterReuse = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeAfterReuse, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-skip-superseded-reuse",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+      }),
+    )
+    return true
+  }
+
   const { idsByPath } = await processSlice({
     client: args.client,
     env: args.env,
@@ -97,11 +139,12 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     namespace: args.target.namespace,
     headSha: args.headSha,
     runId: args.runId,
-    files: filesToProcess,
+    files: reuse.filesToEmbed,
     astChunking: args.astChunking,
   })
+  const mergedIdsByPath = { ...reuse.reusedIdsByPath, ...idsByPath }
 
-  const newIds = idsFromByPath(idsByPath)
+  const newIds = idsFromByPath(mergedIdsByPath)
   const activeBeforeDelete = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeBeforeDelete, args.runId)) {
     console.warn(
@@ -117,7 +160,7 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
   }
 
   const missingEmbeddedPaths = filesToProcess
-    .filter((file) => idsByPath[file.path] === undefined)
+    .filter((file) => mergedIdsByPath[file.path] === undefined)
     .map((file) => file.path)
   if (missingEmbeddedPaths.length > 0) {
     await bestEffortDeleteNewIds(args.env, newIds)
@@ -144,7 +187,7 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     runId: args.runId,
     existing: vectorsRead.vectors,
     pathsToDelete,
-    idsByPath,
+    idsByPath: mergedIdsByPath,
   })
   if (!vectorsResult.proceed) {
     return true
@@ -222,7 +265,108 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
       run_id: args.runId,
       changed_upsert_paths: changed.upsert.length,
       changed_remove_paths: changed.remove.length,
-      embedded_files: filesToProcess.length,
+      embedded_files: reuse.filesToEmbed.length,
+      reused_files: reuse.reusedFiles,
+      deleted_vector_ids: oldIdsToDelete.length,
+    }),
+  )
+  return true
+}
+
+async function handleNoopIncremental(
+  args: IncrementalArgs,
+  prior: RepoIndexManifestV1,
+  existingVectors: RepoIndexVectorsV1,
+  graphRunId: string | undefined,
+  changed: { upsert: string[]; remove: string[] },
+): Promise<boolean> {
+  await writeActiveRun(args.env, args.owner, args.target.stateRepo, args.runId)
+  const idsToReplace = idsForPaths(existingVectors, changed.remove)
+  const vectorsResult = await writeIncrementalVectorIds({
+    env: args.env,
+    owner: args.owner,
+    stateRepo: args.target.stateRepo,
+    githubRepoId: args.githubRepoId,
+    runId: args.runId,
+    existing: existingVectors,
+    pathsToDelete: changed.remove,
+    idsByPath: {},
+  })
+  if (!vectorsResult.proceed) return true
+
+  const activeBeforeManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeBeforeManifest, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-noop-skip-superseded-manifest",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeBeforeManifest,
+      }),
+    )
+    return true
+  }
+
+  await persistManifest({
+    env: args.env,
+    owner: args.owner,
+    repo: args.repo,
+    githubRepoId: args.githubRepoId,
+    stateRepo: args.target.stateRepo,
+    namespace: args.target.namespace,
+    branch: args.target.isDefault ? null : args.target.branch,
+    defaultBranch: args.target.defaultBranch,
+    headSha: args.headSha,
+    runId: args.runId,
+    graphRunId: graphRunId ?? undefined,
+    fileCount: prior.fileCount,
+    chunkCount: vectorsResult.chunkCount,
+    shardCount: 1,
+    chunkerVersion: args.chunkerVersion,
+  })
+  const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeAfterManifest, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-noop-manifest-superseded-after-write",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeAfterManifest,
+      }),
+    )
+    throw new Error(`repo-index-manifest superseded after noop incremental write for ${args.target.stateRepo}`)
+  }
+  const oldIdsToDelete = await unreferencedOldIds(args.env, args.owner, args.target.stateRepo, idsToReplace)
+  const activeBeforeOldCleanup = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeBeforeOldCleanup, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-noop-old-id-cleanup-superseded",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeBeforeOldCleanup,
+        cleanup_ids: oldIdsToDelete.length,
+      }),
+    )
+    throw new Error(`repo-index noop old-id cleanup superseded after incremental write for ${args.target.stateRepo}`)
+  }
+  await bestEffortDeleteOldIds(args.env, oldIdsToDelete)
+
+  console.log(
+    JSON.stringify({
+      event: "index-incremental-noop-completed",
+      owner: args.owner,
+      repo: args.repo,
+      branch: args.target.isDefault ? null : args.target.branch,
+      run_id: args.runId,
+      changed_upsert_paths: changed.upsert.length,
+      changed_remove_paths: changed.remove.length,
       deleted_vector_ids: oldIdsToDelete.length,
     }),
   )
@@ -264,6 +408,84 @@ async function preservedGraphRunId(
     return null
   }
   return active === expected ? active : null
+}
+
+function changedIncludesScopedRules(changed: { upsert: string[]; remove: string[] }): boolean {
+  return [...changed.upsert, ...changed.remove].some((path) => classifyRuleFilePath(path) !== null)
+}
+
+function changedTouchesPotentialIndex(changed: { upsert: string[]; remove: string[] }): boolean {
+  return [...changed.upsert, ...changed.remove].some(isPotentiallyIndexablePath)
+}
+
+interface SplitReusedFilesArgs {
+  args: IncrementalArgs
+  files: readonly IndexableFile[]
+  existingByPath: Readonly<Record<string, string[]>>
+}
+
+async function splitReusedFiles(input: SplitReusedFilesArgs): Promise<{
+  filesToEmbed: IndexableFile[]
+  reusedIdsByPath: Record<string, string[]>
+  reusedFiles: number
+}> {
+  const filesToEmbed: IndexableFile[] = []
+  const reusedIdsByPath: Record<string, string[]> = {}
+  let reusedFiles = 0
+  for (const file of input.files) {
+    const existingIds = input.existingByPath[file.path]
+    if (existingIds === undefined || existingIds.length === 0) {
+      filesToEmbed.push(file)
+      continue
+    }
+    const currentIds = await currentChunkIds(input.args, file)
+    if (currentIds !== null && sameIds(existingIds, currentIds)) {
+      reusedIdsByPath[file.path] = [...existingIds]
+      reusedFiles += 1
+    } else {
+      filesToEmbed.push(file)
+    }
+  }
+  if (reusedFiles > 0) {
+    console.log(
+      JSON.stringify({
+        event: "index-incremental-content-reused",
+        owner: input.args.owner,
+        repo: input.args.repo,
+        branch: input.args.target.isDefault ? null : input.args.target.branch,
+        run_id: input.args.runId,
+        reused_files: reusedFiles,
+        embed_files: filesToEmbed.length,
+      }),
+    )
+  }
+  return { filesToEmbed, reusedIdsByPath, reusedFiles }
+}
+
+async function currentChunkIds(args: IncrementalArgs, file: IndexableFile): Promise<string[] | null> {
+  let content: string | null = null
+  try {
+    content = await args.client.getFileContent(args.owner, args.repo, file.path, args.headSha)
+  } catch {
+    return null
+  }
+  if (content === null) return null
+  const chunks = chunksForFile(file.path, content, args.astChunking)
+  const ids: string[] = []
+  for (const chunk of chunks) {
+    ids.push(await chunkId(args.target.namespace, chunk))
+  }
+  return ids
+}
+
+function chunksForFile(path: string, content: string, astChunking: boolean): Chunk[] {
+  const ext = astChunking ? jsTsExtOf(path) : null
+  if (ext === null) return chunkFile(path, content)
+  return chunkFileAst(path, content, ext) ?? chunkFile(path, content)
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i])
 }
 
 function normalizeChangedPaths(value: IndexRepoMessage["changedPaths"]): { upsert: string[]; remove: string[] } | null {

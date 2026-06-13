@@ -102,19 +102,28 @@ export function walkIndexableFiles(entries: ReadonlyArray<TreeEntry>): Indexable
     if (entry.type !== "blob") continue
     if (typeof entry.path !== "string") continue
     const path = entry.path
-    if (path.length === 0) continue
-    if (pathHitsSkipDir(path)) continue
-    const dot = path.lastIndexOf(".")
-    if (dot < 0) continue
-    const lastSlash = path.lastIndexOf("/")
-    if (dot < lastSlash) continue
-    const ext = path.slice(dot)
-    if (!INDEXED_EXTENSIONS.has(ext)) continue
+    if (!isPotentiallyIndexablePath(path)) continue
     const size = typeof entry.size === "number" ? entry.size : 0
     if (size > MAX_FILE_BYTES) continue
     out.push({ path, size })
   }
   return out
+}
+
+/**
+ * Path-only indexability predicate. Unlike walkIndexableFiles, this
+ * intentionally cannot apply the size cap because push changed-path payloads
+ * do not include blob sizes. Used only for safe "definitely cannot affect the
+ * vector index" fast paths.
+ */
+export function isPotentiallyIndexablePath(path: string): boolean {
+  if (path.length === 0) return false
+  if (pathHitsSkipDir(path)) return false
+  const dot = path.lastIndexOf(".")
+  if (dot < 0) return false
+  const lastSlash = path.lastIndexOf("/")
+  if (dot < lastSlash) return false
+  return INDEXED_EXTENSIONS.has(path.slice(dot))
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   chunkId,
   computeRunId,
   graphIndexEnabled,
+  isPotentiallyIndexablePath,
   shouldCommitGraph,
   shouldSkipForLength,
   effectiveChunkerVersion,
@@ -126,6 +127,16 @@ describe("walkIndexableFiles", () => {
       { path: "src/keep.ts", type: "blob", size: 100 },
     ]
     expect(walkIndexableFiles(entries)).toEqual([{ path: "src/keep.ts", size: 100 }])
+  })
+})
+
+describe("isPotentiallyIndexablePath", () => {
+  it("matches the path-only part of the indexable-file policy", () => {
+    expect(isPotentiallyIndexablePath("src/index.ts")).toBe(true)
+    expect(isPotentiallyIndexablePath("README.md")).toBe(true)
+    expect(isPotentiallyIndexablePath("package-lock.json")).toBe(false)
+    expect(isPotentiallyIndexablePath("node_modules/pkg/index.ts")).toBe(false)
+    expect(isPotentiallyIndexablePath(".sigilix/rules/security.md")).toBe(false)
   })
 })
 

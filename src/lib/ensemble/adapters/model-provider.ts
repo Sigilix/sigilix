@@ -28,7 +28,9 @@ import {
 // leaf to land this adapter at <=1k lines. Re-exported below so the public
 // surface (and the importers + vi.mock paths pinned to this module) are
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
-import { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
+// SIG-287: `wrapFailure` joined the leaf for the same budget reason (private —
+// not re-exported, only `runWithRetryAndFallback` calls it).
+import { isPermanentFailure, isValidProvenance, wrapFailure } from "./model-provider-internals"
 export { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
@@ -302,6 +304,9 @@ export interface SpecialistRunArgs {
   initialMessage: string
   chatEnabled: "on" | "off"
   signal: AbortSignal
+  /** SIG-287: role's bounded reasoning level (from `flags.reasoningByRole`);
+   *  undefined → `think:false`. Primary attempt only. */
+  reasoning?: "high" | "medium" | "low"
   /**
    * ARC-283 Phase B1b: correlation context for emitting
    * `model-attempt-completed` per retry/fallback attempt. Threaded
@@ -356,6 +361,7 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
+    ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}), // SIG-287 (primary-attempt-only)
     // Keep the prod path explicit even though runWithRetryAndFallback also
     // defaults from config.perAttemptTimeoutMs. Shadow callers rely on the
     // shared default; prod keeps the override visible at the role boundary.
@@ -393,6 +399,7 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
           // SIG-212: forward token usage from runWithRetryAndFallback.
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
+          ...(info.thinkingChars !== undefined ? { thinkingChars: info.thinkingChars } : {}), // SIG-287
         })
         // SIG-149: accumulate per-review token spend (every settled
         // attempt — incl. retries/fallback/parse-fail — burned tokens).
@@ -459,6 +466,9 @@ export interface AttemptCallbackInfo {
    *  where no tokens were exchanged. */
   inputTokens?: number
   outputTokens?: number
+  /** SIG-287: cumulative thinking-char count for the attempt (length only,
+   *  never the CoT text). Absent on the default-off `think:false` path. */
+  thinkingChars?: number
 }
 
 export async function runWithRetryAndFallback<T>(args: {
@@ -480,6 +490,10 @@ export async function runWithRetryAndFallback<T>(args: {
    * may pass this field explicitly to override the config without mutating it.
    */
   perAttemptTimeoutMs?: number
+  /** SIG-287: bounded reasoning level for the PRIMARY attempt(s) only — the
+   *  cross-provider fallback omits it (Codex #5: keep the slow-model fallback,
+   *  e.g. security's v4-pro, out of reasoning scope). Undefined → think:false. */
+  reasoning?: "high" | "medium" | "low"
   /**
    * ARC-283 Phase B1b: optional per-attempt observer. Fires AFTER
    * each settled attempt (primary, retry, OR fallback), on BOTH
@@ -548,6 +562,7 @@ export async function runWithRetryAndFallback<T>(args: {
           format,
           parseAnswer,
           parseFailureLabel,
+          ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}), // SIG-287: PRIMARY only (fallback omits)
         }),
       perAttemptCap,
       signal,
@@ -567,14 +582,10 @@ export async function runWithRetryAndFallback<T>(args: {
       // both success and parse-failure; absent on HTTP/timeout/abort.
       ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
       ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
+      ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287
     })
     if (outcome.verdict !== null) {
-      return {
-        verdict: outcome.verdict,
-        elapsedMs: Date.now() - startedAt,
-        modelUsed: config.primary,
-        attemptsUsed,
-      }
+      return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.primary, attemptsUsed }
     }
     lastFailureReason = outcome.failureReason
     lastFailureRaw = outcome.failureRawAnswer
@@ -638,14 +649,10 @@ export async function runWithRetryAndFallback<T>(args: {
       // SIG-212: forward token usage on the fallback path too.
       ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
       ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
+      ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287 (fallback: normally absent)
     })
     if (outcome.verdict !== null) {
-      return {
-        verdict: outcome.verdict,
-        elapsedMs: Date.now() - startedAt,
-        modelUsed: config.fallback,
-        attemptsUsed,
-      }
+      return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.fallback, attemptsUsed }
     }
     // Fallback also failed. Use ITS failure as the reason (more recent + relevant).
     return wrapFailure(
@@ -666,31 +673,6 @@ export async function runWithRetryAndFallback<T>(args: {
   )
 }
 
-function wrapFailure<T>(
-  reason: string,
-  rawAnswer: string | undefined,
-  modelUsed: string,
-  attemptsUsed: number,
-  startedAt: number,
-): {
-  verdict: T | null
-  failureReason?: string
-  failureRawAnswer?: string
-  elapsedMs: number
-  modelUsed: string
-  attemptsUsed: number
-} {
-  const out: ReturnType<typeof wrapFailure<T>> = {
-    verdict: null,
-    elapsedMs: Date.now() - startedAt,
-    modelUsed,
-    attemptsUsed,
-  }
-  if (reason) out.failureReason = reason
-  if (rawAnswer) out.failureRawAnswer = rawAnswer
-  return out
-}
-
 async function attemptChat<T>(args: {
   model: string
   apiKey: string
@@ -700,6 +682,9 @@ async function attemptChat<T>(args: {
   format: Record<string, unknown> | undefined
   parseAnswer: (content: string) => T | null
   parseFailureLabel: string
+  /** SIG-287: bounded reasoning level for THIS attempt. Only the primary loop
+   *  passes it; the fallback attempt omits it (stays `think:false`). */
+  reasoning?: "high" | "medium" | "low"
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -710,6 +695,8 @@ async function attemptChat<T>(args: {
   // exception path where no tokens were exchanged.
   inputTokens?: number
   outputTokens?: number
+  // SIG-287: cumulative thinking-char count from the adapter (length only).
+  thinkingChars?: number
 }> {
   try {
     const result = await chat({
@@ -719,16 +706,20 @@ async function attemptChat<T>(args: {
       signal: args.signal,
       chatEnabled: args.chatEnabled,
       ...(args.format ? { format: args.format } : {}),
+      // SIG-287: byte-identical when undefined (default-off → think:false).
+      ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
       temperature: 0,
     })
     // SIG-212: capture token usage from chat()'s result. Forward on
     // BOTH success and parse-failure paths so cost telemetry stays
     // accurate even when the model produced unparseable output.
     // `usage` is optional on ChatResult to keep test mocks lightweight;
-    // the production accumulator always returns `usage: {...}`.
-    const usagePayload: { inputTokens?: number; outputTokens?: number } = {}
+    // the production accumulator always returns `usage: {...}`. SIG-287:
+    // thinkingChars rides alongside usage on the same paths.
+    const usagePayload: { inputTokens?: number; outputTokens?: number; thinkingChars?: number } = {}
     if (result.usage?.inputTokens !== undefined) usagePayload.inputTokens = result.usage.inputTokens
     if (result.usage?.outputTokens !== undefined) usagePayload.outputTokens = result.usage.outputTokens
+    if (result.thinkingChars !== undefined) usagePayload.thinkingChars = result.thinkingChars
     const verdict = args.parseAnswer(result.message.content)
     if (!verdict) {
       return {

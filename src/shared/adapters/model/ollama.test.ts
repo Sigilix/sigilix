@@ -77,7 +77,12 @@ describe("generate() — SIG-287 think:false on schema-constrained calls", () =>
     })
   }
 
-  it("sets think:false when a format is passed (disables the reasoning phase)", async () => {
+  it("sets think:false (explicitly, not omitted) when a format is passed and reasoning is unset — byte-identical default-off", async () => {
+    // SIG-287 reopener: the `reasoning ?? false` change must STILL send an
+    // explicit `think:false` (present in the body, value false) on the
+    // default-off path — the exact wire shape the prior hardcoded
+    // `think = false` produced. Asserting both presence AND value pins that
+    // `think` is not silently omitted now.
     const captured: { body?: Record<string, unknown> } = {}
     mockCaptureOnce(captured)
     await generate({
@@ -86,7 +91,30 @@ describe("generate() — SIG-287 think:false on schema-constrained calls", () =>
       apiKey: FAKE_API_KEY,
       format: { type: "object" },
     })
+    expect("think" in (captured.body ?? {})).toBe(true)
     expect(captured.body?.think).toBe(false)
+  })
+
+  it('passes think:"high" through when reasoning:"high" is set on a format call (SIG-287 reopener)', async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await generate({
+      model: "deepseek-v4-flash:cloud",
+      prompt: "review",
+      apiKey: FAKE_API_KEY,
+      format: { type: "object" },
+      reasoning: "high",
+    })
+    expect(captured.body?.think).toBe("high")
+  })
+
+  it("ignores reasoning on free-form (no format) calls — think stays omitted", async () => {
+    // `reasoning` only takes effect alongside `format` (the schema-constrained
+    // path); a free-form call keeps the model's default thinking, no `think` key.
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await generate({ model: FAKE_MODEL, prompt: "say hi", apiKey: FAKE_API_KEY, reasoning: "high" })
+    expect("think" in (captured.body ?? {})).toBe(false)
   })
 
   it("omits think on free-form (no format) calls", async () => {
@@ -94,6 +122,58 @@ describe("generate() — SIG-287 think:false on schema-constrained calls", () =>
     mockCaptureOnce(captured)
     await generate({ model: FAKE_MODEL, prompt: "say hi", apiKey: FAKE_API_KEY })
     expect("think" in (captured.body ?? {})).toBe(false)
+  })
+})
+
+describe("generate() — SIG-287 thinking-stream accumulation (reasoning-on)", () => {
+  function mockFetchOnceWithChunks(chunks: string[]): void {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      return {
+        ok: true,
+        status: 200,
+        body: makeStream(chunks),
+        text: async () => "",
+      } as unknown as Response
+    })
+  }
+
+  it("returns the response text + the cumulative thinking length, NOT the CoT text (SIG-287 regression shape)", async () => {
+    // The exact failure shape SIG-287 originally hit: a reasoning model streams
+    // its chain-of-thought into a SEPARATE `thinking` field FIRST (zero
+    // `response` tokens), then emits the structured answer. accumulateStream
+    // must accumulate `response` (so the answer isn't lost) AND tally the
+    // `thinking` LENGTH across the delta chunks (length only — never retained).
+    mockFetchOnceWithChunks([
+      JSON.stringify({ thinking: "let me ", response: "", done: false }),
+      JSON.stringify({ thinking: "reason about this", response: "", done: false }),
+      JSON.stringify({ response: '{"verdict":', done: false }),
+      JSON.stringify({ response: '"ok"}', done: true }),
+    ])
+    const result = await generate({
+      model: "deepseek-v4-flash:cloud",
+      prompt: "review",
+      apiKey: FAKE_API_KEY,
+      format: { type: "object" },
+      reasoning: "high",
+    })
+    expect(result.text).toBe('{"verdict":"ok"}')
+    // "let me " (7) + "reason about this" (17) = 24 chars.
+    expect(result.thinkingChars).toBe(24)
+  })
+
+  it("omits thinkingChars entirely on the default-off path (no thinking emitted)", async () => {
+    mockFetchOnceWithChunks([
+      JSON.stringify({ response: "answer", done: false }),
+      JSON.stringify({ response: "", done: true }),
+    ])
+    const result = await generate({
+      model: FAKE_MODEL,
+      prompt: "review",
+      apiKey: FAKE_API_KEY,
+      format: { type: "object" },
+    })
+    expect(result.text).toBe("answer")
+    expect(result).not.toHaveProperty("thinkingChars")
   })
 })
 

@@ -17,6 +17,7 @@
     "check:advisory-db-size": "./scripts/check-advisory-db-size.sh",
     "bakeoff-report": "tsx scripts/bakeoff-report.ts",
     "fp-rate-report": "tsx scripts/fp-rate-report.ts",
+    "dispatch-monitor": "tsx scripts/dispatch-monitor.ts",
     "fp-eval": "tsx scripts/fp-eval.ts",
     "logic-recall-eval": "vitest run e2e/logic-recall-eval.live.test.ts",
     "security-overfire-eval": "vitest run e2e/security-overfire-eval.live.test.ts",

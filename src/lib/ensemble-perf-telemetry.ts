@@ -263,6 +263,71 @@ export function emitSpecialistFanoutSummary(ctx: EnsembleRunCtx, summary: Specia
   )
 }
 
+// ─── dispatcher-savings-summary (SIG-224 monitor) ───────────────────
+
+export type DispatcherSavingsType = "actual" | "shadow"
+
+export interface DispatcherSavingsSummary {
+  reviewKey: string
+  mode: "shadow" | "enforce_rules" | "enforce"
+  savingsType: DispatcherSavingsType
+  baselineSpecialists: readonly string[]
+  dispatcherSpecialists: readonly string[]
+  actualSpecialists: readonly string[]
+  projectedSkippedRoles: readonly string[]
+  actualNotInvokedRoles: readonly string[]
+  projectedSpecialistCallsAvoided: number
+  actualSpecialistCallsAvoided: number
+  perRole: unknown
+  layerVotes: unknown
+}
+
+export function reviewKeyFor(ctx: EnsembleRunCtx): string {
+  return `${ctx.owner}/${ctx.repo}#${ctx.prNumber}@${ctx.headSha.slice(0, 7)}`
+}
+
+export function buildDispatcherSavingsSummary(args: {
+  ctx: EnsembleRunCtx
+  mode: DispatcherSavingsSummary["mode"]
+  baselineSpecialists: readonly string[]
+  dispatcherSpecialists: readonly string[]
+  perRole: unknown
+  layerVotes: unknown
+}): DispatcherSavingsSummary {
+  const actual = args.mode === "shadow" ? args.baselineSpecialists : args.dispatcherSpecialists
+  const projectedSkipped = rolesRemoved(args.baselineSpecialists, args.dispatcherSpecialists)
+  const actualNotInvoked = args.mode === "shadow" ? [] : rolesRemoved(args.baselineSpecialists, actual)
+  return {
+    reviewKey: reviewKeyFor(args.ctx),
+    mode: args.mode,
+    savingsType: args.mode === "shadow" ? "shadow" : "actual",
+    baselineSpecialists: [...args.baselineSpecialists],
+    dispatcherSpecialists: [...args.dispatcherSpecialists],
+    actualSpecialists: [...actual],
+    projectedSkippedRoles: projectedSkipped,
+    actualNotInvokedRoles: actualNotInvoked,
+    projectedSpecialistCallsAvoided: projectedSkipped.length,
+    actualSpecialistCallsAvoided: actualNotInvoked.length,
+    perRole: args.perRole,
+    layerVotes: args.layerVotes,
+  }
+}
+
+export function emitDispatcherSavingsSummary(ctx: EnsembleRunCtx, summary: DispatcherSavingsSummary): void {
+  console.log(
+    JSON.stringify({
+      event: "dispatcher-savings-summary",
+      ...correlationFields(ctx),
+      ...summary,
+    }),
+  )
+}
+
+function rolesRemoved(baseline: readonly string[], next: readonly string[]): string[] {
+  const kept = new Set(next)
+  return baseline.filter((role) => !kept.has(role))
+}
+
 /** Per-role outcome used by `computeSpecialistFanoutSummary`. Mirrors
  *  the relevant fields of the orchestrator's `CollectedVerdict` but
  *  decoupled — the helper doesn't need to know about

@@ -596,6 +596,11 @@ OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
 # Fails open; ships "shadow" — read the would-drop rate + audit before "enforce".
 # Rollback: set "off".
 OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE = "shadow"
+# SIG-392: reason-scoped enforce allowlist (comma list of LogicClaimDropReason).
+# Empty ⇒ in "enforce" NO reason drops (the safe default); a future flip enforces
+# ONLY the listed reasons (e.g. "balance-sign-claim-refuted-by-correct-accounting-direction"),
+# leaving the other shadow shapes untouched. Lets balance-sign graduate alone.
+OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS = ""
 
 # SIG-325: the GENERALIZED refutation-survival gate (evaluateRefutationSurvival).
 # Extends the SIG-308 refute-first discipline to SELF-ORIGINATED findings on

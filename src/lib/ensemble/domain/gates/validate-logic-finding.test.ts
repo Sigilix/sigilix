@@ -742,4 +742,65 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     expect(result.droppedForFailedLogicClaimRefutation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
   })
+
+  // SIG-392: the balance-sign shape + reason-scoped enforce allowlist.
+  const BAL_PATH = "server/payments.ts"
+  const BAL_SOURCE = `export function balance(amountCents, paidCents, refundedCents) {
+  const outstandingCents = amountCents - paidCents + refundedCents
+  return outstandingCents
+}`
+  const balanceFpFinding = finding({
+    path: BAL_PATH,
+    line: 2,
+    headline: "outstandingCents formula is wrong: refunds should reduce the balance, not increase it",
+    body: "The outstanding balance adds the refund; it should subtract it.",
+  })
+  const BAL_REASON = "balance-sign-claim-refuted-by-correct-accounting-direction"
+
+  function runBalance(args: {
+    mode: "shadow" | "enforce"
+    enforceReasons?: ReadonlySet<string>
+    onFlag: ReturnType<typeof vi.fn>
+  }) {
+    return validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [balanceFpFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(BAL_PATH, 2),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicClaimRefutationMode: args.mode,
+      logicClaimRefutationEnforceReasons: args.enforceReasons as never,
+      fullFileByPath: new Map([[BAL_PATH, BAL_SOURCE]]),
+      onLogicClaimRefutationFindingDropped: args.onFlag,
+    })
+  }
+
+  it("SHADOW: the balance-sign FP is flagged (dropped:false) but KEPT", () => {
+    const onFlag = vi.fn()
+    const result = runBalance({ mode: "shadow", onFlag })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), { reason: BAL_REASON, dropped: false })
+  })
+
+  it("ENFORCE + reason allowlisted: drops the balance-sign FP", () => {
+    const onFlag = vi.fn()
+    const result = runBalance({ mode: "enforce", enforceReasons: new Set([BAL_REASON]), onFlag })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), { reason: BAL_REASON, dropped: true })
+  })
+
+  it("ENFORCE + reason NOT allowlisted: KEEPS the FP (reason-scoping gates the drop)", () => {
+    const onFlag = vi.fn()
+    const result = runBalance({
+      mode: "enforce",
+      enforceReasons: new Set(["control-flow-claim-refuted-by-guard"]),
+      onFlag,
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), { reason: BAL_REASON, dropped: false })
+  })
 })

@@ -39,6 +39,7 @@
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { parseSource, type SourceExt, type AstCache } from "@/src/features/ast-rules"
 import { extractCitedIdentifiers } from "./validate-window-blindness"
+import { matchesBalanceSignClaim, refutesBalanceSignClaim } from "./balance-sign-refuter"
 
 export type LogicClaimRefutationMode = "off" | "shadow" | "enforce"
 
@@ -60,6 +61,37 @@ export type LogicClaimDropReason =
   | "regex-substring-claim-refuted-by-literal-string-filter"
   | "unused-claim-refuted-identifier-is-referenced"
   | "missing-return-type-claim-refuted-annotation-present"
+  | "balance-sign-claim-refuted-by-correct-accounting-direction"
+
+/** Runtime list of every drop reason — used to validate the enforce-reason allowlist. */
+export const LOGIC_CLAIM_DROP_REASONS: readonly LogicClaimDropReason[] = [
+  "control-flow-claim-refuted-by-guard",
+  "sync-race-claim-refuted-no-async-boundary",
+  "idempotency-claim-refuted-by-visible-key",
+  "regex-substring-claim-refuted-by-literal-string-filter",
+  "unused-claim-refuted-identifier-is-referenced",
+  "missing-return-type-claim-refuted-annotation-present",
+  "balance-sign-claim-refuted-by-correct-accounting-direction",
+]
+
+/**
+ * Parse `OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS` (comma list of drop
+ * reasons). UNSET (`undefined`) → `undefined` = enforce EVERY reason (the
+ * pre-SIG-392 behavior). SET (even empty) → a Set: in `enforce` mode ONLY the
+ * listed reasons drop; unlisted reasons stay shadow. Unknown tokens are ignored.
+ */
+export function parseLogicClaimRefutationEnforceReasons(
+  raw: string | undefined,
+): ReadonlySet<LogicClaimDropReason> | undefined {
+  if (raw === undefined) return undefined
+  const valid = new Set<string>(LOGIC_CLAIM_DROP_REASONS)
+  const out = new Set<LogicClaimDropReason>()
+  for (const tok of raw.split(",")) {
+    const t = tok.trim()
+    if (valid.has(t)) out.add(t as LogicClaimDropReason)
+  }
+  return out
+}
 
 export type LogicClaimRefutationDecision = { keep: true } | { keep: false; reason: LogicClaimDropReason }
 
@@ -832,7 +864,16 @@ export function evaluateLogicClaimRefutation(
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
   const isRegexSubstring = REGEX_SUBSTRING_CLAIM_RE.test(text)
-  if (!isControlFlow && !isSyncRace && !isIdempotencyRetry && !isUnused && !isMissingReturnType && !isRegexSubstring)
+  const isBalanceSign = matchesBalanceSignClaim(text)
+  if (
+    !isControlFlow &&
+    !isSyncRace &&
+    !isIdempotencyRetry &&
+    !isUnused &&
+    !isMissingReturnType &&
+    !isRegexSubstring &&
+    !isBalanceSign
+  )
     return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
@@ -870,6 +911,9 @@ export function evaluateLogicClaimRefutation(
   }
   if (isMissingReturnType && refutesMissingReturnType(fn)) {
     return { keep: false, reason: "missing-return-type-claim-refuted-annotation-present" }
+  }
+  if (isBalanceSign && refutesBalanceSignClaim(fn, line, finding)) {
+    return { keep: false, reason: "balance-sign-claim-refuted-by-correct-accounting-direction" }
   }
   return { keep: true }
 }

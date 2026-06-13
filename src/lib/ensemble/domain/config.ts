@@ -15,7 +15,7 @@ import type { TestsValidatorMode } from "./gates/validate-test-finding"
 import type { LogicValidatorMode } from "./gates/validate-logic-finding"
 import type { LogicRefutationMode } from "./gates/validate-logic-refutation"
 import type { RefutationSurvivalMode } from "./gates/validate-refutation-survival"
-import type { LogicClaimRefutationMode } from "./gates/validate-logic-claim-refutation"
+import type { LogicClaimRefutationMode, LogicClaimDropReason } from "./gates/validate-logic-claim-refutation"
 import type { PerfValidatorMode } from "./gates/validate-perf-finding"
 import type { InlineGroundingValidatorMode } from "./gates/validate-inline-grounding"
 import type { AbsenceClaimValidatorMode } from "./gates/validate-absence-grounding"
@@ -68,6 +68,8 @@ export interface EnsembleValidatorModes {
   logicRefutationMode: LogicRefutationMode
   refutationSurvivalMode: RefutationSurvivalMode
   logicClaimRefutationMode: LogicClaimRefutationMode
+  /** SIG-392 reason-scoped enforce allowlist; `undefined` ⇒ enforce every reason. */
+  logicClaimRefutationEnforceReasons: ReadonlySet<LogicClaimDropReason> | undefined
   perfValidatorMode: PerfValidatorMode
   inlineGroundingValidatorMode: InlineGroundingValidatorMode
   absenceClaimValidatorMode: AbsenceClaimValidatorMode

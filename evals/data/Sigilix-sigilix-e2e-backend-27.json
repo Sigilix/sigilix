@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 27,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27",
+  "collectedAt": "2026-06-13T03:27:22.533Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178464,
+        "path": "src/routes/billing.ts",
+        "line": 30,
+        "excerpt": "**IDOR: /users/:id/payment-methods returns any user's payment methods with no authorization check**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3407178464",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3407178468,
+        "path": "src/routes/billing.ts",
+        "line": 34,
+        "excerpt": "**New billing endpoints ship with no test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3407178468",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393147926,
+        "path": "src/routes/billing.ts",
+        "line": 25,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3393147926"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393147930,
+        "path": "src/routes/billing.ts",
+        "line": 35,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3393147930"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393147484,
+        "path": "src/routes/billing.ts",
+        "line": 35,
+        "excerpt": "**Missing authorization check — any user can read any user's payment methods**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3393147484"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393147511,
+        "path": "src/routes/billing.ts",
+        "line": 35,
+        "excerpt": "**Unhandled promise rejections in async route handlers**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/27#discussion_r3393147511"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c2",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "IDOR on /users/:id/payment-methods (Sigilix: ONE clean finding now — dedup-collapse worked)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "c1"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "\"add error handling\" / unhandled rejection"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "g2"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "unhandled promise rejections — pervasive"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s2"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: \"no test coverage\""
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 21,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21",
+  "collectedAt": "2026-06-13T03:27:33.281Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178833,
+        "path": "server/api.ts",
+        "line": 26,
+        "excerpt": "**Authorization bypass: client-supplied `isAdmin` field is trivially forgeable**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3407178833",
+        "botCategory": "security"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393622969,
+        "path": "server/api.ts",
+        "line": 7,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393622969"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393622974,
+        "path": "server/api.ts",
+        "line": 32,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/21#discussion_r3393622974"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c1",
+        "c2"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "server trusts client-supplied isAdmin — authz bypass (Sigilix: 1 clean finding now; 5 w/ dupes last run)"
+    }
+  ]
+}

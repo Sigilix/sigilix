@@ -80,18 +80,6 @@ export async function scheduleInvariantLensForSynth(args: {
         )
       },
     )
-    .catch((err: unknown) => {
-      console.error(
-        JSON.stringify({
-          event: "invariant-lens-background-handler-failed",
-          owner: args.owner,
-          repo: args.repo,
-          prNumber: args.prNumber,
-          headSha: args.headSha.slice(0, 7),
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      )
-    })
   try {
     args.backgroundWaitUntil?.(backgroundWork)
   } catch (err) {

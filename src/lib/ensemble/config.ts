@@ -40,6 +40,16 @@ import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/gr
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
 import type { Env } from "@/src/shared/types/env"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+
+/** SIG-392: the set of specialist roles whose `OPENCLAW_<ROLE>_RECALL_MODE` is
+ *  "on". Add a role here to wire its recall prompt; default = empty. */
+function buildRecallRoles(env: EnsembleConfigEnv): ReadonlySet<SpecialistRole> {
+  const roles = new Set<SpecialistRole>()
+  if (env.OPENCLAW_LOGIC_RECALL_MODE === "on") roles.add("logic")
+  if (env.OPENCLAW_SECURITY_RECALL_MODE === "on") roles.add("security")
+  return roles
+}
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
  *  Declared at the edge (it names framework/env details) — never in the domain. */
@@ -48,6 +58,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_AUTHZ_IDOR_SCAN?: string | undefined
   // SIG-392 recall-eliciting logic prompt
   OPENCLAW_LOGIC_RECALL_MODE?: string | undefined
+  OPENCLAW_SECURITY_RECALL_MODE?: string | undefined
   // SIG-393 region re-sweep
   OPENCLAW_RESWEEP_MODE?: string | undefined
   OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
@@ -187,7 +198,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
-      logicRecallEnabled: env.OPENCLAW_LOGIC_RECALL_MODE === "on",
+      recallRoles: buildRecallRoles(env),
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),

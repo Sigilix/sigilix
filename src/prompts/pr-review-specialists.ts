@@ -83,15 +83,71 @@ REAL, demonstrable instance:
 - a signature/HMAC computed over RE-SERIALIZED data instead of the raw bytes
 ─────────────────────────────────────────────────────────────────────`
 
-/** Resolve a specialist's system prompt, applying the SIG-392 recall directive
- *  to the LOGIC prompt when `recallOn` (OPENCLAW_LOGIC_RECALL_MODE === "on").
- *  All other roles + the default mode return the base prompt unchanged.
- *  Applied at the PROD specialist fanout only for now; the ARC-283 shadow path
+// SIG-392 (security lane): recall-eliciting directive appended to the SECURITY
+// prompt when OPENCLAW_SECURITY_RECALL_MODE === "on". The base security prompt is
+// heavily FP-disciplined (SIG-282/108/311/325/313 "verify before emit"), which —
+// like the logic prompt — suppresses recall; the K=12 fixture map showed the
+// security-owned frontier rows b16 (list-endpoint cross-tenant authz) and b20
+// (HMAC over re-serialized body) at 0/12. This suffix pushes recall and names
+// those classes explicitly, WITHOUT loosening the structured mechanism gates
+// (those still apply to what it emits; precision stays the downstream gates' job).
+export const SECURITY_RECALL_SUFFIX = `
+─────────────────────────────────────────────────────────────────────
+RECALL DIRECTIVE (security):
+Your objective is RECALL. Surface EVERY plausible security weakness, INCLUDING
+subtle and lower-confidence ones (score them 2). The structured gates above
+(evidenceId citation, the SIG-325 source→sink→type mechanism, the SIG-313
+four-part authorization tuple) STILL FULLY APPLY to everything you emit — keep
+naming the mechanism and the missing check, and where ANY of the four authz
+elements is UNKNOWN, still do NOT assert a flaw. ACTIVELY check each class below
+and emit ONLY when the visible code satisfies the applicable SIG-325 / SIG-313
+preconditions — the goal is to stop SKIPPING classes you can actually confirm,
+not to lower the bar. Downstream may adjudicate and dedupe, but every finding you
+emit must independently satisfy those evidence gates. On a target-rich diff
+expect MULTIPLE real vulnerabilities; report every confirmable one.
+Beyond single-object IDOR, systematically check the diff for these often-missed
+classes and emit every instance whose mechanism you can confirm in the code:
+- COLLECTION / LIST / batch endpoints that return rows ACROSS users or tenants
+  with NO owner/tenant filter ("list all", a "?ids=" batch fetch, a search) —
+  collection-scope IDOR / missing ROW-LEVEL tenant scoping. A missing
+  \`WHERE owner_id = $principal\` on a list query is as exploitable as a missing
+  \`:id\` ownership check — and the SIG-313 tuple holds (principal, the implicit
+  "all rows" object key, the resource set, the absent scoping check).
+- a signature / HMAC / digest verified over RE-SERIALIZED or RE-PARSED data
+  (\`JSON.stringify(req.body)\`, a re-encoded payload) when the scheme is meant to
+  sign the EXACT raw request bytes and no canonical-JSON contract is implemented —
+  the recomputed bytes can differ from what was signed, desyncing or bypassing
+  verification.
+- a secret / signature check that FAILS OPEN — a hardcoded fallback secret, a
+  missing-header path that proceeds, a comparison that yields true on error.
+- an ownership/authz check that exists but guards the WRONG object, or runs
+  AFTER the sensitive read/write.
+- attacker-controlled input reaching an interpreted sink (SQL / command /
+  template / header) without parameterization — even a single line.
+Do NOT trust comments or names ("authenticated", "validated", "safe") — verify
+from the actual code. Report each distinct ROOT-CAUSE vuln exactly ONCE; do not
+emit pure hardening-with-no-exploit at score>=4.
+─────────────────────────────────────────────────────────────────────`
+
+/** Per-role recall directive, appended to the base prompt when that role's
+ *  recall mode is on. Add a role here + flip its OPENCLAW_<ROLE>_RECALL_MODE to
+ *  roll the SIG-392 recall lane out one specialist at a time. */
+const RECALL_SUFFIX: Partial<Record<SpecialistRole, string>> = {
+  logic: LOGIC_RECALL_SUFFIX,
+  security: SECURITY_RECALL_SUFFIX,
+}
+
+/** Resolve a specialist's system prompt, appending the SIG-392 recall directive
+ *  for any role in `recallRoles` (built from the per-role OPENCLAW_*_RECALL_MODE
+ *  flags). Roles without a suffix, or not enabled, return the base prompt
+ *  unchanged. Applied at the PROD specialist fanout only; the ARC-283 shadow path
  *  and the SIG-393 re-sweep phase intentionally stay on the base prompt (so the
  *  shadow bake-off stays a pure model diff and re-sweep is a separate rollout). */
-export function specialistSystemPrompt(role: SpecialistRole, recallOn: boolean): string {
-  if (recallOn && role === "logic") return `${LOGIC_PROMPT}\n${LOGIC_RECALL_SUFFIX}`
-  return SPECIALIST_PROMPTS[role]
+export function specialistSystemPrompt(role: SpecialistRole, recallRoles: ReadonlySet<SpecialistRole>): string {
+  const suffix = RECALL_SUFFIX[role]
+  return suffix !== undefined && recallRoles.has(role)
+    ? `${SPECIALIST_PROMPTS[role]}\n${suffix}`
+    : SPECIALIST_PROMPTS[role]
 }
 
 // ─── initial user message builders ─────────────────────────────────────

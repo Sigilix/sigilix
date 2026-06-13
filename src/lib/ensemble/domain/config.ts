@@ -10,6 +10,7 @@
 // The validator-mode fields reuse each validator's own exported mode type, so
 // the contract is a single typed view, not a re-declaration.
 
+import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { SecurityValidatorMode } from "./gates/validate-security-finding"
 import type { TestsValidatorMode } from "./gates/validate-test-finding"
 import type { LogicValidatorMode } from "./gates/validate-logic-finding"
@@ -124,10 +125,10 @@ export interface EnsembleFeatureFlags {
   reviewManifestEnabled: boolean
   /** Normalized `OPENCLAW_RESWEEP_MODE` (SIG-393): "off" | "shadow" | "on",
    *  default "off". Gates the region re-sweep second pass pre-synth. */
-  /** `OPENCLAW_LOGIC_RECALL_MODE === "on"` (SIG-392). Appends the recall-
-   *  eliciting directive to the logic specialist's prompt (~6→16/20 logic
-   *  recall on the dense fixture; precision is the downstream gates' job). */
-  logicRecallEnabled: boolean
+  /** SIG-392: roles whose `OPENCLAW_<ROLE>_RECALL_MODE === "on"`, so the
+   *  recall-eliciting directive is appended to that specialist's prompt
+   *  (precision is the downstream gates' job). Rolled out one role at a time. */
+  recallRoles: ReadonlySet<SpecialistRole>
   resweepMode: ResweepMode
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */

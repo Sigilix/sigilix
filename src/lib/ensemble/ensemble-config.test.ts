@@ -212,6 +212,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_INVARIANT_LENS_MODE: "ON",
       // SIG-392: recall-eliciting logic prompt (=== "on").
       OPENCLAW_LOGIC_RECALL_MODE: "on",
+      OPENCLAW_SECURITY_RECALL_MODE: "on",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -247,7 +248,12 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
       invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
-      logicRecallEnabled: env.OPENCLAW_LOGIC_RECALL_MODE === "on",
+      recallRoles: new Set(
+        [
+          env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
+          env.OPENCLAW_SECURITY_RECALL_MODE === "on" ? "security" : null,
+        ].filter((r): r is "logic" | "security" => r !== null),
+      ),
     })
   })
 
@@ -282,7 +288,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: true,
       resweepMode: "off",
       invariantLensMode: "off",
-      logicRecallEnabled: false,
+      recallRoles: new Set(),
     })
   })
 

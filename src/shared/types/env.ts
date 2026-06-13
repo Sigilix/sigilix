@@ -389,6 +389,13 @@ export interface Env {
    *  appends the security recall directive (targets the b16 list-authz + b20
    *  HMAC-reserialized frontier). Default off. Precision is the gates' job. */
   OPENCLAW_SECURITY_RECALL_MODE?: string
+  /** SIG-399: reasoning-process directive for the logic specialist — "on" appends
+   *  the LOGIC_REASONING_SUFFIX (enumerate-then-judge / verify-the-computed-value /
+   *  uncertainty→low-score) on top of any recall directive. Distinct from the
+   *  SIG-287 reasoning-EFFORT harness below (that gates the model `think:` level;
+   *  this gates the PROMPT text). Default off; validated on o3 (floor +3 net recall,
+   *  0 FP) — enabling on another model needs its own floor check. */
+  OPENCLAW_LOGIC_REASONING_PROMPT_MODE?: string
   /** SIG-287 (reasoning-on harness): master switch for per-role DeepSeek
    *  reasoning — "on" enables the `reasoningByRole` map (built from
    *  `OPENCLAW_REASONING_ROLES` + `OPENCLAW_REASONING_LEVEL`); anything else

@@ -134,6 +134,11 @@ export interface EnsembleFeatureFlags {
    *  recall-eliciting directive is appended to that specialist's prompt
    *  (precision is the downstream gates' job). Rolled out one role at a time. */
   recallRoles: ReadonlySet<SpecialistRole>
+  /** SIG-399: roles whose `OPENCLAW_<ROLE>_REASONING_PROMPT_MODE === "on"`, so the
+   *  reasoning-process directive (LOGIC_REASONING_SUFFIX) is appended to that
+   *  specialist's prompt, AFTER any recall directive. Distinct from `reasoningByRole`
+   *  (the SIG-287 model-effort harness); this gates PROMPT text. Logic-only today. */
+  reasoningPromptRoles: ReadonlySet<SpecialistRole>
   /** SIG-287 (reasoning-on harness): roles whose model calls send a bounded
    *  `think:"<level>"` on the PRIMARY attempt (fallback always stays
    *  `think:false`). Built from `OPENCLAW_REASONING_MODE` + the role/level

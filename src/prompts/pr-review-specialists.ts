@@ -129,6 +129,25 @@ from the actual code. Report each distinct ROOT-CAUSE vuln exactly ONCE; do not
 emit pure hardening-with-no-exploit at score>=4.
 ─────────────────────────────────────────────────────────────────────`
 
+// SIG-399: reasoning-process directive appended to the logic prompt when
+// OPENCLAW_LOGIC_REASONING_PROMPT_MODE === "on", on TOP of LOGIC_RECALL_SUFFIX when
+// that is also on (the append order in `specialistSystemPrompt`). Converged "v1"
+// from the SIG-399 diverse-floor tuning (o3, effort medium, K=5 union, HAND-judged
+// because the keyword scorer under-counts o3's line-offset anchoring): +3 net recall
+// over base (billing 4→6, scheduling 6→7, pipeline 3) at 0 hallucinations / 0
+// trap-trips. v2 (anti-satisfice) and v3 (cross-function) both regressed —
+// elaboration past this dilutes (attention is zero-sum). It teaches the model HOW to
+// spend reasoning for recall (enumerate-then-judge, verify the computed VALUE,
+// uncertainty→a low score not silence); precision stays the downstream gates' job.
+// Distinct from the SIG-287 reasoning-EFFORT harness (OPENCLAW_REASONING_MODE → the
+// model `think:` level): this gates the PROMPT text. Validated on o3; enabling on
+// another model needs its own floor check. Spec:
+// docs/superpowers/specs/2026-06-13-logic-reasoning-prompt-spec.md
+export const LOGIC_REASONING_SUFFIX = `
+─────────────────────────────────────────────────────────────────────
+REASONING DIRECTIVE (logic): Spend your reasoning ENUMERATING candidate correctness defects, not pruning them. Walk the arithmetic, the date/time handling, the boundary conditions (inclusive vs exclusive, off-by-one), the state transitions, the idempotency/ordering/replay assumptions, and the data flow — and list EVERY suspect BEFORE judging any. A correct-LOOKING computation that returns the WRONG VALUE is the target: verify the math/logic actually produces the right result; do NOT just confirm it parses or "looks reasonable". Then per candidate — if you can name the specific guard/bound/check that is genuinely ABSENT, emit at score 4-5 with it in independentAssessment; if you suspect a wrong result but cannot fully rule out a mitigation in the visible code, emit at score 2 and name the suspicion. Uncertainty maps to a LOW SCORE, never to silence. Do not reason yourself out of a real defect because you "can't be sure" — recall is your job, the downstream gates handle precision.
+─────────────────────────────────────────────────────────────────────`
+
 /** Per-role recall directive, appended to the base prompt when that role's
  *  recall mode is on. Add a role here + flip its OPENCLAW_<ROLE>_RECALL_MODE to
  *  roll the SIG-392 recall lane out one specialist at a time. */
@@ -137,17 +156,32 @@ const RECALL_SUFFIX: Partial<Record<SpecialistRole, string>> = {
   security: SECURITY_RECALL_SUFFIX,
 }
 
-/** Resolve a specialist's system prompt, appending the SIG-392 recall directive
- *  for any role in `recallRoles` (built from the per-role OPENCLAW_*_RECALL_MODE
- *  flags). Roles without a suffix, or not enabled, return the base prompt
- *  unchanged. Applied at the PROD specialist fanout only; the ARC-283 shadow path
- *  and the SIG-393 re-sweep phase intentionally stay on the base prompt (so the
- *  shadow bake-off stays a pure model diff and re-sweep is a separate rollout). */
-export function specialistSystemPrompt(role: SpecialistRole, recallRoles: ReadonlySet<SpecialistRole>): string {
-  const suffix = RECALL_SUFFIX[role]
-  return suffix !== undefined && recallRoles.has(role)
-    ? `${SPECIALIST_PROMPTS[role]}\n${suffix}`
-    : SPECIALIST_PROMPTS[role]
+/** SIG-399: per-role reasoning-process directive, appended AFTER the recall
+ *  directive when that role is in `reasoningPromptRoles` (built from the per-role
+ *  OPENCLAW_<ROLE>_REASONING_PROMPT_MODE flags). Logic-only today. */
+const REASONING_SUFFIX: Partial<Record<SpecialistRole, string>> = {
+  logic: LOGIC_REASONING_SUFFIX,
+}
+
+/** Resolve a specialist's system prompt: the base prompt, then (when enabled for
+ *  the role) the SIG-392 recall directive, then the SIG-399 reasoning-process
+ *  directive — in that order (the order each was measured in). `recallRoles` and
+ *  `reasoningPromptRoles` are built from the per-role OPENCLAW_* flags; a role
+ *  absent from a set, or with no suffix registered, contributes nothing. Applied at
+ *  the PROD specialist fanout only; the ARC-283 shadow path and the SIG-393 re-sweep
+ *  phase intentionally stay on the base prompt (so the shadow bake-off stays a pure
+ *  model diff and re-sweep is a separate rollout). */
+export function specialistSystemPrompt(
+  role: SpecialistRole,
+  recallRoles: ReadonlySet<SpecialistRole>,
+  reasoningPromptRoles: ReadonlySet<SpecialistRole>,
+): string {
+  let prompt = SPECIALIST_PROMPTS[role]
+  const recall = RECALL_SUFFIX[role]
+  if (recall !== undefined && recallRoles.has(role)) prompt = `${prompt}\n${recall}`
+  const reasoning = REASONING_SUFFIX[role]
+  if (reasoning !== undefined && reasoningPromptRoles.has(role)) prompt = `${prompt}\n${reasoning}`
+  return prompt
 }
 
 // ─── initial user message builders ─────────────────────────────────────

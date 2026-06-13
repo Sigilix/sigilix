@@ -49,6 +49,8 @@ import { noPrototypePollution } from "./rules/no-prototype-pollution"
 import { noXxe } from "./rules/no-xxe"
 // SIG-392 (b14): deterministic fail-open hardcoded-secret floor (CWE-798).
 import { noHardcodedSecretFallback } from "./rules/no-hardcoded-secret-fallback"
+// SIG-392 (b20): deterministic HMAC-over-reserialized-body floor (CWE-345/347).
+import { noHmacOverReserializedBody } from "./rules/no-hmac-over-reserialized-body"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -109,6 +111,7 @@ export const ALL_RULES: readonly AstRule[] = [
   noXxe,
   // SIG-392 (b14): security-specialist deterministic fail-open hardcoded-secret floor (CWE-798, severity: warning).
   noHardcodedSecretFallback,
+  noHmacOverReserializedBody,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

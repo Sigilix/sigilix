@@ -369,11 +369,11 @@ export default {
    * the failure is visible in Workers Logs as `dropped` instead of
    * blending into the regular retry chatter.
    */
-  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<JobMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
     const MAX_RETRIES = 3
     for (const message of batch.messages) {
       try {
-        await dispatchJob(message.body, env)
+        await dispatchJob(message.body, env, (promise) => ctx.waitUntil(promise))
         message.ack()
       } catch (error) {
         const isFinalAttempt = message.attempts > MAX_RETRIES

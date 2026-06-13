@@ -62,7 +62,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
-import { runResweepPhase } from "./resweep"
+import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
 import { applyInvariantLens, startInvariantLens } from "./invariant-lens"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
@@ -138,6 +138,7 @@ export interface SpecialistsArgs<R> {
   sarifFindings: readonly SarifFinding[]
   sarifResult: SarifResult
   filePaths: string[]
+  backgroundWaitUntil?: (promise: Promise<void>) => void
 }
 
 export type SpecialistsPhaseResult<R> =
@@ -182,6 +183,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     sarifFindings,
     sarifResult,
     filePaths,
+    backgroundWaitUntil,
   } = a
   // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
   // prod Promise.allSettled below so both lineups run in parallel
@@ -797,12 +799,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   // hypothetical extreme-token-pressure case dropping a `score >= 4`
   // finding can't sneak past the bypass gate — CR phase-end catch on
   // PR #188.
-  // ─── SIG-393: region re-sweep (effort-gated second pass) ───────
-  // Scoped follow-up over already-flagged files; candidates flow through
-  // the UNCHANGED gate stack (no bypass). shadow = telemetry only; off =
-  // inert. Evidence + budget notes (runs inside the ~895s wall, ~90-170s
-  // on dense PRs): docs/superpowers/specs/2026-06-11-sig-393-region-resweep-spec.md
-  const resweep = await runResweepPhase({
+  const resweep = await scheduleResweepForSynth({
     env,
     owner,
     repo,
@@ -814,12 +811,13 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     orchCtrl,
     diff,
     succeeded,
+    ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
-  // SIG-395: lens merge/telemetry — AFTER the re-sweep so each lever
-  // matches how it was validated (re-sweep regions come from pass-1).
+  const resweepForSynth = resweepResultForSynth(resweep)
+  // SIG-395: lens merge/telemetry — after re-sweep; shadow uses pass-1.
   const lensApplied = await applyInvariantLens({
     lens: invariantLens,
-    succeeded: resweep.verdicts,
+    succeeded: resweepForSynth.verdicts,
     owner,
     repo,
     prNumber,
@@ -861,7 +859,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
-    leverOrigins: buildLeverOrigins(resweep.resweepFindingIds, lensApplied.lensFindingIds),
+    leverOrigins: buildLeverOrigins(resweepForSynth.resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }

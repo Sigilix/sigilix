@@ -112,7 +112,11 @@ export async function prClosedOrMerged(
   }
 }
 
-export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
+export async function dispatchJob(
+  job: JobMessage,
+  env: Env,
+  backgroundWaitUntil?: (promise: Promise<void>) => void,
+): Promise<void> {
   switch (job.type) {
     case "linear-triage":
       return triageIssue(job.issueId, env)
@@ -242,6 +246,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         validationSink,
         graphMetricsSink,
         graphExpansionMetricsSink,
+        ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
         // ARC-251: thread the requeue depth from the job message into
         // both review pipelines. Webhook-driven messages omit the
         // field (treated as 0); stale-head-driven requeues carry the

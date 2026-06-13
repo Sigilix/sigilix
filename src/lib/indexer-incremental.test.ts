@@ -403,6 +403,32 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(manifest.chunkCount).toBe(3)
   })
 
+  it("falls back to full indexing instead of noop when the active graph version drifted", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "on"
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    manifest.graphRunId = "old-graph-run"
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockResolvedValue("newer-graph-run")
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: ["package-lock.json"],
+          remove: ["assets/logo.png"],
+        },
+      },
+      env,
+    })
+
+    expect(mockGetRepoTree).toHaveBeenCalled()
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+  })
+
   it("falls back to full indexing when scoped rule files change", async () => {
     const { env, kv } = makeEnv()
     seedIndexedRepo(kv)
@@ -444,6 +470,117 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     const stored = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
     expect(stored.byPath["src/changed.ts"]).toEqual([existingId])
     expect(stored.byPath["src/deleted.ts"]).toBeUndefined()
+  })
+
+  it("falls back to embedding when a reuse content probe rejects", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const changedContent = "export const changed = 1\n"
+    const existingId = await chunkId("sigilix/sigilix", chunkFile("src/changed.ts", changedContent)[0]!)
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    vectors.byPath["src/changed.ts"] = [existingId]
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+    mockGetFileContent.mockRejectedValueOnce(new Error("github 503"))
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(2)
+    expect(mockAiRun).toHaveBeenCalled()
+    expect(mockVectorizeUpsert).toHaveBeenCalledTimes(1)
+    const stored = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(stored.byPath["src/changed.ts"]).toEqual([existingId])
+  })
+
+  it("embeds only failed reuse probes while keeping concurrent successful probes reused", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const contents: Record<string, string> = {
+      "src/one.ts": "export const one = 1\n",
+      "src/two.ts": "export const two = 2\n",
+    }
+    mockGetRepoTree.mockResolvedValue({
+      tree: Object.keys(contents).map((path) => ({ path, type: "blob", size: 100 })),
+      truncated: false,
+    })
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    vectors.byPath = {}
+    for (const [path, content] of Object.entries(contents)) {
+      vectors.byPath[path] = [await chunkId("sigilix/sigilix", chunkFile(path, content)[0]!)]
+    }
+    const oneId = vectors.byPath["src/one.ts"]![0]!
+    const twoId = vectors.byPath["src/two.ts"]![0]!
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+    let rejectedOneProbe = false
+    mockGetFileContent.mockImplementation(async (_owner, _repo, path: string) => {
+      if (path === "src/one.ts" && !rejectedOneProbe) {
+        rejectedOneProbe = true
+        throw new Error("github 503")
+      }
+      return contents[path] ?? null
+    })
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: Object.keys(contents),
+          remove: [],
+        },
+      },
+      env,
+    })
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(3)
+    expect(mockAiRun).toHaveBeenCalledTimes(1)
+    expect(mockVectorizeUpsert).toHaveBeenCalledTimes(1)
+    const stored = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(stored.byPath["src/one.ts"]).toEqual([oneId])
+    expect(stored.byPath["src/two.ts"]).toEqual([twoId])
+  })
+
+  it("probes reusable changed files concurrently", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const contents: Record<string, string> = {
+      "src/one.ts": "export const one = 1\n",
+      "src/two.ts": "export const two = 2\n",
+      "src/three.ts": "export const three = 3\n",
+    }
+    mockGetRepoTree.mockResolvedValue({
+      tree: Object.keys(contents).map((path) => ({ path, type: "blob", size: 100 })),
+      truncated: false,
+    })
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    vectors.byPath = {}
+    for (const [path, content] of Object.entries(contents)) {
+      vectors.byPath[path] = [await chunkId("sigilix/sigilix", chunkFile(path, content)[0]!)]
+    }
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+    let active = 0
+    let maxActive = 0
+    mockGetFileContent.mockImplementation(async (_owner, _repo, path: string) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await Promise.resolve()
+      active -= 1
+      return contents[path] ?? null
+    })
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: {
+          upsert: Object.keys(contents),
+          remove: [],
+        },
+      },
+      env,
+    })
+
+    expect(maxActive).toBeGreaterThan(1)
+    expect(mockGetFileContent).toHaveBeenCalledTimes(3)
+    expect(mockAiRun).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
   })
 
   it("logs when lexical cleanup is skipped because the D1 binding is absent", async () => {

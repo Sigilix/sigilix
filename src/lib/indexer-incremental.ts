@@ -20,9 +20,11 @@ import { readRepoIndexVectors, writeRepoIndexVectors, type RepoIndexVectorsV1 } 
 import { chunkFile, type Chunk } from "@/src/lib/chunk-core"
 import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
 import { classifyRuleFilePath } from "@/src/lib/scoped-rules"
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
 
 const MAX_INCREMENTAL_CHANGED_PATHS = 200
 const VECTORIZE_DELETE_BATCH = 100
+const REUSE_PROBE_CONCURRENCY = 8
 
 type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
 
@@ -432,15 +434,28 @@ async function splitReusedFiles(input: SplitReusedFilesArgs): Promise<{
   const filesToEmbed: IndexableFile[] = []
   const reusedIdsByPath: Record<string, string[]> = {}
   let reusedFiles = 0
-  for (const file of input.files) {
+  const results = await mapWithConcurrency(input.files, REUSE_PROBE_CONCURRENCY, async (file) => {
     const existingIds = input.existingByPath[file.path]
     if (existingIds === undefined || existingIds.length === 0) {
-      filesToEmbed.push(file)
-      continue
+      return { file, reuseIds: null }
     }
     const currentIds = await currentChunkIds(input.args, file)
     if (currentIds !== null && sameIds(existingIds, currentIds)) {
-      reusedIdsByPath[file.path] = [...existingIds]
+      return { file, reuseIds: [...existingIds] }
+    }
+    return { file, reuseIds: null }
+  })
+  // mapWithConcurrency preserves input order; a rejected probe falls back to
+  // embedding the file at the same index so index freshness wins over reuse.
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]
+    const file = input.files[i]!
+    if (result?.status !== "fulfilled") {
+      filesToEmbed.push(file)
+      continue
+    }
+    if (result.value.reuseIds !== null) {
+      reusedIdsByPath[result.value.file.path] = result.value.reuseIds
       reusedFiles += 1
     } else {
       filesToEmbed.push(file)

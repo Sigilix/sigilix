@@ -188,6 +188,21 @@ function callRole(arg: unknown): string | null {
   return null
 }
 
+function userMessageText(arg: unknown): string {
+  if (!arg || typeof arg !== "object") return ""
+  const messages = (arg as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return ""
+  return messages
+    .filter((m) => m && typeof m === "object" && (m as { role?: unknown }).role === "user")
+    .map((m) => String((m as { content?: unknown }).content ?? ""))
+    .join("\n")
+}
+
+function rolesFromLine(text: string, prefix: string): Set<string> {
+  const line = text.split("\n").find((l) => l.startsWith(prefix)) ?? ""
+  return new Set(line.slice(prefix.length).split(", ").filter(Boolean))
+}
+
 function findLoggedEvent(eventName: string): Record<string, unknown> | undefined {
   for (const call of logSpy.mock.calls) {
     const arg = call[0]
@@ -447,5 +462,88 @@ index abc1234..def5678 100644
     expect(ranRoles).toContain("logic")
     expect(ranRoles).not.toContain("tests")
     expect(ranRoles).not.toContain("performance")
+  })
+
+  it("SIG-227 / enforce mode gives synth dispatch coverage for intentionally skipped specialists", async () => {
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+      title: "chore: minor",
+      body: "",
+    })
+    mockGetPullRequestDiff.mockResolvedValueOnce(SIMPLE_SOURCE_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValueOnce(null)
+
+    let synthUserMessage = ""
+    const emptyVerdict = JSON.stringify({
+      summary: "No issues.",
+      confidence: 4,
+      confidenceReason: "The changed lines are narrow.",
+      findings: [],
+    })
+    const synthVerdict = JSON.stringify({
+      verdict: {
+        summary: "No issues.",
+        confidence: 4,
+        confidenceReason: "Protected specialists returned clean verdicts.",
+        findings: [],
+      },
+      provenance: { findings: [], dropped: [] },
+    })
+    mockChat.mockImplementation(async (arg: unknown) => {
+      if (isDispatcherCall(arg)) {
+        return {
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              // The dispatcher LLM returns ambiguous-role picks only;
+              // protected logic+security are added by the dispatcher.
+              specialists: [],
+              reasoning: "no tests or performance surface",
+              confidence: 4,
+            }),
+          },
+          hasToolCalls: false,
+        }
+      }
+      const role = callRole(arg)
+      if (role === "security" || role === "logic") {
+        return { message: { role: "assistant", content: emptyVerdict }, hasToolCalls: false }
+      }
+      const userText = userMessageText(arg)
+      if (userText.includes("[SPECIALIST VERDICTS]")) {
+        synthUserMessage = userText
+        return { message: { role: "assistant", content: synthVerdict }, hasToolCalls: false }
+      }
+      throw new Error("unexpected chat call")
+    })
+
+    await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 5005,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({ OPENCLAW_DYNAMIC_DISPATCHER_MODE: "enforce" } as unknown as Env),
+    })
+
+    expect(synthUserMessage).toContain("[DISPATCH COVERAGE]")
+    expect(rolesFromLine(synthUserMessage, "Specialists invoked: ")).toEqual(new Set(["logic", "security"]))
+    expect(
+      rolesFromLine(
+        synthUserMessage,
+        "Specialists intentionally not invoked (routing rules or dispatcher judged not applicable): ",
+      ),
+    ).toEqual(new Set(["performance", "tests"]))
+    expect(synthUserMessage).toContain("not as missing, failed, or unavailable")
+    expect(synthUserMessage).toContain(
+      "Add one concise sentence to `summary` (the posted review body) naming the not-invoked roles",
+    )
+    expect(synthUserMessage).toContain("Do NOT reduce `confidence` solely because a role was not invoked")
+    expect(synthUserMessage).not.toContain("[DEGRADED COVERAGE]")
+    expect(synthUserMessage).not.toContain("confidence` no higher than 3/5")
   })
 })

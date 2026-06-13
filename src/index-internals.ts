@@ -49,10 +49,31 @@ import {
  *     already-reviewed code; re-reviewing doubles spend + adds noise).
  *     The `overview: true` flag still fires so the release PR still
  *     gets its side-effect pass (labels + warmup).
+ *   - A standalone `@sigilix ignore` directive in the PR body opts
+ *     out of all automatic PR review routing for that webhook.
  */
+const PR_BODY_SIGILIX_IGNORE_DIRECTIVE = /^@sigilix[ \t]+ignore$/i
+const PR_BODY_SIGILIX_IGNORE_COMMENT = /(?:^|[ \t])<!--[ \t]*@sigilix[ \t]+ignore[ \t]*-->(?=[ \t]|$)/i
+
+export function prBodyHasSigilixIgnoreDirective(prBody: string | null | undefined): boolean {
+  if (typeof prBody !== "string") return false
+  const cleaned = stripQuotesAndCode(prBody)
+  for (const rawLine of cleaned.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (PR_BODY_SIGILIX_IGNORE_COMMENT.test(line)) return true
+  }
+  const withoutHtmlComments = cleaned.replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+  for (const rawLine of withoutHtmlComments.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (PR_BODY_SIGILIX_IGNORE_DIRECTIVE.test(line)) return true
+  }
+  return false
+}
+
 export function decidePullRequestJobs(args: {
   action: string
   draft: boolean
+  prBody?: string | null | undefined
   baseRef?: string
   headRef?: string
   skipReleasePromotions?: boolean
@@ -60,6 +81,7 @@ export function decidePullRequestJobs(args: {
   if (args.draft) return { overview: false, review: false }
   const supported = ["opened", "synchronize", "reopened", "ready_for_review"]
   if (!supported.includes(args.action)) return { overview: false, review: false }
+  if (prBodyHasSigilixIgnoreDirective(args.prBody)) return { overview: false, review: false }
   let review = args.action !== "reopened"
   if (review && args.skipReleasePromotions && isReleasePromotion(args.baseRef, args.headRef)) {
     review = false

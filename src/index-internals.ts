@@ -17,7 +17,7 @@ import { parseSlashCommand, renderSlashCommandAck, isAuthorAllowedForSlashComman
 import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
 import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
-import { isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
+import { collectPushChangedPaths, isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
 import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
@@ -173,6 +173,12 @@ export interface GitHubWebhookPayload {
   ref?: string
   after?: string
   before?: string
+  size?: number
+  commits?: Array<{
+    added?: string[]
+    modified?: string[]
+    removed?: string[]
+  }>
 }
 
 /**
@@ -738,6 +744,13 @@ export async function handlePushEvent(args: {
     installationId,
     ref: typeof payload.ref === "string" ? payload.ref : undefined,
     after: typeof payload.after === "string" ? payload.after : undefined,
+    before: typeof payload.before === "string" ? payload.before : undefined,
+    changedPaths: collectPushChangedPaths(
+      payload.commits,
+      typeof payload.size === "number" && Number.isInteger(payload.size) && payload.size >= 0
+        ? payload.size
+        : undefined,
+    ),
   })
   if ("enqueued" in outcome && outcome.enqueued) {
     return new Response("push indexed\n", { status: 202 })

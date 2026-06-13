@@ -529,11 +529,11 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   // Active primaries + fallbacks in SIG-234 lineup. Validated via
   // curl-format-test against `/api/chat`; only models that returned
   // schema-clean JSON (no ```json``` markdown-fenced output) are
-  // listed. CodeRabbit M1 on PR #186 fix: dropped `kimi-k2.6:cloud`
-  // because it's no longer referenced after the synth swap to
-  // `gpt-oss:120b-cloud`. `deepseek-v4-pro:cloud` STAYS because it's
-  // still the cross-provider fallback for security.
+  // listed. Kimi K2.7 Code replaces the legacy K2.6 model id for
+  // command overrides. `deepseek-v4-pro:cloud` STAYS because it's still
+  // the cross-provider fallback for security.
   "glm-5.1:cloud", // performance primary
+  "kimi-k2.7-code:cloud", // current Kimi generalist/code model
   "kimi-k2.5:cloud", // logic + performance fallback
   "qwen3-coder:480b-cloud", // reserved for per-repo overrides
   "qwen3-coder-next:cloud", // logic fallback (was security primary; swapped to a reasoner after pr/07)

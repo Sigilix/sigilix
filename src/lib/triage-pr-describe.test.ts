@@ -452,10 +452,10 @@ describe("handlePrDescribe — happy path", () => {
       installationId: 1,
       mode: "pr-description",
       apply: false,
-      env: makeEnv(kv, { OPENCLAW_MODEL: "kimi-k2.6:cloud" } as Partial<Env>),
+      env: makeEnv(kv, { OPENCLAW_MODEL: "kimi-k2.7-code:cloud" } as Partial<Env>),
     })
     const generateArgs = mockGenerate.mock.calls[0]![0] as { model: string }
-    expect(generateArgs.model).toBe("kimi-k2.6:cloud")
+    expect(generateArgs.model).toBe("kimi-k2.7-code:cloud")
   })
 
   it("logs telemetry with mode + headSha + per-spec dimensions on the posted event", async () => {

@@ -176,7 +176,7 @@ describe("emitShadowVerdictComparison", () => {
   it("emits a shadow-verdict-comparison event with all comparison fields", () => {
     const comp: ShadowVerdictComparison = {
       role: "synth",
-      prodModel: "kimi-k2.6:cloud",
+      prodModel: "kimi-k2.7-code:cloud",
       shadowModel: "deepseek-v4-flash:cloud",
       prodVerdictOk: true,
       shadowVerdictOk: true,
@@ -202,7 +202,7 @@ describe("emitShadowVerdictComparison", () => {
     const event = lastLogged()
     expect(event["event"]).toBe("shadow-verdict-comparison")
     expect(event["role"]).toBe("synth")
-    expect(event["prodModel"]).toBe("kimi-k2.6:cloud")
+    expect(event["prodModel"]).toBe("kimi-k2.7-code:cloud")
     expect(event["shadowModel"]).toBe("deepseek-v4-flash:cloud")
     expect(event["overlapCount"]).toBe(2)
     expect(event["prodOnlyCount"]).toBe(1)
@@ -354,7 +354,7 @@ describe("buildShadowVerdictComparison", () => {
 
   const okProd = (overrides: Partial<ProdOutcomeForComparison> = {}): ProdOutcomeForComparison => ({
     verdictOk: true,
-    modelUsed: "kimi-k2.6:cloud",
+    modelUsed: "kimi-k2.7-code:cloud",
     attemptsUsed: 1,
     elapsedMs: 52_000,
     findings: [finding("src/a.ts", 10, "logic", 4)],
@@ -373,12 +373,12 @@ describe("buildShadowVerdictComparison", () => {
   it("builds an apples-to-apples comparison payload from prod + shadow outcomes", () => {
     const result = buildShadowVerdictComparison({
       role: "synth",
-      prodModelDefault: "kimi-k2.6:cloud",
+      prodModelDefault: "kimi-k2.7-code:cloud",
       prod: okProd({ findings: [finding("src/a.ts", 1, "logic", 3)] }),
       shadow: okShadow({ findings: [finding("src/a.ts", 1, "logic", 4)] }),
     })
     expect(result.role).toBe("synth")
-    expect(result.prodModel).toBe("kimi-k2.6:cloud")
+    expect(result.prodModel).toBe("kimi-k2.7-code:cloud")
     expect(result.shadowModel).toBe("deepseek-v4-flash:cloud")
     expect(result.prodVerdictOk).toBe(true)
     expect(result.shadowVerdictOk).toBe(true)
@@ -459,7 +459,7 @@ describe("buildShadowVerdictComparison", () => {
   it("populates shadowFailureReason from the shadow runner on shadow failure", () => {
     const result = buildShadowVerdictComparison({
       role: "synth",
-      prodModelDefault: "kimi-k2.6:cloud",
+      prodModelDefault: "kimi-k2.7-code:cloud",
       prod: okProd(),
       shadow: {
         verdictOk: false,
@@ -496,7 +496,7 @@ describe("buildShadowVerdictComparison", () => {
   it("returns null shadowFailureReason when shadow succeeded (event emitter treats null as success-signal)", () => {
     const result = buildShadowVerdictComparison({
       role: "synth",
-      prodModelDefault: "kimi-k2.6:cloud",
+      prodModelDefault: "kimi-k2.7-code:cloud",
       prod: okProd(),
       shadow: okShadow(),
     })

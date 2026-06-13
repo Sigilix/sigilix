@@ -118,7 +118,7 @@ function comparison(
     event: "shadow-verdict-comparison",
     ts,
     role,
-    prodModel: "kimi-k2.6:cloud",
+    prodModel: "kimi-k2.7-code:cloud",
     shadowModel: "deepseek-v4-flash:cloud",
     prodVerdictOk: true,
     shadowVerdictOk: true,

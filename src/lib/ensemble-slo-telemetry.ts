@@ -47,7 +47,7 @@ export interface ModelPricing {
  *  estimates — see the module header on why these are not billed rates. */
 export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   "deepseek-v4-pro:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 1.7 },
-  "kimi-k2.6:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.5 },
+  "kimi-k2.7-code:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.5 },
   "glm-5.1:cloud": { inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },
   "qwen3:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 0.9 },
   "minimax:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 1.1 },

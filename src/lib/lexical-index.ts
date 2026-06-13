@@ -84,6 +84,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lexical_chunks USING fts5(
   content,
   tokenize = 'unicode61'
 )`.trim()
+const D1_BATCH_LIMIT = 100
 
 // Schema bootstrap is idempotent and cheap; we run it lazily once per
 // isolate rather than depending on a migration step that a fresh preview
@@ -165,6 +166,29 @@ export async function deleteLexicalNamespace(db: D1Database, namespace: string):
       JSON.stringify({
         event: "lexical-delete-failed",
         namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return 0
+  }
+}
+
+export async function deleteLexicalIds(db: D1Database, ids: ReadonlyArray<string>): Promise<number> {
+  if (ids.length === 0) return 0
+  try {
+    await ensureLexicalSchema(db)
+    const del = db.prepare("DELETE FROM lexical_chunks WHERE id = ?")
+    let deleted = 0
+    for (let i = 0; i < ids.length; i += D1_BATCH_LIMIT) {
+      const results = await db.batch(ids.slice(i, i + D1_BATCH_LIMIT).map((id) => del.bind(id)))
+      deleted += results.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0)
+    }
+    return deleted
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "lexical-delete-ids-failed",
+        count: ids.length,
         err: error instanceof Error ? error.message : String(error),
       }),
     )

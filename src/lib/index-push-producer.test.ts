@@ -39,7 +39,11 @@ vi.mock("@/src/shared/adapters/github", async () => {
   return { ...actual, GitHubClient: GitHubClientMock }
 })
 
-import { maybeEnqueuePullRequestBranchIndexJobs, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
+import {
+  collectPushChangedPaths,
+  maybeEnqueuePullRequestBranchIndexJobs,
+  maybeEnqueuePushIndexJob,
+} from "@/src/lib/index-producer"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
@@ -353,6 +357,43 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     })
   })
 
+  it("attaches bounded changed paths so the consumer can avoid a full re-embed", async () => {
+    const { env, sent, kv } = makeEnv()
+    seedManifest(kv)
+    mockGetRepository.mockResolvedValue({ default_branch: "main" })
+    const outcome = await maybeEnqueuePushIndexJob({
+      env,
+      ...baseArgs,
+      ref: "refs/heads/main",
+      after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      before: "a".repeat(40),
+      changedPaths: {
+        upsert: ["src/changed.ts"],
+        remove: ["src/deleted.ts"],
+      },
+    } as Parameters<typeof maybeEnqueuePushIndexJob>[0] & {
+      changedPaths: { upsert: string[]; remove: string[] }
+    })
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent[0]).toMatchObject({
+      type: "index-repo",
+      owner: "Sigilix",
+      repo: "sigilix",
+      reason: "push",
+      before: "a".repeat(40),
+      changedPaths: {
+        upsert: ["src/changed.ts"],
+        remove: ["src/deleted.ts"],
+      },
+    })
+  })
+
+  it("drops changed paths when GitHub truncated the push commit list", () => {
+    const commits = Array.from({ length: 20 }, (_value, i) => ({ modified: [`src/${i}.ts`] }))
+    expect(collectPushChangedPaths(commits, 21)).toBeUndefined()
+    expect(collectPushChangedPaths(commits)).toBeUndefined()
+  })
+
   it("attaches githubRepoId to the queue message when the push payload included repository.id (SIG-243 Phase 1)", async () => {
     // SIG-243: GitHub's immutable repository ID is captured at the
     // webhook entry point and threaded through to the queue message
@@ -491,7 +532,30 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
 })
 
 describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
-  it("enqueues branch indexing for non-draft PR updates", async () => {
+  it("enqueues branch indexing for non-draft PR bootstrap actions", async () => {
+    const { env, sent } = makeEnv()
+    await maybeEnqueuePullRequestBranchIndexJobs({
+      env,
+      ...baseArgs,
+      action: "opened",
+      draft: false,
+      headRef: "feature-branch",
+      baseRef: "main",
+      merged: false,
+    })
+    expect(sent).toEqual([
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "pull-request",
+        branch: "feature-branch",
+      },
+    ])
+  })
+
+  it("enqueues PR synchronize branch indexing as a safety net for missed push webhooks", async () => {
     const { env, sent } = makeEnv()
     await maybeEnqueuePullRequestBranchIndexJobs({
       env,

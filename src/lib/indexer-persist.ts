@@ -128,6 +128,7 @@ interface PersistManifestArgs {
   defaultBranch: string
   headSha: string
   runId: string
+  graphRunId?: string | undefined
   fileCount: number
   chunkCount: number
   shardCount: number
@@ -161,6 +162,9 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
   }
   if (args.branch !== null) {
     manifest.branch = args.branch
+  }
+  if (args.graphRunId !== undefined) {
+    manifest.graphRunId = args.graphRunId
   }
   // SIG-243 Phase 1: persist the immutable repo ID when the queue
   // message carried it. Conditional spread keeps the manifest shape

@@ -210,6 +210,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_RESWEEP_MODE: "Shadow",
       // SIG-395: invariant-lens rollout flag.
       OPENCLAW_INVARIANT_LENS_MODE: "ON",
+      OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT: "shadow-background",
       // SIG-392: recall-eliciting logic prompt (=== "on").
       OPENCLAW_LOGIC_RECALL_MODE: "on",
       OPENCLAW_SECURITY_RECALL_MODE: "on",
@@ -250,6 +251,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
       resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
       invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
+      invariantLensRecallContract: "shadow-background",
       recallRoles: new Set(
         [
           env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
@@ -297,6 +299,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reviewManifestEnabled: true,
       resweepMode: "off",
       invariantLensMode: "off",
+      invariantLensRecallContract: "blocking",
       recallRoles: new Set(),
       // SIG-399: reasoning-process directive default off → empty set.
       reasoningPromptRoles: new Set(),
@@ -314,6 +317,13 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     expect(c.asymmetryHints).toBe("on")
     expect(c.toctouHints).toBe("shadow")
     expect(c.synthRecovery).toBe("post")
+  })
+
+  it("threads the pending-check amendment contract through config without making it detachable", () => {
+    expect(
+      parseEnsembleConfig({ OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT: " Pending-Check-Amendment " }).flags
+        .invariantLensRecallContract,
+    ).toBe("pending-check-amendment")
   })
 
   it('forwards the raw value un-mangled for the raw / `=== "on"` flags (no edge normalization)', () => {

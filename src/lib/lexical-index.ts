@@ -17,6 +17,8 @@
 // cheap no-op-on-failure (a lexical-index outage must never block the
 // Vectorize upsert the GDPR delete ledger depends on).
 
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
+
 // ---------------------------------------------------------------------
 // Flag
 // ---------------------------------------------------------------------
@@ -84,6 +86,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lexical_chunks USING fts5(
   content,
   tokenize = 'unicode61'
 )`.trim()
+const D1_BATCH_LIMIT = 100
+const D1_DELETE_BATCH_CONCURRENCY = 4
 
 // Schema bootstrap is idempotent and cheap; we run it lazily once per
 // isolate rather than depending on a migration step that a fresh preview
@@ -165,6 +169,34 @@ export async function deleteLexicalNamespace(db: D1Database, namespace: string):
       JSON.stringify({
         event: "lexical-delete-failed",
         namespace,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return 0
+  }
+}
+
+export async function deleteLexicalIds(db: D1Database, ids: ReadonlyArray<string>): Promise<number> {
+  if (ids.length === 0) return 0
+  try {
+    await ensureLexicalSchema(db)
+    const del = db.prepare("DELETE FROM lexical_chunks WHERE id = ?")
+    const batches: string[][] = []
+    for (let i = 0; i < ids.length; i += D1_BATCH_LIMIT) {
+      batches.push(ids.slice(i, i + D1_BATCH_LIMIT))
+    }
+    const results = await mapWithConcurrency(batches, D1_DELETE_BATCH_CONCURRENCY, async (batch) => {
+      const batchResults = await db.batch(batch.map((id) => del.bind(id)))
+      return batchResults.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0)
+    })
+    const rejected = results.filter((result) => result.status === "rejected")
+    if (rejected.length > 0) throw new Error(`${rejected.length} lexical delete batches failed`)
+    return results.reduce((sum, result) => sum + (result.status === "fulfilled" ? result.value : 0), 0)
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "lexical-delete-ids-failed",
+        count: ids.length,
         err: error instanceof Error ? error.message : String(error),
       }),
     )

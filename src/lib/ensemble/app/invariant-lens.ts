@@ -32,6 +32,7 @@ import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import {
   countAddedLines,
   decideInvariantDispatch,
+  type InvariantLensRecallContract,
   type InvariantLensMode,
 } from "@/src/lib/ensemble/domain/invariant-lens"
 
@@ -140,6 +141,8 @@ export async function applyInvariantLens(args: {
   prNumber: number
   headSha: string
   diff: string
+  executionLane?: "default" | "background" | "amendment"
+  recallContract?: InvariantLensRecallContract
 }): Promise<InvariantLensApplyResult> {
   const passthrough: InvariantLensApplyResult = { verdicts: args.succeeded, lensFindingIds: [] }
   if (args.lens.mode === "off" || args.lens.dispatched.length === 0) return passthrough
@@ -150,15 +153,19 @@ export async function applyInvariantLens(args: {
   const changedPaths = new Set(splitDiffByFile(args.diff).map((b) => b.path))
   const kept: PrReviewFinding[] = []
   let candidates = 0
+  let highSeverityCandidates = 0
   let outOfDiffDropped = 0
   for (const o of outcomes) {
     for (const f of o.findings) {
       candidates += 1
+      if (f.score >= 4) highSeverityCandidates += 1
       if (changedPaths.has(f.path)) kept.push(f)
       else outOfDiffDropped += 1
     }
   }
   const elapsedMs = Date.now() - args.lens.startedAtMs
+  const target = args.succeeded.find((v) => v.role === "logic" && v.verdict !== null) ?? args.succeeded[0]
+  const mergedIntoSynth = args.lens.mode === "on" && kept.length > 0 && target !== undefined && target.verdict !== null
   console.log(
     JSON.stringify({
       event: args.lens.mode === "shadow" ? "invariant-lens-shadow-summary" : "invariant-lens-summary",
@@ -167,8 +174,13 @@ export async function applyInvariantLens(args: {
       prNumber: args.prNumber,
       headSha: args.headSha.slice(0, 7),
       mode: args.lens.mode,
+      executionLane: args.executionLane ?? "default",
+      recallContract: args.recallContract ?? "blocking",
+      mergedIntoSynth,
       perFamily: outcomes.map((o) => ({ family: o.familyId, findings: o.findings.length, errored: o.errored })),
       candidates,
+      highSeverityCandidates,
+      highSeverityKeptCandidates: kept.filter((f) => f.score >= 4).length,
       outOfDiffDropped,
       keptCandidates: kept.length,
       elapsedMs,
@@ -178,7 +190,6 @@ export async function applyInvariantLens(args: {
 
   // Merge target: logic (protected role — present whenever the coverage
   // gate passed and logic was dispatched); else the first succeeded role.
-  const target = args.succeeded.find((v) => v.role === "logic" && v.verdict !== null) ?? args.succeeded[0]
   if (!target || target.verdict === null) return passthrough
   const lensFindingIds: string[] = []
   const verdicts = args.succeeded.map((v) => {

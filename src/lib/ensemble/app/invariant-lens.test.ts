@@ -112,7 +112,13 @@ describe("invariant lens — mode contract", () => {
     const r = await apply(lens)
     const events = loggedEvents()
     expect(events[0]).toMatchObject({ event: "invariant-lens-decision", fired: true })
-    expect(events.find((e) => e["event"] === "invariant-lens-shadow-summary")).toBeDefined()
+    expect(events.find((e) => e["event"] === "invariant-lens-shadow-summary")).toMatchObject({
+      executionLane: "default",
+      recallContract: "blocking",
+      mergedIntoSynth: false,
+      highSeverityCandidates: lens.dispatched.length,
+      highSeverityKeptCandidates: lens.dispatched.length,
+    })
     expect(r.verdicts).toBe(SUCCEEDED)
     expect(r.lensFindingIds).toEqual([])
   })
@@ -132,6 +138,13 @@ describe("invariant lens — mode contract", () => {
     expect(r.lensFindingIds).toEqual(Array.from({ length: lens.dispatched.length }, (_, i) => `logic-${i + 1}`))
     // Non-target verdicts untouched by reference.
     expect(r.verdicts.find((v) => v.role === "security")).toBe(SUCCEEDED[1])
+    expect(loggedEvents().find((e) => e["event"] === "invariant-lens-summary")).toMatchObject({
+      executionLane: "default",
+      recallContract: "blocking",
+      mergedIntoSynth: true,
+      highSeverityCandidates: lens.dispatched.length,
+      highSeverityKeptCandidates: lens.dispatched.length,
+    })
   })
 
   it("anchored-to-diff guard: candidates outside the changed files are dropped, not merged", async () => {

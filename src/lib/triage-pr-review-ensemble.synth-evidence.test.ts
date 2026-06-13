@@ -242,6 +242,71 @@ describe("buildSynthesizerInitialMessage [DEGRADED COVERAGE] block (ARC-277)", (
   })
 })
 
+describe("buildSynthesizerInitialMessage [DISPATCH COVERAGE] block (SIG-227)", () => {
+  const baseCtx = {
+    prNumber: 42,
+    diff: "diff --git a/foo.ts ...",
+    specialistVerdictsBlock: "=== LOGIC ===\n{}",
+  }
+
+  it("omits the block when every specialist was invoked", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      dispatchCoverage: {
+        rolesInvoked: ["logic", "security", "performance", "tests"],
+        rolesNotInvoked: [],
+        reasoning: "full coverage",
+      },
+    })
+    expect(out).not.toContain("[DISPATCH COVERAGE]")
+  })
+
+  it("renders skipped roles as intentionally not applicable, not degraded", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      dispatchCoverage: {
+        rolesInvoked: ["logic", "security"],
+        rolesNotInvoked: ["performance", "tests"],
+        reasoning: "Diff is an auth refactor with no perf or test surface.",
+      },
+    })
+    expect(out).toContain("[DISPATCH COVERAGE]")
+    expect(out).toContain("Specialists invoked: logic, security")
+    expect(out).toContain(
+      "Specialists intentionally not invoked (routing rules or dispatcher judged not applicable): performance, tests",
+    )
+    expect(out).toContain("Dispatcher reasoning: Diff is an auth refactor with no perf or test surface.")
+    expect(out).toContain("not as missing, failed, or unavailable")
+    expect(out).toContain("Add one concise sentence to `summary` (the posted review body) naming the not-invoked roles")
+    expect(out).toContain("Do NOT reduce `confidence` solely because a role was not invoked")
+    expect(out).not.toContain("[DEGRADED COVERAGE]")
+    expect(out).not.toContain("confidence` no higher than 3/5")
+  })
+
+  it("places [DISPATCH COVERAGE] after stackBlock and before [DEGRADED COVERAGE] when both coverage blocks exist", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      stackBlock: "[STACK CONTEXT]\nparent: #41",
+      dispatchCoverage: {
+        rolesInvoked: ["logic"],
+        rolesNotInvoked: ["performance", "tests"],
+      },
+      degradedCoverage: {
+        rolesReturned: ["logic"],
+        rolesMissing: ["security"],
+      },
+    })
+    const stackIdx = out.indexOf("[STACK CONTEXT]")
+    const dispatchIdx = out.indexOf("[DISPATCH COVERAGE]")
+    const degradedIdx = out.indexOf("[DEGRADED COVERAGE]")
+    const diffIdx = out.indexOf("[DIFF]")
+    expect(stackIdx).toBeGreaterThan(-1)
+    expect(dispatchIdx).toBeGreaterThan(stackIdx)
+    expect(degradedIdx).toBeGreaterThan(dispatchIdx)
+    expect(diffIdx).toBeGreaterThan(degradedIdx)
+  })
+})
+
 // ARC-278: synth retry on timeout / parse / provenance. Two pure
 // helpers (`classifySynthOutcome`, `buildSynthRetryMessage`) plus a
 // constant-budget invariant.

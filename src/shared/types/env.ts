@@ -416,6 +416,10 @@ export interface Env {
   OPENCLAW_RESWEEP_MAX_REGIONS?: string
   /** SIG-395: invariant lens mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_INVARIANT_LENS_MODE?: string
+  /** SIG-400/SIG-401: "blocking" (default) | "shadow-background" |
+   *  "pending-check-amendment". The amendment contract is fail-closed until
+   *  the deep-lane follow-up owns a merge-blocking check signal. */
+  OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
   // SIG-329: max tolerated gap (ms) between runner heartbeats before the

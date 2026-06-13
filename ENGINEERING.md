@@ -206,7 +206,45 @@ ships in shadow, accrues telemetry in a DO, and we read `/metrics/*` to decide w
 
 ---
 
-## 6. Cross-cutting systems
+## 6. Monitoring and operator reports
+
+Sigilix has two monitoring surfaces: live authenticated `/metrics/*` reads for rolling Durable
+Object counters, and offline CLI reports for log/KV exports. The live routes use the shared
+`OPENCLAW_VALIDATION_METRICS_TOKEN` bearer token.
+
+| Surface | Use it for |
+|----|----|
+| `GET /metrics/validation` | Validator would-drop / actual-drop rates by gate, reason, category, and mode. This is the main shadow-to-enforce safety check. |
+| `GET /metrics/test-suppressions` | Focused tests-gate suppression rollup from the validation metrics. |
+| `GET /metrics/dismissals` | Human dismissal reasons, used to spot repeated false-positive classes. |
+| `GET /metrics/repeat-fps` | Rolling repeat-FP signal from review memory. |
+| `GET /metrics/precision` | Per-repo precision profile / FP-reduction view. |
+| `GET /metrics/fp-rate` | Live false-positive-rate read for one or more repos. |
+| `GET /metrics/graph` | Graph-retrieval shadow/post adoption and quality metrics. |
+| `GET /metrics/graph-expansion` / `/metrics/graph-expansion-ab` | Cross-file body expansion measurement and A/B comparison. |
+| `GET /metrics/runner-evidence` | Runner evidence adoption and verification state. |
+| `GET /metrics/runner-tools` | Per-tool runner evidence coverage. |
+| `GET /metrics/verification` | Verification-by-execution verdict distribution and current mode. |
+
+Offline CLIs live in `scripts/` and are exposed through `npm run`:
+
+| Command | Input | Output / decision |
+|----|----|----|
+| `npm run dispatch-monitor -- --input <path> [--format md|json]` | `wrangler tail --format json` capture, including pretty multi-line JSON, or Workers Logpush JSON/JSONL/NDJSON directory. | CLI dashboard for dynamic dispatcher coverage: actual vs shadow specialist calls avoided, roles intentionally not invoked, observed model tokens, and token-savings estimates from per-role averages. |
+| `npm run bakeoff-report -- --input <path> [--since <iso>] [--until <iso>]` | Shadow bake-off Logpush export. | Model bake-off markdown/JSON decision report. |
+| `npm run retrieval-ab-report -- --findings=<jsonl> --truth=<jsonl>` | Hand-labeled retrieval A/B findings + truth sets. | Precision/recall/F1 comparison and ship/no-ship decision. |
+| `npm run fp-rate-report -- --repo=owner/repo` | Production KV telemetry plus review-memory records via Cloudflare API credentials. | Offline per-specialist false-positive report. |
+
+The dispatch monitor is intentionally a CLI, not an HTTP route: dispatcher savings are emitted as
+structured logs (`dispatcher-savings-summary`, `model-attempt-completed`, and
+`specialist-fanout-summary`), and operators can replay tail/logpush exports without adding Worker
+state, retention, or request-time cost. Use it when flipping or auditing
+`OPENCLAW_DYNAMIC_DISPATCHER_MODE` (`shadow`, `enforce_rules`, `enforce`) to check that skipped
+roles are genuinely not invoked in actual modes and only projected in shadow mode.
+
+---
+
+## 7. Cross-cutting systems
 
 - **Trust ledger / proof tiers** (`domain/gates/trust-ledger-thread.ts`) — per-finding accounting
   of which gates a finding passed and which specialist sourced it; drives the VERIFIED/GROUNDED/
@@ -226,7 +264,7 @@ ships in shadow, accrues telemetry in a DO, and we read `/metrics/*` to decide w
 
 ---
 
-## 7. Coding standards
+## 8. Coding standards
 
 These are conventions, observed and expected. The subset that is *enforced* is in COMPLIANCE.md;
 the rest is how we keep the code consistent.
@@ -288,7 +326,7 @@ the rest is how we keep the code consistent.
 
 ---
 
-## 8. Build, test, deploy
+## 9. Build, test, deploy
 
 ```bash
 npm run build      # tsc --noEmit && eslint . && vitest run  — run before every push, never push red
@@ -297,6 +335,7 @@ npm run deploy     # wrangler deploy
 npm run typecheck  # tsc --noEmit  (covers tests too)
 npm run lint       # eslint .
 npm run test       # vitest run
+npm run dispatch-monitor -- --input <logs.ndjson>  # dynamic-dispatcher CLI monitor
 ```
 
 - **TypeScript:** strict, plus `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`,
@@ -314,7 +353,7 @@ npm run test       # vitest run
 
 ---
 
-## 9. How to add things — recipes
+## 10. How to add things — recipes
 
 - **A new validation gate:** add a pure `validate-*.ts` in `ensemble/domain/gates/`, returning a
   keep/drop/demote union with a reason; wire it into `validation-walk.ts`; give it an
@@ -333,7 +372,7 @@ npm run test       # vitest run
 
 ---
 
-## 10. Key files to know
+## 11. Key files to know
 
 | File | Why |
 |------|-----|

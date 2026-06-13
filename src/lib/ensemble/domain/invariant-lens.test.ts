@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest"
 import {
   countAddedLines,
   decideInvariantDispatch,
+  decideInvariantExecution,
+  parseInvariantLensRecallContract,
   parseInvariantLensMode,
 } from "@/src/lib/ensemble/domain/invariant-lens"
 import { INVARIANT_FAMILIES, buildInvariantFamilyPrompt } from "@/src/prompts/specialists/invariant-lens"
@@ -20,6 +22,69 @@ describe("parseInvariantLensMode", () => {
     expect(parseInvariantLensMode("bogus")).toBe("off")
     expect(parseInvariantLensMode(" Shadow ")).toBe("shadow")
     expect(parseInvariantLensMode("ON")).toBe("on")
+  })
+})
+
+describe("parseInvariantLensRecallContract", () => {
+  it("defaults to blocking and only accepts explicit recall-safe contracts", () => {
+    expect(parseInvariantLensRecallContract(undefined)).toBe("blocking")
+    expect(parseInvariantLensRecallContract("")).toBe("blocking")
+    expect(parseInvariantLensRecallContract(" Shadow-Background ")).toBe("shadow-background")
+    expect(parseInvariantLensRecallContract(" Pending-Check-Amendment ")).toBe("pending-check-amendment")
+    expect(parseInvariantLensRecallContract("detached")).toBe("blocking")
+    expect(parseInvariantLensRecallContract("background")).toBe("blocking")
+  })
+})
+
+describe("decideInvariantExecution", () => {
+  it("allows telemetry-only shadow background work", () => {
+    expect(decideInvariantExecution({ mode: "shadow", recallContract: "shadow-background" })).toEqual({
+      kind: "background",
+      effectiveRecallContract: "shadow-background",
+    })
+  })
+
+  it("fails closed when mode=on tries to use a shadow-only background contract", () => {
+    expect(decideInvariantExecution({ mode: "on", recallContract: "shadow-background" })).toEqual({
+      kind: "blocking",
+      effectiveRecallContract: "blocking",
+      refusalReason: "mode-on-requires-blocking",
+    })
+  })
+
+  it("fails closed for pending-check amendments until the merge-gated follow-up surface exists", () => {
+    expect(decideInvariantExecution({ mode: "on", recallContract: "pending-check-amendment" })).toEqual({
+      kind: "blocking",
+      effectiveRecallContract: "blocking",
+      refusalReason: "pending-check-amendment-unavailable",
+    })
+  })
+
+  it("allows pending-check amendments only when mode=on and the merge-gated lane is available", () => {
+    const supported = {
+      mode: "on",
+      recallContract: "pending-check-amendment",
+      amendmentLaneAvailable: true,
+    } as Parameters<typeof decideInvariantExecution>[0] & { amendmentLaneAvailable: true }
+
+    expect(decideInvariantExecution(supported)).toEqual({
+      kind: "amendment",
+      effectiveRecallContract: "pending-check-amendment",
+    })
+  })
+
+  it("fails closed for pending-check amendments even when the lens is in shadow mode", () => {
+    const supported = {
+      mode: "shadow",
+      recallContract: "pending-check-amendment",
+      amendmentLaneAvailable: true,
+    } as Parameters<typeof decideInvariantExecution>[0] & { amendmentLaneAvailable: true }
+
+    expect(decideInvariantExecution(supported)).toEqual({
+      kind: "blocking",
+      effectiveRecallContract: "blocking",
+      refusalReason: "pending-check-amendment-unavailable",
+    })
   })
 })
 

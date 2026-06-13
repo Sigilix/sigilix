@@ -379,6 +379,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     const decideArgs: Parameters<typeof decidePullRequestJobs>[0] = {
       action: action ?? "",
       draft: false,
+      prBody: pr.body,
       skipReleasePromotions: env.OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES === "on",
     }
     if (pr.base?.ref) decideArgs.baseRef = pr.base.ref

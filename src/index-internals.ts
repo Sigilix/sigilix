@@ -17,7 +17,7 @@ import { parseSlashCommand, renderSlashCommandAck, isAuthorAllowedForSlashComman
 import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
 import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "@/src/lib/sigilix-config"
-import { isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
+import { collectPushChangedPaths, isIndexerEnabled, maybeEnqueuePushIndexJob } from "@/src/lib/index-producer"
 import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
@@ -49,10 +49,31 @@ import {
  *     already-reviewed code; re-reviewing doubles spend + adds noise).
  *     The `overview: true` flag still fires so the release PR still
  *     gets its side-effect pass (labels + warmup).
+ *   - A standalone `@sigilix ignore` directive in the PR body opts
+ *     out of all automatic PR review routing for that webhook.
  */
+const PR_BODY_SIGILIX_IGNORE_DIRECTIVE = /^@sigilix[ \t]+ignore$/i
+const PR_BODY_SIGILIX_IGNORE_COMMENT = /(?:^|[ \t])<!--[ \t]*@sigilix[ \t]+ignore[ \t]*-->(?=[ \t]|$)/i
+
+export function prBodyHasSigilixIgnoreDirective(prBody: string | null | undefined): boolean {
+  if (typeof prBody !== "string") return false
+  const cleaned = stripQuotesAndCode(prBody)
+  for (const rawLine of cleaned.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (PR_BODY_SIGILIX_IGNORE_COMMENT.test(line)) return true
+  }
+  const withoutHtmlComments = cleaned.replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+  for (const rawLine of withoutHtmlComments.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (PR_BODY_SIGILIX_IGNORE_DIRECTIVE.test(line)) return true
+  }
+  return false
+}
+
 export function decidePullRequestJobs(args: {
   action: string
   draft: boolean
+  prBody?: string | null | undefined
   baseRef?: string
   headRef?: string
   skipReleasePromotions?: boolean
@@ -60,6 +81,7 @@ export function decidePullRequestJobs(args: {
   if (args.draft) return { overview: false, review: false }
   const supported = ["opened", "synchronize", "reopened", "ready_for_review"]
   if (!supported.includes(args.action)) return { overview: false, review: false }
+  if (prBodyHasSigilixIgnoreDirective(args.prBody)) return { overview: false, review: false }
   let review = args.action !== "reopened"
   if (review && args.skipReleasePromotions && isReleasePromotion(args.baseRef, args.headRef)) {
     review = false
@@ -173,6 +195,12 @@ export interface GitHubWebhookPayload {
   ref?: string
   after?: string
   before?: string
+  size?: number
+  commits?: Array<{
+    added?: string[]
+    modified?: string[]
+    removed?: string[]
+  }>
 }
 
 /**
@@ -738,6 +766,13 @@ export async function handlePushEvent(args: {
     installationId,
     ref: typeof payload.ref === "string" ? payload.ref : undefined,
     after: typeof payload.after === "string" ? payload.after : undefined,
+    before: typeof payload.before === "string" ? payload.before : undefined,
+    changedPaths: collectPushChangedPaths(
+      payload.commits,
+      typeof payload.size === "number" && Number.isInteger(payload.size) && payload.size >= 0
+        ? payload.size
+        : undefined,
+    ),
   })
   if ("enqueued" in outcome && outcome.enqueued) {
     return new Response("push indexed\n", { status: 202 })

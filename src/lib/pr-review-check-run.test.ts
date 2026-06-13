@@ -664,6 +664,21 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Review failed")
   })
 
+  it("renders a blocking failure when merge-gated post-review work fails", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({ handle, conclusion: "blocked" as never })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { conclusion: string; output: { title: string; summary: string } }
+    expect(p.conclusion).toBe("failure")
+    expect(p.output.title).toBe("Review blocked")
+    expect(p.output.summary).toContain("merge-gated follow-up")
+  })
+
   // ARC-280 follow-up: skip-notice path → distinct title pointing
   // the user at the PR comment that explains what failed.
   it("renders 'Couldn't review — see PR comment' on failure when reviewMeta.surface === 'skip-notice'", async () => {

@@ -92,7 +92,7 @@ Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review
     │ ┌─ KV dedupe (OPENCLAW_STATE)
     │ ├─ Linear OAuth or GitHub App installation token (KV-cached)
     │ ├─ Vectorize retrieval (Workers AI + OPENCLAW_CODE_INDEX)
-    │ ├─ Ollama Turbo: glm-5.1:cloud / kimi-k2.6:cloud → JSON verdict
+    │ ├─ Ollama Turbo: glm-5.1:cloud / kimi-k2.7-code:cloud → JSON verdict
     │ └─ Post comment / submit review back to provider
     ▼
 Linear issue / GitHub PR updated
@@ -433,7 +433,7 @@ Each slash command (`review`, `improve`, `describe`, `ask`) can declare its own 
   "commands": {
     "review": {
       "prompt": { "addendum": "Pay extra attention to AbortSignal handling." },
-      "model":  { "primary": "kimi-k2.6:cloud", "fallbacks": ["glm-5.1:cloud"] }
+      "model":  { "primary": "kimi-k2.7-code:cloud", "fallbacks": ["glm-5.1:cloud"] }
     },
     "improve": {
       "prompt": { "addendum": "Match the existing TypeScript style; favor `??` over `||`." }

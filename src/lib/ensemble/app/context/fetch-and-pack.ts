@@ -52,6 +52,7 @@ import { decideSpecialistsDynamic } from "@/src/lib/dynamic-dispatcher"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
+import { buildDispatcherSavingsSummary, emitDispatcherSavingsSummary } from "@/src/lib/ensemble-perf-telemetry"
 
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChangedPaths>
@@ -484,6 +485,17 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
         signal: orchCtrl.signal,
       })
       telemetry.dispatcherDecision = dispatcherDecision
+      emitDispatcherSavingsSummary(
+        { owner, repo, prNumber, headSha },
+        buildDispatcherSavingsSummary({
+          ctx: { owner, repo, prNumber, headSha },
+          mode: dispatcherMode,
+          baselineSpecialists: router.specialists,
+          dispatcherSpecialists: dispatcherDecision.specialists,
+          perRole: dispatcherDecision.perRole,
+          layerVotes: dispatcherDecision.layerVotes,
+        }),
+      )
       console.log(
         JSON.stringify({
           event: "dispatcher-shadow-decision",

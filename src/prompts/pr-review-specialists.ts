@@ -427,6 +427,16 @@ export interface SynthesizerInitialMessageCtx {
    */
   stackBlock?: string
   /**
+   * SIG-227: specialists intentionally not invoked by dynamic routing.
+   * Distinct from degradedCoverage: these roles are not applicable to
+   * the diff, not failed/missing runtime coverage.
+   */
+  dispatchCoverage?: {
+    rolesInvoked: readonly SpecialistRole[]
+    rolesNotInvoked: readonly SpecialistRole[]
+    reasoning?: string
+  }
+  /**
    * ARC-277: when one or more specialists failed to return a verdict
    * (timeout / rate-limit / parse-fail), synth still runs but on
    * degraded input. The roles that DID return are in `rolesReturned`;
@@ -484,6 +494,28 @@ export function buildSynthesizerInitialMessage(ctx: SynthesizerInitialMessageCtx
   if (ctx.stackBlock && ctx.stackBlock.length > 0) {
     lines.push(ctx.stackBlock)
     lines.push("")
+  }
+  if (ctx.dispatchCoverage && ctx.dispatchCoverage.rolesNotInvoked.length > 0) {
+    const invoked = ctx.dispatchCoverage.rolesInvoked.join(", ")
+    const notInvoked = ctx.dispatchCoverage.rolesNotInvoked.join(", ")
+    lines.push(
+      "[DISPATCH COVERAGE]",
+      `Specialists invoked: ${invoked}`,
+      `Specialists intentionally not invoked (routing rules or dispatcher judged not applicable): ${notInvoked}`,
+    )
+    if (ctx.dispatchCoverage.reasoning && ctx.dispatchCoverage.reasoning.length > 0) {
+      lines.push(`Dispatcher reasoning: ${ctx.dispatchCoverage.reasoning}`)
+    }
+    lines.push(
+      "",
+      "Constraints:",
+      "- Treat not-invoked roles as intentionally not applicable to this diff, not as missing, failed, or unavailable.",
+      "- Do NOT fabricate findings that would require a not-invoked specialist's domain unless an invoked specialist explicitly surfaced that finding.",
+      "- Do NOT add no-issues stubs for not-invoked roles.",
+      "- Add one concise sentence to `summary` (the posted review body) naming the not-invoked roles and saying they were judged not applicable.",
+      "- Do NOT reduce `confidence` solely because a role was not invoked.",
+      "",
+    )
   }
   // ARC-277: degraded-coverage block before [DIFF] so synth sees the
   // gap context up front and applies the constraints (no fabricating

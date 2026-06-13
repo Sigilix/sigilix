@@ -217,10 +217,48 @@ export interface MaybeEnqueuePushIndexJobArgs {
   ref: string | undefined
   /** `payload.after` — tip commit SHA. `"000…"` indicates branch delete. */
   after: string | undefined
+  /** `payload.before` — previous tip commit SHA for incremental safety. */
+  before?: string | undefined
+  changedPaths?: PushChangedPaths | undefined
 }
 
 const ZERO_SHA = "0000000000000000000000000000000000000000"
 const BRANCH_REF_PREFIX = "refs/heads/"
+const MAX_INCREMENTAL_PUSH_PATHS = 200
+
+export interface PushChangedPaths {
+  upsert: string[]
+  remove: string[]
+}
+
+export function collectPushChangedPaths(
+  commits: ReadonlyArray<{ added?: string[]; modified?: string[]; removed?: string[] }> | undefined,
+  totalCommitCount?: number | undefined,
+): PushChangedPaths | undefined {
+  if (!Array.isArray(commits) || commits.length === 0) return undefined
+  if (typeof totalCommitCount === "number" && totalCommitCount > commits.length) return undefined
+  if (totalCommitCount === undefined && commits.length >= 20) return undefined
+  const upsert = new Set<string>()
+  const remove = new Set<string>()
+  for (const commit of commits) {
+    for (const path of cleanPaths(commit.removed)) {
+      upsert.delete(path)
+      remove.add(path)
+    }
+    for (const path of [...cleanPaths(commit.added), ...cleanPaths(commit.modified)]) {
+      remove.delete(path)
+      upsert.add(path)
+    }
+    if (upsert.size + remove.size > MAX_INCREMENTAL_PUSH_PATHS) return undefined
+  }
+  if (upsert.size + remove.size === 0) return undefined
+  return { upsert: [...upsert].sort(), remove: [...remove].sort() }
+}
+
+function cleanPaths(paths: string[] | undefined): string[] {
+  if (!Array.isArray(paths)) return []
+  return paths.filter((path) => typeof path === "string" && path.length > 0 && !path.includes("\0"))
+}
 
 /**
  * ARC-237 / SIG-35: producer for the push-driven re-index. Called from
@@ -452,6 +490,8 @@ export async function maybeEnqueuePushIndexJob(args: MaybeEnqueuePushIndexJobArg
       installationId: number
       reason: "push"
       branch?: string
+      before?: string
+      changedPaths?: PushChangedPaths
     } = {
       type: "index-repo",
       owner,
@@ -469,6 +509,12 @@ export async function maybeEnqueuePushIndexJob(args: MaybeEnqueuePushIndexJobArg
       message.githubRepoId = effectiveRepoId
     }
     if (branchToIndex) message.branch = branchToIndex
+    if (typeof args.before === "string" && args.before.length > 0) {
+      message.before = args.before
+    }
+    if (args.changedPaths !== undefined) {
+      message.changedPaths = args.changedPaths
+    }
     await env.OPENCLAW_JOBS.send(message)
     console.log(
       JSON.stringify({

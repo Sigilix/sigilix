@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 20,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20",
+  "collectedAt": "2026-06-13T03:27:31.926Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178838,
+        "path": "src/api/membership-cache.ts",
+        "line": 14,
+        "excerpt": "**Cache key collision from concatenating org and user IDs without a separator**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3407178838",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393527387,
+        "path": "src/api/membership-cache.ts",
+        "line": 7,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393527387"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3393527395,
+        "path": "src/api/membership-cache.ts",
+        "line": 12,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/20#discussion_r3393527395"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c2"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "membership cache key collision — orgId+userId no delimiter (T4; Sigilix CAUGHT it now, missed last run)"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "c1"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "enhancement: dedupe in-flight requests"
+    }
+  ]
+}

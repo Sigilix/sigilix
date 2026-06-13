@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 19,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19",
+  "collectedAt": "2026-06-13T03:27:30.458Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178616,
+        "path": "src/components/Dashboard.tsx",
+        "line": 26,
+        "excerpt": "**Object literal in useEffect dependency array triggers fetch on every render**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3407178616",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3407178619,
+        "path": "src/components/Dashboard.tsx",
+        "line": 26,
+        "excerpt": "**`useEffect` dependency on `fetchOptions` causes the effect to re-run on every render**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3407178619",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393515120,
+        "path": "src/components/Dashboard.tsx",
+        "line": 26,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/19#discussion_r3393515120"
+      }
+    ],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "s2",
+        "c1"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "inline fetchOptions object → effect refires every render (Sigilix posted a near-dup s1/s2)"
+    }
+  ]
+}

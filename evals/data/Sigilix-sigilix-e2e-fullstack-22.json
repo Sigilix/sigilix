@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 22,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/22",
+  "collectedAt": "2026-06-13T03:27:34.713Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178720,
+        "path": "web/InvoiceFooter.tsx",
+        "line": 15,
+        "excerpt": "**sumCents can produce NaN if any invoice.amountCents is NaN**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/22#discussion_r3407178720",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [],
+    "greptile": []
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "speculative: sumCents NaN on typed integer cents (glue-trap: tests over-fire GONE, replaced by this)"
+    }
+  ]
+}

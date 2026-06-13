@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 18,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18",
+  "collectedAt": "2026-06-13T03:27:29.088Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407179070,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "**`useEffect` has an empty dependency array but reads `userId` from props — stale closure fetches the wrong user**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3407179070",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3407179072,
+        "path": "src/components/UserDetail.tsx",
+        "line": 34,
+        "excerpt": "**Stored XSS: `user.name` and `user.bio` rendered unsanitized into the DOM**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3407179072",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3407179073,
+        "path": "src/components/UserDetail.tsx",
+        "line": 28,
+        "excerpt": "**Previous user is not cleared when `userId` changes — stale data flash before the new fetch resolves**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3407179073",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3393477072,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393477072"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3393479369,
+        "path": "src/components/UserDetail.tsx",
+        "line": 26,
+        "excerpt": "The effect dependency array is empty, so the fetch only runs once on mount. When `userId` changes — which the JSDoc says happens every time the user clicks the list — the effect never re-runs and the component keeps displaying the first user's data indefinitely.",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393479369"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3393479437,
+        "path": "src/components/UserDetail.tsx",
+        "line": 15,
+        "excerpt": "When `userId` changes the effect re-runs, but `user` is never cleared first. Because `user` is still non-null, the `if (!user) return <p>Loading…</p>` branch is skipped and the previous user's name and bio remain visible during the in-flight request. Adding `setUser(null)` along…",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/18#discussion_r3393479437"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c1",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "useEffect missing userId dep — stale on prop change"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s3",
+        "g2"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "stale UI not cleared on userId change"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s2"
+      ],
+      "outcome": "noise",
+      "category": "security",
+      "note": "HALLUCINATION: \"Stored XSS\" — React auto-escapes {user.name}/{user.bio} (no dangerouslySetInnerHTML)"
+    }
+  ]
+}

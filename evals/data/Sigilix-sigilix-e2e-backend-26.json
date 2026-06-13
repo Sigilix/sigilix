@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 26,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26",
+  "collectedAt": "2026-06-13T03:27:21.119Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "tool": "sigilix",
+        "commentId": 3407178296,
+        "path": "src/routes/search.ts",
+        "line": 60,
+        "excerpt": "**CSV export materializes up to 1000 rows into a single string before sending**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178296",
+        "botCategory": "performance"
+      },
+      {
+        "ref": "s2",
+        "tool": "sigilix",
+        "commentId": 3407178302,
+        "path": "src/routes/search.ts",
+        "line": 63,
+        "excerpt": "**New search and CSV export endpoints ship with no test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178302",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s3",
+        "tool": "sigilix",
+        "commentId": 3407178303,
+        "path": "src/routes/search.ts",
+        "line": 33,
+        "excerpt": "**Unhandled promise rejection: `query()` call has no try/catch or error handler**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178303",
+        "botCategory": "error-handling"
+      },
+      {
+        "ref": "s4",
+        "tool": "sigilix",
+        "commentId": 3407178306,
+        "path": "src/server.ts",
+        "line": 18,
+        "excerpt": "**New route mount in server.ts has no integration test**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178306",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s5",
+        "tool": "sigilix",
+        "commentId": 3407178308,
+        "path": "src/routes/search.ts",
+        "line": 33,
+        "excerpt": "**Search endpoint returns `nextCursor: null` but never computes a real cursor**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178308",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s6",
+        "tool": "sigilix",
+        "commentId": 3407178309,
+        "path": "src/routes/search.ts",
+        "line": 33,
+        "excerpt": "**Search endpoint uses `ILIKE` with leading/trailing wildcards — no index can accelerate this query**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3407178309",
+        "botCategory": "performance"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "tool": "coderabbit",
+        "commentId": 3392414872,
+        "path": "src/routes/search.ts",
+        "line": 33,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392414872"
+      },
+      {
+        "ref": "c2",
+        "tool": "coderabbit",
+        "commentId": 3392414877,
+        "path": "src/routes/search.ts",
+        "line": 54,
+        "excerpt": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392414877"
+      }
+    ],
+    "greptile": [
+      {
+        "ref": "g1",
+        "tool": "greptile",
+        "commentId": 3392417179,
+        "path": "src/routes/search.ts",
+        "line": 32,
+        "excerpt": "**SQL injection via string-interpolated `q`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392417179"
+      },
+      {
+        "ref": "g2",
+        "tool": "greptile",
+        "commentId": 3392417224,
+        "path": "src/routes/search.ts",
+        "line": 54,
+        "excerpt": "**CSV export only filters by `name`, not `email`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392417224"
+      },
+      {
+        "ref": "g3",
+        "tool": "greptile",
+        "commentId": 3392417290,
+        "path": "src/routes/search.ts",
+        "line": 39,
+        "excerpt": "**RFC 4180: carriage returns are not escaped**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392417290"
+      },
+      {
+        "ref": "g4",
+        "tool": "greptile",
+        "commentId": 3392417343,
+        "path": "src/routes/search.ts",
+        "line": 63,
+        "excerpt": "**CSV uses `\\n` line endings instead of `\\r\\n`**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/26#discussion_r3392417343"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "c1",
+        "g1"
+      ],
+      "outcome": "real_bug",
+      "category": "security",
+      "note": "SQLi via interpolated `q` — Sigilix flagged it only in the summary, NOT inline"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s5"
+      ],
+      "outcome": "real_bug",
+      "category": "logic",
+      "note": "search `nextCursor` always null — pagination never advances"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s6"
+      ],
+      "outcome": "real_bug",
+      "category": "perf",
+      "note": "`ILIKE` leading wildcard — non-indexable"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s1"
+      ],
+      "outcome": "noise",
+      "category": "perf",
+      "note": "CSV buffers ≤1000 rows — minor"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "s3"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "unhandled promise rejection — pervasive repo pattern"
+    },
+    {
+      "id": 6,
+      "findings": [
+        "s2",
+        "s4"
+      ],
+      "outcome": "noise",
+      "category": "tests",
+      "note": "over-fire: \"no test coverage\""
+    },
+    {
+      "id": 7,
+      "findings": [
+        "c2",
+        "g2"
+      ],
+      "outcome": "noise",
+      "category": "logic",
+      "note": "CSV name-only filter — minor/debatable"
+    },
+    {
+      "id": 8,
+      "findings": [
+        "g3"
+      ],
+      "outcome": "noise",
+      "category": "style",
+      "note": "RFC4180 CR — pedantic"
+    },
+    {
+      "id": 9,
+      "findings": [
+        "g4"
+      ],
+      "outcome": "noise",
+      "category": "style",
+      "note": "RFC4180 `\\n` — pedantic"
+    }
+  ]
+}

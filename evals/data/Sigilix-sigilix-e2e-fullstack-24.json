@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 24,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/24",
+  "collectedAt": "2026-06-13T03:27:37.317Z",
+  "findings": {
+    "sigilix": [],
+    "coderabbit": [],
+    "greptile": []
+  },
+  "items": []
+}

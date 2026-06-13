@@ -63,7 +63,8 @@ import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/d
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
-import { applyInvariantLens, startInvariantLens } from "./invariant-lens"
+import { startInvariantLens } from "./invariant-lens"
+import { invariantLensResultForSynth, scheduleInvariantLensForSynth } from "./invariant-lens-scheduler"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
@@ -817,21 +818,20 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded,
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
-  const resweepForSynth = resweepResultForSynth(resweep)
-  // SIG-395: lens merge/telemetry — after re-sweep; shadow uses pass-1.
-  const lensApplied = await applyInvariantLens({
+  const scheduledLens = await scheduleInvariantLensForSynth({
     lens: invariantLens,
-    succeeded: resweepForSynth.verdicts,
+    recallContract: ensembleConfig.flags.invariantLensRecallContract,
+    succeeded: resweepResultForSynth(resweep).verdicts,
     owner,
     repo,
     prNumber,
     headSha,
     diff,
+    ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
+  const lensApplied = invariantLensResultForSynth(scheduledLens)
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
-
   const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)
-
   // SIG-318 (PR 12c): the SYNTHESIZE phase (synth-bypass / synth + retry ladder
   // + telemetry + parse-fail bail + summary) moved to ensemble/app/synthesize.
   // It mutates `telemetry` + `shadowState` by reference; on any of its three
@@ -863,7 +863,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
-    leverOrigins: buildLeverOrigins(resweepForSynth.resweepFindingIds, lensApplied.lensFindingIds),
+    leverOrigins: buildLeverOrigins(resweepResultForSynth(resweep).resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }

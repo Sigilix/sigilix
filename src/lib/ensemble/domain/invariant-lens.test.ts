@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   countAddedLines,
   decideInvariantDispatch,
+  parseInvariantLensRecallContract,
   parseInvariantLensMode,
 } from "@/src/lib/ensemble/domain/invariant-lens"
 import { INVARIANT_FAMILIES, buildInvariantFamilyPrompt } from "@/src/prompts/specialists/invariant-lens"
@@ -20,6 +21,16 @@ describe("parseInvariantLensMode", () => {
     expect(parseInvariantLensMode("bogus")).toBe("off")
     expect(parseInvariantLensMode(" Shadow ")).toBe("shadow")
     expect(parseInvariantLensMode("ON")).toBe("on")
+  })
+})
+
+describe("parseInvariantLensRecallContract", () => {
+  it("defaults to blocking and only accepts the explicit shadow-background contract", () => {
+    expect(parseInvariantLensRecallContract(undefined)).toBe("blocking")
+    expect(parseInvariantLensRecallContract("")).toBe("blocking")
+    expect(parseInvariantLensRecallContract(" Shadow-Background ")).toBe("shadow-background")
+    expect(parseInvariantLensRecallContract("detached")).toBe("blocking")
+    expect(parseInvariantLensRecallContract("background")).toBe("blocking")
   })
 })
 

@@ -11,7 +11,7 @@
 // flags + tunables follow, after which the single parse call hoists to the edge.
 
 import { parseResweepMode } from "./domain/resweep"
-import { parseInvariantLensMode } from "./domain/invariant-lens"
+import { parseInvariantLensMode, parseInvariantLensRecallContract } from "./domain/invariant-lens"
 import { parseSecurityValidatorMode } from "./domain/gates/validate-security-finding"
 import { parseTestsValidatorMode } from "./domain/gates/validate-test-finding"
 import { parseLogicValidatorMode } from "./domain/gates/validate-logic-finding"
@@ -93,6 +93,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_RESWEEP_MODE?: string | undefined
   OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
   OPENCLAW_INVARIANT_LENS_MODE?: string | undefined
+  OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT?: string | undefined
   OPENCLAW_WEAK_RANDOM_SCAN?: string | undefined
   OPENCLAW_OPEN_REDIRECT_SCAN?: string | undefined
   OPENCLAW_SSRF_SCAN?: string | undefined
@@ -234,6 +235,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),
+      invariantLensRecallContract: parseInvariantLensRecallContract(env.OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT),
     },
     tunables: {
       maxRetrieveCallsPerPr: parseIntEnv(

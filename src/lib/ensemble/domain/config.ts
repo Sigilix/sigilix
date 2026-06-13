@@ -30,7 +30,7 @@ import type { TrustLedgerMode } from "./gates/trust-ledger-thread"
 import type { ClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import type { PrecisionMode } from "@/src/features/precision-profile"
 import type { ResweepMode } from "./resweep"
-import type { InvariantLensMode } from "./invariant-lens"
+import type { InvariantLensMode, InvariantLensRecallContract } from "./invariant-lens"
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 
@@ -144,6 +144,10 @@ export interface EnsembleFeatureFlags {
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */
   invariantLensMode: InvariantLensMode
+  /** SIG-400: recall contract for the invariant lens. `blocking` is the
+   *  default and the only contract allowed to affect `mode=on`; the
+   *  `shadow-background` opt-in may only detach telemetry-only shadow runs. */
+  invariantLensRecallContract: InvariantLensRecallContract
 }
 
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed

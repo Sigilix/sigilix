@@ -9,7 +9,7 @@
 // Evidence + design: docs/superpowers/specs/2026-06-11-sig-395-invariant-lens-spec.md
 
 export type InvariantLensMode = "off" | "shadow" | "on"
-export type InvariantLensRecallContract = "blocking" | "shadow-background"
+export type InvariantLensRecallContract = "blocking" | "shadow-background" | "pending-check-amendment"
 
 /** Normalize `OPENCLAW_INVARIANT_LENS_MODE` (default "off"). */
 export function parseInvariantLensMode(raw: string | undefined): InvariantLensMode {
@@ -21,7 +21,41 @@ export function parseInvariantLensMode(raw: string | undefined): InvariantLensMo
  *  Default/fallback is blocking so unknown values cannot detach recall work. */
 export function parseInvariantLensRecallContract(raw: string | undefined): InvariantLensRecallContract {
   const v = (raw ?? "").trim().toLowerCase()
-  return v === "shadow-background" ? v : "blocking"
+  return v === "shadow-background" || v === "pending-check-amendment" ? v : "blocking"
+}
+
+export type InvariantLensExecutionDecision =
+  | { kind: "background"; effectiveRecallContract: "shadow-background" }
+  | {
+      kind: "blocking"
+      effectiveRecallContract: "blocking"
+      refusalReason?: "mode-on-requires-blocking" | "pending-check-amendment-unavailable"
+    }
+
+/**
+ * Decide whether the lens may run outside the synth-critical path. The only
+ * detachable path shipped today is telemetry-only shadow work. Any recall-
+ * affecting contract fails closed until a merge-gated amendment lane owns the
+ * PR's blocking signal through deep-lane completion.
+ */
+export function decideInvariantExecution(args: {
+  mode: InvariantLensMode
+  recallContract: InvariantLensRecallContract
+}): InvariantLensExecutionDecision {
+  if (args.recallContract === "pending-check-amendment") {
+    return {
+      kind: "blocking",
+      effectiveRecallContract: "blocking",
+      refusalReason: "pending-check-amendment-unavailable",
+    }
+  }
+  if (args.recallContract === "shadow-background" && args.mode === "shadow") {
+    return { kind: "background", effectiveRecallContract: "shadow-background" }
+  }
+  if (args.recallContract === "shadow-background" && args.mode === "on") {
+    return { kind: "blocking", effectiveRecallContract: "blocking", refusalReason: "mode-on-requires-blocking" }
+  }
+  return { kind: "blocking", effectiveRecallContract: "blocking" }
 }
 
 /**

@@ -313,6 +313,13 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     expect(c.synthRecovery).toBe("post")
   })
 
+  it("threads the pending-check amendment contract through config without making it detachable", () => {
+    expect(
+      parseEnsembleConfig({ OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT: " Pending-Check-Amendment " }).flags
+        .invariantLensRecallContract,
+    ).toBe("pending-check-amendment")
+  })
+
   it('forwards the raw value un-mangled for the raw / `=== "on"` flags (no edge normalization)', () => {
     // These call sites do their own normalization (`shouldRunSymbolRetrieval`, the
     // inline `(x ?? "").trim().toLowerCase() === "on"`, `=== "on"`), so the edge

@@ -43,6 +43,13 @@ function args(over: Partial<Parameters<typeof scheduleInvariantLensForSynth>[0]>
   }
 }
 
+function loggedEvent(logSpy: ReturnType<typeof vi.spyOn>, event: string): Record<string, unknown> {
+  const parsed = logSpy.mock.calls.map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+  const found = parsed.find((entry) => entry["event"] === event)
+  if (!found) throw new Error(`missing log event ${event}`)
+  return found
+}
+
 beforeEach(() => {
   applyInvariantLensMock.mockReset()
 })
@@ -101,10 +108,35 @@ describe("scheduleInvariantLensForSynth", () => {
       const scheduled = await scheduleInvariantLensForSynth(args({ recallContract: "shadow-background" }))
 
       expect(scheduled).toEqual({ kind: "resolved", result: APPLIED })
-      expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toMatchObject({
+      expect(loggedEvent(logSpy, "invariant-lens-background-refused")).toMatchObject({
         event: "invariant-lens-background-refused",
         mode: "on",
         recallContract: "shadow-background",
+        effectiveRecallContract: "blocking",
+        refusalReason: "mode-on-requires-blocking",
+      })
+      expect(applyInvariantLensMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executionLane: "default", recallContract: "blocking" }),
+      )
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it("pending-check amendment contract refuses to detach until the merge-gated follow-up lane exists", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    applyInvariantLensMock.mockResolvedValueOnce(APPLIED)
+
+    try {
+      const scheduled = await scheduleInvariantLensForSynth(args({ recallContract: "pending-check-amendment" }))
+
+      expect(scheduled).toEqual({ kind: "resolved", result: APPLIED })
+      expect(loggedEvent(logSpy, "invariant-lens-background-refused")).toMatchObject({
+        event: "invariant-lens-background-refused",
+        mode: "on",
+        recallContract: "pending-check-amendment",
+        effectiveRecallContract: "blocking",
+        refusalReason: "pending-check-amendment-unavailable",
       })
       expect(applyInvariantLensMock).toHaveBeenCalledWith(
         expect.objectContaining({ executionLane: "default", recallContract: "blocking" }),

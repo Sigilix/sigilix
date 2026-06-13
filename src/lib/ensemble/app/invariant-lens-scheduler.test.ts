@@ -4,6 +4,7 @@ import {
   invariantLensResultForSynth,
   scheduleInvariantLensForSynth,
 } from "@/src/lib/ensemble/app/invariant-lens-scheduler"
+import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import type { InvariantLensHandle } from "@/src/lib/ensemble/app/invariant-lens"
 import type { CollectedVerdict } from "@/src/lib/ensemble/domain/validation"
 
@@ -133,6 +134,38 @@ describe("scheduleInvariantLensForSynth", () => {
       expect(scheduled).toEqual({ kind: "resolved", result: APPLIED })
       expect(loggedEvent(logSpy, "invariant-lens-background-refused")).toMatchObject({
         event: "invariant-lens-background-refused",
+        mode: "on",
+        recallContract: "pending-check-amendment",
+        effectiveRecallContract: "blocking",
+        refusalReason: "pending-check-amendment-unavailable",
+      })
+      expect(applyInvariantLensMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executionLane: "default", recallContract: "blocking" }),
+      )
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it("parser-to-config-to-scheduler keeps pending-check amendments blocking", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    const config = parseEnsembleConfig({
+      OPENCLAW_INVARIANT_LENS_MODE: "on",
+      OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT: " Pending-Check-Amendment ",
+    })
+    applyInvariantLensMock.mockResolvedValueOnce(APPLIED)
+
+    try {
+      const scheduled = await scheduleInvariantLensForSynth(
+        args({
+          lens: lens(config.flags.invariantLensMode),
+          recallContract: config.flags.invariantLensRecallContract,
+        }),
+      )
+
+      expect(config.flags.invariantLensRecallContract).toBe("pending-check-amendment")
+      expect(scheduled).toEqual({ kind: "resolved", result: APPLIED })
+      expect(loggedEvent(logSpy, "invariant-lens-background-refused")).toMatchObject({
         mode: "on",
         recallContract: "pending-check-amendment",
         effectiveRecallContract: "blocking",

@@ -393,6 +393,7 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     // `shadow` — counts/telemeters the would-drop until the operator flips
     // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
     logicClaimRefutationMode: ensembleConfig.validatorModes.logicClaimRefutationMode,
+    logicClaimRefutationEnforceReasons: ensembleConfig.validatorModes.logicClaimRefutationEnforceReasons,
     onLogicClaimRefutationFindingDropped: (finding, info) => {
       console.log(
         JSON.stringify({

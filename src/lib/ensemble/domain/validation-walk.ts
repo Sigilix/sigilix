@@ -491,11 +491,17 @@ function applyHardDropGates(
       astCache: args.astCache,
     })
     if (!claimDecision.keep) {
-      const dropped = args.logicClaimRefutationMode === "enforce"
+      // SIG-392 reason-scoped enforce: an undefined allowlist enforces every
+      // refuted shape (legacy); a Set enforces ONLY its reasons, the rest stay
+      // shadow. Lets balance-sign enforce while the other shapes soak.
+      const reasonEnforced =
+        args.logicClaimRefutationEnforceReasons === undefined ||
+        args.logicClaimRefutationEnforceReasons.has(claimDecision.reason)
+      const dropped = args.logicClaimRefutationMode === "enforce" && reasonEnforced
       state.droppedForFailedLogicClaimRefutation++
       args.onLogicClaimRefutationFindingDropped?.(f, { reason: claimDecision.reason, dropped })
       if (dropped) return { kind: "continue" }
-      // shadow mode: fall through and keep the finding.
+      // shadow mode (or reason not in the enforce allowlist): keep the finding.
     }
   }
 

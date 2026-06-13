@@ -17,7 +17,10 @@ import { parseTestsValidatorMode } from "./domain/gates/validate-test-finding"
 import { parseLogicValidatorMode } from "./domain/gates/validate-logic-finding"
 import { parseLogicRefutationMode } from "./domain/gates/validate-logic-refutation"
 import { parseRefutationSurvivalMode } from "./domain/gates/validate-refutation-survival"
-import { parseLogicClaimRefutationMode } from "./domain/gates/validate-logic-claim-refutation"
+import {
+  parseLogicClaimRefutationMode,
+  parseLogicClaimRefutationEnforceReasons,
+} from "./domain/gates/validate-logic-claim-refutation"
 import { parsePerfValidatorMode } from "./domain/gates/validate-perf-finding"
 import { parseInlineGroundingValidatorMode } from "./domain/gates/validate-inline-grounding"
 import { parseAbsenceClaimValidatorMode } from "./domain/gates/validate-absence-grounding"
@@ -66,6 +69,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_LOGIC_REFUTATION_MODE?: string | undefined
   OPENCLAW_REFUTATION_SURVIVAL_MODE?: string | undefined
   OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string | undefined
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS?: string | undefined
   OPENCLAW_PERF_VALIDATOR_MODE?: string | undefined
   OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string | undefined
@@ -138,6 +142,9 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
       refutationSurvivalMode: parseRefutationSurvivalMode(env.OPENCLAW_REFUTATION_SURVIVAL_MODE),
       logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      logicClaimRefutationEnforceReasons: parseLogicClaimRefutationEnforceReasons(
+        env.OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS,
+      ),
       perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),

@@ -454,6 +454,12 @@ export type ValidateForSubmissionArgs = {
    * needs `fullFileByPath` for the AST proof. Fails open. Ships dark.
    */
   logicClaimRefutationMode?: LogicClaimRefutationMode
+  /**
+   * SIG-392: reason-scoped enforce allowlist. `undefined` ⇒ `enforce` drops
+   * every refuted shape (legacy). A Set ⇒ in `enforce` ONLY these reasons drop;
+   * the rest stay shadow. Read from `OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS`.
+   */
+  logicClaimRefutationEnforceReasons?: ReadonlySet<LogicClaimDropReason> | undefined
   /** SIG-328: telemetry callback per logic finding the claim gate flagged. */
   onLogicClaimRefutationFindingDropped?: (
     finding: PrReviewFinding,
@@ -710,6 +716,7 @@ export interface ResolvedValidationArgs {
   onLogicRefutationFindingDropped: ValidateForSubmissionArgs["onLogicRefutationFindingDropped"]
   onRefutationSurvivalFindingDropped: ValidateForSubmissionArgs["onRefutationSurvivalFindingDropped"]
   logicClaimRefutationMode: LogicClaimRefutationMode
+  logicClaimRefutationEnforceReasons: ReadonlySet<LogicClaimDropReason> | undefined
   onLogicClaimRefutationFindingDropped: ValidateForSubmissionArgs["onLogicClaimRefutationFindingDropped"]
   perfEvidence: PerfEvidence | undefined
   perfValidatorMode: PerfValidatorMode

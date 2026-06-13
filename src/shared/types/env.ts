@@ -463,6 +463,10 @@ export interface Env {
   // telemetry) | enforce (drop a supported logic claim shape that is PROVABLY
   // false against the cited AST). Fails open; ships dark ("shadow").
   OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string
+  // SIG-392: reason-scoped enforce allowlist (comma list of LogicClaimDropReason).
+  // UNSET → `enforce` drops EVERY shape (legacy). SET → in `enforce` ONLY the
+  // listed reasons drop; the rest stay shadow. Lets balance-sign enforce alone.
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS?: string
 
   // SIG-325: generalized refutation-survival gate mode. "off" (default in code;
   // "shadow" in wrangler) extends the SIG-308 refute-first discipline to

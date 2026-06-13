@@ -187,6 +187,24 @@ beforeEach(() => {
 })
 
 describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
+  it("SKIPS automatic review routing when the PR body has @sigilix ignore", async () => {
+    const { env, sentJobs } = makeEnv()
+    const worker = (await import("@/src/index")).default
+    const payload = synchronizePayload()
+    payload.pull_request = {
+      ...(payload.pull_request as Record<string, unknown>),
+      body: "@sigilix ignore",
+    }
+
+    const res = await postSynchronizeWebhook(worker, env, payload)
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe("skip pr action\n")
+    expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
+    expect(mockLoadSigilixConfig).not.toHaveBeenCalled()
+    expect(sentJobs).toHaveLength(0)
+  })
+
   it("SKIPS enqueuePrReviewJob + pr-stale-mark when the diff hash matches the prior reviewed hash", async () => {
     // Manifest path enabled + a valid manifest stashed in KV — this is
     // the setup where pr-stale-mark WOULD normally fire on a

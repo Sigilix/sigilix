@@ -3,7 +3,12 @@
 // cross-tier field-name drift), and that both are phrased FP-safe (grounded).
 
 import { describe, expect, it } from "vitest"
-import { SPECIALIST_PROMPTS, LOGIC_RECALL_SUFFIX, specialistSystemPrompt } from "@/src/prompts/pr-review-specialists"
+import {
+  SPECIALIST_PROMPTS,
+  LOGIC_RECALL_SUFFIX,
+  SECURITY_RECALL_SUFFIX,
+  specialistSystemPrompt,
+} from "@/src/prompts/pr-review-specialists"
 
 describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => {
   const logic = SPECIALIST_PROMPTS.logic
@@ -62,26 +67,37 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
   })
 })
 
-describe("specialistSystemPrompt — SIG-392 recall-mode flag", () => {
-  it("default (recallOn=false) returns the base prompt unchanged for every role", () => {
+describe("specialistSystemPrompt — SIG-392 per-role recall directive", () => {
+  it("empty recall set returns the base prompt unchanged for every role", () => {
     for (const role of ["logic", "security", "performance", "tests"] as const) {
-      expect(specialistSystemPrompt(role, false)).toBe(SPECIALIST_PROMPTS[role])
+      expect(specialistSystemPrompt(role, new Set())).toBe(SPECIALIST_PROMPTS[role])
     }
   })
 
-  it("recallOn=true appends EXACTLY the recall directive to the LOGIC prompt", () => {
-    const logic = specialistSystemPrompt("logic", true)
-    // exact pin: base prompt + "\n" + the suffix, nothing more (a changed joiner
-    // or a duplicated/edited suffix fails here).
+  it("logic in the set appends EXACTLY the logic recall directive", () => {
+    const logic = specialistSystemPrompt("logic", new Set(["logic"]))
+    // exact pin: base prompt + "\n" + the suffix, nothing more.
     expect(logic).toBe(`${SPECIALIST_PROMPTS.logic}\n${LOGIC_RECALL_SUFFIX}`)
     expect(logic).toContain("RECALL DIRECTIVE")
     expect(logic).toContain("do NOT self-censor or stop early")
   })
 
-  it("recallOn=true does NOT alter the non-logic roles", () => {
-    for (const role of ["security", "performance", "tests"] as const) {
-      expect(specialistSystemPrompt(role, true)).toBe(SPECIALIST_PROMPTS[role])
-      expect(specialistSystemPrompt(role, true)).not.toContain("RECALL DIRECTIVE")
+  it("security in the set appends EXACTLY the security recall directive", () => {
+    const security = specialistSystemPrompt("security", new Set(["security"]))
+    expect(security).toBe(`${SPECIALIST_PROMPTS.security}\n${SECURITY_RECALL_SUFFIX}`)
+    expect(security).toContain("RECALL DIRECTIVE (security)")
+    expect(security).toContain("collection-scope IDOR / missing ROW-LEVEL tenant scoping")
+  })
+
+  it("a role in the set is independent — enabling logic does NOT alter security and vice versa", () => {
+    expect(specialistSystemPrompt("security", new Set(["logic"]))).toBe(SPECIALIST_PROMPTS.security)
+    expect(specialistSystemPrompt("logic", new Set(["security"]))).toBe(SPECIALIST_PROMPTS.logic)
+  })
+
+  it("roles without a recall suffix (performance, tests) are unchanged even when in the set", () => {
+    for (const role of ["performance", "tests"] as const) {
+      expect(specialistSystemPrompt(role, new Set([role]))).toBe(SPECIALIST_PROMPTS[role])
+      expect(specialistSystemPrompt(role, new Set([role]))).not.toContain("RECALL DIRECTIVE")
     }
   })
 })

@@ -144,9 +144,10 @@ export interface EnsembleFeatureFlags {
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */
   invariantLensMode: InvariantLensMode
-  /** SIG-400: recall contract for the invariant lens. `blocking` is the
-   *  default and the only contract allowed to affect `mode=on`; the
-   *  `shadow-background` opt-in may only detach telemetry-only shadow runs. */
+  /** SIG-400/SIG-401: recall contract for the invariant lens. `blocking`
+   *  is the default; `shadow-background` may only detach telemetry-only shadow
+   *  runs. `pending-check-amendment` is parsed but fails closed until a
+   *  merge-gated follow-up lane owns check completion. */
   invariantLensRecallContract: InvariantLensRecallContract
 }
 

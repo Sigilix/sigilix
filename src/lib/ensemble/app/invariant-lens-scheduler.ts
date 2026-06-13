@@ -1,5 +1,5 @@
 import { applyInvariantLens, type InvariantLensApplyResult, type InvariantLensHandle } from "./invariant-lens"
-import type { InvariantLensRecallContract } from "@/src/lib/ensemble/domain/invariant-lens"
+import { decideInvariantExecution, type InvariantLensRecallContract } from "@/src/lib/ensemble/domain/invariant-lens"
 import type { CollectedVerdict } from "@/src/lib/ensemble/domain/validation"
 
 type BackgroundWaitUntil = (promise: Promise<void>) => void
@@ -24,8 +24,9 @@ export async function scheduleInvariantLensForSynth(args: {
   backgroundWaitUntil?: BackgroundWaitUntil
 }): Promise<ScheduledInvariantLensResult> {
   const passthrough: InvariantLensApplyResult = { verdicts: args.succeeded, lensFindingIds: [] }
-  if (args.recallContract !== "shadow-background" || args.lens.mode !== "shadow") {
-    if (args.recallContract === "shadow-background" && args.lens.mode === "on") {
+  const decision = decideInvariantExecution({ mode: args.lens.mode, recallContract: args.recallContract })
+  if (decision.kind === "blocking") {
+    if (decision.refusalReason !== undefined) {
       console.log(
         JSON.stringify({
           event: "invariant-lens-background-refused",
@@ -35,13 +36,18 @@ export async function scheduleInvariantLensForSynth(args: {
           headSha: args.headSha.slice(0, 7),
           mode: args.lens.mode,
           recallContract: args.recallContract,
-          effectiveRecallContract: "blocking",
+          effectiveRecallContract: decision.effectiveRecallContract,
+          refusalReason: decision.refusalReason,
         }),
       )
     }
     return {
       kind: "resolved",
-      result: await applyInvariantLens({ ...args, executionLane: "default", recallContract: "blocking" }),
+      result: await applyInvariantLens({
+        ...args,
+        executionLane: "default",
+        recallContract: decision.effectiveRecallContract,
+      }),
     }
   }
 

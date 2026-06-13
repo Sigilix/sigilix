@@ -9,11 +9,19 @@
 // Evidence + design: docs/superpowers/specs/2026-06-11-sig-395-invariant-lens-spec.md
 
 export type InvariantLensMode = "off" | "shadow" | "on"
+export type InvariantLensRecallContract = "blocking" | "shadow-background"
 
 /** Normalize `OPENCLAW_INVARIANT_LENS_MODE` (default "off"). */
 export function parseInvariantLensMode(raw: string | undefined): InvariantLensMode {
   const v = (raw ?? "").trim().toLowerCase()
   return v === "shadow" || v === "on" ? v : "off"
+}
+
+/** Normalize `OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT`.
+ *  Default/fallback is blocking so unknown values cannot detach recall work. */
+export function parseInvariantLensRecallContract(raw: string | undefined): InvariantLensRecallContract {
+  const v = (raw ?? "").trim().toLowerCase()
+  return v === "shadow-background" ? v : "blocking"
 }
 
 /**

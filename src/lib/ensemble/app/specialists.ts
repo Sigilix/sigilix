@@ -63,7 +63,8 @@ import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/d
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
-import { applyInvariantLens, startInvariantLens } from "./invariant-lens"
+import { startInvariantLens } from "./invariant-lens"
+import { invariantLensResultForSynth, scheduleInvariantLensForSynth } from "./invariant-lens-scheduler"
 import { applyRecallFloors } from "./recall-floors"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 
@@ -818,16 +819,18 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
   const resweepForSynth = resweepResultForSynth(resweep)
-  // SIG-395: lens merge/telemetry — after re-sweep; shadow uses pass-1.
-  const lensApplied = await applyInvariantLens({
+  const scheduledLens = await scheduleInvariantLensForSynth({
     lens: invariantLens,
+    recallContract: ensembleConfig.flags.invariantLensRecallContract,
     succeeded: resweepForSynth.verdicts,
     owner,
     repo,
     prNumber,
     headSha,
     diff,
+    ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
+  const lensApplied = invariantLensResultForSynth(scheduledLens)
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
 
   const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)

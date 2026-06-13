@@ -104,7 +104,6 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
   const newIds = idsFromByPath(idsByPath)
   const activeBeforeDelete = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeBeforeDelete, args.runId)) {
-    await bestEffortDeleteNewIds(args.env, newIds)
     console.warn(
       JSON.stringify({
         event: "index-incremental-skip-superseded-delete",
@@ -137,9 +136,6 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
 
   const idsToKeep = new Set(newIds)
   const idsToDelete = idsToReplace.filter((id) => !idsToKeep.has(id))
-  await deleteVectorIds(args.env, idsToDelete)
-  await deleteLexicalRows(args.env, idsToDelete)
-
   const vectorsResult = await writeIncrementalVectorIds({
     env: args.env,
     owner: args.owner,
@@ -150,6 +146,23 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     pathsToDelete,
     idsByPath,
   })
+  if (!vectorsResult.proceed) {
+    return true
+  }
+  const activeBeforeManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeBeforeManifest, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-skip-superseded-manifest",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeBeforeManifest,
+      }),
+    )
+    return true
+  }
 
   await persistManifest({
     env: args.env,
@@ -168,6 +181,37 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     shardCount: 1,
     chunkerVersion: args.chunkerVersion,
   })
+  const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeAfterManifest, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-manifest-superseded-after-write",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeAfterManifest,
+      }),
+    )
+    throw new Error(`repo-index-manifest superseded after incremental write for ${args.target.stateRepo}`)
+  }
+  const oldIdsToDelete = await unreferencedOldIds(args.env, args.owner, args.target.stateRepo, idsToDelete)
+  const activeBeforeOldCleanup = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
+  if (!shouldFinalize(activeBeforeOldCleanup, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-old-id-cleanup-superseded",
+        owner: args.owner,
+        repo: args.repo,
+        branch: args.target.isDefault ? null : args.target.branch,
+        run_id: args.runId,
+        active_run_id: activeBeforeOldCleanup,
+        cleanup_ids: oldIdsToDelete.length,
+      }),
+    )
+    throw new Error(`repo-index old-id cleanup superseded after incremental write for ${args.target.stateRepo}`)
+  }
+  await bestEffortDeleteOldIds(args.env, oldIdsToDelete)
 
   console.log(
     JSON.stringify({
@@ -179,7 +223,7 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
       changed_upsert_paths: changed.upsert.length,
       changed_remove_paths: changed.remove.length,
       embedded_files: filesToProcess.length,
-      deleted_vector_ids: idsToDelete.length,
+      deleted_vector_ids: oldIdsToDelete.length,
     }),
   )
   return true
@@ -274,7 +318,9 @@ interface WriteIncrementalVectorIdsArgs {
   idsByPath: Record<string, string[]>
 }
 
-async function writeIncrementalVectorIds(args: WriteIncrementalVectorIdsArgs): Promise<{ chunkCount: number }> {
+async function writeIncrementalVectorIds(
+  args: WriteIncrementalVectorIdsArgs,
+): Promise<{ proceed: true; chunkCount: number } | { proceed: false }> {
   const byPath: Record<string, string[]> = {}
   for (const [path, ids] of Object.entries(args.existing.byPath)) {
     byPath[path] = [...ids]
@@ -297,9 +343,23 @@ async function writeIncrementalVectorIds(args: WriteIncrementalVectorIdsArgs): P
   const repoId = effectiveGithubRepoId(args.githubRepoId, args.existing.githubRepoId)
   if (repoId !== undefined) vectors.githubRepoId = repoId
 
+  const activeRunId = await readActiveRunId(args.env, args.owner, args.stateRepo)
+  if (!shouldFinalize(activeRunId, args.runId)) {
+    console.warn(
+      JSON.stringify({
+        event: "repo-index-vectors-incremental-stale-skip",
+        owner: args.owner,
+        repo: args.stateRepo,
+        run_id: args.runId,
+        active_run_id: activeRunId,
+      }),
+    )
+    return { proceed: false }
+  }
+
   const ok = await writeRepoIndexVectors(args.env, vectors)
   if (!ok) throw new Error(`repo-index-vectors incremental write failed for ${args.stateRepo}`)
-  return { chunkCount: idsFromByPath(byPath).length }
+  return { proceed: true, chunkCount: idsFromByPath(byPath).length }
 }
 
 function effectiveGithubRepoId(incoming: number | undefined, existing: number | undefined): number | undefined {
@@ -309,27 +369,88 @@ function effectiveGithubRepoId(incoming: number | undefined, existing: number | 
 }
 
 async function deleteVectorIds(env: Env, ids: readonly string[]): Promise<void> {
+  const batches: string[][] = []
   for (let i = 0; i < ids.length; i += VECTORIZE_DELETE_BATCH) {
-    await env.OPENCLAW_CODE_INDEX.deleteByIds(ids.slice(i, i + VECTORIZE_DELETE_BATCH))
+    batches.push(ids.slice(i, i + VECTORIZE_DELETE_BATCH))
   }
+  const results = await Promise.allSettled(batches.map((batch) => env.OPENCLAW_CODE_INDEX.deleteByIds(batch)))
+  const rejected = results.filter((result) => result.status === "rejected")
+  if (rejected.length > 0) throw new Error(`${rejected.length} vector delete batches failed`)
 }
 
-async function deleteLexicalRows(env: Env, ids: readonly string[]): Promise<void> {
-  if (env.OPENCLAW_LEXICAL_INDEX == null) return
+async function deleteLexicalRows(
+  env: Env,
+  ids: readonly string[],
+  reason: "new-id-cleanup" | "old-id-cleanup",
+): Promise<void> {
+  if (env.OPENCLAW_LEXICAL_INDEX == null) {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-lexical-cleanup-skipped",
+        reason,
+        count: ids.length,
+      }),
+    )
+    return
+  }
   await deleteLexicalIds(env.OPENCLAW_LEXICAL_INDEX, ids)
 }
 
 async function bestEffortDeleteNewIds(env: Env, ids: readonly string[]): Promise<void> {
-  if (ids.length === 0) return
-  try {
-    await deleteVectorIds(env, ids)
-    await deleteLexicalRows(env, ids)
-  } catch (err) {
+  await bestEffortDeleteIds(env, ids, "index-incremental-new-id-cleanup-failed", "new-id-cleanup")
+}
+
+async function bestEffortDeleteOldIds(env: Env, ids: readonly string[]): Promise<void> {
+  await bestEffortDeleteIds(env, ids, "index-incremental-old-id-cleanup-failed", "old-id-cleanup")
+}
+
+async function unreferencedOldIds(
+  env: Env,
+  owner: string,
+  stateRepo: string,
+  ids: readonly string[],
+): Promise<string[]> {
+  if (ids.length === 0) return []
+  const current = await readRepoIndexVectors(env, owner, stateRepo)
+  if (current.kind !== "ok") {
     console.warn(
       JSON.stringify({
-        event: "index-incremental-new-id-cleanup-failed",
+        event: "index-incremental-old-id-cleanup-skipped",
+        owner,
+        repo: stateRepo,
+        reason: current.kind,
+      }),
+    )
+    return []
+  }
+  const referenced = new Set(idsFromByPath(current.vectors.byPath))
+  return ids.filter((id) => !referenced.has(id))
+}
+
+async function bestEffortDeleteIds(
+  env: Env,
+  ids: readonly string[],
+  event: "index-incremental-new-id-cleanup-failed" | "index-incremental-old-id-cleanup-failed",
+  lexicalReason: "new-id-cleanup" | "old-id-cleanup",
+): Promise<void> {
+  if (ids.length === 0) return
+  const errors: string[] = []
+  try {
+    await deleteVectorIds(env, ids)
+  } catch (err) {
+    errors.push(`vector: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  try {
+    await deleteLexicalRows(env, ids, lexicalReason)
+  } catch (err) {
+    errors.push(`lexical: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (errors.length > 0) {
+    console.warn(
+      JSON.stringify({
+        event,
         count: ids.length,
-        err: err instanceof Error ? err.message : String(err),
+        errors,
       }),
     )
   }

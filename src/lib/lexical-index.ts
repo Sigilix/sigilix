@@ -17,6 +17,8 @@
 // cheap no-op-on-failure (a lexical-index outage must never block the
 // Vectorize upsert the GDPR delete ledger depends on).
 
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
+
 // ---------------------------------------------------------------------
 // Flag
 // ---------------------------------------------------------------------
@@ -85,6 +87,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lexical_chunks USING fts5(
   tokenize = 'unicode61'
 )`.trim()
 const D1_BATCH_LIMIT = 100
+const D1_DELETE_BATCH_CONCURRENCY = 4
 
 // Schema bootstrap is idempotent and cheap; we run it lazily once per
 // isolate rather than depending on a migration step that a fresh preview
@@ -178,12 +181,17 @@ export async function deleteLexicalIds(db: D1Database, ids: ReadonlyArray<string
   try {
     await ensureLexicalSchema(db)
     const del = db.prepare("DELETE FROM lexical_chunks WHERE id = ?")
-    let deleted = 0
+    const batches: string[][] = []
     for (let i = 0; i < ids.length; i += D1_BATCH_LIMIT) {
-      const results = await db.batch(ids.slice(i, i + D1_BATCH_LIMIT).map((id) => del.bind(id)))
-      deleted += results.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0)
+      batches.push(ids.slice(i, i + D1_BATCH_LIMIT))
     }
-    return deleted
+    const results = await mapWithConcurrency(batches, D1_DELETE_BATCH_CONCURRENCY, async (batch) => {
+      const batchResults = await db.batch(batch.map((id) => del.bind(id)))
+      return batchResults.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0)
+    })
+    const rejected = results.filter((result) => result.status === "rejected")
+    if (rejected.length > 0) throw new Error(`${rejected.length} lexical delete batches failed`)
+    return results.reduce((sum, result) => sum + (result.status === "fulfilled" ? result.value : 0), 0)
   } catch (error) {
     console.warn(
       JSON.stringify({

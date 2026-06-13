@@ -63,9 +63,11 @@ vi.mock("@/src/lib/repo-graph-client", () => ({
 }))
 
 import { handleIndexRepoJob } from "@/src/lib/indexer"
+import { collectPushChangedPaths } from "@/src/lib/index-producer"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
+import { handlePushEvent } from "@/src/index-internals"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
@@ -86,11 +88,28 @@ function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> }
   return { kv, store }
 }
 
-function makeEnv(): { env: Env; kv: Map<string, string> } {
+function makeEnv(opts: { getImpl?: (key: string, store: Map<string, string>) => Promise<string | null> } = {}): {
+  env: Env
+  kv: Map<string, string>
+  sent: JobMessage[]
+} {
   const { kv, store } = makeKvStub()
+  const sent: JobMessage[] = []
+  const state =
+    opts.getImpl === undefined
+      ? kv
+      : ({
+          ...kv,
+          get: (key: string) => opts.getImpl?.(key, store) ?? kv.get(key),
+        } as unknown as Env["OPENCLAW_STATE"])
   const env = {
-    OPENCLAW_STATE: kv,
-    OPENCLAW_JOBS: { send: vi.fn(async (_message: JobMessage) => undefined) },
+    OPENCLAW_STATE: state,
+    OPENCLAW_JOBS: {
+      send: vi.fn(async (message: JobMessage) => {
+        sent.push(message)
+      }),
+    },
+    OPENCLAW_INDEXER_ENABLED: "on",
     AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
     OPENCLAW_CODE_INDEX: {
       upsert: mockVectorizeUpsert,
@@ -99,7 +118,7 @@ function makeEnv(): { env: Env; kv: Map<string, string> } {
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
   } as unknown as Env
-  return { env, kv: store }
+  return { env, kv: store, sent }
 }
 
 function seedIndexedRepo(kv: Map<string, string>): void {
@@ -178,6 +197,99 @@ beforeEach(() => {
 })
 
 describe("handleIndexRepoJob — incremental push indexing", () => {
+  it("threads complete push changed paths from webhook enqueue to incremental consumption", async () => {
+    const { env, sent, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    mockGetRepository.mockResolvedValue({ id: 808247824, default_branch: "main" })
+    const commits = [
+      {
+        id: "1".repeat(40),
+        added: ["src/changed.ts"],
+        modified: ["src/ignored.md"],
+        removed: ["src/deleted.ts"],
+      },
+    ]
+
+    const response = await handlePushEvent({
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      payload: {
+        ref: "refs/heads/main",
+        before: "a".repeat(40),
+        after: "c".repeat(40),
+        size: commits.length,
+        commits,
+        repository: { id: 808247824 },
+      } as unknown as Parameters<typeof handlePushEvent>[0]["payload"],
+    })
+
+    expect(response.status).toBe(202)
+    expect(collectPushChangedPaths(commits, commits.length)).toEqual({
+      upsert: ["src/changed.ts", "src/ignored.md"],
+      remove: ["src/deleted.ts"],
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: "index-repo",
+      owner: "Sigilix",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      installationId: 99,
+      reason: "push",
+      before: "a".repeat(40),
+      changedPaths: {
+        upsert: ["src/changed.ts", "src/ignored.md"],
+        remove: ["src/deleted.ts"],
+      },
+    })
+
+    await handleIndexRepoJob({ job: sent[0] as Extract<JobMessage, { type: "index-repo" }>, env })
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(1)
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
+    expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+  })
+
+  it("omits changed paths from webhook enqueue when the push commit list is truncated", async () => {
+    const { env, sent, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    mockGetRepository.mockResolvedValue({ id: 808247824, default_branch: "main" })
+    const commits = Array.from({ length: 20 }, (_value, i) => ({
+      id: String(i).padStart(40, "0"),
+      modified: [`src/${i}.ts`],
+    }))
+
+    const response = await handlePushEvent({
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
+      installationId: 99,
+      payload: {
+        ref: "refs/heads/main",
+        before: "a".repeat(40),
+        after: "c".repeat(40),
+        size: 21,
+        commits,
+        repository: { id: 808247824 },
+      } as unknown as Parameters<typeof handlePushEvent>[0]["payload"],
+    })
+
+    expect(response.status).toBe(202)
+    expect(collectPushChangedPaths(commits, 21)).toBeUndefined()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: "index-repo",
+      owner: "Sigilix",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      installationId: 99,
+      reason: "push",
+    })
+    expect(sent[0]).not.toHaveProperty("changedPaths")
+  })
+
   it("embeds only changed files and deletes stale vectors for changed/deleted paths", async () => {
     const { env, kv } = makeEnv()
     seedIndexedRepo(kv)
@@ -209,6 +321,21 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(deletedIds).not.toEqual(expect.arrayContaining(vectors.byPath["src/changed.ts"] ?? []))
   })
 
+  it("logs when lexical cleanup is skipped because the D1 binding is absent", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      const { env, kv } = makeEnv()
+      seedIndexedRepo(kv)
+
+      await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("index-incremental-lexical-cleanup-skipped"))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("old-id-cleanup"))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it("falls back to full indexing when the existing manifest does not match the push before SHA", async () => {
     const { env, kv } = makeEnv()
     seedIndexedRepo(kv)
@@ -222,7 +349,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
   })
 
-  it("cleans up newly written vectors when superseded after embedding", async () => {
+  it("does not delete content-addressed vectors when superseded after embedding", async () => {
     const { env, kv } = makeEnv()
     seedIndexedRepo(kv)
     mockVectorizeUpsert.mockImplementationOnce(async (records: unknown) => {
@@ -237,9 +364,7 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
 
     const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
-    expect(deletedIds).toHaveLength(1)
-    expect(deletedIds).not.toContain("old-changed-id")
-    expect(deletedIds).not.toContain("old-deleted-id")
+    expect(deletedIds).toHaveLength(0)
 
     const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
     expect(manifest.headSha).toBe("a".repeat(40))
@@ -259,5 +384,139 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
     expect(deletedIds).not.toContain("old-changed-id")
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+  })
+
+  it("preserves old vectors when the incremental vector ledger write fails", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const originalPut = env.OPENCLAW_STATE.put.bind(env.OPENCLAW_STATE)
+    let vectorLedgerWrites = 0
+    env.OPENCLAW_STATE.put = vi.fn(async (key: string, value: string, options?: unknown) => {
+      if (key === repoIndexVectorsKey("Sigilix", "sigilix")) {
+        vectorLedgerWrites += 1
+        if (vectorLedgerWrites === 2) throw new Error("kv down")
+      }
+      return originalPut(key, value, options as never)
+    }) as Env["OPENCLAW_STATE"]["put"]
+
+    await expect(handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })).rejects.toThrow(
+      /repo-index-vectors incremental write failed/,
+    )
+
+    expect(mockVectorizeDeleteByIds).not.toHaveBeenCalledWith(["old-changed-id", "old-deleted-id"])
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("a".repeat(40))
+  })
+
+  it("skips finalization when the active run changes immediately before the vector ledger write", async () => {
+    let activeReads = 0
+    const { env, kv } = makeEnv({
+      getImpl: async (key, store) => {
+        if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
+        activeReads += 1
+        if (activeReads < 3) return store.get(key) ?? null
+        return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
+      },
+    })
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(vectors.runId).toBe("old-run")
+    const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
+    expect(deletedIds).toHaveLength(0)
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("a".repeat(40))
+  })
+
+  it("skips manifest finalization when the active run changes after the vector ledger write", async () => {
+    let activeReads = 0
+    const { env, kv } = makeEnv({
+      getImpl: async (key, store) => {
+        if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
+        activeReads += 1
+        if (activeReads < 4) return store.get(key) ?? null
+        return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
+      },
+    })
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
+    expect(deletedIds).toHaveLength(0)
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("a".repeat(40))
+  })
+
+  it("retries without old-vector cleanup when superseded during the manifest write window", async () => {
+    let activeReads = 0
+    const { env, kv } = makeEnv({
+      getImpl: async (key, store) => {
+        if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
+        activeReads += 1
+        if (activeReads < 5) return store.get(key) ?? null
+        return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
+      },
+    })
+    seedIndexedRepo(kv)
+
+    await expect(handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })).rejects.toThrow(
+      /repo-index-manifest superseded after incremental write/,
+    )
+
+    const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
+    expect(deletedIds).toHaveLength(0)
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+  })
+
+  it("retries without old-vector cleanup when superseded immediately before cleanup", async () => {
+    let activeReads = 0
+    const { env, kv } = makeEnv({
+      getImpl: async (key, store) => {
+        if (key !== activeRunKey("Sigilix", "sigilix")) return store.get(key) ?? null
+        activeReads += 1
+        if (activeReads < 6) return store.get(key) ?? null
+        return JSON.stringify({ v: 1, runId: "newer-run", startedAt: "2026-06-13T00:00:01.000Z" })
+      },
+    })
+    seedIndexedRepo(kv)
+
+    await expect(handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })).rejects.toThrow(
+      /repo-index old-id cleanup superseded after incremental write/,
+    )
+
+    const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
+    expect(deletedIds).toHaveLength(0)
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+  })
+
+  it("preserves old IDs that the current vector ledger still references during cleanup", async () => {
+    let vectorReads = 0
+    const { env, kv } = makeEnv({
+      getImpl: async (key, store) => {
+        if (key !== repoIndexVectorsKey("Sigilix", "sigilix")) return store.get(key) ?? null
+        vectorReads += 1
+        if (vectorReads < 2) return store.get(key) ?? null
+        const current = JSON.parse(store.get(key) as string) as RepoIndexVectorsV1
+        return JSON.stringify({
+          ...current,
+          byPath: {
+            ...current.byPath,
+            "src/reverted.ts": ["old-changed-id"],
+          },
+        })
+      },
+    })
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
+    expect(deletedIds).not.toContain("old-changed-id")
+    expect(deletedIds).toContain("old-deleted-id")
   })
 })

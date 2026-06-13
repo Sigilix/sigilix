@@ -392,6 +392,10 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     const commits = Array.from({ length: 20 }, (_value, i) => ({ modified: [`src/${i}.ts`] }))
     expect(collectPushChangedPaths(commits, 21)).toBeUndefined()
     expect(collectPushChangedPaths(commits)).toBeUndefined()
+    expect(collectPushChangedPaths(commits, 20)).toEqual({
+      upsert: Array.from({ length: 20 }, (_value, i) => `src/${i}.ts`).sort(),
+      remove: [],
+    })
   })
 
   it("attaches githubRepoId to the queue message when the push payload included repository.id (SIG-243 Phase 1)", async () => {

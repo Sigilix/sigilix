@@ -63,7 +63,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 29", () => {
+  it("PROMPT_VERSION includes the SIG-107 runner evidence bump", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -112,7 +112,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // KEEP SEPARATE, one provenance row per source ID — anti over-merge).
     // SIG-392 29→30 (synth lever-recovered protection: origin-tagged score>=4
     // findings only droppable via DETECTED-IMPOSSIBLE with quoted evidence).
-    expect(PROMPT_VERSION).toBe("30")
+    // SIG-107 30→31 (specialists treat deterministic runner SARIF as candidate
+    // evidence they inspect/refute, not as an unquestionable verdict).
+    expect(PROMPT_VERSION).toBe("31")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

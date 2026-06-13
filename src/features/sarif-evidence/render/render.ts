@@ -12,6 +12,8 @@
 import type { SarifFinding, SbomSummary } from "@/src/features/sarif-evidence/domain/types"
 
 const PER_FILE_RENDER_CAP = 10
+const SARIF_EVIDENCE_TRIAGE_NOTE =
+  "Deterministic tool output is evidence, not a final verdict; inspect/refute against visible code, and refute only with proof, before emitting."
 
 const SEVERITY_RANK: Record<SarifFinding["severity"], number> = {
   error: 2,
@@ -73,7 +75,10 @@ function collectCapExcludedDroppedResults(sorted: readonly SarifFinding[], cappe
   return summaries
 }
 
-export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]): string {
+export function renderSarifFindingsForPrompt(
+  findings: readonly SarifFinding[],
+  options: { activeRoleHint?: SarifFinding["roleHint"] } = {},
+): string {
   if (findings.length === 0) return ""
   const sorted = sortBySeverityThenPath(findings)
   const capped = applyPerFileCap(sorted)
@@ -83,8 +88,8 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
   const droppedByCap = sorted.length - capped.length
   const summary =
     droppedByCap > 0
-      ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap). Deterministic — do NOT question them.`
-      : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. Deterministic — do NOT question them.`
+      ? `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF (${droppedByCap} additional dropped by per-file render cap; not shown or inspected). ${SARIF_EVIDENCE_TRIAGE_NOTE}`
+      : `${capped.length} ${capped.length === 1 ? "finding" : "findings"} surfaced from SARIF. ${SARIF_EVIDENCE_TRIAGE_NOTE}`
   lines.push(summary)
   for (const droppedResults of capExcludedDroppedResults) {
     lines.push(`dropped_results: ${droppedResults}`)
@@ -94,7 +99,9 @@ export function renderSarifFindingsForPrompt(findings: readonly SarifFinding[]):
     lines.push(`- rule_id: ${f.ruleId}`)
     lines.push(`  severity: ${f.severity}`)
     lines.push(`  category: ${f.category}`)
-    lines.push(`  role_hint: ${f.roleHint}`)
+    // `activeRoleHint` is display-only for role-scoped specialist blocks:
+    // the original SARIF finding keeps its primary role for synth/manifest paths.
+    lines.push(`  role_hint: ${options.activeRoleHint ?? f.roleHint}`)
     lines.push(`  tool: ${f.toolName}`)
     const sourceLabel = formatSourceLabel(f)
     if (sourceLabel !== null) lines.push(`  source: ${sourceLabel}`)

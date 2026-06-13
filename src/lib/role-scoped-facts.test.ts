@@ -162,6 +162,31 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.tests).not.toContain("ruff-dual")
   })
 
+  it("renders multi-role SARIF with the active role as role_hint in each role block", () => {
+    const finding = sarif({
+      ruleId: "ruff-dual",
+      roleHint: "logic",
+      roleHints: ["logic", "performance"],
+      toolId: "ruff",
+      source: "deterministic-tool",
+      toolName: "Ruff",
+    })
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [finding],
+    })
+
+    expect(f.logic).toContain("role_hint: logic")
+    expect(f.performance).toContain("role_hint: performance")
+    expect(f.performance).not.toContain("role_hint: logic")
+    expect(f.logic).not.toContain("role_hints")
+    expect(f.performance).not.toContain("role_hints")
+    expect(f.security).not.toContain("ruff-dual")
+    expect(f.tests).not.toContain("ruff-dual")
+    expect(finding.roleHint).toBe("logic")
+    expect(finding.roleHints).toEqual(["logic", "performance"])
+  })
+
   it("routes Actionlint logic+security SARIF to logic and security", () => {
     const f = buildFactsByRole({
       ...baseInputs,
@@ -178,8 +203,31 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     })
     expect(f.logic).toContain("actionlint-dual")
     expect(f.security).toContain("actionlint-dual")
+    expect(f.security).toContain("role_hint: security")
     expect(f.performance).not.toContain("actionlint-dual")
     expect(f.tests).not.toContain("actionlint-dual")
+  })
+
+  it("falls back to roleHint when roleHints is an empty array", () => {
+    const f = buildFactsByRole({
+      ...baseInputs,
+      sarifFindings: [
+        sarif({
+          ruleId: "empty-rolehints",
+          roleHint: "logic",
+          roleHints: [],
+          toolId: "eslint",
+          source: "deterministic-tool",
+          toolName: "ESLint",
+        }),
+      ],
+    })
+
+    expect(f.logic).toContain("empty-rolehints")
+    expect(f.logic).toContain("role_hint: logic")
+    expect(f.security).not.toContain("empty-rolehints")
+    expect(f.performance).not.toContain("empty-rolehints")
+    expect(f.tests).not.toContain("empty-rolehints")
   })
 
   it("keeps the security manifest block security-only", () => {

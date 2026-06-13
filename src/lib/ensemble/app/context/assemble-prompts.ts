@@ -50,7 +50,7 @@ import {
   type AstCache,
 } from "@/src/features/ast-rules"
 import { runDepVulnScan } from "@/src/features/dep-vulns"
-import { type SarifFinding } from "@/src/features/sarif-evidence"
+import { sarifFindingHasRole, type SarifFinding } from "@/src/features/sarif-evidence"
 import { detectStack, computeFileOverlap, type FileOverlap, type StackContext } from "@/src/lib/pr-stack"
 import { renderStackPromptBlock } from "@/src/prompts/pr-stack-prompt"
 import { classifyDiffFiles, renderDiffFileClassificationBlock } from "@/src/lib/diff-file-classify"
@@ -202,10 +202,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   const securityManifest = await buildSecurityFactManifest({
     secretHits,
     depVulnFindings,
-    sarifFindings: sarifFindings.filter((f) => {
-      const roles = f.roleHints ?? [f.roleHint]
-      return roles.includes("security")
-    }),
+    sarifFindings: sarifFindings.filter((f) => sarifFindingHasRole(f, "security")),
     astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
   })
   // SIG-108: route deterministic facts to their owning specialist — no

@@ -245,12 +245,10 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   // section breakdown.
   const logicPromptBudgetMode = ensembleConfig.flags.logicPromptBudgetMode
 
-  // SIG-235 — min-specialists early exit. Build per-role
-  // AbortControllers (mirroring the shadow path above) so the
-  // quorum collector can cancel a single laggard's outstanding
-  // attempts without affecting the others. composeSignals fires on
-  // EITHER orchCtrl OR the per-role controller — same pattern as
-  // the shadow path so the ladder cancels cleanly mid-attempt.
+  // SIG-235 — min-specialists early exit. Build per-role AbortControllers
+  // (mirroring the shadow path) so the quorum collector can cancel a single
+  // laggard's attempts without affecting others; composeSignals fires on EITHER
+  // orchCtrl OR the per-role controller, so the ladder cancels cleanly mid-attempt.
   const earlyExitMode = ensembleConfig.flags.minSpecialistsEarlyExitMode
   const prodSpecialistAbortControllers = new Map<SpecialistRole, AbortController>()
   // Tracks roles whose perSpecialistEnd has been frozen at the early-
@@ -314,7 +312,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         runSpecialist({
           role,
           apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: specialistSystemPrompt(role, ensembleConfig.flags.logicRecallEnabled),
+          systemPrompt: specialistSystemPrompt(role, ensembleConfig.flags.recallRoles),
           // SIG-113: tests specialist gets the testing-evidence
           // block; other specialists get the classification block.
           initialMessage,

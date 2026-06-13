@@ -593,9 +593,15 @@ OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
 # SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only when
 # its control-flow ("unconditional"/"double-response") or sync-race ("TOCTOU")
 # claim is PROVABLY false against the cited AST (the two stable v4-pro priors).
-# Fails open; ships "shadow" — read the would-drop rate + audit before "enforce".
-# Rollback: set "off".
-OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE = "shadow"
+# Fails open; "enforce" + a reason allowlist drops only the listed shapes.
+# Rollback: set "off" (or clear the allowlist below).
+OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE = "enforce"
+# SIG-392: reason-scoped enforce allowlist (comma list of LogicClaimDropReason).
+# Empty ⇒ in "enforce" NO reason drops; a listed reason drops while the other
+# shapes stay shadow. balance-sign graduated 2026-06-13 after a clean shadow soak
+# (product-wide probe #39: the refuter fired on the lone balance FP and nothing
+# else). The other 5 claim shapes remain shadow (NOT listed here).
+OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS = "balance-sign-claim-refuted-by-correct-accounting-direction"
 
 # SIG-325: the GENERALIZED refutation-survival gate (evaluateRefutationSurvival).
 # Extends the SIG-308 refute-first discipline to SELF-ORIGINATED findings on
@@ -764,6 +770,20 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 # unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
 # (inert); both are safe one-line changes.
 OPENCLAW_INVARIANT_LENS_MODE = "on"
+# SIG-392 — recall-eliciting LOGIC prompt (#508). "on" appends the recall
+# directive to the logic specialist's system prompt. Per-PR logic bake-off
+# (dense fixture, K=6, citation-judged): default prompt 6.0/20 logic recall →
+# this prompt ~16/20, catching the frontier rows (b5/b10/b19/b20) the default
+# was blind to — SAME model (deepseek-v4-pro), no migration. It trades
+# specialist-stage precision for recall (the two are coupled at the prompt
+# level); the downstream gates are the precision backstop, and the SIG-392
+# class-collapse gate (#510) absorbs the same-class redundancy it produces (0/4
+# fixture traps flagged, 0 hallucinations in audit). FLIPPING TO "on" for the
+# full-pipeline validation probe: measure posted recall vs posted hi-sev FP on
+# a fresh dense-fixture clone (`evals score --pr --baseline`) + p50 unmoved.
+# Rollback = flip to "off" (inert, byte-identical to the default prompt) — a
+# safe one-line change.
+OPENCLAW_LOGIC_RECALL_MODE = "on"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.

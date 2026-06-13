@@ -279,8 +279,14 @@
  * coverage-observation aggregation: 2+ pure "no test coverage" stamps merge
  * into one scope:"pr" finding listing every affected file (posted-noise fix;
  * probe #27 posted four separate stamps).
+ *
+ * v30 → v31 (SIG-107): every specialist gets the runner tool evidence contract
+ * for SARIF rows labeled `source: deterministic-tool/<toolId>`. Tool output is
+ * candidate evidence, not a final verdict: specialists must inspect/refute
+ * against visible code, stay in-lane for role-routed findings, and keep
+ * independent real bugs even when no tool emitted them.
  */
-export const PROMPT_VERSION = "30"
+export const PROMPT_VERSION = "31"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Sigilix team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

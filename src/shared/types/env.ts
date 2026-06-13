@@ -385,6 +385,10 @@ export interface Env {
    *  directive to the logic prompt (~6→16/20 logic recall on the dense fixture).
    *  Default off. Precision is the downstream gates' job. */
   OPENCLAW_LOGIC_RECALL_MODE?: string
+  /** SIG-392 (security lane): recall-eliciting security-specialist prompt — "on"
+   *  appends the security recall directive (targets the b16 list-authz + b20
+   *  HMAC-reserialized frontier). Default off. Precision is the gates' job. */
+  OPENCLAW_SECURITY_RECALL_MODE?: string
   /** SIG-393: region re-sweep mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */
@@ -463,6 +467,10 @@ export interface Env {
   // telemetry) | enforce (drop a supported logic claim shape that is PROVABLY
   // false against the cited AST). Fails open; ships dark ("shadow").
   OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string
+  // SIG-392: reason-scoped enforce allowlist (comma list of LogicClaimDropReason).
+  // UNSET → `enforce` drops EVERY shape (legacy). SET → in `enforce` ONLY the
+  // listed reasons drop; the rest stay shadow. Lets balance-sign enforce alone.
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS?: string
 
   // SIG-325: generalized refutation-survival gate mode. "off" (default in code;
   // "shadow" in wrangler) extends the SIG-308 refute-first discipline to

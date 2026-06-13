@@ -18,7 +18,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
-import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { RouterDecision } from "@/src/lib/ensemble-router"
 import {
   type SigilixConfig,
@@ -72,6 +72,11 @@ type SarifResult = Awaited<ReturnType<typeof runSarifEvidence>>
 type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChangedPaths>
 /** The synth-input verdicts produced by `buildSynthInputVerdicts(succeeded)`. */
 type SynthInputVerdict = CollectedVerdict & { verdict: PrReviewVerdictWithIds }
+type DispatchCoverage = {
+  rolesInvoked: readonly SpecialistRole[]
+  rolesNotInvoked: readonly SpecialistRole[]
+  reasoning?: string
+}
 
 /**
  * Minimal structural slice of `EnsembleTelemetry` the synthesize phase writes by
@@ -190,6 +195,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
   } = a
   const synthBypassEligible =
     !shadowEnabledRoles.has("synth") && isSynthBypassEligible(synthBypassEnabled, router.specialists.length, succeeded)
+  const dispatchCoverage = dispatchCoverageFromRouter(router)
 
   // Hoisted from the original synth section below so the bypass
   // path can populate them too — the post-synth validation code
@@ -295,6 +301,10 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
         ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions) }
         : {}),
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
+      // SIG-227: roles skipped by routing/dispatcher are not degraded
+      // coverage. Tell synth they were intentionally not applicable so
+      // it neither fabricates their domain nor caps confidence.
+      ...(dispatchCoverage ? { dispatchCoverage } : {}),
       // ARC-277: when one or more specialists didn't return, tell
       // synth which roles it's missing so it can constrain its
       // output and acknowledge the gap in `summary`.
@@ -702,5 +712,19 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     synthVerdict: synthOutput.verdict,
     synthProvenance: synthOutput.provenance,
     shadowMemoriesForPhase3,
+  }
+}
+
+function dispatchCoverageFromRouter(router: RouterDecision): DispatchCoverage | null {
+  // `router.specialists` is the final invoked set. Roles outside it
+  // were not dispatched; degraded coverage is computed separately
+  // from invoked roles that failed to return.
+  const invoked = new Set(router.specialists)
+  const rolesNotInvoked = ALL_SPECIALISTS.filter((role) => !invoked.has(role))
+  if (rolesNotInvoked.length === 0) return null
+  return {
+    rolesInvoked: router.specialists,
+    rolesNotInvoked,
+    reasoning: router.reason,
   }
 }

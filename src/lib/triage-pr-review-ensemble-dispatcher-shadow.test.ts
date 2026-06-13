@@ -218,6 +218,21 @@ function findLoggedEvent(eventName: string): Record<string, unknown> | undefined
   return undefined
 }
 
+function loggedEvents(eventName: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = []
+  for (const call of logSpy.mock.calls) {
+    const arg = call[0]
+    if (typeof arg !== "string") continue
+    try {
+      const parsed = JSON.parse(arg) as Record<string, unknown>
+      if (parsed.event === eventName) out.push(parsed)
+    } catch {
+      // ignore non-JSON logs
+    }
+  }
+  return out
+}
+
 describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
   it("emits dispatcher-shadow-decision when mode=shadow + lets the dispatcher LLM fire", async () => {
     mockGetPullRequest.mockResolvedValueOnce({
@@ -282,6 +297,17 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     expect(dispatcherCall).toBeDefined()
     const arg = dispatcherCall?.[0] as { model: string } | undefined
     expect(arg?.model).toBe("deepseek-v4-flash:cloud")
+
+    const savings = findLoggedEvent("dispatcher-savings-summary")
+    expect(savings).toMatchObject({
+      mode: "shadow",
+      savingsType: "shadow",
+      actualSpecialistCallsAvoided: 0,
+      projectedSpecialistCallsAvoided: 1,
+      reviewKey: "Sigilix/sigilix#5001@deadbee",
+    })
+    expect(savings?.actualNotInvokedRoles).toEqual([])
+    expect(savings?.projectedSkippedRoles).toEqual(["performance"])
   })
 
   it("does NOT emit dispatcher telemetry when mode is off/absent", async () => {
@@ -384,6 +410,65 @@ index abc1234..def5678 100644
     expect(dispatcherCalls).toHaveLength(0)
   })
 
+  it("SIG-224 monitor event records actual rules-only savings and only marks rule-safe roles skipped", async () => {
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+      title: "chore: refresh lockfile",
+      body: "",
+    })
+    const LOCKFILE_ONLY_DIFF = `diff --git a/package-lock.json b/package-lock.json
+index abc1234..def5678 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,3 +1,3 @@
+ {
+-  "lockfileVersion": 3
++  "lockfileVersion": 3,
+ }
+`
+    mockGetPullRequestDiff.mockResolvedValueOnce(LOCKFILE_ONLY_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValueOnce(null)
+    mockChat.mockRejectedValue(new Error("test boundary"))
+
+    await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 5006,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({ OPENCLAW_DYNAMIC_DISPATCHER_MODE: "enforce_rules" } as unknown as Env),
+    })
+
+    const savings = findLoggedEvent("dispatcher-savings-summary")
+    expect(savings).toMatchObject({
+      mode: "enforce_rules",
+      savingsType: "actual",
+      actualSpecialistCallsAvoided: 3,
+      projectedSpecialistCallsAvoided: 3,
+      reviewKey: "Sigilix/sigilix#5006@deadbee",
+    })
+    expect(savings?.baselineSpecialists).toEqual(["logic", "security", "performance", "tests"])
+    expect(savings?.actualSpecialists).toEqual(["security"])
+    expect(new Set(savings?.actualNotInvokedRoles as string[])).toEqual(new Set(["logic", "performance", "tests"]))
+    const perRole = savings?.perRole as Record<string, { action?: string; reasons?: string[] }>
+    for (const role of savings?.actualNotInvokedRoles as string[]) {
+      expect(perRole[role]?.action).toBe("skip")
+      expect(perRole[role]?.reasons?.length ?? 0).toBeGreaterThan(0)
+    }
+
+    const dispatcherCalls = mockChat.mock.calls.filter((call) => isDispatcherCall(call[0]))
+    expect(dispatcherCalls).toHaveLength(0)
+    const ranRoles = mockChat.mock.calls
+      .filter((c) => !isDispatcherCall(c[0]))
+      .map((c) => callRole(c[0]))
+      .filter((r): r is string => r !== null)
+    expect(new Set(ranRoles)).toEqual(new Set(["security"]))
+  })
+
   it("SIG-227b / enforce mode APPLIES the LLM-decided fan-out — protects security+logic, skips the tests/perf the LLM omits", async () => {
     mockGetPullRequest.mockResolvedValueOnce({
       head: { sha: HEAD_SHA },
@@ -462,6 +547,18 @@ index abc1234..def5678 100644
     expect(ranRoles).toContain("logic")
     expect(ranRoles).not.toContain("tests")
     expect(ranRoles).not.toContain("performance")
+
+    const savings = findLoggedEvent("dispatcher-savings-summary")
+    expect(savings).toMatchObject({
+      mode: "enforce",
+      savingsType: "actual",
+      actualSpecialistCallsAvoided: 2,
+      projectedSpecialistCallsAvoided: 2,
+      reviewKey: "Sigilix/sigilix#5003@deadbee",
+    })
+    expect(new Set(savings?.actualNotInvokedRoles as string[])).toEqual(new Set(["performance", "tests"]))
+    expect(new Set(savings?.projectedSkippedRoles as string[])).toEqual(new Set(["performance", "tests"]))
+    expect(loggedEvents("dispatcher-savings-summary")).toHaveLength(1)
   })
 
   it("SIG-227 / enforce mode gives synth dispatch coverage for intentionally skipped specialists", async () => {

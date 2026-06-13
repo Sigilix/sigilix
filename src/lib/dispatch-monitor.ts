@@ -43,6 +43,10 @@ export interface ParseDispatchMonitorResult {
   skippedLines: number
 }
 
+export interface ParseDispatchMonitorOptions {
+  maxRecordChars?: number
+}
+
 export interface DispatchMonitorReport {
   parsedEvents: number
   dispatchReviews: number
@@ -84,16 +88,19 @@ export interface ReviewDispatchSummary {
   projectedSpecialistCallsAvoided: number
 }
 
-export function parseDispatchMonitorJsonl(text: string): ParseDispatchMonitorResult {
+const DEFAULT_MAX_JSON_RECORD_CHARS = 10 * 1024 * 1024
+
+export function parseDispatchMonitorJsonl(
+  text: string,
+  options: ParseDispatchMonitorOptions = {},
+): ParseDispatchMonitorResult {
   const events: DispatchMonitorEvent[] = []
   let badLines = 0
   let skippedLines = 0
-  for (const raw of text.split("\n")) {
-    const line = raw.trim()
-    if (line.length === 0) continue
+  for (const record of splitJsonRecords(text, options.maxRecordChars ?? DEFAULT_MAX_JSON_RECORD_CHARS)) {
     let parsed: unknown
     try {
-      parsed = JSON.parse(line)
+      parsed = JSON.parse(record)
     } catch {
       badLines++
       continue
@@ -103,6 +110,58 @@ export function parseDispatchMonitorJsonl(text: string): ParseDispatchMonitorRes
     skippedLines += normalized.skippedLines
   }
   return { events, badLines, skippedLines }
+}
+
+function splitJsonRecords(text: string, maxRecordChars: number): string[] {
+  const records: string[] = []
+  let buffer = ""
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let started = false
+
+  for (const raw of text
+    .replace(/^\uFEFF/u, "")
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")) {
+    const line = raw.trim()
+    if (!started && line.length === 0) continue
+    if (!started && line[0] !== "{" && line[0] !== "[") {
+      records.push(line)
+      continue
+    }
+
+    buffer = started ? `${buffer}\n${raw}` : raw
+    if (buffer.length > maxRecordChars) {
+      throw new Error(`dispatch-monitor JSON record exceeds ${maxRecordChars} characters`)
+    }
+    started = true
+    for (const ch of raw) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (ch === "\\" && inString) {
+        escaped = true
+        continue
+      }
+      if (ch === '"') {
+        inString = !inString
+        continue
+      }
+      if (inString) continue
+      if (ch === "{" || ch === "[") depth++
+      else if (ch === "}" || ch === "]") depth--
+    }
+    if (started && depth === 0 && !inString) {
+      records.push(buffer)
+      buffer = ""
+      started = false
+    }
+  }
+
+  if (started && buffer.trim().length > 0) records.push(buffer)
+  return records
 }
 
 export function buildDispatchMonitorReport(events: readonly DispatchMonitorEvent[]): DispatchMonitorReport {

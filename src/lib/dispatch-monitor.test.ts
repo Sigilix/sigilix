@@ -154,4 +154,89 @@ describe("dispatch monitor report", () => {
     expect(report.dispatchReviews).toBe(1)
     expect(report.reviewsMissingFanoutSummary).toBe(0)
   })
+
+  it("parses pretty multi-line wrangler tail JSON captures", () => {
+    const input = [
+      JSON.stringify(
+        {
+          logs: [
+            {
+              message: [
+                JSON.stringify({
+                  event: "dispatcher-savings-summary",
+                  owner: "Sigilix",
+                  repo: "sigilix",
+                  prNumber: 40,
+                  headSha: "bbb2222",
+                  mode: "enforce",
+                  savingsType: "actual",
+                  baselineSpecialists: ["logic", "security", "performance", "tests"],
+                  dispatcherSpecialists: ["logic", "security"],
+                  actualSpecialists: ["logic", "security"],
+                  projectedSkippedRoles: ["performance", "tests"],
+                  actualNotInvokedRoles: ["performance", "tests"],
+                  projectedSpecialistCallsAvoided: 2,
+                  actualSpecialistCallsAvoided: 2,
+                  layerVotes: { llmOutcome: "ok" },
+                }),
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      JSON.stringify(
+        {
+          logs: [
+            {
+              message: [
+                JSON.stringify({
+                  event: "specialist-fanout-summary",
+                  owner: "Sigilix",
+                  repo: "sigilix",
+                  prNumber: 40,
+                  headSha: "bbb2222",
+                  dispatchedRoles: ["logic", "security"],
+                }),
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    ].join("\n")
+
+    const parsed = parseDispatchMonitorJsonl(input)
+    expect(parsed.badLines).toBe(0)
+    expect(parsed.skippedLines).toBe(0)
+    expect(parsed.events).toHaveLength(2)
+    const report = buildDispatchMonitorReport(parsed.events)
+    expect(report.dispatchReviews).toBe(1)
+    expect(report.reviewsMissingFanoutSummary).toBe(0)
+    expect(report.actualSpecialistCallsAvoided).toBe(2)
+  })
+
+  it("strips a UTF-8 BOM from the first JSON record", () => {
+    const parsed = parseDispatchMonitorJsonl(
+      `\uFEFF${JSON.stringify({
+        event: "specialist-fanout-summary",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 41,
+        headSha: "ccc3333",
+        dispatchedRoles: ["logic"],
+      })}`,
+    )
+
+    expect(parsed.badLines).toBe(0)
+    expect(parsed.events).toHaveLength(1)
+  })
+
+  it("fails closed on an oversized unterminated JSON record", () => {
+    expect(() =>
+      parseDispatchMonitorJsonl('{\n  "event": "dispatcher-savings-summary"', { maxRecordChars: 12 }),
+    ).toThrow(/JSON record exceeds/)
+  })
 })

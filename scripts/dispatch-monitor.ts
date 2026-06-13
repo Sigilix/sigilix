@@ -5,7 +5,7 @@
 //   npm run dispatch-monitor -- --input logs.ndjson [--format md|json]
 //
 // Input may be a local `wrangler tail --format json` capture, a Workers
-// Logpush NDJSON export, or a directory containing .jsonl/.ndjson/.log
+// Logpush NDJSON export, or a directory containing .json/.jsonl/.ndjson/.log
 // files. The report is offline by design: no Worker endpoint, no prod
 // state mutation, and no extra Cloudflare read cost.
 
@@ -62,7 +62,7 @@ function printHelp(): void {
 Usage:
   npm run dispatch-monitor -- --input <path> [--format md|json]
 
-  --input, -i    JSONL/NDJSON/log file or directory
+  --input, -i    JSON/JSONL/NDJSON/log file or directory
   --format       md (default) or json
   --help, -h     Show this help
 `)
@@ -80,7 +80,7 @@ async function* collectFiles(input: string): AsyncIterableIterator<string> {
     const path = join(input, entry.name)
     if (entry.isDirectory()) {
       yield* collectFiles(path)
-    } else if (entry.isFile() && /\.(jsonl|ndjson|log)$/u.test(entry.name)) {
+    } else if (entry.isFile() && /\.(json|jsonl|ndjson|log)$/u.test(entry.name)) {
       yield path
     }
   }

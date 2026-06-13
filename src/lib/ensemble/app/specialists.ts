@@ -818,11 +818,10 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded,
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
-  const resweepForSynth = resweepResultForSynth(resweep)
   const scheduledLens = await scheduleInvariantLensForSynth({
     lens: invariantLens,
     recallContract: ensembleConfig.flags.invariantLensRecallContract,
-    succeeded: resweepForSynth.verdicts,
+    succeeded: resweepResultForSynth(resweep).verdicts,
     owner,
     repo,
     prNumber,
@@ -832,9 +831,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   })
   const lensApplied = invariantLensResultForSynth(scheduledLens)
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
-
   const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)
-
   // SIG-318 (PR 12c): the SYNTHESIZE phase (synth-bypass / synth + retry ladder
   // + telemetry + parse-fail bail + summary) moved to ensemble/app/synthesize.
   // It mutates `telemetry` + `shadowState` by reference; on any of its three
@@ -866,7 +863,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
-    leverOrigins: buildLeverOrigins(resweepForSynth.resweepFindingIds, lensApplied.lensFindingIds),
+    leverOrigins: buildLeverOrigins(resweepResultForSynth(resweep).resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }

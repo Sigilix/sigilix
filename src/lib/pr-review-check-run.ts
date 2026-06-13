@@ -161,7 +161,7 @@ const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
  *      wire `failure` for future opt-in P0 gates)
  *    - `skipped` → wire `neutral` (bot couldn't review — legit
  *      ambiguous state, e.g. stale head). */
-export type SigilixCheckConclusion = "success" | "failure" | "skipped"
+export type SigilixCheckConclusion = "success" | "failure" | "skipped" | "blocked"
 
 interface InProgressCheckRun {
   id: number
@@ -496,12 +496,14 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
   // (APPROVE / COMMENT / REQUEST_CHANGES). Reserve `neutral` for
   // skips/errors (ambiguous "did the bot run?" state). Reserve wire
   // `failure` for future opt-in P0 gates.
-  const wireConclusion: "success" | "neutral" =
+  const wireConclusion: "success" | "neutral" | "failure" =
     conclusion === "success"
       ? "success"
-      : conclusion === "failure"
-        ? "neutral" // errored — ambiguous, not failing the check
-        : "neutral" // skipped — legit ambiguous
+      : conclusion === "blocked"
+        ? "failure"
+        : conclusion === "failure"
+          ? "neutral" // errored — ambiguous, not failing the check
+          : "neutral" // skipped — legit ambiguous
   try {
     await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
       status: "completed",
@@ -838,6 +840,12 @@ export function renderOutputForConclusion(
         title: "Review skipped (stale head)",
         summary:
           "A newer commit was pushed before this review finished. Sigilix will re-review the latest head automatically.",
+      }
+    case "blocked":
+      return {
+        title: "Review blocked",
+        summary:
+          "Sigilix could not finish a merge-gated follow-up review for this PR. Re-trigger with `/sigilix review` or contact support before merging.",
       }
     case "failure":
       // ARC-279: the dispatcher maps `surface === "comment"` to

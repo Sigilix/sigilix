@@ -147,6 +147,40 @@ describe("scheduleInvariantLensForSynth", () => {
     }
   })
 
+  it("pending-check amendment contract returns passthrough and schedules amendment work when lane exists", async () => {
+    let resolveAmendment: (result: InvariantLensApplyResult) => void = () => {
+      throw new Error("amendment resolver was not assigned")
+    }
+    applyInvariantLensMock.mockReturnValueOnce(
+      new Promise<InvariantLensApplyResult>((resolve) => {
+        resolveAmendment = resolve
+      }),
+    )
+    const supportedArgs = args({ recallContract: "pending-check-amendment" }) as Parameters<
+      typeof scheduleInvariantLensForSynth
+    >[0] & { pendingCheckAmendmentAvailable: true }
+    supportedArgs.pendingCheckAmendmentAvailable = true
+
+    const scheduled = await scheduleInvariantLensForSynth(supportedArgs)
+
+    expect((scheduled as { kind: string }).kind).toBe("amendment-scheduled")
+    expect(invariantLensResultForSynth(scheduled)).toEqual({ verdicts: PASS_THROUGH, lensFindingIds: [] })
+    expect(applyInvariantLensMock).toHaveBeenCalledWith(
+      expect.objectContaining({ executionLane: "amendment", recallContract: "pending-check-amendment" }),
+    )
+    if ((scheduled as { kind: string }).kind === "amendment-scheduled") {
+      const amendmentWork = (scheduled as { amendmentWork: Promise<InvariantLensApplyResult> }).amendmentWork
+      let completed = false
+      amendmentWork.then(() => {
+        completed = true
+      })
+      await Promise.resolve()
+      expect(completed).toBe(false)
+      resolveAmendment(APPLIED)
+      await expect(amendmentWork).resolves.toBe(APPLIED)
+    }
+  })
+
   it("parser-to-config-to-scheduler keeps pending-check amendments blocking", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
     const config = parseEnsembleConfig({

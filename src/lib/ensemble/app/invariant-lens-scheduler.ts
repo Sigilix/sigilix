@@ -6,10 +6,15 @@ type BackgroundWaitUntil = (promise: Promise<void>) => void
 
 export type ScheduledInvariantLensResult =
   | { kind: "resolved"; result: InvariantLensApplyResult }
+  | {
+      kind: "amendment-scheduled"
+      passthrough: InvariantLensApplyResult
+      amendmentWork: Promise<InvariantLensApplyResult>
+    }
   | { kind: "background-scheduled"; passthrough: InvariantLensApplyResult; backgroundWork: Promise<void> }
 
 export function invariantLensResultForSynth(result: ScheduledInvariantLensResult): InvariantLensApplyResult {
-  return result.kind === "background-scheduled" ? result.passthrough : result.result
+  return result.kind === "resolved" ? result.result : result.passthrough
 }
 
 export async function scheduleInvariantLensForSynth(args: {
@@ -22,9 +27,16 @@ export async function scheduleInvariantLensForSynth(args: {
   headSha: string
   diff: string
   backgroundWaitUntil?: BackgroundWaitUntil
+  pendingCheckAmendmentAvailable?: boolean
 }): Promise<ScheduledInvariantLensResult> {
   const passthrough: InvariantLensApplyResult = { verdicts: args.succeeded, lensFindingIds: [] }
-  const decision = decideInvariantExecution({ mode: args.lens.mode, recallContract: args.recallContract })
+  const decision = decideInvariantExecution({
+    mode: args.lens.mode,
+    recallContract: args.recallContract,
+    ...(args.pendingCheckAmendmentAvailable !== undefined
+      ? { amendmentLaneAvailable: args.pendingCheckAmendmentAvailable }
+      : {}),
+  })
   if (decision.kind === "blocking") {
     if (decision.refusalReason !== undefined) {
       console.log(
@@ -49,6 +61,19 @@ export async function scheduleInvariantLensForSynth(args: {
         recallContract: decision.effectiveRecallContract,
       }),
     }
+  }
+  if (decision.kind === "amendment") {
+    const amendmentWork = Promise.resolve().then(() =>
+      applyInvariantLens({
+        ...args,
+        executionLane: "amendment",
+        recallContract: decision.effectiveRecallContract,
+      }),
+    )
+    void amendmentWork.catch(() => {
+      /* the orchestrator awaits and reports this as merge-gated amendment failure */
+    })
+    return { kind: "amendment-scheduled", passthrough, amendmentWork }
   }
 
   const backgroundWork = Promise.resolve()

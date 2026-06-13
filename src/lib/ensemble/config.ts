@@ -51,6 +51,17 @@ function buildRecallRoles(env: EnsembleConfigEnv): ReadonlySet<SpecialistRole> {
   return roles
 }
 
+/** SIG-399: the set of specialist roles whose `OPENCLAW_<ROLE>_REASONING_PROMPT_MODE`
+ *  is "on", so the reasoning-process directive is appended to that specialist's
+ *  prompt (after any recall directive). Distinct from `buildReasoningByRole` (the
+ *  SIG-287 model-effort harness): this gates PROMPT text, that gates the model
+ *  `think:` level. Default = empty. Logic-only today; add a role to extend. */
+function buildReasoningPromptRoles(env: EnsembleConfigEnv): ReadonlySet<SpecialistRole> {
+  const roles = new Set<SpecialistRole>()
+  if (env.OPENCLAW_LOGIC_REASONING_PROMPT_MODE === "on") roles.add("logic")
+  return roles
+}
+
 const REASONING_LEVELS: ReadonlySet<string> = new Set<ReasoningLevel>(["high", "medium", "low"])
 const REASONING_ROLE_NAMES: ReadonlySet<string> = new Set<SpecialistRole>(["logic", "security", "performance", "tests"])
 
@@ -85,6 +96,8 @@ export interface EnsembleConfigEnv {
   // SIG-392 recall-eliciting logic prompt
   OPENCLAW_LOGIC_RECALL_MODE?: string | undefined
   OPENCLAW_SECURITY_RECALL_MODE?: string | undefined
+  // SIG-399 reasoning-process directive (prompt suffix; distinct from SIG-287 effort)
+  OPENCLAW_LOGIC_REASONING_PROMPT_MODE?: string | undefined
   // SIG-287 reasoning-on harness (per-role bounded reasoning; default off)
   OPENCLAW_REASONING_MODE?: string | undefined
   OPENCLAW_REASONING_ROLES?: string | undefined
@@ -229,6 +242,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
       recallRoles: buildRecallRoles(env),
+      // SIG-399: per-role reasoning-process directive (default off → empty set).
+      reasoningPromptRoles: buildReasoningPromptRoles(env),
       // SIG-287: per-role bounded reasoning (default off → empty map).
       reasoningByRole: buildReasoningByRole(env),
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),

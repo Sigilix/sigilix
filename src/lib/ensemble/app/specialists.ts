@@ -305,6 +305,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     }
     // SIG-287: role's bounded reasoning level — empty map by default → think:false.
     const reasoningForRole = ensembleConfig.flags.reasoningByRole.get(role)
+    const { recallRoles, reasoningPromptRoles } = ensembleConfig.flags
     const promise = withComposedTimeout(
       // Use the composed signal `withComposedTimeout` provides — it
       // aborts on EITHER the per-specialist 270s timer OR the outer
@@ -316,9 +317,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
         runSpecialist({
           role,
           apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: specialistSystemPrompt(role, ensembleConfig.flags.recallRoles),
-          // SIG-113: tests specialist gets the testing-evidence
-          // block; other specialists get the classification block.
+          systemPrompt: specialistSystemPrompt(role, recallRoles, reasoningPromptRoles),
+          // SIG-113: tests get the testing-evidence block; others the classification block.
           initialMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,

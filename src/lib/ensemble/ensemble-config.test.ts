@@ -213,6 +213,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // SIG-392: recall-eliciting logic prompt (=== "on").
       OPENCLAW_LOGIC_RECALL_MODE: "on",
       OPENCLAW_SECURITY_RECALL_MODE: "on",
+      // SIG-399: reasoning-process directive flag (logic).
+      OPENCLAW_LOGIC_REASONING_PROMPT_MODE: "on",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -254,6 +256,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
           env.OPENCLAW_SECURITY_RECALL_MODE === "on" ? "security" : null,
         ].filter((r): r is "logic" | "security" => r !== null),
       ),
+      // SIG-399: reasoning-process directive flag → logic (set "on" above).
+      reasoningPromptRoles: new Set(["logic"]),
       // SIG-287: reasoning-on harness defaults EMPTY — this env block leaves
       // OPENCLAW_REASONING_MODE unset, so the per-role map stays empty (every
       // call is `think:false`, byte-identical to today). The dedicated
@@ -294,6 +298,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       resweepMode: "off",
       invariantLensMode: "off",
       recallRoles: new Set(),
+      // SIG-399: reasoning-process directive default off → empty set.
+      reasoningPromptRoles: new Set(),
       // SIG-287: reasoning-on harness defaults to an empty map (off).
       reasoningByRole: new Map(),
     })
@@ -410,6 +416,22 @@ describe("SIG-287 parseEnsembleConfig — reasoningByRole (reasoning-on harness)
       OPENCLAW_REASONING_LEVEL: "ultra",
     }).flags
     expect(c.reasoningByRole).toEqual(new Map())
+  })
+})
+
+describe("SIG-399 parseEnsembleConfig — reasoningPromptRoles (logic reasoning directive flag)", () => {
+  it("defaults to an empty set when OPENCLAW_LOGIC_REASONING_PROMPT_MODE is unset", () => {
+    expect(parseEnsembleConfig({}).flags.reasoningPromptRoles).toEqual(new Set())
+  })
+  it('adds "logic" when OPENCLAW_LOGIC_REASONING_PROMPT_MODE === "on"', () => {
+    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_REASONING_PROMPT_MODE: "on" }).flags.reasoningPromptRoles).toEqual(
+      new Set(["logic"]),
+    )
+  })
+  it('stays empty for any value other than exactly "on" (e.g. "ON", "shadow") — mirrors recall-mode', () => {
+    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_REASONING_PROMPT_MODE: "ON" }).flags.reasoningPromptRoles).toEqual(
+      new Set(),
+    )
   })
 })
 

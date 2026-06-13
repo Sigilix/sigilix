@@ -68,7 +68,7 @@ describe("dispatch-monitor CLI — end-to-end", () => {
   it("prints JSON and unwraps Cloudflare Logpush envelopes from a directory", () => {
     const dir = mkdtempSync(join(tmpDir, "logpush-"))
     writeFileSync(
-      join(dir, "events.log"),
+      join(dir, "events.json"),
       JSON.stringify({
         EventTimestampMs: 1_760_000_000_000,
         Logs: [

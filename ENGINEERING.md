@@ -230,7 +230,7 @@ Offline CLIs live in `scripts/` and are exposed through `npm run`:
 
 | Command | Input | Output / decision |
 |----|----|----|
-| `npm run dispatch-monitor -- --input <path> [--format md|json]` | `wrangler tail --format json` capture or Workers Logpush JSONL/NDJSON directory. | CLI dashboard for dynamic dispatcher coverage: actual vs shadow specialist calls avoided, roles intentionally not invoked, observed model tokens, and token-savings estimates from per-role averages. |
+| `npm run dispatch-monitor -- --input <path> [--format md|json]` | `wrangler tail --format json` capture, including pretty multi-line JSON, or Workers Logpush JSON/JSONL/NDJSON directory. | CLI dashboard for dynamic dispatcher coverage: actual vs shadow specialist calls avoided, roles intentionally not invoked, observed model tokens, and token-savings estimates from per-role averages. |
 | `npm run bakeoff-report -- --input <path> [--since <iso>] [--until <iso>]` | Shadow bake-off Logpush export. | Model bake-off markdown/JSON decision report. |
 | `npm run retrieval-ab-report -- --findings=<jsonl> --truth=<jsonl>` | Hand-labeled retrieval A/B findings + truth sets. | Precision/recall/F1 comparison and ship/no-ship decision. |
 | `npm run fp-rate-report -- --repo=owner/repo` | Production KV telemetry plus review-memory records via Cloudflare API credentials. | Offline per-specialist false-positive report. |

@@ -315,6 +315,24 @@ export type JobMessage =
        * Vectorize namespace / KV keys throughout the chain.
        */
       branch?: string
+      /**
+       * `payload.before` from the push webhook. Incremental indexing may
+       * proceed only when this matches the existing manifest head; otherwise
+       * the consumer falls back to the full-tree path so missed/backlogged
+       * pushes cannot leave intermediate file changes stale.
+       */
+      before?: string
+      /**
+       * SIG-369 cost control: bounded changed-path set from a GitHub push
+       * webhook. When present, the consumer may update only these paths;
+       * absence keeps the existing full-tree index path as the safe fallback.
+       */
+      changedPaths?: {
+        /** Added or modified paths that should be re-fetched and re-embedded if indexable. */
+        upsert: string[]
+        /** Removed paths whose prior vectors should be deleted. */
+        remove: string[]
+      }
       shard?: {
         /** Inclusive lower bound into the filtered indexable-file list. */
         lo: number

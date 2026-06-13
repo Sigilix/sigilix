@@ -248,7 +248,7 @@ describe("emitModelAttempt", () => {
       role: "synth",
       attemptKind: "retry",
       attemptIndex: 2,
-      model: "kimi-k2.6:cloud",
+      model: "kimi-k2.7-code:cloud",
       timeoutMs: 160_000,
       startedAtMs: 1_000,
       endedAtMs: 1_120,
@@ -264,7 +264,7 @@ describe("emitModelAttempt", () => {
     expect(event["role"]).toBe("synth")
     expect(event["attemptKind"]).toBe("retry")
     expect(event["attemptIndex"]).toBe(2)
-    expect(event["model"]).toBe("kimi-k2.6:cloud")
+    expect(event["model"]).toBe("kimi-k2.7-code:cloud")
     expect(event["timeoutMs"]).toBe(160_000)
     expect(event["startedAtMs"]).toBe(1_000)
     expect(event["endedAtMs"]).toBe(1_120)
@@ -331,7 +331,7 @@ describe("emitSynthSummary", () => {
       inputSpecialistCount: 4,
       inputFindingCount: 9,
       outputFindingCount: 3,
-      modelUsed: "kimi-k2.6:cloud",
+      modelUsed: "kimi-k2.7-code:cloud",
     }
     emitSynthSummary(CTX, summary)
     const event = lastLogged()
@@ -343,7 +343,7 @@ describe("emitSynthSummary", () => {
     expect(event["inputSpecialistCount"]).toBe(4)
     expect(event["inputFindingCount"]).toBe(9)
     expect(event["outputFindingCount"]).toBe(3)
-    expect(event["modelUsed"]).toBe("kimi-k2.6:cloud")
+    expect(event["modelUsed"]).toBe("kimi-k2.7-code:cloud")
   })
 
   it("emits retryOutcome when the synth retry fired", () => {

@@ -9,6 +9,7 @@ import {
   upsertLexicalChunks,
   queryLexical,
   deleteLexicalNamespace,
+  deleteLexicalIds,
   _resetSchemaMemoForTests,
   type LexicalChunk,
   type RankedItem,
@@ -138,6 +139,20 @@ describe.skipIf(!FTS5_AVAILABLE)("lexical D1 round-trip (FTS5/BM25)", () => {
     expect(removed).toBe(1)
     expect(await queryLexical(db, "acme/widgets", "keepme", 10)).toHaveLength(0)
     expect((await queryLexical(db, "other/repo", "keepme", 10)).map((h) => h.id)).toEqual(["2"])
+  })
+
+  it("deletes explicit ids across more than one D1 batch", async () => {
+    const db = makeD1()
+    const chunks = Array.from({ length: 105 }, (_value, i) => chunk({ id: `id-${i}`, content: `needle ${i}` }))
+    await upsertLexicalChunks(db, chunks)
+
+    const removed = await deleteLexicalIds(
+      db,
+      chunks.map((c) => c.id),
+    )
+
+    expect(removed).toBe(105)
+    expect(await queryLexical(db, "acme/widgets", "needle", 10)).toHaveLength(0)
   })
 
   it("returns [] for an unmatchable query rather than throwing", async () => {

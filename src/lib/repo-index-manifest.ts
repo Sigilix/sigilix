@@ -109,6 +109,12 @@ export interface RepoIndexManifestV1 {
   headSha: string
   /** Stable per-run id — sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
   runId: string
+  /**
+   * Active RepoGraphDO version this manifest can safely read with. Incremental
+   * vector-only refreshes preserve the prior full graph instead of committing
+   * a partial graph under the new run id.
+   */
+  graphRunId?: string
   /** Filtered indexable file count (after extension + skip-dirs + size). */
   fileCount: number
   /** Total chunks upserted to Vectorize. */
@@ -184,6 +190,7 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
     return false
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
+  if (o.graphRunId !== undefined && (typeof o.graphRunId !== "string" || o.graphRunId.length === 0)) return false
   if (typeof o.fileCount !== "number") return false
   if (typeof o.chunkCount !== "number") return false
   if (typeof o.shardCount !== "number") return false

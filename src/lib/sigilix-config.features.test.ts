@@ -304,6 +304,26 @@ describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
     expect(result.config.commands?.review?.model?.primary).toBe(KNOWN)
   })
 
+  it("accepts Kimi K2.7 Code as a current command model override", () => {
+    const raw = JSON.stringify({
+      commands: { review: { model: { primary: "kimi-k2.7-code:cloud" } } },
+    })
+    const result = parseSigilixConfigDetailed(raw)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.config.commands?.review?.model?.primary).toBe("kimi-k2.7-code:cloud")
+  })
+
+  it("rejects retired Kimi K2.6 as a command model override", () => {
+    const raw = JSON.stringify({
+      commands: { review: { model: { primary: "kimi-k2.6:cloud" } } },
+    })
+    const result = parseSigilixConfigDetailed(raw)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/unknown model|not in.*registry/i)
+  })
+
   it("captures commands.review.model.fallbacks", () => {
     const fallbacks = [...KNOWN_MODELS].slice(0, 2)
     const raw = JSON.stringify({

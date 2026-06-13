@@ -66,6 +66,7 @@ import {
   leaseAllows,
 } from "@/src/lib/indexer-internals"
 import { processSlice } from "@/src/lib/indexer-slice"
+import { maybeHandleIncrementalPushIndex } from "@/src/lib/indexer-incremental"
 import {
   enqueueNextShard,
   persistManifest,
@@ -217,7 +218,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
     if (fresh) {
-      if (!target.isDefault || (await freshManifestHasActiveGraph({ env, owner, repo, runId }))) {
+      if (
+        !target.isDefault ||
+        (await freshManifestHasActiveGraph({ env, owner, repo, runId, graphRunId: existing.manifest.graphRunId }))
+      ) {
         console.log(
           JSON.stringify({
             event: "index-job-skip-fresh",
@@ -243,6 +247,27 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       }),
     )
     // Fall through to re-index.
+  }
+
+  if (
+    await maybeHandleIncrementalPushIndex({
+      job,
+      env,
+      client,
+      owner,
+      repo,
+      githubRepoId,
+      installationId,
+      target,
+      headSha,
+      treeSha,
+      runId,
+      astChunking: astOn,
+      existingManifest: existing,
+      chunkerVersion: effectiveChunkerVersion(astOn),
+    })
+  ) {
+    return
   }
 
   // SIG-136: claim the run lease as the FIRST side-effecting write after
@@ -585,8 +610,9 @@ async function freshManifestHasActiveGraph(args: {
   owner: string
   repo: string
   runId: string
+  graphRunId?: string | undefined
 }): Promise<boolean> {
-  const { env, owner, repo, runId } = args
+  const { env, owner, repo, runId, graphRunId } = args
   if (!graphIndexEnabled(env)) return true
 
   let activeGraphVersion: string | null = null
@@ -605,7 +631,7 @@ async function freshManifestHasActiveGraph(args: {
     return true
   }
 
-  if (activeGraphVersion === runId) return true
+  if (activeGraphVersion === runId || (graphRunId !== undefined && activeGraphVersion === graphRunId)) return true
 
   console.warn(
     JSON.stringify({

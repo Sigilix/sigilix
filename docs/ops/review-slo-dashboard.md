@@ -36,7 +36,7 @@ Emitted exactly once per review from `finalize()` in `src/lib/triage-pr-review-e
   "costBudgetUsd": 0.5,
   "costOverBudget": false,         // per-review (cost is additive, not a percentile)
   "sloBreached": false,            // latency || cost || overview over budget — the cheap alert predicate
-  "byModelUsd": { "deepseek-v4-pro:cloud": 0.031, "kimi-k2.6:cloud": 0.010 }
+  "byModelUsd": { "deepseek-v4-pro:cloud": 0.031, "kimi-k2.7-code:cloud": 0.010 }
 }
 ```
 

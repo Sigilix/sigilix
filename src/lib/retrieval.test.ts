@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { teamKeyToNamespace } from "@/src/lib/retrieval"
-import { formatChunksForPrompt } from "@/src/lib/retrieval"
+import { formatChunksForPrompt, type RetrievedChunk } from "@/src/lib/retrieval"
 
 describe("teamKeyToNamespace", () => {
   it("returns the default when team key is null", () => {
@@ -61,6 +61,51 @@ describe("formatChunksForPrompt", () => {
     expect(out).toContain("--- app/foo.ts:1-10")
     expect(out).toContain("(score=0.500)")
     expect(out).toContain("const x = 1")
+  })
+
+  it("includes indexed ref metadata when present", () => {
+    const chunks: RetrievedChunk[] = [
+      {
+        path: "app/foo.ts",
+        lineStart: 1,
+        lineEnd: 10,
+        content: "const x = 1",
+        score: 0.5,
+        indexedRef: "main@abc1234",
+        indexFreshness: "current",
+      },
+    ]
+
+    const out = formatChunksForPrompt(chunks)
+
+    expect(out).toContain("indexed_ref=main@abc1234")
+    expect(out).toContain("freshness=current")
+  })
+
+  it("orders current index chunks before legacy or unknown chunks without dropping any", () => {
+    const chunks: RetrievedChunk[] = [
+      { ...chunk("legacy.ts", "legacy"), indexFreshness: "legacy" },
+      { ...chunk("unknown.ts", "unknown"), indexFreshness: "unknown" },
+      { ...chunk("current.ts", "current"), indexFreshness: "current" },
+    ]
+
+    const out = formatChunksForPrompt(chunks)!
+
+    expect(out.indexOf("current.ts")).toBeLessThan(out.indexOf("legacy.ts"))
+    expect(out.indexOf("legacy.ts")).toBeLessThan(out.indexOf("unknown.ts"))
+    expect(out).toContain("legacy")
+    expect(out).toContain("unknown")
+  })
+
+  it("does not let freshness preference override clearly stronger relevance", () => {
+    const chunks: RetrievedChunk[] = [
+      { ...chunk("legacy.ts", "legacy", 0.95), indexFreshness: "legacy" },
+      { ...chunk("current.ts", "current", 0.5), indexFreshness: "current" },
+    ]
+
+    const out = formatChunksForPrompt(chunks)!
+
+    expect(out.indexOf("legacy.ts")).toBeLessThan(out.indexOf("current.ts"))
   })
 
   it("separates multiple chunks with a blank line", () => {

@@ -17,6 +17,7 @@ import {
   type LexicalMatch,
   type RankedItem,
 } from "./lexical-index"
+import { readRepoIndexManifestByNamespace } from "./repo-index-manifest"
 
 const DEFAULT_NAMESPACE = "rubberfit"
 const TOP_K = 6
@@ -32,6 +33,8 @@ interface VectorizeMatch {
     lineStart?: number
     lineEnd?: number
     content?: string
+    headSha?: string
+    runId?: string
   }
 }
 
@@ -54,6 +57,7 @@ export interface RetrievalEnv {
   // flag isn't "on", retrieval stays pure-vector.
   OPENCLAW_LEXICAL_INDEX?: D1Database
   OPENCLAW_RETRIEVAL_HYBRID?: string
+  OPENCLAW_STATE?: KVNamespace
 }
 
 interface RetrievalCtx {
@@ -79,6 +83,14 @@ export interface RetrievedChunk {
   source?: "vector" | "lexical" | "hybrid"
   /** SIG-45: summed reciprocal-rank-fusion score (only set on the hybrid path). */
   rrfScore?: number
+  /** Commit/ref the index says this chunk came from, formatted for prompts. */
+  indexedRef?: string
+  /** Full indexed commit SHA when known. */
+  indexedHeadSha?: string
+  /** Stable index run id when known. */
+  indexRunId?: string
+  /** current = chunk carried current manifest SHA; legacy = manifest-enriched only. */
+  indexFreshness?: "current" | "legacy" | "unknown"
 }
 
 /**
@@ -171,17 +183,18 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
     return []
   }
 
-  const vectorChunks = parseVectorMatches(result.matches)
+  const vectorChunks = await enrichWithIndexReference(parseVectorMatches(result.matches), ctx.env, namespace)
   if (!hybrid) return vectorChunks
 
   const lexical = await lexicalPromise
-  const fused = fuseRetrieval(vectorChunks, lexical, namespace)
+  const enrichedLexical = await enrichWithIndexReference(lexicalToChunks(lexical), ctx.env, namespace)
+  const fused = fuseRetrieval(vectorChunks, enrichedLexical, namespace)
   console.log(
     JSON.stringify({
       event: "pr-review-retrieval-hybrid",
       namespace,
       vectorHits: vectorChunks.length,
-      lexicalHits: lexical.length,
+      lexicalHits: enrichedLexical.length,
       fused: fused.length,
     }),
   )
@@ -210,9 +223,83 @@ function parseVectorMatches(matches: VectorizeMatch[] | undefined): RetrievedChu
       content: md.content,
       score: m.score,
       source: "vector",
+      ...(typeof md.headSha === "string" && md.headSha.length > 0 ? { indexedHeadSha: md.headSha } : {}),
+      ...(typeof md.runId === "string" && md.runId.length > 0 ? { indexRunId: md.runId } : {}),
     })
   }
   return out
+}
+
+function lexicalToChunks(lexical: LexicalMatch[]): RetrievedChunk[] {
+  return lexical.map((m) => ({
+    id: m.id,
+    path: m.path,
+    lineStart: m.lineStart,
+    lineEnd: m.lineEnd,
+    content: m.content,
+    score: m.score,
+    source: "lexical",
+  }))
+}
+
+async function enrichWithIndexReference(
+  chunks: RetrievedChunk[],
+  env: RetrievalEnv,
+  namespace: string,
+): Promise<RetrievedChunk[]> {
+  if (chunks.length === 0) return chunks
+  const manifest = await readManifestSoft(env, namespace)
+  return chunks.map((chunk) => {
+    const indexedHeadSha = chunk.indexedHeadSha ?? manifest?.headSha
+    const indexRunId = chunk.indexRunId ?? manifest?.runId
+    const indexedRef = chunk.indexedRef ?? formatIndexedRef(manifest, indexedHeadSha)
+    const indexFreshness = chunk.indexFreshness ?? classifyFreshness(chunk.indexedHeadSha, manifest?.headSha)
+    return {
+      ...chunk,
+      ...(indexedHeadSha ? { indexedHeadSha } : {}),
+      ...(indexRunId ? { indexRunId } : {}),
+      ...(indexedRef ? { indexedRef } : {}),
+      ...(indexFreshness ? { indexFreshness } : {}),
+    }
+  })
+}
+
+async function readManifestSoft(
+  env: RetrievalEnv,
+  namespace: string,
+): Promise<{ headSha: string; runId: string; branch?: string; defaultBranch?: string } | null> {
+  if (!env.OPENCLAW_STATE) return null
+  try {
+    const result = await readRepoIndexManifestByNamespace({ OPENCLAW_STATE: env.OPENCLAW_STATE }, namespace)
+    if (result.kind !== "ok") return null
+    return {
+      headSha: result.manifest.headSha,
+      runId: result.manifest.runId,
+      ...(result.manifest.branch ? { branch: result.manifest.branch } : {}),
+      ...(result.manifest.defaultBranch ? { defaultBranch: result.manifest.defaultBranch } : {}),
+    }
+  } catch (error) {
+    console.warn("retrieval manifest read failed", { error: String(error), namespace })
+    return null
+  }
+}
+
+function classifyFreshness(
+  chunkHeadSha: string | undefined,
+  manifestHeadSha: string | undefined,
+): RetrievedChunk["indexFreshness"] {
+  if (chunkHeadSha && manifestHeadSha && chunkHeadSha === manifestHeadSha) return "current"
+  if (!chunkHeadSha && manifestHeadSha) return "legacy"
+  return "unknown"
+}
+
+function formatIndexedRef(
+  manifest: { headSha: string; branch?: string; defaultBranch?: string } | null,
+  headSha: string | undefined,
+): string | undefined {
+  if (!headSha) return undefined
+  const refName = manifest?.branch ?? manifest?.defaultBranch ?? "commit"
+  return `${refName}@${headSha.slice(0, 7)}`
 }
 
 /**
@@ -223,24 +310,17 @@ function parseVectorMatches(matches: VectorizeMatch[] | undefined): RetrievedChu
  * and a same-RRF tie breaks toward the semantic hit. `source` records which
  * backend(s) surfaced each chunk so specialists can see the signal.
  */
-export function fuseRetrieval(vector: RetrievedChunk[], lexical: LexicalMatch[], namespace: string): RetrievedChunk[] {
+export function fuseRetrieval(
+  vector: RetrievedChunk[],
+  lexical: RetrievedChunk[],
+  namespace: string,
+): RetrievedChunk[] {
   void namespace // reserved for future per-namespace tuning; keeps call sites stable
   const keyOf = (c: { id?: string; path: string; lineStart: number; lineEnd: number }): string =>
     c.id && c.id.length > 0 ? c.id : `${c.path}:${c.lineStart}-${c.lineEnd}`
 
   const vectorRanked: RankedItem<RetrievedChunk>[] = vector.map((c) => ({ key: keyOf(c), item: c }))
-  const lexicalRanked: RankedItem<RetrievedChunk>[] = lexical.map((m) => ({
-    key: keyOf(m),
-    item: {
-      id: m.id,
-      path: m.path,
-      lineStart: m.lineStart,
-      lineEnd: m.lineEnd,
-      content: m.content,
-      score: m.score,
-      source: "lexical",
-    },
-  }))
+  const lexicalRanked: RankedItem<RetrievedChunk>[] = lexical.map((m) => ({ key: keyOf(m), item: m }))
 
   const inVector = new Set(vectorRanked.map((r) => r.key))
   const inLexical = new Set(lexicalRanked.map((r) => r.key))
@@ -263,7 +343,7 @@ export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
   if (chunks.length === 0) return null
   const parts: string[] = []
   let total = 0
-  for (const c of chunks) {
+  for (const c of orderChunksForPrompt(chunks)) {
     const slice = c.content.length > MAX_CHUNK_CHARS ? c.content.slice(0, MAX_CHUNK_CHARS) : c.content
     // SIG-45: on the hybrid path cite the RRF score + which signal surfaced
     // the chunk; legacy vector-only chunks (no `source`) keep `(score=X)` so
@@ -272,11 +352,41 @@ export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
       c.source && c.rrfScore !== undefined
         ? `(${c.source}, rrf=${c.rrfScore.toFixed(4)})`
         : `(score=${c.score.toFixed(3)})`
-    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag} ---\n${slice}`
+    const freshness = formatFreshnessTag(c)
+    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag}${freshness} ---\n${slice}`
     if (total + block.length > MAX_TOTAL_CHARS) break
     parts.push(block)
     total += block.length
   }
   if (parts.length === 0) return null
   return parts.join("\n\n")
+}
+
+function formatFreshnessTag(c: RetrievedChunk): string {
+  const fields: string[] = []
+  if (c.indexedRef) fields.push(`indexed_ref=${c.indexedRef}`)
+  if (c.indexFreshness) fields.push(`freshness=${c.indexFreshness}`)
+  if (fields.length === 0) return ""
+  return ` [${fields.join(", ")}]`
+}
+
+function orderChunksForPrompt(chunks: RetrievedChunk[]): RetrievedChunk[] {
+  return chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .sort((a, b) => {
+      const scoreDelta = relevanceScore(b.chunk) - relevanceScore(a.chunk)
+      if (Math.abs(scoreDelta) > 0.05) return scoreDelta
+      return freshnessRank(a.chunk) - freshnessRank(b.chunk) || a.index - b.index
+    })
+    .map((entry) => entry.chunk)
+}
+
+function relevanceScore(chunk: RetrievedChunk): number {
+  return chunk.rrfScore ?? chunk.score
+}
+
+function freshnessRank(chunk: RetrievedChunk): number {
+  if (chunk.indexFreshness === "current") return 0
+  if (chunk.indexFreshness === "legacy") return 1
+  return 2
 }

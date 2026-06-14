@@ -27,6 +27,7 @@ import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
 import { recordOutcome } from "@/src/features/precision-profile"
 import { parseFindingCategory, parseFindingFingerprint, parseFindingSeverity } from "./pr-finding-markers"
+import { verifyAndSanitizeCitations } from "./citation-verifier"
 export { parseFindingCategory } from "./pr-finding-markers"
 import { type DismissReason } from "./dismiss-reasons"
 import { recordDismissalMetric } from "./validation-metrics-client"
@@ -435,6 +436,18 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   if (!verdict) {
     console.error("gh-mention verdict did not parse", { commentId })
     return
+  }
+
+  const citationRef =
+    typeof meta.head?.sha === "string" && meta.head.sha.length > 0 ? meta.head.sha : (meta.head?.ref ?? "main")
+  const citationCheck = await verifyAndSanitizeCitations({
+    answer: verdict.answer,
+    ref: citationRef,
+    fetchFileContent: (path, ref) => client.getFileContent(owner, repo, path, ref),
+  })
+  if (citationCheck.invalid.length > 0) {
+    since("citation-verification-corrected", { invalid: citationCheck.invalid.length, ref: citationRef.slice(0, 12) })
+    verdict = { ...verdict, answer: citationCheck.answer }
   }
 
   const replyBody = formatReply(verdict)

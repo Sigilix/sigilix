@@ -150,7 +150,7 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
 
     while (chunkBuffer.length >= EMBED_BATCH) {
       const batch = chunkBuffer.splice(0, EMBED_BATCH)
-      const upserts = await embedBatch(env, batch, namespace)
+      const upserts = await embedBatch(env, batch, namespace, { headSha, runId })
       for (const record of upserts) {
         const path = typeof record.metadata.path === "string" ? record.metadata.path : ""
         if (path.length === 0) continue
@@ -173,7 +173,7 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
 
   // Drain remaining chunks.
   if (chunkBuffer.length > 0) {
-    const upserts = await embedBatch(env, chunkBuffer, namespace)
+    const upserts = await embedBatch(env, chunkBuffer, namespace, { headSha, runId })
     for (const record of upserts) {
       const path = typeof record.metadata.path === "string" ? record.metadata.path : ""
       if (path.length === 0) continue
@@ -246,7 +246,12 @@ async function dualWriteLexical(env: Env, records: ReadonlyArray<VectorizeRecord
   await upsertLexicalChunks(db, chunks)
 }
 
-async function embedBatch(env: Env, chunks: ReadonlyArray<Chunk>, namespace: string): Promise<VectorizeRecord[]> {
+async function embedBatch(
+  env: Env,
+  chunks: ReadonlyArray<Chunk>,
+  namespace: string,
+  indexRef: { headSha: string; runId: string },
+): Promise<VectorizeRecord[]> {
   const vectors = await embedTexts(
     env.AI,
     chunks.map((c) => c.content),
@@ -279,6 +284,8 @@ async function embedBatch(env: Env, chunks: ReadonlyArray<Chunk>, namespace: str
         lineStart: chunk.lineStart,
         lineEnd: chunk.lineEnd,
         content: chunk.content,
+        headSha: indexRef.headSha,
+        runId: indexRef.runId,
       },
     })
   }

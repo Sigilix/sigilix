@@ -214,6 +214,17 @@ export async function readRepoIndexManifest(env: Env, owner: string, repo: strin
   return parseRepoIndexManifest(raw)
 }
 
+export async function readRepoIndexManifestByNamespace(
+  env: { OPENCLAW_STATE: KVNamespace },
+  namespace: string,
+): Promise<ReadResult> {
+  const normalized = namespace.trim().toLowerCase()
+  if (!normalized) return { kind: "missing" }
+  const raw = await env.OPENCLAW_STATE.get(`${KV_KEY_PREFIX}${normalized}`)
+  if (raw === null) return { kind: "missing" }
+  return parseRepoIndexManifest(raw)
+}
+
 /**
  * Parse + validate a raw manifest JSON string into a tagged ReadResult.
  * Extracted so SIG-132's uninstall delete path can validate a record it

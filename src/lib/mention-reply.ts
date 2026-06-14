@@ -9,9 +9,11 @@
 
 import { generate } from "@/src/shared/adapters/model"
 import { LinearClient, buildLinearAuth } from "./linear"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isLikelyBotAuthor, stripMentionFromBody } from "./mention"
-import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "@/src/shared/domain/schemas"
 import type { Env } from "@/src/shared/types/env"
@@ -21,6 +23,7 @@ import {
   listIndexedRepos,
   listTeamRepoMappings,
   parseTeamGithubRepo,
+  resolveInstallation,
 } from "@/src/shared/adapters/github/github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "@/src/shared/util/xml-escape"
@@ -29,6 +32,7 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
+import { extractCodeCitations, verifyAndSanitizeCitations } from "./citation-verifier"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -441,7 +445,14 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  const body = formatReply({ verdict, askerHandle })
+  const verifiedAnswer = await verifyLinearMentionCitations({
+    env,
+    teamRepo,
+    retrievedChunks: chunks,
+    answer: verdict.answer,
+    log,
+  })
+  const body = formatReply({ verdict: { ...verdict, answer: verifiedAnswer }, askerHandle })
   const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
   log("reply-posted", { newCommentId, replyParentId: replyParentId ?? null })
@@ -733,6 +744,81 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchRes
     }
   }
   return { contexts, failures }
+}
+
+async function verifyLinearMentionCitations(args: {
+  env: Env
+  teamRepo: { owner: string; repo: string } | null
+  retrievedChunks: RetrievedChunk[]
+  answer: string
+  log: (label: string, extra?: Record<string, unknown>) => void
+}): Promise<string> {
+  if (extractCodeCitations(args.answer).length === 0) return args.answer
+  if (!args.teamRepo) {
+    return appendCitationVerificationUnavailable(args.answer, "no mapped GitHub repo")
+  }
+  if (!args.env.GITHUB_APP_ID || !args.env.GITHUB_PRIVATE_KEY) {
+    return appendCitationVerificationUnavailable(args.answer, "GitHub app credentials are unavailable")
+  }
+  if (!args.env.OPENCLAW_STATE) {
+    return appendCitationVerificationUnavailable(args.answer, "state storage is unavailable")
+  }
+  const { owner, repo } = args.teamRepo
+  const installation = resolveInstallation(owner, repo, args.env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+  if (!installation.ok) {
+    return appendCitationVerificationUnavailable(args.answer, `no GitHub installation for ${owner}/${repo}`)
+  }
+
+  try {
+    const token = await getInstallationToken({
+      kv: args.env.OPENCLAW_STATE,
+      appId: args.env.GITHUB_APP_ID,
+      privateKey: args.env.GITHUB_PRIVATE_KEY,
+      installationId: installation.installationId,
+    })
+    const client = new GitHubClient({ token })
+    const repoMeta = await client.getRepository(owner, repo)
+    const defaultBranch = repoMeta?.default_branch
+    if (!defaultBranch) {
+      return appendCitationVerificationUnavailable(args.answer, `default branch unavailable for ${owner}/${repo}`)
+    }
+    const branch = await client.getBranch(owner, repo, defaultBranch).catch(() => null)
+    const ref = branch?.headSha ?? defaultBranch
+    const refHints = citationRefHintsByPath(args.retrievedChunks)
+    const checked = await verifyAndSanitizeCitations({
+      answer: args.answer,
+      ref,
+      fetchFileContent: (path, liveRef) => client.getFileContent(owner, repo, path, refHints.get(path) ?? liveRef),
+    })
+    if (checked.invalid.length > 0) {
+      args.log("citation-verification-corrected", {
+        owner,
+        repo,
+        invalid: checked.invalid.length,
+        ref: ref.slice(0, 12),
+      })
+    }
+    return checked.answer
+  } catch (err) {
+    args.log("citation-verification-unavailable", {
+      owner,
+      repo,
+      err: err instanceof Error ? err.message : String(err),
+    })
+    return appendCitationVerificationUnavailable(args.answer, `GitHub verification failed for ${owner}/${repo}`)
+  }
+}
+
+function appendCitationVerificationUnavailable(answer: string, reason: string): string {
+  return `> Citation check: Unable to verify cited file/line ranges against live GitHub right now (${reason}); leaving citations unchanged.\n\n${answer}`
+}
+
+function citationRefHintsByPath(chunks: RetrievedChunk[]): Map<string, string> {
+  const refs = new Map<string, string>()
+  for (const chunk of chunks) {
+    if (chunk.indexedHeadSha && !refs.has(chunk.path)) refs.set(chunk.path, chunk.indexedHeadSha)
+  }
+  return refs
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {

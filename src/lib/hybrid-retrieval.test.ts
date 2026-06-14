@@ -24,6 +24,7 @@ function makeEnv(opts: {
   vectorMatches: ReturnType<typeof vectorMatch>[]
   hybrid?: boolean
   lexicalDb?: ReturnType<typeof makeD1>
+  manifest?: Record<string, unknown>
 }): RetrievalEnv {
   return {
     AI: {
@@ -34,6 +35,11 @@ function makeEnv(opts: {
     },
     OPENCLAW_LEXICAL_INDEX: opts.lexicalDb,
     OPENCLAW_RETRIEVAL_HYBRID: opts.hybrid ? "on" : undefined,
+    OPENCLAW_STATE: opts.manifest
+      ? {
+          get: async () => JSON.stringify(opts.manifest),
+        }
+      : undefined,
   } as unknown as RetrievalEnv
 }
 
@@ -46,6 +52,39 @@ describe("retrieveChunks — vector-only (flag off)", () => {
     expect(out).toHaveLength(1)
     expect(out[0]!.source).toBe("vector")
     expect(out[0]!.rrfScore).toBeUndefined()
+  })
+
+  it("enriches legacy vector chunks from the repo index manifest", async () => {
+    const env = makeEnv({
+      vectorMatches: [vectorMatch("v1", "src/a.ts", "alpha", 0.9)],
+      manifest: {
+        v: 1,
+        owner: "acme",
+        repo: "widgets",
+        namespace: "acme/widgets",
+        defaultBranch: "main",
+        headSha: "abc123456789",
+        runId: "run-abc",
+        fileCount: 1,
+        chunkCount: 1,
+        shardCount: 1,
+        indexedAt: "2026-06-14T00:00:00.000Z",
+        modelId: "m",
+        embeddingDim: 768,
+        chunkerVersion: 1,
+        windowLines: 30,
+        overlapLines: 10,
+      },
+    })
+
+    const out = await retrieveChunks({ text: "alpha query", teamKey: "acme/widgets", env })
+
+    expect(out[0]).toMatchObject({
+      indexedRef: "main@abc1234",
+      indexedHeadSha: "abc123456789",
+      indexRunId: "run-abc",
+      indexFreshness: "legacy",
+    })
   })
 })
 

@@ -31,6 +31,7 @@ import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
 import { PR_DESCRIBE_SCHEMA } from "@/src/shared/domain/schemas"
 import type { Env } from "@/src/shared/types/env"
+import { verifyAndSanitizeCitations } from "./citation-verifier"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 
@@ -670,7 +671,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
           // Pass full verdict body — apply mode is bounded by
           // PR_BODY_HARD_CAP via the post-merge length guard, not by
           // the comment-mode cap.
-          body: verdict.body,
+          body: await verifyPrDescribeCitations(client, owner, repo, headSha, verdict.body, tag),
         }),
       })
 
@@ -746,12 +747,19 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         }
       }
     } else {
-      const commentBody = renderDescribeComment({
-        mode,
+      const commentBody = await verifyPrDescribeCitations(
+        client,
+        owner,
+        repo,
         headSha,
-        summary: verdict.summary,
-        body: commentBodyCapped,
-      })
+        renderDescribeComment({
+          mode,
+          headSha,
+          summary: verdict.summary,
+          body: commentBodyCapped,
+        }),
+        tag,
+      )
 
       try {
         await client.createIssueComment(owner, repo, prNumber, commentBody)
@@ -820,6 +828,32 @@ async function tryPostComment(
       }),
     )
   }
+}
+
+async function verifyPrDescribeCitations(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+  answer: string,
+  tag: Record<string, unknown>,
+): Promise<string> {
+  const checked = await verifyAndSanitizeCitations({
+    answer,
+    ref: headSha,
+    fetchFileContent: (path, ref) => client.getFileContent(owner, repo, path, ref),
+  })
+  if (checked.invalid.length > 0) {
+    console.log(
+      JSON.stringify({
+        event: "pr-describe-citation-verification-corrected",
+        invalid: checked.invalid.length,
+        headSha: headSha.slice(0, 7),
+        ...tag,
+      }),
+    )
+  }
+  return checked.answer
 }
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {

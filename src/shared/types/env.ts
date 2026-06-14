@@ -672,6 +672,13 @@ export interface Env {
   // (including unset) keeps indexing disabled.
   OPENCLAW_INDEXER_ENABLED?: string
 
+  // SIG-413: PR-head-branch full-index enqueue. DEFAULT OFF — only "on" enables
+  // (anything else, including unset, keeps it off). The review path retrieves from
+  // the MAIN namespace + the SIG-129 in-memory branch overlay, so the persistent
+  // per-branch index is never read by review; building one per PR was ~380x
+  // redundant embedding churn. "on" restores the legacy enqueue during the soak.
+  OPENCLAW_PR_BRANCH_INDEX?: string
+
   // SIG-35: comma-separated long-lived non-default branches to persistently
   // index in addition to the repo default branch. Defaults in code cover
   // dev/develop/development/staging/stage; this var lets customers add

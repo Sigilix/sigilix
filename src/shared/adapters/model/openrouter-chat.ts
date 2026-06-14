@@ -27,13 +27,12 @@
 // tokens; we count `delta.reasoning` length ONLY when present and omit the field
 // otherwise (never assert it exists).
 //
-// Tools: NOT supported on this route in Phase 1. OpenRouter streaming tool-call deltas
-// do not share Ollama's snapshot semantics, so rather than mis-handle them we reject
-// `args.tools` explicitly — the specialist/synth paths are schema-constrained and never
-// pass tools; the agent loop (which does) stays on Ollama until a later phase wires
-// streaming tool deltas.
+// Tools: supported on a non-streaming tool-call turn. Streaming tool-call deltas
+// do not share Ollama's snapshot semantics, so tool turns use a single buffered
+// request and map the returned assistant `tool_calls` snapshot into the shared
+// ChatResult contract. Schema-constrained final answers continue to stream.
 
-import type { LlmUsage, ChatMessage, ChatArgs, ChatResult } from "@/src/shared/ports/model"
+import type { LlmUsage, ChatMessage, ChatArgs, ChatResult, ToolCall } from "@/src/shared/ports/model"
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -51,14 +50,29 @@ interface OpenRouterChunk {
   usage?: { prompt_tokens?: number; completion_tokens?: number }
   error?: { message?: string; code?: number | string }
 }
+interface OpenRouterChatCompletion {
+  choices?: Array<{
+    message?: {
+      role?: string
+      content?: string | null
+      tool_calls?: OpenRouterToolCall[]
+    }
+  }>
+  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  error?: { message?: string; code?: number | string }
+}
+interface OpenRouterToolCall {
+  id?: string
+  type?: string
+  function?: {
+    name?: string
+    arguments?: string | Record<string, unknown>
+  }
+}
 
 export async function chat(args: ChatArgs): Promise<ChatResult> {
   if (args.chatEnabled === "off") {
     throw new Error("OPENCLAW chat disabled (chatEnabled=off)")
-  }
-  if (args.tools && args.tools.length > 0) {
-    // Explicit reject (see header) — never silently drop tools on the OR route.
-    throw new Error("openrouter-chat: tool calls are not supported on the OpenRouter route in this phase")
   }
 
   const timeoutMs = args.timeoutMs ?? 600_000
@@ -71,12 +85,16 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
   const effectiveTemperature = args.temperature ?? (args.format ? 0 : 0.2)
   const body: Record<string, unknown> = {
     model: args.model,
-    messages: args.messages,
-    stream: true,
+    messages: sanitizeMessages(args.messages),
+    stream: !(args.tools && args.tools.length > 0),
     temperature: effectiveTemperature,
     max_tokens: DEFAULT_MAX_TOKENS,
   }
-  if (args.format) {
+  if (args.tools && args.tools.length > 0) {
+    body.tools = args.tools
+    body.tool_choice = "auto"
+    body.parallel_tool_calls = true
+  } else if (args.format) {
     body.response_format = {
       type: "json_schema",
       json_schema: { name: "pr_review", strict: false, schema: args.format },
@@ -96,6 +114,15 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
       const text = await res.text().catch(() => "")
       throw new Error(`OpenRouter HTTP ${res.status}: ${text.slice(0, 500)}`)
     }
+    if (args.tools && args.tools.length > 0) {
+      const parsed = (await res.json()) as OpenRouterChatCompletion
+      if (parsed.error) {
+        throw new Error(
+          `OpenRouter response error: ${String(parsed.error.message ?? parsed.error.code ?? "unknown").slice(0, 500)}`,
+        )
+      }
+      return mapToolCompletion(parsed)
+    }
     if (!res.body) {
       throw new Error("OpenRouter response missing body")
     }
@@ -107,6 +134,50 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     clearTimeout(timer)
     args.signal?.removeEventListener("abort", onExternalAbort)
   }
+}
+
+function sanitizeMessages(messages: ChatMessage[]): Array<Record<string, unknown>> {
+  return messages.map((m) => {
+    if (m.role === "tool") {
+      const out: Record<string, unknown> = { role: "tool", content: m.content }
+      if (m.tool_call_id) out.tool_call_id = m.tool_call_id
+      return out
+    }
+    const out: Record<string, unknown> = { role: m.role, content: m.content }
+    if (m.tool_calls && m.tool_calls.length > 0) out.tool_calls = m.tool_calls
+    return out
+  })
+}
+
+function mapToolCompletion(parsed: OpenRouterChatCompletion): ChatResult {
+  const raw = parsed.choices?.[0]?.message
+  if (!raw) throw new Error("OpenRouter tool response missing assistant message")
+  const toolCalls = normalizeToolCalls(raw.tool_calls ?? [])
+  const message: ChatMessage = {
+    role: "assistant",
+    content: typeof raw.content === "string" ? raw.content : "",
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  }
+  const usage: LlmUsage = {}
+  if (typeof parsed.usage?.prompt_tokens === "number") usage.inputTokens = parsed.usage.prompt_tokens
+  if (typeof parsed.usage?.completion_tokens === "number") usage.outputTokens = parsed.usage.completion_tokens
+  return { message, hasToolCalls: toolCalls.length > 0, usage }
+}
+
+function normalizeToolCalls(rawCalls: OpenRouterToolCall[]): ToolCall[] {
+  const out: ToolCall[] = []
+  for (const raw of rawCalls) {
+    const name = raw.function?.name
+    if (!name) continue
+    out.push({
+      ...(raw.id ? { id: raw.id } : {}),
+      function: {
+        name,
+        arguments: raw.function?.arguments ?? "{}",
+      },
+    })
+  }
+  return out
 }
 
 /**

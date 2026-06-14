@@ -92,17 +92,20 @@ import { renderPrOverviewWaitingArt } from "./pr-overview-waiting-art"
  * `isStubBody` distinguish a real loading state from a completed
  * overview that merely mentions "reviewing".
  */
-const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
+export const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
 const DEFAULT_STUB_HEAD_SHA = "0".repeat(40)
+const STATUS_BEFORE_STUB_TAIL = [
+  "**Sigilix is reviewing this pull request.**",
+  "",
+  "A structured overview will replace this note when retrieval and specialist review complete.",
+].join("\n")
 
 export function buildPrOverviewStubBody(args: { prNumber: number; headSha: string }): string {
   const body = `${OVERVIEW_MARKER}
 
 ${STUB_V2_MARKER}
 
-**Sigilix is reviewing this pull request.**
-
-A structured overview will replace this note when retrieval and specialist review complete.
+${STATUS_BEFORE_STUB_TAIL}
 
 ${renderPrOverviewWaitingArt(`queued:${args.prNumber}:${args.headSha}`)}`
   return `${body}
@@ -169,9 +172,29 @@ const LEGACY_STUB_FORM_VARIANTS = buildLegacyStubFormVariants()
 
 function isV2StubBody(trimmed: string): boolean {
   for (const marker of [OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER]) {
-    const oldV2Stub = !trimmed.includes(REVIEW_STATUS_BLOCK_START) && trimmed.endsWith("\n```")
-    const currentV2Stub = trimmed.endsWith(REVIEW_STATUS_BLOCK_END)
-    if (trimmed.startsWith(marker) && trimmed.includes(STUB_V2_MARKER) && (oldV2Stub || currentV2Stub)) {
+    const hasStubMarker = trimmed.startsWith(marker) && trimmed.includes(STUB_V2_MARKER)
+    if (!hasStubMarker) continue
+
+    const stubMarkerIndex = trimmed.indexOf(STUB_V2_MARKER)
+    const statusBlockIndex = trimmed.indexOf(REVIEW_STATUS_BLOCK_START)
+    const statusBlockEndIndex = trimmed.indexOf(REVIEW_STATUS_BLOCK_END)
+    const hasCompletedOverviewHeading = trimmed.includes("\n## Sigilix Overview")
+    const oldV2Stub =
+      !hasCompletedOverviewHeading && !trimmed.includes(REVIEW_STATUS_BLOCK_START) && trimmed.endsWith("\n```")
+    const currentV2Stub = !hasCompletedOverviewHeading && trimmed.endsWith(REVIEW_STATUS_BLOCK_END)
+    const hasEmptyStatusToStubGap =
+      statusBlockEndIndex >= 0 &&
+      statusBlockEndIndex < stubMarkerIndex &&
+      trimmed.slice(statusBlockEndIndex + REVIEW_STATUS_BLOCK_END.length, stubMarkerIndex).trim() === ""
+    const hasStatusBeforeStubTail =
+      trimmed.slice(stubMarkerIndex + STUB_V2_MARKER.length).trim() === STATUS_BEFORE_STUB_TAIL
+    const statusBeforeStub =
+      statusBlockIndex >= 0 &&
+      stubMarkerIndex > statusBlockIndex &&
+      hasEmptyStatusToStubGap &&
+      hasStatusBeforeStubTail &&
+      !hasCompletedOverviewHeading
+    if (oldV2Stub || currentV2Stub || statusBeforeStub) {
       return true
     }
   }

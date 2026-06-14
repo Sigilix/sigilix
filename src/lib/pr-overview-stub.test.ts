@@ -48,7 +48,7 @@ import {
   stubInflightKey,
   waitForPrOverviewStub,
 } from "@/src/lib/pr-overview-stub"
-import { REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
+import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
 import {
   PR_OVERVIEW_WAITING_ARTS,
   renderPrOverviewWaitingArt,
@@ -114,7 +114,7 @@ describe("buildPrOverviewStubBody — review-run status", () => {
 
     expect(artFences).toHaveLength(1)
     expect(artFences[0]!.split("\n").length).toBeGreaterThanOrEqual(15)
-    expect(artFences[0]).toBe([`== ${selectedArt.title} ==`, ...selectedArt.lines].join("\n"))
+    expect(artFences[0]).toBe([`== ${selectedArt.title} ==`, ...selectedArt.lines, "", ...selectedArt.poem].join("\n"))
     expect(body).not.toContain("30-90 seconds")
     expect(body).not.toContain("### Sigilix Review Status")
     expect(body).toContain("**Phase:** Queued")
@@ -862,6 +862,62 @@ describe("isStubBody (SIG-96)", () => {
     ].join("\n")
 
     expect(isStubBody(oldV2Stub)).toBe(true)
+  })
+
+  it("returns true for a status-before-stub v2 body from an in-flight review comment", () => {
+    const statusBeforeStub = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      "**Phase:** Retrieval",
+      "**Commit:** `aa3be4c`",
+      "",
+      REVIEW_STATUS_BLOCK_END,
+      "",
+      "<!-- sigilix:pr-overview-stub:v2 -->",
+      "",
+      "**Sigilix is reviewing this pull request.**",
+      "",
+      "A structured overview will replace this note when retrieval and specialist review complete.",
+    ].join("\n")
+
+    expect(isStubBody(statusBeforeStub)).toBe(true)
+  })
+
+  it("returns false for completed content between stale status and stub markers", () => {
+    const completedWithHistoricalMarkers = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      "**Phase:** Posted",
+      "**Commit:** `aa3be4c`",
+      "",
+      REVIEW_STATUS_BLOCK_END,
+      "",
+      "Rendered overview content that should be preserved.",
+      "",
+      "<!-- sigilix:pr-overview-stub:v2 -->",
+      "",
+      "**Sigilix is reviewing this pull request.**",
+    ].join("\n")
+
+    expect(isStubBody(completedWithHistoricalMarkers)).toBe(false)
+
+    const completedAfterStubMarker = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      REVIEW_STATUS_BLOCK_END,
+      "",
+      "<!-- sigilix:pr-overview-stub:v2 -->",
+      "",
+      "Rendered overview content that should be preserved.",
+    ].join("\n")
+
+    expect(isStubBody(completedAfterStubMarker)).toBe(false)
   })
 
   it("returns true for the legacy openclaw stub variant", () => {

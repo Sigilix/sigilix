@@ -3,6 +3,7 @@ import {
   MAX_OVERVIEW_WAITING_ART_HEIGHT,
   MAX_OVERVIEW_WAITING_ART_WIDTH,
   PR_OVERVIEW_WAITING_ARTS,
+  _testOnlyNormalizeWaitingArtIndex,
   renderPrOverviewWaitingArt,
   selectPrOverviewWaitingArt,
 } from "@/src/lib/pr-overview-waiting-art"
@@ -17,6 +18,7 @@ describe("PR overview waiting art", () => {
       expect(art.lines.length).toBeLessThanOrEqual(MAX_OVERVIEW_WAITING_ART_HEIGHT)
       expect(art.title.length).toBeGreaterThan(0)
       expect(/^[\x20-\x7E]+$/.test(art.title)).toBe(true)
+      expect(art.poem.length).toBe(2)
 
       const usedChars = new Set<string>()
       for (const line of art.lines) {
@@ -24,18 +26,31 @@ describe("PR overview waiting art", () => {
         expect(/^[\x20-\x7E]*$/.test(line)).toBe(true)
         for (const ch of line) if (ch !== " ") usedChars.add(ch)
       }
+      for (const line of art.poem) {
+        expect(line.length).toBeLessThanOrEqual(MAX_OVERVIEW_WAITING_ART_WIDTH)
+        expect(/^[\x20-\x7E]*$/.test(line)).toBe(true)
+      }
       expect(usedChars.size).toBeGreaterThanOrEqual(10)
     }
   })
 
+  it("pairs each artwork with its own unique two-line poem", () => {
+    const poemSignatures = new Set(PR_OVERVIEW_WAITING_ARTS.map((art) => art.poem.join("\n")))
+
+    expect(poemSignatures.size).toBe(PR_OVERVIEW_WAITING_ARTS.length)
+  })
+
   it("renders exactly one bounded text fence for GitHub markdown", () => {
-    const rendered = renderPrOverviewWaitingArt("Sigilix/sigilix#540@abcdef1")
+    const seed = "Sigilix/sigilix#540@abcdef1"
+    const selected = selectPrOverviewWaitingArt(seed)
+    const rendered = renderPrOverviewWaitingArt(seed)
     const lines = rendered.split("\n")
 
     expect(lines[0]).toBe("```text")
     expect(lines.at(-1)).toBe("```")
     expect(rendered.match(/```/g)).toHaveLength(2)
-    expect(rendered).toContain(selectPrOverviewWaitingArt("Sigilix/sigilix#540@abcdef1").title)
+    expect(rendered).toContain(selected.title)
+    expect(rendered).toContain(selected.poem.join("\n"))
   })
 
   it("keeps the Aristotle-inspired compositions grounded in garden imagery", () => {
@@ -54,5 +69,15 @@ describe("PR overview waiting art", () => {
       selected.add(selectPrOverviewWaitingArt(`seed-${i}`).id)
     }
     expect(selected.size).toBeGreaterThan(4)
+  })
+
+  it("normalizes signed hash remainders before indexing the catalog", () => {
+    const length = PR_OVERVIEW_WAITING_ARTS.length
+
+    expect(_testOnlyNormalizeWaitingArtIndex(-5, 3)).toBe(1)
+    expect(_testOnlyNormalizeWaitingArtIndex(-1, length)).toBe(length - 1)
+    expect(_testOnlyNormalizeWaitingArtIndex(-length - 2, length)).toBe(length - 2)
+    expect(_testOnlyNormalizeWaitingArtIndex(-2147483648, 12)).toBe(4)
+    expect(() => _testOnlyNormalizeWaitingArtIndex(1, 0)).toThrow("waiting art catalog length must be positive")
   })
 })

@@ -7,7 +7,24 @@ import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { DeterministicCheck } from "@/src/shared/domain/deterministic-checks"
 import { RUNNER_TOOL_IDS, type RunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
 
-export const SIGILIX_CONFIG_PATH = "sigilix.json"
+export const SIGILIX_CONFIG_PATH_JSON = "sigilix.json"
+export const SIGILIX_CONFIG_PATH_YAML = "sigilix.yaml"
+export const SIGILIX_CONFIG_PATH_YML = "sigilix.yml"
+export const SIGILIX_CONFIG_PATH = SIGILIX_CONFIG_PATH_JSON
+export const SIGILIX_CONFIG_PATHS = [
+  SIGILIX_CONFIG_PATH_JSON,
+  SIGILIX_CONFIG_PATH_YAML,
+  SIGILIX_CONFIG_PATH_YML,
+] as const
+
+export type SigilixConfigPath = (typeof SIGILIX_CONFIG_PATHS)[number]
+export type SigilixConfigFormat = "json" | "yaml"
+
+export interface SigilixConfigSource {
+  path: SigilixConfigPath
+  format: SigilixConfigFormat
+  raw: string
+}
 
 /**
  * ARC-176: review tone. `chill` (default) only flags must-fix

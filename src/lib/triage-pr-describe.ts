@@ -26,12 +26,7 @@ import { PR_DESCRIBE_PROMPTS } from "@/src/prompts/pr-describe"
 import { generate } from "@/src/shared/adapters/model"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
-import {
-  loadSigilixConfig,
-  loadSigilixConfigRaw,
-  parseSigilixConfigDetailed,
-  resolveCommandConfig,
-} from "./sigilix-config"
+import { EMPTY_CONFIG, loadSigilixConfigSource, parseSigilixConfigSource, resolveCommandConfig } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
 import { PR_DESCRIBE_SCHEMA } from "@/src/shared/domain/schemas"
@@ -222,13 +217,13 @@ export function renderDescribeComment(args: {
 
 /**
  * Disabled-config branch. Posted when the per-repo
- * `sigilix.json` has `describe.enabled: false`. Visible signal
+ * Sigilix config has `describe.enabled: false`. Visible signal
  * (rather than silent drop) because the user explicitly typed the
  * command and would otherwise wonder where the output went.
  */
 export function renderDisabledComment(): string {
   return [
-    "**Sigilix describe** — disabled in `sigilix.json` for this repo.",
+    "**Sigilix describe** — disabled in Sigilix config for this repo.",
     "",
     "Remove `describe.enabled: false` (or set it to `true`) at the PR head ref to re-enable.",
   ].join("\n")
@@ -409,16 +404,16 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   const meta = await client.getPullRequest(owner, repo, prNumber)
   const headSha = meta.head.sha
 
-  // ARC-185: load with detailed parse for the parse-error PR
+  // ARC-185/SIG-291: load with detailed parse for the parse-error PR
   // comment. On parse failure, post the comment fire-and-forget
   // (idempotent per head SHA) and proceed with EMPTY_CONFIG so the
   // describe still runs in default mode.
-  const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
-  let config: Awaited<ReturnType<typeof loadSigilixConfig>>
-  if (rawConfig === null) {
-    config = await loadSigilixConfig(client, owner, repo, headSha)
+  const configSource = await loadSigilixConfigSource(client, owner, repo, headSha)
+  let config = EMPTY_CONFIG
+  if (configSource === null) {
+    config = EMPTY_CONFIG
   } else {
-    const parsed = parseSigilixConfigDetailed(rawConfig)
+    const parsed = parseSigilixConfigSource(configSource)
     if (parsed.ok) {
       config = parsed.config
     } else {
@@ -452,7 +447,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
           }),
         )
       })
-      config = await loadSigilixConfig(client, owner, repo, headSha)
+      config = EMPTY_CONFIG
     }
   }
   // Disabled-config gate. Loaded AT the head ref so per-PR config

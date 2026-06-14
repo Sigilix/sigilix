@@ -12,7 +12,7 @@ const mockGetPullRequestDiff = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdatePullRequestBody = vi.fn(async (..._args: unknown[]) => undefined)
 const mockGenerate = vi.fn()
-const mockLoadSigilixConfig = vi.fn()
+const mockLoadSigilixConfigSource = vi.fn()
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -46,7 +46,7 @@ vi.mock("@/src/lib/sigilix-config", async () => {
   const actual = await vi.importActual<typeof import("@/src/lib/sigilix-config")>("@/src/lib/sigilix-config")
   return {
     ...actual,
-    loadSigilixConfig: (...args: unknown[]) => mockLoadSigilixConfig(...args),
+    loadSigilixConfigSource: (...args: unknown[]) => mockLoadSigilixConfigSource(...args),
   }
 })
 
@@ -66,6 +66,10 @@ import {
 import type { Env } from "@/src/shared/types/env"
 import { makeKvStub, makeEnv } from "@/src/lib/triage-pr-describe.test-helpers"
 
+function jsonConfigSource(config: unknown) {
+  return { path: "sigilix.json", format: "json", raw: JSON.stringify(config) }
+}
+
 beforeEach(() => {
   // mockClear (not mockReset) — preserves the implementation set by
   // the module-level vi.mock factory (matches the existing
@@ -76,7 +80,7 @@ beforeEach(() => {
   mockCreateIssueComment.mockClear()
   mockUpdatePullRequestBody.mockReset().mockResolvedValue(undefined)
   mockGenerate.mockClear()
-  mockLoadSigilixConfig.mockClear()
+  mockLoadSigilixConfigSource.mockClear()
   mockGetPullRequest.mockResolvedValue({
     head: { sha: "abc1234567890abcdef1234567890abcdef12345" },
     title: "Add widget",
@@ -84,7 +88,7 @@ beforeEach(() => {
   })
   mockGetPullRequestDiff.mockResolvedValue("diff --git a/foo.ts ...\n+const x = 1")
   mockCreateIssueComment.mockResolvedValue({})
-  mockLoadSigilixConfig.mockResolvedValue({})
+  mockLoadSigilixConfigSource.mockResolvedValue(null)
 })
 
 describe("renderDescribeComment", () => {
@@ -187,7 +191,7 @@ describe("renderDisabledComment", () => {
   it("explains the disable mechanism in plain English", () => {
     const out = renderDisabledComment()
     expect(out).toContain("disabled")
-    expect(out).toContain("`sigilix.json`")
+    expect(out).toContain("Sigilix config")
     expect(out).toContain("describe.enabled")
   })
 })
@@ -531,7 +535,7 @@ describe("handlePrDescribe — sensitive-repo gate", () => {
 
 describe("handlePrDescribe — disabled-config gate", () => {
   it("posts the disabled comment + does NOT call generate", async () => {
-    mockLoadSigilixConfig.mockResolvedValueOnce({ describe: { enabled: false } })
+    mockLoadSigilixConfigSource.mockResolvedValueOnce(jsonConfigSource({ describe: { enabled: false } }))
     const { kv } = makeKvStub()
     await handlePrDescribe({
       owner: "acme",
@@ -544,11 +548,11 @@ describe("handlePrDescribe — disabled-config gate", () => {
     })
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
-    expect(mockCreateIssueComment.mock.calls[0]![3] as string).toContain("disabled in `sigilix.json`")
+    expect(mockCreateIssueComment.mock.calls[0]![3] as string).toContain("disabled in Sigilix config")
   })
 
   it("does NOT post the disabled comment when describe.enabled is true", async () => {
-    mockLoadSigilixConfig.mockResolvedValueOnce({ describe: { enabled: true } })
+    mockLoadSigilixConfigSource.mockResolvedValueOnce(jsonConfigSource({ describe: { enabled: true } }))
     mockGenerate.mockResolvedValue(
       JSON.stringify({
         summary: "x".repeat(20),
@@ -569,7 +573,7 @@ describe("handlePrDescribe — disabled-config gate", () => {
   })
 
   it("does NOT post the disabled comment when describe field is missing entirely", async () => {
-    mockLoadSigilixConfig.mockResolvedValueOnce({})
+    mockLoadSigilixConfigSource.mockResolvedValueOnce(jsonConfigSource({}))
     mockGenerate.mockResolvedValue(
       JSON.stringify({
         summary: "x".repeat(20),

@@ -29,8 +29,19 @@ export type {
   SigilixCommandPromptConfig,
   SigilixCommandModelConfig,
   SigilixCommandConfig,
+  SigilixConfigPath,
+  SigilixConfigFormat,
+  SigilixConfigSource,
 } from "@/src/shared/domain/config/types"
-export { SIGILIX_CONFIG_PATH, KNOWN_MODELS, EMPTY_CONFIG } from "@/src/shared/domain/config/types"
+export {
+  SIGILIX_CONFIG_PATH,
+  SIGILIX_CONFIG_PATH_JSON,
+  SIGILIX_CONFIG_PATH_YAML,
+  SIGILIX_CONFIG_PATH_YML,
+  SIGILIX_CONFIG_PATHS,
+  KNOWN_MODELS,
+  EMPTY_CONFIG,
+} from "@/src/shared/domain/config/types"
 export * from "@/src/shared/domain/config/parse"
 export * from "@/src/shared/domain/config/resolve"
 export * from "@/src/shared/adapters/config/load"

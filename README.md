@@ -274,11 +274,13 @@ curl -X POST "https://sigilix.<your-account>.workers.dev/linear/manual" \
   -d '{"issueId": "ARC-42"}'
 ```
 
-## Per-repo config (`sigilix.json`)
+## Per-repo config (`sigilix.json`, `sigilix.yaml`, `sigilix.yml`)
 
-Drop a `sigilix.json` at the repo root to give Sigilix per-repo
+Drop a Sigilix config file at the repo root to give Sigilix per-repo
 guidance. Read at the PR head SHA on every review run, so you can
-iterate on the rules in the same PR they apply to.
+iterate on the rules in the same PR they apply to. Precedence is
+`sigilix.json` first, then `sigilix.yaml`, then `sigilix.yml`; remove
+the JSON file when migrating a repo to YAML.
 
 ```json
 {
@@ -292,7 +294,20 @@ iterate on the rules in the same PR they apply to.
 }
 ```
 
-All fields are optional. Missing file = no extra context (current behavior). Malformed JSON = ignored with a structured warning logged but the review still runs — the config is never load-bearing for review correctness.
+YAML is useful when comments make the config easier to maintain:
+
+```yaml
+# Repo-wide guidance is shown to every specialist and the synthesizer.
+guidance: This repo is a TypeScript Cloudflare Worker. Reject any new class declarations.
+
+rules:
+  logic: Flag any function over 50 lines.
+  security: Always check token handling and signal-aborted paths.
+  performance: Reject sync I/O in request handlers.
+  tests: Require at least one test per new exported function.
+```
+
+All fields are optional. Missing file = no extra context (current behavior). Malformed JSON/YAML = ignored with a structured warning logged but the review still runs — the config is never load-bearing for review correctness. YAML is parsed as JSON-compatible data: use explicit `true`/`false` booleans and numbers, quote glob patterns that start with `!` or `*`, and do not use custom tags, anchors, or aliases.
 
 `guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
 

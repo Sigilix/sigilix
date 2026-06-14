@@ -31,7 +31,7 @@ import {
 } from "@/src/shared/util/diff-positions"
 export { isContiguousRightRange } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
-import { loadSigilixConfigRaw, parseSigilixConfigDetailed, resolveCommandConfig, EMPTY_CONFIG } from "./sigilix-config"
+import { loadSigilixConfigSource, parseSigilixConfigSource, resolveCommandConfig, EMPTY_CONFIG } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import type { Env } from "@/src/shared/types/env"
 
@@ -145,14 +145,14 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
 
     const reviewable = parseDiffToReviewablePositions(diff)
 
-    // ARC-185: load sigilix.json with detailed parse so we can post
+    // ARC-185/SIG-291: load repo config with detailed parse so we can post
     // a parse-error PR comment on user-invoked slash commands. On
     // parse failure: fire-and-forget the comment (idempotent per
     // head SHA) and continue with EMPTY_CONFIG (degraded mode).
-    const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
+    const configSource = await loadSigilixConfigSource(client, owner, repo, headSha)
     let sigilixConfig: typeof EMPTY_CONFIG = EMPTY_CONFIG
-    if (rawConfig !== null) {
-      const result = parseSigilixConfigDetailed(rawConfig)
+    if (configSource !== null) {
+      const result = parseSigilixConfigSource(configSource)
       if (result.ok) {
         sigilixConfig = result.config
       } else {

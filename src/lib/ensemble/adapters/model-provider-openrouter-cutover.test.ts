@@ -1,7 +1,7 @@
-// SIG-405 (OpenRouter migration, Phase 2): the cutover resolver + per-provider
-// key selection. Proves logic→openai/o3 is gated by the provider map, that the
-// OFF path is byte-identical, that the key is selected by model-id shape, and
-// that no path can send the wrong provider's key.
+// SIG-406 (OpenRouter alpha): per-provider API-key selection for the all-OpenRouter
+// lineup. Proves the key is selected by model-id shape, that no path can send the
+// wrong provider's key (fail-closed), and that `runSpecialist` routes the role's
+// OpenRouter model + the OpenRouter key (or fails closed when that key is unset).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -21,48 +21,10 @@ import {
   modelApiKeys,
   runSpecialist,
 } from "@/src/lib/ensemble/adapters/model-provider"
-import { specialistProviderOverride } from "@/src/lib/ensemble/adapters/model-provider-routing"
 import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
-import type { ModelProvider } from "@/src/lib/ensemble/domain/config"
-import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 
-const ALL_ROLES: SpecialistRole[] = ["logic", "security", "performance", "tests"]
-const LOGIC_OR = new Map<SpecialistRole, ModelProvider>([["logic", "openrouter"]])
-const EMPTY = new Map<SpecialistRole, ModelProvider>()
 const BOTH_KEYS = { ollama: "ollama-key", openrouter: "openrouter-key" }
-
-describe("specialistProviderOverride — provider-gated config override", () => {
-  it("logic + {logic:openrouter} → openai/o3 on the OpenRouter route (retries:1, no fallback)", () => {
-    expect(specialistProviderOverride("logic", LOGIC_OR)).toEqual({
-      primary: "openai/o3",
-      retries: 1,
-      fallback: null,
-      perAttemptTimeoutMs: 120_000,
-    })
-  })
-
-  it("logic + empty map → null (runner falls back to the SPECIALIST_CONFIGS Ollama lineup)", () => {
-    expect(specialistProviderOverride("logic", EMPTY)).toBeNull()
-  })
-
-  it('logic + {logic:"ollama"} → null (only "openrouter" overrides)', () => {
-    const ollamaMap = new Map<SpecialistRole, ModelProvider>([["logic", "ollama"]])
-    expect(specialistProviderOverride("logic", ollamaMap)).toBeNull()
-  })
-
-  it("non-logic roles → null even when logic is on OpenRouter", () => {
-    for (const role of ["security", "performance", "tests"] as SpecialistRole[]) {
-      expect(specialistProviderOverride(role, LOGIC_OR)).toBeNull()
-    }
-  })
-
-  it("OFF path: no override for any role on the empty map (→ runner uses SPECIALIST_CONFIGS, byte-identical)", () => {
-    for (const role of ALL_ROLES) {
-      expect(specialistProviderOverride(role, EMPTY)).toBeNull()
-    }
-  })
-})
 
 describe("modelApiKeys — env → key set", () => {
   it("maps OLLAMA_API_KEY / OPENROUTER_API_KEY (openrouter undefined when unset)", () => {
@@ -95,21 +57,27 @@ describe("selectConfigApiKey — per-provider key, fail-closed, mixed-provider g
   })
 })
 
-describe("invariant: no shipped/effective config mixes providers", () => {
+describe("invariant: no shipped config mixes providers", () => {
   it("selectConfigApiKey never throws for any reachable config", () => {
-    const reachable: ModelConfig[] = [
-      ...Object.values(SPECIALIST_CONFIGS),
-      SYNTHESIZER_CONFIG,
-      CLAIM_EXTRACTOR_CONFIG,
-      specialistProviderOverride("logic", LOGIC_OR)!, // the o3 cutover config
-    ]
+    const reachable: ModelConfig[] = [...Object.values(SPECIALIST_CONFIGS), SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]
     for (const config of reachable) {
       expect(() => selectConfigApiKey(config, BOTH_KEYS)).not.toThrow()
     }
   })
+
+  it("every shipped config resolves to the OpenRouter key (the all-OpenRouter alpha lineup)", () => {
+    // SIG-406: specialists + synth + the claim-extractor are ALL on OpenRouter, so the
+    // key selector must return the OpenRouter key for each. Reverting any to a `:cloud`
+    // model without re-wiring its call site to the Ollama key would resurface the
+    // claim-extractor key-leak class (the call site passes a key the config doesn't match).
+    const reachable: ModelConfig[] = [...Object.values(SPECIALIST_CONFIGS), SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]
+    for (const config of reachable) {
+      expect(selectConfigApiKey(config, BOTH_KEYS)).toBe("openrouter-key")
+    }
+  })
 })
 
-describe("runSpecialist — routes the right model to the right key", () => {
+describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter key", () => {
   const validVerdict = JSON.stringify({ summary: "ok", confidence: 3, findings: [] })
   const perfCtx: EnsembleRunCtx = { owner: "o", repo: "r", prNumber: 1, headSha: "a".repeat(40) }
   const baseArgs = {
@@ -130,37 +98,22 @@ describe("runSpecialist — routes the right model to the right key", () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it("logic on OpenRouter → chat gets model openai/o3 + the OpenRouter key", async () => {
-    await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, providerByRole: LOGIC_OR, ...baseArgs })
+  it("logic → chat gets model openai/o3 + the OpenRouter key", async () => {
+    await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
     expect(mockChat).toHaveBeenCalledTimes(1)
     const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
     expect(call.model).toBe("openai/o3")
     expect(call.apiKey).toBe("openrouter-key")
   })
 
-  it("logic OFF (empty map) → chat gets the Ollama model + the Ollama key", async () => {
-    await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, providerByRole: EMPTY, ...baseArgs })
-    const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
-    expect(call.model).toBe("deepseek-v4-pro:cloud")
-    expect(call.apiKey).toBe("ollama-key")
-  })
-
-  it("logic on OpenRouter but OPENROUTER_API_KEY unset → fails closed, never calls chat with the Ollama key", async () => {
+  it("logic but OPENROUTER_API_KEY unset → fails closed, never calls chat with the Ollama key", async () => {
     const res = await runSpecialist({
       role: "logic",
       apiKeys: { ollama: "ollama-key", openrouter: undefined },
-      providerByRole: LOGIC_OR,
       ...baseArgs,
     })
     expect(res.failureReason).toBe("missing_api_key")
     expect(res.modelUsed).toBe("openai/o3")
     expect(mockChat).not.toHaveBeenCalled()
-  })
-
-  it("mixed-provider run: same map, logic→o3/openrouter while security→deepseek/ollama", async () => {
-    await runSpecialist({ role: "security", apiKeys: BOTH_KEYS, providerByRole: LOGIC_OR, ...baseArgs })
-    const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
-    expect(call.model).toBe("deepseek-v4-flash:cloud")
-    expect(call.apiKey).toBe("ollama-key")
   })
 })

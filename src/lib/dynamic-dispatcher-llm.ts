@@ -15,7 +15,7 @@
 
 import type { ClassifiedDiffFile } from "./diff-file-classify"
 import type { DiffSignals, SpecialistRole } from "./ensemble-router"
-import { chat } from "@/src/shared/adapters/model"
+import { chat, isOpenRouterModel } from "@/src/shared/adapters/model"
 import { buildSanitizedMetadataBlock, type SanitizedMetadata } from "./dispatcher-prompt-sanitizer"
 import { extractDiffSample, truncate } from "./dynamic-dispatcher-patterns"
 
@@ -38,9 +38,13 @@ export type DispatcherLlmOutcome =
  *  observe a fail-closed return. */
 export const DISPATCHER_LLM_TIMEOUT_MS = 8_000
 
-/** Model used for the LLM classifier. In-fleet (same provider as the
- *  tests specialist); changing this is a routing-table edit. */
-export const DISPATCHER_LLM_MODEL = "deepseek-v4-flash:cloud"
+/** Model used for the LLM classifier. SIG-406: brought over to OpenRouter on the
+ *  synth model (`nvidia/nemotron-3-ultra-550b-a55b`) — a strong generalist won't
+ *  wrongly SKIP a needed specialist (a weaker classifier under-dispatches, costing
+ *  recall, which is the expensive failure here vs the cheap over-dispatch). Slash-id
+ *  routes to OpenRouter via the `chat` router; the call site selects the matching
+ *  OpenRouter key by shape. Changing this is a routing-table edit. */
+export const DISPATCHER_LLM_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 
 /** Per-file diff-snippet cap fed into the LLM prompt. The prompt-
  *  budget target is ~1500 input tokens; with 4 files at ~200 chars
@@ -89,7 +93,11 @@ export async function callLlmClassifier(args: {
   prBody?: string
   commitMessage: string
   ambiguous: readonly SpecialistRole[]
-  apiKey: string
+  /** SIG-406: BOTH provider keys; the function picks the one matching
+   *  DISPATCHER_LLM_MODEL by id-shape (OpenRouter id → openrouter key,
+   *  `:cloud` tag → ollama key) and fails closed when it is unset. */
+  ollamaApiKey: string | undefined
+  openrouterApiKey: string | undefined
   signal?: AbortSignal
   /**
    * SIG-230: telemetry callback fires once the metadata is sanitized
@@ -98,12 +106,14 @@ export async function callLlmClassifier(args: {
    */
   onSanitized?: (s: SanitizedMetadata) => void
 }): Promise<LlmClassifierResult> {
-  if (!args.apiKey) {
+  // SIG-406: pick the key matching DISPATCHER_LLM_MODEL's provider by id-shape.
+  const apiKey = isOpenRouterModel(DISPATCHER_LLM_MODEL) ? args.openrouterApiKey : args.ollamaApiKey
+  if (!apiKey) {
     return {
       outcome: "no_api_key",
       picks: [...args.ambiguous],
       confidence: 1,
-      reasoning: "OLLAMA_API_KEY missing; failing closed to ambiguous-all",
+      reasoning: "no OpenRouter API key; failing closed to ambiguous-all",
     }
   }
 
@@ -159,7 +169,7 @@ export async function callLlmClassifier(args: {
   try {
     const result = await chat({
       model: DISPATCHER_LLM_MODEL,
-      apiKey: args.apiKey,
+      apiKey,
       messages: built.messages,
       format: DISPATCHER_LLM_SCHEMA,
       temperature: 0,

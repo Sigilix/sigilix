@@ -27,7 +27,6 @@ function scheduleArgs(mode: ResweepArgs["mode"]): ResweepArgs {
     orchCtrl: new AbortController(),
     diff: "diff --git a/app.ts b/app.ts",
     succeeded: PASS_1_VERDICTS,
-    providerByRole: new Map(),
   }
 }
 

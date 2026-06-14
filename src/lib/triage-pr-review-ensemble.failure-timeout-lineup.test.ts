@@ -132,13 +132,12 @@ describe("Phase 4a.3 — timeout schedule", () => {
     expect(ORCHESTRATOR_TIMEOUT_MS).toBeLessThan(900_000)
   })
 
-  it("specialist budget accommodates 2 primary attempts + 1 fallback at PER_ATTEMPT_TIMEOUT_MS cap (SIG-234 tightening)", () => {
-    // SIG-234 (2026-05-26): the prior 270s budget was sized for
-    // `deepseek-v4-pro:cloud` at ~90s/attempt. After the lineup swap
-    // retired v4-pro from the logic primary, the new primaries all
-    // respect PER_ATTEMPT_TIMEOUT_MS (60s) cleanly. Budget = 3 * 60s
-    // = 180s. The regression guard still bounds the floor (so a
-    // future tighten can't silently break fallback firing).
+  it("specialist budget floors at a few PER_ATTEMPT_TIMEOUT_MS caps + backoff (regression guard)", () => {
+    // SIG-406: no role carries a cross-provider fallback anymore (OpenRouter routes
+    // across upstreams), so the worst case is primary + 1 retry at the default cap.
+    // This stays a generous FLOOR guard (3× the 60s default + backoff) so a future
+    // tighten of SPECIALIST_TIMEOUT_MS can't silently starve the retry ladder — the
+    // exact per-role primary+retry chains are pinned in logic-per-attempt-timeout.test.ts.
     const retryBackoffMs = 1_000
     const minBudget = 3 * PER_ATTEMPT_TIMEOUT_MS + retryBackoffMs
     expect(SPECIALIST_TIMEOUT_MS).toBeGreaterThanOrEqual(minBudget)
@@ -154,137 +153,80 @@ describe("Phase 4a.3 — timeout schedule", () => {
   })
 })
 
-describe("SIG-349 — measured model lineup", () => {
-  it("logic specialist runs deepseek-v4-pro:cloud primary, retries:0, with a qwen3-coder-next cross-provider fallback (think:false + fast-fallback)", () => {
-    // SIG-287 (2026-05-30): the prior "trim to 1-attempt-only, fallback:null"
-    // (PR #188) was built on the wrong diagnosis ("prompt-driven, not model-
-    // driven"). The TRUE root cause was a missing `think:false` — the reasoning
-    // primary burned the whole budget thinking, emitting zero `response`
-    // tokens. With think:false (ollama-chat.ts / ollama.ts) logic finishes
-    // fast, so it now carries a CROSS-PROVIDER fallback: a future stall fails
-    // fast (120s) and qwen3-coder-next rescues it. retries:0 (a same-model
-    // retry of a stalled deepseek would just stall again — the fallback is the
-    // resilience). Cross-provider so the fallback fails independently.
-    // 2026-06-05: primary SWAPPED flash→pro. With think:false v4-pro is also
-    // fast (~6-12s), and the subtle-logic recall ruler (K=12 real-path) shows
-    // v4-pro + FP-discipline at recall 93% / FP 25% vs flash-tuned 86% / 31%.
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
-    expect(SPECIALIST_CONFIGS.logic.retries).toBe(0)
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("qwen3-coder-next:cloud")
-    const primaryFamily = SPECIALIST_CONFIGS.logic.primary.split("-")[0]
-    expect(SPECIALIST_CONFIGS.logic.fallback?.split("-")[0]).not.toBe(primaryFamily)
+describe("SIG-406 — OpenRouter alpha model lineup", () => {
+  // SIG-406 (2026-06-14): the whole review ensemble cut over to OpenRouter. Every
+  // role is `retries: 1, fallback: null` — OpenRouter routes each call across its
+  // upstream providers, so the Ollama-era cross-provider fallback is gone; one
+  // retry covers a transient OpenRouter blip. Per-attempt caps preserved where the
+  // role set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
+  it("logic specialist runs openai/o3 (retries:1, no fallback, 120s attempt cap)", () => {
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("openai/o3")
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
+    expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)
   })
 
-  it("performance specialist runs glm-5.1:cloud (ARC-167 retained) with kimi-k2.5 fallback", () => {
-    expect(SPECIALIST_CONFIGS.performance.primary).toBe("glm-5.1:cloud")
-    expect(SPECIALIST_CONFIGS.performance.fallback).toBe("kimi-k2.5:cloud")
+  it("performance specialist runs z-ai/glm-5.1 (retries:1, no fallback)", () => {
+    expect(SPECIALIST_CONFIGS.performance.primary).toBe("z-ai/glm-5.1")
+    expect(SPECIALIST_CONFIGS.performance.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(1)
   })
 
-  it("security specialist runs deepseek-v4-flash:cloud (reasoner, reverted from the qwen coder) + deepseek-v4-pro fallback", () => {
-    // pr/07 regression: SIG-234 had swapped security to qwen3-coder-next (a
-    // CODER model) on the premise "vulns are syntax recognition, not reasoning".
-    // That premise fails for AUTHORIZATION — IDOR/BOLA/access-control are
-    // reasoning, and the coder model generated ZERO authz findings on an
-    // IDOR-heavy benchmark (raw pre-gate telemetry: never generated, not
-    // dropped). Reverted to a REASONING model. Deliberately SHARES
-    // deepseek-v4-flash with logic (recall beats the 4+1-unique nicety);
-    // deepseek-v4-pro stays as the deeper authz fallback.
-    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek-v4-pro:cloud")
+  it("security specialist runs deepseek/deepseek-v4-flash (retries:1, no fallback)", () => {
+    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek/deepseek-v4-flash")
+    expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("tests specialist runs deepseek-v4-flash primary + MiniMax M3 fallback with a 160s attempt cap", () => {
-    // SIG-349: V4 Flash primary beats the MiniMax M3 K=12 baseline on the
-    // tests-overfire post-gate surface while returning in seconds. MiniMax M3
-    // stays as the cross-provider tests-lane fallback so V4 parse/timeouts
-    // route to the known baseline instead of dropping coverage.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("minimax-m3:cloud")
-    expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
+  it("tests specialist runs deepseek/deepseek-v4-pro (retries:1, no fallback, 160s attempt cap)", () => {
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek/deepseek-v4-pro")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBeNull()
+    expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
   })
 
-  it("tests intentionally shares security's V4 Flash primary after SIG-349", () => {
+  it("security and tests are now DISTINCT DeepSeek models (flash vs pro); 4 unique specialist primaries", () => {
+    // SIG-349 had tests SHARE security's flash on Ollama. SIG-406 splits them:
+    // security = deepseek/deepseek-v4-flash, tests = deepseek/deepseek-v4-pro
+    // (pro edges flash on subtle test-quality cases). All four specialist
+    // primaries are now distinct again.
+    expect(SPECIALIST_CONFIGS.tests.primary).not.toBe(SPECIALIST_CONFIGS.security.primary)
     const primaries = [
       SPECIALIST_CONFIGS.logic.primary,
       SPECIALIST_CONFIGS.security.primary,
       SPECIALIST_CONFIGS.performance.primary,
       SPECIALIST_CONFIGS.tests.primary,
-      SYNTHESIZER_CONFIG.primary,
     ]
-    // History: SIG-234 preferred 4+1-unique primaries, but recall/runtime wins
-    // over model-diversity when measured. Security uses V4 Flash because authz
-    // needs a reasoner; SIG-349 intentionally moves tests onto the same fast
-    // reasoner after K-repeated tests-overfire measurement, with MiniMax as the
-    // fallback safety net.
-    expect(SPECIALIST_CONFIGS.security.primary).not.toBe(SPECIALIST_CONFIGS.logic.primary)
-    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe(SPECIALIST_CONFIGS.security.primary)
     expect(new Set(primaries).size).toBe(4)
   })
 
-  it("synthesizer uses gemma4:31b primary + DeepSeek-flash cross-provider fallback (SIG-392)", () => {
-    // ARC-291 (PR #97 hot-fix): synth fallback was kimi-k2.5:cloud
-    // (same Moonshot provider as primary). When Moonshot had a bad
-    // few minutes, both primary AND fallback failed identically →
-    // synth_timeout. Sigilix's review of PR #97 demoed this with a
-    // 6m 16s wall-clock burn and a customer-visible skip-notice.
-    //
-    // Cross-provider fallback is the whole point of the fallback
-    // mechanic. Every other ModelConfig in this file had it; synth
-    // was the outlier. Switched to deepseek-v4-flash (proven primary
-    // on security + tests specialists, different provider, fails
-    // independently from Moonshot).
-    // SIG-234 (2026-05-26): synth primary moved kimi-k2.6 →
-    // gpt-oss:120b. Removes Moonshot from the customer-visible
-    // critical merge path entirely. Cross-provider fallback retained.
-    // SIG-392 (2026-06-11): primary gpt-oss:120b-cloud → gemma4:31b — won the
-    // uncapped shared-prompt bake-off on every axis (retention, FP, aborts,
-    // latency, drop-reason honesty) at ~4× lower cost; see SYNTHESIZER_CONFIG.
-    expect(SYNTHESIZER_CONFIG.primary).toBe("gemma4:31b")
-    expect(SYNTHESIZER_CONFIG.fallback).toBe("deepseek-v4-flash:cloud")
-    // SIG-392 (2026-06-11): per-attempt 60s → 150s + same-model retry dropped
-    // (the SIG-287 logic-role fast-fallback shape). The 60s cap was killing
-    // healthy slow-tail gpt-oss attempts at exactly 60,006ms; the ladder must
-    // fit the 325s synth phase, so 150+150 (primary+fallback) replaces
-    // 60+60+60 (primary+retry+fallback).
-    expect(SYNTHESIZER_CONFIG.retries).toBe(0)
+  it("synthesizer runs nvidia/nemotron-3-ultra (retries:1, no fallback, 150s attempt cap)", () => {
+    // SIG-406 alpha: nemotron-3-ultra on OpenRouter — a strong generalist
+    // adjudicator decorrelated from every specialist family. retries:1,
+    // fallback:null (OpenRouter self-routes).
+    expect(SYNTHESIZER_CONFIG.primary).toBe("nvidia/nemotron-3-ultra-550b-a55b")
+    expect(SYNTHESIZER_CONFIG.fallback).toBeNull()
+    expect(SYNTHESIZER_CONFIG.retries).toBe(1)
     expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
-    // Cross-provider invariant: synth primary and fallback MUST NOT
-    // share the same provider prefix. If a future bump ever picks
-    // a same-provider fallback again, this assertion catches it at
-    // CI time. The check is intentionally generous on what counts
-    // as "different provider" — any model name that doesn't share
-    // primary's family prefix (everything before the first hyphen)
-    // satisfies the cross-provider requirement.
-    const primaryFamily = SYNTHESIZER_CONFIG.primary.split("-")[0]
-    const fallbackFamily = SYNTHESIZER_CONFIG.fallback?.split("-")[0]
-    expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (14 after SIG-392 synth retry removal)", () => {
-    // The production constant is what `dailyBudgetAvailable()` reserves
-    // before admitting a PR, so the regression must assert against it
-    // directly — not against a hand-calc that would silently drift if
-    // someone changes the production formula. Pre-flight retrieve is
-    // a Vectorize call (gated by OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR),
-    // not a model call (gated by OPENCLAW_ENSEMBLE_DAILY_BUDGET), so it
-    // is intentionally NOT counted here.
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (12)", () => {
+    // The production constant is what `dailyBudgetAvailable()` reserves before
+    // admitting a PR, so the regression asserts against it directly — not a
+    // hand-calc that would silently drift. Pre-flight retrieve is a Vectorize
+    // call, not a model call, so it is intentionally NOT counted here.
     //
-    // Worst-case model calls per ensemble run:
-    //   logic:       primary + fallback (retries:0)           = 2 (SIG-287)
-    //   security:    primary + 1 retry + fallback             = 3
-    //   performance: primary + 1 retry + fallback             = 3
-    //   tests:       primary + fallback (retries:0)           = 2 (SIG-348)
-    //   synth:       primary + fallback (retries:0)           = 2 (SIG-392,
-    //                per-attempt 60s→150s — 3×150 would not fit the phase)
-    //   synth retry: primary + fallback                       = 2 (ARC-278
+    // Worst-case model calls per ensemble run (all roles retries:1, fallback:null):
+    //   logic:       primary + 1 retry                        = 2
+    //   security:    primary + 1 retry                        = 2
+    //   performance: primary + 1 retry                        = 2
+    //   tests:       primary + 1 retry                        = 2
+    //   synth:       primary + 1 retry                        = 2
+    //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 14.  Down from 16 — SIG-392 removed synth's same-model retry
-    //   (both attempt ladders) and preserved cross-provider fallback.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(14)
+    //   total: 12.  OpenRouter routes each call across upstreams, so no
+    //   per-role cross-provider fallback adds to the count.
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(12)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

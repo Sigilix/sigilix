@@ -39,7 +39,7 @@ import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
 import type { Env } from "@/src/shared/types/env"
-import type { AstScanMode, EnsembleConfig, ModelProvider, ReasoningLevel } from "./domain/config"
+import type { AstScanMode, EnsembleConfig, ReasoningLevel } from "./domain/config"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 
 /** SIG-392: the set of specialist roles whose `OPENCLAW_<ROLE>_RECALL_MODE` is
@@ -60,18 +60,6 @@ function buildReasoningPromptRoles(env: EnsembleConfigEnv): ReadonlySet<Speciali
   const roles = new Set<SpecialistRole>()
   if (env.OPENCLAW_LOGIC_REASONING_PROMPT_MODE === "on") roles.add("logic")
   return roles
-}
-
-/** SIG-405 (OpenRouter migration): the per-role model-provider override. A role
- *  whose `OPENCLAW_<ROLE>_PROVIDER` is "openrouter" runs its OpenRouter model on
- *  the OpenRouter route (logic→openai/o3 with OPENROUTER_API_KEY). Default empty
- *  → every role on its `SPECIALIST_CONFIGS` Ollama lineup, byte-identical.
- *  Logic-only today; add a role to extend (mirrors `buildReasoningPromptRoles`).
- *  unset / "ollama" / any invalid value → no entry (stays on Ollama). */
-function buildProviderByRole(env: EnsembleConfigEnv): ReadonlyMap<SpecialistRole, ModelProvider> {
-  const byRole = new Map<SpecialistRole, ModelProvider>()
-  if ((env.OPENCLAW_LOGIC_PROVIDER ?? "").trim().toLowerCase() === "openrouter") byRole.set("logic", "openrouter")
-  return byRole
 }
 
 const REASONING_LEVELS: ReadonlySet<string> = new Set<ReasoningLevel>(["high", "medium", "low"])
@@ -110,8 +98,6 @@ export interface EnsembleConfigEnv {
   OPENCLAW_SECURITY_RECALL_MODE?: string | undefined
   // SIG-399 reasoning-process directive (prompt suffix; distinct from SIG-287 effort)
   OPENCLAW_LOGIC_REASONING_PROMPT_MODE?: string | undefined
-  // SIG-405 per-role model-provider override (OpenRouter migration; default ollama)
-  OPENCLAW_LOGIC_PROVIDER?: string | undefined
   // SIG-287 reasoning-on harness (per-role bounded reasoning; default off)
   OPENCLAW_REASONING_MODE?: string | undefined
   OPENCLAW_REASONING_ROLES?: string | undefined
@@ -261,8 +247,6 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       reasoningPromptRoles: buildReasoningPromptRoles(env),
       // SIG-287: per-role bounded reasoning (default off → empty map).
       reasoningByRole: buildReasoningByRole(env),
-      // SIG-405: per-role model-provider override (default off → empty map).
-      providerByRole: buildProviderByRole(env),
       resweepMode: parseResweepMode(env.OPENCLAW_RESWEEP_MODE),
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),

@@ -1,8 +1,8 @@
 {
   "name": "sigilix",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
-  "description": "Sigilix — multi-agent AI code review for GitHub. Cloudflare Worker + Ollama Turbo specialists. The mark of merge-ready code.",
+  "description": "Sigilix — multi-agent AI code review for GitHub. Cloudflare Worker + OpenRouter specialists. The mark of merge-ready code.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

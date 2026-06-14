@@ -32,9 +32,16 @@ import {
   type DiffRegion,
   type RepeatOutcome,
 } from "@/e2e/fixture-eval-lib"
-import { PER_ROLE_TIMEOUT_MS, buildFixtureMessage, rolesFromEnv, runRole } from "@/e2e/fixture-eval-runner"
+import {
+  PER_ROLE_TIMEOUT_MS,
+  buildFixtureMessage,
+  hasAnyEvalApiKey,
+  rolesFromEnv,
+  runRole,
+} from "@/e2e/fixture-eval-runner"
 
-const API_KEY = process.env.OLLAMA_API_KEY
+// SIG-406: gate on EITHER provider key; runRole picks the matching key per role shape.
+const HAS_KEY = hasAnyEvalApiKey()
 const FIXTURE_NAME = process.env.FIXTURE_EVAL_FIXTURE ?? "fullstack-pr20-dense"
 const REPEATS = (() => {
   const n = Number(process.env.RESWEEP_REPEATS ?? 1)
@@ -59,7 +66,7 @@ function resweepGuidance(region: string, alreadyFound: readonly string[]): strin
   ].join("\n")
 }
 
-describe.skipIf(!API_KEY)(`SIG-393 re-sweep prototype — ${FIXTURE_NAME} (LIVE)`, () => {
+describe.skipIf(!HAS_KEY)(`SIG-393 re-sweep prototype — ${FIXTURE_NAME} (LIVE)`, () => {
   it(
     `pass1 + region re-sweep ×${REPEATS}, scored against the frozen truth`,
     { timeout: (PER_ROLE_TIMEOUT_MS * 2 + 60_000) * REPEATS },
@@ -77,9 +84,7 @@ describe.skipIf(!API_KEY)(`SIG-393 re-sweep prototype — ${FIXTURE_NAME} (LIVE)
       const lines: string[] = []
       for (let repeat = 1; repeat <= REPEATS; repeat++) {
         // ── pass 1: full-diff review, all roles ──
-        const p1 = await Promise.all(
-          ROLES.map((role) => runRole({ role, userMessage: pass1Message, apiKey: API_KEY! })),
-        )
+        const p1 = await Promise.all(ROLES.map((role) => runRole({ role, userMessage: pass1Message })))
         const p1Findings = unionFixtureFindings(p1.map((r) => r.findings))
         const p1Errored = ROLES.filter((_, i) => p1[i]!.errored)
 
@@ -111,9 +116,7 @@ describe.skipIf(!API_KEY)(`SIG-393 re-sweep prototype — ${FIXTURE_NAME} (LIVE)
           return ROLES.map((role) => ({ role, message, region: region.label }))
         })
         const p2 = await Promise.all(
-          resweepJobs.map((j) =>
-            runRole({ role: j.role, userMessage: j.message, apiKey: API_KEY!, refRole: `resweep-${j.role}` }),
-          ),
+          resweepJobs.map((j) => runRole({ role: j.role, userMessage: j.message, refRole: `resweep-${j.role}` })),
         )
         const p2Findings = unionFixtureFindings(p2.map((r) => r.findings))
 

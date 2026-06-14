@@ -32,11 +32,12 @@ import {
 // not re-exported, only `runWithRetryAndFallback` calls it).
 import { isPermanentFailure, isValidProvenance, wrapFailure } from "./model-provider-internals"
 export { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
-// SIG-405: provider/key routing primitives (split out for the file-size budget).
-import { selectConfigApiKey, specialistProviderOverride, type ModelApiKeys } from "./model-provider-routing"
+// SIG-405/406: per-model API-key selection (key-by-id-shape) — OpenRouter id →
+// OPENROUTER_API_KEY, `:cloud` tag → OLLAMA_API_KEY. The latter lets local eval runs
+// hit Ollama Turbo (no OpenRouter spend) via a `:cloud` model override. Re-exported.
+import { selectConfigApiKey, type ModelApiKeys } from "./model-provider-routing"
 export { modelApiKeys, selectConfigApiKey, type ModelApiKeys } from "./model-provider-routing"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
-import type { ModelProvider } from "@/src/lib/ensemble/domain/config"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
@@ -46,225 +47,72 @@ import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
 
 /**
- * Per-role model lineup with retry/fallback config (v3.1 LOCKED spec
- * amendment, post-shadow-mode telemetry from PR #35-36 dogfooding).
+ * Per-role model lineup (SIG-406 alpha, 2026-06-14): the OpenRouter LIVE DEFAULT.
+ * All review roles run on OpenRouter — `fallback: null` because OpenRouter routes
+ * each call across upstream providers with automatic failover (no per-role backup
+ * needed). `retries: 1` covers a transient OpenRouter error. Reasoning levels
+ * (logic+tests medium) + the recall/reasoning prompt suffixes are env-applied via
+ * `wrangler.toml [vars]`, so code defaults stay off for local/tests.
  *
- * Initial v3.1 lineup had two real bugs:
- *   - `qwen3-coder:30b:cloud` was a phantom — Ollama Turbo's tag list
- *     doesn't include a 30B variant on cloud (verified via /api/tags).
- *     Security + tests specialists 404'd on every call.
- *   - `deepseek-v4-pro:cloud` is the latest reasoning model, capacity-
- *     constrained on Ollama Turbo's underlying provider; routinely
- *     returns 503 under demand spikes. With specialist retries
- *     disabled per original spec, that = silent specialist failure
- *     and quorum loss.
- *
- * After dual sign-off (Codex + Kimi K2.6) the lineup is now:
- *   - Same primary models where they were working (logic, perf, synth)
- *   - Replaced phantom qwen3-coder:30b → deepseek-v4-flash for
- *     security + tests (known-working family member, predictable cost)
- *   - Cross-provider fallbacks per role (true uncorrelated resilience —
- *     Kimi-B's argument: same-family fallback fails when the upstream
- *     provider has an outage, defeating the fallback's purpose)
- *   - Retries enabled per-role, sized by criticality (logic gets 2,
- *     others 1, synth 1; user constraint "logic cannot fail").
+ * Local eval testing still hits Ollama Turbo with NO OpenRouter spend: the `chat`
+ * router dispatches by model-id shape, so a `:cloud` override (the eval harness's
+ * `FIXTURE_EVAL_MODEL_<role>` / `LOGIC_RECALL_MODEL`) routes to Ollama and the key
+ * is picked by shape. Pre-alpha Ollama lineup history lives in git.
  */
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
-  // SIG-234 lineup swap (2026-05-26): all 5 specialist + synth roles
-  // now use UNIQUE primary models per the founder's 4+1 constraint.
-  // Driven by Codex's ARC-292 lineup proposal + Ollama-format-
-  // compatibility validation (curl-tested each candidate with a
-  // JSON-schema-constrained prompt; `mistral-large-3:675b-cloud`,
-  // `glm-4.6:cloud`, and `deepseek-v3.1:671b-cloud` ALL wrap output
-  // in ```json``` markdown fences and are NOT used). The slow logic
-  // primary (deepseek-v4-pro:cloud at 100-270s) is demoted to
-  // security fallback — kept reachable for its reasoning capability
-  // without anchoring wall-time.
+  // logic — openai/o3: best deep multi-step reasoning for the subtle-correctness
+  // frontier (races/predicates/data-flow). Runs with the recall-suffix +
+  // reasoning-suffix-v1 at effort medium (via [vars]).
   logic: {
-    // 2026-06-05 — SWAPPED BACK to `deepseek-v4-pro:cloud` from
-    // `deepseek-v4-flash:cloud`. The original demotion reason (100-270s
-    // latency) is VOID: that was the unbounded-CoT stall, which the SIG-287
-    // `think:false` fix already cured — with `think:false`, v4-pro returns
-    // structured output in ~6-12s on Turbo (curl-probed + live eval), same
-    // ballpark as flash, well within the budget invariant below. The subtle-
-    // logic recall ruler (tests/logic-recall-eval.live.test.ts, K=12 real-path)
-    // shows v4-pro + the FP-discipline prompt in this PR at recall 93% / FP 25%
-    // vs flash-tuned 86% / 31% — better on BOTH axes, and the only config that
-    // beats Greptile's recall (82%) while matching CodeRabbit's precision floor
-    // (~75%). v4-pro keeps the V4 reasoning lineage + 1M context.
-    primary: "deepseek-v4-pro:cloud",
-    // 2026-05-26 Codex/measurement: production telemetry on PR #188
-    // showed deepseek-v4-flash + kimi-k2.5 (the prior fallback) BOTH
-    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
-    // The retry/fallback ladder was 100% waste — 180s burned, logic
-    // verdict never returned, customer got `[DEGRADED COVERAGE]` either
-    // way. Codex diagnostic: logic's prompt shape (full retrieval +
-    // graph + symbol context) is uniquely expensive; the issue is
-    // prompt-driven, not model-driven, so swapping fallbacks alone
-    // wouldn't help.
-    //
-    // #188 tactical fix `retries:0`+`fallback:null` capped logic at 60s
-    // (vs 180s), but the ROOT CAUSE was never the ladder — it's that the
-    // 60s PER-ATTEMPT cap is too small for logic's prompt. SIG-287 added a
-    // trim, but it CANNOT reach the 6000-tok cap: the mandatory floor
-    // (diff+graph+deterministic+system+meta+rules+schema) is ~8.4k tok even
-    // on a small PR. Live #241 telemetry: model-attempt-completed
-    // elapsedMs=60000 outcome=aborted — logic was STILL generating at the
-    // cap on EVERY review → "logic specialist unavailable" banner for weeks.
-    //
-    // SIG-287 TRUE ROOT CAUSE (2026-05-30, telemetry + Ollama API docs +
-    // DeepSeek-v4-pro, all concurring): the timeout was NEVER the lever. The
-    // 60→110→240→360s bumps ALL failed for the same reason — `generate`/
-    // `ollamaChat` omitted `think:false`, so deepseek-v4-flash (a REASONING
-    // model) ran an unbounded chain-of-thought in a separate `thinking` field
-    // (which the stream reader ignores), emitting ZERO `response` tokens until
-    // the per-attempt cap aborted it. Live #251 telemetry: timeoutMs:360000
-    // elapsedMs:360000 outcome:aborted with NO outputTokens — a flash model
-    // producing nothing in 6 min = a stuck reasoning phase, not slow
-    // generation. THE FIX (ollama.ts/ollama-chat.ts): set `think:false` on
-    // schema-constrained calls so the model emits the structured answer
-    // directly — logic now finishes in seconds like every other role.
-    //
-    // RESILIENCE (founder-chosen fast-fallback, 2026-05-30): with think:false
-    // logic is fast, so drop the per-attempt cap 360→120s (still 2× the
-    // expected <60s, covers route variance) and ADD a cross-provider fallback
-    // (was null) so ANY future stall — route outage, capacity dip — fails fast
-    // and the fallback rescues, exactly like the tests role (primary abort →
-    // retry/fallback ok). qwen3-coder-next:cloud (Codex pick): cross-provider
-    // from DeepSeek (fails independently — the point of a fallback), proven
-    // fast in the same #251 telemetry that exposed the stall (it's security's
-    // primary, returned in 7.4s), code-analysis-capable, and think:false
-    // applies to it too. NOT deepseek-v4-pro (same family as the failing
-    // primary + the slow reasoner — the wrong rescue for a stall). Chain:
-    // primary 120s + fallback 120s = ~240s ≤ SPECIALIST_TIMEOUT_MS(370s, 130s
-    // slack); the budget invariant (370+325+195 ≤ 895) is unchanged. NOTE:
-    // logic can now make 2 model calls (primary + fallback), so
-    // MAX_CALLS_PER_ENSEMBLE_RUN rose 16→17. VERIFY reliability across MULTIPLE
-    // post-deploy reviews (outcome:ok + real outputTokens + elapsedMs well
-    // under cap) before declaring SIG-287 fixed.
-    retries: 0,
-    fallback: "qwen3-coder-next:cloud",
+    primary: "openai/o3",
+    retries: 1,
+    fallback: null,
     perAttemptTimeoutMs: 120_000,
   },
+  // security — deepseek/deepseek-v4-flash: fast reasoner; reasoning stays OFF (it
+  // regresses flash), recall-suffix + authz-resolution addendum carry recall.
   security: {
-    // REVERTED from qwen3-coder-next (a coder model) to a REASONING model
-    // after the pr/07 benchmark regression. The SIG-234 premise —
-    // "vulnerability patterns are mostly syntax/dataflow recognition, not
-    // frontier reasoning" — holds for INJECTION but FAILS for AUTHORIZATION:
-    // IDOR / BOLA / broken access control are reasoning ("should this caller
-    // reach this resource?"), not pattern matching. On an IDOR-heavy benchmark
-    // the coder model produced ZERO authz findings (only the two obvious
-    // injections); raw pre-gate KV telemetry confirmed they were NEVER
-    // generated (not gate-dropped). In a controlled re-test on the exact diff,
-    // deepseek-v4-flash (the logic primary, a FAST reasoner) caught all of
-    // them. Deliberately the SAME model as logic — recall beats the
-    // 4+1-unique-primaries nicety, and v4-flash is proven in-budget on the hot
-    // path (deepseek-v4-pro is too slow for a critical-path primary; it stays
-    // on the fallback as the deeper authz backup).
-    primary: "deepseek-v4-flash:cloud",
+    primary: "deepseek/deepseek-v4-flash",
     retries: 1,
-    fallback: "deepseek-v4-pro:cloud",
+    fallback: null,
   },
+  // performance — z-ai/glm-5.1: perf bugs are universal structural patterns; no
+  // reasoning (off), fast + cheap on the highest-volume role.
   performance: {
-    // Phase 4a.1: glm-5.1 promoted from fallback → primary.
-    // Shadow telemetry: glm-5.1 won 6/12 fallback runs, minimax was unreliable.
-    //
-    // ARC-167 spot-check (2026-05-12): swap ratified on a 41-run sample
-    // pulled from production KV. glm-5.1 hits 100% success (26/26) vs
-    // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
-    // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
-    // longer body text per finding. The latency tradeoff is real
-    // (glm-5.1 p95 = 144s) but well under the 250s specialist budget
-    // (SIG-287). Full analysis in
-    // `.claude/research/arc-167/_report.md`.
-    primary: "glm-5.1:cloud",
+    primary: "z-ai/glm-5.1",
     retries: 1,
-    // Cross-provider fallback retained — kimi-k2.5 same family as
-    // logic's fallback so we know it's reachable.
-    fallback: "kimi-k2.5:cloud",
+    fallback: null,
   },
+  // tests — deepseek/deepseek-v4-pro: edges flash on subtle test-quality cases;
+  // reasoning medium (via [vars]).
   tests: {
-    // SIG-349: deepseek-v4-flash becomes the tests primary after the
-    // tests-overfire ruler showed the tuned prompt + deterministic citation gate
-    // beating the MiniMax M3 baseline on post-gate recall/precision/FP while
-    // returning in seconds instead of ~70s/call. It deliberately shares the
-    // security primary: tests-lane believability + runtime beats model-diversity
-    // neatness here, and the tests prompt/gate keeps security/perf duplicates
-    // from surfacing customer-visible testing findings.
-    primary: "deepseek-v4-flash:cloud",
-    // Keep MiniMax M3 as the cross-provider fallback, not a same-model retry.
-    // V4 Flash is fast but has occasional schema parse failures on testing
-    // evidence prompts; fallback routes those failures to the known tests-lane
-    // baseline instead of dropping coverage. A retry on the same model would
-    // usually cost less than MiniMax, but the existing runner treats parse
-    // failures as permanent, so the fallback is the reliable rescue path today.
-    retries: 0,
-    fallback: "minimax-m3:cloud",
-    // 160s keeps V4 Flash + MiniMax fallback at 320s, leaving 50s of the 370s
-    // specialist wall for orchestration overhead. Healthy V4 Flash attempts are
-    // far below this; the cap exists so MiniMax fallback has its old budget.
+    primary: "deepseek/deepseek-v4-pro",
+    retries: 1,
+    fallback: null,
     perAttemptTimeoutMs: 160_000,
   },
 }
 
 export const SYNTHESIZER_CONFIG: ModelConfig = {
-  // SIG-392 swap (2026-06-11): gpt-oss:120b-cloud → gemma4:31b. Won the
-  // uncapped shared-prompt bake-off ON THE INCUMBENT'S PROMPT on every axis:
-  // raw retention 12-13/20 vs ~8 (floored 13/20, zero post-floor drops 8/8),
-  // floored hi-sev FP 4.1 vs 6.3, aborts 0/8 vs 0-17%, latency 28-56s typ
-  // (110s outlier fits the 150s cap), honest categorized drop reasons — at
-  // ~4× lower cost (31B vs 120B). K=12 two-union confirm in SIG-392.
-  // (History: gpt-oss replaced kimi-k2.6 2026-05-26, SIG-234/ARC-292.)
-  primary: "gemma4:31b",
-  // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
-  // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
-  // PROVIDER as primary (both Moonshot). When Moonshot had a bad few
-  // minutes, primary + retry + fallback all hit the same wall, the
-  // ARC-278 retry doubled the burn, and synth_timeout fired even
-  // though specialist verdicts were ready to merge.
-  //
-  // Sigilix's own review of PR #97 demoed this: 6m 16s wall-clock
-  // burned, both attemptSynth calls timed out twice, customer saw
-  // "Couldn't review — see PR comment." Brand-fatal UX.
-  //
-  // Every OTHER ModelConfig in this file has cross-provider
-  // fallback. Synth was the only outlier. DeepSeek-v4-flash is the
-  // proven lighter DeepSeek variant (already primary on security +
-  // tests specialists). DIFFERENT provider from Moonshot — fails
-  // INDEPENDENTLY, which is the whole point of fallback.
-  //
-  // Worst-case math with cross-provider fallback:
-  //   Primary attempt:  60s (PER_ATTEMPT cap)  — Moonshot slow → null
-  //   Retry attempt:    60s + 1s backoff       — Moonshot slow → null
-  //   Fallback attempt: 60s                    — DeepSeek likely OK
-  //   Total:           ~121s if Moonshot is slow but DeepSeek is fine
-  // vs the pre-fix:
-  //   Total:           ~362s (180s × 2 outer attempts) → skip-notice
-  fallback: "deepseek-v4-flash:cloud",
-  // SIG-392 (2026-06-11): per-attempt 60s (default) → 150s, same-model retry
-  // dropped — the logic-role SIG-287 "fast-fallback" shape. The 60s cap was
-  // killing healthy slow-tail attempts (gpt-oss synth runs 45-52s typical on
-  // dense payloads; K=12 replays showed aborts at exactly 60,006ms mid-
-  // generation, 0-17% per session — the synth "capacity" problem). 150s gives
-  // the tail 3× headroom and makes 100-150s-class models eligible synth
-  // candidates. Ladder fits the phase: primary 150 + fallback 150 ≈ 301s ≤
-  // SYNTHESIZER_TIMEOUT_MS (325s); 3×150 would not, so the retry rung goes
-  // (with tail room it rarely rescued anything cross-provider fallback
-  // doesn't). The ARC-278 OUTER retry (attempt2, 160s phase) now fits one
-  // primary rung — acceptable for the constrained re-emission path.
-  retries: 0,
+  // SIG-406 alpha: nemotron-3-ultra on OpenRouter — a strong GENERALIST adjudicator
+  // (dedupe / severity / merge) decorrelated from every specialist family
+  // (o3 / DeepSeek / GLM), so it's an unbiased judge with no self-preference. Runs
+  // free-form (format:undefined) with the retention directive (recall-first; the
+  // gates handle precision). retries:1; fallback:null (OpenRouter self-routes).
+  primary: "nvidia/nemotron-3-ultra-550b-a55b",
+  retries: 1,
+  fallback: null,
   perAttemptTimeoutMs: 150_000,
 }
 
 /**
- * SIG-276 Phase 2: the write-time claim extractor. A cheap, single-shot
- * classifier (no retry, no fallback) over the final findings — fail-open
- * by design, so a capacity blip just yields no claims rather than burning
- * the merge path. `deepseek-v4-flash:cloud` matches the logic specialist's
- * proven format-clean primary.
+ * SIG-276 Phase 2: the write-time claim extractor. A cheap, single-shot classifier
+ * (no retry, no fallback) over the final findings — fail-open by design, so a
+ * capacity blip just yields no claims rather than burning the merge path.
+ * SIG-406 alpha: on OpenRouter (`deepseek/deepseek-v4-flash`).
  */
 export const CLAIM_EXTRACTOR_CONFIG: ModelConfig = {
-  primary: "deepseek-v4-flash:cloud",
+  primary: "deepseek/deepseek-v4-flash",
   retries: 0,
   fallback: null,
 }
@@ -282,16 +130,17 @@ export const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
 }
 export const SYNTHESIZER_MODEL = SYNTHESIZER_CONFIG.primary
 
+// SIG-406: baseline fanout + synth reservation ONLY — 4 specialists ×
+// maxAttempts(retries:1, fallback:null)=2 + 2×synth(2) = 12. The SIG-393 re-sweep +
+// SIG-395 invariant-lens add-on phases make extra `runSpecialist` calls NOT counted
+// here (unchanged from pre-alpha accounting; full add-on budgeting is SIG-369).
 export const MAX_CALLS_PER_ENSEMBLE_RUN =
   maxAttempts(SPECIALIST_CONFIGS.logic) +
   maxAttempts(SPECIALIST_CONFIGS.security) +
   maxAttempts(SPECIALIST_CONFIGS.performance) +
   maxAttempts(SPECIALIST_CONFIGS.tests) +
-  // ARC-278 (CR catch on PR #91): reserve TWO synth budgets, not
-  // one. The retry path can fire a second `runSynthesizer` call
-  // (itself primary + retry + cross-provider fallback). Without
-  // this, a worst-case PR can spend up to N + maxAttempts(SYNTH)
-  // extra and overshoot the daily cap.
+  // ARC-278 (CR catch on PR #91): reserve TWO synth budgets — the retry path can
+  // fire a second `runSynthesizer` call.
   2 * maxAttempts(SYNTHESIZER_CONFIG)
 
 // ─── specialist runner ────────────────────────────────────────────────
@@ -303,11 +152,9 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN =
  */
 export interface SpecialistRunArgs {
   role: SpecialistRole
-  /** SIG-405: provider key set; runSpecialist picks the key for the role's
-   *  effective model (replaces the old single `apiKey`). */
+  /** SIG-405/406: the provider key set; runSpecialist picks the key matching the
+   *  role's model by id-shape (OpenRouter id → openrouter key; `:cloud` → ollama). */
   apiKeys: ModelApiKeys
-  /** SIG-405: per-role provider override (`flags.providerByRole`); empty → Ollama. */
-  providerByRole: ReadonlyMap<SpecialistRole, ModelProvider>
   systemPrompt: string
   initialMessage: string
   chatEnabled: "on" | "off"
@@ -345,10 +192,10 @@ export interface SpecialistRunResult {
  */
 export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
-  // SIG-405: resolve the effective config (logic→o3 under the provider flag) + the
-  // matching key from the SAME inputs so model + key can't desync; a missing key
-  // fails closed below (the other provider's key is never substituted).
-  const config = specialistProviderOverride(args.role, args.providerByRole) ?? SPECIALIST_CONFIGS[args.role]
+  // SIG-406: the role's OpenRouter config; the API key is picked by model-id shape
+  // (a `:cloud` eval override → the Ollama key). Missing key → fail closed below
+  // (the other provider's key is never substituted).
+  const config = SPECIALIST_CONFIGS[args.role]
   const apiKey = selectConfigApiKey(config, args.apiKeys)
   if (!apiKey) {
     return {

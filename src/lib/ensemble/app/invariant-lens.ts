@@ -22,8 +22,6 @@
 import type { Env } from "@/src/shared/types/env"
 import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { modelApiKeys, runSpecialist } from "@/src/lib/ensemble/adapters/model-provider"
-import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
-import type { ModelProvider } from "@/src/lib/ensemble/domain/config"
 import { buildInvariantFamilyPrompt, INVARIANT_FAMILIES } from "@/src/prompts/specialists/invariant-lens"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
@@ -40,9 +38,6 @@ import {
 
 export interface InvariantLensStartArgs {
   env: Env
-  /** SIG-405: per-role provider override (from `flags.providerByRole`). The lens
-   *  runs the logic model, so this is what makes it track logic→o3 under the flag. */
-  providerByRole: ReadonlyMap<SpecialistRole, ModelProvider>
   owner: string
   repo: string
   prNumber: number
@@ -113,7 +108,6 @@ export function startInvariantLens(a: InvariantLensStartArgs): InvariantLensHand
           // a reasoning task (derive the rule, then sweep).
           role: "logic",
           apiKeys: modelApiKeys(a.env),
-          providerByRole: a.providerByRole,
           systemPrompt: buildInvariantFamilyPrompt(family),
           initialMessage: a.userMessage,
           chatEnabled,

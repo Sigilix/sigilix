@@ -44,12 +44,6 @@ export type AstScanMode = string
  *  an unbounded CoT (the SIG-287 stall). Matches `GenerateArgs.reasoning`. */
 export type ReasoningLevel = "high" | "medium" | "low"
 
-/** SIG-405 (OpenRouter migration): which provider serves a role's model.
- *  "ollama" = Ollama Turbo (":cloud" tags, OLLAMA_API_KEY); "openrouter" =
- *  OpenRouter ("provider/model" ids, OPENROUTER_API_KEY). The `chat` router
- *  dispatches by model-id shape; this names the choice at the config layer. */
-export type ModelProvider = "ollama" | "openrouter"
-
 /** The AST security-scanner modes, one per scanner rule. */
 export interface AstScanModes {
   authzIdor: AstScanMode
@@ -151,12 +145,6 @@ export interface EnsembleFeatureFlags {
    *  vars; EMPTY by default → every call is `think:false`, byte-identical to
    *  today. Mirrors `recallRoles`' per-role rollout shape. */
   reasoningByRole: ReadonlyMap<SpecialistRole, ReasoningLevel>
-  /** SIG-405: per-role model-provider override (OpenRouter migration). EMPTY by
-   *  default → every role runs its `SPECIALIST_CONFIGS` Ollama lineup, byte-
-   *  identical to today. A role mapped to "openrouter" runs its OpenRouter model
-   *  (logic→`openai/o3`) on the OpenRouter route with `OPENROUTER_API_KEY`.
-   *  Logic-only today; mirrors `reasoningByRole`'s per-role rollout shape. */
-  providerByRole: ReadonlyMap<SpecialistRole, ModelProvider>
   resweepMode: ResweepMode
   /** Normalized `OPENCLAW_INVARIANT_LENS_MODE` (SIG-395): "off" | "shadow" |
    *  "on", default "off". Gates the concurrent invariant-lens auditors. */

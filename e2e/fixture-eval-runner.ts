@@ -5,7 +5,7 @@
 // imports live HERE; `fixture-eval-lib.ts` stays engine-free/pure.
 
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, selectConfigApiKey, type ModelConfig } from "@/src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import type { SpecialistRole } from "@/src/lib/ensemble-router"
 import { shadowFindingsToFixtureFindings, type LocalRawFinding } from "@/evals/local-adapter"
@@ -28,6 +28,25 @@ export function configFor(role: SpecialistRole, envPrefix = "FIXTURE_EVAL_MODEL_
   // Override nulls the fallback so every scored run is the requested model
   // (a fallback would silently mix a second model in) — LOGIC_RECALL_MODEL rule.
   return override ? { ...SPECIALIST_CONFIGS[role], primary: override, fallback: null } : SPECIALIST_CONFIGS[role]
+}
+
+/** SIG-406: both provider keys from the live-eval env. A `:cloud` model override
+ *  routes to OLLAMA_API_KEY (Ollama Turbo, no OpenRouter spend); an OpenRouter id
+ *  (e.g. the prod default `openai/o3`) routes to OPENROUTER_API_KEY. */
+export function evalApiKeys(): { ollama: string | undefined; openrouter: string | undefined } {
+  return { ollama: process.env.OLLAMA_API_KEY, openrouter: process.env.OPENROUTER_API_KEY }
+}
+
+/** True when EITHER provider key is present — the live-eval skip-gate. */
+export function hasAnyEvalApiKey(): boolean {
+  const k = evalApiKeys()
+  return Boolean(k.ollama || k.openrouter)
+}
+
+/** Pick the API key matching a config's model by id-shape, via the prod selector
+ *  (so the cross-provider-fallback guard applies here too). */
+export function evalApiKeyFor(config: ModelConfig): string | undefined {
+  return selectConfigApiKey(config, evalApiKeys())
 }
 
 /** Build the minimal-context specialist message for a fixture diff slice. */
@@ -57,14 +76,30 @@ export interface RoleRunResult {
 export async function runRole(args: {
   role: SpecialistRole
   userMessage: string
-  apiKey: string
+  /** SIG-406: optional explicit override. When omitted, the key is selected by the
+   *  role's EFFECTIVE model shape (`configFor(role)`) — a `:cloud` override → the
+   *  Ollama key, an OpenRouter id → the OpenRouter key. */
+  apiKey?: string
   refRole?: string
 }): Promise<RoleRunResult> {
+  const config = configFor(args.role)
+  const apiKey = args.apiKey ?? evalApiKeyFor(config)
+  if (!apiKey) {
+    // SIG-406: the key for THIS role's effective model provider isn't set — fail fast
+    // + clear instead of passing "" into the model call (which fails late / empties
+    // the measurement). The default OpenRouter config needs OPENROUTER_API_KEY; a
+    // `:cloud` model override needs OLLAMA_API_KEY (Ollama Turbo, no OpenRouter spend).
+    console.warn(
+      `[fixture-eval] ${args.role}: no API key set for model "${config.primary}" — ` +
+        `set OPENROUTER_API_KEY (or OLLAMA_API_KEY for a :cloud override). Role skipped.`,
+    )
+    return { findings: [], errored: true, elapsedMs: 0 }
+  }
   try {
     const r = await runShadowSpecialist({
       role: args.role,
-      shadowConfig: configFor(args.role),
-      apiKey: args.apiKey,
+      shadowConfig: config,
+      apiKey,
       systemPrompt: SPECIALIST_PROMPTS[args.role],
       userMessage: args.userMessage,
       chatEnabled: "on",

@@ -18,10 +18,9 @@ import {
   type PerformanceScoredFinding,
 } from "./performance-overfire-corpus"
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, selectConfigApiKey } from "@/src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 
-const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000
 const REPEATS = (() => {
   const n = Number(process.env.PERFORMANCE_OVERFIRE_REPEATS ?? 1)
@@ -31,6 +30,13 @@ const MODEL_OVERRIDE = process.env.PERFORMANCE_OVERFIRE_MODEL?.trim()
 const PERFORMANCE_CONFIG = MODEL_OVERRIDE
   ? { ...SPECIALIST_CONFIGS.performance, primary: MODEL_OVERRIDE, fallback: null }
   : SPECIALIST_CONFIGS.performance
+// SIG-406: key by the effective model shape — a `:cloud` override → OLLAMA_API_KEY,
+// an OpenRouter id (the prod default) → OPENROUTER_API_KEY. Suite skips unless the
+// SELECTED provider's key is set.
+const API_KEY = selectConfigApiKey(PERFORMANCE_CONFIG, {
+  ollama: process.env.OLLAMA_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+})
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
 const fmtRate = (numerator: number, denominator: number): string =>
   denominator > 0 ? pct(numerator / denominator) : "n/a"
@@ -124,115 +130,118 @@ async function runCase(
   return { raw, postGate, errored }
 }
 
-describe.skipIf(!API_KEY)("performance overfire baseline (LIVE - needs OLLAMA_API_KEY, K-repeated)", () => {
-  it(
-    "measures performance-specialist P0/P1 recall + raw/post-gate FP-rate and precision",
-    async () => {
-      const onlyIds =
-        process.env.PERFORMANCE_OVERFIRE_ONLY?.split(",")
-          .map((s) => s.trim())
-          .filter(Boolean) ?? []
-      const cases = onlyIds.length
-        ? PERFORMANCE_OVERFIRE_CASES.filter((c) => onlyIds.includes(c.id))
-        : PERFORMANCE_OVERFIRE_CASES
-      const perCase = new Map<
-        string,
-        {
-          rawHits: number
-          gateHits: number
-          rawPositive: number
-          gatePositive: number
-          runs: number
-          errors: number
+describe.skipIf(!API_KEY)(
+  "performance overfire baseline (LIVE - needs OLLAMA_API_KEY or OPENROUTER_API_KEY, K-repeated)",
+  () => {
+    it(
+      "measures performance-specialist P0/P1 recall + raw/post-gate FP-rate and precision",
+      async () => {
+        const onlyIds =
+          process.env.PERFORMANCE_OVERFIRE_ONLY?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []
+        const cases = onlyIds.length
+          ? PERFORMANCE_OVERFIRE_CASES.filter((c) => onlyIds.includes(c.id))
+          : PERFORMANCE_OVERFIRE_CASES
+        const perCase = new Map<
+          string,
+          {
+            rawHits: number
+            gateHits: number
+            rawPositive: number
+            gatePositive: number
+            runs: number
+            errors: number
+          }
+        >()
+        for (const c of cases)
+          perCase.set(c.id, {
+            rawHits: 0,
+            gateHits: 0,
+            rawPositive: 0,
+            gatePositive: 0,
+            runs: 0,
+            errors: 0,
+          })
+        for (let k = 0; k < REPEATS; k++) {
+          for (const c of cases) {
+            const { raw, postGate, errored } = await runCase(c, API_KEY as string)
+            const e = perCase.get(c.id)!
+            if (errored) {
+              e.errors++
+              continue
+            }
+            e.runs++
+            if (c.label === "vuln") {
+              if (raw.caught) {
+                e.rawHits++
+                e.rawPositive++
+              }
+              if (postGate.caught) {
+                e.gateHits++
+                e.gatePositive++
+              }
+            } else {
+              if (!raw.falsePositive) e.rawHits++
+              else e.rawPositive++
+              if (!postGate.falsePositive) e.gateHits++
+              else e.gatePositive++
+            }
+          }
         }
-      >()
-      for (const c of cases)
-        perCase.set(c.id, {
-          rawHits: 0,
-          gateHits: 0,
-          rawPositive: 0,
-          gatePositive: 0,
-          runs: 0,
-          errors: 0,
-        })
-      for (let k = 0; k < REPEATS; k++) {
-        for (const c of cases) {
-          const { raw, postGate, errored } = await runCase(c, API_KEY as string)
+        const vuln = cases.filter((c) => c.label === "vuln")
+        const safe = cases.filter((c) => c.label === "safe")
+        const scored = (cs: typeof vuln): typeof vuln => cs.filter((c) => perCase.get(c.id)!.runs > 0)
+        const sv = scored(vuln),
+          ss = scored(safe)
+        const rate = (id: string, k: "rawHits" | "gateHits"): number => {
+          const e = perCase.get(id)!
+          return e.runs ? e[k] / e.runs : 0
+        }
+        const mean = (cs: typeof vuln, k: "rawHits" | "gateHits"): number =>
+          cs.reduce((s, c) => s + rate(c.id, k), 0) / (cs.length || 1)
+        const rawRecall = mean(sv, "rawHits")
+        const gateRecall = mean(sv, "gateHits")
+        const rawClean = mean(ss, "rawHits")
+        const gateClean = mean(ss, "gateHits")
+        const rawTp = sv.reduce((s, c) => s + perCase.get(c.id)!.rawPositive, 0)
+        const gateTp = sv.reduce((s, c) => s + perCase.get(c.id)!.gatePositive, 0)
+        const rawFp = ss.reduce((s, c) => s + perCase.get(c.id)!.rawPositive, 0)
+        const gateFp = ss.reduce((s, c) => s + perCase.get(c.id)!.gatePositive, 0)
+        const totalErrors = [...perCase.values()].reduce((s, e) => s + e.errors, 0)
+        const droppedCases = vuln.length - sv.length + (safe.length - ss.length)
+        const marker = (id: string, k: "rawHits" | "gateHits"): string => {
+          const e = perCase.get(id)!
+          return e.runs === 0 ? "!" : e[k] === e.runs ? "Y" : e[k] === 0 ? "N" : "~"
+        }
+        const suffix = (id: string): string => {
+          const e = perCase.get(id)!
+          return e.errors ? `  [${e.errors} err]` : ""
+        }
+        const lines: string[] = ["", `PERFORMANCE OVERFIRE - model=${PERFORMANCE_CONFIG.primary} - ${REPEATS}x/case`]
+        lines.push(
+          `RAW:       recall ${pct(rawRecall)}  clean-on-safe ${pct(rawClean)}  FP-rate ${pct(1 - rawClean)}  precision ${fmtRate(rawTp, rawTp + rawFp)}`,
+        )
+        lines.push(
+          `POST-GATE: recall ${pct(gateRecall)}  clean-on-safe ${pct(gateClean)}  FP-rate ${pct(1 - gateClean)}  precision ${fmtRate(gateTp, gateTp + gateFp)}${totalErrors ? `  ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? `  ${droppedCases} case(s) all-errored` : ""}`,
+        )
+        lines.push("per VULN case (caught / runs):")
+        for (const c of vuln) {
           const e = perCase.get(c.id)!
-          if (errored) {
-            e.errors++
-            continue
-          }
-          e.runs++
-          if (c.label === "vuln") {
-            if (raw.caught) {
-              e.rawHits++
-              e.rawPositive++
-            }
-            if (postGate.caught) {
-              e.gateHits++
-              e.gatePositive++
-            }
-          } else {
-            if (!raw.falsePositive) e.rawHits++
-            else e.rawPositive++
-            if (!postGate.falsePositive) e.gateHits++
-            else e.gatePositive++
-          }
+          lines.push(
+            `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(30)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
+          )
         }
-      }
-      const vuln = cases.filter((c) => c.label === "vuln")
-      const safe = cases.filter((c) => c.label === "safe")
-      const scored = (cs: typeof vuln): typeof vuln => cs.filter((c) => perCase.get(c.id)!.runs > 0)
-      const sv = scored(vuln),
-        ss = scored(safe)
-      const rate = (id: string, k: "rawHits" | "gateHits"): number => {
-        const e = perCase.get(id)!
-        return e.runs ? e[k] / e.runs : 0
-      }
-      const mean = (cs: typeof vuln, k: "rawHits" | "gateHits"): number =>
-        cs.reduce((s, c) => s + rate(c.id, k), 0) / (cs.length || 1)
-      const rawRecall = mean(sv, "rawHits")
-      const gateRecall = mean(sv, "gateHits")
-      const rawClean = mean(ss, "rawHits")
-      const gateClean = mean(ss, "gateHits")
-      const rawTp = sv.reduce((s, c) => s + perCase.get(c.id)!.rawPositive, 0)
-      const gateTp = sv.reduce((s, c) => s + perCase.get(c.id)!.gatePositive, 0)
-      const rawFp = ss.reduce((s, c) => s + perCase.get(c.id)!.rawPositive, 0)
-      const gateFp = ss.reduce((s, c) => s + perCase.get(c.id)!.gatePositive, 0)
-      const totalErrors = [...perCase.values()].reduce((s, e) => s + e.errors, 0)
-      const droppedCases = vuln.length - sv.length + (safe.length - ss.length)
-      const marker = (id: string, k: "rawHits" | "gateHits"): string => {
-        const e = perCase.get(id)!
-        return e.runs === 0 ? "!" : e[k] === e.runs ? "Y" : e[k] === 0 ? "N" : "~"
-      }
-      const suffix = (id: string): string => {
-        const e = perCase.get(id)!
-        return e.errors ? `  [${e.errors} err]` : ""
-      }
-      const lines: string[] = ["", `PERFORMANCE OVERFIRE - model=${PERFORMANCE_CONFIG.primary} - ${REPEATS}x/case`]
-      lines.push(
-        `RAW:       recall ${pct(rawRecall)}  clean-on-safe ${pct(rawClean)}  FP-rate ${pct(1 - rawClean)}  precision ${fmtRate(rawTp, rawTp + rawFp)}`,
-      )
-      lines.push(
-        `POST-GATE: recall ${pct(gateRecall)}  clean-on-safe ${pct(gateClean)}  FP-rate ${pct(1 - gateClean)}  precision ${fmtRate(gateTp, gateTp + gateFp)}${totalErrors ? `  ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? `  ${droppedCases} case(s) all-errored` : ""}`,
-      )
-      lines.push("per VULN case (caught / runs):")
-      for (const c of vuln) {
-        const e = perCase.get(c.id)!
-        lines.push(
-          `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(30)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
-        )
-      }
-      lines.push("per SAFE case (clean / runs):")
-      for (const c of safe) {
-        const e = perCase.get(c.id)!
-        lines.push(
-          `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(30)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
-        )
-      }
-      console.log(lines.join("\n"))
-    },
-    PERFORMANCE_OVERFIRE_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
-  )
-})
+        lines.push("per SAFE case (clean / runs):")
+        for (const c of safe) {
+          const e = perCase.get(c.id)!
+          lines.push(
+            `  ${marker(c.id, "rawHits")}/${marker(c.id, "gateHits")} ${c.id.padEnd(30)} raw ${e.rawHits}/${e.runs} - gate ${e.gateHits}/${e.runs}  (${c.bugClass})${suffix(c.id)}`,
+          )
+        }
+        console.log(lines.join("\n"))
+      },
+      PERFORMANCE_OVERFIRE_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
+    )
+  },
+)

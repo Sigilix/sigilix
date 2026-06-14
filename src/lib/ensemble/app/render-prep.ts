@@ -71,7 +71,9 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import {
   CLAIM_EXTRACTOR_CONFIG,
   CLAIM_EXTRACTOR_TIMEOUT_MS,
+  modelApiKeys,
   runWithRetryAndFallback,
+  selectConfigApiKey,
 } from "@/src/lib/ensemble/adapters/model-provider"
 import { prepareVerification } from "./verification-prep"
 
@@ -226,10 +228,14 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   // path (the warm pre-pass memoizes its output into
   // `earlyClaimsPerFinding`).
   const runClaimClassifier = async (system: string, user: string): Promise<string | null> => {
-    if (!env.OLLAMA_API_KEY) return null
+    // SIG-406: the claim extractor runs on OpenRouter (deepseek/deepseek-v4-flash) —
+    // select the key by model-id shape (NEVER send the Ollama key to OpenRouter).
+    // Fail-open by design: no matching key → no claims (not an error).
+    const claimApiKey = selectConfigApiKey(CLAIM_EXTRACTOR_CONFIG, modelApiKeys(env))
+    if (!claimApiKey) return null
     const res = await runWithRetryAndFallback<string>({
       config: CLAIM_EXTRACTOR_CONFIG,
-      apiKey: env.OLLAMA_API_KEY,
+      apiKey: claimApiKey,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

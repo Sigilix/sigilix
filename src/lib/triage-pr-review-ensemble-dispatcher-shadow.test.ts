@@ -50,10 +50,12 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
-  )
+// SIG-406: the dispatcher LLM AND the specialists/synth all run on OpenRouter now,
+// so every `chat` routes through the barrel → the OpenRouter adapter. Mock the BARREL
+// `chat` (one mock covers the dispatcher + specialist + synth calls, distinguished by
+// `isDispatcherCall` on the prompt content).
+vi.mock("@/src/shared/adapters/model", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -112,6 +114,8 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
     OLLAMA_API_KEY: "fake-key",
+    // SIG-406: dispatcher + specialists + synth all run on OpenRouter — they need this key.
+    OPENROUTER_API_KEY: "fake-or-key",
     OLLAMA_CHAT_ENABLE: "on",
     ...overrides,
   } as unknown as Env
@@ -296,7 +300,8 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     const dispatcherCall = mockChat.mock.calls.find((call) => isDispatcherCall(call[0]))
     expect(dispatcherCall).toBeDefined()
     const arg = dispatcherCall?.[0] as { model: string } | undefined
-    expect(arg?.model).toBe("deepseek-v4-flash:cloud")
+    // SIG-406: the dispatcher LLM moved to the synth model on OpenRouter.
+    expect(arg?.model).toBe("nvidia/nemotron-3-ultra-550b-a55b")
 
     const savings = findLoggedEvent("dispatcher-savings-summary")
     expect(savings).toMatchObject({

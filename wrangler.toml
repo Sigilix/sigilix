@@ -689,11 +689,16 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # code), runs NO LLM classifier (zero added Ollama call, unlike full "enforce"), and
 # reconcile() PROTECTS security+logic (always run) — so no believability-critical
 # lens is ever skipped. Net effect: fewer concurrent specialist calls per review =
-# less contention, recall-safe. Full "enforce" (the deepseek-v4-flash LLM filter)
-# stays deferred until the shadow-bake trail is validated AND it would not ADD an
-# Ollama call to the hot path. Modes: off | shadow | enforce_rules | enforce.
-# Rollback: "shadow" (telemetry-only) or "off".
-OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
+# less contention, recall-safe. Modes: off | shadow | enforce_rules | enforce.
+# SIG-406 alpha: the LLM classifier now runs on `nvidia/nemotron-3-ultra-550b-a55b`
+# (OpenRouter — the synth model; a strong model won't wrongly skip a needed
+# specialist) and is set to "shadow" — it RUNS on every PR and LOGS the picks it
+# WOULD make, but does NOT prune (every rule-selected role still runs), so it builds
+# the shadow-bake validation trail at ZERO recall risk. The added per-PR ultra call
+# is the tradeoff the founder accepted ("worth it long-term"). Flip to "enforce"
+# (the actual prune / cost-saving) once the shadow trail validates the picks;
+# "enforce_rules" (rules-only, no LLM call) or "off" reverts.
+OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
@@ -784,6 +789,25 @@ OPENCLAW_INVARIANT_LENS_MODE = "on"
 # Rollback = flip to "off" (inert, byte-identical to the default prompt) — a
 # safe one-line change.
 OPENCLAW_LOGIC_RECALL_MODE = "on"
+
+# ── SIG-406 OpenRouter ALPHA lineup tunings ─────────────────────────────────
+# The deployed alpha runs the SIG-399-tuned lineup on OpenRouter (see
+# ENGINEERING.md §"The model lineup" + src/lib/ensemble/adapters/model-provider.ts).
+# These [vars] turn ON the per-role reasoning + recall/reasoning prompt suffixes the
+# tuning sweep validated; the code defaults stay OFF so local runs + the test suite
+# stay byte-identical without them. (OPENCLAW_LOGIC_RECALL_MODE above is part of this
+# lineup.)
+#   - reasoning EFFORT (SIG-287 harness): logic + tests at medium (o3 / v4-pro). The
+#     map is built from ROLES × LEVEL only when MODE === "on".
+#   - SECURITY recall suffix: names the authz-resolution classes (flash reasoning OFF
+#     — it collapses flash; the suffix carries the lift instead).
+#   - LOGIC reasoning-PROMPT suffix (SIG-399): enumerate-then-judge / verify-the-value,
+#     validated on o3 (+3 net recall, 0 FP).
+OPENCLAW_REASONING_MODE = "on"
+OPENCLAW_REASONING_ROLES = "logic,tests"
+OPENCLAW_REASONING_LEVEL = "medium"
+OPENCLAW_SECURITY_RECALL_MODE = "on"
+OPENCLAW_LOGIC_REASONING_PROMPT_MODE = "on"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.
@@ -882,12 +906,16 @@ OPENCLAW_GATE = "shadow"
 #                                 Linear → Settings → API → Personal API keys
 #   LINEAR_WEBHOOK_SECRET         Signing secret from the Linear webhook config.
 #                                 Used to verify the HMAC on every webhook delivery.
-#   OLLAMA_API_KEY                Ollama Turbo API key (https://ollama.com/settings/keys)
-#   OPENROUTER_API_KEY            OpenRouter API key (https://openrouter.ai/keys). OPTIONAL —
-#                                 only required once a role's provider is "openrouter" (SIG-405;
-#                                 e.g. OPENCLAW_LOGIC_PROVIDER=openrouter → logic on openai/o3).
-#                                 The migration ships dormant, so the Worker boots without it; a
-#                                 run that selects OpenRouter without it fails closed.
+#   OPENROUTER_API_KEY            OpenRouter API key (https://openrouter.ai/keys). REQUIRED —
+#                                 SIG-406 alpha runs the ENTIRE review ensemble (specialists +
+#                                 synthesizer + dispatcher) on OpenRouter, so review FAILS CLOSED
+#                                 without it (each call returns missing_api_key). Per-call key
+#                                 selection is by model-id shape (slash-id → this key).
+#   OLLAMA_API_KEY                Ollama Turbo API key (https://ollama.com/settings/keys). Now
+#                                 OPTIONAL/LEGACY — serves the non-review command paths
+#                                 (/api/chat, @-mention agent loop, indexer) and local eval
+#                                 testing (a `:cloud` model override routes here, no OpenRouter
+#                                 spend). Not needed for the review path.
 #
 # Optional (recommended for production — gives the Worker its own bot identity):
 #

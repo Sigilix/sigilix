@@ -13,10 +13,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockChat = vi.fn()
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
-  )
+// SIG-406: the lineup is now all-OpenRouter, so `runSpecialist`/`runSynthesizer`
+// route through the barrel `chat` → the OpenRouter adapter. Mock the BARREL `chat`
+// (provider-agnostic) so the executor wiring is exercised regardless of the model id.
+vi.mock("@/src/shared/adapters/model", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
   return {
     ...actual,
     chat: (args: unknown) => mockChat(args),
@@ -468,8 +469,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         )
         const result = await runSpecialist({
           role,
-          apiKeys: { ollama: "test-key", openrouter: undefined },
-          providerByRole: new Map(),
+          apiKeys: { ollama: undefined, openrouter: "test-key" },
           systemPrompt: "system",
           initialMessage: "user",
           chatEnabled: "on",
@@ -525,37 +525,26 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
     }
   })
 
-  it("emits primary/retry/fallback sequence on security specialist when primary + retry both 503", async () => {
-    // SPECIALIST_CONFIGS.security = { primary: "deepseek-v4-flash:cloud",
-    // retries: 1, fallback: "deepseek-v4-pro:cloud" } — three mocked
-    // chat calls (primary 503, retry 503, fallback OK) → three emits:
-    // primary/failed, retry/failed, fallback/ok. Pins both the
-    // attemptKind sequence AND the model identity per attempt
-    // (retry stays on primary model; fallback swaps).
-    //
-    // Switched from `logic` to `security` on 2026-05-26 because the
-    // logic config was trimmed to retries:0 + fallback:null after
-    // telemetry showed the logic ladder was 100% waste. `security`
-    // is the next role still exercising the full primary+retry+
-    // fallback ladder, so it's the right surface for this regression.
+  it("emits primary/retry sequence on the security specialist when primary 503s then the retry succeeds", async () => {
+    // SIG-406: SPECIALIST_CONFIGS.security = { primary: "deepseek/deepseek-v4-flash",
+    // retries: 1, fallback: null } — OpenRouter routes across upstreams, so there is
+    // NO per-role cross-provider fallback. Two mocked chat calls (primary 503, retry
+    // OK) → two emits: primary/failed, retry/ok. Pins the attemptKind sequence AND
+    // that the retry stays on the SAME (primary) model.
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
-      mockChat
-        .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
-        .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
-        .mockResolvedValueOnce(
-          ok(
-            JSON.stringify({
-              summary: "security verdict",
-              confidence: 3,
-              findings: [],
-            }),
-          ),
-        )
+      mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload")).mockResolvedValueOnce(
+        ok(
+          JSON.stringify({
+            summary: "security verdict",
+            confidence: 3,
+            findings: [],
+          }),
+        ),
+      )
       const result = await runSpecialist({
         role: "security",
-        apiKeys: { ollama: "test-key", openrouter: undefined },
-        providerByRole: new Map(),
+        apiKeys: { ollama: undefined, openrouter: "test-key" },
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",
@@ -563,7 +552,9 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         perfCtx,
       })
       expect(result.verdict).not.toBeNull()
-      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.security.fallback)
+      // No fallback in the lineup — the retry on the primary model is what rescues it.
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.security.primary)
+      expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
 
       const events = logSpy.mock.calls
         .map((c) => {
@@ -577,22 +568,23 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
           (e): e is Record<string, unknown> =>
             e !== null && e["event"] === "model-attempt-completed" && e["role"] === "security",
         )
-      expect(events).toHaveLength(3)
+      expect(events).toHaveLength(2)
       expect(events[0]?.["attemptKind"]).toBe("primary")
       expect(events[0]?.["outcome"]).toBe("failed")
       expect(events[0]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
       expect(events[1]?.["attemptKind"]).toBe("retry")
-      expect(events[1]?.["outcome"]).toBe("failed")
+      expect(events[1]?.["outcome"]).toBe("ok")
       expect(events[1]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
-      expect(events[2]?.["attemptKind"]).toBe("fallback")
-      expect(events[2]?.["outcome"]).toBe("ok")
-      expect(events[2]?.["model"]).toBe(SPECIALIST_CONFIGS.security.fallback)
     } finally {
       logSpy.mockRestore()
     }
   })
 
-  it("routes tests specialist timeout directly to fallback without a same-model retry", async () => {
+  it("routes a tests-specialist primary TIMEOUT to a same-model retry (SIG-406: retries:1, no fallback)", async () => {
+    // SIG-406: SPECIALIST_CONFIGS.tests = { primary: "deepseek/deepseek-v4-pro",
+    // retries: 1, fallback: null }. A primary that hits the per-attempt cap aborts,
+    // then (after backoff) the SAME-model retry runs. There is no fallback — OpenRouter
+    // self-routes — so the retry is the resilience.
     vi.useFakeTimers()
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const outerCtrl = new AbortController()
@@ -608,7 +600,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       mockChat.mockImplementationOnce(slowChat).mockResolvedValueOnce(
         ok(
           JSON.stringify({
-            summary: "tests fallback verdict",
+            summary: "tests retry verdict",
             confidence: 3,
             findings: [],
           }),
@@ -616,21 +608,25 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       )
       const resultPromise = runSpecialist({
         role: "tests",
-        apiKeys: { ollama: "test-key", openrouter: undefined },
-        providerByRole: new Map(),
+        apiKeys: { ollama: undefined, openrouter: "test-key" },
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",
         signal: outerCtrl.signal,
         perfCtx,
       })
+      // Trip the per-attempt cap so the primary aborts.
       await vi.advanceTimersByTimeAsync(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs! + 1)
       const primarySignal = mockChat.mock.calls[0]?.[0]?.signal
       expect(primarySignal).toBeDefined()
       expect(primarySignal?.aborted).toBe(true)
+      // Drain the retry backoff (RETRY_BACKOFF_MS[0]=800ms) so the retry attempt runs.
+      await vi.advanceTimersByTimeAsync(1_000)
       const result = await resultPromise
       expect(result.verdict).not.toBeNull()
-      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.tests.fallback)
+      // No fallback — the retry on the SAME (primary) model rescues it.
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.tests.primary)
+      expect(SPECIALIST_CONFIGS.tests.fallback).toBeNull()
       expect(result.attemptsUsed).toBe(2)
       expect(mockChat).toHaveBeenCalledTimes(2)
 
@@ -647,10 +643,10 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
             e !== null && e["event"] === "model-attempt-completed" && e["role"] === "tests",
         )
       expect(events).toHaveLength(2)
-      expect(events.map((e) => e["attemptKind"])).toEqual(["primary", "fallback"])
+      expect(events.map((e) => e["attemptKind"])).toEqual(["primary", "retry"])
       expect(events.map((e) => e["model"])).toEqual([
         SPECIALIST_CONFIGS.tests.primary,
-        SPECIALIST_CONFIGS.tests.fallback,
+        SPECIALIST_CONFIGS.tests.primary,
       ])
       expect(events[0]).toMatchObject({
         outcome: "aborted",

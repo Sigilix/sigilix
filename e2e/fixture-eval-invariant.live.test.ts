@@ -32,9 +32,18 @@ import {
   type LocalRawFinding,
 } from "@/evals/local-adapter"
 import { FIXTURES_DIR, foldRuns, loadFixture, type RepeatOutcome } from "@/e2e/fixture-eval-lib"
-import { PER_ROLE_TIMEOUT_MS, buildFixtureMessage, rolesFromEnv, runRole } from "@/e2e/fixture-eval-runner"
+import {
+  PER_ROLE_TIMEOUT_MS,
+  buildFixtureMessage,
+  evalApiKeyFor,
+  hasAnyEvalApiKey,
+  rolesFromEnv,
+  runRole,
+} from "@/e2e/fixture-eval-runner"
 
-const API_KEY = process.env.OLLAMA_API_KEY
+// SIG-406: gate on EITHER provider key; the lens runs on the logic config, whose key
+// is selected by model-id shape (OpenRouter id → OPENROUTER_API_KEY, `:cloud` → Ollama).
+const HAS_KEY = hasAnyEvalApiKey()
 const FIXTURE_NAME = process.env.FIXTURE_EVAL_FIXTURE ?? "fullstack-pr20-dense"
 const REPEATS = (() => {
   const n = Number(process.env.INVARIANT_REPEATS ?? 1)
@@ -50,7 +59,7 @@ const OUT_DIR = join(process.cwd(), "e2e", ".fixture-eval-out")
 // narrow question swept exhaustively beats one broad mandate). Families
 // are generic (taxonomy-derived, not fixture-coached). Calls run
 // concurrently; output contract identical (prod shared blocks).
-describe.skipIf(!API_KEY)(`SIG-395 invariant lens prototype — ${FIXTURE_NAME} (LIVE)`, () => {
+describe.skipIf(!HAS_KEY)(`SIG-395 invariant lens prototype — ${FIXTURE_NAME} (LIVE)`, () => {
   it(
     `pass1 + invariant lens ×${REPEATS}, scored against the frozen truth`,
     { timeout: (PER_ROLE_TIMEOUT_MS + 60_000) * REPEATS },
@@ -65,19 +74,32 @@ describe.skipIf(!API_KEY)(`SIG-395 invariant lens prototype — ${FIXTURE_NAME} 
       const unionOutcomes: RepeatOutcome[] = []
       const lensOnlyOutcomes: RepeatOutcome[] = []
       const lines: string[] = []
+      // SIG-406: the lens runs the logic model (openai/o3 on OpenRouter) — resolve its
+      // key by id-shape ONCE; if it's missing, the lens contributes nothing rather than
+      // passing "" into the model call (fail fast + clear, mirroring `runRole`).
+      const lensApiKey = evalApiKeyFor(SPECIALIST_CONFIGS.logic)
+      if (!lensApiKey) {
+        console.warn(
+          `[fixture-eval-invariant] no API key for the lens model "${SPECIALIST_CONFIGS.logic.primary}" — ` +
+            `set OPENROUTER_API_KEY (or a :cloud LOGIC override + OLLAMA_API_KEY). Lens skipped.`,
+        )
+      }
       for (let repeat = 1; repeat <= REPEATS; repeat++) {
         // pass1 (4 roles) + the lens call run CONCURRENTLY — the lens needs
         // no pass-1 input (unlike re-sweep), so a prod version adds ~zero
         // wall-clock to the fanout.
         const [p1, lens] = await Promise.all([
-          Promise.all(ROLES.map((role) => runRole({ role, userMessage, apiKey: API_KEY! }))),
+          Promise.all(ROLES.map((role) => runRole({ role, userMessage }))),
           Promise.all(
             INVARIANT_FAMILIES.map(async (family) => {
+              if (!lensApiKey) {
+                return { findings: [] as ReturnType<typeof shadowFindingsToFixtureFindings>, errored: true }
+              }
               try {
                 const r = await runShadowSpecialist({
                   role: "logic", // strongest reasoning model config
                   shadowConfig: SPECIALIST_CONFIGS.logic,
-                  apiKey: API_KEY!,
+                  apiKey: lensApiKey,
                   systemPrompt: buildInvariantFamilyPrompt(family),
                   userMessage,
                   chatEnabled: "on",

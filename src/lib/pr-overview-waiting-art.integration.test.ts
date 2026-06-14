@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { buildPrOverviewStubBody } from "@/src/lib/pr-overview-stub"
+import { STUB_V2_MARKER, buildPrOverviewStubBody } from "@/src/lib/pr-overview-stub"
 import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
 import { renderPrOverviewWaitingArt, selectPrOverviewWaitingArt } from "@/src/lib/pr-overview-waiting-art"
-
-const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
 
 describe("PR overview waiting art integration", () => {
   it("carries the selected poem through the generated overview stub body", () => {
@@ -11,12 +9,22 @@ describe("PR overview waiting art integration", () => {
     const seed = `queued:17:${headSha}`
     const selected = selectPrOverviewWaitingArt(seed)
     const body = buildPrOverviewStubBody({ prNumber: 17, headSha })
+    const artBlock = selected.lines.join("\n")
+    const poemBlock = selected.poem.join("\n")
+    const artIndex = body.indexOf(artBlock)
+    const poemIndex = body.indexOf(poemBlock)
+    const fenceIndex = body.indexOf("```text")
+    const statusIndex = body.indexOf(REVIEW_STATUS_BLOCK_START)
 
     expect(body).toContain(STUB_V2_MARKER)
     expect(body).toContain(renderPrOverviewWaitingArt(seed))
-    expect(body).toContain(selected.poem.join("\n"))
-    expect(body.indexOf(selected.lines.join("\n"))).toBeLessThan(body.indexOf(selected.poem[0]))
-    expect(body.indexOf("```text")).toBeLessThan(body.indexOf(REVIEW_STATUS_BLOCK_START))
+    expect(body).toContain(poemBlock)
+    expect(artIndex).toBeGreaterThan(-1)
+    expect(poemIndex).toBeGreaterThan(-1)
+    expect(fenceIndex).toBeGreaterThan(-1)
+    expect(statusIndex).toBeGreaterThan(-1)
+    expect(artIndex + artBlock.length).toBeLessThan(poemIndex)
+    expect(fenceIndex).toBeLessThan(statusIndex)
   })
 
   it("does not classify completed overview headings as legacy or current v2 stubs", async () => {

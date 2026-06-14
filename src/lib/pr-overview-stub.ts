@@ -92,7 +92,7 @@ import { renderPrOverviewWaitingArt } from "./pr-overview-waiting-art"
  * `isStubBody` distinguish a real loading state from a completed
  * overview that merely mentions "reviewing".
  */
-const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
+export const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
 const DEFAULT_STUB_HEAD_SHA = "0".repeat(40)
 const STATUS_BEFORE_STUB_TAIL = [
   "**Sigilix is reviewing this pull request.**",
@@ -105,9 +105,7 @@ export function buildPrOverviewStubBody(args: { prNumber: number; headSha: strin
 
 ${STUB_V2_MARKER}
 
-**Sigilix is reviewing this pull request.**
-
-A structured overview will replace this note when retrieval and specialist review complete.
+${STATUS_BEFORE_STUB_TAIL}
 
 ${renderPrOverviewWaitingArt(`queued:${args.prNumber}:${args.headSha}`)}`
   return `${body}

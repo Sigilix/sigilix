@@ -356,6 +356,25 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(withNote).toContain("SQLi in unrelated module")
   })
 
+  it("Outside your changes: collapses into a scoped, default-collapsed <details> dropdown (founder 2026-06-14 + Kimi)", () => {
+    const body = renderApproveBody({
+      verdict: verdict({
+        findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })],
+      }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    // Collapsed dropdown so a long list doesn't eat the review body.
+    expect(body).toContain("<details>")
+    expect(body).toContain("</details>")
+    expect(body).not.toContain("<details open") // default collapsed
+    // Summary states scope + count so a reader who never expands still understands.
+    expect(body).toContain("<summary>")
+    expect(body).toContain("1 finding outside this PR's changes")
+    expect(body).toContain("awareness only, non-blocking")
+    // The finding itself lives inside the dropdown.
+    expect(body).toContain("SQLi in unrelated module")
+  })
+
   it("Phase 3 (#333): an oversized body sheds the low-severity tail end-to-end, NEVER the security blocker (Sigilix #333)", () => {
     // A security blocker (score 5) + many huge low-severity body-only findings
     // that push the body past GitHub's 65,535-char limit. The end-to-end render

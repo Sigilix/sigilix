@@ -133,6 +133,7 @@ export interface GitHubWebhookPayload {
     // SIG-44: title/body feed the merged-PR multi-corpus refresh.
     title?: string
     body?: string | null
+    user?: { login?: string }
   }
   workflow_run?: {
     id?: number
@@ -164,6 +165,11 @@ export interface GitHubWebhookPayload {
     // FIRST_TIME_CONTRIBUTOR, MANNEQUIN, NONE. Used by ARC-178 to gate
     // slash commands that trigger expensive review re-runs.
     author_association?: string
+  }
+  sender?: { login?: string }
+  thread?: {
+    node_id?: string
+    comments?: Array<{ id?: number }>
   }
   // `issue_comment` events deliver an `issue` block. When the issue
   // is a PR, `issue.pull_request` is present (otherwise it's a plain

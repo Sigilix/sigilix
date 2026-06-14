@@ -5,6 +5,7 @@ import {
   buildReviewStatusBlock,
   upsertReviewStatusBlock,
 } from "@/src/lib/pr-review-status-render"
+import { PR_OVERVIEW_WAITING_ARTS, renderPrOverviewWaitingArt } from "@/src/lib/pr-overview-waiting-art"
 import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
 
 const HEAD_SHA = "abcdef1234567890abcdef1234567890abcdef12"
@@ -131,6 +132,27 @@ describe("review status renderer", () => {
     expect(replaced).not.toContain("Retrieval")
     expect(replaced).toContain("Synth")
     expect(replaced.indexOf("Keep this summary.")).toBeLessThan(replaced.indexOf(REVIEW_STATUS_BLOCK_START))
+  })
+
+  it("does not leak waiting ASCII into a posted overview status update", () => {
+    const body = `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n### Summary\n\nDone.`
+    const updated = upsertReviewStatusBlock(body, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 8,
+      final: {
+        status: "posted",
+        findingsCount: 1,
+        reviewUrl: "https://github.com/Sigilix/sigilix/pull/7",
+      },
+      footerSeed: "posted::7::abcdef1",
+    })
+
+    expect(updated).not.toContain("```text")
+    expect(updated).not.toContain(renderPrOverviewWaitingArt("posted:7:abcdef1"))
+    for (const art of PR_OVERVIEW_WAITING_ARTS) {
+      expect(updated).not.toContain(`== ${art.title} ==`)
+    }
   })
 
   it("moves an old top-level status block into the overview on replacement", () => {

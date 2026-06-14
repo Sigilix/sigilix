@@ -413,6 +413,20 @@ export interface Env {
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */
   OPENCLAW_RESWEEP_MAX_REGIONS?: string
+  /** SIG-417: the dark projected-cost governor (TRIM). "on" enables trimming
+   *  low-risk files when the projection exceeds the ceiling; default off →
+   *  capture + projection telemetry only, review byte-identical. Trim is
+   *  recall-NEGATIVE (drops deterministic + secret scans on trimmed files), so
+   *  it is a founder-set emergency lever, never default behavior. */
+  OPENCLAW_COST_GOVERNOR_ENABLED?: string
+  /** SIG-417: founder-set per-PR projected-cost ceiling in USD (parseFloat).
+   *  Absent → no ceiling → never trims even when enabled. */
+  OPENCLAW_COST_GOVERNOR_CEILING_USD?: string
+  /** SIG-417: floor — never trim below this many reviewed files (default 1). */
+  OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES?: string
+  /** SIG-417: per-call fixed-overhead token estimate for the projection
+   *  (system prompt + retrieval + output budget; default 4000). */
+  OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST?: string
   /** SIG-395: invariant lens mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_INVARIANT_LENS_MODE?: string
   /** SIG-400/SIG-401: "blocking" (default) | "shadow-background" |

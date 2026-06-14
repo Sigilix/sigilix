@@ -48,8 +48,11 @@ export interface EnsembleRunCtx {
    *  param through `runSpecialist`/`runSynthesizer`. Inline function type
    *  (not an import) keeps this module free of an slo-telemetry dependency
    *  — the slo module imports this type, not the other way around.
-   *  Absent in tests / shadow paths that don't care about cost. */
-  recordTokens?: (model: string, inputTokens?: number, outputTokens?: number) => void
+   *  Absent in tests / shadow paths that don't care about cost.
+   *  SIG-417: `costUsd` is the provider's actual per-call cost (OpenRouter
+   *  `usage.cost`, credits ≈ USD), summed alongside tokens so the cost
+   *  roll-up prefers measured spend over the token-pricing estimate. */
+  recordTokens?: (model: string, inputTokens?: number, outputTokens?: number, costUsd?: number) => void
 }
 
 function correlationFields(ctx: EnsembleRunCtx): Record<string, string | number> {
@@ -215,6 +218,11 @@ export interface ModelAttemptEvent {
   /** SIG-212: token usage reported by Ollama (`eval_count`). Same
    *  optionality semantics as `inputTokens`. */
   outputTokens?: number
+  /** SIG-417: actual per-call cost (OpenRouter `usage.cost`, credits ≈ USD).
+   *  Same optionality semantics as the token counts — omitted when the
+   *  provider didn't report it (Ollama, exception paths). Surfaced on the
+   *  per-attempt event for cost-attribution drilldown. */
+  costUsd?: number
   /** SIG-287 (reasoning-on harness): cumulative LENGTH of the model's
    *  `thinking`/CoT field for this attempt (char count only — never the
    *  text). Lets the soak size reasoning time per role. Absent on the

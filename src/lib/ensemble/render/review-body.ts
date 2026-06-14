@@ -152,58 +152,54 @@ const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
  * via `formatFindingComment` (ARC-282 will revisit).
  */
 /**
- * SIG-414 Phase 1.2: the honest 3-way "what wasn't reviewed" disclosure. The
- * pre-SIG-414 body lumped every un-reviewed file into ONE ⚠️ "size budget"
- * notice, which (a) conflated three distinct reasons and (b) made policy skips
- * (lockfiles/generated/vendored — the `pathFilters` set) invisible entirely.
- * This splits them into three calm, distinct notices, each true to its cause:
- *
- *   - `policySkipped` — files excluded by config/defaults (lockfiles, generated,
- *     vendored, minified, binary). "Not applicable", NOT a coverage gap — a
- *     collapsed, subtle note (no ⚠️), and it does NOT downgrade an APPROVE.
- *   - `oversized` — a single file whose diff exceeds the per-call cap.
- *   - `spillover` — changed files beyond the reviewed batch on a very large PR.
- *
- * `reviewedCount` (n) / `totalChangedCount` (m) drive the spillover copy
- * "Reviewed {n} of {m} changed files". m is the RECONCILED denominator
- * (n + spillover) so `remaining = m - n` and the count never appears to
- * contradict the separate policy/oversized notices (Codex sign-off).
+ * SIG-414 Phase 1.2: the honest "what wasn't reviewed" disclosure — distinct,
+ * calm notices per cause (replacing the pre-SIG-414 lumped "size budget" note).
+ * `reviewedCount` (n) / `totalChangedCount` (m) drive the spillover "Reviewed n
+ * of m" copy; m is the RECONCILED denominator (n + spillover + costTrimmed) so
+ * `remaining = m - n` never contradicts the separate notices (Codex sign-off).
  */
 export interface ReviewDisclosure {
-  /** Files excluded by `pathFilters` (lockfiles/generated/vendored/minified/binary). */
+  /** Files excluded by `pathFilters` — "not applicable", NOT a coverage gap. */
   policySkipped: string[]
   /** Files whose individual diff exceeded the per-call cap (`droppedTooLarge`). */
   oversized: string[]
-  /** Changed files beyond the reviewed batch (`filesNotReviewed`). */
+  /** Changed files beyond the reviewed batch on a very large PR (`filesNotReviewed`). */
   spillover: string[]
+  /** SIG-417: files the dark (default-off) cost governor trimmed to stay under the
+   *  ceiling. DISTINCT from `spillover` (its own copy — Codex #4). Optional/absent
+   *  so every existing caller + the governor-OFF path is byte-identical. */
+  costTrimmed?: string[]
   /** n — files actually reviewed (the reviewed batch size). */
   reviewedCount: number
-  /** m — reconciled total for the spillover copy = reviewedCount + spillover.length. */
+  /** m — reconciled total = reviewedCount + spillover + costTrimmed. */
   totalChangedCount: number
 }
 
 /**
- * SIG-414 Phase 1.2: pure factory for `ReviewDisclosure` (co-located with the
- * type + renderer; exported for render-prep + tests). `reviewedCount` is the
- * packer's reviewed-batch size — the honest `n` (a deletions-only reviewed file
- * has no reviewable position yet WAS reviewed). Reconciles `totalChangedCount`
- * (m) = n + spillover (see the type doc). Returns `null` when nothing was
- * dropped so the renderer skips the disclosure (byte-identical common case).
+ * SIG-414 Phase 1.2: pure factory for `ReviewDisclosure` (exported for render-prep
+ * + tests). Reconciles `totalChangedCount` (m) = n + spillover + costTrimmed.
+ * Returns `null` when nothing was dropped (byte-identical common case). SIG-417:
+ * `costTrimmed` (optional) — omitted/empty → builder + renderer behave as 1.2.
  */
 export function buildReviewDisclosure(args: {
   policySkipped: string[]
   oversized: string[]
   spillover: string[]
   reviewedCount: number
+  costTrimmed?: string[]
 }): ReviewDisclosure | null {
   const { policySkipped, oversized, spillover, reviewedCount } = args
-  if (policySkipped.length === 0 && oversized.length === 0 && spillover.length === 0) return null
+  const costTrimmed = args.costTrimmed ?? []
+  if (policySkipped.length === 0 && oversized.length === 0 && spillover.length === 0 && costTrimmed.length === 0) {
+    return null
+  }
   return {
     policySkipped,
     oversized,
     spillover,
+    ...(costTrimmed.length > 0 ? { costTrimmed } : {}),
     reviewedCount,
-    totalChangedCount: reviewedCount + spillover.length,
+    totalChangedCount: reviewedCount + spillover.length + costTrimmed.length,
   }
 }
 
@@ -330,23 +326,16 @@ function renderOutsideYourChanges(
 }
 
 /**
- * SIG-414 Phase 1.2: render the honest 3-way un-reviewed disclosure as up to
- * three distinct, calm notices (verbatim copy per the Kimi spec). Returns the
- * lines to splice under the lead, or `[]` when nothing was left un-reviewed.
- *
- * Render order (Codex sign-off): the real coverage gaps first, then the calm
- * "not applicable" policy note last —
- *   1. OVERSIZED (`oversized`) — one calm `>` blockquote per too-large file.
- *   2. SPILLOVER (`spillover`) — one calm `>` blockquote summarizing the
- *      reviewed-vs-changed split for a very large PR.
- *   3. POLICY (`policySkipped`) — collapsed <details>, NO ⚠️. Files excluded by
- *      config/defaults aren't a coverage gap, so the note is subtle and sits
- *      last; the summary carries the full message (a reader who never expands
- *      still understands) and the body lists the files so the previously-
- *      invisible skips are honestly exposed (Codex: list, don't hide).
- *
- * No ⚠️ anywhere — this is informational, not alarming (the SIG-411 body-only
- * explainer dropped the "size budget" framing; this stays consistent).
+ * SIG-414 Phase 1.2: render the honest un-reviewed disclosure as distinct, calm
+ * notices (verbatim copy per the Kimi spec). Returns the lines to splice under
+ * the lead, or `[]` when nothing was left un-reviewed. No ⚠️ anywhere — this is
+ * informational, not alarming. Render order (Codex sign-off): real coverage gaps
+ * first, the calm "not applicable" policy note last —
+ *   1. OVERSIZED — one calm `>` blockquote per too-large file.
+ *   2. SPILLOVER — the reviewed-vs-changed split for a very large PR.
+ *   2b. COST-TRIM (SIG-417) — files the dark governor trimmed (distinct copy).
+ *   3. POLICY — collapsed <details>, subtle (not a coverage gap); lists the
+ *      files so a previously-invisible skip is honestly exposed.
  */
 function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
   const lines: string[] = []
@@ -363,6 +352,19 @@ function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
     lines.push("")
     lines.push(
       `> 📊 Reviewed ${disclosure.reviewedCount} of ${disclosure.totalChangedCount} changed files — the remaining ${count} ${count === 1 ? "was" : "were"} below the priority cutoff for this very large PR. Split into smaller PRs to cover them.`,
+    )
+  }
+
+  // 2b. SIG-417: cost-trim — DISTINCT copy from spillover (trimmed for cost, not
+  // a large-PR cutoff). Lowest-risk by construction (governor never trims a
+  // high-risk/scanner-hit file); surfaced so a trimmed file is never invisible.
+  const costTrimmed = disclosure.costTrimmed ?? []
+  if (costTrimmed.length > 0) {
+    const count = costTrimmed.length
+    const files = costTrimmed.map((p) => `\`${p}\``).join(", ")
+    lines.push("")
+    lines.push(
+      `> 💸 ${count} lower-risk ${count === 1 ? "file was" : "files were"} not reviewed to keep this PR within its cost budget: ${files}. Re-run with a higher budget or split the PR to cover ${count === 1 ? "it" : "them"}.`,
     )
   }
 

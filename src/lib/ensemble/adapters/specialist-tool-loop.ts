@@ -139,6 +139,10 @@ function addUsage(base: LlmUsage, next: LlmUsage | undefined): LlmUsage {
   const out: LlmUsage = { ...base }
   if (next?.inputTokens !== undefined) out.inputTokens = (out.inputTokens ?? 0) + next.inputTokens
   if (next?.outputTokens !== undefined) out.outputTokens = (out.outputTokens ?? 0) + next.outputTokens
+  // SIG-417: sum the actual per-call cost across the tool turn + final turn so a
+  // multi-turn tool conversation doesn't lose its per-turn `usage.cost`. Undefined
+  // is skipped (no provider cost reported) — never zero-filled, same as tokens.
+  if (next?.costUsd !== undefined) out.costUsd = (out.costUsd ?? 0) + next.costUsd
   return out
 }
 

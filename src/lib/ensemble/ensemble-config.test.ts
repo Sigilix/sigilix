@@ -463,6 +463,12 @@ describe("SIG-318 parseEnsembleConfig — numeric tunables (PR 5c)", () => {
       graphRpcTimeoutMs: 2500,
       // SIG-393: re-sweep region fan-out cap.
       resweepMaxRegions: 6,
+      // SIG-417: the dark cost governor — default OFF, no ceiling (absent), floors.
+      costGovernor: {
+        enabled: false,
+        minReviewedFiles: 1,
+        perCallOverheadTokensEst: 4000,
+      },
     })
   })
 
@@ -479,5 +485,53 @@ describe("SIG-318 parseEnsembleConfig — numeric tunables (PR 5c)", () => {
     expect(
       parseEnsembleConfig({ OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "0" }).tunables.maxRetrieveCallsPerPr,
     ).toBe(0)
+  })
+})
+
+describe("SIG-417 parseEnsembleConfig — cost governor (dark by default)", () => {
+  it("defaults the governor OFF with no ceiling and the floor defaults", () => {
+    const g = parseEnsembleConfig({}).tunables.costGovernor
+    expect(g.enabled).toBe(false)
+    expect(g.ceilingUsd).toBeUndefined()
+    expect(g.minReviewedFiles).toBe(1)
+    expect(g.perCallOverheadTokensEst).toBe(4000)
+  })
+
+  it("enables only on the exact 'on' string", () => {
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_ENABLED: "on" }).tunables.costGovernor.enabled).toBe(true)
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_ENABLED: "true" }).tunables.costGovernor.enabled).toBe(false)
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_ENABLED: "1" }).tunables.costGovernor.enabled).toBe(false)
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_ENABLED: "ON" }).tunables.costGovernor.enabled).toBe(false)
+  })
+
+  it("parses a float ceiling in USD", () => {
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_CEILING_USD: "0.35" }).tunables.costGovernor.ceilingUsd).toBe(
+      0.35,
+    )
+  })
+
+  it("treats a non-numeric or negative ceiling as ABSENT (never an accidental ceiling)", () => {
+    expect(
+      parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_CEILING_USD: "abc" }).tunables.costGovernor.ceilingUsd,
+    ).toBeUndefined()
+    expect(
+      parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_CEILING_USD: "-1" }).tunables.costGovernor.ceilingUsd,
+    ).toBeUndefined()
+    expect(
+      parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_CEILING_USD: "" }).tunables.costGovernor.ceilingUsd,
+    ).toBeUndefined()
+  })
+
+  it("allows an explicit 0 ceiling (trim everything trimmable)", () => {
+    expect(parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_CEILING_USD: "0" }).tunables.costGovernor.ceilingUsd).toBe(0)
+  })
+
+  it("parses the floor + overhead overrides", () => {
+    const g = parseEnsembleConfig({
+      OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES: "3",
+      OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST: "5500",
+    }).tunables.costGovernor
+    expect(g.minReviewedFiles).toBe(3)
+    expect(g.perCallOverheadTokensEst).toBe(5500)
   })
 })

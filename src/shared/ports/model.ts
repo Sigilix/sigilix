@@ -11,6 +11,13 @@
 export interface LlmUsage {
   inputTokens?: number
   outputTokens?: number
+  /** SIG-417: actual per-call cost as reported by the provider's `usage.cost`
+   *  (OpenRouter only; Ollama omits it). Denominated in OpenRouter CREDITS,
+   *  which we treat as USD-equivalent (≈USD, not guaranteed — see
+   *  `computeReviewCost`). Omitted — never zero-filled — when the provider
+   *  didn't report it, so cost aggregation falls back to the `MODEL_PRICING`
+   *  token estimate rather than logging a misleading $0. */
+  costUsd?: number
 }
 
 export interface GenerateResult {

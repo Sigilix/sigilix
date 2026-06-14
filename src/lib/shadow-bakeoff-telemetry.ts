@@ -56,6 +56,10 @@ export interface ShadowAttemptEvent {
   inputTokens?: number
   /** SIG-212: token usage reported by Ollama (`eval_count`). */
   outputTokens?: number
+  /** SIG-417: actual per-call cost (OpenRouter `usage.cost`, credits ≈ USD).
+   *  Mirrors the prod attempt event so shadow + prod cost aggregate on the
+   *  same tuple. Optional — omitted when the provider didn't report it. */
+  costUsd?: number
 }
 
 export function emitShadowAttempt(ctx: EnsembleRunCtx, info: ShadowAttemptEvent): void {

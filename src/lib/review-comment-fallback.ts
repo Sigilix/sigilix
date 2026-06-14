@@ -301,6 +301,11 @@ export type SkipNoticeReason =
   | "synth_failed_parse"
   | "synth_invalid_provenance"
   | "internal_error"
+  // SIG-417 (Codex sign-off #5): the dark cost governor trimmed so many files
+  // that the survivors route to no specialist. We post THIS skip-notice (never a
+  // silent APPROVE) so the trimmed files aren't invisible. Default-off governor
+  // never reaches it.
+  | "cost_governor_trimmed_all_routable"
 
 function dedupeKeyForSkipNotice(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
   return `pr-review-skip-notice:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
@@ -337,6 +342,8 @@ export function renderReviewSkipNotice(args: {
       "The synth model produced a verdict whose provenance couldn't be validated against the specialist inputs, even after a retry.",
     internal_error:
       "An unexpected internal error fired during the ensemble run. The on-call team has a telemetry record.",
+    cost_governor_trimmed_all_routable:
+      "The cost governor trimmed lower-risk files to stay within this PR's cost budget, and the remaining files didn't match any specialist's domain. Raise the budget or split the PR so the trimmed files can be reviewed.",
   }
   return [
     "<!-- sigilix:pr-review -->",

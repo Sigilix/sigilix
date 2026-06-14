@@ -33,8 +33,8 @@ import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
 import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
-import { emitReviewSlo } from "@/src/lib/ensemble-slo-telemetry"
-import { incrementDailyBudget, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
+import { emitReviewSlo, computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
+import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 
 // ARC-250: `stale_head` is split out from `skipped` so the dispatcher
 // can short-circuit the Phase 3 fallback. Falling through to Phase 3
@@ -125,6 +125,14 @@ export interface FinalizeTelemetry {
   specialistVerdicts: ReadonlyArray<{ attemptsUsed?: number }>
   synthesizer: { attemptsUsed?: number } | null
   timeToFirstOverviewMs?: number
+  /** SIG-417: the pre-flight cost projection (set by `packAndRoute`). Read here
+   *  to emit the post-hoc `cost-projection-miss` calibration event. Absent on
+   *  early-bail paths that never packed. */
+  costProjection?: {
+    projectedUsd: number
+    governorEnabled: boolean
+    governorTrimmed: boolean
+  }
 }
 
 export async function finalize<Tel extends FinalizeTelemetry>(
@@ -187,6 +195,50 @@ export async function finalize<Tel extends FinalizeTelemetry>(
     console.error(
       JSON.stringify({
         event: "review-slo-emit-failed",
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        err: e instanceof Error ? e.message : String(e),
+      }),
+    )
+  }
+  // SIG-417: the actual per-review cost (blended measured `usage.cost` + the
+  // pricing estimate for any unpriced tokens). Computed once here for the
+  // separate daily-COST accumulator + the projection-miss calibration event.
+  // Guarded so a cost-telemetry bug can never convert a posted review into a
+  // throw (same discipline as the SLO + telemetry-write catches).
+  try {
+    const cost = computeReviewCost(telemetry.tokenUsageByModel)
+    // (D) the per-day cost-in-USD accumulator — SEPARATE from the call-count
+    // budget above (which loses dollar decimals). Best-effort.
+    await incrementDailyCostUsd(env, cost.totalUsd).catch(() => {})
+    // (B) post-hoc projection-miss: compare the pre-flight projection against
+    // the real spend so the estimator can be calibrated BEFORE any enforcement
+    // is ever flipped on. Only when a projection was actually computed.
+    if (telemetry.costProjection !== undefined) {
+      const projectedUsd = telemetry.costProjection.projectedUsd
+      const actualUsd = cost.totalUsd
+      console.log(
+        JSON.stringify({
+          event: "cost-projection-miss",
+          owner: telemetry.owner,
+          repo: telemetry.repo,
+          prNumber: telemetry.prNumber,
+          headSha: telemetry.headSha.slice(0, 7),
+          projectedUsd,
+          actualUsd,
+          deltaUsd: actualUsd - projectedUsd,
+          // Ratio actual/projected — >1 means the projection under-estimated.
+          ratio: projectedUsd > 0 ? actualUsd / projectedUsd : null,
+          governorEnabled: telemetry.costProjection.governorEnabled,
+          governorTrimmed: telemetry.costProjection.governorTrimmed,
+        }),
+      )
+    }
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        event: "cost-accounting-failed",
         owner: telemetry.owner,
         repo: telemetry.repo,
         prNumber: telemetry.prNumber,

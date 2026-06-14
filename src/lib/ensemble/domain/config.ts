@@ -156,6 +156,36 @@ export interface EnsembleFeatureFlags {
   invariantLensRecallContract: InvariantLensRecallContract
 }
 
+/**
+ * SIG-417: the (DARK by default) projected-cost governor knobs. Capture +
+ * projection telemetry ship unconditionally; only the TRIM is gated here.
+ *
+ * RECALL-SAFETY: trimming is recall-NEGATIVE — a trimmed file is dropped from
+ * the cheap deterministic + secret-scan P0/P1 detectors too, not just the LLM
+ * pass (both run on the packed diff). So this defaults `enabled: false` and is a
+ * founder-set emergency lever, never v1 behavior. When the governor DOES trim,
+ * the trimmed files flow into the 1.2 spillover disclosure (never silently
+ * hidden) and a high-risk file is never trimmed.
+ */
+export interface CostGovernorConfig {
+  /** `OPENCLAW_COST_GOVERNOR_ENABLED === "on"`. Default false → no trim,
+   *  review byte-identical (projection telemetry still emits, observe-only). */
+  enabled: boolean
+  /** Founder-set per-PR projected-cost ceiling in USD
+   *  (`OPENCLAW_COST_GOVERNOR_CEILING_USD`, parseFloat). When `enabled` and set,
+   *  the governor trims lowest-risk files until the projection is at/under it.
+   *  Undefined ⇒ no ceiling ⇒ never trims even when `enabled`. */
+  ceilingUsd?: number
+  /** Floor: never trim below this many reviewed files
+   *  (`OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES`, default 1). Guards against a
+   *  too-low ceiling emptying the reviewed batch. */
+  minReviewedFiles: number
+  /** Per-call fixed-overhead token estimate added to the diff tokens for the
+   *  projection (system prompt + retrieval snapshot + output budget;
+   *  `OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST`, default 4000). */
+  perCallOverheadTokensEst: number
+}
+
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed
  *  at the edge with the orchestrator's original default. */
 export interface EnsembleTunables {
@@ -165,6 +195,8 @@ export interface EnsembleTunables {
   graphRpcTimeoutMs: number
   /** SIG-393: max regions one re-sweep may fan out over (default 6). */
   resweepMaxRegions: number
+  /** SIG-417: the dark projected-cost governor (default-off; see the type). */
+  costGovernor: CostGovernorConfig
 }
 
 /** The parse-once, typed view of the ensemble's env-derived settings. Grows by

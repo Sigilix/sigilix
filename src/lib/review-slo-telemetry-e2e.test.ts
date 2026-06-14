@@ -367,7 +367,15 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     expect(mockChat).toHaveBeenCalledTimes(1)
 
     // The failed attempt's tokens ARE charged, keyed by the primary model.
-    expect(sink[primaryModel]).toEqual({ inputTokens: 2000, outputTokens: 50 })
+    // SIG-417: this mock reports no `usage.cost`, so the tokens land in the
+    // `unpriced*` buckets too (priced via MODEL_PRICING, not dropped). The
+    // input/output totals are unchanged.
+    expect(sink[primaryModel]).toEqual({
+      inputTokens: 2000,
+      outputTokens: 50,
+      unpricedInputTokens: 2000,
+      unpricedOutputTokens: 50,
+    })
 
     // Cost = the failed attempt's spend, priced for the primary model (no silent drop).
     const cost = computeReviewCost(sink)

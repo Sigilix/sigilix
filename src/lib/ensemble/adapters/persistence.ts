@@ -128,6 +128,41 @@ export async function incrementDailyBudget(env: Env, by: number): Promise<void> 
   await env.OPENCLAW_STATE.put(key, String(used + by), { expirationTtl: 48 * 60 * 60 })
 }
 
+/** SIG-417: the per-day cost accumulator in USD, kept SEPARATE from the
+ *  `incrementDailyBudget` CALL-COUNT counter above (which `parseInt`s and so
+ *  loses dollar decimals). Written from the real summed `costUsd` in `finalize`.
+ *  Stored as JSON `{ date, usd }` (parseFloat) under a distinct key, so a
+ *  date-rollover read of a stale value is detectable (the embedded `date` won't
+ *  match) and resets to that day's spend rather than compounding. Best-effort
+ *  (the caller wraps it in `.catch`). The call-count budget is untouched. */
+export interface DailyCostRecord {
+  date: string
+  usd: number
+}
+
+export async function incrementDailyCostUsd(env: Env, usd: number): Promise<void> {
+  // A non-finite or negative cost is a no-op — never corrupt the accumulator.
+  if (!Number.isFinite(usd) || usd <= 0) return
+  const today = new Date().toISOString().slice(0, 10)
+  const key = `ensemble-cost-usd:${today}`
+  const raw = await env.OPENCLAW_STATE.get(key)
+  let priorUsd = 0
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<DailyCostRecord>
+      // Only carry the prior total forward when it's THIS day's record and a
+      // valid number — a stale/corrupt value resets instead of compounding.
+      if (parsed.date === today && typeof parsed.usd === "number" && Number.isFinite(parsed.usd) && parsed.usd >= 0) {
+        priorUsd = parsed.usd
+      }
+    } catch {
+      priorUsd = 0
+    }
+  }
+  const next: DailyCostRecord = { date: today, usd: priorUsd + usd }
+  await env.OPENCLAW_STATE.put(key, JSON.stringify(next), { expirationTtl: 48 * 60 * 60 })
+}
+
 export async function writeTelemetry(env: Env, telemetry: EnsembleTelemetrySummary): Promise<void> {
   const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
   const key = `ensemble-review-telemetry:${reverseTs}:${telemetry.owner}/${telemetry.repo}#${telemetry.prNumber}`

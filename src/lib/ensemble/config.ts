@@ -155,6 +155,11 @@ export interface EnsembleConfigEnv {
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
+  // SIG-417: the dark projected-cost governor (default-off; trim is recall-negative)
+  OPENCLAW_COST_GOVERNOR_ENABLED?: string | undefined
+  OPENCLAW_COST_GOVERNOR_CEILING_USD?: string | undefined
+  OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES?: string | undefined
+  OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST?: string | undefined
 }
 
 // The exact normalization the inline scan call sites used: default "off", trim,
@@ -170,12 +175,31 @@ function parseIntEnv(raw: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
+// SIG-417: float-from-env parser for the cost-governor USD ceiling. Empty,
+// non-numeric, or negative → undefined (no ceiling) rather than a fallback; the
+// ceiling is intentionally absent-by-default (the governor is dark), so a bad
+// value must NOT silently become an active ceiling. An explicit 0 IS a valid
+// ceiling (trim everything trimmable) and propagates.
+function parseFloatEnvOptional(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const parsed = Number.parseFloat(raw)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+}
+
 // Pre-flight retrieval call-cap default (was god-file-local, SIG-318 PR 5c).
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // SIG-393: re-sweep fan-out cap — regions × roles bounds the second pass.
 const DEFAULT_RESWEEP_MAX_REGIONS = 6
+// SIG-417: cost-governor floors. Never trim below 1 reviewed file; the per-call
+// fixed-overhead token estimate (system prompt + retrieval snapshot + output
+// budget) added to the diff tokens for the projection.
+const DEFAULT_COST_GOVERNOR_MIN_REVIEWED_FILES = 1
+const DEFAULT_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST = 4_000
 
 export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
+  // SIG-417: parse the cost-governor ceiling once (a bad value → undefined, never
+  // an accidental active ceiling — see `parseFloatEnvOptional`).
+  const costGovernorCeilingUsd = parseFloatEnvOptional(env.OPENCLAW_COST_GOVERNOR_CEILING_USD)
   return {
     astScanModes: {
       authzIdor: scanMode(env.OPENCLAW_AUTHZ_IDOR_SCAN),
@@ -259,6 +283,21 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       ),
       graphRpcTimeoutMs: parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS),
       resweepMaxRegions: parseIntEnv(env.OPENCLAW_RESWEEP_MAX_REGIONS, DEFAULT_RESWEEP_MAX_REGIONS),
+      // SIG-417: the dark projected-cost governor. `enabled` defaults false →
+      // capture + projection telemetry only, review byte-identical. `ceilingUsd`
+      // is absent unless explicitly set.
+      costGovernor: {
+        enabled: env.OPENCLAW_COST_GOVERNOR_ENABLED === "on",
+        ...(costGovernorCeilingUsd !== undefined ? { ceilingUsd: costGovernorCeilingUsd } : {}),
+        minReviewedFiles: parseIntEnv(
+          env.OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES,
+          DEFAULT_COST_GOVERNOR_MIN_REVIEWED_FILES,
+        ),
+        perCallOverheadTokensEst: parseIntEnv(
+          env.OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST,
+          DEFAULT_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST,
+        ),
+      },
     },
   }
 }

@@ -45,9 +45,13 @@ interface OpenRouterDelta {
   content?: string
   reasoning?: string
 }
+// SIG-417: `usage.cost` is OpenRouter's actual per-call charge (CREDITS, ≈USD),
+// returned in the non-stream body and once on the final stream chunk. Optional —
+// some routes/models omit it — so we capture only when it's a number and omit
+// otherwise (the cost aggregator then falls back to the MODEL_PRICING estimate).
 interface OpenRouterChunk {
   choices?: Array<{ delta?: OpenRouterDelta; message?: { content?: string } }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number }
   error?: { message?: string; code?: number | string }
 }
 interface OpenRouterChatCompletion {
@@ -58,7 +62,7 @@ interface OpenRouterChatCompletion {
       tool_calls?: OpenRouterToolCall[]
     }
   }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number }
   error?: { message?: string; code?: number | string }
 }
 interface OpenRouterToolCall {
@@ -161,6 +165,8 @@ function mapToolCompletion(parsed: OpenRouterChatCompletion): ChatResult {
   const usage: LlmUsage = {}
   if (typeof parsed.usage?.prompt_tokens === "number") usage.inputTokens = parsed.usage.prompt_tokens
   if (typeof parsed.usage?.completion_tokens === "number") usage.outputTokens = parsed.usage.completion_tokens
+  // SIG-417: capture the actual per-call cost (credits ≈ USD) when reported.
+  if (typeof parsed.usage?.cost === "number") usage.costUsd = parsed.usage.cost
   return { message, hasToolCalls: toolCalls.length > 0, usage }
 }
 
@@ -195,6 +201,9 @@ async function accumulateStream(
   let thinkingChars = 0
   let promptTokens: number | undefined
   let completionTokens: number | undefined
+  // SIG-417: the final usage chunk also carries the actual per-call cost
+  // (credits ≈ USD) on OpenRouter; capture it when present, omit otherwise.
+  let costUsd: number | undefined
   let saw = false
   let done = false
 
@@ -223,6 +232,7 @@ async function accumulateStream(
     if (chunk.usage) {
       if (typeof chunk.usage.prompt_tokens === "number") promptTokens = chunk.usage.prompt_tokens
       if (typeof chunk.usage.completion_tokens === "number") completionTokens = chunk.usage.completion_tokens
+      if (typeof chunk.usage.cost === "number") costUsd = chunk.usage.cost
     }
   }
 
@@ -260,5 +270,6 @@ async function accumulateStream(
   const usage: LlmUsage = {}
   if (promptTokens !== undefined) usage.inputTokens = promptTokens
   if (completionTokens !== undefined) usage.outputTokens = completionTokens
+  if (costUsd !== undefined) usage.costUsd = costUsd
   return { message, usage, thinkingChars }
 }

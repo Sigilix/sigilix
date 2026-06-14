@@ -138,7 +138,12 @@ describe("runAgentLoop — happy paths", () => {
         required: ["query"],
       },
       async execute() {
-        return { ok: true, chunks: [{ path: "x.ts", content: "..." }], count: 1 }
+        return {
+          ok: true,
+          repo: "sigilix/sigilix",
+          chunks: [{ path: "x.ts", content: "..." }],
+          count: 1,
+        }
       },
     }
     mockChat
@@ -158,7 +163,22 @@ describe("runAgentLoop — happy paths", () => {
         hasToolCalls: false,
       })
 
-    const { args, captured } = makeArgs({ tools: [tool] })
+    const { args, captured } = makeArgs({
+      tools: [tool],
+      telemetryContext: {
+        singleShotPrompt: "single-shot prompt",
+        singleShotSchema: { type: "object" },
+        promptBuilderVersion: "1.0.0",
+        promptBuilderSource: "// pretend source",
+        linearMentionRetrieval: {
+          availableRepos: ["sigilix/sigilix"],
+          mappedRepo: "sigilix/sigilix",
+          repoStatus: "mapped_indexed",
+          initialRetrievalNamespace: "sigilix/sigilix",
+          initialChunkCount: 0,
+        },
+      },
+    } as Partial<AgentLoopArgs>)
     const result = await runAgentLoop(args)
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -167,6 +187,18 @@ describe("runAgentLoop — happy paths", () => {
     expect(captured.payload?.toolCalls).toHaveLength(1)
     expect(captured.payload?.toolCalls[0]?.name).toBe("retrieve_codebase")
     expect(captured.payload?.toolCalls[0]?.ok).toBe(true)
+    expect(captured.payload?.linearMentionRetrieval).toEqual({
+      availableRepos: ["sigilix/sigilix"],
+      mappedRepo: "sigilix/sigilix",
+      repoStatus: "mapped_indexed",
+      initialRetrievalNamespace: "sigilix/sigilix",
+      initialChunkCount: 0,
+      calledRetrieveCodebase: true,
+      retrieveCodebaseCallCount: 1,
+      retrievalNamespace: "sigilix/sigilix",
+      chunkCount: 1,
+      toolRetrievals: [{ ok: true, repo: "sigilix/sigilix", count: 1 }],
+    })
   })
 })
 

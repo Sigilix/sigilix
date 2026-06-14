@@ -47,6 +47,7 @@ import {
   handleAdminMigrateToRepoIdRoute,
   handleAdminMigrateReviewMemoryToRepoIdRoute,
 } from "@/src/lib/admin-index-route"
+import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-retrieval-probe-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
@@ -229,6 +230,11 @@ export default {
     // enqueues repos with no manifest in KV.
     if (request.method === "POST" && url.pathname === "/admin/index-reconcile") {
       return handleAdminReconcileRoute(request, env)
+    }
+
+    // SIG-207: safe dry-run probe for Linear mention code retrieval.
+    if (request.method === "POST" && url.pathname === "/admin/linear-retrieval-probe") {
+      return handleAdminLinearRetrievalProbeRoute(request, env)
     }
 
     // SIG-243 Phase 3: authenticated migration endpoint to backfill the

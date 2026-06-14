@@ -99,6 +99,7 @@ async function buildStoredPayload(input: AgentLoopTelemetryRecordInput): Promise
     promptBuilderSourceHash,
   }
   if (typeof input.prNumber === "number") out.prNumber = input.prNumber
+  if (input.linearMentionRetrieval) out.linearMentionRetrieval = input.linearMentionRetrieval
   if (input.fallback) out.fallback = input.fallback
   if (typeof input.failureRawAnswer === "string") {
     const trunc = truncateAndRedact(input.failureRawAnswer)

@@ -52,7 +52,36 @@ export type AgentLoopFailure =
 export interface LoopTelemetryState {
   startMs: number
   turns: number
-  toolCalls: Array<{ name: string; ok: boolean; elapsedMs: number; argsHash: string }>
+  toolCalls: Array<{
+    name: string
+    ok: boolean
+    elapsedMs: number
+    argsHash: string
+    result?: RetrieveCodebaseToolSummary
+  }>
+}
+
+export interface RetrieveCodebaseToolSummary {
+  ok?: boolean
+  repo?: string
+  count?: number
+  error?: string
+}
+
+export interface LinearMentionRetrievalContext {
+  availableRepos: string[]
+  mappedRepo: string | null
+  repoStatus: string
+  initialRetrievalNamespace: string | null
+  initialChunkCount: number
+}
+
+export interface LinearMentionRetrievalTelemetry extends LinearMentionRetrievalContext {
+  calledRetrieveCodebase: boolean
+  retrieveCodebaseCallCount: number
+  retrievalNamespace: string | null
+  chunkCount: number
+  toolRetrievals: RetrieveCodebaseToolSummary[]
 }
 
 export interface AgentLoopTelemetryRecordInput {
@@ -70,6 +99,7 @@ export interface AgentLoopTelemetryRecordInput {
   toolCalls: LoopTelemetryState["toolCalls"]
   totalMs: number
   finalAnswer: unknown
+  linearMentionRetrieval?: LinearMentionRetrievalTelemetry
   fallback?: string
   /** Raw model output when fallback is `final_answer_did_not_parse`.
    *  Only set on that failure mode — null/absent for any other path.
@@ -111,6 +141,7 @@ export interface AgentLoopArgs {
     singleShotSchema: Record<string, unknown>
     promptBuilderVersion: string
     promptBuilderSource: string
+    linearMentionRetrieval?: LinearMentionRetrievalContext
   }
   log: (event: AgentLoopEvent) => void
 }
@@ -394,11 +425,13 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
           args.signal,
         )
         const elapsed = Date.now() - toolStart
+        const resultSummary = summarizeToolResult(toolName, toolResult)
         telemetryState.toolCalls.push({
           name: toolName,
           ok: true,
           elapsedMs: elapsed,
           argsHash,
+          ...(resultSummary ? { result: resultSummary } : {}),
         })
         args.log({ kind: "tool", name: toolName, ok: true, elapsedMs: elapsed })
         messages.push({
@@ -412,11 +445,13 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
           return { result: { ok: false, reason: "wall_clock_exceeded" }, telemetryState }
         }
         const elapsed = Date.now() - toolStart
+        const resultSummary = summarizeThrownToolError(toolName, e)
         telemetryState.toolCalls.push({
           name: toolName,
           ok: false,
           elapsedMs: elapsed,
           argsHash,
+          ...(resultSummary ? { result: resultSummary } : {}),
         })
         return {
           result: {
@@ -670,6 +705,36 @@ function stringifyToolResult(value: unknown): string {
   }
 }
 
+function summarizeToolResult(toolName: string, value: unknown): RetrieveCodebaseToolSummary | undefined {
+  if (toolName !== "retrieve_codebase" || value === null || typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
+  const out: RetrieveCodebaseToolSummary = {}
+  if (typeof record.ok === "boolean") out.ok = record.ok
+  if (typeof record.repo === "string") out.repo = record.repo
+  if (typeof record.count === "number" && Number.isFinite(record.count)) out.count = record.count
+  if (typeof record.error === "string") out.error = truncateTelemetryError(record.error)
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function summarizeThrownToolError(toolName: string, error: unknown): RetrieveCodebaseToolSummary | undefined {
+  if (toolName !== "retrieve_codebase") return undefined
+  return { ok: false, error: truncateTelemetryError(formatThrownValue(error)) }
+}
+
+function formatThrownValue(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`
+  try {
+    return JSON.stringify(error) ?? "null"
+  } catch {
+    return `[unserializable: ${typeof error}]`
+  }
+}
+
+function truncateTelemetryError(error: string): string {
+  const cap = 1_000
+  return error.length <= cap ? error : `${error.slice(0, cap - 1)}…`
+}
+
 // ──────────────────────────────────────────────────────────────── telemetry
 
 export function buildTelemetryRecordInput(
@@ -693,6 +758,11 @@ export function buildTelemetryRecordInput(
     totalMs,
     finalAnswer: result.ok ? result.answer : null,
   }
+  const linearMentionRetrieval = buildLinearMentionRetrievalTelemetry(
+    args.telemetryContext.linearMentionRetrieval,
+    telemetryState.toolCalls,
+  )
+  if (linearMentionRetrieval) out.linearMentionRetrieval = linearMentionRetrieval
   if (typeof args.prNumber === "number") out.prNumber = args.prNumber
   if (!result.ok) {
     out.fallback = result.reason
@@ -701,6 +771,34 @@ export function buildTelemetryRecordInput(
     }
   }
   return out
+}
+
+function buildLinearMentionRetrievalTelemetry(
+  context: LinearMentionRetrievalContext | undefined,
+  toolCalls: LoopTelemetryState["toolCalls"],
+): LinearMentionRetrievalTelemetry | undefined {
+  if (!context) return undefined
+  const calledRetrieveCodebase = toolCalls.some((call) => call.name === "retrieve_codebase")
+  const retrieveCodebaseCallCount = toolCalls.filter((call) => call.name === "retrieve_codebase").length
+  const allToolRetrievals = toolCalls
+    .filter((call) => call.name === "retrieve_codebase")
+    .map((call) => call.result)
+    .filter((result): result is RetrieveCodebaseToolSummary => result !== undefined)
+  const firstResolved = allToolRetrievals.find(
+    (result) => result.ok === true && (result.repo !== undefined || typeof result.count === "number"),
+  )
+  return {
+    availableRepos: context.availableRepos,
+    mappedRepo: context.mappedRepo ?? null,
+    repoStatus: context.repoStatus,
+    initialRetrievalNamespace: context.initialRetrievalNamespace ?? null,
+    initialChunkCount: context.initialChunkCount ?? 0,
+    calledRetrieveCodebase,
+    retrieveCodebaseCallCount,
+    retrievalNamespace: calledRetrieveCodebase ? (firstResolved?.repo ?? null) : null,
+    chunkCount: calledRetrieveCodebase ? (firstResolved?.count ?? 0) : 0,
+    toolRetrievals: allToolRetrievals.slice(0, 5),
+  }
 }
 
 // ──────────────────────────────────────────────────────────────── misc

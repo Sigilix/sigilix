@@ -88,7 +88,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
   return {
     name: "retrieve_codebase",
     description:
-      "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path + line range + content. Use when you need to look at code in this repo to answer. Refine your query if the first call returns irrelevant chunks.",
+      "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, and indexed ref/freshness when available. Prefer current default-branch chunks for citations, and refine your query if the first call returns irrelevant chunks.",
     parameters: {
       type: "object",
       properties: {
@@ -219,6 +219,10 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
           lineEnd: c.lineEnd,
           score: c.score,
           content: c.content,
+          ...(c.indexedRef ? { indexedRef: c.indexedRef } : {}),
+          ...(c.indexedHeadSha ? { indexedHeadSha: c.indexedHeadSha } : {}),
+          ...(c.indexRunId ? { indexRunId: c.indexRunId } : {}),
+          ...(c.indexFreshness ? { indexFreshness: c.indexFreshness } : {}),
         })),
         count: chunks.length,
         ...(noChunksMessage ? { message: noChunksMessage } : {}),

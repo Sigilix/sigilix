@@ -34,6 +34,7 @@ import { isRepoSensitive } from "./repo-policy"
 import { loadSigilixConfigSource, parseSigilixConfigSource, resolveCommandConfig, EMPTY_CONFIG } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import type { Env } from "@/src/shared/types/env"
+import { verifyAndSanitizeCitations } from "./citation-verifier"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 
@@ -278,6 +279,8 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
         `pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`,
       )
     }
+
+    verdict = await verifyPrImproveCitations(client, owner, repo, headSha, verdict)
 
     // Split suggestions into applyable inline patches and summary-only
     // fallbacks. Empty suggestion blocks are valid deletion patches.
@@ -565,6 +568,38 @@ export function partitionImproveSuggestions(
 export function hasSuggestionBlock(body: string): boolean {
   if (typeof body !== "string") return false
   return /```suggestion\s*\n[\s\S]*?```/.test(body)
+}
+
+async function verifyPrImproveCitations(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+  verdict: PrImproveVerdict,
+): Promise<PrImproveVerdict> {
+  const verifyText = async (answer: string): Promise<string> => {
+    const checked = await verifyAndSanitizeCitations({
+      answer,
+      ref: headSha,
+      fetchFileContent: (path, ref) => client.getFileContent(owner, repo, path, ref),
+    })
+    if (checked.invalid.length > 0) {
+      console.log(
+        JSON.stringify({
+          event: "pr-improve-citation-verification-corrected",
+          owner,
+          repo,
+          invalid: checked.invalid.length,
+          headSha: headSha.slice(0, 7),
+        }),
+      )
+    }
+    return checked.answer
+  }
+  const suggestions = await Promise.all(
+    verdict.suggestions.map(async (s) => ({ ...s, body: await verifyText(s.body) })),
+  )
+  return { summary: await verifyText(verdict.summary), suggestions }
 }
 
 interface BuildImproveArgs {

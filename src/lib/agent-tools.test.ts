@@ -102,7 +102,15 @@ describe("createAgentTools — surface scoping", () => {
 describe("retrieve_codebase", () => {
   it("returns ok with chunks when retrieveChunks succeeds", async () => {
     mockRetrieveChunks.mockResolvedValue([
-      { path: "src/foo.ts", lineStart: 10, lineEnd: 30, score: 0.85, content: "function foo() {}" },
+      {
+        path: "src/foo.ts",
+        lineStart: 10,
+        lineEnd: 30,
+        score: 0.85,
+        content: "function foo() {}",
+        indexedRef: "main@abc1234",
+        indexFreshness: "current",
+      },
     ])
     const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
     const result = await tool!.execute(
@@ -120,6 +128,8 @@ describe("retrieve_codebase", () => {
           lineEnd: 30,
           score: 0.85,
           content: "function foo() {}",
+          indexedRef: "main@abc1234",
+          indexFreshness: "current",
         },
       ],
       count: 1,

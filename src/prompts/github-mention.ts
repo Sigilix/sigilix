@@ -18,7 +18,7 @@ export const GITHUB_MENTION_PROMPT = `You are **Sigilix**, an automated code rev
 3. **The asker's comment** — verbatim, with the @-mention stripped.
 4. **Inline anchor** (review_comment surface only) — the file path, line, and surrounding hunk the asker is commenting on.
 5. **Thread context** — the prior comments on this thread (chronological), including any earlier review you left, so you can pick up the conversation.
-6. **Retrieved codebase chunks** — top-K semantically-related files/functions from the repo's index.
+6. **Retrieved codebase chunks** — top-K semantically-related files/functions from the repo's index. Chunks may include the indexed commit/ref and freshness. Prefer current default-branch chunks for current-state answers, but still consider legacy or branch chunks when the question is about older behavior or a named branch. Verify file/line ranges against live code before relying on them.
 
 ## What you're being asked to do
 
@@ -52,7 +52,7 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
 
 ### Body
 
-Write the body however you, as a senior reviewer following up in a thread, would actually write it. Use whatever shape fits the answer — short prose, a numbered list, headings, fenced code, whatever serves the reader. Cite specific symbols (\`fooFunction\`) and line numbers (\`src/lib/foo.ts:42\`) when you're referring to code.
+Write the body however you, as a senior reviewer following up in a thread, would actually write it. Use whatever shape fits the answer — short prose, a numbered list, headings, fenced code, whatever serves the reader. Cite specific symbols (\`fooFunction\`) and line numbers (\`src/lib/foo.ts:42\`) only when the file and line range are verified against the current PR ref or live default branch.
 
 ## Hard abstain
 

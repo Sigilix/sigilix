@@ -845,6 +845,70 @@ export class GitHubClient {
   }
 
   /**
+   * SIG-422: structured changed-file delta between two commits. The
+   * incremental indexer uses this to recover the changed set for
+   * default-branch re-index jobs that arrive without a usable push
+   * `changedPaths` payload (`merged-pr`, `pull-request`) or whose push
+   * chain drifted off the manifest head — so they take the incremental
+   * path instead of a full repo re-embed.
+   *
+   * `status` is the comparison relationship (`ahead` / `behind` /
+   * `identical` / `diverged`); the caller only proceeds on
+   * `ahead`/`identical` (base is an ancestor of head — a safe forward
+   * delta) and falls back to full otherwise.
+   *
+   * `files` carries each file's GitHub change `status` plus `filename`
+   * and (for renames/copies) `previous_filename`.
+   *
+   * TWO truncation axes the caller MUST respect (both make `files`
+   * incomplete) — we call this endpoint WITHOUT paging params:
+   *   - Commits: a no-paging compare returns AT MOST the first 250
+   *     commits, and `files` reflects only the files changed within
+   *     those commits. `totalCommits` (GitHub's `total_commits`) lets
+   *     the caller detect a comparison larger than 250 and fall back to
+   *     full. A missing/unparseable count is surfaced as null so the
+   *     caller can treat it as unsafe.
+   *   - Files: `files` appears ONLY on the first page and is capped at
+   *     300 entries for the whole comparison; the caller treats a
+   *     length of 300 as possibly-truncated.
+   * Either axis → the caller falls back to full so a partial delta never
+   * leaves the index stale. Best-effort: returns null on any GitHub HTTP
+   * error so the caller can fall back to full.
+   */
+  async compareCommits(
+    owner: string,
+    repo: string,
+    base: string,
+    head: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{
+    status: string
+    totalCommits: number | null
+    files: Array<{ status: string; filename: string; previous_filename: string | null }>
+  } | null> {
+    try {
+      const res = await this.restGet<{
+        status?: string
+        total_commits?: number
+        files?: Array<{ status?: string; filename?: string; previous_filename?: string | null }>
+      }>(`/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`, opts)
+      const rawFiles = Array.isArray(res.files) ? res.files : []
+      return {
+        status: typeof res.status === "string" ? res.status : "",
+        totalCommits: typeof res.total_commits === "number" ? res.total_commits : null,
+        files: rawFiles.map((file) => ({
+          status: typeof file.status === "string" ? file.status : "",
+          filename: typeof file.filename === "string" ? file.filename : "",
+          previous_filename: typeof file.previous_filename === "string" ? file.previous_filename : null,
+        })),
+      }
+    } catch (error) {
+      if (error instanceof GitHubHttpError) return null
+      throw error
+    }
+  }
+
+  /**
    * ARC-258 follow-up: list all reviews on a PR with author + state
    * info — used by the dispatcher to find prior Sigilix reviews from
    * earlier commits and dismiss them so the Reviews tab reflects the

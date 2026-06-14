@@ -3,6 +3,7 @@ import {
   MAX_OVERVIEW_WAITING_ART_HEIGHT,
   MAX_OVERVIEW_WAITING_ART_WIDTH,
   PR_OVERVIEW_WAITING_ARTS,
+  _testOnlyNormalizeWaitingArtIndex,
   renderPrOverviewWaitingArt,
   selectPrOverviewWaitingArt,
 } from "@/src/lib/pr-overview-waiting-art"
@@ -68,5 +69,15 @@ describe("PR overview waiting art", () => {
       selected.add(selectPrOverviewWaitingArt(`seed-${i}`).id)
     }
     expect(selected.size).toBeGreaterThan(4)
+  })
+
+  it("normalizes signed hash remainders before indexing the catalog", () => {
+    const length = PR_OVERVIEW_WAITING_ARTS.length
+
+    expect(_testOnlyNormalizeWaitingArtIndex(-5, 3)).toBe(1)
+    expect(_testOnlyNormalizeWaitingArtIndex(-1, length)).toBe(length - 1)
+    expect(_testOnlyNormalizeWaitingArtIndex(-length - 2, length)).toBe(length - 2)
+    expect(_testOnlyNormalizeWaitingArtIndex(-2147483648, 12)).toBe(4)
+    expect(() => _testOnlyNormalizeWaitingArtIndex(1, 0)).toThrow("waiting art catalog length must be positive")
   })
 })

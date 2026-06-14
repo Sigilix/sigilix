@@ -302,7 +302,9 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly [PrOverviewWaitingArt, ...PrOver
 
 export function selectPrOverviewWaitingArt(seed: string | undefined): PrOverviewWaitingArt {
   const value = hashString(seed ?? "sigilix")
-  return PR_OVERVIEW_WAITING_ARTS[value % PR_OVERVIEW_WAITING_ARTS.length] ?? PR_OVERVIEW_WAITING_ARTS[0]
+  const index = normalizeWaitingArtIndex(value, PR_OVERVIEW_WAITING_ARTS.length)
+  // Keep a runtime fallback even though the catalog is statically non-empty.
+  return PR_OVERVIEW_WAITING_ARTS[index] ?? PR_OVERVIEW_WAITING_ARTS[0]
 }
 
 export function renderPrOverviewWaitingArt(seed: string | undefined): string {
@@ -319,3 +321,11 @@ function hashString(value: string): number {
   }
   return hash >>> 0
 }
+
+function normalizeWaitingArtIndex(value: number, length: number): number {
+  if (!Number.isInteger(length) || length <= 0) throw new RangeError("waiting art catalog length must be positive")
+  const remainder = value % length
+  return remainder < 0 ? remainder + length : remainder
+}
+
+export const _testOnlyNormalizeWaitingArtIndex = normalizeWaitingArtIndex

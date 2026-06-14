@@ -173,6 +173,21 @@ export function packFilesIntoBatches(
 }
 
 /**
+ * SIG-414: stable risk-ordering for review coverage. When a PR spans more than
+ * one batch, only `batches[0]` is reviewed — so the riskiest files must land
+ * first. Partitions `files` into (high-risk, rest), preserving original order
+ * within each tier (deterministic). Returns the input UNCHANGED when all-or-none
+ * are high-risk (nothing to promote), so callers stay byte-identical in the
+ * common case. `isHighRisk` is injected so this leaf stays dependency-free (the
+ * predicate lives in the ensemble domain).
+ */
+export function riskOrderFiles(files: DiffFileBlock[], isHighRisk: (path: string) => boolean): DiffFileBlock[] {
+  const high = files.filter((f) => isHighRisk(f.path))
+  if (high.length === 0 || high.length === files.length) return files
+  return [...high, ...files.filter((f) => !isHighRisk(f.path))]
+}
+
+/**
  * Reassemble a batch into a single diff string. Preserves file order
  * within the batch.
  */

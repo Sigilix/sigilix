@@ -41,7 +41,14 @@ import {
 } from "@/src/lib/ai-instructions"
 import { renderScopedRulesForPrompt, resolveScopedRulesForChangedPaths } from "@/src/lib/scoped-rules"
 import { loadCompiledScopedRulesManifest } from "@/src/lib/scoped-rules-kv"
-import { splitDiffByFile, packFilesIntoBatches, batchToDiff, estimateTokens } from "@/src/lib/diff-packing"
+import {
+  splitDiffByFile,
+  packFilesIntoBatches,
+  batchToDiff,
+  estimateTokens,
+  riskOrderFiles,
+} from "@/src/lib/diff-packing"
+import { isHighRiskPath } from "@/src/lib/ensemble/domain/resweep"
 import { classifyDiffFiles } from "@/src/lib/diff-file-classify"
 import { shouldReview } from "@/src/shared/util/path-glob"
 import { runDeterministicChecks, type DeterministicCheckHit } from "@/src/shared/domain/deterministic-checks"
@@ -308,7 +315,13 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     filterPatterns.length === 0
       ? []
       : splitFiles.filter((f) => !shouldReview(f.path, filterPatterns)).map((f) => f.path)
-  const { batches, droppedTooLarge } = packFilesIntoBatches(filesAfterFilter)
+  // SIG-414: risk-order so the reviewed batch[0] holds the highest-risk files
+  // (auth/secret/session/token/… per `isHighRiskPath` — the same paths that
+  // trigger a re-sweep), not an arbitrary diff-order slice. Stable + a no-op
+  // when all-or-none are high-risk; a single-batch no-filter PR's diff stays
+  // `fullDiff` below, so the common case is byte-identical.
+  const riskOrderedFiles = riskOrderFiles(filesAfterFilter, isHighRiskPath)
+  const { batches, droppedTooLarge } = packFilesIntoBatches(riskOrderedFiles)
   const reviewedFiles = batches[0] ?? []
   const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
   const baseDiff =

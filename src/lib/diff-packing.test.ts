@@ -7,8 +7,43 @@ import {
   estimateTokens,
   packFilesIntoBatches,
   batchToDiff,
+  riskOrderFiles,
   DEFAULT_MAX_DIFF_TOKENS_PER_CALL,
 } from "@/src/lib/diff-packing"
+
+describe("riskOrderFiles (SIG-414)", () => {
+  const f = (path: string) => ({ path, body: `// ${path}`, charCount: path.length + 3 })
+  const isRisky = (p: string) => p.includes("auth") || p.includes("secret")
+
+  it("moves high-risk files to the front so they land in batch[0]", () => {
+    const ordered = riskOrderFiles([f("a.ts"), f("auth.ts"), f("b.ts")], isRisky)
+    expect(ordered.map((x) => x.path)).toEqual(["auth.ts", "a.ts", "b.ts"])
+  })
+
+  it("is stable — preserves original order within each tier", () => {
+    const ordered = riskOrderFiles([f("a.ts"), f("auth.ts"), f("b.ts"), f("secret.ts")], isRisky)
+    expect(ordered.map((x) => x.path)).toEqual(["auth.ts", "secret.ts", "a.ts", "b.ts"])
+  })
+
+  it("returns the input UNCHANGED (same ref) when no file is high-risk — byte-identical common case", () => {
+    const input = [f("a.ts"), f("b.ts")]
+    expect(riskOrderFiles(input, isRisky)).toBe(input)
+  })
+
+  it("returns the input UNCHANGED (same ref) when every file is high-risk", () => {
+    const input = [f("auth.ts"), f("secret.ts")]
+    expect(riskOrderFiles(input, isRisky)).toBe(input)
+  })
+
+  it("handles empty input", () => {
+    expect(riskOrderFiles([], isRisky)).toEqual([])
+  })
+
+  it("returns a single file unchanged (same ref)", () => {
+    const input = [f("auth.ts")]
+    expect(riskOrderFiles(input, isRisky)).toBe(input)
+  })
+})
 
 describe("estimateTokens", () => {
   it("uses the chars/4 heuristic", () => {

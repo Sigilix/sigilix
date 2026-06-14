@@ -37,7 +37,14 @@ import {
 // id-list exceeded 100. Batch at the documented limit.
 export const VECTORIZE_DELETE_BATCH = 100
 
-export type DeleteReason = "install-deleted" | "install-repos-removed" | "branch-deleted" | "pr-branch-closed"
+export type DeleteReason =
+  | "install-deleted"
+  | "install-repos-removed"
+  | "branch-deleted"
+  | "pr-branch-closed"
+  // SIG-419: operator-triggered bulk purge of stale index records (branch
+  // overlays redundant after SIG-413 + dead-org orphans). Same delete machinery.
+  | "stale-index-purge"
 
 export interface DeleteResult {
   /** Summary status — drives the webhook HTTP response. */

@@ -46,6 +46,7 @@ import {
   handleAdminReconcileRoute,
   handleAdminMigrateToRepoIdRoute,
   handleAdminMigrateReviewMemoryToRepoIdRoute,
+  handleAdminPurgeStaleIndexesRoute,
 } from "@/src/lib/admin-index-route"
 import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-retrieval-probe-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
@@ -230,6 +231,12 @@ export default {
     // enqueues repos with no manifest in KV.
     if (request.method === "POST" && url.pathname === "/admin/index-reconcile") {
       return handleAdminReconcileRoute(request, env)
+    }
+
+    // SIG-419: authenticated bulk purge of stale index records (branch overlays
+    // redundant after SIG-413 + caller-named dead orgs). `?dryRun=true` first.
+    if (request.method === "POST" && url.pathname === "/admin/purge-stale-indexes") {
+      return handleAdminPurgeStaleIndexesRoute(request, env)
     }
 
     // SIG-207: safe dry-run probe for Linear mention code retrieval.

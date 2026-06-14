@@ -13,6 +13,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import { runIndexBackfill } from "./index-backfill"
 import { runIndexReconciliation } from "./index-reconciliation"
+import { runStaleIndexPurge } from "./index-purge"
 import { migrateInstallToRepoId } from "./index-migrate-to-repo-id"
 import { migrateInstallReviewMemoryToRepoId } from "./review-memory/migrate"
 
@@ -224,5 +225,52 @@ export async function handleAdminReconcileRoute(request: Request, env: Env): Pro
 
   const dryRun = new URL(request.url).searchParams.get("dryRun") === "true"
   const summary = await runIndexReconciliation(env, { dryRun })
+  return json(summary, 200)
+}
+
+/**
+ * SIG-419: POST /admin/purge-stale-indexes?dryRun=true[&deadOrgs=a,b][&max=N] —
+ * bearer-auth bulk purge of stale index records: branch overlays
+ * (the `/__branch__/` keyspace, redundant after SIG-413) and every record under
+ * a caller-named dead org (e.g. the pre-rename `arc-and-anchor`). Reuses the
+ * vetted `deleteRepoIndex` per tuple (Vectorize-before-KV, cross-tenant guard,
+ * graph cleanup; branch overlays preserve the default-branch index).
+ *
+ * `?dryRun=true` reports the full grouped scope without deleting (start here;
+ * eyeball `byBaseRepo`). Dead-org deletion is OPT-IN via `?deadOrgs=` — empty
+ * means branch overlays only. Each call deletes a bounded batch (subrequest cap)
+ * and returns `remaining`; re-POST and loop until a fresh `dryRun` scan reports
+ * `totalCandidateTuples: 0` (the re-scan is authoritative — `remaining` is a
+ * single-call estimate). `enumerationIncomplete: true` means a `list` page
+ * errored, so that call saw only a PARTIAL keyspace and deleted a subset (always
+ * safe — never the wrong record); treat its counts as partial and re-run. No
+ * GitHub App dependency — this is pure KV/Vectorize/graph cleanup.
+ */
+export async function handleAdminPurgeStaleIndexesRoute(request: Request, env: Env): Promise<Response> {
+  const token = env.OPENCLAW_ADMIN_TOKEN
+  if (!token) {
+    return json({ error: "admin_endpoint_not_configured" }, 503)
+  }
+  if (!(await requireBearerToken(request, token))) {
+    return json({ error: "unauthorized" }, 401)
+  }
+
+  const url = new URL(request.url)
+  const dryRun = url.searchParams.get("dryRun") === "true"
+  const deadOrgs = (url.searchParams.get("deadOrgs") ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0)
+  const maxRaw = url.searchParams.get("max")?.trim()
+  const maxParsed = maxRaw === undefined || maxRaw === "" ? NaN : Number(maxRaw)
+  // Clamp an override to [1, 100] so a typo can't blow the subrequest budget;
+  // omitted/invalid falls through to the module default.
+  const maxDeletesPerCall = Number.isInteger(maxParsed) && maxParsed > 0 ? Math.min(maxParsed, 100) : undefined
+
+  const summary = await runStaleIndexPurge(env, {
+    dryRun,
+    deadOrgs,
+    ...(maxDeletesPerCall !== undefined ? { maxDeletesPerCall } : {}),
+  })
   return json(summary, 200)
 }

@@ -7,11 +7,18 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 vi.mock("@/src/shared/adapters/github/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
 vi.mock("@/src/lib/index-backfill", () => ({ runIndexBackfill: vi.fn() }))
 vi.mock("@/src/lib/index-reconciliation", () => ({ runIndexReconciliation: vi.fn() }))
+vi.mock("@/src/lib/index-purge", () => ({ runStaleIndexPurge: vi.fn() }))
 
-import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "@/src/lib/admin-index-route"
+import {
+  handleAdminIndexRoute,
+  handleAdminBackfillRoute,
+  handleAdminReconcileRoute,
+  handleAdminPurgeStaleIndexesRoute,
+} from "@/src/lib/admin-index-route"
 import { resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import { runIndexBackfill } from "@/src/lib/index-backfill"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import { runStaleIndexPurge } from "@/src/lib/index-purge"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 
@@ -229,5 +236,87 @@ describe("handleAdminReconcileRoute", () => {
     const { env } = makeEnv()
     await handleAdminReconcileRoute(post("https://x/admin/index-reconcile", `Bearer ${TOKEN}`), env)
     expect(mockReconcile).toHaveBeenCalledWith(env, { dryRun: false })
+  })
+})
+
+const mockPurge = vi.mocked(runStaleIndexPurge)
+const purgeSummary = (over: Record<string, unknown> = {}) => ({
+  dryRun: true,
+  deadOrgs: [],
+  scannedManifestKeys: 0,
+  scannedVectorKeys: 0,
+  branchOverlayTuples: 0,
+  deadOrgTuples: 0,
+  totalCandidateTuples: 0,
+  byBaseRepo: {},
+  processed: 0,
+  deleted: 0,
+  vectorIdsDeleted: 0,
+  remaining: 0,
+  deleteErrors: [],
+  enumerationIncomplete: false,
+  ...over,
+})
+
+describe("handleAdminPurgeStaleIndexesRoute", () => {
+  beforeEach(() => mockPurge.mockReset())
+
+  it("503 when the admin token is unset", async () => {
+    const { env } = makeEnv({ OPENCLAW_ADMIN_TOKEN: undefined })
+    expect(
+      (await handleAdminPurgeStaleIndexesRoute(post("https://x/admin/purge-stale-indexes", `Bearer ${TOKEN}`), env))
+        .status,
+    ).toBe(503)
+    expect(mockPurge).not.toHaveBeenCalled()
+  })
+
+  it("401 on missing/wrong bearer", async () => {
+    const { env } = makeEnv()
+    expect((await handleAdminPurgeStaleIndexesRoute(post("https://x/admin/purge-stale-indexes"), env)).status).toBe(401)
+    expect(mockPurge).not.toHaveBeenCalled()
+  })
+
+  it("does NOT require the GitHub App (pure KV/Vectorize/graph cleanup)", async () => {
+    mockPurge.mockResolvedValue(purgeSummary())
+    const { env } = makeEnv({ GITHUB_APP_ID: undefined, GITHUB_PRIVATE_KEY: undefined })
+    const res = await handleAdminPurgeStaleIndexesRoute(
+      post("https://x/admin/purge-stale-indexes?dryRun=true", `Bearer ${TOKEN}`),
+      env,
+    )
+    expect(res.status).toBe(200)
+    expect(mockPurge).toHaveBeenCalled()
+  })
+
+  it("200 threads dryRun + parses comma-separated deadOrgs", async () => {
+    mockPurge.mockResolvedValue(purgeSummary({ totalCandidateTuples: 5, deadOrgs: ["arc-and-anchor"] }))
+    const { env } = makeEnv()
+    const res = await handleAdminPurgeStaleIndexesRoute(
+      post("https://x/admin/purge-stale-indexes?dryRun=true&deadOrgs=arc-and-anchor,old-org", `Bearer ${TOKEN}`),
+      env,
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ totalCandidateTuples: 5 })
+    expect(mockPurge).toHaveBeenCalledWith(env, { dryRun: true, deadOrgs: ["arc-and-anchor", "old-org"] })
+  })
+
+  it("defaults to dryRun=false + no deadOrgs (module default cap) when unspecified", async () => {
+    mockPurge.mockResolvedValue(purgeSummary({ dryRun: false }))
+    const { env } = makeEnv()
+    await handleAdminPurgeStaleIndexesRoute(post("https://x/admin/purge-stale-indexes", `Bearer ${TOKEN}`), env)
+    expect(mockPurge).toHaveBeenCalledWith(env, { dryRun: false, deadOrgs: [] })
+  })
+
+  it("clamps an out-of-range max to 100; passes a valid max through; ignores a junk max", async () => {
+    mockPurge.mockResolvedValue(purgeSummary({ dryRun: false }))
+    const { env } = makeEnv()
+    await handleAdminPurgeStaleIndexesRoute(
+      post("https://x/admin/purge-stale-indexes?max=99999", `Bearer ${TOKEN}`),
+      env,
+    )
+    expect(mockPurge).toHaveBeenLastCalledWith(env, { dryRun: false, deadOrgs: [], maxDeletesPerCall: 100 })
+    await handleAdminPurgeStaleIndexesRoute(post("https://x/admin/purge-stale-indexes?max=25", `Bearer ${TOKEN}`), env)
+    expect(mockPurge).toHaveBeenLastCalledWith(env, { dryRun: false, deadOrgs: [], maxDeletesPerCall: 25 })
+    await handleAdminPurgeStaleIndexesRoute(post("https://x/admin/purge-stale-indexes?max=abc", `Bearer ${TOKEN}`), env)
+    expect(mockPurge).toHaveBeenLastCalledWith(env, { dryRun: false, deadOrgs: [] })
   })
 })

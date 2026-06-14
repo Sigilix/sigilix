@@ -114,7 +114,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // findings only droppable via DETECTED-IMPOSSIBLE with quoted evidence).
     // SIG-107 30→31 (specialists treat deterministic runner SARIF as candidate
     // evidence they inspect/refute, not as an unquestionable verdict).
-    expect(PROMPT_VERSION).toBe("31")
+    // SIG-406 31→32 (security recall-suffix gains the authz-RESOLUTION addendum;
+    // synth gains the RETENTION DIRECTIVE — both shift the posted verdict).
+    expect(PROMPT_VERSION).toBe("32")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

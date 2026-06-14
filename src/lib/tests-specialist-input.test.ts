@@ -21,10 +21,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockChat = vi.fn()
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
-  )
+// SIG-406: tests specialist runs on OpenRouter now, so `runSpecialist` routes through
+// the barrel `chat` → the OpenRouter adapter. Mock the BARREL `chat` (provider-agnostic).
+vi.mock("@/src/shared/adapters/model", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
   return {
     ...actual,
     chat: (args: unknown) => mockChat(args),
@@ -249,8 +249,7 @@ describe("tests specialist receives the sibling classification + diff", () => {
 
     await runSpecialist({
       role: "tests",
-      apiKeys: { ollama: "test-key", openrouter: undefined },
-      providerByRole: new Map(),
+      apiKeys: { ollama: undefined, openrouter: "test-key" },
       systemPrompt: SPECIALIST_PROMPTS.tests,
       initialMessage,
       chatEnabled: "on",
@@ -416,10 +415,10 @@ describe("SPECIALIST_PROMPTS.tests grounding", () => {
     expect(SPECIALIST_PROMPTS.tests).toContain("DROPPED")
   })
 
-  it("test-specialist primary model is set (regression guard, SIG-234 lineup)", () => {
-    // SIG-349: V4 Flash is the measured tests primary; MiniMax M3 remains the
-    // fallback for parse/timeouts.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("minimax-m3:cloud")
+  it("test-specialist primary model is set (regression guard, SIG-406 OpenRouter lineup)", () => {
+    // SIG-406: tests runs deepseek/deepseek-v4-pro on OpenRouter, fallback:null
+    // (OpenRouter self-routes across upstreams).
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek/deepseek-v4-pro")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBeNull()
   })
 })

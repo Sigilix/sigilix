@@ -13,13 +13,19 @@ import type { Env } from "@/src/shared/types/env"
 
 export const EMPTY_CONFIG: SigilixConfig = {}
 
-export type DispatcherEnv = Pick<Env, "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE">
+export type DispatcherEnv = Pick<
+  Env,
+  "OLLAMA_API_KEY" | "OPENROUTER_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE"
+>
 
 export function envOff(): DispatcherEnv {
   // `OPENCLAW_DYNAMIC_DISPATCHER_MODE` intentionally omitted — that's
   // the "off" path (default mode is absent / not "shadow"|"enforce").
   return {
     OLLAMA_API_KEY: "fake-key",
+    // SIG-406: dispatcher LLM now runs on OpenRouter (nemotron-ultra); the key is
+    // selected by model-id shape, so the success path needs OPENROUTER_API_KEY.
+    OPENROUTER_API_KEY: "fake-or-key",
     OLLAMA_CHAT_ENABLE: "on",
   }
 }
@@ -27,6 +33,7 @@ export function envOff(): DispatcherEnv {
 export function envShadow(overrides: Partial<DispatcherEnv> = {}): DispatcherEnv {
   return {
     OLLAMA_API_KEY: "fake-key",
+    OPENROUTER_API_KEY: "fake-or-key",
     OLLAMA_CHAT_ENABLE: "on",
     OPENCLAW_DYNAMIC_DISPATCHER_MODE: "shadow",
     ...overrides,

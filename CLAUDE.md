@@ -84,24 +84,38 @@ the system is built and where code goes; read it before working in an unfamiliar
 
 Some tests run a **real review specialist through a live model** — e.g. the subtle-logic
 recall ruler that measures the logic specialist (`e2e/logic-recall-eval.live.test.ts`,
-`npm run logic-recall-eval`). These need a **Turbo-entitled `OLLAMA_API_KEY`** — the same
-Ollama Turbo (`ollama.com`) endpoint prod uses. Put the shared testing key in your
+`npm run logic-recall-eval`).
+
+**SIG-406:** prod now runs the ensemble on **OpenRouter** (logic `openai/o3`, etc.), so each
+live eval **selects its API key by the effective model's id-shape**: an OpenRouter id (the
+prod default) → `OPENROUTER_API_KEY`; a `:cloud` model override → `OLLAMA_API_KEY` (Ollama
+Turbo, no OpenRouter spend). Each suite SKIPs unless the *selected* provider's key is set, and
+gates on **either** key being present. Put whichever testing key(s) you have in your
 **gitignored `.dev.vars`**:
 
 ```
-OLLAMA_API_KEY=<your Turbo testing key>
+OPENROUTER_API_KEY=<your OpenRouter testing key>   # to measure the prod model (openai/o3, …)
+OLLAMA_API_KEY=<your Turbo testing key>            # to measure a :cloud override on Ollama Turbo
 ```
 
-Then, e.g.:
+Then, e.g. — measure the **prod** logic model on OpenRouter:
 
 ```bash
-OLLAMA_API_KEY="$(grep -E '^OLLAMA_API_KEY' .dev.vars | cut -d= -f2-)" npm run logic-recall-eval
+OPENROUTER_API_KEY="$(grep -E '^OPENROUTER_API_KEY' .dev.vars | cut -d= -f2-)" npm run logic-recall-eval
+```
+
+…or pin a `:cloud` override to hit **Ollama Turbo** instead (no OpenRouter spend):
+
+```bash
+LOGIC_RECALL_MODEL=deepseek-v4-pro:cloud \
+  OLLAMA_API_KEY="$(grep -E '^OLLAMA_API_KEY' .dev.vars | cut -d= -f2-)" npm run logic-recall-eval
 ```
 
 - These live tests are **gated on the key and SKIP without it**, so `npm run build` / CI
   stay green without it — only run them when you're measuring model behavior.
-- This is the **real prod path** (Ollama Turbo). Prefer it over any local proxy / LAN-Ollama
-  workaround — a Turbo key works from anywhere; a private LAN box doesn't.
+- For the prod path use `OPENROUTER_API_KEY`; for an Ollama Turbo A/B use a `:cloud` override
+  (e.g. `FIXTURE_EVAL_MODEL_LOGIC`, `LOGIC_RECALL_MODEL`, `SYNTH_RETENTION_MODEL`). A Turbo key
+  works from anywhere; prefer it over any local proxy / LAN-Ollama workaround.
 - Re-baseline a model/prompt change with the **K-repeated** ruler (`LOGIC_RECALL_REPEATS=12`):
   the specialists are non-deterministic run-to-run, so a single pass is noise. K=4 is **also**
   too noisy — two back-to-back K=4 runs on the *same* prompt swung ~8pp recall / ~12pp FP, so a

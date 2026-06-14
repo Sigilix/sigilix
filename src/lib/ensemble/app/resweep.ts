@@ -18,8 +18,6 @@
 import type { Env } from "@/src/shared/types/env"
 import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { modelApiKeys, runSpecialist } from "@/src/lib/ensemble/adapters/model-provider"
-import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
-import type { ModelProvider } from "@/src/lib/ensemble/domain/config"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
@@ -38,9 +36,6 @@ import {
 
 export interface ResweepArgs {
   env: Env
-  /** SIG-405: per-role provider override (from `flags.providerByRole`), forwarded
-   *  to each re-sweep `runSpecialist` so logic tracks the OpenRouter flag. */
-  providerByRole: ReadonlyMap<SpecialistRole, ModelProvider>
   owner: string
   repo: string
   prNumber: number
@@ -140,7 +135,6 @@ export async function runResweepPhase(a: ResweepArgs): Promise<ResweepResult> {
         const r = await runSpecialist({
           role: job.role,
           apiKeys: modelApiKeys(a.env),
-          providerByRole: a.providerByRole,
           systemPrompt: SPECIALIST_PROMPTS[job.role],
           initialMessage,
           chatEnabled,

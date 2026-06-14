@@ -265,8 +265,6 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // call is `think:false`, byte-identical to today). The dedicated
       // reasoning-parse suite below covers the populated cases.
       reasoningByRole: new Map(),
-      // SIG-405: provider-override flag → empty map (OPENCLAW_LOGIC_PROVIDER unset).
-      providerByRole: new Map(),
     })
   })
 
@@ -307,8 +305,6 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       reasoningPromptRoles: new Set(),
       // SIG-287: reasoning-on harness defaults to an empty map (off).
       reasoningByRole: new Map(),
-      // SIG-405: provider-override flag defaults to an empty map (off).
-      providerByRole: new Map(),
     })
   })
 
@@ -430,29 +426,6 @@ describe("SIG-287 parseEnsembleConfig — reasoningByRole (reasoning-on harness)
       OPENCLAW_REASONING_LEVEL: "ultra",
     }).flags
     expect(c.reasoningByRole).toEqual(new Map())
-  })
-})
-
-describe("SIG-405 parseEnsembleConfig — providerByRole (OpenRouter migration flag)", () => {
-  it("defaults to an empty map when OPENCLAW_LOGIC_PROVIDER is unset (byte-identical default-off)", () => {
-    expect(parseEnsembleConfig({}).flags.providerByRole).toEqual(new Map())
-  })
-
-  it('maps logic→"openrouter" when OPENCLAW_LOGIC_PROVIDER === "openrouter"', () => {
-    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_PROVIDER: "openrouter" }).flags.providerByRole).toEqual(
-      new Map([["logic", "openrouter"]]),
-    )
-  })
-
-  it("normalizes with trim + lowercase", () => {
-    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_PROVIDER: "  OpenRouter  " }).flags.providerByRole).toEqual(
-      new Map([["logic", "openrouter"]]),
-    )
-  })
-
-  it('stays empty for "ollama" or any other value (only "openrouter" flips it)', () => {
-    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_PROVIDER: "ollama" }).flags.providerByRole).toEqual(new Map())
-    expect(parseEnsembleConfig({ OPENCLAW_LOGIC_PROVIDER: "bogus" }).flags.providerByRole).toEqual(new Map())
   })
 })
 

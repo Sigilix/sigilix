@@ -89,6 +89,9 @@ describe("specialistSystemPrompt — SIG-392 per-role recall directive", () => {
     expect(security).toBe(`${SPECIALIST_PROMPTS.security}\n${SECURITY_RECALL_SUFFIX}`)
     expect(security).toContain("RECALL DIRECTIVE (security)")
     expect(security).toContain("collection-scope IDOR / missing ROW-LEVEL tenant scoping")
+    // SIG-406: the authz-RESOLUTION addendum (a check exists but computes the WRONG decision).
+    expect(security).toContain("authz-RESOLUTION classes")
+    expect(security).toContain("Verify the authorization DECISION is correct, not merely that a check is present")
   })
 
   it("a role in the recall set is independent — enabling logic does NOT alter security and vice versa", () => {

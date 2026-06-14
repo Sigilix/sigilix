@@ -71,6 +71,11 @@ describe("SIG-392 protected-recovery prompt rule", () => {
     expect(SYNTHESIZER_PROMPT).toContain("Do NOT copy the `origin` field into your output findings")
   })
 
+  it("SIG-406: ships the recall RETENTION DIRECTIVE (carry forward every grounded finding)", () => {
+    expect(SYNTHESIZER_PROMPT).toContain("RETENTION DIRECTIVE (recall)")
+    expect(SYNTHESIZER_PROMPT).toContain("carry forward EVERY distinct grounded specialist finding of score >= 2")
+  })
+
   it("rode in with the v30 prompt version bump", () => {
     expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(30)
   })

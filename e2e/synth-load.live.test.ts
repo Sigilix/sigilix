@@ -24,7 +24,7 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { runSynthesizer } from "@/src/lib/ensemble/adapters/model-provider"
+import { runSynthesizer, SYNTHESIZER_CONFIG, selectConfigApiKey } from "@/src/lib/ensemble/adapters/model-provider"
 import {
   SYNTHESIZER_PROMPT,
   buildSynthesizerInitialMessage,
@@ -38,17 +38,25 @@ import type { FixtureFinding, FixtureGroundTruth } from "@/evals/fixture-types"
 import { FIXTURES_DIR } from "@/e2e/fixture-eval-lib"
 import { rebuildSpecialistVerdicts } from "@/e2e/replay-shared"
 
-const API_KEY = process.env.OLLAMA_API_KEY
 const FIXTURE = "fullstack-pr20-dense"
 const PER_SYNTH_TIMEOUT_MS = 300_000
 const REPEATS = (() => {
   const n = Number(process.env.SYNTH_LOAD_REPEATS ?? 1)
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1
 })()
-// SYNTH_LOAD_MODEL overrides the synth primary (default gpt-oss:120b-cloud)
-// — the "is the recall loss a model ceiling?" A/B. Nulls the fallback so
-// every run is the requested model (LOGIC_RECALL_MODEL discipline).
+// SYNTH_LOAD_MODEL overrides the synth primary (default = SYNTHESIZER_CONFIG.primary,
+// an OpenRouter id) — the "is the recall loss a model ceiling?" A/B. Nulls the fallback
+// so every run is the requested model (LOGIC_RECALL_MODEL discipline).
 const MODEL_OVERRIDE = process.env.SYNTH_LOAD_MODEL?.trim()
+// SIG-406: the effective synth config + its key, selected by model-id shape — a `:cloud`
+// override → OLLAMA_API_KEY, an OpenRouter id (default) → OPENROUTER_API_KEY.
+const SYNTH_CONFIG = MODEL_OVERRIDE
+  ? { ...SYNTHESIZER_CONFIG, primary: MODEL_OVERRIDE, fallback: null, perAttemptTimeoutMs: PER_SYNTH_TIMEOUT_MS }
+  : SYNTHESIZER_CONFIG
+const API_KEY = selectConfigApiKey(SYNTH_CONFIG, {
+  ollama: process.env.OLLAMA_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+})
 // Default to two representative captured unions (one re-sweep, one lens) so
 // a default run is cheap; override with a comma list for the full sweep.
 const INPUTS = (process.env.SYNTH_LOAD_INPUTS ?? "resweep.window.run1.union.json,invariant.run2.union.json")
@@ -107,22 +115,13 @@ describe.skipIf(!API_KEY)(`SIG-392 synth-under-lever-load — ${FIXTURE} (LIVE)`
 
         for (let repeat = 1; repeat <= REPEATS; repeat++) {
           const r = await runSynthesizer({
-            apiKey: API_KEY!,
+            apiKey: API_KEY,
             systemPrompt: SYNTHESIZER_PROMPT,
             userMessage: synthMessage,
             chatEnabled: "on",
             signal: AbortSignal.timeout(PER_SYNTH_TIMEOUT_MS),
             perfCtx: { owner: "eval", repo: "synth-load", prNumber: 0, headSha: "0".repeat(40) },
-            ...(MODEL_OVERRIDE
-              ? {
-                  configOverride: {
-                    primary: MODEL_OVERRIDE,
-                    fallback: null,
-                    retries: 1,
-                    perAttemptTimeoutMs: PER_SYNTH_TIMEOUT_MS,
-                  },
-                }
-              : {}),
+            ...(MODEL_OVERRIDE ? { configOverride: SYNTH_CONFIG } : {}),
           })
           attempted += 1
           if (r.verdict === null) {

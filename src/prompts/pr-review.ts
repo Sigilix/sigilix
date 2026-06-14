@@ -285,8 +285,20 @@
  * candidate evidence, not a final verdict: specialists must inspect/refute
  * against visible code, stay in-lane for role-routed findings, and keep
  * independent real bugs even when no tool emitted them.
+ *
+ * v31 → v32 (SIG-406): two recall-shifting prompt changes ride the OpenRouter
+ * alpha. (1) SECURITY_RECALL_SUFFIX gains the authz-RESOLUTION addendum — six
+ * "a check exists but computes the WRONG decision" classes (wildcard/`*`
+ * over-grant, inheritance resolved in the wrong direction, union-vs-intersection
+ * of permission sources, inverted deny/allow precedence, an uncompared tenant
+ * boundary, fail-open authorization). (2) SYNTHESIZER_PROMPT gains the RETENTION
+ * DIRECTIVE — the synth must carry forward EVERY distinct grounded score>=2
+ * source finding; thinning a large verdict set is a FAILURE, with MERGE (dedupe
+ * bar) and DETECTED-IMPOSSIBLE the only drop paths. Both shift the posted
+ * verdict, so prior reviews on unchanged SHAs go stale; the
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` aid is intended for the rollout window.
  */
-export const PROMPT_VERSION = "31"
+export const PROMPT_VERSION = "32"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Sigilix team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

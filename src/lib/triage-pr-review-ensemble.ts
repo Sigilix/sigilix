@@ -136,8 +136,14 @@ export {
   runSynthesizer,
   isPermanentFailure,
   parseSynthAnswer,
+  // SIG-406: per-model API-key selection (key-by-id-shape) — used by the live eval
+  // harnesses so a `:cloud` model override routes to OLLAMA_API_KEY and an OpenRouter
+  // id (e.g. openai/o3) routes to OPENROUTER_API_KEY.
+  selectConfigApiKey,
+  modelApiKeys,
 } from "./ensemble/adapters/model-provider"
 export type { SpecialistRunArgs, AttemptCallbackInfo, SynthesizerRunArgs } from "./ensemble/adapters/model-provider"
+export type { ModelApiKeys } from "./ensemble/adapters/model-provider"
 
 // SIG-318 (PR 12e/12f): the submission-affordance cluster + the SESSION contract.
 export { prepareSubmissionAffordance, buildSuggestionEmissionLogEvents } from "./ensemble/app/affordances"

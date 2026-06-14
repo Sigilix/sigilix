@@ -315,9 +315,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
       (signal) =>
         runSpecialist({
           role,
-          // SIG-405: runSpecialist selects the key for the role's effective model.
+          // SIG-406: runSpecialist selects the key by model-id shape (OR id → OR key).
           apiKeys: modelApiKeys(env),
-          providerByRole: ensembleConfig.flags.providerByRole,
           systemPrompt: specialistSystemPrompt(role, recallRoles, reasoningPromptRoles),
           // SIG-113: tests get the testing-evidence block; others the classification block.
           initialMessage,
@@ -393,9 +392,6 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     prNumber,
     headSha,
     mode: ensembleConfig.flags.invariantLensMode,
-    // SIG-405: the lens runs the logic model — same provider map so it tracks
-    // logic→o3 (else it'd run deepseek while the primary logic runs o3).
-    providerByRole: ensembleConfig.flags.providerByRole,
     perfCtx,
     orchCtrl,
     diff,
@@ -812,7 +808,6 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     headSha,
     mode: ensembleConfig.flags.resweepMode,
     maxRegions: ensembleConfig.tunables.resweepMaxRegions,
-    providerByRole: ensembleConfig.flags.providerByRole, // SIG-405: re-sweep tracks the provider flag too
     perfCtx,
     orchCtrl,
     diff,

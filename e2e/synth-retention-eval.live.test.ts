@@ -20,7 +20,12 @@ import {
   type SynthRetentionCase,
   type SynthRetentionOutput,
 } from "./synth-retention-corpus"
-import { runSynthesizer, SYNTHESIZER_CONFIG, SYNTHESIZER_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
+import {
+  runSynthesizer,
+  SYNTHESIZER_CONFIG,
+  SYNTHESIZER_TIMEOUT_MS,
+  selectConfigApiKey,
+} from "@/src/lib/triage-pr-review-ensemble"
 import {
   SYNTHESIZER_PROMPT,
   buildSynthesizerInitialMessage,
@@ -29,7 +34,6 @@ import {
 import type { PrReviewVerdict } from "@/src/lib/triage-pr-review"
 import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 
-const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = SYNTHESIZER_TIMEOUT_MS + 30_000
 const REPEATS = (() => {
   const n = Number(process.env.SYNTH_RETENTION_REPEATS ?? 1)
@@ -39,6 +43,13 @@ const MODEL_OVERRIDE = process.env.SYNTH_RETENTION_MODEL?.trim()
 const SYNTH_CONFIG = MODEL_OVERRIDE
   ? { ...SYNTHESIZER_CONFIG, primary: MODEL_OVERRIDE, fallback: null }
   : SYNTHESIZER_CONFIG
+// SIG-406: key by the effective synth model shape — a `:cloud` override → OLLAMA_API_KEY,
+// an OpenRouter id (the prod default `nvidia/nemotron-3-ultra-...`) → OPENROUTER_API_KEY.
+// Suite skips unless the SELECTED provider's key is set.
+const API_KEY = selectConfigApiKey(SYNTH_CONFIG, {
+  ollama: process.env.OLLAMA_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+})
 
 const EMPTY_VERDICT: PrReviewVerdict = {
   summary: "Synth failed.",
@@ -101,47 +112,52 @@ async function runCase(c: SynthRetentionCase, apiKey: string): Promise<SynthRete
   }
 }
 
-describe.skipIf(!API_KEY)("synth retention baseline (LIVE - needs OLLAMA_API_KEY, K-repeated)", () => {
-  it(
-    "measures synthesizer TP retention, FP filtering, hallucinations, duplicate collapse, and runtime",
-    async () => {
-      const onlyIds =
-        process.env.SYNTH_RETENTION_ONLY?.split(",")
-          .map((s) => s.trim())
-          .filter(Boolean) ?? []
-      const cases = onlyIds.length ? SYNTH_RETENTION_CASES.filter((c) => onlyIds.includes(c.id)) : SYNTH_RETENTION_CASES
-      const scores = []
-      for (let k = 0; k < REPEATS; k++) {
-        for (const c of cases) {
-          const rawOutput = await runCase(c, API_KEY as string)
-          const output = applySynthRetentionProductGates(c, rawOutput)
-          const score = scoreSynthRetentionCase(c, output)
-          scores.push(score)
-          const mark = [
-            `recall ${score.retained}/${score.totalMustKeep}`,
-            `fp-kept ${score.falsePositivesKept}/${score.totalMustDrop}`,
-            `hallucinated ${score.unsupportedFindings}`,
-            `drift ${score.severityDriftSourceIds.length}`,
-            `collapse ${score.duplicateCollapses}`,
-          ].join(" - ")
-          console.log(
-            `  [synth] ${c.id.padEnd(30)} ${mark} (${score.modelUsed} - ${score.elapsedMs}ms${score.failureReason ? ` - FAIL:${score.failureReason}` : ""})`,
-          )
-          if (
-            process.env.SYNTH_RETENTION_DEBUG &&
-            (score.recall < 1 || score.falsePositivesKept > 0 || score.unsupportedFindings > 0)
-          ) {
+describe.skipIf(!API_KEY)(
+  "synth retention baseline (LIVE - needs OLLAMA_API_KEY or OPENROUTER_API_KEY, K-repeated)",
+  () => {
+    it(
+      "measures synthesizer TP retention, FP filtering, hallucinations, duplicate collapse, and runtime",
+      async () => {
+        const onlyIds =
+          process.env.SYNTH_RETENTION_ONLY?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []
+        const cases = onlyIds.length
+          ? SYNTH_RETENTION_CASES.filter((c) => onlyIds.includes(c.id))
+          : SYNTH_RETENTION_CASES
+        const scores = []
+        for (let k = 0; k < REPEATS; k++) {
+          for (const c of cases) {
+            const rawOutput = await runCase(c, API_KEY as string)
+            const output = applySynthRetentionProductGates(c, rawOutput)
+            const score = scoreSynthRetentionCase(c, output)
+            scores.push(score)
+            const mark = [
+              `recall ${score.retained}/${score.totalMustKeep}`,
+              `fp-kept ${score.falsePositivesKept}/${score.totalMustDrop}`,
+              `hallucinated ${score.unsupportedFindings}`,
+              `drift ${score.severityDriftSourceIds.length}`,
+              `collapse ${score.duplicateCollapses}`,
+            ].join(" - ")
             console.log(
-              `      missed=${score.missedSourceIds.join(",") || "-"} drift=${score.severityDriftSourceIds.join(",") || "-"} misdiagnosed=${score.misdiagnosedSourceIds.join(",") || "-"}`,
+              `  [synth] ${c.id.padEnd(30)} ${mark} (${score.modelUsed} - ${score.elapsedMs}ms${score.failureReason ? ` - FAIL:${score.failureReason}` : ""})`,
             )
+            if (
+              process.env.SYNTH_RETENTION_DEBUG &&
+              (score.recall < 1 || score.falsePositivesKept > 0 || score.unsupportedFindings > 0)
+            ) {
+              console.log(
+                `      missed=${score.missedSourceIds.join(",") || "-"} drift=${score.severityDriftSourceIds.join(",") || "-"} misdiagnosed=${score.misdiagnosedSourceIds.join(",") || "-"}`,
+              )
+            }
           }
         }
-      }
-      const summary = summarizeSynthRetentionResults(scores)
-      console.log("")
-      console.log(`SYNTH RETENTION - model=${SYNTH_CONFIG.primary} - ${REPEATS}x/case`)
-      console.log(formatSynthRetentionSummary(summary))
-    },
-    SYNTH_RETENTION_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
-  )
-})
+        const summary = summarizeSynthRetentionResults(scores)
+        console.log("")
+        console.log(`SYNTH RETENTION - model=${SYNTH_CONFIG.primary} - ${REPEATS}x/case`)
+        console.log(formatSynthRetentionSummary(summary))
+      },
+      SYNTH_RETENTION_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
+    )
+  },
+)

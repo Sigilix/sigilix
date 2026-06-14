@@ -50,10 +50,12 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
-  )
+// SIG-406: the lineup is all-OpenRouter, so the specialist/synth runners route
+// through the barrel `chat` → the OpenRouter adapter. Mock the BARREL `chat`
+// (provider-agnostic) so the token-aggregation wiring is exercised regardless of
+// the model id.
+vi.mock("@/src/shared/adapters/model", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
   return {
     ...actual,
     chat: (...args: unknown[]) => mockChat(...args),
@@ -294,8 +296,7 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     for (const role of ALL_SPECIALISTS) {
       const res = await runSpecialist({
         role,
-        apiKeys: { ollama: "k", openrouter: undefined },
-        providerByRole: new Map(),
+        apiKeys: { ollama: undefined, openrouter: "k" },
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",
@@ -337,62 +338,56 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     }
   })
 
-  it("charges parse-FAILED-but-resolved attempts too, keyed by each model that answered (SIG-212)", async () => {
-    // security = primary qwen3-coder + retries:1 + cross-provider
-    // fallback. Primary RESOLVES with unparseable content + usage
-    // (parse-fail is permanent → skip retry, go to fallback); fallback
-    // RESOLVES valid + usage. Both attempts burned tokens → both must
-    // be charged, under their respective model keys.
+  it("charges a parse-FAILED attempt's tokens even when the run then fails (SIG-212)", async () => {
+    // SIG-406: security = { primary: "deepseek/deepseek-v4-flash", retries: 1,
+    // fallback: null } on OpenRouter. A parse-fail is PERMANENT → the executor does
+    // NOT retry it, and there is no fallback → the run fails. But the primary attempt
+    // still BURNED tokens producing the unparseable output, so they MUST be charged
+    // (the SIG-212 invariant: settled attempts cost money even when the verdict fails).
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }
 
     const primaryModel = SPECIALIST_CONFIGS.security.primary
-    const fallbackModel = SPECIALIST_CONFIGS.security.fallback!
 
-    mockChat
-      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // primary, parse-fail
-      .mockResolvedValueOnce(okWithUsage(verdictJson("security"), 1500, 300)) // fallback, ok
+    mockChat.mockResolvedValueOnce(badParseWithUsage(2000, 50)) // primary, parse-fail (permanent → no retry)
 
     const res = await runSpecialist({
       role: "security",
-      apiKeys: { ollama: "k", openrouter: undefined },
-      providerByRole: new Map(),
+      apiKeys: { ollama: undefined, openrouter: "k" },
       systemPrompt: "system",
       initialMessage: "user",
       chatEnabled: "on",
       signal: new AbortController().signal,
       perfCtx,
     })
-    expect(res.verdict).not.toBeNull()
-    expect(res.modelUsed).toBe(fallbackModel)
+    // No fallback to rescue a permanent parse-fail → the run fails.
+    expect(res.verdict).toBeNull()
+    expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
+    // Only one chat call (parse-fail is not retried).
+    expect(mockChat).toHaveBeenCalledTimes(1)
 
-    // Both the failed-primary and the successful-fallback tokens recorded.
+    // The failed attempt's tokens ARE charged, keyed by the primary model.
     expect(sink[primaryModel]).toEqual({ inputTokens: 2000, outputTokens: 50 })
-    expect(sink[fallbackModel]).toEqual({ inputTokens: 1500, outputTokens: 300 })
 
-    // Cost = both models priced independently (no silent drop of the
-    // failed attempt's spend).
+    // Cost = the failed attempt's spend, priced for the primary model (no silent drop).
     const cost = computeReviewCost(sink)
     const expectedUsd =
       (2000 / 1_000_000) * pricingForModel(primaryModel).inputPerMTokUsd +
-      (50 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd +
-      (1500 / 1_000_000) * pricingForModel(fallbackModel).inputPerMTokUsd +
-      (300 / 1_000_000) * pricingForModel(fallbackModel).outputPerMTokUsd
+      (50 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd
     expect(cost.totalUsd).toBeCloseTo(expectedUsd, 9)
   })
 
   it("records nothing when chat() throws (HTTP/timeout) — no usage, no phantom cost", async () => {
-    // SIG-212: usage is absent on the exception path (no tokens
-    // exchanged). logic = retries:0 + no fallback, so a single throw
-    // exhausts it with zero recorded spend.
+    // SIG-212: usage is absent on the exception path (no tokens exchanged). SIG-406:
+    // logic = retries:1 + no fallback; reject EVERY attempt so the whole ladder
+    // exhausts with zero recorded spend.
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }
 
-    mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))
+    mockChat.mockRejectedValue(new Error("Ollama HTTP 503: overloaded"))
     const res = await runSpecialist({
       role: "logic",
-      apiKeys: { ollama: "k", openrouter: undefined },
-      providerByRole: new Map(),
+      apiKeys: { ollama: undefined, openrouter: "k" },
       systemPrompt: "system",
       initialMessage: "user",
       chatEnabled: "on",

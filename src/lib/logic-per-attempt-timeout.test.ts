@@ -12,8 +12,11 @@
 
 import { describe, expect, it } from "vitest"
 import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS, PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/triage-pr-review-ensemble"
+import { RETRY_BACKOFF_MS } from "@/src/lib/ensemble/domain/model-policy"
 
-const TESTS_SPECIALIST_MIN_HEADROOM_MS = 50_000
+// SIG-406: the retry path inserts RETRY_BACKOFF_MS[0] between primary and retry, so the
+// worst-case tests chain is 2×160s + 800ms = 320,800ms → ~49.2s headroom under the wall.
+const TESTS_SPECIALIST_MIN_HEADROOM_MS = 49_000
 
 describe("specialist per-attempt timeout overrides", () => {
   it("caps logic at 120s per attempt (think:false makes it fast; 2× the expected <60s for route variance)", () => {
@@ -33,25 +36,25 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBeUndefined()
   })
 
-  it("gives logic a cross-provider fallback (retries:0) whose primary+fallback chain fits the specialist wall", () => {
-    // retries:0 — the resilience is the cross-provider FALLBACK, not a same-
-    // model retry (a re-run of a stalled deepseek would just stall again).
-    expect(SPECIALIST_CONFIGS.logic.retries).toBe(0)
-    // qwen3-coder-next:cloud — cross-provider from the deepseek-v4-flash
-    // primary (fails independently) and proven fast in live telemetry.
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("qwen3-coder-next:cloud")
-    expect(SPECIALIST_CONFIGS.logic.fallback).not.toBe(SPECIALIST_CONFIGS.logic.primary)
-    // The full chain — primary (120s) + fallback (120s), no retry backoff —
-    // must fit inside SPECIALIST_TIMEOUT_MS so a stalled primary can still be
-    // rescued within the wall.
-    const chainMs = 2 * SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs!
+  it("gives logic retries:1 + no fallback (SIG-406: OpenRouter self-routes) whose attempt chain fits the wall", () => {
+    // SIG-406: on OpenRouter the resilience is a single same-model RETRY (retries:1);
+    // there is NO per-role cross-provider fallback (OpenRouter routes across upstreams).
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
+    // The full chain — primary (120s) + backoff (800ms) + 1 retry (120s) — must fit
+    // inside SPECIALIST_TIMEOUT_MS so a stalled primary can still be rescued in the wall.
+    const chainMs =
+      (SPECIALIST_CONFIGS.logic.retries + 1) * SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs! +
+      SPECIALIST_CONFIGS.logic.retries * RETRY_BACKOFF_MS[0]!
     expect(chainMs).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("keeps the tests primary+fallback chain inside the specialist wall with 50s headroom", () => {
-    expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("minimax-m3:cloud")
-    const chainMs = 2 * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!
+  it("keeps the tests primary+retry chain (incl. backoff) inside the specialist wall (SIG-406)", () => {
+    expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBeNull()
+    const chainMs =
+      (SPECIALIST_CONFIGS.tests.retries + 1) * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs! +
+      SPECIALIST_CONFIGS.tests.retries * RETRY_BACKOFF_MS[0]!
     expect(SPECIALIST_TIMEOUT_MS - chainMs).toBeGreaterThanOrEqual(TESTS_SPECIALIST_MIN_HEADROOM_MS)
   })
 })

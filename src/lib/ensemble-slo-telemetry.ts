@@ -58,6 +58,16 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   // per-call cost drop the swap measured. Estimate sized so the synth cost line
   // on the dashboard reflects the real drop, not the over-estimating default.
   "gemma4:31b": { inputPerMTokUsd: 0.15, outputPerMTokUsd: 0.6 },
+  // SIG-406 alpha — the OpenRouter lineup. Unlike the rows above (conservative
+  // cloud estimates), these are OpenRouter's PUBLISHED list rates (per-MTok, from
+  // the /models catalog), so the cost dashboard reflects real OpenRouter spend.
+  // Keep in sync with SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG / CLAIM_EXTRACTOR_CONFIG
+  // / DISPATCHER_LLM_MODEL (the dynamic-dispatcher.ts classifier).
+  "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 },
+  "deepseek/deepseek-v4-flash": { inputPerMTokUsd: 0.09, outputPerMTokUsd: 0.18 },
+  "deepseek/deepseek-v4-pro": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 },
+  "z-ai/glm-5.1": { inputPerMTokUsd: 0.98, outputPerMTokUsd: 3.08 },
+  "nvidia/nemotron-3-ultra-550b-a55b": { inputPerMTokUsd: 0.5, outputPerMTokUsd: 2.5 },
 }
 
 /** Applied to any model not in `MODEL_PRICING`. Sized at the high end of

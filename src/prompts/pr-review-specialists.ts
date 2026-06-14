@@ -127,6 +127,14 @@ classes and emit every instance whose mechanism you can confirm in the code:
 Do NOT trust comments or names ("authenticated", "validated", "safe") — verify
 from the actual code. Report each distinct ROOT-CAUSE vuln exactly ONCE; do not
 emit pure hardening-with-no-exploit at score>=4.
+Beyond IDOR / injection, also actively check these authz-RESOLUTION classes — a check EXISTS but computes the WRONG decision — and report every confirmable instance (score lower-confidence ones 2):
+- a granted WILDCARD / "*" / "anyone"/public principal or scope treated as matching a MORE SPECIFIC requested resource or scope (read:* satisfying read:admin; an anyone-with-link share satisfying a named-user check) — privilege over-grant;
+- role / group / folder INHERITANCE resolved in the WRONG DIRECTION (a child/descendant pulled into an ancestor's lineage, or only the FIRST parent/ancestor followed);
+- an effective permission/access set computed as the UNION of sources (roles, groups, links) when least-privilege requires the INTERSECTION / most-restrictive-wins;
+- deny-vs-allow precedence INVERTED — last-match-wins, or a grant short-circuiting "allowed" BEFORE deny rules are consulted;
+- a tenant / org / workspace boundary id destructured or stripped but never COMPARED, so a grant in one authorizes the same resource in another;
+- an authorization decision that FAILS OPEN — a missing ACL/policy row, header, or lookup treated as allow.
+Verify the authorization DECISION is correct, not merely that a check is present.
 ─────────────────────────────────────────────────────────────────────`
 
 // SIG-399: reasoning-process directive appended to the logic prompt when

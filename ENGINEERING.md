@@ -202,6 +202,16 @@ this table is the rationale, not the runtime value.
 | perf | `glm-5.1` | **OFF** | base | Universal shapes (N+1, full-table-scan, blocking-IO). Pattern-matching generalizes; reasoning at *any* effort gave no reliable recall gain (base = medium = high). |
 | synth | `nvidia/nemotron-3-ultra` | model default | recall directive (retain every grounded finding; don't thin under load) | The synthesizer's job is **retention** (recall) — it must not drop findings on a large verdict set. **Precision is the downstream gates' job, not the synth's** — do not tune the synth to filter FPs; it costs recall for FPs the gates already catch. |
 
+The Tier-2 LLM **dispatcher** (`dynamic-dispatcher-llm.ts`) also runs on `nvidia/nemotron-3-ultra` — a
+strong generalist won't wrongly *skip* a needed specialist (under-dispatch costs recall). All of the
+above run on OpenRouter (`fallback: null`; OpenRouter self-routes across upstreams); local eval can hit
+Ollama Turbo via `:cloud` model overrides. The reasoning levels + recall/reasoning prompt suffixes are
+**not** code defaults — they're the SIG-406 alpha `[vars]` recipe in `wrangler.toml` (so local runs +
+tests stay byte-identical without them): `OPENCLAW_REASONING_MODE=on`,
+`OPENCLAW_REASONING_ROLES=logic,tests`, `OPENCLAW_REASONING_LEVEL=medium`,
+`OPENCLAW_LOGIC_RECALL_MODE=on`, `OPENCLAW_SECURITY_RECALL_MODE=on`,
+`OPENCLAW_LOGIC_REASONING_PROMPT_MODE=on`.
+
 Cross-cutting rules every model-touching change MUST respect:
 
 - **Recall first; gates enforce precision.** Specialists *and* the synth are run for recall
@@ -214,12 +224,15 @@ Cross-cutting rules every model-touching change MUST respect:
   model's latency *or recall* on Ollama numbers — Ollama Turbo truncates large free-form output
   (ultra synth scored 40% large-payload recall on Ollama vs **100% on OpenRouter**) and
   constrained-decode-aborts on schema-heavy calls. Re-measure on OpenRouter before acting.
-- **Provider routing is by model-id shape.** OpenRouter ids contain `/` (`openai/o3`); Ollama
-  Turbo tags use `:cloud`. The `chat` router (`src/shared/adapters/model/index.ts`) dispatches
-  accordingly. Per-call API-key selection by provider lands at the cutover (Phase 2); until then
-  every call still passes the single Ollama key, so the router only ever resolves to Ollama.
-  Cross-provider fallbacks exist on Ollama (uncorrelated-failure insurance) and will be **removed
-  on OpenRouter** (its routing already fails over across upstream providers).
+- **Provider routing is by model-id shape (SIG-406 alpha: all-OpenRouter).** OpenRouter ids
+  contain `/` (`openai/o3`); Ollama Turbo tags use `:cloud`. The `chat` router
+  (`src/shared/adapters/model/index.ts`) dispatches accordingly, and `selectConfigApiKey`
+  (`model-provider-routing.ts`) picks the API key by the SAME shape (slash-id → `OPENROUTER_API_KEY`,
+  `:cloud` → `OLLAMA_API_KEY`). Every review role now runs on OpenRouter with `fallback: null` —
+  OpenRouter routes each call across its upstream providers, so the Ollama-era cross-provider
+  fallback (uncorrelated-failure insurance) is gone. Local eval can still hit Ollama Turbo with NO
+  OpenRouter spend: a `:cloud` model override (`FIXTURE_EVAL_MODEL_<role>`, `LOGIC_RECALL_MODEL`,
+  `SYNTH_RETENTION_MODEL`, …) routes to Ollama and the key is selected by shape.
 
 ---
 
@@ -385,12 +398,32 @@ npm run dispatch-monitor -- --input <logs.ndjson>  # dynamic-dispatcher CLI moni
 - **Wrangler:** Worker `sigilix`; bindings for KV, Vectorize (768-dim), D1 (lexical mirror),
   Workers AI, the queue, and the DO classes; DO SQLite migrations; secrets in the secret store.
 - **Model-eval tests** (`e2e/*.live.test.ts`, e.g. `npm run logic-recall-eval`) run a real
-  specialist through a live model and need a Turbo-entitled `OLLAMA_API_KEY` in `.dev.vars`; they
-  **skip** without it so CI stays green. Treat their numbers as signal only at K≥12 repeats.
+  specialist/synth through a live model and **skip** without an API key so CI stays green. SIG-406:
+  they gate on EITHER `OPENROUTER_API_KEY` or `OLLAMA_API_KEY` in `.dev.vars` and pick the key by the
+  role's effective model shape — the prod default (an OpenRouter id) hits OpenRouter; a `:cloud`
+  model override (`LOGIC_RECALL_MODEL`, `FIXTURE_EVAL_MODEL_<role>`, …) hits Ollama Turbo with no
+  OpenRouter spend. Treat their numbers as signal only at K≥12 repeats.
 
 ---
 
-## 10. How to add things — recipes
+## 10. Versioning
+
+The product is **alpha**. Versions follow **SemVer 2.0.0**, formatted `MAJOR.MINOR.PATCH-PRERELEASE`.
+Current: **`0.1.0-alpha.1`** (`package.json`).
+
+Increment rules:
+
+- **Each tagged release bumps the pre-release counter:** `-alpha.1` → `-alpha.2` → `-alpha.3` → …
+- **Pre-1.0 breaking changes ride MINOR, never MAJOR.** While `0.x`, the MAJOR stays `0`; a breaking
+  change increments MINOR (e.g. `0.1.x` → `0.2.0`). No `1.0.0` bump until the product graduates.
+- **Stage graduation follows SemVer pre-release precedence** `alpha < beta < rc < release`:
+  `-alpha.N` → `-beta.1` → `-rc.1` → first stable `1.0.0`.
+- **Every bump gets a git tag** `vX.Y.Z-stage.N` (e.g. `v0.1.0-alpha.1`). A version bump without its
+  tag is incomplete.
+
+---
+
+## 11. How to add things — recipes
 
 - **A new validation gate:** add a pure `validate-*.ts` in `ensemble/domain/gates/`, returning a
   keep/drop/demote union with a reason; wire it into `validation-walk.ts`; give it an
@@ -409,7 +442,7 @@ npm run dispatch-monitor -- --input <logs.ndjson>  # dynamic-dispatcher CLI moni
 
 ---
 
-## 11. Key files to know
+## 12. Key files to know
 
 | File | Why |
 |------|-----|

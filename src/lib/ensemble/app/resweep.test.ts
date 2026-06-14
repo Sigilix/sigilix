@@ -70,7 +70,6 @@ function args(mode: "off" | "shadow" | "on", succeeded: CollectedVerdict[]) {
     orchCtrl: new AbortController(),
     diff: DIFF,
     succeeded,
-    providerByRole: new Map(),
   } as const
 }
 
@@ -186,21 +185,6 @@ describe("runResweepPhase — mode contract", () => {
     expect(r.verdicts).toBe(SUCCEEDED)
     const summary = loggedEvents().find((e) => e["event"] === "resweep-summary")
     expect(summary).toMatchObject({ erroredCalls: 4, candidates: 0 })
-  })
-
-  it("forwards providerByRole to every re-sweep runSpecialist call (SIG-405 logic→o3 threading)", async () => {
-    mockedRunSpecialist.mockResolvedValue({
-      verdict: { findings: [] } as unknown as PrReviewVerdict,
-      elapsedMs: 10,
-      modelUsed: "m",
-      attemptsUsed: 1,
-    })
-    const providerByRole = new Map([["logic", "openrouter"]] as const)
-    await runResweepPhase({ ...args("on", SUCCEEDED), providerByRole })
-    expect(mockedRunSpecialist).toHaveBeenCalled()
-    for (const call of mockedRunSpecialist.mock.calls) {
-      expect(call[0].providerByRole).toBe(providerByRole)
-    }
   })
 })
 

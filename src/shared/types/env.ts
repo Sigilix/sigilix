@@ -27,11 +27,15 @@ export interface Env {
   OPENCLAW_JOBS: Queue<JobMessage>
   LINEAR_API_KEY: string
   LINEAR_WEBHOOK_SECRET: string
+  // SIG-406: OLLAMA_API_KEY is now LEGACY — it serves non-review command paths
+  // (`/api/chat`, @-mention agent loop, indexer) and local eval testing (a `:cloud`
+  // model override routes to Ollama Turbo). The review ensemble runs on OpenRouter.
   OLLAMA_API_KEY: string
-  // SIG-405 (OpenRouter migration): OpenRouter API key. Only needed once a role's
-  // provider is set to "openrouter" (e.g. OPENCLAW_LOGIC_PROVIDER=openrouter →
-  // logic on openai/o3). Optional so the worker boots without it while the
-  // migration is dormant; a run that selects OpenRouter without it fails closed.
+  // SIG-406 (OpenRouter alpha): the PRIMARY review API key — every review specialist +
+  // the synthesizer + the dispatcher run on OpenRouter ids, and the per-call key is
+  // selected by model-id shape (slash-id → this key). Review FAILS CLOSED without it.
+  // Typed optional so the Worker still boots without it (non-review paths use
+  // OLLAMA_API_KEY); a review that selects OpenRouter without it returns missing_api_key.
   OPENROUTER_API_KEY?: string
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string

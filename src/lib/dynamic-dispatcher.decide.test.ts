@@ -14,9 +14,11 @@ const { mockChat } = vi.hoisted(() => ({
   mockChat: vi.fn(),
 }))
 
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
+// SIG-406: DISPATCHER_LLM_MODEL is now an OpenRouter id (nemotron-ultra), so the
+// `chat` router dispatches to the OpenRouter adapter — mock THAT, not ollama-chat.
+vi.mock("@/src/shared/adapters/model/openrouter-chat", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/openrouter-chat")>(
+    "@/src/shared/adapters/model/openrouter-chat",
   )
   return {
     ...actual,
@@ -232,33 +234,35 @@ describe("decideSpecialistsDynamic — LLM failure paths (fail-closed)", () => {
     expect([...decision.specialists].sort()).toEqual(["logic", "performance", "security", "tests"])
   })
 
-  it("returns no_api_key outcome when OLLAMA_API_KEY is empty", async () => {
+  it("returns no_api_key outcome when OPENROUTER_API_KEY is empty (SIG-406: dispatcher on OpenRouter)", async () => {
     const decision = await decideSpecialistsDynamic({
       signals: { paths: ["src/lib/foo.ts"], totalLinesChanged: 5, diffText: "+ x" },
       classified: classifiedFor(["src/lib/foo.ts"]),
       commitMessage: "chore: minor",
       repoConfig: EMPTY_CONFIG,
-      env: envShadow({ OLLAMA_API_KEY: "" }),
+      env: envShadow({ OPENROUTER_API_KEY: "" }),
     })
     expect(decision.layerVotes.llmOutcome).toBe("no_api_key")
     expect([...decision.specialists].sort()).toEqual(["logic", "performance", "security", "tests"])
     expect(mockChat).not.toHaveBeenCalled()
   })
 
-  it("returns no_api_key outcome when OLLAMA_API_KEY is undefined / absent", async () => {
+  it("returns no_api_key outcome when OPENROUTER_API_KEY is undefined / absent", async () => {
     // Code-review H3 / I1: Cloudflare bindings can yield `undefined`
     // when a secret was never `wrangler secret put`-ed. The Env type
     // claims `string` but runtime reality is `string | undefined`.
-    // Verify the fail-closed path covers this.
+    // SIG-406: the dispatcher LLM keys on OPENROUTER_API_KEY now — verify the
+    // fail-closed path covers its absence even when OLLAMA_API_KEY is present.
     const decision = await decideSpecialistsDynamic({
       signals: { paths: ["src/lib/foo.ts"], totalLinesChanged: 5, diffText: "+ x" },
       classified: classifiedFor(["src/lib/foo.ts"]),
       commitMessage: "chore: minor",
       repoConfig: EMPTY_CONFIG,
       env: {
+        OLLAMA_API_KEY: "fake-key",
         OLLAMA_CHAT_ENABLE: "on",
         OPENCLAW_DYNAMIC_DISPATCHER_MODE: "shadow",
-        // OLLAMA_API_KEY intentionally omitted to mimic missing secret
+        // OPENROUTER_API_KEY intentionally omitted to mimic missing secret
       } as DispatcherEnv,
     })
     expect(decision.layerVotes.llmOutcome).toBe("no_api_key")

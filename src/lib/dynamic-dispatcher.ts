@@ -156,7 +156,7 @@ export interface DispatcherInputs {
   repoConfig: SigilixConfig
   /** Read by the LLM-call branch only. Slice the Env so unit tests
    *  can construct minimal stubs. */
-  env: Pick<Env, "OLLAMA_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE">
+  env: Pick<Env, "OLLAMA_API_KEY" | "OPENROUTER_API_KEY" | "OLLAMA_CHAT_ENABLE" | "OPENCLAW_DYNAMIC_DISPATCHER_MODE">
   /** Composed with the dispatcher's internal 8s timeout so the
    *  caller (orchestrator) can abort us if the outer budget is
    *  blown. */
@@ -491,7 +491,10 @@ export async function decideSpecialistsDynamic(inputs: DispatcherInputs): Promis
       ...(inputs.prTitle !== undefined ? { prTitle: inputs.prTitle } : {}),
       ...(inputs.prBody !== undefined ? { prBody: inputs.prBody } : {}),
       ambiguous: [...ambiguous],
-      apiKey: inputs.env.OLLAMA_API_KEY,
+      // SIG-406: pass BOTH keys; callLlmClassifier picks the one matching
+      // DISPATCHER_LLM_MODEL (now an OpenRouter id) by shape.
+      ollamaApiKey: inputs.env.OLLAMA_API_KEY,
+      openrouterApiKey: inputs.env.OPENROUTER_API_KEY,
       ...(inputs.signal ? { signal: inputs.signal } : {}),
       onSanitized: (sanitized) => {
         // SIG-230: telemetry hook fires once the metadata is

@@ -18,10 +18,9 @@ import {
   type SecurityScoredFinding,
 } from "./security-overfire-corpus"
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, selectConfigApiKey } from "@/src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 
-const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000
 const REPEATS = (() => {
   const n = Number(process.env.SECURITY_OVERFIRE_REPEATS ?? 1)
@@ -31,6 +30,13 @@ const MODEL_OVERRIDE = process.env.SECURITY_OVERFIRE_MODEL?.trim()
 const SECURITY_CONFIG = MODEL_OVERRIDE
   ? { ...SPECIALIST_CONFIGS.security, primary: MODEL_OVERRIDE, fallback: null }
   : SPECIALIST_CONFIGS.security
+// SIG-406: key by the effective model shape — a `:cloud` override → OLLAMA_API_KEY,
+// an OpenRouter id (the prod default) → OPENROUTER_API_KEY. Suite skips unless the
+// SELECTED provider's key is set.
+const API_KEY = selectConfigApiKey(SECURITY_CONFIG, {
+  ollama: process.env.OLLAMA_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+})
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
 
 function rawFindingsFrom(result: Awaited<ReturnType<typeof runShadowSpecialist>>): SecurityScoredFinding[] {
@@ -115,7 +121,7 @@ async function runCase(
 }
 
 describe.skipIf(!API_KEY)(
-  "security usage-vs-mention overfire baseline (LIVE — needs OLLAMA_API_KEY, K-repeated)",
+  "security usage-vs-mention overfire baseline (LIVE — needs OLLAMA_API_KEY or OPENROUTER_API_KEY, K-repeated)",
   () => {
     it(
       "measures security-specialist P0/P1 recall + raw/post-gate inline FP-rate",

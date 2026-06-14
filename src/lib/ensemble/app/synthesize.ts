@@ -51,7 +51,14 @@ import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import { parseShadowEnabledRoles, resolveShadowConfig } from "@/src/lib/shadow-bakeoff-config"
 import { runShadowSynth } from "@/src/lib/shadow-bakeoff-runner"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
-import { SYNTHESIZER_CONFIG, SYNTHESIZER_MODEL, runSynthesizer } from "@/src/lib/ensemble/adapters/model-provider"
+import {
+  SYNTHESIZER_CONFIG,
+  SYNTHESIZER_MODEL,
+  modelApiKeys,
+  runSynthesizer,
+  selectConfigApiKey,
+} from "@/src/lib/ensemble/adapters/model-provider"
+import { isOpenRouterModel } from "@/src/shared/adapters/model"
 import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
 import { SYNTHESIZER_TIMEOUT_MS, SYNTHESIZER_RETRY_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
@@ -412,7 +419,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
       const synthSystemPrompt = reviewCmdConfig.promptAddendum
         ? `${SYNTHESIZER_PROMPT}\n\n[REPO-SPECIFIC GUIDANCE]\n${reviewCmdConfig.promptAddendum}`
         : SYNTHESIZER_PROMPT
-      const synthConfigOverride: ModelConfig | undefined =
+      let synthConfigOverride: ModelConfig | undefined =
         reviewCmdConfig.modelPrimary !== null || reviewCmdConfig.modelFallbacks.override
           ? {
               primary: reviewCmdConfig.modelPrimary ?? SYNTHESIZER_CONFIG.primary,
@@ -422,6 +429,26 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
                 : SYNTHESIZER_CONFIG.fallback,
             }
           : undefined
+      // SIG-406: the synth runner uses ONE key (selected by model-id shape). A user
+      // override that mixes providers (primary + fallback on different providers)
+      // would make `selectConfigApiKey` throw into an opaque synth timeout — drop the
+      // mismatched fallback (+ log) so the override degrades gracefully.
+      if (
+        synthConfigOverride?.fallback != null &&
+        isOpenRouterModel(synthConfigOverride.fallback) !== isOpenRouterModel(synthConfigOverride.primary)
+      ) {
+        console.log(
+          JSON.stringify({
+            event: "synth-config-override-mixed-provider",
+            owner,
+            repo,
+            prNumber,
+            primary: synthConfigOverride.primary,
+            fallback: synthConfigOverride.fallback,
+          }),
+        )
+        synthConfigOverride = { ...synthConfigOverride, fallback: null }
+      }
       if (
         reviewCmdConfig.promptAddendum !== null ||
         reviewCmdConfig.modelPrimary !== null ||
@@ -509,7 +536,9 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
             // (CR catch on PR #42).
             (signal) =>
               runSynthesizer({
-                apiKey: env.OLLAMA_API_KEY,
+                // SIG-406: synth runs on OpenRouter (ultra); the key is selected by
+                // the effective config's model-id shape (a `:cloud` override → ollama).
+                apiKey: selectConfigApiKey(synthConfigOverride ?? SYNTHESIZER_CONFIG, modelApiKeys(env)),
                 systemPrompt: synthSystemPrompt,
                 userMessage,
                 chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",

@@ -26,9 +26,18 @@ import { describe, expect, it } from "vitest"
 import { scoreFixture } from "@/evals/scorer"
 import { unionFixtureFindings } from "@/evals/local-adapter"
 import { foldRuns, formatLocalEvalReport, loadFixture, type RepeatOutcome } from "@/e2e/fixture-eval-lib"
-import { PER_ROLE_TIMEOUT_MS, buildFixtureMessage, rolesFromEnv, runRole } from "@/e2e/fixture-eval-runner"
+import {
+  PER_ROLE_TIMEOUT_MS,
+  buildFixtureMessage,
+  hasAnyEvalApiKey,
+  rolesFromEnv,
+  runRole,
+} from "@/e2e/fixture-eval-runner"
 
-const API_KEY = process.env.OLLAMA_API_KEY
+// SIG-406: gate on EITHER provider key — a `:cloud` override runs on Ollama Turbo,
+// the prod OpenRouter default + OPENROUTER_API_KEY runs on OpenRouter. runRole picks
+// the matching key by the role's effective model shape.
+const HAS_KEY = hasAnyEvalApiKey()
 const FIXTURE_NAME = process.env.FIXTURE_EVAL_FIXTURE ?? "fullstack-pr20-dense"
 const REPEATS = (() => {
   const raw = process.env.FIXTURE_EVAL_REPEATS
@@ -44,7 +53,7 @@ const REPEATS = (() => {
 const ROLES = rolesFromEnv(process.env.FIXTURE_EVAL_ROLES)
 const OUT_DIR = join(process.cwd(), "e2e", ".fixture-eval-out")
 
-describe.skipIf(!API_KEY)(`local fixture eval — ${FIXTURE_NAME} (LIVE)`, () => {
+describe.skipIf(!HAS_KEY)(`local fixture eval — ${FIXTURE_NAME} (LIVE)`, () => {
   it(
     `runs ${ROLES.join("+")} ×${REPEATS} and scores every repeat`,
     { timeout: (PER_ROLE_TIMEOUT_MS + 30_000) * REPEATS },
@@ -58,7 +67,7 @@ describe.skipIf(!API_KEY)(`local fixture eval — ${FIXTURE_NAME} (LIVE)`, () =>
       const outcomes: RepeatOutcome[] = []
       for (let repeat = 1; repeat <= REPEATS; repeat++) {
         const startedAt = Date.now()
-        const roleRuns = await Promise.all(ROLES.map((role) => runRole({ role, userMessage, apiKey: API_KEY! })))
+        const roleRuns = await Promise.all(ROLES.map((role) => runRole({ role, userMessage })))
         const erroredRoles = ROLES.filter((_, i) => roleRuns[i]!.errored)
         const union = unionFixtureFindings(roleRuns.map((r) => r.findings))
         // Persist findings BEFORE scoring: an ambiguity throw (the scorer's

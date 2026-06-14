@@ -19,7 +19,7 @@ import {
   type ScoredFinding,
 } from "./logic-recall-corpus"
 import { runShadowSpecialist } from "@/src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "@/src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, selectConfigApiKey } from "@/src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import {
   evaluateLogicClaimRefutation,
@@ -27,7 +27,6 @@ import {
 } from "@/src/lib/ensemble/domain/gates/validate-logic-claim-refutation"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
-const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000
 // The logic specialist is non-deterministic run-to-run, so repeat each case K
 // times (LOGIC_RECALL_REPEATS, default 1) for a stable per-case catch-rate.
@@ -43,6 +42,14 @@ const MODEL_OVERRIDE = process.env.LOGIC_RECALL_MODEL?.trim()
 const LOGIC_CONFIG = MODEL_OVERRIDE
   ? { ...SPECIALIST_CONFIGS.logic, primary: MODEL_OVERRIDE, fallback: null }
   : SPECIALIST_CONFIGS.logic
+// SIG-406: select the key by the EFFECTIVE logic model's shape — a `:cloud` override
+// (LOGIC_RECALL_MODEL=deepseek-v4-pro:cloud) → Ollama Turbo (no OpenRouter spend); the
+// prod default `openai/o3` (or LOGIC_RECALL_MODEL=openai/o3) → OPENROUTER_API_KEY. The
+// suite SKIPS unless the SELECTED provider's key is set.
+const API_KEY = selectConfigApiKey(LOGIC_CONFIG, {
+  ollama: process.env.OLLAMA_API_KEY,
+  openrouter: process.env.OPENROUTER_API_KEY,
+})
 const CLAIM_REFUTATION_MODE = parseLogicClaimRefutationMode(process.env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE)
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
 
@@ -145,81 +152,84 @@ async function runCase(
   return { result, errored }
 }
 
-describe.skipIf(!API_KEY)("subtle-logic recall baseline (LIVE — needs OLLAMA_API_KEY, K-repeated)", () => {
-  it(
-    "measures the logic specialist's recall + FP-rate over the corpus",
-    async () => {
-      // `runs` counts only attempts that actually returned a verdict; model/API
-      // errors are tracked separately so a timeout never masquerades as a clean
-      // safe run (Codex review).
-      // LOGIC_RECALL_ONLY: comma-separated case ids to run a fast targeted subset
-      // (e.g. triaging a few over-fire cases) instead of the whole corpus.
-      const onlyIds =
-        process.env.LOGIC_RECALL_ONLY?.split(",")
-          .map((s) => s.trim())
-          .filter(Boolean) ?? []
-      const cases = onlyIds.length ? LOGIC_RECALL_CASES.filter((c) => onlyIds.includes(c.id)) : LOGIC_RECALL_CASES
-      const perCase = new Map<string, { hits: number; runs: number; errors: number }>()
-      for (const c of cases) perCase.set(c.id, { hits: 0, runs: 0, errors: 0 })
-      for (let k = 0; k < REPEATS; k++) {
-        for (const c of cases) {
-          const { result: r, errored } = await runCase(c, API_KEY as string) // sequential — don't hammer the model
-          const e = perCase.get(c.id)!
-          if (errored) {
-            e.errors++
-            continue
+describe.skipIf(!API_KEY)(
+  "subtle-logic recall baseline (LIVE — needs OLLAMA_API_KEY or OPENROUTER_API_KEY, K-repeated)",
+  () => {
+    it(
+      "measures the logic specialist's recall + FP-rate over the corpus",
+      async () => {
+        // `runs` counts only attempts that actually returned a verdict; model/API
+        // errors are tracked separately so a timeout never masquerades as a clean
+        // safe run (Codex review).
+        // LOGIC_RECALL_ONLY: comma-separated case ids to run a fast targeted subset
+        // (e.g. triaging a few over-fire cases) instead of the whole corpus.
+        const onlyIds =
+          process.env.LOGIC_RECALL_ONLY?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean) ?? []
+        const cases = onlyIds.length ? LOGIC_RECALL_CASES.filter((c) => onlyIds.includes(c.id)) : LOGIC_RECALL_CASES
+        const perCase = new Map<string, { hits: number; runs: number; errors: number }>()
+        for (const c of cases) perCase.set(c.id, { hits: 0, runs: 0, errors: 0 })
+        for (let k = 0; k < REPEATS; k++) {
+          for (const c of cases) {
+            const { result: r, errored } = await runCase(c, API_KEY as string) // sequential — don't hammer the model
+            const e = perCase.get(c.id)!
+            if (errored) {
+              e.errors++
+              continue
+            }
+            e.runs++
+            // "hit" = a GOOD outcome: vuln caught, or safe stayed clean.
+            if (c.label === "vuln" ? r.caught : !r.falsePositive) e.hits++
           }
-          e.runs++
-          // "hit" = a GOOD outcome: vuln caught, or safe stayed clean.
-          if (c.label === "vuln" ? r.caught : !r.falsePositive) e.hits++
         }
-      }
-      const vuln = cases.filter((c) => c.label === "vuln")
-      const safe = cases.filter((c) => c.label === "safe")
-      const rate = (id: string): number => {
-        const e = perCase.get(id)!
-        return e.runs ? e.hits / e.runs : 0
-      }
-      // A case whose every repeat errored has runs===0 and rate 0 — averaging that 0 into
-      // the mean would understate recall / overstate FP (code-reviewer P1). Exclude
-      // all-errored cases from the mean denominator, mirroring the per-attempt exclusion.
-      const scored = (cs: typeof vuln): typeof vuln => cs.filter((c) => perCase.get(c.id)!.runs > 0)
-      const sv = scored(vuln),
-        ss = scored(safe)
-      const meanRecall = sv.reduce((s, c) => s + rate(c.id), 0) / (sv.length || 1)
-      const meanClean = ss.reduce((s, c) => s + rate(c.id), 0) / (ss.length || 1)
-      const totalErrors = [...perCase.values()].reduce((s, e) => s + e.errors, 0)
-      const droppedCases = vuln.length - sv.length + (safe.length - ss.length)
-      const errSuffix = (id: string): string => {
-        const e = perCase.get(id)!
-        return e.errors ? `  [${e.errors} err]` : ""
-      }
-      // ✓ all clean/caught · ✗ all wrong · ~ mixed · ⚠ no verdict ever (only errors).
-      const marker = (id: string): string => {
-        const e = perCase.get(id)!
-        return e.runs === 0 ? "⚠" : e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"
-      }
-      const postFilter = CLAIM_REFUTATION_MODE === "enforce" ? " · postfilter=logic-claim-refutation" : ""
-      const lines: string[] = [
-        "",
-        `┌─ SUBTLE-LOGIC RECALL · model=${LOGIC_CONFIG.primary} · ${REPEATS}×/case${postFilter} ─────────────┐`,
-      ]
-      lines.push(
-        `MEAN: recall ${pct(meanRecall)}  ·  clean-on-safe ${pct(meanClean)}  (FP-rate ${pct(1 - meanClean)})${totalErrors ? `  · ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? ` · ${droppedCases} case(s) all-errored (excluded from mean)` : ""}`,
-      )
-      lines.push("per VULN case (caught / runs):")
-      for (const c of vuln) {
-        const e = perCase.get(c.id)!
-        lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`)
-      }
-      lines.push("per SAFE case (clean / runs):")
-      for (const c of safe) {
-        const e = perCase.get(c.id)!
-        lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`)
-      }
-      lines.push("└──────────────────────────────────────────────────────────┘")
-      console.log(lines.join("\n"))
-    },
-    LOGIC_RECALL_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
-  )
-})
+        const vuln = cases.filter((c) => c.label === "vuln")
+        const safe = cases.filter((c) => c.label === "safe")
+        const rate = (id: string): number => {
+          const e = perCase.get(id)!
+          return e.runs ? e.hits / e.runs : 0
+        }
+        // A case whose every repeat errored has runs===0 and rate 0 — averaging that 0 into
+        // the mean would understate recall / overstate FP (code-reviewer P1). Exclude
+        // all-errored cases from the mean denominator, mirroring the per-attempt exclusion.
+        const scored = (cs: typeof vuln): typeof vuln => cs.filter((c) => perCase.get(c.id)!.runs > 0)
+        const sv = scored(vuln),
+          ss = scored(safe)
+        const meanRecall = sv.reduce((s, c) => s + rate(c.id), 0) / (sv.length || 1)
+        const meanClean = ss.reduce((s, c) => s + rate(c.id), 0) / (ss.length || 1)
+        const totalErrors = [...perCase.values()].reduce((s, e) => s + e.errors, 0)
+        const droppedCases = vuln.length - sv.length + (safe.length - ss.length)
+        const errSuffix = (id: string): string => {
+          const e = perCase.get(id)!
+          return e.errors ? `  [${e.errors} err]` : ""
+        }
+        // ✓ all clean/caught · ✗ all wrong · ~ mixed · ⚠ no verdict ever (only errors).
+        const marker = (id: string): string => {
+          const e = perCase.get(id)!
+          return e.runs === 0 ? "⚠" : e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"
+        }
+        const postFilter = CLAIM_REFUTATION_MODE === "enforce" ? " · postfilter=logic-claim-refutation" : ""
+        const lines: string[] = [
+          "",
+          `┌─ SUBTLE-LOGIC RECALL · model=${LOGIC_CONFIG.primary} · ${REPEATS}×/case${postFilter} ─────────────┐`,
+        ]
+        lines.push(
+          `MEAN: recall ${pct(meanRecall)}  ·  clean-on-safe ${pct(meanClean)}  (FP-rate ${pct(1 - meanClean)})${totalErrors ? `  · ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? ` · ${droppedCases} case(s) all-errored (excluded from mean)` : ""}`,
+        )
+        lines.push("per VULN case (caught / runs):")
+        for (const c of vuln) {
+          const e = perCase.get(c.id)!
+          lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`)
+        }
+        lines.push("per SAFE case (clean / runs):")
+        for (const c of safe) {
+          const e = perCase.get(c.id)!
+          lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`)
+        }
+        lines.push("└──────────────────────────────────────────────────────────┘")
+        console.log(lines.join("\n"))
+      },
+      LOGIC_RECALL_CASES.length * REPEATS * PER_CASE_TIMEOUT_MS + 60_000,
+    )
+  },
+)

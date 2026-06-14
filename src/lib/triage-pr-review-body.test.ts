@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest"
 import {
   renderApproveBody,
   renderRequestChangesBody,
+  renderCommentBody,
   renderCoverageLine,
   renderDeltaBadge,
   renderStackParenthetical,
@@ -20,6 +21,7 @@ import {
   type PrReviewFinding,
   type CoverageRoles,
   type DeltaBadgeCounts,
+  type ReviewDisclosure,
 } from "@/src/lib/triage-pr-review"
 import type { StackContext, StackPr } from "@/src/lib/pr-stack"
 
@@ -749,5 +751,178 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       })
       assertSummaryFirst(body, "all variants")
     })
+  })
+})
+
+// ─── SIG-414 Phase 1.2: honest 3-way un-reviewed disclosure ───────────
+
+function disclosure(overrides: Partial<ReviewDisclosure> = {}): ReviewDisclosure {
+  return {
+    policySkipped: [],
+    oversized: [],
+    spillover: [],
+    reviewedCount: 0,
+    totalChangedCount: 0,
+    ...overrides,
+  }
+}
+
+describe("renderReviewDisclosure (SIG-414 Phase 1.2) — three distinct cases", () => {
+  it("POLICY: calm collapsed <details>, no ⚠️, the verbatim copy + the file list", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5, headline: "blocker" })] }),
+      coverage: FULL,
+      disclosure: disclosure({
+        policySkipped: ["package-lock.json", "dist/app.min.js"],
+        reviewedCount: 3,
+        totalChangedCount: 3,
+      }),
+    })
+    expect(body).toContain(
+      "📋 2 files skipped — lockfiles, generated, vendored, minified, or binary files aren't reviewed by default.",
+    )
+    expect(body).toContain("<details>")
+    expect(body).toContain("</details>")
+    expect(body).toContain("`package-lock.json`")
+    expect(body).toContain("`dist/app.min.js`")
+    // Policy is "not applicable", not a coverage gap — never alarming.
+    expect(body).not.toContain("⚠️")
+  })
+
+  it("POLICY: singular phrasing for one file", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({ policySkipped: ["yarn.lock"], reviewedCount: 1, totalChangedCount: 1 }),
+    })
+    expect(body).toContain(
+      "📋 1 file skipped — lockfiles, generated, vendored, minified, or binary files aren't reviewed by default.",
+    )
+  })
+
+  it("OVERSIZED: one calm blockquote per too-large file, verbatim copy, no ⚠️", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({
+        oversized: ["src/huge.ts", "src/also-huge.ts"],
+        reviewedCount: 2,
+        totalChangedCount: 2,
+      }),
+    })
+    expect(body).toContain(
+      "> 📄 `src/huge.ts` was not reviewed — its diff is too large to analyze inline in this review.",
+    )
+    expect(body).toContain(
+      "> 📄 `src/also-huge.ts` was not reviewed — its diff is too large to analyze inline in this review.",
+    )
+    expect(body).not.toContain("⚠️")
+  })
+
+  it("SPILLOVER: reconciled n-of-m copy where remaining == m − n; plural", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({ spillover: ["src/a.ts", "src/b.ts"], reviewedCount: 3, totalChangedCount: 5 }),
+    })
+    expect(body).toContain(
+      "> 📊 Reviewed 3 of 5 changed files — the remaining 2 were below the priority cutoff for this very large PR. Split into smaller PRs to cover them.",
+    )
+  })
+
+  it("SPILLOVER: singular phrasing for one remaining file (m − n == 1)", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({ spillover: ["src/a.ts"], reviewedCount: 4, totalChangedCount: 5 }),
+    })
+    expect(body).toContain("the remaining 1 was below the priority cutoff")
+  })
+
+  it("ALL THREE render together, each independent (a PR can hit every case)", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({
+        policySkipped: ["package-lock.json"],
+        oversized: ["src/huge.ts"],
+        spillover: ["src/a.ts"],
+        reviewedCount: 2,
+        totalChangedCount: 3,
+      }),
+    })
+    expect(body).toContain("📋 1 file skipped")
+    expect(body).toContain("📄 `src/huge.ts` was not reviewed")
+    expect(body).toContain("📊 Reviewed 2 of 3 changed files")
+    // Render order (Codex): oversized, spillover, then policy last.
+    expect(body.indexOf("📄 `src/huge.ts`")).toBeLessThan(body.indexOf("📊 Reviewed"))
+    expect(body.indexOf("📊 Reviewed")).toBeLessThan(body.indexOf("📋 1 file skipped"))
+  })
+
+  it("renders the same on the COMMENT posture (oversized/spillover downgrade to COMMENT)", () => {
+    const body = renderCommentBody({
+      verdict: verdict({ findings: [] }),
+      coverage: FULL,
+      disclosure: disclosure({ oversized: ["src/huge.ts"], reviewedCount: 1, totalChangedCount: 1 }),
+    })
+    expect(body).toContain("📄 `src/huge.ts` was not reviewed")
+  })
+
+  it("the legacy lumped 'size budget' / 'not analyzed' framing is gone (SIG-411 consistency)", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({ spillover: ["src/a.ts"], reviewedCount: 1, totalChangedCount: 2 }),
+    })
+    expect(body).not.toContain("size budget")
+    expect(body).not.toContain("not analyzed")
+  })
+})
+
+describe("renderApproveBody disclosure exception (SIG-414 Phase 1.2)", () => {
+  it("a POLICY-only skip surfaces on the APPROVE body (must NOT downgrade, but stay visible)", () => {
+    const body = renderApproveBody({
+      verdict: verdict({ findings: [] }),
+      disclosure: disclosure({ policySkipped: ["package-lock.json"], reviewedCount: 3, totalChangedCount: 3 }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toContain("**Approved**")
+    expect(body).toContain(
+      "📋 1 file skipped — lockfiles, generated, vendored, minified, or binary files aren't reviewed by default.",
+    )
+    expect(body).toContain("`package-lock.json`")
+    expect(body).not.toContain("⚠️")
+  })
+
+  it("a clean APPROVE with NO disclosure stays marker-only (byte-identical to pre-SIG-414)", () => {
+    const body = renderApproveBody({
+      verdict: verdict({ findings: [] }),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+  })
+
+  it("an APPROVE with an empty disclosure object (all sets empty) stays marker-only", () => {
+    const body = renderApproveBody({
+      verdict: verdict({ findings: [] }),
+      disclosure: disclosure(),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+  })
+
+  it("the APPROVE policy note coexists with an 'Outside your changes' note", () => {
+    const body = renderApproveBody({
+      verdict: verdict({ findings: [] }),
+      unanchored: [
+        finding({ score: 5, scope: "file", outOfPrScope: true, headline: "issue elsewhere", body: "not in this PR" }),
+      ],
+      disclosure: disclosure({ policySkipped: ["package-lock.json"], reviewedCount: 2, totalChangedCount: 2 }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toContain("note") // out-of-scope reconciliation line
+    expect(body).toContain("### Outside your changes")
+    expect(body).toContain("📋 1 file skipped")
   })
 })

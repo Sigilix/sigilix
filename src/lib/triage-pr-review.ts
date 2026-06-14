@@ -411,7 +411,7 @@ export {
   renderFixPlan,
   renderFixPlanTable,
 } from "./ensemble/render/review-body"
-export type { DeltaBadgeCounts, ProvenanceCtx, RenderBodyArgs } from "./ensemble/render/review-body"
+export type { DeltaBadgeCounts, ProvenanceCtx, RenderBodyArgs, ReviewDisclosure } from "./ensemble/render/review-body"
 export {
   buildReviewSubmission,
   buildReviewSubmissionWithMetadata,

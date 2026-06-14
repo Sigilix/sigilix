@@ -53,7 +53,7 @@ import { dismissPriorSigilixReviews } from "@/src/lib/dismiss-prior-reviews"
 import { postReviewCommentFallback } from "@/src/lib/review-comment-fallback"
 import { buildFallbackSubmission } from "@/src/lib/ensemble/render/fallback"
 import { previewFallbackSubmissionEvent } from "@/src/lib/ensemble/render/submission"
-import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
+import type { DeltaBadgeCounts, ReviewDisclosure } from "@/src/lib/ensemble/render/review-body"
 import { selectPrimarySubmitAnnotations } from "@/src/lib/pr-review-check-run"
 import { writeLastReviewedSha } from "@/src/lib/incremental-review"
 import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
@@ -113,7 +113,10 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
   stack: StackContext
   coverage: CoverageRoles
   deltaCounts: DeltaBadgeCounts | null
-  filesDroppedFromReview: string[]
+  /** SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
+   *  oversized / spillover), forwarded to the anchorless-fallback renderer so the
+   *  422-retry path carries the same three notices. `null` = nothing dropped. */
+  disclosure: ReviewDisclosure | null
   currentFindingsForManifest: ReviewManifestFinding[]
   /** SIG-375: the parsed `OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off"` kill-switch,
    *  threaded from `EnsembleConfig.flags` so the manifest write no longer reads env. */
@@ -167,7 +170,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     stack,
     coverage,
     deltaCounts,
-    filesDroppedFromReview,
+    disclosure,
     currentFindingsForManifest,
     reviewManifestEnabled,
     reviewEventOverride,
@@ -477,7 +480,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
           {
             trustLedger: trustLedgerMode === "on",
             showEvidence,
-            notReviewedFiles: filesDroppedFromReview,
+            // SIG-414 Phase 1.2: the 3-way un-reviewed disclosure on the
+            // anchorless-fallback body too, so the 422-retry never silently drops.
+            ...(disclosure ? { disclosure } : {}),
             verdict: submissionVerdict,
             unanchored: renderableUnanchoredForSubmission,
             prAuthor: meta.user?.login ?? null,
@@ -676,7 +681,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
           {
             trustLedger: trustLedgerMode === "on",
             showEvidence,
-            notReviewedFiles: filesDroppedFromReview,
+            // SIG-414 Phase 1.2: the 3-way un-reviewed disclosure on the
+            // anchorless-fallback body too, so the 422-retry never silently drops.
+            ...(disclosure ? { disclosure } : {}),
             verdict: submissionVerdict,
             unanchored: renderableUnanchoredForSubmission,
             prAuthor: meta.user?.login ?? null,
@@ -743,7 +750,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         {
           trustLedger: trustLedgerMode === "on",
           showEvidence,
-          notReviewedFiles: filesDroppedFromReview,
+          // SIG-414 Phase 1.2: the 3-way un-reviewed disclosure on the
+          // anchorless-fallback body too, so the 422-retry never silently drops.
+          ...(disclosure ? { disclosure } : {}),
           // ARC-189: fallback path also receives the soften-applied
           // verdict. Markers are NOT emitted on the fallback (it's a
           // body-only review with no inline anchors) — see Task 2.5.

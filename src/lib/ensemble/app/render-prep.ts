@@ -127,7 +127,6 @@ export interface RenderPrepResult {
   effectiveEvent: ReturnType<typeof assessApprovalReadiness>["event"]
   synthConfidence: number
   reviewIncomplete: boolean
-  filesDroppedFromReview: string[]
   reviewEventOverride: ReturnType<typeof resolveReviewEventOverride>
   deltaCounts: DeltaBadgeCounts | null
   currentFindingsForManifest: ReviewManifestFinding[]
@@ -787,14 +786,11 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   const synthConfidence = typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
   // TODO(SIG-364): extract an isLowConfidence predicate into domain/verdict when the orchestrator is thinned — the comparison direction is policy.
   const reviewIncomplete = degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
-  // SIG-245: files dropped from review (diff-budget spill into a later batch,
-  // or individually too large) make a clean APPROVE dishonest — the bot never
-  // read part of the diff. Downgrade it to COMMENT (same mechanism as
-  // SIG-287) so the "files not reviewed" notice — which renders in the
-  // findings body, NOT the marker-only APPROVE body — actually surfaces.
-  // Kept SEPARATE from `reviewIncomplete` so the degraded/low-confidence
-  // summary-prefix wording is NOT applied to a files-dropped review (the
-  // notice is its own block under the headline).
+  // SIG-245 / SIG-414: the APPROVE→COMMENT downgrade union is the REAL coverage
+  // gaps ONLY — oversized ∪ spillover. POLICY skips are EXCLUDED (not a gap), so
+  // a policy-only skip stays APPROVE (Req 3) — the orchestrator-built `disclosure`
+  // carries policy informationally, but it never enters this union. Separate from
+  // `reviewIncomplete` so the degraded summary prefix isn't applied here.
   const filesDroppedFromReview = [...new Set([...filesNotReviewed, ...droppedTooLarge])]
   const reviewEventOverride = resolveReviewEventOverride({
     hasApprovalBlocker: approvalReadiness.blockers.length > 0,
@@ -979,7 +975,6 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     effectiveEvent,
     synthConfidence,
     reviewIncomplete,
-    filesDroppedFromReview,
     reviewEventOverride,
     deltaCounts,
     currentFindingsForManifest,

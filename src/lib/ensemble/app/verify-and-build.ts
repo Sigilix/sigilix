@@ -39,7 +39,7 @@ import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
 import { getProposedChangeScopeMismatch } from "@/src/lib/ensemble/render/finding-format"
 import { buildBodyOnlyCheckAnnotations } from "@/src/lib/ensemble/render/finding-comment"
 import { buildReviewSubmissionWithMetadata, previewReviewSubmissionEvent } from "@/src/lib/ensemble/render/submission"
-import type { DeltaBadgeCounts } from "@/src/lib/ensemble/render/review-body"
+import type { DeltaBadgeCounts, ReviewDisclosure } from "@/src/lib/ensemble/render/review-body"
 import { evidencePieceCountForTelemetry } from "@/src/lib/ensemble/domain/validation"
 import { readGateMode, readGateThreshold } from "@/src/lib/gate-config"
 import { computeShadowGateDivergence } from "@/src/lib/ensemble/domain/verdict"
@@ -92,7 +92,10 @@ export interface VerifyAndBuildArgs {
   stack: StackContext
   coverage: CoverageRoles
   deltaCounts: DeltaBadgeCounts | null
-  filesDroppedFromReview: string[]
+  /** SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
+   *  oversized / spillover), forwarded to the renderer. `null` = nothing dropped.
+   *  Replaces the pre-SIG-414 single `filesDroppedFromReview` render input. */
+  disclosure: ReviewDisclosure | null
   /** The render-event resolution from render-prep (read by the gate-shadow + approval-readiness telemetry). */
   approvalReadiness: ReturnType<typeof assessApprovalReadiness>
   effectiveEvent: ReturnType<typeof assessApprovalReadiness>["event"]
@@ -153,7 +156,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     stack,
     coverage,
     deltaCounts,
-    filesDroppedFromReview,
+    disclosure,
     approvalReadiness,
     effectiveEvent,
     intendedEvent,
@@ -621,13 +624,14 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     // ARC-281: thread specialist coverage + delta counts through
     // to the new renderer.
     coverage,
-    // SIG-245: files dropped from review (diff-budget spill into a later
-    // batch, or individually too large) → a visible "files not reviewed"
-    // notice in the body so a silently-dropped file is never invisible. The
-    // review is also downgraded APPROVE→COMMENT above so this notice renders
-    // even when batch[0] was clean (it would be discarded by the marker-only
-    // APPROVE body otherwise).
-    notReviewedFiles: filesDroppedFromReview,
+    // SIG-245 / SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure
+    // (policy / oversized / spillover) → three distinct, calm notices in the
+    // body so a dropped file is never invisible. A review with oversized/spillover
+    // gaps is downgraded APPROVE→COMMENT in render-prep so the notice renders even
+    // when batch[0] was clean; a POLICY-only skip stays APPROVE and surfaces the
+    // policy note via the APPROVE body's narrow exception. Spread so the key is
+    // omitted entirely when nothing was dropped (byte-identical common case).
+    ...(disclosure ? { disclosure } : {}),
     delta: deltaCounts,
     ...(primaryAffordance.reviewCounter !== undefined ? { reviewCounter: primaryAffordance.reviewCounter } : {}),
     ...(primaryAffordance.retriggerUrl !== undefined ? { retriggerUrl: primaryAffordance.retriggerUrl } : {}),

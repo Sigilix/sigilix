@@ -24,6 +24,10 @@ import { indexNamespace } from "./repo-index-manifest"
 const KV_KEY_PREFIX = "repo-index-vectors:"
 const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days; aligned with manifest
 
+/** The shared `repo-index-vectors:` prefix. Exported for KV-scan callers
+ *  (e.g. the SIG-419 stale-index purge), mirroring `REPO_INDEX_MANIFEST_PREFIX`. */
+export const REPO_INDEX_VECTORS_PREFIX = KV_KEY_PREFIX
+
 // ---------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------

@@ -348,6 +348,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     env.OPENCLAW_INDEXER_ENABLED = "on"
+    env.OPENCLAW_PR_BRANCH_INDEX = "on" // SIG-413: exercise the same-repo gate (PR-branch index now off by default)
     const worker = (await import("@/src/index")).default
     const waitUntilPromises: Promise<unknown>[] = []
 
@@ -368,6 +369,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     mockLoadSigilixConfig.mockResolvedValue({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     env.OPENCLAW_INDEXER_ENABLED = "on"
+    env.OPENCLAW_PR_BRANCH_INDEX = "on" // SIG-413: flag on so the no-enqueue is proven by the fork/missing-head check, not the flag
     const worker = (await import("@/src/index")).default
 
     const missingHeadRepoWaits: Promise<unknown>[] = []

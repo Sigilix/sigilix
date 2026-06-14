@@ -270,6 +270,44 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     expect(mockSubmitReview).not.toHaveBeenCalled()
   })
 
+  it("reports retrieval and skipped status updates when no specialists are needed", async () => {
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+    })
+    mockGetPullRequestDiff.mockResolvedValueOnce(DOCS_ONLY_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValueOnce(null)
+    const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+
+    await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9001,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({
+        OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "on",
+      } as unknown as Env),
+      statusReporter,
+    })
+
+    const phases = statusReporter.report.mock.calls.map((c) => c[0]?.phase)
+    expect(phases).toContain("retrieval")
+    expect(phases).toContain("skipped")
+    expect(statusReporter.report).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "skipped",
+        specialists: expect.objectContaining({
+          notNeeded: ["logic", "security", "performance", "tests"],
+        }),
+        final: expect.objectContaining({ status: "skipped", findingsCount: 0 }),
+      }),
+    )
+  })
+
   it("stays default-all-four (does NOT empty out) when the router flag is off", async () => {
     // Defense in depth: confirm we didn't accidentally invert the
     // flag-off semantics. With `OPENCLAW_ENSEMBLE_ROUTER_ENABLED`

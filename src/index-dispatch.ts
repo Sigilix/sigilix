@@ -40,6 +40,7 @@ import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import { handleIndexRepoJob } from "@/src/lib/indexer"
 import { handleCorpusPrUpsert, handleCorpusPrBackfill, handleCorpusIssueUpsert } from "@/src/lib/multi-corpus-jobs"
+import { finalStatusUpdate } from "@/src/lib/pr-review-status-phases"
 import {
   attachExistingCheckRun,
   startInProgressCheckRun,
@@ -309,211 +310,226 @@ export async function dispatchJob(
         // lookup at the lookup call site.
         ...(job.repoId !== undefined ? { repoId: job.repoId } : {}),
       }
-      return runPrReviewWithDoCallback(job, env, async () => {
-        // ARC-258 follow-up: warmup signaling now lives inside the
-        // pr-overview sticky (a "Sigilix is warming up its index"
-        // callout at the top, gated on `repo-index-manifest:<repo>`
-        // existence). The pr-review path no longer posts a separate
-        // warmup comment. See `src/lib/triage-pr-overview.ts` and
-        // `src/lib/warmup.ts::enqueueWarmupRerunsForIndex`.
+      return runPrReviewWithDoCallback(
+        job,
+        env,
+        async (statusReporter) => {
+          // ARC-258 follow-up: warmup signaling now lives inside the
+          // pr-overview sticky (a "Sigilix is warming up its index"
+          // callout at the top, gated on `repo-index-manifest:<repo>`
+          // existence). The pr-review path no longer posts a separate
+          // warmup comment. See `src/lib/triage-pr-overview.ts` and
+          // `src/lib/warmup.ts::enqueueWarmupRerunsForIndex`.
 
-        // ARC-280: routing collapsed. The pre-ARC-275 decision matrix
-        // (ensemble-shadow vs ensemble-post vs phase3-agentic vs
-        // phase3-singleshot-legacy) is gone — there's exactly one
-        // review pipeline now (`handlePrReviewEnsemble`) plus the
-        // intentional sensitive-repo skip. Phase 3 single-shot
-        // reviewer + the `routeReview` decision layer are deleted in
-        // this ticket; the ensemble owns submit, verify, retry, and
-        // comment-fallback end-to-end (ARC-277 / ARC-278 / ARC-279).
-        if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, job.owner, job.repo)) {
-          console.log(
-            JSON.stringify({
-              event: "pr-review-skipped",
-              reason: "repo_in_sensitive_denylist",
-              owner: job.owner,
-              repo: job.repo,
-              prNumber: job.prNumber,
-            }),
-          )
-          // SIG-220: when the DO created the check upstream (so the
-          // user already sees "Sigilix · In progress" in the GitHub
-          // UI) and the dispatcher then skips for a sensitive-repo
-          // policy, we must close the check ourselves — otherwise
-          // it hangs `in_progress` forever. Map to `skipped` (wire
-          // `neutral`) per the existing advisory-bot convention.
-          // No-op when `checkRunId` is absent (legacy messages or
-          // upstream create failed → no orphan to close).
-          if (job.checkRunId !== undefined) {
-            const handle = await attachExistingCheckRun({
-              env,
-              owner: job.owner,
-              repo: job.repo,
-              installationId: job.installationId,
-              checkRunId: job.checkRunId,
-            })
-            await completeCheckRun({ handle, conclusion: "skipped" })
-          }
-          return
-        }
-        // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
-        // created the customer-visible check (the new fast path —
-        // visible to the user within ~1–2s of push), the dispatcher
-        // ATTACHES to that existing row instead of creating a new
-        // one. Fallback (legacy queue messages without `checkRunId`,
-        // slash-command reruns, stale-head helper requeues) keeps
-        // the pre-SIG-220 dispatcher-time create path — best-effort
-        // throughout; a null handle means the completion below is
-        // a no-op.
-        const checkRun =
-          job.checkRunId !== undefined
-            ? await attachExistingCheckRun({
+          // ARC-280: routing collapsed. The pre-ARC-275 decision matrix
+          // (ensemble-shadow vs ensemble-post vs phase3-agentic vs
+          // phase3-singleshot-legacy) is gone — there's exactly one
+          // review pipeline now (`handlePrReviewEnsemble`) plus the
+          // intentional sensitive-repo skip. Phase 3 single-shot
+          // reviewer + the `routeReview` decision layer are deleted in
+          // this ticket; the ensemble owns submit, verify, retry, and
+          // comment-fallback end-to-end (ARC-277 / ARC-278 / ARC-279).
+          if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, job.owner, job.repo)) {
+            console.log(
+              JSON.stringify({
+                event: "pr-review-skipped",
+                reason: "repo_in_sensitive_denylist",
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+              }),
+            )
+            // SIG-220: when the DO created the check upstream (so the
+            // user already sees "Sigilix · In progress" in the GitHub
+            // UI) and the dispatcher then skips for a sensitive-repo
+            // policy, we must close the check ourselves — otherwise
+            // it hangs `in_progress` forever. Map to `skipped` (wire
+            // `neutral`) per the existing advisory-bot convention.
+            // No-op when `checkRunId` is absent (legacy messages or
+            // upstream create failed → no orphan to close).
+            if (job.checkRunId !== undefined) {
+              const handle = await attachExistingCheckRun({
                 env,
                 owner: job.owner,
                 repo: job.repo,
                 installationId: job.installationId,
                 checkRunId: job.checkRunId,
               })
-            : await startInProgressCheckRun({
-                env,
+              await completeCheckRun({ handle, conclusion: "skipped" })
+            }
+            return
+          }
+          // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
+          // created the customer-visible check (the new fast path —
+          // visible to the user within ~1–2s of push), the dispatcher
+          // ATTACHES to that existing row instead of creating a new
+          // one. Fallback (legacy queue messages without `checkRunId`,
+          // slash-command reruns, stale-head helper requeues) keeps
+          // the pre-SIG-220 dispatcher-time create path — best-effort
+          // throughout; a null handle means the completion below is
+          // a no-op.
+          const checkRun =
+            job.checkRunId !== undefined
+              ? await attachExistingCheckRun({
+                  env,
+                  owner: job.owner,
+                  repo: job.repo,
+                  installationId: job.installationId,
+                  checkRunId: job.checkRunId,
+                })
+              : await startInProgressCheckRun({
+                  env,
+                  owner: job.owner,
+                  repo: job.repo,
+                  headSha: job.headSha,
+                  installationId: job.installationId,
+                })
+          let conclusion: SigilixCheckConclusion | null = null
+          let reviewMeta: import("./lib/triage-pr-review-ensemble").ReviewMeta | undefined = undefined
+          try {
+            const result = await handlePrReviewEnsemble(
+              statusReporter !== undefined ? { ...baseArgs, statusReporter } : baseArgs,
+            )
+            if (result.status === "posted") {
+              const blocked = await postReviewWorkBlocked(result.postReviewWork, {
                 owner: job.owner,
                 repo: job.repo,
+                prNumber: job.prNumber,
                 headSha: job.headSha,
-                installationId: job.installationId,
               })
-        let conclusion: SigilixCheckConclusion | null = null
-        // ARC-276: capture the customer-visible review verdict +
-        // findings count on the posted path so the Check Run title
-        // can reflect `Approved — no issues found` vs `N findings
-        // posted`. Threaded out via `completeCheckRun`.
-        let reviewMeta: import("./lib/triage-pr-review-ensemble").ReviewMeta | undefined = undefined
-        try {
-          const result = await handlePrReviewEnsemble(baseArgs)
-          if (result.status === "posted") {
-            const blocked = await postReviewWorkBlocked(result.postReviewWork, {
+              const statusUpdate = finalStatusUpdate({
+                status: blocked ? "errored" : result.status,
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                ...(result.reviewMeta !== undefined ? { reviewMeta: result.reviewMeta } : {}),
+              })
+              if (statusUpdate !== null) statusReporter?.report(statusUpdate)
+              conclusion = blocked ? "blocked" : result.reviewMeta?.surface === "comment" ? "failure" : "success"
+              reviewMeta = result.reviewMeta
+              return
+            }
+            const statusUpdate = finalStatusUpdate({
+              status: result.status,
               owner: job.owner,
               repo: job.repo,
               prNumber: job.prNumber,
-              headSha: job.headSha,
+              ...(result.reviewMeta !== undefined ? { reviewMeta: result.reviewMeta } : {}),
             })
-            // ARC-279: when the ensemble used the comment fallback
-            // (formal review submit was silently rejected), the
-            // Check Run should reflect that the normal pipeline
-            // didn't run — even though the synth body posted as a
-            // PR comment. `failure` + reviewMeta.surface === "comment"
-            // routes to the "see PR comment" title.
-            conclusion = blocked ? "blocked" : result.reviewMeta?.surface === "comment" ? "failure" : "success"
+            if (statusUpdate !== null) statusReporter?.report(statusUpdate)
+            if (result.status === "stale_head") {
+              conclusion = "skipped"
+              return
+            }
+            // ARC-280 + follow-up: ARC-279 handles "synth ran but
+            // submit didn't persist" via comment-fallback. The
+            // remaining `skipped`/`errored` paths split into:
+            //   - sensitive-repo: handled above, never reaches here
+            //   - label gate: legitimate user-config skip → success
+            //   - errored + skip-notice posted (router_no_specialists,
+            //     specialists_all_failed, synth retry exhausted,
+            //     internal_error): map to failure + thread reviewMeta
+            //     so the Check Run title says "Couldn't review — see
+            //     PR comment"
+            //   - errored without skip-notice (rare; the helper
+            //     itself failed to post): generic "Review failed"
+            conclusion = result.status === "errored" ? "failure" : "success"
             reviewMeta = result.reviewMeta
-            return
-          }
-          if (result.status === "stale_head") {
-            conclusion = "skipped"
-            return
-          }
-          // ARC-280 + follow-up: ARC-279 handles "synth ran but
-          // submit didn't persist" via comment-fallback. The
-          // remaining `skipped`/`errored` paths split into:
-          //   - sensitive-repo: handled above, never reaches here
-          //   - label gate: legitimate user-config skip → success
-          //   - errored + skip-notice posted (router_no_specialists,
-          //     specialists_all_failed, synth retry exhausted,
-          //     internal_error): map to failure + thread reviewMeta
-          //     so the Check Run title says "Couldn't review — see
-          //     PR comment"
-          //   - errored without skip-notice (rare; the helper
-          //     itself failed to post): generic "Review failed"
-          conclusion = result.status === "errored" ? "failure" : "success"
-          reviewMeta = result.reviewMeta
-        } catch (err) {
-          conclusion = "failure"
-          throw err
-        } finally {
-          // Best-effort completion. `null` conclusion means we
-          // returned before assigning one (shouldn't happen with the
-          // current branches, but defensive). Map it to `failure` so
-          // the check doesn't hang in_progress.
-          // SIG-216: thread prNumber into reviewMeta so the check-run
-          // summary can render the `[View review](pr-url)` link. When
-          // the ensemble didn't return a reviewMeta (degraded paths),
-          // the summary degrades to the link-less fallback — that's
-          // intentional, not worth scaffolding a synthetic reviewMeta.
-          const reviewMetaForComplete = reviewMeta !== undefined ? { ...reviewMeta, prNumber: job.prNumber } : undefined
-          await completeCheckRun({
-            handle: checkRun,
-            conclusion: conclusion ?? "failure",
-            // SIG-144: thread the configured output surface so the
-            // check-run completer knows whether to post Checks
-            // annotations (annotations | both) in addition to the
-            // PR review comments the ensemble already posted.
-            surface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
-            ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
-          })
-          // SIG-119: flush collected validator-rejection telemetry once.
-          // Non-fatal — a metrics failure must never affect the review.
-          if (validationSink.length > 0) {
-            try {
-              await recordValidationMetrics(env, {
-                owner: job.owner,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                headSha: job.headSha,
-                events: validationSink,
-              })
-            } catch (err) {
-              console.log(
-                JSON.stringify({
-                  event: "validation-metrics-record-error",
+          } catch (err) {
+            conclusion = "failure"
+            throw err
+          } finally {
+            await statusReporter?.flush()
+            // Best-effort completion. `null` conclusion means we
+            // returned before assigning one (shouldn't happen with the
+            // current branches, but defensive). Map it to `failure` so
+            // the check doesn't hang in_progress.
+            // SIG-216: thread prNumber into reviewMeta so the check-run
+            // summary can render the `[View review](pr-url)` link. When
+            // the ensemble didn't return a reviewMeta (degraded paths),
+            // the summary degrades to the link-less fallback — that's
+            // intentional, not worth scaffolding a synthetic reviewMeta.
+            const reviewMetaForComplete =
+              reviewMeta !== undefined ? { ...reviewMeta, prNumber: job.prNumber } : undefined
+            await completeCheckRun({
+              handle: checkRun,
+              conclusion: conclusion ?? "failure",
+              // SIG-144: thread the configured output surface so the
+              // check-run completer knows whether to post Checks
+              // annotations (annotations | both) in addition to the
+              // PR review comments the ensemble already posted.
+              surface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
+              ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
+            })
+            // SIG-119: flush collected validator-rejection telemetry once.
+            // Non-fatal — a metrics failure must never affect the review.
+            if (validationSink.length > 0) {
+              try {
+                await recordValidationMetrics(env, {
                   owner: job.owner,
                   repo: job.repo,
                   prNumber: job.prNumber,
-                  error: err instanceof Error ? err.message : String(err),
-                }),
-              )
+                  headSha: job.headSha,
+                  events: validationSink,
+                })
+              } catch (err) {
+                console.log(
+                  JSON.stringify({
+                    event: "validation-metrics-record-error",
+                    owner: job.owner,
+                    repo: job.repo,
+                    prNumber: job.prNumber,
+                    error: err instanceof Error ? err.message : String(err),
+                  }),
+                )
+              }
             }
-          }
-          // SIG-152: flush the per-review graph-retrieval sample once.
-          // Non-fatal — same guarantees as the validation flush above.
-          const graphSample = graphMetricsSink[0]
-          if (graphSample) {
-            try {
-              await recordGraphMetrics(env, {
-                owner: job.owner,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                headSha: job.headSha,
-                sample: graphSample,
-              })
-            } catch (err) {
-              console.log(
-                JSON.stringify({
-                  event: "graph-metrics-record-error",
+            // SIG-152: flush the per-review graph-retrieval sample once.
+            // Non-fatal — same guarantees as the validation flush above.
+            const graphSample = graphMetricsSink[0]
+            if (graphSample) {
+              try {
+                await recordGraphMetrics(env, {
                   owner: job.owner,
                   repo: job.repo,
                   prNumber: job.prNumber,
-                  error: err instanceof Error ? err.message : String(err),
-                }),
-              )
+                  headSha: job.headSha,
+                  sample: graphSample,
+                })
+              } catch (err) {
+                console.log(
+                  JSON.stringify({
+                    event: "graph-metrics-record-error",
+                    owner: job.owner,
+                    repo: job.repo,
+                    prNumber: job.prNumber,
+                    error: err instanceof Error ? err.message : String(err),
+                  }),
+                )
+              }
+            }
+            // SIG-286 PR2.5: flush the per-review graph-expansion sample once.
+            // Non-fatal — same guarantees as the graph-retrieval flush above.
+            const expansionSample = graphExpansionMetricsSink[0]
+            if (expansionSample) {
+              try {
+                await recordGraphExpansionMetrics(env, { sample: expansionSample })
+              } catch (err) {
+                console.log(
+                  JSON.stringify({
+                    event: "graph-expansion-metrics-record-error",
+                    owner: job.owner,
+                    repo: job.repo,
+                    prNumber: job.prNumber,
+                    error: err instanceof Error ? err.message : String(err),
+                  }),
+                )
+              }
             }
           }
-          // SIG-286 PR2.5: flush the per-review graph-expansion sample once.
-          // Non-fatal — same guarantees as the graph-retrieval flush above.
-          const expansionSample = graphExpansionMetricsSink[0]
-          if (expansionSample) {
-            try {
-              await recordGraphExpansionMetrics(env, { sample: expansionSample })
-            } catch (err) {
-              console.log(
-                JSON.stringify({
-                  event: "graph-expansion-metrics-record-error",
-                  owner: job.owner,
-                  repo: job.repo,
-                  prNumber: job.prNumber,
-                  error: err instanceof Error ? err.message : String(err),
-                }),
-              )
-            }
-          }
-        }
-      })
+        },
+        backgroundWaitUntil,
+      )
     }
     case "pr-review-rerun": {
       // ARC-178: `/sigilix review` slash command. Resolve the current

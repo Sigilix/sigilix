@@ -25,6 +25,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { classifyEnsembleError, classifyEnsembleStage } from "./classify-error"
 import type { RunResultRequest, RunResultStatus } from "./types"
+import { createPrReviewStatusReporter, type ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
 
 type PrReviewJob = Extract<JobMessage, { type: "pr-review" }>
 
@@ -59,7 +60,8 @@ async function readPickupReason(res: Response): Promise<string | undefined> {
 export async function runPrReviewWithDoCallback(
   job: PrReviewJob,
   env: Env,
-  runEnsemble: () => Promise<void>,
+  runEnsemble: (statusReporter?: ReviewStatusReporter) => Promise<void>,
+  waitUntil?: (promise: Promise<void>) => void,
 ): Promise<void> {
   // Codex BLOCKING B2 on plan v1: string-typed runId is the DO-routed
   // signal. ci-triage's separate numeric runId would falsely match a
@@ -107,9 +109,20 @@ export async function runPrReviewWithDoCallback(
   // own repo) the heartbeat stops and the DO detects the dead attempt
   // within one `livenessMs` gap instead of waiting out the watchdog.
   const stopHeartbeat = startHeartbeat(stub, runId, consumerId, job)
+  const statusReporter = createPrReviewStatusReporter({
+    env,
+    owner: job.owner,
+    repo: job.repo,
+    prNumber: job.prNumber,
+    headSha: job.headSha,
+    runId,
+    installationId: job.installationId,
+    doStub: stub,
+    ...(waitUntil !== undefined ? { waitUntil } : {}),
+  })
   let caught: unknown = undefined
   try {
-    await runEnsemble()
+    await runEnsemble(statusReporter)
   } catch (err) {
     caught = err
   } finally {

@@ -46,6 +46,12 @@ import { prepareRender } from "./render-prep"
 import { verifyAndBuildSubmission } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
 import { attachInvariantLensAmendmentWork } from "./invariant-lens-amendment"
+import {
+  retrievalStatusUpdate,
+  skippedStatusUpdate,
+  specialistsStatusUpdate,
+  synthStatusUpdate,
+} from "@/src/lib/pr-review-status-phases"
 import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
@@ -299,6 +305,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       // a noop-merge skip would help with anyway.
     }
 
+    args.statusReporter?.report(retrievalStatusUpdate())
     // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the incremental-select marker
     // read, the per-repo sigilix.json load, the AI-instruction-ingest flag, and the
     // label-gate INPUT live in ensemble/app/context/fetch-and-pack (the label-gate
@@ -317,12 +324,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     const { fullPrDiff, openPrsForStack, fullDiff, shouldLoadAiInstructions, costControls } = fetched
     let sigilixConfig = fetched.sigilixConfig
 
-    // ARC-273: label gate. When the operator configures
-    // `costControls.runOnLabels`, pr-review only fires on PRs
-    // carrying at least one of those labels. Empty config = no
-    // gating (current behavior). Returns `skipped` so the
-    // dispatcher-owned Check Run completes as `neutral` rather
-    // than misclassifying as a failed review.
+    // ARC-273: configured label gate; non-matching PRs are clean skips.
     if (costControls.runOnLabels.length > 0) {
       const labelNames = (meta.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === "string")
       if (!passesLabelGate(labelNames, costControls.runOnLabels)) {
@@ -339,14 +341,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
           }),
         )
         telemetry.fellBackReason = "label_gate_skip"
-        // SIG-224 Phase 0 follow-along: thread `reviewMeta` so the
-        // Check Run renders "Approved — no issues found · Sigilix
-        // approved · [View PR]" instead of falling through to the
-        // legacy "Review posted · [View review]" title that links to
-        // a nonexistent review. Same shape as the empty-router branch
-        // below — both are "we successfully reviewed and chose not to
-        // run specialists." The customer-visible effect: green check,
-        // honest "View PR" link, no broken review URL.
+        args.statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
         return finalize(telemetry, env, "skipped", cache, {
           event: "APPROVE",
           findingsCount: 0,
@@ -397,31 +392,10 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     } = packed
 
     if (router.specialists.length === 0) {
-      // Router said "no specialists apply to this PR" — e.g. docs-only
-      // with no executable fenced code blocks (see ensemble-router.ts
-      // `decideSpecialists` for the rule taxonomy).
-      //
-      // SIG-224 Phase 0: this used to call `bailWithSkipNotice` →
-      // "Couldn't review — see PR comment" + a yellow check, which is
-      // wrong semantics. "No specialists apply" is a successful review,
-      // not a failure. Thread `event: "APPROVE" + findingsCount: 0` so
-      // the Check Run renders the existing `"Approved — no issues found"`
-      // title (`pr-review-check-run.ts:382-387`) instead of falling
-      // through to the legacy "Review posted · View review" title that
-      // links to a nonexistent review. The dispatcher maps `"skipped"
-      // → "success"` via `src/index.ts:1297`.
-      //
-      // "APPROVE" is a slight semantic stretch (we didn't run a review;
-      // we determined no review was needed), but the customer-visible
-      // effect is correct: green check, "Sigilix approved", link points
-      // at the PR conversation tab, no broken review URL.
-      //
-      // Pre-req for SIG-225 (Phase 1 shadow dispatcher) — once the
-      // dynamic dispatcher starts skipping legitimately-not-applicable
-      // specialists more often, this path will fire more often, and the
-      // wrong "couldn't review" surface would be customer-visible noise.
+      // Router found no applicable specialists; this is a clean review skip.
       telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
+      args.statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
       return finalize(telemetry, env, "skipped", cache, {
         event: "APPROVE",
         findingsCount: 0,
@@ -581,6 +555,16 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       messageForRole,
     } = prompts
 
+    args.statusReporter?.report(
+      specialistsStatusUpdate({
+        dispatched: router.specialists,
+        droppedFiles: droppedTooLarge,
+        graphNodes: graphContextNodesForEvidence,
+        totalFiles: filePaths.length,
+        graphMode: graphCtxForPrompt.length > 0 ? "available" : "none",
+      }),
+    )
+
     // ─── SIG-318 (PR 12c): the SPECIALISTS+SYNTH seam ─────────
     // The shadow + prod specialist fan-out, quorum collector, verdict collection,
     // fanout telemetry, the ARC-277 coverage gate, the synth-bypass / synthesizer
@@ -628,6 +612,17 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       effectiveSynthProvenance,
       invariantLensAmendmentWork,
     } = specialistsPhase
+    args.statusReporter?.report(
+      synthStatusUpdate({
+        dispatched: router.specialists,
+        succeeded: succeeded.map((v) => v.role),
+        missing: degradedCoverage?.rolesMissing ?? [],
+        droppedFiles: droppedTooLarge,
+        graphNodes: graphContextNodesForEvidence,
+        totalFiles: filePaths.length,
+        graphMode: graphCtxForPrompt.length > 0 ? "available" : "none",
+      }),
+    )
 
     // ─── Post-synthesis validation ─────────────────────────────
     // SIG-318 (PR 12a): validation, severity clamps, and consensus ranking live in ./adjudicate.
@@ -696,18 +691,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
-
-    // ─── SIG-216: overview-then-submit ordering ────────────────
-    //
-    // Pre-SIG-216 the overview ran as its own queue job kicked off
-    // by the push webhook and a "Reviewing…" stub was synchronously
-    // posted at webhook time so the review-side wait gate could line
-    // it up ahead of `submitReview`. Founder direction 2026-05-25:
-    // drop the stub-first pattern; the overview comment now lands
-    // immediately BEFORE the review comment in this same handler
-    // invocation, CodeRabbit-style. See `runInlineOverview` below
-    // (called once the submission verdict is final, just before the
-    // pre-submit dismiss + `submitReview`).
 
     // ─── Submit ────────────────────────────────────────────────
     // SIG-318 (PR 12d): the render-prep phase — review-memory soften, the SIG-280 warm

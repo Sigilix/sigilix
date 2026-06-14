@@ -183,6 +183,19 @@ describe("runPrReviewWithDoCallback — happy path", () => {
     const rr = calls[1]?.body as RunResultRequest
     expect(rr.error).toBeUndefined()
   })
+
+  it("passes a status reporter to DO-routed review work", async () => {
+    const { env } = makeEnv()
+    let reporter: unknown = null
+    await runPrReviewWithDoCallback(makeJob(), env, async (r) => {
+      reporter = r
+    })
+
+    expect(reporter).toMatchObject({
+      report: expect.any(Function),
+      flush: expect.any(Function),
+    })
+  })
 })
 
 describe("runPrReviewWithDoCallback — pickup blocked (ack + exit)", () => {

@@ -45,6 +45,7 @@ import {
   pruneHistoryRecords,
   pruneHistoryStorage,
 } from "./pr-review-run-internals"
+import { handleStatusProgress } from "./pr-review-status-route"
 export {
   decideEnqueueAction,
   decidePickupAction,
@@ -73,6 +74,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
     }
     if (request.method === "POST" && url.pathname === "/heartbeat") {
       return this.handleHeartbeat(request)
+    }
+    if (request.method === "POST" && url.pathname === "/status-progress") {
+      return handleStatusProgress(this.ctx.storage, request)
     }
     if (request.method === "POST" && url.pathname === "/cancel") {
       return this.handleCancel()

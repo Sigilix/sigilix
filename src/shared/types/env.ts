@@ -106,19 +106,9 @@ export interface Env {
   // repos. Empty/unset = no sensitive repos. Match is
   // case-insensitive on `owner/repo`.
   OPENCLAW_SENSITIVE_REPOS?: string
-  // Per-PR cap on total model invocations (counts retries). Default 8
-  // (4 specialists + 1 synth + 3 headroom).
-  OPENCLAW_ENSEMBLE_MAX_MODEL_CALLS_PER_PR?: string
   // Per-PR cap on retrieve_codebase calls (covers pre-flight + every
   // specialist follow-up + synth conflict-verification). Default 3.
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string
-  // Daily ensemble call budget (best-effort via KV; 1-2 call overshoot
-  // under concurrent webhooks accepted). Default 200.
-  OPENCLAW_ENSEMBLE_DAILY_BUDGET?: string
-  // Emergency-only: re-enables specialist-verdict fallback when synth
-  // fails in `post` mode. Default off — synth failure falls back to
-  // Phase 3, not raw specialist output.
-  OPENCLAW_ENSEMBLE_ALLOW_SPECIALIST_FALLBACK?: string
   // Phase 4 router (Option C consolidation): when "on", router decides
   // which specialists fire based on static signals from the diff
   // (lockfile→security, auth-path→security, docs-only→none, etc.).

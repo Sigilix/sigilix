@@ -45,6 +45,9 @@ import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import { emitModelAttempt, type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
+import type { McpToolId } from "@/src/shared/domain/config/types"
+import { createSpecialistMcpTools } from "./specialist-mcp-tools"
+import { runSpecialistToolConversation, type SpecialistRuntimeTool } from "./specialist-tool-loop"
 
 /**
  * Per-role model lineup (SIG-406 alpha, 2026-06-14): the OpenRouter LIVE DEFAULT.
@@ -171,6 +174,9 @@ export interface SpecialistRunArgs {
    * events for downstream correlation.
    */
   perfCtx: EnsembleRunCtx
+  mcpTools?: {
+    toolIds: McpToolId[]
+  }
 }
 
 export interface SpecialistRunResult {
@@ -210,6 +216,10 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     { role: "system", content: args.systemPrompt },
     { role: "user", content: args.initialMessage },
   ]
+  const specialistTools =
+    args.mcpTools && args.mcpTools.toolIds.length > 0
+      ? createSpecialistMcpTools({ toolIds: args.mcpTools.toolIds, reviewCorpus: args.initialMessage })
+      : undefined
   return runWithRetryAndFallback({
     config,
     apiKey,
@@ -220,6 +230,7 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
+    ...(specialistTools !== undefined ? { specialistTools } : {}),
     ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}), // SIG-287 (primary-attempt-only)
     // Keep the prod path explicit even though runWithRetryAndFallback also
     // defaults from config.perAttemptTimeoutMs. Shadow callers rely on the
@@ -371,6 +382,7 @@ export async function runWithRetryAndFallback<T>(args: {
    * loud, not papered over.
    */
   onAttempt?: (info: AttemptCallbackInfo) => void
+  specialistTools?: SpecialistRuntimeTool[]
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -421,6 +433,7 @@ export async function runWithRetryAndFallback<T>(args: {
           format,
           parseAnswer,
           parseFailureLabel,
+          ...(args.specialistTools !== undefined ? { specialistTools: args.specialistTools } : {}),
           ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}), // SIG-287: PRIMARY only (fallback omits)
         }),
       perAttemptCap,
@@ -491,6 +504,7 @@ export async function runWithRetryAndFallback<T>(args: {
           format,
           parseAnswer,
           parseFailureLabel,
+          ...(args.specialistTools !== undefined ? { specialistTools: args.specialistTools } : {}),
         }),
       perAttemptCap,
       signal,
@@ -544,6 +558,7 @@ async function attemptChat<T>(args: {
   /** SIG-287: bounded reasoning level for THIS attempt. Only the primary loop
    *  passes it; the fallback attempt omits it (stays `think:false`). */
   reasoning?: "high" | "medium" | "low"
+  specialistTools?: SpecialistRuntimeTool[]
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -558,17 +573,31 @@ async function attemptChat<T>(args: {
   thinkingChars?: number
 }> {
   try {
-    const result = await chat({
-      model: args.model,
-      messages: args.messages,
-      apiKey: args.apiKey,
-      signal: args.signal,
-      chatEnabled: args.chatEnabled,
-      ...(args.format ? { format: args.format } : {}),
-      // SIG-287: byte-identical when undefined (default-off → think:false).
-      ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
-      temperature: 0,
-    })
+    const result =
+      args.specialistTools && args.specialistTools.length > 0 && args.format
+        ? await runSpecialistToolConversation({
+            chat,
+            model: args.model,
+            messages: args.messages,
+            apiKey: args.apiKey,
+            signal: args.signal,
+            chatEnabled: args.chatEnabled,
+            tools: args.specialistTools,
+            format: args.format,
+            ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+            temperature: 0,
+          })
+        : await chat({
+            model: args.model,
+            messages: args.messages,
+            apiKey: args.apiKey,
+            signal: args.signal,
+            chatEnabled: args.chatEnabled,
+            ...(args.format ? { format: args.format } : {}),
+            // SIG-287: byte-identical when undefined (default-off → think:false).
+            ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+            temperature: 0,
+          })
     // SIG-212: capture token usage from chat()'s result. Forward on
     // BOTH success and parse-failure paths so cost telemetry stays
     // accurate even when the model produced unparseable output.

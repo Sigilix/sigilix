@@ -9,8 +9,8 @@
 //
 // Founder feedback after dogfooding SIG-216: the WANTED UX is closer
 // to CodeRabbit — a sticky comment appears immediately on push saying
-// "Reviewing…" (with the ASCII flourish), and MORPHS into the overview
-// when the models finish. SIG-216 lost that affordance entirely.
+// "Reviewing…" and MORPHS into the overview when the models finish.
+// SIG-216 lost that affordance entirely.
 //
 // SIG-219 restores the webhook-time stub-post. The new pipeline:
 //
@@ -83,6 +83,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER, findExistingOverviewComment } from "./triage-pr-overview"
 import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START, buildReviewStatusBlock } from "./pr-review-status-render"
+import { renderPrOverviewWaitingArt } from "./pr-overview-waiting-art"
 
 /**
  * Body posted by the stub. The marker on line 1 is what the overview
@@ -94,108 +95,16 @@ import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START, buildReviewStatusBl
 const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
 const DEFAULT_STUB_HEAD_SHA = "0".repeat(40)
 
-export const STUB_QUIPS = [
-  "Prove the path before you trust the patch.",
-  "Small diffs still deserve sharp eyes.",
-  "Facts first. Verdicts second.",
-  "Trace the edge before naming the risk.",
-  "Changed lines get the first question.",
-  "Evidence beats confidence every time.",
-  "Follow the call, then follow the consequence.",
-  "A clean review starts with a clean anchor.",
-  "The quiet bug is usually in the boundary.",
-  "Good findings can point to their proof.",
-  "Review the behavior, not just the shape.",
-  "If it matters, it should survive citation.",
-  "Scanning your diff like a lighthouse in fog. Clearer seas soon.",
-  "Read the change like the author was you at 2am. Often, it was.",
-] as const
-
-export const STUB_ASCII_TEMPLATES = [
-  "signal-box",
-  "small-lamp",
-  "steady-bridge",
-  "star-map",
-  "patch-garden",
-  "quiet-compass",
-  "tiny-poem",
-  "proof-lab",
-] as const
-
-type StubAsciiTemplate = (typeof STUB_ASCII_TEMPLATES)[number]
-
-function stubKeyHash(prNumber: number, headSha: string): number {
-  let hash = 2166136261
-  const input = `${prNumber}:${headSha}`
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i)
-    hash = Math.imul(hash, 16777619) >>> 0
-  }
-  return hash
-}
-
-function quipIndex(prNumber: number, headSha: string): number {
-  return stubKeyHash(prNumber, headSha) % STUB_QUIPS.length
-}
-
-function templateIndex(prNumber: number, headSha: string): number {
-  return Math.floor(stubKeyHash(prNumber, headSha) / STUB_QUIPS.length) % STUB_ASCII_TEMPLATES.length
-}
-
-export function selectPrOverviewStubQuip(args: { prNumber: number; headSha: string }): string {
-  return STUB_QUIPS[quipIndex(args.prNumber, args.headSha)]!
-}
-
-export function selectPrOverviewStubAsciiTemplate(args: { prNumber: number; headSha: string }): StubAsciiTemplate {
-  return STUB_ASCII_TEMPLATES[templateIndex(args.prNumber, args.headSha)]!
-}
-
-function centerText(text: string, width: number): string {
-  if (text.length >= width) return text.slice(0, width)
-  const left = Math.floor((width - text.length) / 2)
-  return `${" ".repeat(left)}${text}`.padEnd(width, " ")
-}
-
-function frameLines(lines: readonly string[], width = 58): string {
-  const border = `+${"-".repeat(width + 2)}+`
-  return [border, ...lines.map((line) => `| ${centerText(line, width)} |`), border].join("\n")
-}
-
-function renderStubFlourish(template: StubAsciiTemplate, quip: string): string {
-  switch (template) {
-    case "signal-box":
-      return frameLines(["SIGILIX REVIEW SIGNAL", "", quip, "", "[ diff ] -> [ reason ] -> [ review ]"])
-    case "small-lamp":
-      return frameLines(["    .", "   /|\\", "  /_|_\\    small light, sharp sight", "    |", quip])
-    case "steady-bridge":
-      return frameLines(["source === proof === patch", "====[ review bridge ]====", quip, "cross slowly; ship cleanly"])
-    case "star-map":
-      return frameLines(["       *        .", "  .       [ SIGILIX ]       *", "      trace the changed stars", quip])
-    case "patch-garden":
-      return frameLines(["  _ _ _", " | patch |  water with tests", " | proof |  prune with care", quip])
-    case "quiet-compass":
-      return frameLines(["        N", "    W --+-- E", "        S", quip, "direction: changed behavior"])
-    case "tiny-poem":
-      return frameLines(["Tiny diff, steady hand.", "A line can move a land.", quip])
-    case "proof-lab":
-      return frameLines(["[ hypothesis ]", "      + evidence", "      + changed lines", "      = review note", quip])
-  }
-}
-
 export function buildPrOverviewStubBody(args: { prNumber: number; headSha: string }): string {
-  const quip = selectPrOverviewStubQuip(args)
-  const template = selectPrOverviewStubAsciiTemplate(args)
   const body = `${OVERVIEW_MARKER}
 
 ${STUB_V2_MARKER}
 
-**Sigilix is reviewing this pull request...**
+**Sigilix is reviewing this pull request.**
 
-You'll see a structured overview here in 30-90 seconds.
+A structured overview will replace this note when retrieval and specialist review complete.
 
-\`\`\`text
-${renderStubFlourish(template, quip)}
-\`\`\``
+${renderPrOverviewWaitingArt(`queued:${args.prNumber}:${args.headSha}`)}`
   return `${body}
 
 ${buildReviewStatusBlock({

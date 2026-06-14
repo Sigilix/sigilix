@@ -198,6 +198,74 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
   })
 })
 
+describe("buildReviewSubmission — SIG-411: low-confidence findings keep their inline thread (confidence-tier demotion removed)", () => {
+  const path = "src/lib/specialist-mcp-tools.ts"
+  const reviewable: ReviewableMap = new Map([[path, [{ line: 236, side: "RIGHT" }]]])
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [path, new Map([[236, "const [a, b, c] = parts"]])],
+  ])
+
+  // score 2 (< 4), no committable fix — the now-removed SIG-281 confidence-tier
+  // gate WOULD have demoted this to the body. SIG-411: it keeps its inline thread.
+  const lowSevFinding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    path,
+    line: 236,
+    scope: "line",
+    score: 2,
+    category: "logic",
+    headline: "isBlockedIpv4Parts ignores the 4th octet",
+    body: "The helper destructures [a, b, c] from a 4-element tuple and never binds d, so the last octet is dropped.",
+    trust: { tier: "grounded-model" },
+    ...overrides,
+  })
+  const verdictFor = (f: PrReviewFinding, confidence: number): PrReviewVerdict => ({
+    summary: "Octet dropped.",
+    confidence,
+    confidenceReason: "Low-confidence note.",
+    findings: [f],
+  })
+
+  it("keeps a confidence<=2 no-fix low-severity finding inline (was demoted pre-SIG-411)", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: verdictFor(lowSevFinding(), 1),
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.comments ?? []).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.line).toBe(236)
+    expect(out.bodyOnlyFindings).toEqual([])
+  })
+
+  it("keeps a confidence===3 no-fix/no-repro low-severity finding inline (the other removed arm)", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: verdictFor(lowSevFinding(), 3),
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.comments ?? []).toHaveLength(1)
+    expect(out.bodyOnlyFindings).toEqual([])
+  })
+
+  it("keeps even an ungrounded low-confidence finding inline — grounding no longer gates this surface", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: verdictFor(lowSevFinding({ trust: { tier: "body-only-ungrounded" } }), 1),
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.comments ?? []).toHaveLength(1)
+    expect(out.bodyOnlyFindings).toEqual([])
+  })
+})
+
 describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
   const commentFinding: PrReviewFinding = {
     path: "src/lib/github-mention.ts",
@@ -431,16 +499,9 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
       headSha: "abc",
     })
 
-  it("Rec 5: demotes a sub-4 line finding at confidence <= 2 with no fix to the body", () => {
-    const out = submit([lf({ score: 3, confidence: 2 })])
-    expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain(baseFinding.headline)
-  })
-
-  it("Rec 5: demotes a sub-4 line finding at confidence 3 with neither a fix nor a repro", () => {
-    const out = submit([lf({ score: 3, confidence: 3 })])
-    expect(out.comments ?? []).toHaveLength(0)
-  })
+  // SIG-411: the Rec 5 confidence-tier body demotion was REMOVED — a sub-4
+  // low-confidence finding now keeps its inline thread (see the dedicated
+  // "SIG-411" describe block above for the kept-inline cases).
 
   it("Rec 5: KEEPS a sub-4 confidence-3 finding inline when it carries a repro (failureExample)", () => {
     const out = submit([lf({ score: 3, confidence: 3, failureExample: "throws when user is null" })])
@@ -452,7 +513,7 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     expect(out.comments).toHaveLength(1)
   })
 
-  it("SIG-103: strips identical replacement before routing so bogus fixes do not keep weak findings inline", () => {
+  it("SIG-103: strips an identical (no-op) replacement; the finding stays inline without a bogus suggestion block (SIG-411)", () => {
     const reviewable: ReviewableMap = new Map([["src/lib/foo.ts", [{ line: 42, side: "RIGHT" }]]])
     const addedLineTextByLine = new Map([["src/lib/foo.ts", new Map([[42, "const x = a ?? b"]])]])
     const out = buildReviewSubmissionWithMetadata({
@@ -463,8 +524,10 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
       addedLineTextByLine,
     })
 
-    expect(out.submission.comments ?? []).toHaveLength(0)
-    expect(out.bodyOnlyFindings[0]?.suggestedReplacement).toBeUndefined()
+    // The no-op fix is stripped (no committable suggestion emitted), but SIG-411
+    // keeps the weak finding inline rather than demoting it to the body.
+    expect(out.submission.comments ?? []).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
     expect(out.suggestionEmissions).toHaveLength(0)
   })
 
@@ -478,11 +541,10 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     expect(out.comments).toHaveLength(1)
   })
 
-  it("Rec 5: demotion runs on the post-line-move anchor (uses effective.line)", () => {
-    // The model says line 5; the only added line is 9. SIG-127 moves the
-    // anchor forward to 9, and the confidence gate (conf 2, no fix) then
-    // demotes on `effective` — so the finding lands in the body carrying
-    // the moved line, not the model's raw line.
+  it("SIG-127: a low-confidence finding moves to the substantive anchor and stays inline there (SIG-411)", () => {
+    // The model says line 5; the only added line is 9. SIG-127 moves the anchor
+    // forward to 9. Pre-SIG-411 the confidence gate then demoted it to the body;
+    // now it keeps its inline thread at the moved line.
     const added = new Map<string, Map<number, string>>([
       ["src/lib/foo.ts", new Map<number, string>([[9, "const y = compute()"]])],
     ])
@@ -492,8 +554,8 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
       headSha: "abc",
       addedLineTextByLine: added,
     })
-    expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("src/lib/foo.ts:9")
+    expect(out.comments ?? []).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(9)
   })
 
   it("Rec 3 (SIG-392): does NOT cap a dense PR inline — every real finding keeps its thread", () => {

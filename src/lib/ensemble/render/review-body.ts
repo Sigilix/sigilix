@@ -118,12 +118,12 @@ const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
 // SIG-281 PR B (Rec 6 / Kimi K2.6): this section now holds only
 // sub-blocker (score < 4) body-only findings — score >= 4 blockers are
 // surfaced in the Fix Plan table + a collapsed evidence block above.
-// SIG-281 PR C: copy now covers ALL three reasons a finding lands here —
-// un-anchorable scope, inline-comment-cap overflow (Rec 3), AND
-// confidence-tier (Rec 5) / grounding (Rec 4) demotion — closing the
-// CodeRabbit accuracy gap from PR B.
+// SIG-281 PR C: copy covers the reasons a finding lands here — un-anchorable
+// scope, inline-comment-cap overflow (Rec 3), AND grounding (Rec 4) demotion.
+// (SIG-411 removed the Rec 5 confidence-tier demotion, so confidence no longer
+// routes a finding to the body.)
 const BODY_ONLY_FINDINGS_EXPLANATION =
-  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope), because the inline comment cap was exceeded, or because their confidence tier or grounding made them better suited for body-only review.</sub>"
+  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope), because the inline comment cap was exceeded, or because grounding made them better suited for body-only review.</sub>"
 // SIG-281 PR B (Rec 6 / Kimi K2.6): caption shown under the Fix Plan
 // table only when it contains body-only blockers (rows with no inline
 // thread), so a reviewer isn't confused by table rows that have no
@@ -239,11 +239,15 @@ export interface ProvenanceCtx {
  * Pure — exported for tests.
  */
 /**
- * Outside your changes (founder ask + Kimi redesign): the informational section
- * for findings about code NOT modified in this PR (`outOfPrScope`). Flat — no
- * dropdown (the collapsed dropdown was exactly what confused the reader into
- * thinking a within-diff finding was mis-placed). FYI tone, reuses the body-only
- * row format. Empty when there are none.
+ * Outside your changes (founder ask 2026-06-14 + Kimi redesign): the informational
+ * section for findings about code NOT modified in this PR (`outOfPrScope`). A
+ * COLLAPSED <details> dropdown so a long list doesn't eat the review body. The
+ * summary states the scope ("outside this PR's changes") + count + non-blocking
+ * framing, so a reader who never expands it still understands — that explicit,
+ * scoped summary is what avoids the earlier confusion (a GENERIC collapsed
+ * dropdown read like a mis-placed within-diff finding; this one cannot). FYI tone,
+ * reuses the body-only row format. A blank line after `</summary>` and before
+ * `</details>` is REQUIRED for the inner markdown rows to render. Empty when none.
  */
 function renderOutsideYourChanges(
   findings: readonly PrReviewFinding[],
@@ -252,12 +256,19 @@ function renderOutsideYourChanges(
   showEvidence?: boolean,
 ): string[] {
   if (findings.length === 0) return []
+  const n = findings.length
   return [
     "",
     "### Outside your changes",
     "",
-    "_These relate to code **not modified in this PR** — shown for awareness only; they don't block the merge._",
+    "<details>",
+    `<summary><b>▸ ${n} finding${n === 1 ? "" : "s"} outside this PR's changes</b> — awareness only, non-blocking</summary>`,
+    "",
+    "<i>These relate to code <b>not modified in this PR</b> — shown for awareness; they don't block the merge.</i>",
+    "",
     ...renderBodyOnlyFindings([...findings], linkContext, trustLedger, showEvidence),
+    "",
+    "</details>",
   ]
 }
 

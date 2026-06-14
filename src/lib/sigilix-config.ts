@@ -32,6 +32,8 @@ export type {
   SigilixConfigPath,
   SigilixConfigFormat,
   SigilixConfigSource,
+  McpToolId,
+  McpConfig,
 } from "@/src/shared/domain/config/types"
 export {
   SIGILIX_CONFIG_PATH,
@@ -41,6 +43,7 @@ export {
   SIGILIX_CONFIG_PATHS,
   KNOWN_MODELS,
   EMPTY_CONFIG,
+  MCP_TOOL_IDS,
 } from "@/src/shared/domain/config/types"
 export * from "@/src/shared/domain/config/parse"
 export * from "@/src/shared/domain/config/resolve"

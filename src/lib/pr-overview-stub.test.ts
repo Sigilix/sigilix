@@ -42,17 +42,18 @@ import {
   buildPrOverviewStubBody,
   isStubBody,
   postPrOverviewStubIfNeeded,
-  selectPrOverviewStubAsciiTemplate,
-  selectPrOverviewStubQuip,
   STUB_BODY,
-  STUB_ASCII_TEMPLATES,
   STUB_GITHUB_API_TIMEOUT_MS,
-  STUB_QUIPS,
   stubFlagKey,
   stubInflightKey,
   waitForPrOverviewStub,
 } from "@/src/lib/pr-overview-stub"
 import { REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
+import {
+  PR_OVERVIEW_WAITING_ARTS,
+  renderPrOverviewWaitingArt,
+  selectPrOverviewWaitingArt,
+} from "@/src/lib/pr-overview-waiting-art"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
@@ -88,6 +89,12 @@ const args = {
   installationId: 1,
 }
 
+function extractWaitingArtFences(body: string): readonly string[] {
+  const statusIndex = body.indexOf(REVIEW_STATUS_BLOCK_START)
+  const prefix = statusIndex >= 0 ? body.slice(0, statusIndex) : body
+  return [...prefix.matchAll(/```text\n([\s\S]*?)\n```/g)].map((match) => match[1] ?? "")
+}
+
 describe("buildPrOverviewStubBody — review-run status", () => {
   it("renders the queued review status block inside the overview sticky", () => {
     const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
@@ -96,6 +103,26 @@ describe("buildPrOverviewStubBody — review-run status", () => {
     expect(body).toContain("Queued")
     expect(body).toContain("0/4")
     expect(body).toContain("logic, security, performance, tests")
+  })
+
+  it("renders one detailed waiting ASCII block before the queued status", () => {
+    const headSha = "a".repeat(40)
+    const seed = `queued:7:${headSha}`
+    const body = buildPrOverviewStubBody({ prNumber: 7, headSha })
+    const artFences = extractWaitingArtFences(body)
+    const selectedArt = selectPrOverviewWaitingArt(seed)
+
+    expect(artFences).toHaveLength(1)
+    expect(artFences[0]!.split("\n").length).toBeGreaterThanOrEqual(15)
+    expect(artFences[0]).toBe([`== ${selectedArt.title} ==`, ...selectedArt.lines].join("\n"))
+    expect(body).not.toContain("30-90 seconds")
+    expect(body).not.toContain("### Sigilix Review Status")
+    expect(body).toContain("**Phase:** Queued")
+    expect(body).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(body).toContain(renderPrOverviewWaitingArt(seed))
+    expect(body.indexOf("```text")).toBeLessThan(body.indexOf(REVIEW_STATUS_BLOCK_START))
+    expect(body.slice(body.indexOf(REVIEW_STATUS_BLOCK_START))).not.toContain("```text")
+    expect(PR_OVERVIEW_WAITING_ARTS.some((art) => body.includes(art.title))).toBe(true)
   })
 })
 
@@ -343,54 +370,10 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
   it("STUB_BODY starts with the sigilix-overview marker so the handler edits it in place", () => {
     expect(STUB_BODY.split("\n")[0]).toBe("<!-- sigilix:pr-overview -->")
-    expect(STUB_BODY).toContain("Sigilix is reviewing this pull request...")
-    expect(STUB_BODY).toContain("30-90 seconds")
-    expect(STUB_BODY).toContain("```text")
-  })
-
-  it("SIG-165: quip selection is deterministic per PR number and head SHA", () => {
-    expect(STUB_QUIPS.length).toBeGreaterThanOrEqual(12)
-    const first = selectPrOverviewStubQuip(args)
-    const second = selectPrOverviewStubQuip({ ...args })
-    const body = stubBodyFor()
-
-    expect(second).toBe(first)
-    expect(body).toContain(first)
-    expect(body).toBe(stubBodyFor())
-    expect(body).not.toContain("_Reviewing")
-  })
-
-  it("SIG-206: ASCII template selection is deterministic and varies by PR head", () => {
-    expect(STUB_ASCII_TEMPLATES.length).toBeGreaterThanOrEqual(8)
-    const first = selectPrOverviewStubAsciiTemplate(args)
-    const second = selectPrOverviewStubAsciiTemplate({ ...args })
-    const templates = new Set(
-      Array.from({ length: 512 }, (_, i) =>
-        selectPrOverviewStubAsciiTemplate({
-          ...args,
-          headSha: `${String(i).padStart(3, "0")}${"a".repeat(37)}`,
-        }),
-      ),
-    )
-
-    expect(second).toBe(first)
-    expect(templates).toEqual(new Set(STUB_ASCII_TEMPLATES))
-  })
-
-  it("SIG-206: keeps generated ASCII blocks rectangular for GitHub Markdown", () => {
-    for (let i = 0; i < 24; i++) {
-      const body = stubBodyFor({
-        headSha: `${String(i).padStart(2, "0")}${"b".repeat(38)}`,
-      })
-      const codeBlock = /```text\n([\s\S]*?)\n```/.exec(body)?.[1]
-      expect(codeBlock).toBeDefined()
-
-      const lines = codeBlock!.split("\n")
-      const width = lines[0]!.length
-
-      expect(lines.length).toBeGreaterThanOrEqual(5)
-      expect(lines.every((line) => line.length === width)).toBe(true)
-    }
+    expect(STUB_BODY).toContain("Sigilix is reviewing this pull request.")
+    expect(STUB_BODY).toContain("A structured overview will replace this note")
+    expect(STUB_BODY).not.toContain("30-90 seconds")
+    expect(extractWaitingArtFences(STUB_BODY)).toHaveLength(1)
   })
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {

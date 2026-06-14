@@ -1,8 +1,8 @@
 // SIG-365 (PR 13) — the review-SUBMISSION render module (render layer).
 //
 // The GitHub review-submission builders carved VERBATIM from triage-pr-review.ts:
-// `prepareReviewSubmissionFindings` (inline-vs-body routing, the SIG-281 Rec 3/5
-// cap + confidence-tier demotion, the SIG-159 anchor walk-forward, the SIG-103
+// `prepareReviewSubmissionFindings` (inline-vs-body routing, the SIG-281 Rec 3
+// inline-comment cap, the SIG-159 anchor walk-forward, the SIG-103
 // structured-fix validation), `buildReviewSubmission` /
 // `buildReviewSubmissionWithMetadata`, and the two event-preview helpers. These
 // CONSUME the review-event decision (`chooseRenderedEventWithOverride` from
@@ -377,8 +377,8 @@ function prepareReviewSubmissionFindings(args: {
       // Walk forward to the nearest SUBSTANTIVE added line so an in-diff finding
       // whose anchor landed on a brace/blank stays INLINE on real code instead of
       // demoting to the body. For THIS anchoring step, fall back to the body only
-      // when there's no substantive added line at/after the anchor. (Other gates —
-      // confidence-tier routing below, inline-cap overflow — can still body-route.)
+      // when there's no substantive added line at/after the anchor. (The other
+      // body-routing path below — the inline-comment cap overflow — can still body-route.)
       const resolved = pickSubstantiveAnchorLineForward(
         addedLinesForPath,
         findingForInline.line,
@@ -400,26 +400,15 @@ function prepareReviewSubmissionFindings(args: {
       }
     }
 
-    // SIG-281 PR B (Recs 2/5): confidence-tiered severity routing. A
-    // low/medium-severity line finding (score < 4) with weak grounding is
-    // demoted to the review body so the inline surface stays high-signal.
-    // Runs on `effective` (post-line-move) and short-circuits the
-    // substantiveness gate below — severity/confidence is orthogonal to
-    // anchor quality. NEVER demotes score >= 4 (P0/P1 — the believability
-    // floor). The tiers (per Codex backend sign-off, the conservative
-    // unification of the ticket's Recs 2 + 5):
-    //   - confidence <= 2: demote unless it carries a committable fix.
-    //   - confidence === 3: demote unless it carries a fix OR a repro.
-    //   - confidence >= 4: never demoted here (high-confidence signal
-    //     keeps its inline thread even without a patch).
-    if (
-      findingScope(effective) === "line" &&
-      effective.score < 4 &&
-      ((confidence <= 2 && !hasStructuredFix(effective)) || (confidence === 3 && !hasPatchOrRepro(effective)))
-    ) {
-      bodyFindings.push(effective)
-      return
-    }
+    // SIG-411 (founder 2026-06-14): the SIG-281 Rec 2/5 confidence-tier body
+    // demotion was REMOVED. In prod the trust ledger stamps every anchored,
+    // gate-surviving finding a `grounded-model` baseline, so demoting by the
+    // model's self-reported confidence buried real, GROUNDED findings (e.g. a
+    // P3 on PR #540) in the body where they were easy to miss. Precision is
+    // controlled upstream by the grounding / refute / dedup / class-collapse
+    // gates (SIG-392) — a finding that anchors AND survives them keeps its inline
+    // thread regardless of confidence. P0/P1 (score >= 4) were never demoted
+    // here anyway. Do NOT re-introduce a confidence-only demotion.
 
     // The forward-walk above already guaranteed a SUBSTANTIVE anchor line (or
     // routed to the body), so a separate non-substantive demotion is no longer

@@ -10,9 +10,11 @@ import { defaultEnabledForRunnerTool } from "@/src/shared/domain/runner-tool-cat
 import { pathMatchesAny } from "@/src/shared/util/path-glob"
 import {
   LINTER_IDS,
+  MCP_TOOL_IDS,
   SPECIALIST_ROLES,
   type LinterId,
   type MatchedSigilixPathInstruction,
+  type McpToolId,
   type ReviewMemoryCategoryRef,
   type SarifFindingCategoryRef,
   type SigilixCommandName,
@@ -395,6 +397,28 @@ export function resolveLintersConfig(config: SigilixConfig | null): ResolvedLint
     out[id] = { enabled: configured ?? defaultEnabledForRunnerTool(id) }
   }
   return out
+}
+
+export interface ResolvedSpecialistMcpTools {
+  toolIds: McpToolId[]
+}
+
+/**
+ * SIG-408: resolve the in-process specialist tool surface for one role.
+ * Missing config means no tools. Explicit global disables remove a tool
+ * from every role even if that role lists it.
+ */
+export function resolveSpecialistMcpTools(
+  config: SigilixConfig | null,
+  role: SpecialistRole,
+): ResolvedSpecialistMcpTools {
+  if (config?.mcp?.enabled !== true) return { toolIds: [] }
+  const globallyDisabled = new Set<McpToolId>()
+  for (const id of MCP_TOOL_IDS) {
+    if (config.mcp.tools?.[id]?.enabled === false) globallyDisabled.add(id)
+  }
+  const configured = config.mcp.specialists?.[role]?.tools ?? []
+  return { toolIds: configured.filter((id) => !globallyDisabled.has(id)) }
 }
 
 /**

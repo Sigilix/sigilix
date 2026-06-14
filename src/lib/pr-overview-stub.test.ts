@@ -49,6 +49,11 @@ import {
   waitForPrOverviewStub,
 } from "@/src/lib/pr-overview-stub"
 import { REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
+import {
+  PR_OVERVIEW_WAITING_ARTS,
+  renderPrOverviewWaitingArt,
+  selectPrOverviewWaitingArt,
+} from "@/src/lib/pr-overview-waiting-art"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
@@ -84,6 +89,12 @@ const args = {
   installationId: 1,
 }
 
+function extractWaitingArtFences(body: string): readonly string[] {
+  const statusIndex = body.indexOf(REVIEW_STATUS_BLOCK_START)
+  const prefix = statusIndex >= 0 ? body.slice(0, statusIndex) : body
+  return [...prefix.matchAll(/```text\n([\s\S]*?)\n```/g)].map((match) => match[1] ?? "")
+}
+
 describe("buildPrOverviewStubBody — review-run status", () => {
   it("renders the queued review status block inside the overview sticky", () => {
     const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
@@ -94,14 +105,24 @@ describe("buildPrOverviewStubBody — review-run status", () => {
     expect(body).toContain("logic, security, performance, tests")
   })
 
-  it("renders no decorative ASCII block in the queued overview", () => {
-    const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
+  it("renders one detailed waiting ASCII block before the queued status", () => {
+    const headSha = "a".repeat(40)
+    const seed = `queued:7:${headSha}`
+    const body = buildPrOverviewStubBody({ prNumber: 7, headSha })
+    const artFences = extractWaitingArtFences(body)
+    const selectedArt = selectPrOverviewWaitingArt(seed)
 
-    expect(body).not.toContain("```text")
+    expect(artFences).toHaveLength(1)
+    expect(artFences[0]!.split("\n").length).toBeGreaterThanOrEqual(15)
+    expect(artFences[0]).toBe([`== ${selectedArt.title} ==`, ...selectedArt.lines].join("\n"))
     expect(body).not.toContain("30-90 seconds")
     expect(body).not.toContain("### Sigilix Review Status")
     expect(body).toContain("**Phase:** Queued")
     expect(body).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(body).toContain(renderPrOverviewWaitingArt(seed))
+    expect(body.indexOf("```text")).toBeLessThan(body.indexOf(REVIEW_STATUS_BLOCK_START))
+    expect(body.slice(body.indexOf(REVIEW_STATUS_BLOCK_START))).not.toContain("```text")
+    expect(PR_OVERVIEW_WAITING_ARTS.some((art) => body.includes(art.title))).toBe(true)
   })
 })
 
@@ -352,7 +373,7 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
     expect(STUB_BODY).toContain("Sigilix is reviewing this pull request.")
     expect(STUB_BODY).toContain("A structured overview will replace this note")
     expect(STUB_BODY).not.toContain("30-90 seconds")
-    expect(STUB_BODY).not.toContain("```text")
+    expect(extractWaitingArtFences(STUB_BODY)).toHaveLength(1)
   })
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {

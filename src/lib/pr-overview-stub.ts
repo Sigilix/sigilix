@@ -83,6 +83,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER, findExistingOverviewComment } from "./triage-pr-overview"
 import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START, buildReviewStatusBlock } from "./pr-review-status-render"
+import { renderPrOverviewWaitingArt } from "./pr-overview-waiting-art"
 
 /**
  * Body posted by the stub. The marker on line 1 is what the overview
@@ -101,7 +102,9 @@ ${STUB_V2_MARKER}
 
 **Sigilix is reviewing this pull request.**
 
-A structured overview will replace this note when retrieval and specialist review complete.`
+A structured overview will replace this note when retrieval and specialist review complete.
+
+${renderPrOverviewWaitingArt(`queued:${args.prNumber}:${args.headSha}`)}`
   return `${body}
 
 ${buildReviewStatusBlock({

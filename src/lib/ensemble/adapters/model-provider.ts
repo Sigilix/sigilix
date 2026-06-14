@@ -585,6 +585,7 @@ async function attemptChat<T>(args: {
             tools: args.specialistTools,
             format: args.format,
             ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+            temperature: 0,
           })
         : await chat({
             model: args.model,

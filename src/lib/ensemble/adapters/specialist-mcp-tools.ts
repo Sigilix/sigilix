@@ -252,6 +252,17 @@ async function fetchTextSnapshot(url: URL, signal: AbortSignal): Promise<Record<
       return toolError("redirect_not_followed", "URL fetch tools do not follow redirects.")
     }
     const { text, truncated } = await readBoundedText(response, DEFAULT_FETCH_CHAR_LIMIT)
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: "error",
+        httpStatus: response.status,
+        url: url.toString(),
+        text,
+        truncated,
+        error: { code: "http_error", message: `HTTP ${response.status}` },
+      }
+    }
     return {
       ok: response.ok,
       status: truncated ? "truncated" : "complete",

@@ -183,6 +183,27 @@ describe("specialist MCP runtime tools", () => {
     )
   })
 
+  it("returns HTTP failures as error snapshots instead of successful statuses", async () => {
+    const fetch = vi.fn(async () => new Response("missing", { status: 404 }))
+    vi.stubGlobal("fetch", fetch)
+    const [docsFetch] = createSpecialistMcpTools({
+      toolIds: ["docs_fetch"],
+      reviewCorpus: "",
+      docsAllowedHosts: ["docs.example.com"],
+    })
+
+    await expect(
+      docsFetch!.execute({ url: "https://docs.example.com/missing" }, new AbortController().signal),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: "error",
+      error: { code: "http_error" },
+      httpStatus: 404,
+      text: "missing",
+      truncated: false,
+    })
+  })
+
   it("observability_lookup requires a runtime endpoint and host allowlist", async () => {
     const [unconfigured] = createSpecialistMcpTools({
       toolIds: ["observability_lookup"],

@@ -1,9 +1,8 @@
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 
-export { REVIEW_STATUS_ASCII_FOOTERS, selectReviewStatusAsciiFooter } from "./pr-review-status-ascii"
-
 export const REVIEW_STATUS_BLOCK_START = "<!-- sigilix:review-run-status:start -->"
 export const REVIEW_STATUS_BLOCK_END = "<!-- sigilix:review-run-status:end -->"
+const OVERVIEW_HEADING = "## Sigilix Overview"
 
 export type ReviewStatusPhase =
   | "queued"
@@ -70,9 +69,12 @@ export function reviewStatusPhaseRank(phase: ReviewStatusPhase): number {
 }
 
 export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
-  const lines: string[] = [REVIEW_STATUS_BLOCK_START, "", "### Sigilix Review Status", ""]
-  lines.push(`**Phase:** ${phaseLabel(snapshot.phase)}`)
-  lines.push(`**Commit:** \`${snapshot.headSha.slice(0, 7)}\``)
+  const lines: string[] = [
+    REVIEW_STATUS_BLOCK_START,
+    "",
+    `**Phase:** ${phaseLabel(snapshot.phase)}`,
+    `**Commit:** \`${snapshot.headSha.slice(0, 7)}\``,
+  ]
   if (snapshot.specialists) lines.push(`**Specialists:** ${specialistSummary(snapshot.specialists)}`)
   appendList(lines, "Dispatched", snapshot.specialists?.dispatched)
   appendList(lines, "Completed", snapshot.specialists?.succeeded)
@@ -89,11 +91,61 @@ export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
 
 export function upsertReviewStatusBlock(body: string, snapshot: ReviewStatusSnapshot): string {
   const block = buildReviewStatusBlock(snapshot)
+  const bodyWithoutStatus = removeReviewStatusBlock(body)
+  return insertReviewStatusBlock(bodyWithoutStatus, block)
+}
+
+function removeReviewStatusBlock(body: string): string {
   const start = body.indexOf(REVIEW_STATUS_BLOCK_START)
-  const end = body.indexOf(REVIEW_STATUS_BLOCK_END)
-  if (start >= 0 && end > start) {
-    return `${body.slice(0, start).trimEnd()}\n\n${block}\n\n${body.slice(end + REVIEW_STATUS_BLOCK_END.length).trimStart()}`
+  if (start < 0) return body
+  const end = body.indexOf(REVIEW_STATUS_BLOCK_END, start + REVIEW_STATUS_BLOCK_START.length)
+  if (end > start) {
+    return `${body.slice(0, start).trimEnd()}\n\n${body.slice(end + REVIEW_STATUS_BLOCK_END.length).trimStart()}`.trimEnd()
   }
+  return joinBodyParts(
+    body.slice(0, start),
+    stripMalformedStatusPreamble(body.slice(start + REVIEW_STATUS_BLOCK_START.length)),
+  )
+}
+
+function stripMalformedStatusPreamble(tail: string): string {
+  const lines = tail.trimStart().split("\n")
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]!
+    const trimmed = line.trim()
+    if (trimmed === "" || trimmed === "### Sigilix Review Status" || isStatusMetadataLine(trimmed)) {
+      index += 1
+      continue
+    }
+    if (trimmed === "```text") {
+      index += 1
+      while (index < lines.length && lines[index]!.trim() !== "```") index += 1
+      if (index < lines.length) index += 1
+      continue
+    }
+    break
+  }
+  return lines.slice(index).join("\n")
+}
+
+function isStatusMetadataLine(trimmed: string): boolean {
+  return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result):\*\*/.test(
+    trimmed,
+  )
+}
+
+function joinBodyParts(before: string, after: string): string {
+  const prefix = before.trimEnd()
+  const suffix = after.trimStart()
+  if (!prefix) return suffix
+  if (!suffix) return prefix
+  return `${prefix}\n\n${suffix}`.trimEnd()
+}
+
+function insertReviewStatusBlock(body: string, block: string): string {
+  const heading = body.indexOf(OVERVIEW_HEADING)
+  if (heading >= 0) return `${body.trimEnd()}\n\n${block}`
   if (body.startsWith(OVERVIEW_MARKER)) {
     return `${OVERVIEW_MARKER}\n\n${block}\n\n${body.slice(OVERVIEW_MARKER.length).trimStart()}`
   }
@@ -143,8 +195,8 @@ function finalSummary(final: ReviewStatusFinal): string {
   if (typeof final.findingsCount === "number")
     pieces.push(`${final.findingsCount} ${plural("finding", final.findingsCount)}`)
   if (final.surface) pieces.push(`surface: ${final.surface}`)
-  const text = pieces.join(" - ")
-  return final.reviewUrl ? `${text} - [View review](${final.reviewUrl})` : text
+  if (final.reviewUrl) pieces.push(`[View review](${final.reviewUrl})`)
+  return pieces.join(" - ")
 }
 
 function appendList(lines: string[], label: string, values: readonly string[] | undefined): void {

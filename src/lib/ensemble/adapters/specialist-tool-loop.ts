@@ -20,6 +20,8 @@ export interface SpecialistToolConversationArgs {
   tools: SpecialistRuntimeTool[]
   format: Record<string, unknown>
   reasoning?: "high" | "medium" | "low"
+  /** Provider passes 0 explicitly; direct callers also default to deterministic tool turns. */
+  temperature?: number
   toolTimeoutMs?: number
   maxToolCalls?: number
 }
@@ -43,7 +45,7 @@ export async function runSpecialistToolConversation(args: SpecialistToolConversa
     chatEnabled: args.chatEnabled,
     signal: args.signal,
     tools: args.tools.map(toChatToolDef),
-    temperature: 0,
+    temperature: args.temperature ?? 0,
   })
   const usage = addUsage({}, toolTurn.usage)
   if (toolTurn.hasToolCalls) {
@@ -82,7 +84,7 @@ export async function runSpecialistToolConversation(args: SpecialistToolConversa
     signal: args.signal,
     format: args.format,
     ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
-    temperature: 0,
+    temperature: args.temperature ?? 0,
   })
   return { ...final, usage: addUsage(usage, final.usage) }
 }

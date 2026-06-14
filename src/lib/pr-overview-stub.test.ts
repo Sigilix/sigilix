@@ -42,12 +42,8 @@ import {
   buildPrOverviewStubBody,
   isStubBody,
   postPrOverviewStubIfNeeded,
-  selectPrOverviewStubAsciiTemplate,
-  selectPrOverviewStubQuip,
   STUB_BODY,
-  STUB_ASCII_TEMPLATES,
   STUB_GITHUB_API_TIMEOUT_MS,
-  STUB_QUIPS,
   stubFlagKey,
   stubInflightKey,
   waitForPrOverviewStub,
@@ -98,10 +94,13 @@ describe("buildPrOverviewStubBody — review-run status", () => {
     expect(body).toContain("logic, security, performance, tests")
   })
 
-  it("keeps only one waiting ASCII block in the queued overview", () => {
+  it("renders no decorative ASCII block in the queued overview", () => {
     const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
 
-    expect(body.match(/```text/g)).toHaveLength(1)
+    expect(body).not.toContain("```text")
+    expect(body).not.toContain("30-90 seconds")
+    expect(body).not.toContain("### Sigilix Review Status")
+    expect(body).toContain("**Phase:** Queued")
     expect(body).toContain(REVIEW_STATUS_BLOCK_START)
   })
 })
@@ -350,54 +349,10 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
   it("STUB_BODY starts with the sigilix-overview marker so the handler edits it in place", () => {
     expect(STUB_BODY.split("\n")[0]).toBe("<!-- sigilix:pr-overview -->")
-    expect(STUB_BODY).toContain("Sigilix is reviewing this pull request...")
-    expect(STUB_BODY).toContain("30-90 seconds")
-    expect(STUB_BODY).toContain("```text")
-  })
-
-  it("SIG-165: quip selection is deterministic per PR number and head SHA", () => {
-    expect(STUB_QUIPS.length).toBeGreaterThanOrEqual(12)
-    const first = selectPrOverviewStubQuip(args)
-    const second = selectPrOverviewStubQuip({ ...args })
-    const body = stubBodyFor()
-
-    expect(second).toBe(first)
-    expect(body).toContain(first)
-    expect(body).toBe(stubBodyFor())
-    expect(body).not.toContain("_Reviewing")
-  })
-
-  it("SIG-206: ASCII template selection is deterministic and varies by PR head", () => {
-    expect(STUB_ASCII_TEMPLATES.length).toBeGreaterThanOrEqual(8)
-    const first = selectPrOverviewStubAsciiTemplate(args)
-    const second = selectPrOverviewStubAsciiTemplate({ ...args })
-    const templates = new Set(
-      Array.from({ length: 512 }, (_, i) =>
-        selectPrOverviewStubAsciiTemplate({
-          ...args,
-          headSha: `${String(i).padStart(3, "0")}${"a".repeat(37)}`,
-        }),
-      ),
-    )
-
-    expect(second).toBe(first)
-    expect(templates).toEqual(new Set(STUB_ASCII_TEMPLATES))
-  })
-
-  it("SIG-206: keeps generated ASCII blocks rectangular for GitHub Markdown", () => {
-    for (let i = 0; i < 24; i++) {
-      const body = stubBodyFor({
-        headSha: `${String(i).padStart(2, "0")}${"b".repeat(38)}`,
-      })
-      const codeBlock = /```text\n([\s\S]*?)\n```/.exec(body)?.[1]
-      expect(codeBlock).toBeDefined()
-
-      const lines = codeBlock!.split("\n")
-      const width = lines[0]!.length
-
-      expect(lines.length).toBeGreaterThanOrEqual(5)
-      expect(lines.every((line) => line.length === width)).toBe(true)
-    }
+    expect(STUB_BODY).toContain("Sigilix is reviewing this pull request.")
+    expect(STUB_BODY).toContain("A structured overview will replace this note")
+    expect(STUB_BODY).not.toContain("30-90 seconds")
+    expect(STUB_BODY).not.toContain("```text")
   })
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {

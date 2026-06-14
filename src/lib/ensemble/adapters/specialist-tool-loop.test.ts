@@ -159,6 +159,47 @@ describe("runSpecialistToolConversation", () => {
     })
   })
 
+  it("passes runtime tool error statuses into the final model turn as structured evidence", async () => {
+    const tool = makeTool("docs_fetch")
+    tool.execute = vi.fn(async () => ({
+      ok: false,
+      status: "error",
+      httpStatus: 404,
+      url: "https://docs.example.com/missing",
+      text: "missing",
+      truncated: false,
+      error: { code: "http_error", message: "HTTP 404" },
+    }))
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      .mockResolvedValueOnce(
+        toolResult([{ id: "http-404", function: { name: "docs_fetch", arguments: { query: "docs" } } }]),
+      )
+      .mockResolvedValueOnce(finalResult())
+
+    await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+
+    const toolMessage = chat.mock.calls[1]?.[0].messages.find((m) => m.role === "tool")
+    expect(JSON.parse(toolMessage!.content)).toMatchObject({
+      ok: false,
+      status: "error",
+      httpStatus: 404,
+      url: "https://docs.example.com/missing",
+      text: "missing",
+      truncated: false,
+      error: { code: "http_error" },
+    })
+  })
+
   it("converts a slow tool into a structured timeout result", async () => {
     vi.useFakeTimers()
     const tool = makeTool()

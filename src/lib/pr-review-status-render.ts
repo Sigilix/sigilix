@@ -1,5 +1,4 @@
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
-import { selectReviewStatusAsciiFooter } from "./pr-review-status-ascii"
 
 export { REVIEW_STATUS_ASCII_FOOTERS, selectReviewStatusAsciiFooter } from "./pr-review-status-ascii"
 
@@ -83,10 +82,6 @@ export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
   const graph = graphSummary(snapshot.graphCoverage)
   if (graph) lines.push(`**Graph context:** ${graph}`)
   if (snapshot.final) lines.push(`**Result:** ${finalSummary(snapshot.final)}`)
-  lines.push("")
-  lines.push("```text")
-  lines.push(...selectReviewStatusAsciiFooter(snapshot.footerSeed ?? `${snapshot.headSha}:${snapshot.sequence}`).lines)
-  lines.push("```")
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)
   return lines.join("\n")

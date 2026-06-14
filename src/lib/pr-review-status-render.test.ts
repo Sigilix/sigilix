@@ -11,7 +11,7 @@ import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
 const HEAD_SHA = "abcdef1234567890abcdef1234567890abcdef12"
 
 describe("review status renderer", () => {
-  it("renders a queued waiting block with SHA, phase, progress, and ASCII footer", () => {
+  it("renders a queued waiting block with SHA, phase, and progress", () => {
     const block = buildReviewStatusBlock({
       phase: "queued",
       headSha: HEAD_SHA,
@@ -30,7 +30,27 @@ describe("review status renderer", () => {
     expect(block).toContain("`abcdef1`")
     expect(block).toContain("0/4")
     expect(block).toContain("logic, security, performance, tests")
-    expect(block).toContain("```text")
+    expect(block).not.toContain("```text")
+  })
+
+  it("renders every review phase label without adding a second ASCII block", () => {
+    const phases = ["queued", "retrieval", "specialists", "synth", "posted", "degraded", "skipped", "failed"] as const
+
+    for (const phase of phases) {
+      const block = buildReviewStatusBlock({
+        phase,
+        headSha: HEAD_SHA,
+        sequence: 1,
+        specialists: {
+          total: 4,
+          completed: phase === "queued" || phase === "retrieval" || phase === "specialists" ? 0 : 4,
+          dispatched: ["logic", "security", "performance", "tests"],
+        },
+      })
+
+      expect(block).toContain(`**Phase:** ${phase[0]!.toUpperCase()}${phase.slice(1)}`)
+      expect(block).not.toContain("```text")
+    }
   })
 
   it("renders dropped files, graph coverage, degraded roles, and final review link", () => {

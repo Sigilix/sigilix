@@ -97,6 +97,13 @@ describe("buildPrOverviewStubBody — review-run status", () => {
     expect(body).toContain("0/4")
     expect(body).toContain("logic, security, performance, tests")
   })
+
+  it("keeps only one waiting ASCII block in the queued overview", () => {
+    const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
+
+    expect(body.match(/```text/g)).toHaveLength(1)
+    expect(body).toContain(REVIEW_STATUS_BLOCK_START)
+  })
 })
 
 function stubBodyFor(overrides: Partial<typeof args> = {}): string {

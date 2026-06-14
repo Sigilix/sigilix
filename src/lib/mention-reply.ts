@@ -405,6 +405,13 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
         singleShotSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
         promptBuilderVersion: "linear-mention-reply-v7",
         promptBuilderSource: MENTION_REPLY_PROMPT,
+        linearMentionRetrieval: {
+          availableRepos: repoScope.availableRepos,
+          mappedRepo: repoScope.mappedRepo,
+          repoStatus: repoScope.status,
+          initialRetrievalNamespace: retrievalTeamKey,
+          initialChunkCount: chunks.length,
+        },
       },
       log: (event) => log(`agent-loop ${event.kind}`),
     })

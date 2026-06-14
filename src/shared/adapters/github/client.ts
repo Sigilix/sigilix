@@ -1210,8 +1210,9 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-  ): Promise<Array<{ id: string; isResolved: boolean; firstCommentLogin: string | null }>> {
-    const out: Array<{ id: string; isResolved: boolean; firstCommentLogin: string | null }> = []
+  ): Promise<Array<{ id: string; isResolved: boolean; firstCommentId?: number; firstCommentLogin: string | null }>> {
+    const out: Array<{ id: string; isResolved: boolean; firstCommentId?: number; firstCommentLogin: string | null }> =
+      []
     let cursor: string | null = null
     const MAX_PAGES = 5
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -1231,7 +1232,7 @@ export class GitHubClient {
                   id
                   isResolved
                   comments(first: 1) {
-                    nodes { author { login } }
+                    nodes { databaseId author { login } }
                   }
                 }
               }
@@ -1243,12 +1244,15 @@ export class GitHubClient {
       const pageData = data?.repository?.pullRequest?.reviewThreads
       if (!pageData) break
       for (const node of pageData.nodes ?? []) {
-        const firstCommentLogin = node.comments?.nodes?.[0]?.author?.login ?? null
-        out.push({
+        const firstComment = node.comments?.nodes?.[0]
+        const firstCommentLogin = firstComment?.author?.login ?? null
+        const thread: { id: string; isResolved: boolean; firstCommentId?: number; firstCommentLogin: string | null } = {
           id: node.id,
           isResolved: Boolean(node.isResolved),
           firstCommentLogin,
-        })
+        }
+        if (typeof firstComment?.databaseId === "number") thread.firstCommentId = firstComment.databaseId
+        out.push(thread)
       }
       const hasMore = Boolean(pageData.pageInfo?.hasNextPage)
       // SIG-98 (code-reviewer H5): when we're about to bail because

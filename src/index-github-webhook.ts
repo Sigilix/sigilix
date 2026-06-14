@@ -39,6 +39,12 @@ import {
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
 } from "@/src/index-internals"
+import {
+  handleReviewThreadAutoApproveWebhook,
+  maybeScheduleAutoApproveFromIssueComment,
+  maybeScheduleAutoApproveFromReviewComment,
+} from "@/src/index-github-auto-approve"
+import { handleWorkflowRunEvent } from "@/src/index-github-workflow-run"
 
 export async function handleGitHubWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
@@ -791,32 +797,18 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
   }
 
   if (event === "workflow_run") {
-    const action = payload.action
-    const run = payload.workflow_run
-    if (action !== "completed" || !run) {
-      return new Response("skip workflow_run action\n", { status: 200 })
-    }
-    if (run.conclusion !== "failure") {
-      return new Response("skip non-failure\n", { status: 200 })
-    }
-    const prRef = run.pull_requests?.[0]
-    if (!prRef || typeof prRef.number !== "number") {
-      return new Response("workflow_run not on a PR\n", { status: 200 })
-    }
-    const headSha = run.head_sha ?? prRef.head?.sha ?? ""
-    if (!headSha) return new Response("missing head sha\n", { status: 400 })
-    if (typeof run.id !== "number") return new Response("missing run id\n", { status: 400 })
+    return handleWorkflowRunEvent({ env, payload, owner, repo, installationId })
+  }
 
-    await env.OPENCLAW_JOBS.send({
-      type: "ci-triage",
+  if (event === "pull_request_review_thread") {
+    return handleReviewThreadAutoApproveWebhook({
+      env,
+      ctx,
+      payload,
       owner,
       repo,
-      prNumber: prRef.number,
-      runId: run.id,
-      headSha,
       installationId,
     })
-    return new Response("queued\n", { status: 202 })
   }
 
   // GitHub @-mention reply — top-level PR conversation thread.
@@ -830,6 +822,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     if (!payload.issue?.pull_request) {
       return new Response("skip non-PR issue_comment\n", { status: 200 })
     }
+    maybeScheduleAutoApproveFromIssueComment({ env, ctx, payload, owner, repo, installationId })
     const reviewMemoryComment = payload.comment
     const reviewMemoryPrNumber = payload.issue.number
     if (
@@ -921,6 +914,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     if (payload.action !== "created") {
       return new Response("skip review_comment action\n", { status: 200 })
     }
+    maybeScheduleAutoApproveFromReviewComment({ env, ctx, payload, owner, repo, installationId })
 
     // ARC-189: cross-PR review-memory capture. Fires alongside (NOT in
     // place of) the existing mention-trigger pipeline. Runs in

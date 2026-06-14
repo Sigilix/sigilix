@@ -18,7 +18,7 @@ export interface GraphQLReviewThreadsPage {
           id: string
           isResolved?: boolean
           comments?: {
-            nodes?: Array<{ author?: { login?: string } | null }>
+            nodes?: Array<{ databaseId?: number | null; author?: { login?: string } | null }>
           }
         }>
       }

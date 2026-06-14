@@ -82,6 +82,7 @@ import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER, findExistingOverviewComment } from "./triage-pr-overview"
+import { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START, buildReviewStatusBlock } from "./pr-review-status-render"
 
 /**
  * Body posted by the stub. The marker on line 1 is what the overview
@@ -184,7 +185,7 @@ function renderStubFlourish(template: StubAsciiTemplate, quip: string): string {
 export function buildPrOverviewStubBody(args: { prNumber: number; headSha: string }): string {
   const quip = selectPrOverviewStubQuip(args)
   const template = selectPrOverviewStubAsciiTemplate(args)
-  return `${OVERVIEW_MARKER}
+  const body = `${OVERVIEW_MARKER}
 
 ${STUB_V2_MARKER}
 
@@ -195,6 +196,19 @@ You'll see a structured overview here in 30-90 seconds.
 \`\`\`text
 ${renderStubFlourish(template, quip)}
 \`\`\``
+  return `${body}
+
+${buildReviewStatusBlock({
+  phase: "queued",
+  headSha: args.headSha,
+  sequence: 0,
+  specialists: {
+    total: 4,
+    completed: 0,
+    dispatched: ["logic", "security", "performance", "tests"],
+  },
+  footerSeed: `queued:${args.prNumber}:${args.headSha}`,
+})}`
 }
 
 export const STUB_BODY = buildPrOverviewStubBody({
@@ -246,17 +260,11 @@ const LEGACY_STUB_FORM_VARIANTS = buildLegacyStubFormVariants()
 
 function isV2StubBody(trimmed: string): boolean {
   for (const marker of [OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER]) {
-    const prefix = `${marker}
-
-${STUB_V2_MARKER}
-
-**Sigilix is reviewing this pull request...**
-
-You'll see a structured overview here in 30-90 seconds.
-
-\`\`\`text
-`
-    if (trimmed.startsWith(prefix) && trimmed.endsWith("\n```")) return true
+    const oldV2Stub = !trimmed.includes(REVIEW_STATUS_BLOCK_START) && trimmed.endsWith("\n```")
+    const currentV2Stub = trimmed.endsWith(REVIEW_STATUS_BLOCK_END)
+    if (trimmed.startsWith(marker) && trimmed.includes(STUB_V2_MARKER) && (oldV2Stub || currentV2Stub)) {
+      return true
+    }
   }
   return false
 }

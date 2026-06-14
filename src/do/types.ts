@@ -3,6 +3,8 @@
 // Spec: docs/superpowers/specs/2026-05-07-arc-190-durable-objects-webhook-ingest-design.md
 // Plan: docs/superpowers/plans/2026-05-07-arc-190-durable-objects-webhook-ingest.md
 
+import type { ReviewStatusSnapshot } from "@/src/lib/pr-review-status-render"
+
 export type RunFinalState = "done" | "failed"
 
 export type RunStateLifecycle = "idle" | "queued" | "running" | "done" | "failed-transient" | "failed"
@@ -107,6 +109,10 @@ export interface RunState {
    * reads in that case.
    */
   repoId?: number
+  /** SIG-169: latest sticky review-status snapshot accepted by the DO. */
+  reviewStatus?: ReviewStatusSnapshot
+  /** Monotonic sequence for same-rank review status updates. */
+  reviewStatusSequence?: number
 }
 
 /** Spec §4.2 — frozen snapshot retained in history (FIFO-capped per `historyLimit`). */

@@ -544,6 +544,116 @@ describe("PrReviewRunDO /run-result", () => {
   })
 })
 
+// ─── /status-progress ─────────────────────────────────────────
+
+describe("PrReviewRunDO /status-progress", () => {
+  it("stores the latest review status snapshot and emits transition telemetry", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+    const runId = (state.store.get("state") as RunState).runId
+
+    const res = await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 2,
+      phase: "retrieval",
+      snapshot: {
+        phase: "retrieval",
+        headSha: SAMPLE_HEAD_SHA,
+        sequence: 2,
+      },
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ accepted: true, phase: "retrieval" })
+    const stored = state.store.get("state") as RunState
+    expect(stored.reviewStatus?.phase).toBe("retrieval")
+    expect(stored.reviewStatusSequence).toBe(2)
+    const logged = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n")
+    expect(logged).toContain("pr-review-status-comment-state")
+    expect(logged).toContain('"phase":"retrieval"')
+  })
+
+  it("ignores lower-rank stale phase updates after synth has started", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+    const runId = (state.store.get("state") as RunState).runId
+
+    await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 4,
+      phase: "synth",
+      snapshot: { phase: "synth", headSha: SAMPLE_HEAD_SHA, sequence: 4 },
+    })
+    const stale = await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 5,
+      phase: "specialists",
+      snapshot: { phase: "specialists", headSha: SAMPLE_HEAD_SHA, sequence: 5 },
+    })
+
+    expect(stale.status).toBe(200)
+    expect(await stale.json()).toEqual({ accepted: false, phase: "synth", reason: "stale-phase" })
+    const stored = state.store.get("state") as RunState
+    expect(stored.reviewStatus?.phase).toBe("synth")
+    expect(stored.reviewStatusSequence).toBe(4)
+  })
+
+  it("does not let later updates overwrite a posted terminal status", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+    const runId = (state.store.get("state") as RunState).runId
+
+    await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 8,
+      phase: "posted",
+      snapshot: { phase: "posted", headSha: SAMPLE_HEAD_SHA, sequence: 8 },
+    })
+    const stale = await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 9,
+      phase: "failed",
+      snapshot: { phase: "failed", headSha: SAMPLE_HEAD_SHA, sequence: 9 },
+    })
+
+    expect(stale.status).toBe(200)
+    expect(await stale.json()).toEqual({ accepted: false, phase: "posted", reason: "terminal-phase" })
+    const repeat = await postJson(instance, "/status-progress", {
+      runId,
+      sequence: 10,
+      phase: "posted",
+      snapshot: { phase: "posted", headSha: SAMPLE_HEAD_SHA, sequence: 10 },
+    })
+    expect(await repeat.json()).toEqual({ accepted: false, phase: "posted", reason: "terminal-phase" })
+    const stored = state.store.get("state") as RunState
+    expect(stored.reviewStatus?.phase).toBe("posted")
+    expect(stored.reviewStatusSequence).toBe(8)
+  })
+
+  it("rejects status updates for a stale run id", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance } = makeDo(env)
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+
+    const res = await postJson(instance, "/status-progress", {
+      runId: "22222222-2222-4222-8222-222222222222",
+      sequence: 1,
+      phase: "queued",
+      snapshot: { phase: "queued", headSha: SAMPLE_HEAD_SHA, sequence: 1 },
+    })
+
+    expect(res.status).toBe(410)
+    expect(await res.json()).toEqual({ accepted: false, reason: "stale-runId" })
+  })
+})
+
 // ─── /status ──────────────────────────────────────────────────
 
 describe("PrReviewRunDO /status", () => {

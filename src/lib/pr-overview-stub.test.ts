@@ -52,6 +52,7 @@ import {
   stubInflightKey,
   waitForPrOverviewStub,
 } from "@/src/lib/pr-overview-stub"
+import { REVIEW_STATUS_BLOCK_START } from "@/src/lib/pr-review-status-render"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
@@ -86,6 +87,17 @@ const args = {
   headSha: "h".repeat(40),
   installationId: 1,
 }
+
+describe("buildPrOverviewStubBody — review-run status", () => {
+  it("renders the queued review status block inside the overview sticky", () => {
+    const body = buildPrOverviewStubBody({ prNumber: 7, headSha: "a".repeat(40) })
+
+    expect(body).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(body).toContain("Queued")
+    expect(body).toContain("0/4")
+    expect(body).toContain("logic, security, performance, tests")
+  })
+})
 
 function stubBodyFor(overrides: Partial<typeof args> = {}): string {
   const merged = { ...args, ...overrides }
@@ -847,6 +859,26 @@ describe("isStubBody (SIG-96)", () => {
 
   it("returns true for stub body with surrounding whitespace (trim-tolerant)", () => {
     expect(isStubBody(`\n\n${STUB_BODY}\n\n`)).toBe(true)
+  })
+
+  it("returns true for a pre-status-block v2 stub body", () => {
+    const oldV2Stub = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      "<!-- sigilix:pr-overview-stub:v2 -->",
+      "",
+      "**Sigilix is reviewing this pull request...**",
+      "",
+      "You'll see a structured overview here in 30-90 seconds.",
+      "",
+      "```text",
+      "+----------+",
+      "| SIGILIX |",
+      "+----------+",
+      "```",
+    ].join("\n")
+
+    expect(isStubBody(oldV2Stub)).toBe(true)
   })
 
   it("returns true for the legacy openclaw stub variant", () => {

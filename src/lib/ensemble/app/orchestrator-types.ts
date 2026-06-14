@@ -40,6 +40,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
 import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
 import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
+import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
 // SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>`
 // binding moved here from the orchestrator to land that file at <=1k lines. This is
 // `EnsembleTelemetry`'s natural co-location (the binding is one of its two named
@@ -95,6 +96,8 @@ export interface EnsembleHandlerArgs {
   graphExpansionMetricsSink?: GraphExpansionSample[]
   /** Optional Worker lifetime hook for telemetry-only background work. */
   backgroundWaitUntil?: (promise: Promise<void>) => void
+  /** Optional sticky overview status reporter for DO-routed review runs. */
+  statusReporter?: ReviewStatusReporter
   /**
    * SIG-247 Phase 1: GitHub's immutable `repo.id`, threaded from
    * the webhook payload via JobMessage → baseArgs → here. Passed

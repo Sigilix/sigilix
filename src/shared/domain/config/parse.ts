@@ -8,10 +8,12 @@ import { parseDeterministicChecks } from "@/src/shared/domain/deterministic-chec
 import {
   KNOWN_MODELS,
   LINTER_IDS,
+  MCP_TOOL_IDS,
   SPECIALIST_ROLES,
   type DispatcherConfig,
   type DispatcherSafetyNetPattern,
   type LinterId,
+  type McpToolId,
   type ReviewMemoryCategoryRef,
   type SarifFindingCategoryRef,
   type SigilixCommandConfig,
@@ -130,6 +132,7 @@ function parsePathInstructions(v: unknown): SigilixPathInstruction[] {
 
 const SPECIALIST_ROLE_SET: ReadonlySet<SpecialistRole> = new Set(SPECIALIST_ROLES)
 const LINTER_ID_SET: ReadonlySet<LinterId> = new Set(LINTER_IDS)
+const MCP_TOOL_ID_SET: ReadonlySet<McpToolId> = new Set(MCP_TOOL_IDS)
 
 const DISPATCHER_MAX_ADDITIONAL_PATTERNS = 50
 
@@ -148,6 +151,40 @@ function parseLintersConfig(v: unknown): SigilixConfig["linters"] | undefined {
     if (typeof rec.enabled === "boolean") {
       out[id] = { enabled: rec.enabled }
     }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function parseMcpConfig(v: unknown): SigilixConfig["mcp"] | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const rec = v as Record<string, unknown>
+  const out: NonNullable<SigilixConfig["mcp"]> = {}
+  if (typeof rec.enabled === "boolean") out.enabled = rec.enabled
+  if (rec.tools && typeof rec.tools === "object" && !Array.isArray(rec.tools)) {
+    const toolsOut: NonNullable<NonNullable<SigilixConfig["mcp"]>["tools"]> = {}
+    for (const [key, value] of Object.entries(rec.tools as Record<string, unknown>)) {
+      if (!MCP_TOOL_ID_SET.has(key as McpToolId)) continue
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue
+      const enabled = (value as Record<string, unknown>).enabled
+      if (typeof enabled === "boolean") toolsOut[key as McpToolId] = { enabled }
+    }
+    if (Object.keys(toolsOut).length > 0) out.tools = toolsOut
+  }
+  if (rec.specialists && typeof rec.specialists === "object" && !Array.isArray(rec.specialists)) {
+    const specialistsOut: NonNullable<NonNullable<SigilixConfig["mcp"]>["specialists"]> = {}
+    for (const [key, value] of Object.entries(rec.specialists as Record<string, unknown>)) {
+      if (!SPECIALIST_ROLE_SET.has(key as SpecialistRole)) continue
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue
+      const toolsRaw = (value as Record<string, unknown>).tools
+      if (!Array.isArray(toolsRaw)) continue
+      const tools = [
+        ...new Set(
+          toolsRaw.filter((id): id is McpToolId => typeof id === "string" && MCP_TOOL_ID_SET.has(id as McpToolId)),
+        ),
+      ]
+      if (tools.length > 0) specialistsOut[key as SpecialistRole] = { tools }
+    }
+    if (Object.keys(specialistsOut).length > 0) out.specialists = specialistsOut
   }
   return Object.keys(out).length > 0 ? out : undefined
 }
@@ -561,6 +598,8 @@ function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
   }
   const linters = parseLintersConfig(obj.linters)
   if (linters !== undefined) out.linters = linters
+  const mcp = parseMcpConfig(obj.mcp)
+  if (mcp !== undefined) out.mcp = mcp
   // SIG-118: coverage — coverage-diff ingestion (default OFF). Only the
   // literal "github-actions-artifact" opts in; anything else (including
   // the explicit "off") leaves the resolver on its default-OFF path.

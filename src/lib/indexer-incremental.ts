@@ -26,6 +26,26 @@ const MAX_INCREMENTAL_CHANGED_PATHS = 200
 const VECTORIZE_DELETE_BATCH = 100
 const REUSE_PROBE_CONCURRENCY = 8
 
+// SIG-422: change-triggered re-index reasons eligible for the incremental
+// path. `merged-pr` (enqueued on every PR merge for the default branch) and
+// `pull-request` arrive with no push `changedPaths`/`before`, so they recover
+// the delta via the Compare API below. `install` / `install-repos-added` /
+// `manual` are bootstrap / operator intent and stay on the full-tree path.
+const INCREMENTAL_REASONS: ReadonlySet<IndexRepoMessage["reason"]> = new Set(["push", "merged-pr", "pull-request"])
+
+// GitHub's Compare API returns the changed-file array only on the
+// comparison's first page and caps it at 300 entries for the whole
+// comparison. A length at the cap is treated as possibly-truncated, so the
+// recovery falls back to full rather than risk an incomplete delta.
+const COMPARE_FILES_PAGE_CAP = 300
+
+// A no-paging compare (what `compareCommits` issues) returns at most the
+// first 250 commits, and the changed-file array reflects only those commits.
+// A comparison larger than this can therefore omit files changed in later
+// commits, so recovery falls back to full above the cap (or when the count
+// is unknown).
+const COMPARE_COMMITS_NO_PAGING_CAP = 250
+
 type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
 
 interface IncrementalArgs {
@@ -46,25 +66,30 @@ interface IncrementalArgs {
 }
 
 export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Promise<boolean> {
-  const changed = normalizeChangedPaths(args.job.changedPaths)
-  if (args.job.reason !== "push" || args.job.shard !== undefined || changed === null) return false
-  if (args.existingManifest.kind !== "ok") return false
-
-  const prior = args.existingManifest.manifest
-  if (!canIncrementFromManifest(prior, args.owner, args.chunkerVersion)) return false
-  if (prior.headSha !== args.job.before) {
-    console.warn(
-      JSON.stringify({
-        event: "index-incremental-skip-before-mismatch",
-        owner: args.owner,
-        repo: args.repo,
-        branch: args.target.isDefault ? null : args.target.branch,
-        manifest_head_sha: prior.headSha,
-        push_before_sha: args.job.before ?? null,
-      }),
-    )
+  // SIG-422: bootstrap / operator-intent reasons (install, manual, …) and
+  // bootstrap shards stay on the full-tree path.
+  if (!INCREMENTAL_REASONS.has(args.job.reason) || args.job.shard !== undefined) {
+    logIncrementalSkipped(args, "not-incremental-reason")
     return false
   }
+  if (args.existingManifest.kind !== "ok") {
+    logIncrementalSkipped(args, "no-prior-manifest")
+    return false
+  }
+
+  const prior = args.existingManifest.manifest
+  if (!canIncrementFromManifest(prior, args.owner, args.chunkerVersion)) {
+    logIncrementalSkipped(args, "version-mismatch")
+    return false
+  }
+
+  // SIG-422: source the changed set from the cheap push payload when it's
+  // present AND the push chain is intact; otherwise recover it via the
+  // Compare API (merged-pr / pull-request, or a chain-drifted push). A null
+  // result means a recall-unsafe delta — fall back to the full-tree path.
+  const changed = await resolveIncrementalChanged(args, prior)
+  if (changed === null) return false
+
   if (changedIncludesScopedRules(changed)) {
     console.log(
       JSON.stringify({
@@ -78,11 +103,16 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
   }
 
   const vectorsRead = await readRepoIndexVectors(args.env, args.owner, args.target.stateRepo)
-  if (vectorsRead.kind !== "ok") return false
-  if (!canIncrementFromVectors(vectorsRead.vectors, args.owner, args.target.stateRepo)) return false
+  if (vectorsRead.kind !== "ok" || !canIncrementFromVectors(vectorsRead.vectors, args.owner, args.target.stateRepo)) {
+    logIncrementalSkipped(args, "vectors-not-ok")
+    return false
+  }
 
   const graphRunId = await preservedGraphRunId(args, prior)
-  if (graphRunId === null) return false
+  if (graphRunId === null) {
+    logIncrementalSkipped(args, "graph-version-mismatch")
+    return false
+  }
 
   if (!changedTouchesPotentialIndex(changed)) {
     return await handleNoopIncremental(args, prior, vectorsRead.vectors, graphRunId, changed)
@@ -375,6 +405,176 @@ async function handleNoopIncremental(
   return true
 }
 
+type ChangedSet = { upsert: string[]; remove: string[] }
+
+/**
+ * SIG-422: resolve the changed-file delta for an incremental re-index.
+ *
+ * Two sources, one downstream flow:
+ *   - Cheap push fast-path: when the job carries a usable `changedPaths`
+ *     payload AND the push chain is intact (`prior.headSha === job.before`),
+ *     trust it directly — unchanged pre-SIG-422 behavior.
+ *   - Compare-recovery: otherwise (merged-pr / pull-request, which carry
+ *     neither; or a push whose chain drifted off the manifest head, or whose
+ *     `changedPaths` was dropped as too-large/truncated) recover the delta
+ *     from the GitHub Compare API between the manifest head and the live head.
+ *
+ * Returns the changed set, or null to signal a recall-unsafe situation the
+ * caller must answer with a full-tree re-index.
+ */
+async function resolveIncrementalChanged(
+  args: IncrementalArgs,
+  prior: RepoIndexManifestV1,
+): Promise<ChangedSet | null> {
+  const pushChanged = normalizeChangedPaths(args.job.changedPaths)
+  if (pushChanged !== null && prior.headSha === args.job.before) {
+    return pushChanged
+  }
+  return await recoverChangedViaCompare(args, prior)
+}
+
+/**
+ * SIG-422: recover the changed set via the Compare API when the push
+ * fast-path can't supply it. Recall-safety is absolute — every branch that
+ * can't prove a complete forward delta returns null (full fallback):
+ *   - status must be `ahead` or `identical` (base is an ancestor of head);
+ *     `diverged` / `behind` / unknown / a failed call mean a rewrite or
+ *     force-push where a delta would be unsafe.
+ *   - an unknown per-file status, a file array at the 300-entry page cap
+ *     (possibly truncated), or a mapped change count over the cap all force
+ *     a full fallback.
+ * An empty net delta is NOT a fallback: the caller's noop path advances the
+ * manifest head to re-establish the push chain for the next push.
+ */
+async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexManifestV1): Promise<ChangedSet | null> {
+  const reason: "merged-pr" | "push-drift" | "large-push" =
+    args.job.reason === "push" ? (args.job.changedPaths === undefined ? "large-push" : "push-drift") : "merged-pr"
+
+  let compare: Awaited<ReturnType<GitHubClient["compareCommits"]>>
+  try {
+    compare = await args.client.compareCommits(args.owner, args.repo, prior.headSha, args.headSha)
+  } catch (err) {
+    return logCompareFallbackFull(args, prior, "compare-failed", {
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+  if (compare === null) {
+    return logCompareFallbackFull(args, prior, "compare-failed", {})
+  }
+  if (compare.status !== "ahead" && compare.status !== "identical") {
+    return logCompareFallbackFull(args, prior, "diverged", { compare_status: compare.status })
+  }
+  // A comparison spanning more than the no-paging commit cap (or one whose
+  // commit count we couldn't read) can omit files changed in the dropped
+  // commits, so the `files` delta may be incomplete — fall back to full.
+  if (compare.totalCommits === null || compare.totalCommits > COMPARE_COMMITS_NO_PAGING_CAP) {
+    return logCompareFallbackFull(args, prior, "too-many-commits", { total_commits: compare.totalCommits })
+  }
+  if (compare.files.length >= COMPARE_FILES_PAGE_CAP) {
+    return logCompareFallbackFull(args, prior, "too-many", { file_count: compare.files.length })
+  }
+
+  const mapped = mapCompareFiles(compare.files)
+  if (mapped === null) {
+    return logCompareFallbackFull(args, prior, "unknown-status", {})
+  }
+  const changed = normalizeChangeSet(mapped.upsert, mapped.remove)
+  if (changed === null) {
+    return logCompareFallbackFull(args, prior, "too-many", {
+      file_count: mapped.upsert.length + mapped.remove.length,
+    })
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "index-incremental-compare-recovered",
+      owner: args.owner,
+      repo: args.repo,
+      branch: args.target.isDefault ? null : args.target.branch,
+      base: prior.headSha,
+      head: args.headSha,
+      file_count: changed.upsert.length + changed.remove.length,
+      reason,
+    }),
+  )
+  return changed
+}
+
+/**
+ * SIG-422: map a Compare API `files[]` array into upsert/remove path sets.
+ * Returns null on ANY unrecognized file status — conservative, so a file is
+ * never left stale because we didn't understand its change type.
+ */
+function mapCompareFiles(
+  files: ReadonlyArray<{ status: string; filename: string; previous_filename: string | null }>,
+): { upsert: string[]; remove: string[] } | null {
+  const upsert: string[] = []
+  const remove: string[] = []
+  for (const file of files) {
+    switch (file.status) {
+      case "added":
+      case "modified":
+      case "changed":
+      case "copied":
+        upsert.push(file.filename)
+        break
+      case "removed":
+        remove.push(file.filename)
+        break
+      case "renamed":
+        if (file.previous_filename !== null) remove.push(file.previous_filename)
+        upsert.push(file.filename)
+        break
+      case "unchanged":
+        break
+      default:
+        return null
+    }
+  }
+  return { upsert, remove }
+}
+
+function logCompareFallbackFull(
+  args: IncrementalArgs,
+  prior: RepoIndexManifestV1,
+  reason: "diverged" | "too-many" | "too-many-commits" | "unknown-status" | "compare-failed",
+  extra: Record<string, unknown>,
+): null {
+  console.warn(
+    JSON.stringify({
+      event: "index-incremental-compare-fallback-full",
+      owner: args.owner,
+      repo: args.repo,
+      branch: args.target.isDefault ? null : args.target.branch,
+      base: prior.headSha,
+      head: args.headSha,
+      reason,
+      ...extra,
+    }),
+  )
+  return null
+}
+
+function logIncrementalSkipped(
+  args: IncrementalArgs,
+  reason:
+    | "not-incremental-reason"
+    | "no-prior-manifest"
+    | "version-mismatch"
+    | "vectors-not-ok"
+    | "graph-version-mismatch",
+): void {
+  console.log(
+    JSON.stringify({
+      event: "index-incremental-skipped",
+      owner: args.owner,
+      repo: args.repo,
+      branch: args.target.isDefault ? null : args.target.branch,
+      reason,
+    }),
+  )
+}
+
 function canIncrementFromManifest(manifest: RepoIndexManifestV1, owner: string, chunkerVersion: number): boolean {
   return (
     manifest.owner === owner &&
@@ -503,12 +703,30 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i])
 }
 
-function normalizeChangedPaths(value: IndexRepoMessage["changedPaths"]): { upsert: string[]; remove: string[] } | null {
+function normalizeChangedPaths(value: IndexRepoMessage["changedPaths"]): ChangedSet | null {
   if (value === undefined) return null
-  const upsert = new Set(cleanPaths(value.upsert))
-  const remove = new Set(cleanPaths(value.remove))
+  const changed = normalizeChangeSet(value.upsert, value.remove)
+  // The push fast-path treats an empty changed set as "nothing to do" and
+  // declines incremental entirely (the freshness check already covered the
+  // no-op). The compare path keeps an empty set so its noop branch can
+  // advance the manifest head and re-establish the push chain.
+  if (changed === null || changed.upsert.length + changed.remove.length === 0) return null
+  return changed
+}
+
+/**
+ * SIG-422: shared upsert/remove normalization — clean (drop empty / NUL),
+ * dedupe, drop any path that is both upserted and removed in favor of the
+ * upsert, sort for stable ordering, and enforce the incremental size cap.
+ * Returns null only when the deduped count exceeds the cap (too large to be
+ * cheaper incremental); an empty set is returned as-is for callers that
+ * need to distinguish it.
+ */
+function normalizeChangeSet(upsertPaths: ReadonlyArray<string>, removePaths: ReadonlyArray<string>): ChangedSet | null {
+  const upsert = new Set(cleanPaths(upsertPaths))
+  const remove = new Set(cleanPaths(removePaths))
   for (const path of upsert) remove.delete(path)
-  if (upsert.size + remove.size === 0 || upsert.size + remove.size > MAX_INCREMENTAL_CHANGED_PATHS) return null
+  if (upsert.size + remove.size > MAX_INCREMENTAL_CHANGED_PATHS) return null
   return { upsert: [...upsert].sort(), remove: [...remove].sort() }
 }
 

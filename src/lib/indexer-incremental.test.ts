@@ -6,6 +6,7 @@ const {
   mockGetBranch,
   mockGetRepoTree,
   mockGetFileContent,
+  mockCompareCommits,
   mockAiRun,
   mockVectorizeUpsert,
   mockVectorizeDeleteByIds,
@@ -17,6 +18,7 @@ const {
   mockGetBranch: vi.fn(),
   mockGetRepoTree: vi.fn(),
   mockGetFileContent: vi.fn(),
+  mockCompareCommits: vi.fn(),
   mockAiRun: vi.fn(),
   mockVectorizeUpsert: vi.fn(
     async (..._args: unknown[]): Promise<{ ids: string[]; count: number }> => ({
@@ -48,6 +50,9 @@ vi.mock("@/src/shared/adapters/github", async () => {
     async getFileContent(owner: string, repo: string, path: string, ref: string): Promise<unknown> {
       return mockGetFileContent(owner, repo, path, ref)
     }
+    async compareCommits(owner: string, repo: string, base: string, head: string): Promise<unknown> {
+      return mockCompareCommits(owner, repo, base, head)
+    }
     async listOpenPullRequests(): Promise<unknown[]> {
       return []
     }
@@ -78,107 +83,24 @@ import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
 import { handlePushEvent } from "@/src/index-internals"
-import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
+import { EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
-
-function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
-  const store = new Map<string, string>()
-  const kv = {
-    async get(key: string): Promise<string | null> {
-      return store.get(key) ?? null
-    },
-    async put(key: string, value: string): Promise<void> {
-      store.set(key, value)
-    },
-    async delete(key: string): Promise<void> {
-      store.delete(key)
-    },
-  } as unknown as Env["OPENCLAW_STATE"]
-  return { kv, store }
-}
+import {
+  makeEnv as makeEnvShared,
+  seedIndexedRepo,
+  pushJobWithChangedPaths,
+} from "@/src/lib/indexer-incremental.test-helpers"
 
 function makeEnv(opts: { getImpl?: (key: string, store: Map<string, string>) => Promise<string | null> } = {}): {
-  env: Env
+  env: ReturnType<typeof makeEnvShared>["env"]
   kv: Map<string, string>
   sent: JobMessage[]
 } {
-  const { kv, store } = makeKvStub()
-  const sent: JobMessage[] = []
-  const state =
-    opts.getImpl === undefined
-      ? kv
-      : ({
-          ...kv,
-          get: (key: string) => opts.getImpl?.(key, store) ?? kv.get(key),
-        } as unknown as Env["OPENCLAW_STATE"])
-  const env = {
-    OPENCLAW_STATE: state,
-    OPENCLAW_JOBS: {
-      send: vi.fn(async (message: JobMessage) => {
-        sent.push(message)
-      }),
-    },
-    OPENCLAW_INDEXER_ENABLED: "on",
-    AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
-    OPENCLAW_CODE_INDEX: {
-      upsert: mockVectorizeUpsert,
-      deleteByIds: mockVectorizeDeleteByIds,
-    },
-    GITHUB_APP_ID: "12345",
-    GITHUB_PRIVATE_KEY: "fake-key",
-  } as unknown as Env
-  return { env, kv: store, sent }
-}
-
-function seedIndexedRepo(kv: Map<string, string>): void {
-  const manifest: RepoIndexManifestV1 = {
-    v: 1,
-    repo: "sigilix",
-    owner: "Sigilix",
-    actualRepo: "sigilix",
-    defaultBranch: "main",
-    namespace: "sigilix/sigilix",
-    headSha: "a".repeat(40),
-    runId: "old-run",
-    fileCount: 3,
-    chunkCount: 3,
-    shardCount: 1,
-    indexedAt: "2026-06-13T00:00:00.000Z",
-    modelId: EMBEDDING_MODEL,
-    embeddingDim: EMBEDDING_DIMENSIONS,
-    chunkerVersion: 2,
-    windowLines: 30,
-    overlapLines: 10,
-  }
-  const vectors: RepoIndexVectorsV1 = {
-    v: 1,
-    owner: "Sigilix",
-    repo: "sigilix",
-    runId: "old-run",
-    byPath: {
-      "src/changed.ts": ["old-changed-id"],
-      "src/deleted.ts": ["old-deleted-id"],
-      "src/unchanged.ts": ["old-unchanged-id"],
-    },
-  }
-  kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
-  kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
-}
-
-function pushJobWithChangedPaths(): Extract<JobMessage, { type: "index-repo" }> {
-  return {
-    type: "index-repo",
-    owner: "Sigilix",
-    repo: "sigilix",
-    installationId: 99,
-    reason: "push",
-    before: "a".repeat(40),
-    changedPaths: {
-      upsert: ["src/changed.ts"],
-      remove: ["src/deleted.ts"],
-    },
-  } as unknown as Extract<JobMessage, { type: "index-repo" }>
+  return makeEnvShared(
+    { aiRun: mockAiRun, vectorizeUpsert: mockVectorizeUpsert, vectorizeDeleteByIds: mockVectorizeDeleteByIds },
+    opts,
+  )
 }
 
 beforeEach(() => {
@@ -205,6 +127,17 @@ beforeEach(() => {
   mockVectorizeDeleteByIds.mockReset().mockResolvedValue(undefined)
   mockDebugActiveGraphVersion.mockReset().mockResolvedValue(null)
   mockDeleteLexicalIds.mockReset().mockResolvedValue(0)
+  // SIG-422: default compare response mirrors the push fast-path's changed
+  // set (changed.ts modified, deleted.ts removed) so a job that recovers via
+  // the Compare API lands on the same incremental delta. Per-test overrides
+  // exercise the diverged / truncated / unknown-status fallbacks.
+  mockCompareCommits.mockReset().mockResolvedValue({
+    status: "ahead",
+    files: [
+      { status: "modified", filename: "src/changed.ts", previous_filename: null },
+      { status: "removed", filename: "src/deleted.ts", previous_filename: null },
+    ],
+  })
 })
 
 describe("handleIndexRepoJob — incremental push indexing", () => {
@@ -598,7 +531,11 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     }
   })
 
-  it("falls back to full indexing when the existing manifest does not match the push before SHA", async () => {
+  it("recovers the delta via the Compare API when the push chain drifts off the manifest head", async () => {
+    // SIG-422 case (b): push `before` no longer matches the manifest head
+    // (the indexer resolved a live head that advanced past the push chain).
+    // Pre-SIG-422 this forced a full re-embed; now it recovers a complete
+    // forward delta from the Compare API and stays incremental.
     const { env, kv } = makeEnv()
     seedIndexedRepo(kv)
 
@@ -607,8 +544,12 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
       env,
     })
 
+    expect(mockCompareCommits).toHaveBeenCalledWith("Sigilix", "sigilix", "a".repeat(40), "c".repeat(40))
+    // Only the changed file is fetched — unchanged.ts is never touched, which
+    // proves the incremental (not full-tree) path ran.
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
-    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    expect(mockVectorizeDeleteByIds).toHaveBeenCalledWith(["old-changed-id", "old-deleted-id"])
   })
 
   it("does not delete content-addressed vectors when superseded after embedding", async () => {

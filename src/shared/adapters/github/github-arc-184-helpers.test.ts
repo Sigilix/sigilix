@@ -185,6 +185,67 @@ describe("getMergeBase", () => {
   })
 })
 
+// SIG-422 — structured compare delta for incremental-index recovery.
+describe("compareCommits", () => {
+  it("returns status, total commits, and normalized files on 200", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResp({
+        status: "ahead",
+        total_commits: 3,
+        files: [
+          { status: "modified", filename: "src/a.ts" },
+          { status: "renamed", filename: "src/c.ts", previous_filename: "src/b.ts" },
+          { status: "removed", filename: "src/d.ts" },
+        ],
+      }),
+    )
+    const c = newClient()
+    const out = await c.compareCommits("o", "r", "base1", "head1")
+    expect(out).toEqual({
+      status: "ahead",
+      totalCommits: 3,
+      files: [
+        { status: "modified", filename: "src/a.ts", previous_filename: null },
+        { status: "renamed", filename: "src/c.ts", previous_filename: "src/b.ts" },
+        { status: "removed", filename: "src/d.ts", previous_filename: null },
+      ],
+    })
+  })
+
+  it("surfaces a missing total_commits as null (caller treats as unsafe)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ status: "ahead", files: [] }))
+    const c = newClient()
+    const out = await c.compareCommits("o", "r", "base1", "head1")
+    expect(out).toEqual({ status: "ahead", totalCommits: null, files: [] })
+  })
+
+  it("hits the three-dot compare endpoint with url-encoded refs", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResp({ status: "identical", total_commits: 0, files: [] }))
+    const c = newClient()
+    await c.compareCommits("o", "r", "a".repeat(40), "b".repeat(40))
+    const call = fetchSpy.mock.calls[0]!
+    const url =
+      typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
+    expect(url).toContain(`/repos/o/r/compare/${"a".repeat(40)}...${"b".repeat(40)}`)
+  })
+
+  it("defaults a missing files array to empty", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ status: "identical", total_commits: 0 }))
+    const c = newClient()
+    const out = await c.compareCommits("o", "r", "base1", "head1")
+    expect(out).toEqual({ status: "identical", totalCommits: 0, files: [] })
+  })
+
+  it("returns null on a GitHub HTTP error (caller falls back to full)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(404))
+    const c = newClient()
+    const out = await c.compareCommits("o", "r", "base1", "head1")
+    expect(out).toBeNull()
+  })
+})
+
 // ARC-258 — Check Run lifecycle for the customer-visible in-progress
 // reviewer indicator. The bot creates a Check Run in `in_progress`
 // state at the head of the ensemble pipeline so customers see

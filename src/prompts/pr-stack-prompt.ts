@@ -1,14 +1,8 @@
 // ARC-182: rendering layer for stack-aware review.
 //
-// Two distinct outputs:
-//
 //   renderStackPromptBlock() → injected into the LLM context BEFORE
 //     the diff so the model knows which findings should be tagged as
 //     downstack-context vs current-pr vs upstack-followup.
-//
-//   renderStackContextSummary() → injected into the GitHub review body
-//     (the sticky summary) so a human reviewer sees the stack picture
-//     at a glance.
 //
 // Pure rendering. No I/O. Stack detection lives in `src/lib/pr-stack.ts`.
 //
@@ -41,26 +35,6 @@ function sanitizeInlinePromptValue(raw: string, maxLength = 120): string {
   if (stripped.length <= maxLength) return stripped
   return stripped.slice(0, maxLength - 1) + "…"
 }
-
-/**
- * Stack-awareness instruction text added to the system prompt
- * (PR_REVIEW_PROMPT in pr-review.ts and the specialist/synth prompts).
- *
- * Kept separate from the per-PR `renderStackPromptBlock` so the
- * instruction is documented to the model on EVERY review even when
- * the PR is not stacked — that way the model never sees a brand-new
- * concept on its first stacked PR.
- */
-export const STACK_AWARENESS_INSTRUCTION = `
-## Stack-aware findings (stackOrigin field)
-
-When a PR is part of a Graphite-style stack (its base branch is another open PR's head branch), the [STACK CONTEXT] block at the top of the input will tell you the parent PR, child PRs, and file overlap. Use that context to tag each finding with one of:
-
-- **"current-pr"** — the issue is introduced or maintained in THIS PR's diff. Default.
-- **"downstack-context"** — the issue ALREADY exists in a downstack (parent or earlier) PR. Report it for awareness, but DO NOT describe it as introduced by this PR — that's a false-positive on the child.
-- **"upstack-followup"** — the issue's proper fix belongs in an upstack PR (child or later). Flag it for awareness but don't block on it.
-
-When uncertain, default to "current-pr". The \`stackOrigin\` field is optional and omitted when [STACK CONTEXT] indicates "not stacked."`.trim()
 
 /**
  * Render the per-PR stack context block injected into the LLM prompt
@@ -133,47 +107,4 @@ export function renderStackPromptBlock(ctx: StackContext, overlap?: FileOverlap)
   lines.push(`- Default to "current-pr" when uncertain.`)
 
   return lines.join("\n")
-}
-
-/**
- * Render the "### Stack context" Markdown block injected into the
- * GitHub review body (sticky summary). Returns empty string when the
- * PR is not stacked.
- *
- * Uses GitHub's native cross-PR link syntax (#N) so a reviewer sees
- * the linked PR titles inline in the rendered review body.
- */
-export function renderStackContextSummary(ctx: StackContext): string {
-  if (!ctx.isStacked) return ""
-
-  const lines: string[] = ["### Stack context", ""]
-  // CodeRabbit PR #72 minor: same depth-is-a-lower-bound caveat as
-  // the prompt block. "at least N" reads cleanly in Markdown.
-  const summaryDepth = ctx.hasUpstackFork ? `at least ${ctx.depth}` : `${ctx.depth}`
-  lines.push(`This PR is **#${ctx.position} of ${summaryDepth}** in a stack.`)
-  lines.push("")
-
-  if (ctx.parent) {
-    lines.push(`- ⬇ Parent: #${ctx.parent.number} _${escapeForMd(ctx.parent.title)}_`)
-  } else if (ctx.cycleDetected || ctx.stackWalkCapped) {
-    // Mirrors the prompt-block degradation message (Sigilix PR #72
-    // self-review catch). Reviewer-facing copy says "ambiguous" so a
-    // human reading the sticky summary understands the parent isn't
-    // simply absent.
-    lines.push("- ⚠ Parent: unknown (downstack walk degraded)")
-  }
-  for (const child of ctx.children) {
-    lines.push(`- ⬆ Child: #${child.number} _${escapeForMd(child.title)}_`)
-  }
-  if (ctx.root && ctx.root.number !== ctx.parent?.number) {
-    lines.push(`- 🌱 Root: #${ctx.root.number} _${escapeForMd(ctx.root.title)}_`)
-  }
-
-  return lines.join("\n")
-}
-
-/** Defensive escape for Markdown emphasis characters inside PR titles
- * — a title with `_` or `*` would otherwise mangle the italics. */
-function escapeForMd(s: string): string {
-  return s.replace(/([_*`])/g, "\\$1")
 }

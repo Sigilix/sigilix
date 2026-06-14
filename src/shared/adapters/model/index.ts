@@ -29,9 +29,10 @@ import type { EmbeddingPort } from "@/src/shared/ports/embedding"
  * ever contain a "/". That holds for every tag we run; if it stops holding, replace
  * this with an explicit per-role provider field rather than widening the heuristic.
  *
- * Exported so a later phase's call site can select the matching API key (OPENROUTER vs
- * OLLAMA) per role. That key-selection is NOT wired yet — every call still passes the
- * single Ollama key, so until a config uses a slash-model this only ever returns false.
+ * Exported so the call site can select the matching API key (OPENROUTER vs OLLAMA) per
+ * role. SIG-405 wires this for `logic` via `selectConfigApiKey` in the model-provider
+ * adapter: behind `OPENCLAW_LOGIC_PROVIDER=openrouter` a slash-model resolves the
+ * OpenRouter key; every other role still resolves to a no-slash tag → the Ollama key.
  */
 export function isOpenRouterModel(model: string): boolean {
   return model.includes("/")

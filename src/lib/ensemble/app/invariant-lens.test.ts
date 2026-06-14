@@ -63,6 +63,7 @@ function start(mode: "off" | "shadow" | "on") {
     prNumber: 1,
     headSha: "a".repeat(40),
     mode,
+    providerByRole: new Map(),
     perfCtx: { owner: "o", repo: "r", prNumber: 1, headSha: "a".repeat(40) },
     orchCtrl: new AbortController(),
     diff: DIFF,
@@ -121,6 +122,34 @@ describe("invariant lens — mode contract", () => {
     })
     expect(r.verdicts).toBe(SUCCEEDED)
     expect(r.lensFindingIds).toEqual([])
+  })
+
+  it("forwards providerByRole to the lens runSpecialist calls (SIG-405 logic→o3 threading)", async () => {
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [] } as unknown as PrReviewVerdict,
+      elapsedMs: 5,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+    const providerByRole = new Map([["logic", "openrouter"]] as const)
+    const lens = startInvariantLens({
+      env: ENV,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "a".repeat(40),
+      mode: "shadow",
+      providerByRole,
+      perfCtx: { owner: "o", repo: "r", prNumber: 1, headSha: "a".repeat(40) },
+      orchCtrl: new AbortController(),
+      diff: DIFF,
+      userMessage: "msg",
+    })
+    await lens.outcomes
+    expect(mockedRunSpecialist).toHaveBeenCalled()
+    for (const call of mockedRunSpecialist.mock.calls) {
+      expect(call[0].providerByRole).toBe(providerByRole)
+    }
   })
 
   it("on: kept candidates merge into the LOGIC verdict; pass-1 ids stable; additions tracked", async () => {

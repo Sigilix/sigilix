@@ -181,6 +181,11 @@ npx wrangler secret put LINEAR_WEBHOOK_SECRET
 
 npx wrangler secret put OLLAMA_API_KEY
 # Paste your Ollama Turbo API key (https://ollama.com/settings/keys)
+
+# Optional — only needed once a role runs on OpenRouter (SIG-405; e.g.
+# OPENCLAW_LOGIC_PROVIDER=openrouter → logic on openai/o3). Dormant by default.
+npx wrangler secret put OPENROUTER_API_KEY
+# Paste your OpenRouter API key (https://openrouter.ai/keys)
 ```
 
 **GitHub App** (required for the `/github/webhook` route — without these the route returns 503):

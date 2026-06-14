@@ -468,7 +468,8 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         )
         const result = await runSpecialist({
           role,
-          apiKey: "test-key",
+          apiKeys: { ollama: "test-key", openrouter: undefined },
+          providerByRole: new Map(),
           systemPrompt: "system",
           initialMessage: "user",
           chatEnabled: "on",
@@ -553,7 +554,8 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         )
       const result = await runSpecialist({
         role: "security",
-        apiKey: "test-key",
+        apiKeys: { ollama: "test-key", openrouter: undefined },
+        providerByRole: new Map(),
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",
@@ -614,7 +616,8 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       )
       const resultPromise = runSpecialist({
         role: "tests",
-        apiKey: "test-key",
+        apiKeys: { ollama: "test-key", openrouter: undefined },
+        providerByRole: new Map(),
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",

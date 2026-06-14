@@ -28,6 +28,11 @@ export interface Env {
   LINEAR_API_KEY: string
   LINEAR_WEBHOOK_SECRET: string
   OLLAMA_API_KEY: string
+  // SIG-405 (OpenRouter migration): OpenRouter API key. Only needed once a role's
+  // provider is set to "openrouter" (e.g. OPENCLAW_LOGIC_PROVIDER=openrouter →
+  // logic on openai/o3). Optional so the worker boots without it while the
+  // migration is dormant; a run that selects OpenRouter without it fails closed.
+  OPENROUTER_API_KEY?: string
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
   GITHUB_APP_ID?: string

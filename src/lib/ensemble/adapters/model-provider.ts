@@ -32,7 +32,11 @@ import {
 // not re-exported, only `runWithRetryAndFallback` calls it).
 import { isPermanentFailure, isValidProvenance, wrapFailure } from "./model-provider-internals"
 export { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
+// SIG-405: provider/key routing primitives (split out for the file-size budget).
+import { selectConfigApiKey, specialistProviderOverride, type ModelApiKeys } from "./model-provider-routing"
+export { modelApiKeys, selectConfigApiKey, type ModelApiKeys } from "./model-provider-routing"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { ModelProvider } from "@/src/lib/ensemble/domain/config"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
@@ -299,7 +303,11 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN =
  */
 export interface SpecialistRunArgs {
   role: SpecialistRole
-  apiKey: string | undefined
+  /** SIG-405: provider key set; runSpecialist picks the key for the role's
+   *  effective model (replaces the old single `apiKey`). */
+  apiKeys: ModelApiKeys
+  /** SIG-405: per-role provider override (`flags.providerByRole`); empty → Ollama. */
+  providerByRole: ReadonlyMap<SpecialistRole, ModelProvider>
   systemPrompt: string
   initialMessage: string
   chatEnabled: "on" | "off"
@@ -337,12 +345,17 @@ export interface SpecialistRunResult {
  */
 export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
-  if (!args.apiKey) {
+  // SIG-405: resolve the effective config (logic→o3 under the provider flag) + the
+  // matching key from the SAME inputs so model + key can't desync; a missing key
+  // fails closed below (the other provider's key is never substituted).
+  const config = specialistProviderOverride(args.role, args.providerByRole) ?? SPECIALIST_CONFIGS[args.role]
+  const apiKey = selectConfigApiKey(config, args.apiKeys)
+  if (!apiKey) {
     return {
       verdict: null,
       failureReason: "missing_api_key",
       elapsedMs: 0,
-      modelUsed: SPECIALIST_CONFIGS[args.role].primary,
+      modelUsed: config.primary,
       attemptsUsed: 0,
     }
   }
@@ -350,10 +363,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     { role: "system", content: args.systemPrompt },
     { role: "user", content: args.initialMessage },
   ]
-  const config = SPECIALIST_CONFIGS[args.role]
   return runWithRetryAndFallback({
     config,
-    apiKey: args.apiKey,
+    apiKey,
     messages,
     signal: args.signal,
     chatEnabled: args.chatEnabled,

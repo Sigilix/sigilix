@@ -883,6 +883,11 @@ OPENCLAW_GATE = "shadow"
 #   LINEAR_WEBHOOK_SECRET         Signing secret from the Linear webhook config.
 #                                 Used to verify the HMAC on every webhook delivery.
 #   OLLAMA_API_KEY                Ollama Turbo API key (https://ollama.com/settings/keys)
+#   OPENROUTER_API_KEY            OpenRouter API key (https://openrouter.ai/keys). OPTIONAL —
+#                                 only required once a role's provider is "openrouter" (SIG-405;
+#                                 e.g. OPENCLAW_LOGIC_PROVIDER=openrouter → logic on openai/o3).
+#                                 The migration ships dormant, so the Worker boots without it; a
+#                                 run that selects OpenRouter without it fails closed.
 #
 # Optional (recommended for production — gives the Worker its own bot identity):
 #

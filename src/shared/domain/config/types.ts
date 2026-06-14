@@ -215,6 +215,14 @@ export interface SigilixConfig {
   linters?: Partial<Record<LinterId, LinterConfig>>
 
   /**
+   * SIG-408: per-repo specialist tool permissions. This is an
+   * MCP-style, in-process Worker-safe tool surface for PR-review
+   * specialists, not an external stdio/server transport. Missing config
+   * means no specialist sees tools.
+   */
+  mcp?: McpConfig
+
+  /**
    * SIG-118: per-repo configuration for coverage-diff ingestion. Reads
    * an LCOV coverage artifact from the PR head's GitHub Actions run,
    * intersects uncovered lines with the PR's added lines, and feeds the
@@ -480,6 +488,16 @@ export type LinterId = RunnerToolId
 
 export interface LinterConfig {
   enabled?: boolean
+}
+
+export const MCP_TOOL_IDS = ["file_grep", "docs_fetch", "observability_lookup", "browser_check"] as const
+
+export type McpToolId = (typeof MCP_TOOL_IDS)[number]
+
+export interface McpConfig {
+  enabled?: boolean
+  specialists?: Partial<Record<SpecialistRole, { tools?: McpToolId[] }>>
+  tools?: Partial<Record<McpToolId, { enabled?: boolean }>>
 }
 
 /**

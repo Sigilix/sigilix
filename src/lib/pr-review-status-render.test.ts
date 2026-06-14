@@ -5,13 +5,12 @@ import {
   buildReviewStatusBlock,
   upsertReviewStatusBlock,
 } from "@/src/lib/pr-review-status-render"
-import { REVIEW_STATUS_ASCII_FOOTERS, selectReviewStatusAsciiFooter } from "@/src/lib/pr-review-status-ascii"
 import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
 
 const HEAD_SHA = "abcdef1234567890abcdef1234567890abcdef12"
 
 describe("review status renderer", () => {
-  it("renders a queued waiting block with SHA, phase, progress, and ASCII footer", () => {
+  it("renders a queued waiting block with SHA, phase, and progress", () => {
     const block = buildReviewStatusBlock({
       phase: "queued",
       headSha: HEAD_SHA,
@@ -26,14 +25,35 @@ describe("review status renderer", () => {
 
     expect(block).toContain(REVIEW_STATUS_BLOCK_START)
     expect(block).toContain(REVIEW_STATUS_BLOCK_END)
-    expect(block).toContain("Queued")
+    expect(block).toContain("**Phase:** Queued")
     expect(block).toContain("`abcdef1`")
     expect(block).toContain("0/4")
     expect(block).toContain("logic, security, performance, tests")
-    expect(block).toContain("```text")
+    expect(block).not.toContain("### Sigilix Review Status")
+    expect(block).not.toContain("```text")
   })
 
-  it("renders dropped files, graph coverage, degraded roles, and final review link", () => {
+  it("renders every review phase label without adding a second ASCII block", () => {
+    const phases = ["queued", "retrieval", "specialists", "synth", "posted", "degraded", "skipped", "failed"] as const
+
+    for (const phase of phases) {
+      const block = buildReviewStatusBlock({
+        phase,
+        headSha: HEAD_SHA,
+        sequence: 1,
+        specialists: {
+          total: 4,
+          completed: phase === "queued" || phase === "retrieval" || phase === "specialists" ? 0 : 4,
+          dispatched: ["logic", "security", "performance", "tests"],
+        },
+      })
+
+      expect(block).toContain(`**Phase:** ${phase[0]!.toUpperCase()}${phase.slice(1)}`)
+      expect(block).not.toContain("```text")
+    }
+  })
+
+  it("renders dropped files, graph coverage, degraded roles, and final review link without post-review ASCII", () => {
     const block = buildReviewStatusBlock({
       phase: "degraded",
       headSha: HEAD_SHA,
@@ -61,7 +81,7 @@ describe("review status renderer", () => {
       footerSeed: "Sigilix/sigilix#7@abcdef1",
     })
 
-    expect(block).toContain("Degraded")
+    expect(block).toContain("**Phase:** Degraded")
     expect(block).toContain("3/4")
     expect(block).toContain("performance")
     expect(block).toContain("dist/bundle.js")
@@ -70,6 +90,7 @@ describe("review status renderer", () => {
     expect(block).toContain("19 nodes")
     expect(block).toContain("[View review](https://github.com/Sigilix/sigilix/pull/7#pullrequestreview-123)")
     expect(block).toContain("2 findings")
+    expect(block).not.toContain("```text")
   })
 
   it("renders specialists that were not needed", () => {
@@ -85,11 +106,11 @@ describe("review status renderer", () => {
       final: { status: "skipped", findingsCount: 0 },
     })
 
-    expect(block).toContain("Skipped")
+    expect(block).toContain("**Phase:** Skipped")
     expect(block).toContain("**Not needed:** logic, security, performance, tests")
   })
 
-  it("upserts the status block without disturbing overview body content", () => {
+  it("upserts the status block at the bottom of the completed overview", () => {
     const body = `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n### Summary\n\nKeep this summary.`
     const updated = upsertReviewStatusBlock(body, {
       phase: "retrieval",
@@ -109,67 +130,115 @@ describe("review status renderer", () => {
     expect(replaced.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
     expect(replaced).not.toContain("Retrieval")
     expect(replaced).toContain("Synth")
+    expect(replaced.indexOf("Keep this summary.")).toBeLessThan(replaced.indexOf(REVIEW_STATUS_BLOCK_START))
   })
 
-  it("ships many deterministic ASCII footer variants and keeps them ASCII-only", () => {
-    expect(REVIEW_STATUS_ASCII_FOOTERS.length).toBeGreaterThanOrEqual(100)
-    for (const footer of REVIEW_STATUS_ASCII_FOOTERS) {
-      expect(footer.id).toMatch(/^[a-z0-9-]+$/)
-      expect(footer.lines).toHaveLength(3)
-      expect(/^[\x00-\x7F]+$/.test(footer.lines.join("\n"))).toBe(true)
-      for (const line of footer.lines) {
-        expect(line.length).toBeLessThanOrEqual(80)
-      }
-    }
+  it("moves an old top-level status block into the overview on replacement", () => {
+    const oldStatus = [
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      "### Sigilix Review Status",
+      "",
+      "**Phase:** Posted",
+      "",
+      "```text",
+      "  launch window open",
+      "```",
+      "",
+      REVIEW_STATUS_BLOCK_END,
+    ].join("\n")
+    const body = `${OVERVIEW_MARKER}\n\n${oldStatus}\n\n## Sigilix Overview\n\n### Summary\n\nKeep this summary.`
 
-    const one = selectReviewStatusAsciiFooter("Sigilix/sigilix#7@a")
-    const two = selectReviewStatusAsciiFooter("Sigilix/sigilix#7@b")
-    expect(one).not.toBe(two)
+    const updated = upsertReviewStatusBlock(body, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 8,
+      final: {
+        status: "posted",
+        findingsCount: 6,
+        reviewUrl: "https://github.com/Sigilix/sigilix/pull/540",
+      },
+    })
+
+    expect(updated.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    expect(updated).not.toContain("### Sigilix Review Status")
+    expect(updated).not.toContain("```text")
+    expect(updated).not.toContain("launch window open")
+    expect(updated).toContain("**Phase:** Posted")
+    expect(updated).toContain(
+      "**Result:** Posted - 6 findings - [View review](https://github.com/Sigilix/sigilix/pull/540)",
+    )
+    expect(updated.indexOf("Keep this summary.")).toBeLessThan(updated.indexOf(REVIEW_STATUS_BLOCK_START))
   })
 
-  it("includes human and love-poem themed waiting footers", () => {
-    const footerIds = REVIEW_STATUS_ASCII_FOOTERS.map((footer) => footer.id)
-    const humanThemeIds = footerIds.filter((id) =>
-      /love|heart|dear|vow|devotion|beloved|home|human|kind|tender|promise|stay|hands|care|friendship/i.test(id),
-    )
+  it("removes a malformed old top-level status block without dropping the overview", () => {
+    const body = [
+      OVERVIEW_MARKER,
+      "",
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      "### Sigilix Review Status",
+      "",
+      "**Phase:** Posted",
+      "",
+      "## Sigilix Overview",
+      "",
+      "### Summary",
+      "",
+      "Keep this summary.",
+    ].join("\n")
 
-    expect(humanThemeIds.length).toBeGreaterThanOrEqual(50)
-    expect(footerIds).toEqual(
-      expect.arrayContaining([
-        "home-star",
-        "dear-diff",
-        "promise-of-dawn",
-        "human-constellation",
-        "tender-orbit",
-        "hands-full-of-stars",
-        "stay-for-the-light",
-        "dear-tired-heart",
-        "love-as-background-light",
-        "promise-kept-in-stars",
-      ]),
-    )
+    const updated = upsertReviewStatusBlock(body, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 8,
+      final: { status: "posted", findingsCount: 6 },
+    })
+
+    expect(updated.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    expect(updated).toContain("## Sigilix Overview")
+    expect(updated).toContain("Keep this summary.")
+    expect(updated).not.toContain("### Sigilix Review Status")
+    expect(updated.indexOf("Keep this summary.")).toBeLessThan(updated.indexOf(REVIEW_STATUS_BLOCK_START))
   })
 
-  it("includes Aristotle-inspired poetic waiting footers", () => {
-    const footerIds = REVIEW_STATUS_ASCII_FOOTERS.map((footer) => footer.id)
-    const aristotleThemeIds = footerIds.filter((id) =>
-      /telos|ethos|wonder|catharsis|recognition|reversal|golden-mean|contemplation|friendship/i.test(id),
-    )
+  it("preserves unknown content after a malformed status block without an overview heading", () => {
+    const body = [
+      OVERVIEW_MARKER,
+      "",
+      REVIEW_STATUS_BLOCK_START,
+      "",
+      "### Sigilix Review Status",
+      "",
+      "**Phase:** Posted",
+      "",
+      "Important review content here.",
+      "More content without an overview heading.",
+    ].join("\n")
 
-    expect(aristotleThemeIds.length).toBeGreaterThanOrEqual(30)
-    expect(footerIds).toEqual(
-      expect.arrayContaining([
-        "telos-love-star",
-        "ethos-window",
-        "wonder-door",
-        "catharsis-exhale",
-        "recognition-lantern",
-        "reversal-at-dusk",
-        "golden-mean-heart",
-        "contemplation-porch",
-        "friendship-orbit",
-        "telos-of-kindness",
-      ]),
-    )
+    const updated = upsertReviewStatusBlock(body, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 8,
+      final: { status: "posted", findingsCount: 6 },
+    })
+
+    expect(updated.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    expect(updated).not.toContain("### Sigilix Review Status")
+    expect(updated).toContain("Important review content here.")
+    expect(updated).toContain("More content without an overview heading.")
+  })
+
+  it("falls back to prepending status when the body has no overview marker", () => {
+    const updated = upsertReviewStatusBlock("plain comment", {
+      phase: "retrieval",
+      headSha: HEAD_SHA,
+      sequence: 1,
+    })
+
+    expect(updated).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(updated).toContain("**Phase:** Retrieval")
+    expect(updated).toContain("plain comment")
+    expect(updated.indexOf(REVIEW_STATUS_BLOCK_START)).toBeLessThan(updated.indexOf("plain comment"))
   })
 })

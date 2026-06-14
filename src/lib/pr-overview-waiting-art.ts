@@ -4,6 +4,7 @@ export const MAX_OVERVIEW_WAITING_ART_HEIGHT = 26
 export interface PrOverviewWaitingArt {
   id: string
   title: string
+  poem: readonly [string, string]
   lines: readonly string[]
 }
 
@@ -16,6 +17,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "unfinished-constellation",
     title: "unfinished constellation",
+    poem: ["the last star waits for its name", "we trace it gently before the dawn"],
     lines: art(String.raw`
         .             *                    .              *
    *         .                    .                .              .
@@ -37,6 +39,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "accretion-vow",
     title: "accretion vow",
+    poem: ["what gathers here is not hurried", "care has gravity enough to stay"],
     lines: art(String.raw`
   .            .        .----====~~~~====----.             .
        *            .-~~  .   .       *       ~~-.      *
@@ -57,6 +60,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "quiet-observatory",
     title: "quiet observatory",
+    poem: ["a quiet lens keeps watch tonight", "your question crosses every pane"],
     lines: art(String.raw`
         .       *              .              *        .
    .                 .     .---------.                 .
@@ -79,6 +83,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "orbital-letter",
     title: "orbital letter",
+    poem: ["i tied a note to patient light", "it circles back with what it learned"],
     lines: art(String.raw`
    *                    .                         .        *
              .                 .----.       .-.
@@ -100,6 +105,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "cartographers-window",
     title: "cartographer's window",
+    poem: ["each branch becomes a little sky", "we map the risk before the road"],
     lines: art(String.raw`
      .--------------------------------------------------.
     /  o      o      o      o      o      o      o      \
@@ -121,6 +127,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "lighthouse-nebula",
     title: "lighthouse nebula",
+    poem: ["a beam can love the dark it scans", "and still ask every shadow why"],
     lines: art(String.raw`
            .       .          .          .        .
       *              .        /\        .              *
@@ -144,6 +151,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "peripatetic-garden",
     title: "peripatetic garden",
+    poem: ["we walk the rows between extremes", "the middle path is tended, not found"],
     lines: art(String.raw`
         .        *             .             *        .
      .      .------------------------------------------------.     .
@@ -164,6 +172,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "rings-of-care",
     title: "rings of care",
+    poem: ["patience is a ring around the flame", "it keeps the bright work from burning"],
     lines: art(String.raw`
      .             .               .               .
           *              .-----------------.             *
@@ -185,6 +194,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "photonic-bottle",
     title: "photonic bottle",
+    poem: ["a folded star keeps your message warm", "it crosses the wait without spilling"],
     lines: art(String.raw`
         .        *           .              .        *
              .          .---.                     .
@@ -205,6 +215,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "four-causes-garden",
     title: "four causes garden",
+    poem: ["root, form, work, and end awake", "a careful crop becomes an answer"],
     lines: art(String.raw`
        .          *             .             *          .
           +------------+------------+------------+------------+
@@ -225,6 +236,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "listener-array",
     title: "listener array",
+    poem: ["we heard the signal under the static", "and held it close enough to answer"],
     lines: art(String.raw`
       .          *           .             *          .
                     .                 .
@@ -247,6 +259,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "mean-arbor",
     title: "mean arbor",
+    poem: ["virtue grows where both sides are pruned", "a garden learns by being tended"],
     lines: art(String.raw`
         .             *              .              *
               .        /\      /\      /\       .
@@ -267,6 +280,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
   {
     id: "star-harbor",
     title: "star harbor",
+    poem: ["every small ship returns with light", "some carry warnings, some carry peace"],
     lines: art(String.raw`
        .           *              .              *
                  .        __..----..__       .
@@ -293,7 +307,7 @@ export function selectPrOverviewWaitingArt(seed: string | undefined): PrOverview
 
 export function renderPrOverviewWaitingArt(seed: string | undefined): string {
   const art = selectPrOverviewWaitingArt(seed)
-  return ["```text", `== ${art.title} ==`, ...art.lines, "```"].join("\n")
+  return ["```text", `== ${art.title} ==`, ...art.lines, "", ...art.poem, "```"].join("\n")
 }
 
 function hashString(value: string): number {

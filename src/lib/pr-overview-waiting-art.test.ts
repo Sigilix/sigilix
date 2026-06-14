@@ -17,6 +17,7 @@ describe("PR overview waiting art", () => {
       expect(art.lines.length).toBeLessThanOrEqual(MAX_OVERVIEW_WAITING_ART_HEIGHT)
       expect(art.title.length).toBeGreaterThan(0)
       expect(/^[\x20-\x7E]+$/.test(art.title)).toBe(true)
+      expect(art.poem.length).toBe(2)
 
       const usedChars = new Set<string>()
       for (const line of art.lines) {
@@ -24,18 +25,31 @@ describe("PR overview waiting art", () => {
         expect(/^[\x20-\x7E]*$/.test(line)).toBe(true)
         for (const ch of line) if (ch !== " ") usedChars.add(ch)
       }
+      for (const line of art.poem) {
+        expect(line.length).toBeLessThanOrEqual(MAX_OVERVIEW_WAITING_ART_WIDTH)
+        expect(/^[\x20-\x7E]*$/.test(line)).toBe(true)
+      }
       expect(usedChars.size).toBeGreaterThanOrEqual(10)
     }
   })
 
+  it("pairs each artwork with its own unique two-line poem", () => {
+    const poemSignatures = new Set(PR_OVERVIEW_WAITING_ARTS.map((art) => art.poem.join("\n")))
+
+    expect(poemSignatures.size).toBe(PR_OVERVIEW_WAITING_ARTS.length)
+  })
+
   it("renders exactly one bounded text fence for GitHub markdown", () => {
-    const rendered = renderPrOverviewWaitingArt("Sigilix/sigilix#540@abcdef1")
+    const seed = "Sigilix/sigilix#540@abcdef1"
+    const selected = selectPrOverviewWaitingArt(seed)
+    const rendered = renderPrOverviewWaitingArt(seed)
     const lines = rendered.split("\n")
 
     expect(lines[0]).toBe("```text")
     expect(lines.at(-1)).toBe("```")
     expect(rendered.match(/```/g)).toHaveLength(2)
-    expect(rendered).toContain(selectPrOverviewWaitingArt("Sigilix/sigilix#540@abcdef1").title)
+    expect(rendered).toContain(selected.title)
+    expect(rendered).toContain(selected.poem.join("\n"))
   })
 
   it("keeps the Aristotle-inspired compositions grounded in garden imagery", () => {

@@ -73,6 +73,7 @@ function makeEnv(
     sensitive?: string
     credentials?: boolean
     trackedBranches?: string
+    prBranchIndex?: string
     sendImpl?: (msg: JobMessage) => Promise<void> | void
   } = {},
 ): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
@@ -90,6 +91,7 @@ function makeEnv(
     },
     OPENCLAW_SENSITIVE_REPOS: opts.sensitive,
     OPENCLAW_INDEXER_ENABLED: "on",
+    OPENCLAW_PR_BRANCH_INDEX: opts.prBranchIndex ?? "on",
     OPENCLAW_INDEX_BRANCHES: opts.trackedBranches,
     GITHUB_APP_ID: haveCreds ? "12345" : undefined,
     GITHUB_PRIVATE_KEY: haveCreds ? "fake-key" : undefined,
@@ -681,6 +683,66 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
       },
     ])
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("index-pr-branch-delete-enqueue-failed"))
+  })
+
+  it("SIG-413: does NOT enqueue a PR-branch index when OPENCLAW_PR_BRANCH_INDEX is off; emits pr-branch-index-skipped", async () => {
+    const { env, sent } = makeEnv({ prBranchIndex: "off" })
+    await maybeEnqueuePullRequestBranchIndexJobs({
+      env,
+      ...baseArgs,
+      action: "opened",
+      draft: false,
+      headRef: "feature-branch",
+      baseRef: "main",
+      merged: false,
+    })
+    expect(sent).toHaveLength(0)
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("pr-branch-index-skipped"))
+  })
+
+  it("SIG-413: does NOT enqueue on synchronize when OPENCLAW_PR_BRANCH_INDEX is off (the high-frequency churn action)", async () => {
+    const { env, sent } = makeEnv({ prBranchIndex: "off" })
+    await maybeEnqueuePullRequestBranchIndexJobs({
+      env,
+      ...baseArgs,
+      action: "synchronize",
+      draft: false,
+      headRef: "feature-branch",
+      baseRef: "main",
+      merged: false,
+    })
+    expect(sent).toHaveLength(0)
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("pr-branch-index-skipped"))
+  })
+
+  it("SIG-413: the flag gates ONLY the PR-branch enqueue — close still deletes the branch index + refreshes the merged base when off", async () => {
+    const { env, sent } = makeEnv({ prBranchIndex: "off" })
+    await maybeEnqueuePullRequestBranchIndexJobs({
+      env,
+      ...baseArgs,
+      action: "closed",
+      draft: false,
+      headRef: "feature-branch",
+      baseRef: "main",
+      merged: true,
+    })
+    expect(sent).toEqual([
+      {
+        type: "delete-repo-index",
+        owner: "Sigilix",
+        repo: "sigilix",
+        branch: "feature-branch",
+        reason: "pr-branch-closed",
+      },
+      {
+        type: "index-repo",
+        owner: "Sigilix",
+        repo: "sigilix",
+        installationId: 99,
+        reason: "merged-pr",
+        branch: "main",
+      },
+    ])
   })
 })
 

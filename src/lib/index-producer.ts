@@ -80,6 +80,14 @@ export function isIndexerEnabled(env: Pick<Env, "OPENCLAW_INDEXER_ENABLED">): bo
   return env.OPENCLAW_INDEXER_ENABLED === "on"
 }
 
+// SIG-413: PR-head-branch full-index enqueue flag. Default OFF (only "on"
+// enables) — see env.ts. The review path uses the main index + the SIG-129
+// in-memory overlay, so the persistent per-branch index is redundant. This gates
+// ONLY the pull-request enqueue, NOT push / tracked-branch / merged-base indexing.
+export function isPrBranchIndexEnabled(env: Pick<Env, "OPENCLAW_PR_BRANCH_INDEX">): boolean {
+  return env.OPENCLAW_PR_BRANCH_INDEX === "on"
+}
+
 /**
  * Producer for ARC-234. Iterates `repositories` and enqueues one
  * `index-repo` job per entry that passes `parseFullName` + sensitive-
@@ -592,39 +600,61 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
   const isBranchIndexAction =
     action === "opened" || action === "synchronize" || action === "reopened" || action === "ready_for_review"
   if (draft !== true && isBranchIndexAction && headRef && headRef !== baseRef) {
-    try {
-      await env.OPENCLAW_JOBS.send({
-        type: "index-repo",
-        owner,
-        repo,
-        installationId,
-        reason: "pull-request",
-        branch: headRef,
-      })
+    if (!isPrBranchIndexEnabled(env)) {
+      // SIG-413: PR-branch full-index is OFF by default. The review path reads the
+      // MAIN namespace + the SIG-129 in-memory overlay, so the persistent
+      // per-branch index is redundant; building one per PR was ~380x embedding
+      // churn. Emit soak telemetry so the saving is visible and any downstream
+      // regression surfaces before the build path is deleted.
       console.log(
         JSON.stringify({
-          event: "index-pr-branch-enqueued",
+          event: "pr-branch-index-skipped",
           owner,
           repo,
           installation_id: installationId,
           branch: headRef,
           action,
+          // SIG-413 soak: marks a skip that WOULD have enqueued a full branch
+          // index — filter on this to quantify the saving vs the historical
+          // `index-pr-branch-enqueued` stream.
+          would_have_indexed: true,
         }),
       )
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(
-        JSON.stringify({
-          event: "index-pr-branch-enqueue-failed",
+    } else {
+      try {
+        await env.OPENCLAW_JOBS.send({
+          type: "index-repo",
           owner,
           repo,
-          installation_id: installationId,
+          installationId,
+          reason: "pull-request",
           branch: headRef,
-          action,
-          err: message,
-        }),
-      )
-      enqueueFailures.push(`index-pr-branch:${message}`)
+        })
+        console.log(
+          JSON.stringify({
+            event: "index-pr-branch-enqueued",
+            owner,
+            repo,
+            installation_id: installationId,
+            branch: headRef,
+            action,
+          }),
+        )
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(
+          JSON.stringify({
+            event: "index-pr-branch-enqueue-failed",
+            owner,
+            repo,
+            installation_id: installationId,
+            branch: headRef,
+            action,
+            err: message,
+          }),
+        )
+        enqueueFailures.push(`index-pr-branch:${message}`)
+      }
     }
   }
 

@@ -181,8 +181,9 @@ function isV2StubBody(trimmed: string): boolean {
     const statusBlockIndex = trimmed.indexOf(REVIEW_STATUS_BLOCK_START)
     const statusBlockEndIndex = trimmed.indexOf(REVIEW_STATUS_BLOCK_END)
     const hasCompletedOverviewHeading = trimmed.includes("\n## Sigilix Overview")
-    const oldV2Stub = !trimmed.includes(REVIEW_STATUS_BLOCK_START) && trimmed.endsWith("\n```")
-    const currentV2Stub = trimmed.endsWith(REVIEW_STATUS_BLOCK_END)
+    const oldV2Stub =
+      !hasCompletedOverviewHeading && !trimmed.includes(REVIEW_STATUS_BLOCK_START) && trimmed.endsWith("\n```")
+    const currentV2Stub = !hasCompletedOverviewHeading && trimmed.endsWith(REVIEW_STATUS_BLOCK_END)
     const hasEmptyStatusToStubGap =
       statusBlockEndIndex >= 0 &&
       statusBlockEndIndex < stubMarkerIndex &&

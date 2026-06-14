@@ -184,6 +184,43 @@ This is why the golden matrix (`e2e/validation-golden-matrix.test.ts`) pins both
 the *ordered telemetry callbacks*: any change to gate behavior is visible, and any refactor that
 preserves behavior passes untouched.
 
+### The model lineup — who runs what, reasoning levels, and why
+
+The per-role model + reasoning config is the result of the **SIG-399 tuning sweep** (measured on a
+diverse "reasoning floor" of tool-uncatchable wrong-result bugs, K-repeated, hand-judged). The
+governing principle: **reasoning weight ∝ bug-NOVELTY** — the more a bug class is unique per
+codebase (vs universal/templated), the more extended reasoning helps; for pattern-matchable
+classes it only adds latency/cost. **Source of truth for the live configs is
+`src/lib/ensemble/adapters/model-provider.ts`** (`SPECIALIST_CONFIGS` / `SYNTHESIZER_CONFIG`) —
+this table is the rationale, not the runtime value.
+
+| role | model | reasoning | prompt add-on | why |
+| --- | --- | --- | --- | --- |
+| logic | `openai/o3` | **medium** | recall-suffix + reasoning-suffix (`OPENCLAW_LOGIC_REASONING_PROMPT_MODE`) | Most novel class — per-repo invariants, control-flow, data-flow. Reasoning matters most here. `high` over-prunes (the model reasons itself out of findings); `medium` is the sweet spot. |
+| security | `deepseek-v4-flash` | **OFF** | recall-suffix (names authz-resolution classes: wildcard-`*`, inheritance-direction, union-vs-intersection, deny-precedence, tenant) | Authz/IDOR is reasoning, injection/secrets is pattern — but reasoning-ON **collapsed** flash (it self-censored to ~1 finding/run). The recall-suffix gives the lift without the collapse. |
+| tests | `deepseek-v4-pro` | **medium** | base | Smells are templated, coverage-fit is semi-novel → reasoning earns a modest, *reliable* lift (it enumerates each test instead of satisficing). |
+| perf | `glm-5.1` | **OFF** | base | Universal shapes (N+1, full-table-scan, blocking-IO). Pattern-matching generalizes; reasoning at *any* effort gave no reliable recall gain (base = medium = high). |
+| synth | `nvidia/nemotron-3-ultra` | model default | recall directive (retain every grounded finding; don't thin under load) | The synthesizer's job is **retention** (recall) — it must not drop findings on a large verdict set. **Precision is the downstream gates' job, not the synth's** — do not tune the synth to filter FPs; it costs recall for FPs the gates already catch. |
+
+Cross-cutting rules every model-touching change MUST respect:
+
+- **Recall first; gates enforce precision.** Specialists *and* the synth are run for recall
+  (surface everything, score uncertain findings low); the ~13 deterministic gates cut the
+  ungrounded. Never push a model prompt to do the gates' precision job.
+- **Reasoning is a deep-lane lever, not a default.** Turn it on only where the floor showed a
+  *reliable* recall lift. It raises latency + cost and can *regress* a model (security flash
+  collapsed under reasoning). When in doubt, off.
+- **Ollama is the slow/degraded measurement path; OpenRouter is the prod target.** Never judge a
+  model's latency *or recall* on Ollama numbers — Ollama Turbo truncates large free-form output
+  (ultra synth scored 40% large-payload recall on Ollama vs **100% on OpenRouter**) and
+  constrained-decode-aborts on schema-heavy calls. Re-measure on OpenRouter before acting.
+- **Provider routing is by model-id shape.** OpenRouter ids contain `/` (`openai/o3`); Ollama
+  Turbo tags use `:cloud`. The `chat` router (`src/shared/adapters/model/index.ts`) dispatches
+  accordingly. Per-call API-key selection by provider lands at the cutover (Phase 2); until then
+  every call still passes the single Ollama key, so the router only ever resolves to Ollama.
+  Cross-provider fallbacks exist on Ollama (uncorrelated-failure insurance) and will be **removed
+  on OpenRouter** (its routing already fails over across upstream providers).
+
 ---
 
 ## 5. Durable Objects — stateful work

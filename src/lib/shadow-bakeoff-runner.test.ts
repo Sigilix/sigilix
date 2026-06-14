@@ -4,14 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { runShadowSpecialist, runShadowSynth } from "@/src/lib/shadow-bakeoff-runner"
 
-// Mock `chat` so we don't make real HTTP calls. The runner ultimately
-// calls runWithRetryAndFallback → attemptChat → chat. We control the
-// last hop.
+// Mock `chat` so we don't make real HTTP calls. The runner ultimately calls
+// runWithRetryAndFallback → attemptChat → chat (the barrel `chat` is now the
+// OpenRouter-migration ROUTER, which dispatches to ollama-chat for the Ollama-tag
+// shadow models). Mock + control THAT last hop directly — import `chat` from
+// ollama-chat (not the barrel, whose `chat` is the router wrapper, not the mock).
 vi.mock("@/src/shared/adapters/model/ollama-chat", () => ({
   chat: vi.fn(),
 }))
 
-import { chat } from "@/src/shared/adapters/model"
+import { chat } from "@/src/shared/adapters/model/ollama-chat"
 import type { ChatArgs, ChatResult } from "@/src/shared/ports/model"
 
 const CTX: EnsembleRunCtx = {

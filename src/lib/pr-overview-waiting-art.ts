@@ -13,7 +13,7 @@ function art(raw: string): readonly string[] {
   return withoutLeadingBlank.trimEnd().split("\n")
 }
 
-export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
+export const PR_OVERVIEW_WAITING_ARTS: readonly [PrOverviewWaitingArt, ...PrOverviewWaitingArt[]] = [
   {
     id: "unfinished-constellation",
     title: "unfinished constellation",
@@ -302,7 +302,7 @@ export const PR_OVERVIEW_WAITING_ARTS: readonly PrOverviewWaitingArt[] = [
 
 export function selectPrOverviewWaitingArt(seed: string | undefined): PrOverviewWaitingArt {
   const value = hashString(seed ?? "sigilix")
-  return PR_OVERVIEW_WAITING_ARTS[value % PR_OVERVIEW_WAITING_ARTS.length]!
+  return PR_OVERVIEW_WAITING_ARTS[value % PR_OVERVIEW_WAITING_ARTS.length] ?? PR_OVERVIEW_WAITING_ARTS[0]
 }
 
 export function renderPrOverviewWaitingArt(seed: string | undefined): string {

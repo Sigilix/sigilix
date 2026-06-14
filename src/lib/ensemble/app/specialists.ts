@@ -51,6 +51,7 @@ import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import {
   SPECIALIST_CONFIGS,
   SPECIALIST_MODELS,
+  modelApiKeys,
   runSpecialist,
   type SpecialistRunResult,
 } from "@/src/lib/ensemble/adapters/model-provider"
@@ -309,16 +310,14 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     const reasoningForRole = ensembleConfig.flags.reasoningByRole.get(role)
     const { recallRoles, reasoningPromptRoles } = ensembleConfig.flags
     const promise = withComposedTimeout(
-      // Use the composed signal `withComposedTimeout` provides — it
-      // aborts on EITHER the per-specialist 270s timer OR the outer
-      // orch abort OR the per-role early-exit abort. Passing
-      // `orchCtrl.signal` directly only cancels the await wrapper,
-      // leaving the in-flight model fetch alive until the outer
-      // 490s wall fires (CR catch on PR #42).
+      // Use the composed signal `withComposedTimeout` provides (per-specialist
+      // timer + orch abort + early-exit), not `orchCtrl.signal` (CR PR #42).
       (signal) =>
         runSpecialist({
           role,
-          apiKey: env.OLLAMA_API_KEY,
+          // SIG-405: runSpecialist selects the key for the role's effective model.
+          apiKeys: modelApiKeys(env),
+          providerByRole: ensembleConfig.flags.providerByRole,
           systemPrompt: specialistSystemPrompt(role, recallRoles, reasoningPromptRoles),
           // SIG-113: tests get the testing-evidence block; others the classification block.
           initialMessage,
@@ -326,10 +325,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           signal,
           // SIG-287: per-role bounded reasoning (resolved above; default-off → omitted).
           ...(reasoningForRole !== undefined ? { reasoning: reasoningForRole } : {}),
-          // ARC-283 Phase B1b: thread the orchestrator's perfCtx
-          // through so per-attempt `model-attempt-completed` events
-          // share correlation fields with the surrounding ensemble
-          // telemetry.
+          // ARC-283 B1b: perfCtx correlates per-attempt telemetry.
           perfCtx,
         }),
       SPECIALIST_TIMEOUT_MS,
@@ -397,6 +393,9 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     prNumber,
     headSha,
     mode: ensembleConfig.flags.invariantLensMode,
+    // SIG-405: the lens runs the logic model — same provider map so it tracks
+    // logic→o3 (else it'd run deepseek while the primary logic runs o3).
+    providerByRole: ensembleConfig.flags.providerByRole,
     perfCtx,
     orchCtrl,
     diff,
@@ -813,6 +812,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     headSha,
     mode: ensembleConfig.flags.resweepMode,
     maxRegions: ensembleConfig.tunables.resweepMaxRegions,
+    providerByRole: ensembleConfig.flags.providerByRole, // SIG-405: re-sweep tracks the provider flag too
     perfCtx,
     orchCtrl,
     diff,

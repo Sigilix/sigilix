@@ -294,7 +294,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     for (const role of ALL_SPECIALISTS) {
       const res = await runSpecialist({
         role,
-        apiKey: "k",
+        apiKeys: { ollama: "k", openrouter: undefined },
+        providerByRole: new Map(),
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",
@@ -354,7 +355,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
 
     const res = await runSpecialist({
       role: "security",
-      apiKey: "k",
+      apiKeys: { ollama: "k", openrouter: undefined },
+      providerByRole: new Map(),
       systemPrompt: "system",
       initialMessage: "user",
       chatEnabled: "on",
@@ -389,7 +391,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))
     const res = await runSpecialist({
       role: "logic",
-      apiKey: "k",
+      apiKeys: { ollama: "k", openrouter: undefined },
+      providerByRole: new Map(),
       systemPrompt: "system",
       initialMessage: "user",
       chatEnabled: "on",

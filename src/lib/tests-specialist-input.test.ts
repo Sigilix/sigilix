@@ -249,7 +249,8 @@ describe("tests specialist receives the sibling classification + diff", () => {
 
     await runSpecialist({
       role: "tests",
-      apiKey: "test-key",
+      apiKeys: { ollama: "test-key", openrouter: undefined },
+      providerByRole: new Map(),
       systemPrompt: SPECIALIST_PROMPTS.tests,
       initialMessage,
       chatEnabled: "on",

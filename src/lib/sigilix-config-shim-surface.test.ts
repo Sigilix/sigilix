@@ -11,10 +11,15 @@ import { describe, it, expect } from "vitest"
 
 import {
   SIGILIX_CONFIG_PATH,
+  SIGILIX_CONFIG_PATH_JSON,
+  SIGILIX_CONFIG_PATH_YAML,
+  SIGILIX_CONFIG_PATH_YML,
+  SIGILIX_CONFIG_PATHS,
   KNOWN_MODELS,
   EMPTY_CONFIG,
   parseSigilixConfig,
   parseSigilixConfigDetailed,
+  parseSigilixConfigSource,
   resolvePreMergeGatesConfig,
   resolveCostControlsConfig,
   passesLabelGate,
@@ -31,6 +36,7 @@ import {
   resolveCoverageConfig,
   resolveCommandConfig,
   loadSigilixConfig,
+  loadSigilixConfigSource,
   loadSigilixConfigRaw,
 } from "@/src/lib/sigilix-config"
 
@@ -38,10 +44,15 @@ describe("sigilix-config shim export parity (SIG-382)", () => {
   it("re-exports every public value symbol", () => {
     const exports = {
       SIGILIX_CONFIG_PATH,
+      SIGILIX_CONFIG_PATH_JSON,
+      SIGILIX_CONFIG_PATH_YAML,
+      SIGILIX_CONFIG_PATH_YML,
+      SIGILIX_CONFIG_PATHS,
       KNOWN_MODELS,
       EMPTY_CONFIG,
       parseSigilixConfig,
       parseSigilixConfigDetailed,
+      parseSigilixConfigSource,
       resolvePreMergeGatesConfig,
       resolveCostControlsConfig,
       passesLabelGate,
@@ -58,6 +69,7 @@ describe("sigilix-config shim export parity (SIG-382)", () => {
       resolveCoverageConfig,
       resolveCommandConfig,
       loadSigilixConfig,
+      loadSigilixConfigSource,
       loadSigilixConfigRaw,
     }
     for (const [name, value] of Object.entries(exports)) {
@@ -65,6 +77,6 @@ describe("sigilix-config shim export parity (SIG-382)", () => {
     }
     // Guard the count so a future drop is caught even if a name above is
     // removed alongside its assertion.
-    expect(Object.keys(exports)).toHaveLength(22)
+    expect(Object.keys(exports)).toHaveLength(28)
   })
 })

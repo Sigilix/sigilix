@@ -12,8 +12,12 @@ import {
   resolvePathInstructionsForChangedPaths,
   renderPathInstructionsForPrompt,
   loadSigilixConfig,
+  loadSigilixConfigSource,
   EMPTY_CONFIG,
   SIGILIX_CONFIG_PATH,
+  SIGILIX_CONFIG_PATH_YAML,
+  SIGILIX_CONFIG_PATH_YML,
+  parseSigilixConfigSource,
   type SigilixConfig,
 } from "@/src/lib/sigilix-config"
 import type { GitHubClient } from "@/src/shared/adapters/github"
@@ -157,6 +161,103 @@ describe("parseSigilixConfig — defensive returns null", () => {
       }),
     )
     expect(result).toEqual({ rules: { logic: "real" } })
+  })
+})
+
+describe("parseSigilixConfigSource — YAML", () => {
+  it("parses YAML comments and explicit JSON-compatible scalars through the same validator", () => {
+    const json = parseSigilixConfig(
+      JSON.stringify({
+        guidance: "Review auth paths carefully.",
+        overview: { enabled: false },
+        reviewMemory: { enabled: true, maxInjectedMemories: 3 },
+        pathFilters: ["dist/**", "**/*.lock", "!critical/important.lock"],
+      }),
+    )
+
+    const yaml = parseSigilixConfigSource({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: `
+# repo-level config with comments
+guidance: Review auth paths carefully.
+overview:
+  enabled: false
+reviewMemory:
+  enabled: true
+  maxInjectedMemories: 3
+pathFilters:
+  - "dist/**"
+  - "**/*.lock"
+  - "!critical/important.lock"
+`,
+    })
+
+    expect(yaml).toEqual({ ok: true, config: json })
+  })
+
+  it("does not coerce Norway-problem booleans like no/yes into booleans", () => {
+    const result = parseSigilixConfigSource({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: `
+overview:
+  enabled: no
+reviewMemory:
+  enabled: yes
+labels:
+  enabled: false
+`,
+    })
+
+    expect(result).toEqual({ ok: true, config: { labels: { enabled: false } } })
+  })
+
+  it("allows quoted star-prefixed text and glob patterns", () => {
+    const result = parseSigilixConfigSource({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: `
+guidance: "Use *bold text when it helps."
+pathFilters:
+  - "*.test.ts"
+  - "!critical/*"
+`,
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        guidance: "Use *bold text when it helps.",
+        pathFilters: ["*.test.ts", "!critical/*"],
+      },
+    })
+  })
+
+  it("rejects custom tags", () => {
+    const result = parseSigilixConfigSource({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: "guidance: !secret Review everything\n",
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/YAML parse failed|custom tag/i)
+  })
+
+  it("rejects YAML anchors and aliases instead of expanding them", () => {
+    const result = parseSigilixConfigSource({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: `
+guidance: &shared Review security-sensitive code.
+rules:
+  security: *shared
+`,
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/anchor|alias/i)
   })
 })
 
@@ -456,11 +557,94 @@ describe("loadSigilixConfig — fail-open contract", () => {
     expect(result).toBe(EMPTY_CONFIG)
   })
 
+  it("does not fall through to YAML when the higher-priority JSON fetch throws", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH) throw new Error("EAI_AGAIN")
+      if (path === SIGILIX_CONFIG_PATH_YAML) return "guidance: should not load\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfig(client, "owner", "repo", "deadbeef")).resolves.toBe(EMPTY_CONFIG)
+    expect(getFile.mock.calls.map((call) => call[2])).toEqual([SIGILIX_CONFIG_PATH])
+  })
+
   it("fetches sigilix.json at the requested ref (head SHA, not the default branch)", async () => {
     const getFile = vi.fn().mockResolvedValue('{"guidance":"X"}')
     const client = fakeClient(getFile)
     await loadSigilixConfig(client, "myorg", "myrepo", "abc1234")
     expect(getFile).toHaveBeenCalledWith("myorg", "myrepo", SIGILIX_CONFIG_PATH, "abc1234")
+  })
+
+  it("uses sigilix.json before YAML configs when multiple config files exist", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH) return '{"guidance":"json wins"}'
+      if (path === SIGILIX_CONFIG_PATH_YAML) return "guidance: yaml loses\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfig(client, "owner", "repo", "deadbeef")).resolves.toEqual({
+      guidance: "json wins",
+    })
+    expect(getFile).toHaveBeenCalledTimes(1)
+    expect(getFile).toHaveBeenCalledWith("owner", "repo", SIGILIX_CONFIG_PATH, "deadbeef")
+  })
+
+  it("does not fall through to YAML when the higher-priority JSON config is malformed", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH) return "{not json"
+      if (path === SIGILIX_CONFIG_PATH_YAML) return "guidance: yaml loses\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfig(client, "owner", "repo", "deadbeef")).resolves.toBe(EMPTY_CONFIG)
+    expect(getFile.mock.calls.map((call) => call[2])).toEqual([SIGILIX_CONFIG_PATH])
+  })
+
+  it("falls back to sigilix.yaml when sigilix.json is missing", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH_YAML) return "guidance: yaml config\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfig(client, "owner", "repo", "deadbeef")).resolves.toEqual({
+      guidance: "yaml config",
+    })
+    expect(getFile.mock.calls.map((call) => call[2])).toEqual([SIGILIX_CONFIG_PATH, SIGILIX_CONFIG_PATH_YAML])
+  })
+
+  it("falls back to sigilix.yml when json and yaml are missing", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH_YML) return "guidance: yml config\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfig(client, "owner", "repo", "deadbeef")).resolves.toEqual({
+      guidance: "yml config",
+    })
+    expect(getFile.mock.calls.map((call) => call[2])).toEqual([
+      SIGILIX_CONFIG_PATH,
+      SIGILIX_CONFIG_PATH_YAML,
+      SIGILIX_CONFIG_PATH_YML,
+    ])
+  })
+
+  it("returns source metadata for the first config file found", async () => {
+    const getFile = vi.fn(async (_owner: string, _repo: string, path: string) => {
+      if (path === SIGILIX_CONFIG_PATH_YAML) return "commands:\n  describe:\n    prompt:\n      addendum: YAML\n"
+      return null
+    })
+    const client = fakeClient(getFile)
+
+    await expect(loadSigilixConfigSource(client, "owner", "repo", "deadbeef")).resolves.toEqual({
+      path: SIGILIX_CONFIG_PATH_YAML,
+      format: "yaml",
+      raw: "commands:\n  describe:\n    prompt:\n      addendum: YAML\n",
+    })
   })
 
   it("returns the parsed config on the happy path", async () => {

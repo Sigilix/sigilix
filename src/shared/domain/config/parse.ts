@@ -18,8 +18,10 @@ import {
   type SigilixCommandModelConfig,
   type SigilixCommandName,
   type SigilixConfig,
+  type SigilixConfigSource,
   type SigilixPathInstruction,
 } from "./types"
+import { parseYamlConfigDocument } from "./yaml"
 
 const SARIF_FINDING_CATEGORIES: ReadonlySet<SarifFindingCategoryRef> = new Set([
   "iac",
@@ -243,6 +245,18 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     const msg = err instanceof Error ? err.message : "JSON parse failed"
     return { ok: false, reason: `JSON parse failed: ${msg}`, raw }
   }
+  return parseSigilixConfigObject(parsed, raw)
+}
+
+export function parseSigilixConfigSource(source: SigilixConfigSource): ParseResult {
+  if (source.format === "json") return parseSigilixConfigDetailed(source.raw)
+
+  const parsed = parseYamlConfigDocument(source.raw)
+  if (!parsed.ok) return { ok: false, reason: parsed.reason, raw: source.raw }
+  return parseSigilixConfigObject(parsed.value, source.raw)
+}
+
+function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {
       ok: false,

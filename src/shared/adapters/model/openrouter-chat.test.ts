@@ -120,10 +120,54 @@ describe("openrouter-chat", () => {
     await expect(chat(base)).rejects.toThrow(/stream error/)
   })
 
-  it("rejects tool calls on the OpenRouter route", async () => {
-    await expect(
-      chat({ ...base, tools: [{ type: "function", function: { name: "f", description: "d", parameters: {} } }] }),
-    ).rejects.toThrow(/tool/)
+  it("maps non-streaming tool calls into the shared ChatResult shape", async () => {
+    const f = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: null,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "file_grep", arguments: '{"query":"removedHelper"}' },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 11, completion_tokens: 3 },
+      }),
+    })) as unknown as ReturnType<typeof vi.fn>
+    vi.stubGlobal("fetch", f)
+
+    const result = await chat({
+      ...base,
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "file_grep",
+            description: "Search files",
+            parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+          },
+        },
+      ],
+    })
+
+    expect(result.hasToolCalls).toBe(true)
+    expect(result.message.tool_calls?.[0]?.function.name).toBe("file_grep")
+    expect(result.usage).toEqual({ inputTokens: 11, outputTokens: 3 })
+    const body = JSON.parse((f.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.stream).toBe(false)
+    expect(body.tools).toHaveLength(1)
+    expect(body.parallel_tool_calls).toBe(true)
+    expect(body.response_format).toBeUndefined()
   })
 
   it("throws when chatEnabled is off", async () => {

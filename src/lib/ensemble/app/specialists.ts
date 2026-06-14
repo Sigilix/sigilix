@@ -28,6 +28,7 @@ import {
   type SigilixConfig,
   resolveAstRulesConfig,
   resolvePathInstructionsForChangedPaths,
+  resolveSpecialistMcpTools,
 } from "@/src/lib/sigilix-config"
 import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
 import { evaluateScanFactDismissal } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
@@ -326,6 +327,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           ...(reasoningForRole !== undefined ? { reasoning: reasoningForRole } : {}),
           // ARC-283 B1b: perfCtx correlates per-attempt telemetry.
           perfCtx,
+          mcpTools: resolveSpecialistMcpTools(sigilixConfig, role),
         }),
       SPECIALIST_TIMEOUT_MS,
       composedSignal,

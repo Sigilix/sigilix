@@ -318,6 +318,27 @@ All fields are optional. Missing file = no extra context (current behavior). Mal
 
 `guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
 
+### Specialist tools
+
+Use `mcp` to approve a small in-process tool surface for specific specialists. Missing config means no tools are exposed. Each specialist invocation can make at most two tool calls, each capped at five seconds; tool results are injected into that specialist's conversation before the final review verdict.
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "specialists": {
+      "security": { "tools": ["file_grep"] },
+      "logic": { "tools": ["file_grep", "docs_fetch"] }
+    },
+    "tools": {
+      "docs_fetch": { "enabled": false }
+    }
+  }
+}
+```
+
+Known tool ids are `file_grep`, `docs_fetch`, `observability_lookup`, and `browser_check`. Unknown roles/tools are ignored fail-open. `tools.<id>.enabled: false` disables that tool globally even when a specialist lists it. URL-fetch tools use runtime-owned host allowlists/endpoints, not PR-controlled config; without those runtime settings they return `unavailable` instead of fetching. Tool results always carry an explicit status (`complete`, `empty`, `truncated`, `unavailable`, or `error`); non-`complete` results and `file_grep` `empty` results are not proof that a bug is absent.
+
 ### Path instructions
 
 Use `pathInstructions` when a repo needs different review behavior for different parts of the codebase. This mirrors the path-instruction pattern used by AI review competitors: auth/API paths can be strict about authorization, database paths can focus on migrations and transactions, generated paths can be handled differently via `pathInstructions`, or excluded entirely via `pathFilters`, and tests/docs can get their own expectations.

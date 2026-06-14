@@ -112,14 +112,64 @@ describe("review status renderer", () => {
   })
 
   it("ships many deterministic ASCII footer variants and keeps them ASCII-only", () => {
-    expect(REVIEW_STATUS_ASCII_FOOTERS.length).toBeGreaterThanOrEqual(24)
+    expect(REVIEW_STATUS_ASCII_FOOTERS.length).toBeGreaterThanOrEqual(100)
     for (const footer of REVIEW_STATUS_ASCII_FOOTERS) {
+      expect(footer.id).toMatch(/^[a-z0-9-]+$/)
+      expect(footer.lines).toHaveLength(3)
       expect(/^[\x00-\x7F]+$/.test(footer.lines.join("\n"))).toBe(true)
-      expect(footer.lines.join("\n")).toMatch(/[*.]|SIGILIX|star|orbit|constellation/i)
+      for (const line of footer.lines) {
+        expect(line.length).toBeLessThanOrEqual(80)
+      }
     }
 
     const one = selectReviewStatusAsciiFooter("Sigilix/sigilix#7@a")
     const two = selectReviewStatusAsciiFooter("Sigilix/sigilix#7@b")
     expect(one).not.toBe(two)
+  })
+
+  it("includes human and love-poem themed waiting footers", () => {
+    const footerIds = REVIEW_STATUS_ASCII_FOOTERS.map((footer) => footer.id)
+    const humanThemeIds = footerIds.filter((id) =>
+      /love|heart|dear|vow|devotion|beloved|home|human|kind|tender|promise|stay|hands|care|friendship/i.test(id),
+    )
+
+    expect(humanThemeIds.length).toBeGreaterThanOrEqual(50)
+    expect(footerIds).toEqual(
+      expect.arrayContaining([
+        "home-star",
+        "dear-diff",
+        "promise-of-dawn",
+        "human-constellation",
+        "tender-orbit",
+        "hands-full-of-stars",
+        "stay-for-the-light",
+        "dear-tired-heart",
+        "love-as-background-light",
+        "promise-kept-in-stars",
+      ]),
+    )
+  })
+
+  it("includes Aristotle-inspired poetic waiting footers", () => {
+    const footerIds = REVIEW_STATUS_ASCII_FOOTERS.map((footer) => footer.id)
+    const aristotleThemeIds = footerIds.filter((id) =>
+      /telos|ethos|wonder|catharsis|recognition|reversal|golden-mean|contemplation|friendship/i.test(id),
+    )
+
+    expect(aristotleThemeIds.length).toBeGreaterThanOrEqual(30)
+    expect(footerIds).toEqual(
+      expect.arrayContaining([
+        "telos-love-star",
+        "ethos-window",
+        "wonder-door",
+        "catharsis-exhale",
+        "recognition-lantern",
+        "reversal-at-dusk",
+        "golden-mean-heart",
+        "contemplation-porch",
+        "friendship-orbit",
+        "telos-of-kindness",
+      ]),
+    )
   })
 })

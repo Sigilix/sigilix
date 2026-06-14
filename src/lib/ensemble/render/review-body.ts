@@ -151,6 +151,62 @@ const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
  * customer-facing body. Per-finding inline comments still use it
  * via `formatFindingComment` (ARC-282 will revisit).
  */
+/**
+ * SIG-414 Phase 1.2: the honest 3-way "what wasn't reviewed" disclosure. The
+ * pre-SIG-414 body lumped every un-reviewed file into ONE ⚠️ "size budget"
+ * notice, which (a) conflated three distinct reasons and (b) made policy skips
+ * (lockfiles/generated/vendored — the `pathFilters` set) invisible entirely.
+ * This splits them into three calm, distinct notices, each true to its cause:
+ *
+ *   - `policySkipped` — files excluded by config/defaults (lockfiles, generated,
+ *     vendored, minified, binary). "Not applicable", NOT a coverage gap — a
+ *     collapsed, subtle note (no ⚠️), and it does NOT downgrade an APPROVE.
+ *   - `oversized` — a single file whose diff exceeds the per-call cap.
+ *   - `spillover` — changed files beyond the reviewed batch on a very large PR.
+ *
+ * `reviewedCount` (n) / `totalChangedCount` (m) drive the spillover copy
+ * "Reviewed {n} of {m} changed files". m is the RECONCILED denominator
+ * (n + spillover) so `remaining = m - n` and the count never appears to
+ * contradict the separate policy/oversized notices (Codex sign-off).
+ */
+export interface ReviewDisclosure {
+  /** Files excluded by `pathFilters` (lockfiles/generated/vendored/minified/binary). */
+  policySkipped: string[]
+  /** Files whose individual diff exceeded the per-call cap (`droppedTooLarge`). */
+  oversized: string[]
+  /** Changed files beyond the reviewed batch (`filesNotReviewed`). */
+  spillover: string[]
+  /** n — files actually reviewed (the reviewed batch size). */
+  reviewedCount: number
+  /** m — reconciled total for the spillover copy = reviewedCount + spillover.length. */
+  totalChangedCount: number
+}
+
+/**
+ * SIG-414 Phase 1.2: pure factory for `ReviewDisclosure` (co-located with the
+ * type + renderer; exported for render-prep + tests). `reviewedCount` is the
+ * packer's reviewed-batch size — the honest `n` (a deletions-only reviewed file
+ * has no reviewable position yet WAS reviewed). Reconciles `totalChangedCount`
+ * (m) = n + spillover (see the type doc). Returns `null` when nothing was
+ * dropped so the renderer skips the disclosure (byte-identical common case).
+ */
+export function buildReviewDisclosure(args: {
+  policySkipped: string[]
+  oversized: string[]
+  spillover: string[]
+  reviewedCount: number
+}): ReviewDisclosure | null {
+  const { policySkipped, oversized, spillover, reviewedCount } = args
+  if (policySkipped.length === 0 && oversized.length === 0 && spillover.length === 0) return null
+  return {
+    policySkipped,
+    oversized,
+    spillover,
+    reviewedCount,
+    totalChangedCount: reviewedCount + spillover.length,
+  }
+}
+
 export interface RenderBodyArgs {
   verdict: PrReviewVerdict
   /** Line-scoped findings that passed review but could not be anchored
@@ -162,11 +218,12 @@ export interface RenderBodyArgs {
    *  line is omitted (back-compat shim for call sites that haven't
    *  plumbed coverage through yet — ensemble will always supply). */
   coverage?: CoverageRoles
-  /** SIG-245: changed files that spilled past the per-call diff budget
-   *  (or were individually too large) and so were NOT reviewed. When
-   *  non-empty, the body renders a visible "files not reviewed" notice so
-   *  a silently-dropped file is never invisible to the reader. */
-  notReviewedFiles?: string[]
+  /** SIG-245 / SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure
+   *  (policy / oversized / spillover). When non-empty the body renders up to
+   *  three distinct, calm notices right under the headline so a file that wasn't
+   *  reviewed is never invisible to the reader. Replaces the pre-SIG-414 single
+   *  lumped `notReviewedFiles` "size budget" notice. */
+  disclosure?: ReviewDisclosure
   /** Per-Kimi delta badge counts (already computed). `null` skips. */
   delta?: DeltaBadgeCounts | null
   /** Stack context. When `stack.isStacked === true && stack.parent`,
@@ -272,6 +329,64 @@ function renderOutsideYourChanges(
   ]
 }
 
+/**
+ * SIG-414 Phase 1.2: render the honest 3-way un-reviewed disclosure as up to
+ * three distinct, calm notices (verbatim copy per the Kimi spec). Returns the
+ * lines to splice under the lead, or `[]` when nothing was left un-reviewed.
+ *
+ * Render order (Codex sign-off): the real coverage gaps first, then the calm
+ * "not applicable" policy note last —
+ *   1. OVERSIZED (`oversized`) — one calm `>` blockquote per too-large file.
+ *   2. SPILLOVER (`spillover`) — one calm `>` blockquote summarizing the
+ *      reviewed-vs-changed split for a very large PR.
+ *   3. POLICY (`policySkipped`) — collapsed <details>, NO ⚠️. Files excluded by
+ *      config/defaults aren't a coverage gap, so the note is subtle and sits
+ *      last; the summary carries the full message (a reader who never expands
+ *      still understands) and the body lists the files so the previously-
+ *      invisible skips are honestly exposed (Codex: list, don't hide).
+ *
+ * No ⚠️ anywhere — this is informational, not alarming (the SIG-411 body-only
+ * explainer dropped the "size budget" framing; this stays consistent).
+ */
+function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
+  const lines: string[] = []
+
+  // 1. Oversized — one calm blockquote per file whose diff exceeds the per-call cap.
+  for (const file of disclosure.oversized) {
+    lines.push("")
+    lines.push(`> 📄 \`${file}\` was not reviewed — its diff is too large to analyze inline in this review.`)
+  }
+
+  // 2. Spillover — the reviewed-vs-changed split for a very large PR.
+  if (disclosure.spillover.length > 0) {
+    const count = disclosure.spillover.length
+    lines.push("")
+    lines.push(
+      `> 📊 Reviewed ${disclosure.reviewedCount} of ${disclosure.totalChangedCount} changed files — the remaining ${count} ${count === 1 ? "was" : "were"} below the priority cutoff for this very large PR. Split into smaller PRs to cover them.`,
+    )
+  }
+
+  // 3. Policy — calm, collapsed, no ⚠️. The summary carries the full message;
+  // the body lists the files so a previously-invisible skip is honestly exposed.
+  // A blank line after `</summary>` (and before `</details>`) is REQUIRED for the
+  // inner markdown file list to render — same constraint as renderOutsideYourChanges.
+  if (disclosure.policySkipped.length > 0) {
+    const n = disclosure.policySkipped.length
+    const files = disclosure.policySkipped.map((p) => `\`${p}\``).join(", ")
+    lines.push("")
+    lines.push("<details>")
+    lines.push(
+      `<summary>📋 ${n} file${n === 1 ? "" : "s"} skipped — lockfiles, generated, vendored, minified, or binary files aren't reviewed by default.</summary>`,
+    )
+    lines.push("")
+    lines.push(files)
+    lines.push("")
+    lines.push("</details>")
+  }
+
+  return lines
+}
+
 export function renderApproveBody(args: RenderBodyArgs): string {
   // SIG-94: marker-only on a CLEAN approve — GitHub's native "approved these
   // changes" line is the entire signal. EXCEPTION (founder ask): when the approve
@@ -290,14 +405,33 @@ export function renderApproveBody(args: RenderBodyArgs): string {
     seenOutOfScope.add(key)
     return true
   })
-  if (outOfScope.length === 0) return `${SIGILIX_REVIEW_MARKER}\n`
-  const n = outOfScope.length
-  const lines: string[] = [
-    SIGILIX_REVIEW_MARKER,
-    "",
-    `**Approved** — no issues in your changes. ${n} ${n === 1 ? "note" : "notes"} about code outside this PR below.`,
-    ...renderOutsideYourChanges(outOfScope, args.linkContext, args.trustLedger, args.showEvidence),
-  ]
+  // SIG-414 Phase 1.2: a POLICY-only skip (lockfiles/generated/vendored) stays
+  // APPROVE — it is "not applicable", not a coverage gap — but it must still be
+  // VISIBLE. The marker-only APPROVE body would discard it, so render the
+  // disclosure notice(s) on the APPROVE body too. Codex sign-off: this is the
+  // narrow exception the marker-only path needs. In practice only `policySkipped`
+  // reaches here (oversized/spillover force an APPROVE→COMMENT downgrade in
+  // render-prep, so they render on the COMMENT body), but render whatever the
+  // disclosure carries — `renderReviewDisclosure` is independent of posture.
+  const disclosureLines = args.disclosure ? renderReviewDisclosure(args.disclosure) : []
+  if (outOfScope.length === 0 && disclosureLines.length === 0) {
+    return `${SIGILIX_REVIEW_MARKER}\n`
+  }
+  const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
+  if (outOfScope.length > 0) {
+    const n = outOfScope.length
+    lines.push(
+      `**Approved** — no issues in your changes. ${n} ${n === 1 ? "note" : "notes"} about code outside this PR below.`,
+    )
+  } else {
+    // Disclosure-only APPROVE (e.g. policy-only skip): a short reconciliation
+    // line so the calm notice below has context and the green check isn't bare.
+    lines.push("**Approved** — no issues in your changes.")
+  }
+  lines.push(...disclosureLines)
+  if (outOfScope.length > 0) {
+    lines.push(...renderOutsideYourChanges(outOfScope, args.linkContext, args.trustLedger, args.showEvidence))
+  }
   return `${lines.join("\n")}\n`
 }
 
@@ -461,18 +595,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   if (coverageInline) leadParts.push(coverageInline)
   lines.push(leadParts.join(" · "))
 
-  // SIG-245: never silently drop. If changed files spilled past the per-call
-  // diff budget (or were individually too large), they were NOT reviewed —
-  // surface a visible notice right under the headline so a dropped file is
-  // never invisible. Believability: the bot must not post as if it analyzed
-  // code it never saw.
-  if (args.notReviewedFiles && args.notReviewedFiles.length > 0) {
-    const n = args.notReviewedFiles.length
-    const files = args.notReviewedFiles.map((p) => `\`${p}\``).join(", ")
-    lines.push("")
-    lines.push(
-      `> ⚠️ **${n} file${n === 1 ? "" : "s"} not reviewed** — the diff exceeded this review's size budget, so ${n === 1 ? "it was" : "they were"} **not analyzed**: ${files}. Split the PR or re-run to cover ${n === 1 ? "it" : "them"}.`,
-    )
+  // SIG-245 / SIG-414 Phase 1.2: never silently drop. Files that weren't
+  // reviewed are surfaced right under the headline so a dropped file is never
+  // invisible. SIG-414 replaced the old single ⚠️ "size budget" notice (which
+  // conflated three distinct reasons and hid policy skips entirely) with three
+  // honest, calm cases (policy / oversized / spillover) via `disclosure`.
+  if (args.disclosure) {
+    lines.push(...renderReviewDisclosure(args.disclosure))
   }
 
   // SIG Trust Ledger v0: the per-review Trust Summary, immediately under the lead

@@ -55,6 +55,7 @@ import {
   type RenderBodyArgs,
   type ProvenanceCtx,
   type DeltaBadgeCounts,
+  type ReviewDisclosure,
 } from "./review-body"
 
 interface BuildReviewArgs {
@@ -184,10 +185,10 @@ interface BuildReviewArgs {
   showEvidence?: boolean
   /** Trust Ledger: forwarded to `RenderBodyArgs.trustLedgerSuppressed`. */
   trustLedgerSuppressed?: number
-  /** SIG-245: changed files dropped from review (diff-budget spill or
-   *  individually too large). Forwarded to `RenderBodyArgs.notReviewedFiles`
-   *  to render the visible "files not reviewed" notice. */
-  notReviewedFiles?: string[]
+  /** SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
+   *  oversized / spillover). Forwarded to `RenderBodyArgs.disclosure` so the body
+   *  renders three distinct, calm notices instead of one lumped "size budget" one. */
+  disclosure?: ReviewDisclosure
 }
 
 /**
@@ -536,7 +537,7 @@ export function buildReviewSubmissionWithMetadata({
   trustLedger,
   showEvidence,
   trustLedgerSuppressed,
-  notReviewedFiles,
+  disclosure,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const { verdict, renderVerdict, inlineFindings, inlineOriginalIndex, unanchored } = prepareReviewSubmissionFindings({
     rawVerdict,
@@ -574,7 +575,9 @@ export function buildReviewSubmissionWithMetadata({
   if (trustLedger) renderArgs.trustLedger = true
   if (showEvidence) renderArgs.showEvidence = true
   if (typeof trustLedgerSuppressed === "number") renderArgs.trustLedgerSuppressed = trustLedgerSuppressed
-  if (notReviewedFiles && notReviewedFiles.length > 0) renderArgs.notReviewedFiles = notReviewedFiles
+  // SIG-414 Phase 1.2: forward the 3-way un-reviewed disclosure (policy /
+  // oversized / spillover). The renderers (incl. renderApproveBody) read it.
+  if (disclosure) renderArgs.disclosure = disclosure
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)

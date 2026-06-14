@@ -232,6 +232,12 @@ export interface PackAndRouteResult {
   reviewedFiles: SplitFile[]
   filesNotReviewed: string[]
   droppedTooLarge: string[]
+  /** SIG-414: paths excluded by `pathFilters` BEFORE packing (lockfiles /
+   *  generated / vendored / minified / binary). Previously this was only ever
+   *  written to telemetry and died there; the render path now consumes it to
+   *  render the calm "policy skipped" disclosure note (distinct from the
+   *  oversized + spillover coverage gaps, and NOT a downgrade trigger). */
+  filesDroppedByFilter: string[]
   matchedPathInstructions: MatchedPathInstructions
   scopedRulesBlock: string
   wasTruncated: boolean
@@ -613,6 +619,7 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     reviewedFiles,
     filesNotReviewed,
     droppedTooLarge,
+    filesDroppedByFilter,
     matchedPathInstructions,
     scopedRulesBlock,
     wasTruncated,

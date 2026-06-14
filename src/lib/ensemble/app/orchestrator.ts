@@ -45,6 +45,7 @@ import { assembleSpecialistPrompts } from "./context/assemble-prompts"
 import { prepareRender } from "./render-prep"
 import { verifyAndBuildSubmission } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
+import { buildReviewDisclosure } from "@/src/lib/ensemble/render/review-body"
 import { attachInvariantLensAmendmentWork } from "./invariant-lens-amendment"
 import {
   retrievalStatusUpdate,
@@ -380,6 +381,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       reviewedFiles,
       filesNotReviewed,
       droppedTooLarge,
+      filesDroppedByFilter,
       matchedPathInstructions,
       scopedRulesBlock,
       wasTruncated,
@@ -390,6 +392,17 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       secretHits,
       router,
     } = packed
+
+    // SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
+    // oversized / spillover), built once from the packer outputs and threaded to
+    // every render path (primary + both fallbacks). `reviewedFiles.length` is the
+    // honest `n`. Pure factory; `null` when nothing was dropped.
+    const disclosure = buildReviewDisclosure({
+      policySkipped: filesDroppedByFilter,
+      oversized: droppedTooLarge,
+      spillover: filesNotReviewed,
+      reviewedCount: reviewedFiles.length,
+    })
 
     if (router.specialists.length === 0) {
       // Router found no applicable specialists; this is a clean review skip.
@@ -711,7 +724,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       effectiveEvent,
       synthConfidence,
       reviewIncomplete,
-      filesDroppedFromReview,
       reviewEventOverride,
       deltaCounts,
       currentFindingsForManifest,
@@ -837,7 +849,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       stack,
       coverage,
       deltaCounts,
-      filesDroppedFromReview,
+      disclosure,
       approvalReadiness,
       effectiveEvent,
       intendedEvent,
@@ -881,7 +893,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         stack,
         coverage,
         deltaCounts,
-        filesDroppedFromReview,
+        disclosure,
         currentFindingsForManifest,
         reviewManifestEnabled: ensembleConfig.flags.reviewManifestEnabled,
         reviewEventOverride,

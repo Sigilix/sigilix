@@ -33,6 +33,7 @@ import {
   type RenderBodyArgs,
   type ProvenanceCtx,
   type DeltaBadgeCounts,
+  type ReviewDisclosure,
 } from "./review-body"
 
 interface BuildFallbackArgs {
@@ -56,9 +57,10 @@ interface BuildFallbackArgs {
   trustLedger?: boolean
   /** SIG-112: render evidence/provenance blocks in anchorless fallback too. */
   showEvidence?: boolean
-  /** SIG-245: files dropped from review — render the "files not reviewed"
-   *  notice on the anchorless-fallback body too (CR #286). */
-  notReviewedFiles?: string[]
+  /** SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
+   *  oversized / spillover) — render the three notices on the anchorless-fallback
+   *  body too, so the 422-retry path never silently drops (CR #286 / SIG-414). */
+  disclosure?: ReviewDisclosure
 }
 
 /**
@@ -93,7 +95,7 @@ export function buildFallbackSubmission({
   eventOverride,
   trustLedger,
   showEvidence,
-  notReviewedFiles,
+  disclosure,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
@@ -130,7 +132,7 @@ export function buildFallbackSubmission({
     eventOverride,
     trustLedger,
     showEvidence,
-    notReviewedFiles,
+    disclosure,
   )
   return {
     event,
@@ -152,7 +154,7 @@ export function buildFallbackBody(
   eventOverride?: ReviewEventOverride,
   trustLedger?: boolean,
   showEvidence?: boolean,
-  notReviewedFiles?: string[],
+  disclosure?: ReviewDisclosure,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -180,6 +182,11 @@ export function buildFallbackBody(
     if (prov !== undefined) args.prov = prov
     if (coverage) args.coverage = coverage
     if (delta !== undefined) args.delta = delta
+    // SIG-414 Phase 1.2: a POLICY-only skip stays APPROVE, so the policy note
+    // must survive on the APPROVE fallback body too (renderApproveBody renders
+    // the disclosure). Pre-SIG-414 the APPROVE branch dropped the notice — a
+    // policy-only fallback would have been silent.
+    if (disclosure) args.disclosure = disclosure
     return renderApproveBody(args)
   }
   const args: RenderBodyArgs = {
@@ -194,8 +201,9 @@ export function buildFallbackBody(
   if (delta !== undefined) args.delta = delta
   if (typeof reviewCounter === "number") args.reviewCounter = reviewCounter
   if (retriggerUrl) args.retriggerUrl = retriggerUrl
-  // SIG-245 (CR #286): carry the "files not reviewed" notice onto the
-  // anchorless-fallback body too, so the 422-retry path never silently drops.
-  if (notReviewedFiles && notReviewedFiles.length > 0) args.notReviewedFiles = notReviewedFiles
+  // SIG-245 / SIG-414 Phase 1.2 (CR #286): carry the 3-way un-reviewed
+  // disclosure (policy / oversized / spillover) onto the anchorless-fallback
+  // body too, so the 422-retry path never silently drops.
+  if (disclosure) args.disclosure = disclosure
   return event === "COMMENT" ? renderCommentBody(args) : renderRequestChangesBody(args)
 }

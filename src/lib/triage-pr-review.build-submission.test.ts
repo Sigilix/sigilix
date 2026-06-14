@@ -311,45 +311,114 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.body).not.toContain("0 findings")
   })
 
-  it("SIG-245: renders a visible 'files not reviewed' notice when files were dropped from review", () => {
+  it("SIG-414: renders distinct oversized + spillover notices, NOT the old lumped 'size budget' copy", () => {
     const out = buildReviewSubmissionWithMetadata({
       verdict,
       prAuthor: "alice",
       headSha: "abc",
-      notReviewedFiles: ["src/services/exec.ts", "src/big.ts"],
+      disclosure: {
+        policySkipped: [],
+        oversized: ["src/big.ts"],
+        spillover: ["src/a.ts", "src/b.ts"],
+        reviewedCount: 3,
+        totalChangedCount: 5,
+      },
     })
-    expect(out.submission.body).toContain("2 files not reviewed")
-    expect(out.submission.body).toContain("`src/services/exec.ts`")
-    expect(out.submission.body).toContain("`src/big.ts`")
-    expect(out.submission.body).toContain("not analyzed")
-    // The notice sits up top, under the headline lead line — assert it's in the
-    // first third of the body, not buried (robust to renderer rerouting; no
-    // dependence on a downstream "Fix Plan" anchor that may be absent).
-    expect(out.submission.body!.indexOf("not reviewed")).toBeGreaterThanOrEqual(0)
-    expect(out.submission.body!.indexOf("not reviewed")).toBeLessThan(out.submission.body!.length / 3)
+    // Oversized — distinct per-file copy.
+    expect(out.submission.body).toContain(
+      "📄 `src/big.ts` was not reviewed — its diff is too large to analyze inline in this review.",
+    )
+    // Spillover — reconciled n-of-m copy with the remaining count.
+    expect(out.submission.body).toContain(
+      "📊 Reviewed 3 of 5 changed files — the remaining 2 were below the priority cutoff",
+    )
+    // The old conflated framing is gone.
+    expect(out.submission.body).not.toContain("size budget")
+    expect(out.submission.body).not.toContain("not analyzed")
+    // Notices sit up top, under the headline lead line (first third of the body).
+    expect(out.submission.body!.indexOf("was not reviewed")).toBeGreaterThanOrEqual(0)
+    expect(out.submission.body!.indexOf("was not reviewed")).toBeLessThan(out.submission.body!.length / 3)
   })
 
-  it("SIG-245: singular phrasing for one dropped file; no notice when nothing dropped", () => {
+  it("SIG-414: the policy note is a calm collapsed <details> with no ⚠️, listing the skipped files", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      disclosure: {
+        policySkipped: ["package-lock.json", "dist/bundle.min.js"],
+        oversized: [],
+        spillover: [],
+        reviewedCount: 2,
+        totalChangedCount: 2,
+      },
+    })
+    expect(out.submission.body).toContain(
+      "📋 2 files skipped — lockfiles, generated, vendored, minified, or binary files aren't reviewed by default.",
+    )
+    expect(out.submission.body).toContain("<details>")
+    expect(out.submission.body).toContain("`package-lock.json`")
+    expect(out.submission.body).toContain("`dist/bundle.min.js`")
+    // Calm — no alarming glyph, no blockquote for the policy note.
+    expect(out.submission.body).not.toContain("⚠️")
+  })
+
+  it("SIG-414: singular phrasing for one spillover file; no disclosure when nothing dropped", () => {
     const one = buildReviewSubmissionWithMetadata({
       verdict,
       prAuthor: "alice",
       headSha: "abc",
-      notReviewedFiles: ["src/services/exec.ts"],
+      disclosure: {
+        policySkipped: [],
+        oversized: [],
+        spillover: ["src/a.ts"],
+        reviewedCount: 4,
+        totalChangedCount: 5,
+      },
     })
-    expect(one.submission.body).toContain("1 file not reviewed")
-    expect(one.submission.body).toContain("it was")
+    expect(one.submission.body).toContain("the remaining 1 was below the priority cutoff")
     const none = buildReviewSubmissionWithMetadata({
       verdict,
       prAuthor: "alice",
       headSha: "abc",
     })
-    expect(none.submission.body).not.toContain("not reviewed")
+    expect(none.submission.body).not.toContain("was not reviewed")
+    expect(none.submission.body).not.toContain("skipped —")
   })
 
-  it("SIG-245: notice survives on a ZERO-findings review downgraded to COMMENT (the silent-clean-approve hole)", () => {
-    // The ensemble downgrades APPROVE→COMMENT when files were dropped, so a
-    // clean-batch[0] review routes through the findings body (which renders the
-    // notice) instead of the marker-only APPROVE body that would discard it.
+  it("SIG-414: a POLICY-ONLY skip surfaces on the APPROVE body (no downgrade, but still visible)", () => {
+    // The ensemble keeps APPROVE for a policy-only skip (it's "not applicable",
+    // not a coverage gap), so renderApproveBody must carry the policy note —
+    // the marker-only APPROVE body would otherwise discard it.
+    const empty: PrReviewVerdict = {
+      summary: "No issues found in the reviewed files.",
+      confidence: 4,
+      confidenceReason: "Reviewed batch was clean.",
+      findings: [],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: empty,
+      prAuthor: "alice",
+      headSha: "abc",
+      // No eventOverride → clean APPROVE.
+      disclosure: {
+        policySkipped: ["package-lock.json"],
+        oversized: [],
+        spillover: [],
+        reviewedCount: 3,
+        totalChangedCount: 3,
+      },
+    })
+    expect(out.submission.event).toBe("APPROVE")
+    expect(out.submission.body).toContain("**Approved**")
+    expect(out.submission.body).toContain("1 file skipped — lockfiles, generated, vendored")
+    expect(out.submission.body).toContain("`package-lock.json`")
+  })
+
+  it("SIG-414: the disclosure survives on a ZERO-findings review downgraded to COMMENT (oversized/spillover hole)", () => {
+    // Oversized + spillover are real coverage gaps → the ensemble downgrades
+    // APPROVE→COMMENT, so a clean-batch[0] review routes through the findings
+    // body (which renders the notice) instead of the marker-only APPROVE body.
     const empty: PrReviewVerdict = {
       summary: "No issues found in the reviewed files.",
       confidence: 4,
@@ -361,16 +430,21 @@ describe("buildReviewSubmission", () => {
       prAuthor: "alice",
       headSha: "abc",
       eventOverride: "COMMENT",
-      notReviewedFiles: ["src/services/exec.ts"],
+      disclosure: {
+        policySkipped: [],
+        oversized: ["src/big.ts"],
+        spillover: [],
+        reviewedCount: 2,
+        totalChangedCount: 2,
+      },
     })
     expect(out.submission.event).toBe("COMMENT")
-    expect(out.submission.body).toContain("1 file not reviewed")
-    expect(out.submission.body).toContain("`src/services/exec.ts`")
+    expect(out.submission.body).toContain("📄 `src/big.ts` was not reviewed")
   })
 
-  it("SIG-245: the anchorless fallback body also carries the notice (CR #286)", () => {
+  it("SIG-414: the anchorless fallback body also carries the disclosure (CR #286)", () => {
     // The 422-retry path re-renders via buildFallbackSubmission; it must not
-    // silently omit dropped files either.
+    // silently omit the un-reviewed disclosure either.
     const out = buildFallbackSubmission({
       verdict: {
         summary: "Re-rendered anchorless.",
@@ -382,11 +456,38 @@ describe("buildReviewSubmission", () => {
       prAuthor: null,
       headSha: "abc",
       eventOverride: "COMMENT",
-      notReviewedFiles: ["src/services/exec.ts"],
+      disclosure: {
+        policySkipped: [],
+        oversized: [],
+        spillover: ["src/a.ts"],
+        reviewedCount: 4,
+        totalChangedCount: 5,
+      },
     })
     expect(out.event).toBe("COMMENT")
-    expect(out.body).toContain("1 file not reviewed")
-    expect(out.body).toContain("`src/services/exec.ts`")
+    expect(out.body).toContain("📊 Reviewed 4 of 5 changed files")
+  })
+
+  it("SIG-414: the anchorless fallback APPROVE body carries a policy-only disclosure", () => {
+    // A policy-only skip stays APPROVE even on the fallback path — the policy
+    // note must survive (pre-SIG-414 the APPROVE fallback branch dropped it).
+    const out = buildFallbackSubmission({
+      verdict: { summary: "Re-rendered anchorless.", confidence: 4, confidenceReason: "y", findings: [] },
+      unanchored: [],
+      prAuthor: null,
+      headSha: "abc",
+      // No eventOverride → APPROVE.
+      disclosure: {
+        policySkipped: ["yarn.lock"],
+        oversized: [],
+        spillover: [],
+        reviewedCount: 1,
+        totalChangedCount: 1,
+      },
+    })
+    expect(out.event).toBe("APPROVE")
+    expect(out.body).toContain("1 file skipped — lockfiles, generated, vendored")
+    expect(out.body).toContain("`yarn.lock`")
   })
 })
 

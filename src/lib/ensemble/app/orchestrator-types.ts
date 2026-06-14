@@ -344,6 +344,21 @@ export interface EnsembleTelemetry {
     fingerprints: string[]
   }
   /**
+   * SIG-417: the pre-flight cost projection (observe-only telemetry) + the
+   * dark-governor trim outcome. Written by `packAndRoute`; read by `finalize`
+   * to emit the post-hoc `cost-projection-miss` calibration event.
+   * `governorTrimmed` is true only when the default-off governor actually
+   * removed files.
+   */
+  costProjection?: {
+    projectedUsd: number
+    perCallInputTokens: number
+    governorEnabled: boolean
+    governorTrimmed: boolean
+    trimmedPaths: string[]
+    ceilingUnmet: boolean
+  }
+  /**
    * ARC-186: dependency-vulnerability scan telemetry. `skipped: true`
    * with a reason for the skip-paths (disabled, missing manifest,
    * etc.); `skipped: false` with the finding count + scanned counts

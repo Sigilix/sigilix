@@ -24,6 +24,7 @@ import {
   type ReviewDisclosure,
 } from "@/src/lib/triage-pr-review"
 import type { StackContext, StackPr } from "@/src/lib/pr-stack"
+// SIG-417: the cost-trim disclosure aspect lives in `triage-pr-review-body.cost-trim.test.ts`.
 
 const HEAD = "abcdef1234567890abcdef1234567890abcdef12"
 const NOW = 1747547318000 // 2025-05-18T05:48:38.000Z

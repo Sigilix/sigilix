@@ -18,6 +18,7 @@
 import { chat } from "@/src/shared/adapters/model"
 import type { ChatMessage } from "@/src/shared/ports/model"
 import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "@/src/lib/ensemble/domain/model-policy"
+import type { CostProjectionLineup } from "@/src/lib/ensemble/domain/cost-projection"
 import { PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import {
@@ -132,6 +133,26 @@ export const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
   tests: SPECIALIST_CONFIGS.tests.primary,
 }
 export const SYNTHESIZER_MODEL = SYNTHESIZER_CONFIG.primary
+
+/**
+ * SIG-417: the model lineup the cost projection prices, as typed domain data.
+ * Returns ALL specialist primaries + the synth primary — a conservative
+ * UPPER-BOUND lineup (the projection runs before routing finalizes, and an
+ * over-estimate is the safe direction for a cost ceiling). The orchestrator
+ * passes this into `packAndRoute` so the packing layer never imports these
+ * adapter-owned configs.
+ */
+export function buildCostProjectionLineup(): CostProjectionLineup {
+  return {
+    specialistModels: [
+      SPECIALIST_CONFIGS.logic.primary,
+      SPECIALIST_CONFIGS.security.primary,
+      SPECIALIST_CONFIGS.performance.primary,
+      SPECIALIST_CONFIGS.tests.primary,
+    ],
+    synthModel: SYNTHESIZER_CONFIG.primary,
+  }
+}
 
 // SIG-406: baseline fanout + synth reservation ONLY — 4 specialists ×
 // maxAttempts(retries:1, fallback:null)=2 + 2×synth(2) = 12. The SIG-393 re-sweep +
@@ -269,11 +290,14 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
           // SIG-212: forward token usage from runWithRetryAndFallback.
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
+          // SIG-417: forward the actual per-call cost on the attempt event.
+          ...(info.costUsd !== undefined ? { costUsd: info.costUsd } : {}),
           ...(info.thinkingChars !== undefined ? { thinkingChars: info.thinkingChars } : {}), // SIG-287
         })
         // SIG-149: accumulate per-review token spend (every settled
         // attempt — incl. retries/fallback/parse-fail — burned tokens).
-        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
+        // SIG-417: also accumulate the actual per-call cost (credits ≈ USD).
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens, info.costUsd)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSpecialist` runs inside
@@ -336,6 +360,11 @@ export interface AttemptCallbackInfo {
    *  where no tokens were exchanged. */
   inputTokens?: number
   outputTokens?: number
+  /** SIG-417: actual per-call cost (credits ≈ USD) reported by `usage.cost`
+   *  (OpenRouter only). Rides the same paths as the token counts — present on
+   *  success + parse-failure, absent on exception paths and on providers
+   *  (Ollama) that don't report it. */
+  costUsd?: number
   /** SIG-287: cumulative thinking-char count for the attempt (length only,
    *  never the CoT text). Absent on the default-off `think:false` path. */
   thinkingChars?: number
@@ -454,6 +483,8 @@ export async function runWithRetryAndFallback<T>(args: {
       // both success and parse-failure; absent on HTTP/timeout/abort.
       ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
       ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
+      // SIG-417: forward the actual per-call cost alongside the token counts.
+      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287
     })
     if (outcome.verdict !== null) {
@@ -522,6 +553,8 @@ export async function runWithRetryAndFallback<T>(args: {
       // SIG-212: forward token usage on the fallback path too.
       ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
       ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
+      // SIG-417: forward the actual per-call cost on the fallback path too.
+      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287 (fallback: normally absent)
     })
     if (outcome.verdict !== null) {
@@ -569,6 +602,8 @@ async function attemptChat<T>(args: {
   // exception path where no tokens were exchanged.
   inputTokens?: number
   outputTokens?: number
+  // SIG-417: actual per-call cost (credits ≈ USD), same paths as the tokens.
+  costUsd?: number
   // SIG-287: cumulative thinking-char count from the adapter (length only).
   thinkingChars?: number
 }> {
@@ -604,9 +639,11 @@ async function attemptChat<T>(args: {
     // `usage` is optional on ChatResult to keep test mocks lightweight;
     // the production accumulator always returns `usage: {...}`. SIG-287:
     // thinkingChars rides alongside usage on the same paths.
-    const usagePayload: { inputTokens?: number; outputTokens?: number; thinkingChars?: number } = {}
+    const usagePayload: { inputTokens?: number; outputTokens?: number; costUsd?: number; thinkingChars?: number } = {}
     if (result.usage?.inputTokens !== undefined) usagePayload.inputTokens = result.usage.inputTokens
     if (result.usage?.outputTokens !== undefined) usagePayload.outputTokens = result.usage.outputTokens
+    // SIG-417: capture the actual per-call cost when the provider reported it.
+    if (result.usage?.costUsd !== undefined) usagePayload.costUsd = result.usage.costUsd
     if (result.thinkingChars !== undefined) usagePayload.thinkingChars = result.thinkingChars
     const verdict = args.parseAnswer(result.message.content)
     if (!verdict) {
@@ -808,9 +845,12 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
           // SIG-212: forward token usage on the synth path too.
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
+          // SIG-417: forward the actual per-call cost on the synth path too.
+          ...(info.costUsd !== undefined ? { costUsd: info.costUsd } : {}),
         })
         // SIG-149: accumulate synth token spend into the per-review total.
-        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
+        // SIG-417: also accumulate the actual per-call cost (credits ≈ USD).
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens, info.costUsd)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSynthesizer` is invoked

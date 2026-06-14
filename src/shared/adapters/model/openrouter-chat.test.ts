@@ -173,4 +173,70 @@ describe("openrouter-chat", () => {
   it("throws when chatEnabled is off", async () => {
     await expect(chat({ ...base, chatEnabled: "off" })).rejects.toThrow(/disabled/)
   })
+
+  // ─── SIG-417: usage.cost capture ──────────────────────────────────
+
+  it("captures usage.cost from the final stream chunk into costUsd", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        'data: {"choices":[{"delta":{"content":"x"}}]}\n',
+        'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.0123}}\n',
+        "data: [DONE]\n",
+      ]),
+    )
+    const r = await chat({ ...base, format: {} })
+    expect(r.usage?.costUsd).toBe(0.0123)
+    expect(r.usage?.inputTokens).toBe(10)
+  })
+
+  it("omits costUsd on the stream path when usage.cost is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        'data: {"choices":[{"delta":{"content":"x"}}]}\n',
+        'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n',
+        "data: [DONE]\n",
+      ]),
+    )
+    const r = await chat({ ...base, format: {} })
+    expect(r.usage?.costUsd).toBeUndefined()
+  })
+
+  it("captures usage.cost from the non-streaming tool completion into costUsd", async () => {
+    const f = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: null,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "", tool_calls: [] } }],
+        usage: { prompt_tokens: 11, completion_tokens: 3, cost: 0.0044 },
+      }),
+    })) as unknown as ReturnType<typeof vi.fn>
+    vi.stubGlobal("fetch", f)
+    const result = await chat({
+      ...base,
+      tools: [{ type: "function", function: { name: "noop", description: "d", parameters: { type: "object" } } }],
+    })
+    expect(result.usage?.costUsd).toBe(0.0044)
+    expect(result.usage?.inputTokens).toBe(11)
+  })
+
+  it("omits costUsd on the tool path when usage.cost is absent", async () => {
+    const f = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: null,
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "", tool_calls: [] } }],
+        usage: { prompt_tokens: 11, completion_tokens: 3 },
+      }),
+    })) as unknown as ReturnType<typeof vi.fn>
+    vi.stubGlobal("fetch", f)
+    const result = await chat({
+      ...base,
+      tools: [{ type: "function", function: { name: "noop", description: "d", parameters: { type: "object" } } }],
+    })
+    expect(result.usage?.costUsd).toBeUndefined()
+  })
 })

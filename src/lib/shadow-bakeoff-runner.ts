@@ -166,6 +166,8 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
         // AND aggregate token cost across both paths.
         ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
         ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
+        // SIG-417: forward the actual per-call cost to the shadow event too.
+        ...(info.costUsd !== undefined ? { costUsd: info.costUsd } : {}),
       })
     },
   })
@@ -258,6 +260,8 @@ export async function runShadowSynth(args: SynthShadowArgs): Promise<ShadowRunRe
         // SIG-212: forward token usage on the shadow synth path too.
         ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
         ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
+        // SIG-417: forward the actual per-call cost on the shadow synth path too.
+        ...(info.costUsd !== undefined ? { costUsd: info.costUsd } : {}),
       })
     },
   })

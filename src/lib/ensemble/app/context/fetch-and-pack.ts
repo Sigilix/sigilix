@@ -49,14 +49,23 @@ import {
   riskOrderFiles,
 } from "@/src/lib/diff-packing"
 import { isHighRiskPath } from "@/src/lib/ensemble/domain/resweep"
+import {
+  projectReviewCostUsd,
+  applyCostGovernorTrim,
+  type CostProjectionLineup,
+} from "@/src/lib/ensemble/domain/cost-projection"
 import { classifyDiffFiles } from "@/src/lib/diff-file-classify"
 import { shouldReview } from "@/src/shared/util/path-glob"
-import { runDeterministicChecks, type DeterministicCheckHit } from "@/src/shared/domain/deterministic-checks"
+import {
+  runDeterministicChecks,
+  type DeterministicCheck,
+  type DeterministicCheckHit,
+} from "@/src/shared/domain/deterministic-checks"
 import { runSecretScan, type SecretHit } from "@/src/lib/secret-scan"
 import { readLastReviewedSha, selectDiff } from "@/src/lib/incremental-review"
 import { decideSpecialists, type RouterDecision } from "@/src/lib/ensemble-router"
 import { decideSpecialistsDynamic } from "@/src/lib/dynamic-dispatcher"
-import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import type { EnsembleConfig, CostGovernorConfig } from "@/src/lib/ensemble/domain/config"
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 import { buildDispatcherSavingsSummary, emitDispatcherSavingsSummary } from "@/src/lib/ensemble-perf-telemetry"
@@ -203,6 +212,22 @@ export interface PackAndRouteTelemetry {
   routerDecision: RouterDecision | null
   legacyRouterDecision?: RouterDecision
   dispatcherDecision?: import("@/src/lib/dynamic-dispatcher").DispatcherDecision
+  /** SIG-417: the pre-flight cost projection (observe-only) + the dark
+   *  governor's trim outcome. `governorTrimmed` is true ONLY when the
+   *  default-off governor actually removed files — the orchestrator reads it to
+   *  force a notice/disclosure path instead of the router-empty silent skip. */
+  costProjection?: {
+    projectedUsd: number
+    perCallInputTokens: number
+    /** Whether the governor was enabled this run (telemetry vs enforcing). */
+    governorEnabled: boolean
+    /** True iff the governor actually trimmed ≥1 file (drives force-notice). */
+    governorTrimmed: boolean
+    /** Paths the governor trimmed (lowest-risk; never high-risk/scanner-hit). */
+    trimmedPaths: string[]
+    /** True when a floor stopped the trim before the ceiling (still over budget). */
+    ceilingUnmet: boolean
+  }
 }
 
 export interface PackAndRouteArgs {
@@ -220,6 +245,12 @@ export interface PackAndRouteArgs {
   sigilixConfig: SigilixConfig
   shouldLoadAiInstructions: boolean
   costControls: CostControlsConfig
+  /** SIG-417: the model lineup the cost projection prices, passed IN as typed
+   *  data so the packing layer never imports model-provider state. The
+   *  orchestrator builds it from `SPECIALIST_CONFIGS`/`SYNTHESIZER_CONFIG`. The
+   *  projection (telemetry, always) + the dark governor trim (default-off) use
+   *  it. Optional so non-edge / test callers can omit it (projection skipped). */
+  costProjectionLineup?: CostProjectionLineup
   /** Mutated by reference: diffPacking / deterministicChecks / secretScan / router writes. */
   telemetry: PackAndRouteTelemetry
 }
@@ -247,6 +278,11 @@ export interface PackAndRouteResult {
   deterministicHits: DeterministicCheckHit[]
   secretHits: SecretHit[]
   router: RouterDecision
+  /** SIG-417: paths the dark cost governor trimmed (default-off → empty). The
+   *  orchestrator feeds these to `buildReviewDisclosure({ costTrimmed })` so a
+   *  trimmed file is disclosed with its own copy (never the spillover wording),
+   *  and uses non-empty as the "force a notice, not a silent skip" signal. */
+  costTrimmedPaths: string[]
 }
 
 export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteResult> {
@@ -263,6 +299,7 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     fullDiff,
     shouldLoadAiInstructions,
     costControls,
+    costProjectionLineup,
     telemetry,
   } = a
   let sigilixConfig = a.sigilixConfig
@@ -328,8 +365,34 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
   // `fullDiff` below, so the common case is byte-identical.
   const riskOrderedFiles = riskOrderFiles(filesAfterFilter, isHighRiskPath)
   const { batches, droppedTooLarge } = packFilesIntoBatches(riskOrderedFiles)
-  const reviewedFiles = batches[0] ?? []
-  const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
+  // SIG-417: the reviewed batch is `let` because the dark cost governor (when
+  // explicitly enabled — default OFF) may trim its lowest-risk TAIL right here,
+  // BEFORE `diff`/`reviewable`/scans/routing derive (the correct mutation
+  // boundary — Codex sign-off). Default-off → these are byte-identical to the
+  // SIG-414 1.1 outputs and `costTrimmedPaths` stays empty.
+  let reviewedFiles = batches[0] ?? []
+  let filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
+  // SIG-417: projection telemetry (ALWAYS) + the dark governor trim (default-off,
+  // recall-guarded). Mutates `reviewedFiles` only when the governor is enabled
+  // AND a ceiling is set AND the projection exceeds it. Returns the trimmed
+  // paths for the disclosure + the force-notice signal.
+  const costTrimmedPaths = applyCostGovernorSeam({
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    costGovernor: ensembleConfig.tunables.costGovernor,
+    ...(costProjectionLineup !== undefined ? { lineup: costProjectionLineup } : {}),
+    deterministicChecks: sigilixConfig.deterministicChecks ?? [],
+    telemetry,
+    reviewedFiles,
+    setReviewedFiles: (next) => {
+      reviewedFiles = next
+    },
+    appendNotReviewed: (paths) => {
+      filesNotReviewed = [...filesNotReviewed, ...paths]
+    },
+  })
   const baseDiff =
     reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0 ? fullDiff : batchToDiff(reviewedFiles)
   const matchedPathInstructions = resolvePathInstructionsForChangedPaths(
@@ -629,5 +692,130 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     deterministicHits,
     secretHits,
     router,
+    costTrimmedPaths,
   }
+}
+
+/**
+ * SIG-417 — the cost-projection telemetry + dark-governor seam, factored out of
+ * `packAndRoute` for readability. Two responsibilities:
+ *
+ *   1. ALWAYS (observe-only): project the review's cost from the model lineup ×
+ *      the reviewed-batch token size and emit a `cost-projection` event. No
+ *      enforcement, no mutation — pure telemetry, recall-neutral. Skipped only
+ *      when no lineup was passed (non-edge/test callers).
+ *   2. WHEN the governor is explicitly ENABLED with a ceiling (default OFF):
+ *      trim the lowest-risk TAIL of `reviewedFiles` until the projection is
+ *      at/under the ceiling, with HARD recall floors — never below
+ *      `minReviewedFiles`, never a high-risk file, and never a file with a
+ *      deterministic/secret hit on the PRE-trim batch (those scans run on the
+ *      packed diff, so trimming a hit-bearing file would drop a real P0 from the
+ *      cheap detector too — Codex sign-off #3). Trimmed paths flow to
+ *      `filesNotReviewed` + are returned for the distinct cost-trim disclosure.
+ *
+ * Returns the trimmed paths (empty unless the governor actually trimmed). The
+ * default-off path returns `[]` and leaves `reviewedFiles` byte-identical.
+ */
+function applyCostGovernorSeam(args: {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  costGovernor: CostGovernorConfig
+  lineup?: CostProjectionLineup
+  deterministicChecks: DeterministicCheck[]
+  telemetry: PackAndRouteTelemetry
+  reviewedFiles: SplitFile[]
+  setReviewedFiles: (next: SplitFile[]) => void
+  appendNotReviewed: (paths: string[]) => void
+}): string[] {
+  const { owner, repo, prNumber, headSha, costGovernor, lineup, telemetry } = args
+  // No lineup → can't price a projection (non-edge/test path). Nothing to do.
+  if (!lineup) return []
+
+  const overheadTokens = costGovernor.perCallOverheadTokensEst
+  // Re-projects the cost for a candidate kept-set: each model reads the kept
+  // diff once (+ the fixed overhead). Closes over the lineup + overhead so the
+  // pure projection/trim functions never import model-provider state.
+  const projectUsdForFiles = (kept: readonly SplitFile[]): number =>
+    projectReviewCostUsd({
+      specialistModels: lineup.specialistModels,
+      synthModel: lineup.synthModel,
+      reviewedDiffTokens: estimateTokens(batchToDiff([...kept])),
+      perCallOverheadTokensEst: overheadTokens,
+    }).projectedUsd
+
+  const initialProjection = projectReviewCostUsd({
+    specialistModels: lineup.specialistModels,
+    synthModel: lineup.synthModel,
+    reviewedDiffTokens: estimateTokens(batchToDiff(args.reviewedFiles)),
+    perCallOverheadTokensEst: overheadTokens,
+  })
+
+  // The dark governor only acts when explicitly enabled AND a ceiling is set
+  // AND the projection exceeds it. Otherwise this is observe-only telemetry.
+  const willTrim =
+    costGovernor.enabled &&
+    costGovernor.ceilingUsd !== undefined &&
+    initialProjection.projectedUsd > costGovernor.ceilingUsd
+
+  let trimmedPaths: string[] = []
+  let finalProjectedUsd = initialProjection.projectedUsd
+  let ceilingUnmet = false
+
+  if (willTrim) {
+    // Codex sign-off #3: pre-scan the PRE-trim reviewed batch so any file with a
+    // deterministic-check or secret hit is UNTRIMMABLE — trimming it would drop
+    // it from the cheap P0/P1 detectors (which run on the packed diff), not just
+    // the LLM. This is what makes an enabled trim recall-bounded.
+    const preTrimDiff = batchToDiff(args.reviewedFiles)
+    const protectedPaths = new Set<string>()
+    for (const hit of runDeterministicChecks(preTrimDiff, args.deterministicChecks).hits) protectedPaths.add(hit.path)
+    for (const hit of runSecretScan(preTrimDiff)) protectedPaths.add(hit.path)
+
+    const trim = applyCostGovernorTrim<SplitFile>({
+      reviewedFiles: args.reviewedFiles,
+      projectUsdForFiles,
+      ceilingUsd: costGovernor.ceilingUsd!,
+      minReviewedFiles: costGovernor.minReviewedFiles,
+      isHighRisk: isHighRiskPath,
+      protectedPaths,
+    })
+    if (trim.trimmed.length > 0) {
+      args.setReviewedFiles(trim.kept)
+      trimmedPaths = trim.trimmed.map((f) => f.path)
+      args.appendNotReviewed(trimmedPaths)
+    }
+    finalProjectedUsd = trim.projectedUsd
+    ceilingUnmet = trim.ceilingUnmet
+  }
+
+  telemetry.costProjection = {
+    projectedUsd: finalProjectedUsd,
+    perCallInputTokens: initialProjection.perCallInputTokens,
+    governorEnabled: costGovernor.enabled,
+    governorTrimmed: trimmedPaths.length > 0,
+    trimmedPaths,
+    ceilingUnmet,
+  }
+  console.log(
+    JSON.stringify({
+      event: "cost-projection",
+      owner,
+      repo,
+      prNumber,
+      headSha: headSha.slice(0, 7),
+      projectedUsd: finalProjectedUsd,
+      preTrimProjectedUsd: initialProjection.projectedUsd,
+      perCallInputTokens: initialProjection.perCallInputTokens,
+      models: [...lineup.specialistModels, lineup.synthModel],
+      ...(costGovernor.ceilingUsd !== undefined ? { ceilingUsd: costGovernor.ceilingUsd } : {}),
+      governorEnabled: costGovernor.enabled,
+      governorTrimmed: trimmedPaths.length > 0,
+      trimmedCount: trimmedPaths.length,
+      ceilingUnmet,
+    }),
+  )
+
+  return trimmedPaths
 }

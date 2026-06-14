@@ -74,6 +74,65 @@ describe("runSpecialistToolConversation", () => {
     expect(out.usage).toEqual({ inputTokens: 4, outputTokens: 6 })
   })
 
+  // SIG-417: the actual per-call cost (usage.cost → costUsd) must sum across the
+  // tool turn + the final turn, just like the token counts — a multi-turn tool
+  // conversation otherwise loses its per-turn cost.
+  it("sums costUsd across the tool turn and the final turn", async () => {
+    const tool = makeTool()
+    const toolTurn: ChatResult = {
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "a", function: { name: "file_grep", arguments: { query: "x" } } }],
+      },
+      hasToolCalls: true,
+      usage: { inputTokens: 1, outputTokens: 2, costUsd: 0.001 },
+    }
+    const finalTurn: ChatResult = {
+      message: { role: "assistant", content: '{"summary":"ok"}' },
+      hasToolCalls: false,
+      usage: { inputTokens: 3, outputTokens: 4, costUsd: 0.002 },
+    }
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      .mockResolvedValueOnce(toolTurn)
+      .mockResolvedValueOnce(finalTurn)
+
+    const out = await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+    expect(out.usage).toEqual({ inputTokens: 4, outputTokens: 6, costUsd: 0.003 })
+  })
+
+  // SIG-417: when no turn reports a cost, costUsd stays omitted (not zero).
+  it("omits costUsd when neither turn reported a cost", async () => {
+    const tool = makeTool()
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      .mockResolvedValueOnce(toolResult([{ id: "a", function: { name: "file_grep", arguments: { query: "x" } } }]))
+      .mockResolvedValueOnce(finalResult())
+    const out = await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+    // No cost on either turn → costUsd omitted; tokens still summed.
+    expect(out.usage).toEqual({ inputTokens: 4, outputTokens: 6 })
+    expect(out.usage?.costUsd).toBeUndefined()
+  })
+
   it("returns invalid argument errors as tool messages instead of throwing", async () => {
     const tool = makeTool()
     const chat = vi

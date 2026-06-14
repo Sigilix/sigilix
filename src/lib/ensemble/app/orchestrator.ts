@@ -38,6 +38,7 @@ import {
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
 import { runSpecialistsAndSynthesize } from "./specialists"
+import { buildCostProjectionLineup } from "@/src/lib/ensemble/adapters/model-provider"
 import { fetchDiffAndConfig, packAndRoute } from "./context/fetch-and-pack"
 import { gatherRetrievalEvidence } from "./context/gather-evidence"
 import { gatherGraphEvidence } from "./context/gather-graph"
@@ -372,6 +373,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       sigilixConfig,
       shouldLoadAiInstructions,
       costControls,
+      costProjectionLineup: buildCostProjectionLineup(), // SIG-417 (see PackAndRouteArgs doc)
       telemetry,
     })
     sigilixConfig = packed.sigilixConfig
@@ -391,6 +393,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       deterministicHits,
       secretHits,
       router,
+      costTrimmedPaths,
     } = packed
 
     // SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
@@ -402,12 +405,18 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       oversized: droppedTooLarge,
       spillover: filesNotReviewed,
       reviewedCount: reviewedFiles.length,
+      costTrimmed: costTrimmedPaths, // SIG-417: default-off → empty
     })
 
     if (router.specialists.length === 0) {
-      // Router found no applicable specialists; this is a clean review skip.
+      // Router found no applicable specialists.
       telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
+      // SIG-417 (Codex #5): a dark-governor trim that empties routing posts a
+      // skip-notice COMMENT (never the silent skip) so trimmed files aren't hidden.
+      if (costTrimmedPaths.length > 0) {
+        return bailWithSkipNotice("cost_governor_trimmed_all_routable")
+      }
       args.statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
       return finalize(telemetry, env, "skipped", cache, {
         event: "APPROVE",

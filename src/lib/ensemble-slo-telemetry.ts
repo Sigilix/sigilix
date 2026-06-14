@@ -31,64 +31,46 @@
 //     so a new model name never silently drops to $0.
 
 import { type EnsembleRunCtx } from "./ensemble-perf-telemetry"
+import { pricingForModel } from "@/src/shared/domain/model-pricing"
 
 // ─── pricing ────────────────────────────────────────────────────────
 
-/** USD per 1,000,000 tokens, split by direction. */
-export interface ModelPricing {
-  inputPerMTokUsd: number
-  outputPerMTokUsd: number
-}
-
-/** Operator-maintained estimate. Keys match the `model` string the
- *  ensemble passes to `chat()` (e.g. `deepseek-v4-pro:cloud`). Keep this
- *  table in sync with `SPECIALIST_CONFIGS` / synth config when models
- *  change. Numbers are deliberately conservative cloud-inference
- *  estimates — see the module header on why these are not billed rates. */
-export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
-  "deepseek-v4-pro:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 1.7 },
-  "kimi-k2.7-code:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.5 },
-  "glm-5.1:cloud": { inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },
-  "qwen3:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 0.9 },
-  "minimax:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 1.1 },
-  // SIG-392: the synth primary (swapped from gpt-oss:120b). gemma4:31b is the
-  // SMALLEST model in the lineup (31B vs the 100-670B others), so it sits at
-  // the low end of the estimate table. Without this row the synth's most-
-  // frequent call fell through to DEFAULT_PRICING (0.6/2.5) — hiding the ~4×
-  // per-call cost drop the swap measured. Estimate sized so the synth cost line
-  // on the dashboard reflects the real drop, not the over-estimating default.
-  "gemma4:31b": { inputPerMTokUsd: 0.15, outputPerMTokUsd: 0.6 },
-  // SIG-406 alpha — the OpenRouter lineup. Unlike the rows above (conservative
-  // cloud estimates), these are OpenRouter's PUBLISHED list rates (per-MTok, from
-  // the /models catalog), so the cost dashboard reflects real OpenRouter spend.
-  // Keep in sync with SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG / CLAIM_EXTRACTOR_CONFIG
-  // / DISPATCHER_LLM_MODEL (the dynamic-dispatcher.ts classifier).
-  "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 },
-  "deepseek/deepseek-v4-flash": { inputPerMTokUsd: 0.09, outputPerMTokUsd: 0.18 },
-  "deepseek/deepseek-v4-pro": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 },
-  "z-ai/glm-5.1": { inputPerMTokUsd: 0.98, outputPerMTokUsd: 3.08 },
-  "nvidia/nemotron-3-ultra-550b-a55b": { inputPerMTokUsd: 0.5, outputPerMTokUsd: 2.5 },
-}
-
-/** Applied to any model not in `MODEL_PRICING`. Sized at the high end of
- *  the table so an untracked model over-estimates cost rather than
- *  hiding spend — a too-high number trips the budget alert (visible),
- *  a too-low one doesn't (silent). */
-export const DEFAULT_PRICING: ModelPricing = {
-  inputPerMTokUsd: 0.6,
-  outputPerMTokUsd: 2.5,
-}
-
-export function pricingForModel(model: string): ModelPricing {
-  return MODEL_PRICING[model] ?? DEFAULT_PRICING
-}
+// SIG-417: the pricing table + `pricingForModel` moved to the pure domain leaf
+// `@/src/shared/domain/model-pricing` so the cost-projection domain module can
+// read pricing without a domain→lib import (the dependency rule). Re-exported
+// here so this module's public surface (and its importers/tests) are unchanged.
+export { type ModelPricing, MODEL_PRICING, DEFAULT_PRICING, pricingForModel } from "@/src/shared/domain/model-pricing"
 
 // ─── token accumulation ─────────────────────────────────────────────
 
 /** Per-review token totals, keyed by the model that produced them.
  *  Mutated in place by the recorder so the orchestrator can hang it
- *  straight off the telemetry object. */
-export type TokenUsageByModel = Record<string, { inputTokens: number; outputTokens: number }>
+ *  straight off the telemetry object.
+ *
+ *  SIG-417 — the cost split (Codex sign-off #2): a single model can mix
+ *  attempts that DID report a provider cost (OpenRouter `usage.cost`) with
+ *  attempts that did NOT (a torn stream, an Ollama `:cloud` eval override). A
+ *  naive "prefer costUsd when present" would silently DROP the unpriced
+ *  attempt's spend. So we split:
+ *   - `inputTokens` / `outputTokens` — the TRUE totals across ALL attempts (the
+ *     SLO token fields; unchanged meaning).
+ *   - `costUsd` — SUM of the actual per-call cost from attempts that reported it
+ *     (credits ≈ USD). Optional; absent when no attempt reported a cost.
+ *   - `unpricedInputTokens` / `unpricedOutputTokens` — tokens from attempts with
+ *     NO reported cost, which `computeReviewCost` prices via `MODEL_PRICING`.
+ *  Final per-model cost = `costUsd + unpricedTokens × pricing` — measured where
+ *  we have it, estimated only for the genuinely-unpriced remainder. Never
+ *  zero-filled (the unpriced fields stay absent when every attempt was priced). */
+export type TokenUsageByModel = Record<
+  string,
+  {
+    inputTokens: number
+    outputTokens: number
+    costUsd?: number
+    unpricedInputTokens?: number
+    unpricedOutputTokens?: number
+  }
+>
 
 /**
  * Build the callback the orchestrator hangs on `perfCtx.recordTokens`.
@@ -100,15 +82,30 @@ export type TokenUsageByModel = Record<string, { inputTokens: number; outputToke
  * coerced to 0 — so a provider that doesn't surface usage leaves the
  * model absent rather than logging a misleading zero. Pure aside from
  * the in-place mutation of `sink`; exported for tests.
+ *
+ * SIG-417: per attempt, route the tokens by whether THIS attempt reported a
+ * cost. A priced attempt adds its `costUsd` (and its tokens count only toward
+ * the SLO totals). An UNPRICED attempt additionally adds its tokens to the
+ * `unpriced*` buckets so they get estimated, not dropped (Codex #2). A call
+ * carrying ONLY a cost (no token counts) still records — the early-out fires
+ * only when all are absent.
  */
 export function makeTokenRecorder(
   sink: TokenUsageByModel,
-): (model: string, inputTokens?: number, outputTokens?: number) => void {
-  return (model, inputTokens, outputTokens) => {
-    if (inputTokens === undefined && outputTokens === undefined) return
+): (model: string, inputTokens?: number, outputTokens?: number, costUsd?: number) => void {
+  return (model, inputTokens, outputTokens, costUsd) => {
+    if (inputTokens === undefined && outputTokens === undefined && costUsd === undefined) return
     const entry = sink[model] ?? { inputTokens: 0, outputTokens: 0 }
     if (inputTokens !== undefined) entry.inputTokens += inputTokens
     if (outputTokens !== undefined) entry.outputTokens += outputTokens
+    if (costUsd !== undefined) {
+      entry.costUsd = (entry.costUsd ?? 0) + costUsd
+    } else {
+      // This attempt reported no cost — its tokens must be priced via the
+      // estimate, not folded into a measured-cost model and dropped.
+      if (inputTokens !== undefined) entry.unpricedInputTokens = (entry.unpricedInputTokens ?? 0) + inputTokens
+      if (outputTokens !== undefined) entry.unpricedOutputTokens = (entry.unpricedOutputTokens ?? 0) + outputTokens
+    }
     sink[model] = entry
   }
 }
@@ -121,16 +118,39 @@ export interface ReviewCost {
   byModelUsd: Record<string, number>
 }
 
-/** Pure tokens → USD using `MODEL_PRICING`. Exported for tests. */
+/**
+ * Per-review cost, blended actual + estimate. Exported for tests.
+ *
+ * SIG-417: per model, cost = the measured `costUsd` (the priced attempts'
+ * provider `usage.cost`) PLUS a `MODEL_PRICING` estimate over the UNPRICED token
+ * remainder (`unpriced*`, from attempts that reported no cost). This blends
+ * measured spend with an estimate only where we had no measurement — and never
+ * drops an unpriced attempt (Codex sign-off #2). When every attempt was priced
+ * the unpriced buckets are absent → pure measured cost; when none were priced
+ * the unpriced buckets equal the totals → the pre-SIG-417 pure-estimate result.
+ *
+ * ASSUMPTION (Codex/founder-confirmed): OpenRouter `usage.cost` is denominated
+ * in CREDITS, treated here as USD-equivalent (≈USD, not contractually
+ * guaranteed). If credits ever diverge from USD this is the single conversion
+ * point. Token totals are always the real summed counts, independent of which
+ * cost source priced them.
+ */
 export function computeReviewCost(usage: TokenUsageByModel): ReviewCost {
   let totalUsd = 0
   let totalInputTokens = 0
   let totalOutputTokens = 0
   const byModelUsd: Record<string, number> = {}
   for (const [model, t] of Object.entries(usage)) {
+    const measuredUsd = t.costUsd ?? 0
+    // Estimate ONLY the tokens that came with no provider cost. When `costUsd`
+    // is absent the unpriced buckets default to the full totals (a model whose
+    // every attempt was unpriced), preserving the pre-SIG-417 estimate.
+    const estInputTokens = t.unpricedInputTokens ?? (t.costUsd === undefined ? t.inputTokens : 0)
+    const estOutputTokens = t.unpricedOutputTokens ?? (t.costUsd === undefined ? t.outputTokens : 0)
     const price = pricingForModel(model)
-    const usd =
-      (t.inputTokens / 1_000_000) * price.inputPerMTokUsd + (t.outputTokens / 1_000_000) * price.outputPerMTokUsd
+    const estimatedUsd =
+      (estInputTokens / 1_000_000) * price.inputPerMTokUsd + (estOutputTokens / 1_000_000) * price.outputPerMTokUsd
+    const usd = measuredUsd + estimatedUsd
     byModelUsd[model] = usd
     totalUsd += usd
     totalInputTokens += t.inputTokens

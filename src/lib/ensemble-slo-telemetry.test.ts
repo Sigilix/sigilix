@@ -65,7 +65,12 @@ describe("makeTokenRecorder", () => {
     const record = makeTokenRecorder(sink)
     record("m1", 100, 10)
     record("m1", 50, 5)
-    expect(sink).toEqual({ m1: { inputTokens: 150, outputTokens: 15 } })
+    // SIG-417: a cost-less attempt buckets its tokens as `unpriced*` (so
+    // `computeReviewCost` estimates them rather than dropping them); the
+    // input/output totals still sum across attempts exactly as before.
+    expect(sink).toEqual({
+      m1: { inputTokens: 150, outputTokens: 15, unpricedInputTokens: 150, unpricedOutputTokens: 15 },
+    })
   })
 
   it("keeps models separate", () => {
@@ -73,8 +78,18 @@ describe("makeTokenRecorder", () => {
     const record = makeTokenRecorder(sink)
     record("m1", 100, 10)
     record("m2", 200, 20)
-    expect(sink["m1"]).toEqual({ inputTokens: 100, outputTokens: 10 })
-    expect(sink["m2"]).toEqual({ inputTokens: 200, outputTokens: 20 })
+    expect(sink["m1"]).toEqual({
+      inputTokens: 100,
+      outputTokens: 10,
+      unpricedInputTokens: 100,
+      unpricedOutputTokens: 10,
+    })
+    expect(sink["m2"]).toEqual({
+      inputTokens: 200,
+      outputTokens: 20,
+      unpricedInputTokens: 200,
+      unpricedOutputTokens: 20,
+    })
   })
 
   it("treats undefined as no-data, not zero (model stays absent)", () => {
@@ -88,7 +103,53 @@ describe("makeTokenRecorder", () => {
     const sink: TokenUsageByModel = {}
     const record = makeTokenRecorder(sink)
     record("m1", 100, undefined)
-    expect(sink["m1"]).toEqual({ inputTokens: 100, outputTokens: 0 })
+    // outputTokens stays 0 (not zero-filled as data); the cost-less input is
+    // bucketed unpriced. The output side records no unpriced bucket.
+    expect(sink["m1"]).toEqual({ inputTokens: 100, outputTokens: 0, unpricedInputTokens: 100 })
+  })
+
+  // SIG-417: a priced attempt (4th arg = costUsd) records its cost and does NOT
+  // bucket its tokens as unpriced — those tokens are already paid for by the
+  // measured cost.
+  it("records an actual costUsd and leaves priced tokens out of the unpriced buckets", () => {
+    const sink: TokenUsageByModel = {}
+    const record = makeTokenRecorder(sink)
+    record("m1", 100, 10, 0.0042)
+    expect(sink["m1"]).toEqual({ inputTokens: 100, outputTokens: 10, costUsd: 0.0042 })
+  })
+
+  // SIG-417: sums actual cost across multiple priced attempts.
+  it("sums costUsd across attempts of the same model", () => {
+    const sink: TokenUsageByModel = {}
+    const record = makeTokenRecorder(sink)
+    record("m1", 100, 10, 0.001)
+    record("m1", 50, 5, 0.002)
+    expect(sink["m1"]).toEqual({ inputTokens: 150, outputTokens: 15, costUsd: 0.003 })
+  })
+
+  // SIG-417: a MIXED model — one priced attempt + one cost-less attempt — keeps
+  // both the measured cost AND the unpriced tokens, so neither is dropped.
+  it("keeps both measured cost and unpriced tokens for a mixed model", () => {
+    const sink: TokenUsageByModel = {}
+    const record = makeTokenRecorder(sink)
+    record("m1", 100, 10, 0.005) // priced
+    record("m1", 40, 4) // cost-less → unpriced bucket
+    expect(sink["m1"]).toEqual({
+      inputTokens: 140,
+      outputTokens: 14,
+      costUsd: 0.005,
+      unpricedInputTokens: 40,
+      unpricedOutputTokens: 4,
+    })
+  })
+
+  // SIG-417: a cost-only call (no token counts) still records — the early-out
+  // fires only when all three are absent.
+  it("records a cost-only call (no token counts)", () => {
+    const sink: TokenUsageByModel = {}
+    const record = makeTokenRecorder(sink)
+    record("m1", undefined, undefined, 0.007)
+    expect(sink["m1"]).toEqual({ inputTokens: 0, outputTokens: 0, costUsd: 0.007 })
   })
 })
 
@@ -128,6 +189,49 @@ describe("computeReviewCost", () => {
     expect(cost.totalInputTokens).toBe(0)
     expect(cost.totalOutputTokens).toBe(0)
     expect(cost.byModelUsd).toEqual({})
+  })
+
+  // SIG-417: prefer the measured `usage.cost` over the token estimate.
+  it("prefers the actual measured costUsd over the token estimate", () => {
+    // Without costUsd the estimate would be 2.3 USD (as above); the measured
+    // 0.42 must win for a fully-priced model.
+    const usage: TokenUsageByModel = {
+      "deepseek-v4-pro:cloud": { inputTokens: 1_000_000, outputTokens: 1_000_000, costUsd: 0.42 },
+    }
+    const cost = computeReviewCost(usage)
+    expect(cost.totalUsd).toBeCloseTo(0.42, 6)
+    expect(cost.byModelUsd["deepseek-v4-pro:cloud"]).toBeCloseTo(0.42, 6)
+    // Token totals are still the real counts, independent of the cost source.
+    expect(cost.totalInputTokens).toBe(1_000_000)
+    expect(cost.totalOutputTokens).toBe(1_000_000)
+  })
+
+  // SIG-417: a MIXED model — measured cost for priced tokens + an estimate for
+  // the unpriced remainder — sums both (never drops the unpriced attempt; Codex
+  // sign-off #2).
+  it("blends measured cost with an estimate for the unpriced remainder", () => {
+    // Priced portion: costUsd 0.10. Unpriced remainder: 1M input on qwen3
+    // (0.3/MTok) = 0.3. Total = 0.40.
+    const usage: TokenUsageByModel = {
+      "qwen3:cloud": {
+        inputTokens: 2_000_000,
+        outputTokens: 0,
+        costUsd: 0.1,
+        unpricedInputTokens: 1_000_000,
+        unpricedOutputTokens: 0,
+      },
+    }
+    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(0.4, 6)
+  })
+
+  // SIG-417: a mixed lineup — one OpenRouter model with measured cost + one
+  // Ollama `:cloud` model with no cost — blends measured + estimated.
+  it("blends an OpenRouter measured model with an Ollama estimated model", () => {
+    const usage: TokenUsageByModel = {
+      "openai/o3": { inputTokens: 500_000, outputTokens: 100_000, costUsd: 1.25 }, // measured
+      "qwen3:cloud": { inputTokens: 1_000_000, outputTokens: 0 }, // estimate → 0.3
+    }
+    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(1.55, 6)
   })
 })
 

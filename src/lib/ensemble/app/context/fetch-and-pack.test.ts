@@ -142,3 +142,114 @@ describe("packAndRoute — byte-identity", () => {
     expect(result.diff).toBe(fullDiff)
   })
 })
+
+// SIG-417 — the cost-projection telemetry + dark-governor seam, driven through
+// `packAndRoute` model-free (same harness as above). A realistic lineup so
+// MODEL_PRICING applies; the governor env vars flow via `parseEnsembleConfig`.
+const LINEUP = {
+  specialistModels: ["openai/o3", "deepseek/deepseek-v4-flash", "z-ai/glm-5.1", "deepseek/deepseek-v4-pro"],
+  synthModel: "nvidia/nemotron-3-ultra-550b-a55b",
+}
+
+describe("packAndRoute — SIG-417 cost projection + dark governor", () => {
+  // `packAndRoute` mutates the telemetry by reference; capture the passed-in
+  // object so we can assert the `costProjection` it writes.
+  function argsWithTelemetry(over: Partial<PackAndRouteArgs> & { fullDiff: string }): {
+    args: PackAndRouteArgs
+    telemetry: PackAndRouteTelemetry
+  } {
+    const telemetry: PackAndRouteTelemetry = { routerDecision: null }
+    return { args: makeArgs({ ...over, telemetry }), telemetry }
+  }
+
+  it("DEFAULT-OFF: review byte-identical, no trim, projection telemetry still recorded", async () => {
+    const a = fileBlock("src/util.ts", "export const a = 1")
+    const b = fileBlock("src/helpers.ts", "export const b = 2")
+    const fullDiff = `${a}\n${b}`
+
+    // parseEnsembleConfig({}) → costGovernor.enabled = false (the default).
+    const { args, telemetry } = argsWithTelemetry({ fullDiff, costProjectionLineup: LINEUP })
+    const result = await packAndRoute(args)
+
+    // Byte-identical reviewed set + diff (governor off → no mutation).
+    expect(result.reviewedFiles.map((f) => f.path)).toEqual(["src/util.ts", "src/helpers.ts"])
+    expect(result.filesNotReviewed).toEqual([])
+    expect(result.costTrimmedPaths).toEqual([])
+    expect(result.diff).toBe(fullDiff)
+    // Projection telemetry is unconditional (observe-only) — recorded, not enforcing.
+    expect(telemetry.costProjection?.governorEnabled).toBe(false)
+    expect(telemetry.costProjection?.governorTrimmed).toBe(false)
+    expect(telemetry.costProjection?.projectedUsd).toBeGreaterThan(0)
+  })
+
+  it("ENABLED + low ceiling: trims the lowest-risk TAIL to filesNotReviewed + costTrimmedPaths", async () => {
+    // Three normal files (none high-risk) so risk order == diff order.
+    const a = fileBlock("src/a.ts", "export const a = 1")
+    const b = fileBlock("src/b.ts", "export const b = 2")
+    const c = fileBlock("src/c.ts", "export const c = 3")
+    const fullDiff = `${a}\n${b}\n${c}`
+
+    const ensembleConfig = parseEnsembleConfig({
+      OPENCLAW_COST_GOVERNOR_ENABLED: "on",
+      // A tiny ceiling forces aggressive trimming down to the floor (1 file).
+      OPENCLAW_COST_GOVERNOR_CEILING_USD: "0.0000001",
+      OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES: "1",
+    })
+    const { args, telemetry } = argsWithTelemetry({ fullDiff, ensembleConfig, costProjectionLineup: LINEUP })
+    const result = await packAndRoute(args)
+
+    // Floor = 1 → exactly one file (the highest-risk = first) survives.
+    expect(result.reviewedFiles).toHaveLength(1)
+    expect(result.reviewedFiles[0]?.path).toBe("src/a.ts")
+    // The trimmed tail flows into BOTH filesNotReviewed (1.2 spillover plumbing)
+    // and costTrimmedPaths (the distinct cost-trim disclosure).
+    expect(result.costTrimmedPaths.sort()).toEqual(["src/b.ts", "src/c.ts"])
+    expect(result.filesNotReviewed.sort()).toEqual(["src/b.ts", "src/c.ts"])
+    expect(telemetry.costProjection?.governorTrimmed).toBe(true)
+    expect(telemetry.costProjection?.trimmedPaths.sort()).toEqual(["src/b.ts", "src/c.ts"])
+  })
+
+  it("ENABLED but NEVER trims a high-risk file (kept even under a tiny ceiling)", async () => {
+    // One normal + one high-risk file. The ceiling is tiny, but the high-risk
+    // file must survive — the governor trims the normal one instead.
+    const normal = fileBlock("src/util.ts", "export const x = 1")
+    const highRisk = fileBlock("src/auth-session.ts", "export const token = readSession()")
+    const fullDiff = `${normal}\n${highRisk}`
+
+    const ensembleConfig = parseEnsembleConfig({
+      OPENCLAW_COST_GOVERNOR_ENABLED: "on",
+      OPENCLAW_COST_GOVERNOR_CEILING_USD: "0.0000001",
+      OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES: "1",
+    })
+    const { args } = argsWithTelemetry({ fullDiff, ensembleConfig, costProjectionLineup: LINEUP })
+    const result = await packAndRoute(args)
+
+    // The high-risk file is always kept; the normal file is trimmed.
+    expect(result.reviewedFiles.map((f) => f.path)).toContain("src/auth-session.ts")
+    expect(result.reviewedFiles.map((f) => f.path)).not.toContain("src/util.ts")
+    expect(result.costTrimmedPaths).toEqual(["src/util.ts"])
+  })
+
+  it("ENABLED but NO ceiling set: never trims (ceiling absent → governor inert)", async () => {
+    const a = fileBlock("src/a.ts", "export const a = 1")
+    const b = fileBlock("src/b.ts", "export const b = 2")
+    const fullDiff = `${a}\n${b}`
+
+    const ensembleConfig = parseEnsembleConfig({ OPENCLAW_COST_GOVERNOR_ENABLED: "on" }) // no ceiling
+    const { args, telemetry } = argsWithTelemetry({ fullDiff, ensembleConfig, costProjectionLineup: LINEUP })
+    const result = await packAndRoute(args)
+
+    expect(result.reviewedFiles).toHaveLength(2)
+    expect(result.costTrimmedPaths).toEqual([])
+    expect(telemetry.costProjection?.governorEnabled).toBe(true)
+    expect(telemetry.costProjection?.governorTrimmed).toBe(false)
+  })
+
+  it("no lineup passed: projection skipped entirely (no costProjection telemetry, no trim)", async () => {
+    const fullDiff = fileBlock("src/a.ts", "export const a = 1")
+    const { args, telemetry } = argsWithTelemetry({ fullDiff }) // no costProjectionLineup
+    const result = await packAndRoute(args)
+    expect(result.costTrimmedPaths).toEqual([])
+    expect(telemetry.costProjection).toBeUndefined()
+  })
+})

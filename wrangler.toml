@@ -708,6 +708,15 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # "enforce_rules" (rules-only, no LLM call) or "off" reverts.
 OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 
+# SIG-418 Phase 2 (Design B′): in-invocation multi-batch review for large PRs.
+# "off" | "shadow" | "on". "shadow": on a PR that spills past the single-batch
+# pack cap, run the batch loop DETACHED + telemeter the would-be union / coverage
+# delta / cost — the posted review stays BYTE-IDENTICAL (output unchanged) and
+# prod token accounting is untouched (cost-isolated). Gathers organic large-PR
+# data. "on" (output-union enforce) ships in SIG-432, gated on a distributed-bug
+# fixture proving the recall delta. Code default is off (parseEnsembleConfig).
+OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
+
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
 # the dispatcher returns exactly 1 specialist AND none of that

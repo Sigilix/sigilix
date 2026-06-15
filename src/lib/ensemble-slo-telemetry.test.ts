@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("pricingForModel", () => {
   it("returns the table entry for a known model", () => {
-    expect(pricingForModel("deepseek-v4-pro:cloud")).toBe(MODEL_PRICING["deepseek-v4-pro:cloud"])
+    expect(pricingForModel("openai/o3")).toBe(MODEL_PRICING["openai/o3"])
   })
 
   it("falls back to DEFAULT_PRICING for an unknown model (never $0)", () => {
@@ -157,23 +157,23 @@ describe("makeTokenRecorder", () => {
 
 describe("computeReviewCost", () => {
   it("sums tokens and converts to USD per the pricing table", () => {
-    // 1M input + 1M output on deepseek = 0.6 + 1.7 = 2.3 USD.
+    // 1M input + 1M output on deepseek/deepseek-v4-pro = 0.435 + 0.87 = 1.305 USD.
     const usage: TokenUsageByModel = {
-      "deepseek-v4-pro:cloud": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      "deepseek/deepseek-v4-pro": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
     }
     const cost = computeReviewCost(usage)
     expect(cost.totalInputTokens).toBe(1_000_000)
     expect(cost.totalOutputTokens).toBe(1_000_000)
-    expect(cost.totalUsd).toBeCloseTo(2.3, 6)
-    expect(cost.byModelUsd["deepseek-v4-pro:cloud"]).toBeCloseTo(2.3, 6)
+    expect(cost.totalUsd).toBeCloseTo(1.305, 6)
+    expect(cost.byModelUsd["deepseek/deepseek-v4-pro"]).toBeCloseTo(1.305, 6)
   })
 
   it("sums across multiple models", () => {
     const usage: TokenUsageByModel = {
-      "deepseek-v4-pro:cloud": { inputTokens: 1_000_000, outputTokens: 0 }, // 0.6
-      "qwen3:cloud": { inputTokens: 1_000_000, outputTokens: 0 }, // 0.3
+      "deepseek/deepseek-v4-flash": { inputTokens: 1_000_000, outputTokens: 0 }, // 0.09
+      "z-ai/glm-5.1": { inputTokens: 1_000_000, outputTokens: 0 }, // 0.98
     }
-    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(0.9, 6)
+    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(1.07, 6)
   })
 
   it("uses DEFAULT_PRICING for an untracked model", () => {
@@ -193,14 +193,14 @@ describe("computeReviewCost", () => {
 
   // SIG-417: prefer the measured `usage.cost` over the token estimate.
   it("prefers the actual measured costUsd over the token estimate", () => {
-    // Without costUsd the estimate would be 2.3 USD (as above); the measured
+    // Without costUsd the estimate would be 1.305 USD (as above); the measured
     // 0.42 must win for a fully-priced model.
     const usage: TokenUsageByModel = {
-      "deepseek-v4-pro:cloud": { inputTokens: 1_000_000, outputTokens: 1_000_000, costUsd: 0.42 },
+      "deepseek/deepseek-v4-pro": { inputTokens: 1_000_000, outputTokens: 1_000_000, costUsd: 0.42 },
     }
     const cost = computeReviewCost(usage)
     expect(cost.totalUsd).toBeCloseTo(0.42, 6)
-    expect(cost.byModelUsd["deepseek-v4-pro:cloud"]).toBeCloseTo(0.42, 6)
+    expect(cost.byModelUsd["deepseek/deepseek-v4-pro"]).toBeCloseTo(0.42, 6)
     // Token totals are still the real counts, independent of the cost source.
     expect(cost.totalInputTokens).toBe(1_000_000)
     expect(cost.totalOutputTokens).toBe(1_000_000)
@@ -210,10 +210,10 @@ describe("computeReviewCost", () => {
   // the unpriced remainder — sums both (never drops the unpriced attempt; Codex
   // sign-off #2).
   it("blends measured cost with an estimate for the unpriced remainder", () => {
-    // Priced portion: costUsd 0.10. Unpriced remainder: 1M input on qwen3
-    // (0.3/MTok) = 0.3. Total = 0.40.
+    // Priced portion: costUsd 0.10. Unpriced remainder: 1M input on
+    // deepseek/deepseek-v4-flash (0.09/MTok) = 0.09. Total = 0.19.
     const usage: TokenUsageByModel = {
-      "qwen3:cloud": {
+      "deepseek/deepseek-v4-flash": {
         inputTokens: 2_000_000,
         outputTokens: 0,
         costUsd: 0.1,
@@ -221,17 +221,18 @@ describe("computeReviewCost", () => {
         unpricedOutputTokens: 0,
       },
     }
-    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(0.4, 6)
+    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(0.19, 6)
   })
 
-  // SIG-417: a mixed lineup — one OpenRouter model with measured cost + one
-  // Ollama `:cloud` model with no cost — blends measured + estimated.
-  it("blends an OpenRouter measured model with an Ollama estimated model", () => {
+  // SIG-417: a mixed lineup — one model with a measured cost + one model with
+  // no reported cost (e.g. a local-eval `:cloud` override) — blends measured +
+  // estimated. The cost-less model falls back to DEFAULT_PRICING (0.6/MTok).
+  it("blends a measured model with an estimated (fallback-priced) model", () => {
     const usage: TokenUsageByModel = {
       "openai/o3": { inputTokens: 500_000, outputTokens: 100_000, costUsd: 1.25 }, // measured
-      "qwen3:cloud": { inputTokens: 1_000_000, outputTokens: 0 }, // estimate → 0.3
+      "qwen3:cloud": { inputTokens: 1_000_000, outputTokens: 0 }, // DEFAULT_PRICING → 0.6
     }
-    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(1.55, 6)
+    expect(computeReviewCost(usage).totalUsd).toBeCloseTo(1.85, 6)
   })
 })
 
@@ -313,7 +314,7 @@ describe("evaluateReviewSlo", () => {
 describe("emitReviewSlo", () => {
   it("emits a review-slo-summary with the full field set + correlation", () => {
     const usage: TokenUsageByModel = {
-      "deepseek-v4-pro:cloud": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      "deepseek/deepseek-v4-pro": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
     }
     emitReviewSlo(CTX, { status: "posted", totalMs: 42_000, usage })
     const ev = lastLogged()
@@ -331,11 +332,11 @@ describe("emitReviewSlo", () => {
     expect(ev["latencyOverBudget"]).toBe(false)
     expect(ev["totalInputTokens"]).toBe(1_000_000)
     expect(ev["totalOutputTokens"]).toBe(1_000_000)
-    expect(ev["costUsd"]).toBeCloseTo(2.3, 6)
+    expect(ev["costUsd"]).toBeCloseTo(1.305, 6)
     expect(ev["costBudgetUsd"]).toBe(SLO_TARGETS[DEFAULT_TIER]!.costPerReviewUsd)
-    expect(ev["costOverBudget"]).toBe(true) // 2.3 > 0.5
+    expect(ev["costOverBudget"]).toBe(true) // 1.305 > 0.5
     expect(ev["sloBreached"]).toBe(true)
-    expect(ev["byModelUsd"]).toEqual({ "deepseek-v4-pro:cloud": expect.closeTo(2.3, 6) })
+    expect(ev["byModelUsd"]).toEqual({ "deepseek/deepseek-v4-pro": expect.closeTo(1.305, 6) })
     // Overview fields: no overview passed → null measured value, budget
     // echoed, no overview breach.
     expect(ev["timeToFirstOverviewMs"]).toBeNull()

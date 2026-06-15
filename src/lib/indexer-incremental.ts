@@ -173,6 +173,13 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     runId: args.runId,
     files: reuse.filesToEmbed,
     astChunking: args.astChunking,
+    // SIG-423: the incremental path NEVER commits its graph version — it keeps
+    // the prior version active (manifest.graphRunId stays pinned to it). Graph
+    // rows written here under args.runId would be orphaned `pending` rows that
+    // no read path touches (all graph reads resolve `debugActiveVersion`) and
+    // the next full commit GCs. Skip writing them — pure rows-written savings,
+    // recall-neutral (the graph the reviewer reads is unchanged).
+    writeGraph: false,
   })
   const mergedIdsByPath = { ...reuse.reusedIdsByPath, ...idsByPath }
 

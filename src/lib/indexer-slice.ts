@@ -42,6 +42,18 @@ interface ProcessSliceArgs {
   runId: string
   files: ReadonlyArray<IndexableFile>
   astChunking: boolean
+  /**
+   * SIG-423: whether this slice writes per-file graph rows to the RepoGraphDO.
+   * Defaults to `true` (the full-tree bootstrap/shard path, whose run is later
+   * committed via commitGraphVersion and becomes the active graph). The
+   * incremental push path passes `false`: it writes graph rows under the NEW
+   * runId but NEVER commits that version (it keeps the prior version active and
+   * pins the manifest's graphRunId to it), so those rows are orphaned — never
+   * read by graph retrieval (all reads resolve `debugActiveVersion`), GC'd by
+   * the next full commit. Skipping them is a pure SQLite rows-written reduction
+   * with zero effect on the graph the reviewer reads (recall-neutral, SIG-423).
+   */
+  writeGraph?: boolean
 }
 
 export interface ProcessSliceResult {
@@ -99,7 +111,11 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
 
     // SIG-138: graph write is best-effort and additive — any error here
     // logs + continues; the embedding/upsert pipeline is unaffected.
-    if (!isBranchStateRepo(stateRepo) && graphIndexEnabled(env)) {
+    // SIG-423: `writeGraph` (default true) lets a caller opt out of the per-file
+    // graph write. The incremental push path passes false: its graph rows would
+    // land under an uncommitted runId that no read path resolves (see the field
+    // JSDoc on ProcessSliceArgs.writeGraph), so writing them is pure SQLite waste.
+    if ((args.writeGraph ?? true) && !isBranchStateRepo(stateRepo) && graphIndexEnabled(env)) {
       try {
         const fg = extractFileGraph(file.path, content)
         await writeFileGraph(env, owner, repo, {

@@ -193,17 +193,16 @@ function applyHardDropGates(
       // SIG-111 / SIG-245: the tests specialist over-fires "X lacks
       // coverage" on glue covered by structural tests or with a vague,
       // non-actionable ask — the dominant labeled-FP class (21/31 in the
-      // SIG-161 corpus). FN-safe: in `enforce` the finding is DEMOTED to the
-      // body (still visible if the coverage gap is real) rather than dropped,
-      // matching the SIG-108 / SIG-307 demote-not-drop discipline. In
+      // SIG-161 corpus). FN-safe: in `enforce` the finding is trust-demoted
+      // but still visible inline when anchorable, rather than dropped. In
       // `shadow` the would-demote is counted + telemetered but the finding is
-      // kept inline. `dropped` in the telemetry callback means "actioned".
+      // kept inline. `dropped:false` means the finding was not hidden.
       const demoted = args.testsValidatorMode === "enforce"
       state.droppedForFailedTestValidation++
-      args.onTestFindingDropped?.(f, { reason: testDecision.reason, dropped: demoted })
+      args.onTestFindingDropped?.(f, { reason: testDecision.reason, dropped: false })
       if (demoted) {
         // SIG-245: cap below the score>=4 REQUEST_CHANGES floor so the
-        // gate-flagged FP becomes a NON-blocking body note — visible if the
+        // gate-flagged FP becomes a NON-blocking inline note — visible if the
         // coverage gap is real, but the bot does NOT block a merge over a
         // coverage finding the gate itself judged low-confidence. (Differs
         // from the SIG-108 security demote, which keeps the score: a
@@ -214,10 +213,8 @@ function applyHardDropGates(
         // which is recorded to telemetry.synthesizer.verdict — capping the
         // score in place would corrupt the recorded synth score (CR #284).
         const demotedFinding: PrReviewFinding = { ...f, score: Math.min(f.score, 3) }
-        if (args.trustLedgerEnabled)
-          annotateFindingTrust(demotedFinding, { surface: "body", demoteReason: "tests-coverage" })
-        state.unanchoredFindings.push(demotedFinding)
-        return { kind: "continue" }
+        if (args.trustLedgerEnabled) annotateFindingTrust(demotedFinding, { demoteReason: "tests-coverage" })
+        return { kind: "proceed", finding: demotedFinding }
       }
       // shadow mode: fall through and keep the finding.
     }
@@ -294,9 +291,8 @@ function applyHardDropGates(
         headline: (f.headline ?? "").slice(0, 100),
       }),
     )
-    if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "do-race" })
-    state.unanchoredFindings.push(f)
-    return { kind: "continue" }
+    if (args.trustLedgerEnabled) annotateFindingTrust(f, { demoteReason: "do-race" })
+    return { kind: "proceed", finding: f }
   }
 
   // SIG-392: set when the SIG-108 demote branch below reclassifies this
@@ -334,17 +330,14 @@ function applyHardDropGates(
         }
       }
     } else {
-      // SIG-108 (demote-conversion, 2026-06-01): an unsupported sev>=4 security
-      // finding is DEMOTED to the review body in `enforce` — NOT hard-dropped.
-      // The Trust Ledger now gives it a home (the body) + an honest MODEL/GROUNDED
-      // pill, so the guidance stays VISIBLE instead of vanishing (FN-cost >> FP-cost
-      // for security). `shadow` keeps it inline (count only). The counter +
-      // callback semantics are unchanged: `dropped` = the enforce action fired
-      // (now a demote). Currently shadow in prod, so this is inert until the
-      // enforce flip.
+      // SIG-108 (demote-conversion, 2026-06-01; SIG-440 surface flip): an
+      // unsupported sev>=4 security finding remains visible. Enforce now keeps
+      // anchorable findings inline with trust metadata instead of routing them
+      // to the body. The counter still records that the validator fired; the
+      // callback uses dropped:false because the finding was not hidden.
       // SIG-392 (e2e-frontend#20): security-shaped LOGIC bugs — key
       // collisions, authz-by-construction — can NEVER carry scanner
-      // evidence, so the evidence gate body-demoted a true P1 with a
+      // evidence, so the evidence gate formerly body-demoted a true P1 with a
       // concrete repro attached ("silent" to external evaluators). When the
       // failing finding articulates a concrete mechanism (non-empty
       // failureExample), recategorize to `logic` and keep it INLINE — it
@@ -358,8 +351,8 @@ function applyHardDropGates(
       // SIG-325 exemption (resolves code review #497's MEDIUM): the SIG-325
       // backstop below is SKIPPED for a finding this branch reclassified —
       // this branch IS the controlling adjudication of its evidence-absence
-      // (enforce mode + concrete mechanism required); a second body-demote of
-      // the same finding for the same reason would silently defeat SIG-392
+      // (enforce mode + concrete mechanism required); a second trust-demotion
+      // of the same finding for the same reason would silently defeat SIG-392
       // the moment REFUTATION_SURVIVAL_MODE flips to enforce. All
       // non-reclassified security findings face SIG-325 unchanged.
       const failureExample = typeof f.failureExample === "string" ? f.failureExample.trim() : ""
@@ -382,11 +375,10 @@ function applyHardDropGates(
         // branches are ever split, keep them mutually exclusive.
         const demoted = args.securityValidatorMode === "enforce"
         state.droppedForFailedValidation++
-        args.onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: demoted })
+        args.onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: false })
         if (demoted) {
-          if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "security-evidence" })
-          state.unanchoredFindings.push(f)
-          return { kind: "continue" }
+          if (args.trustLedgerEnabled) annotateFindingTrust(f, { demoteReason: "security-evidence" })
+          return { kind: "proceed", finding: f }
         }
         // shadow mode: fall through and keep the finding inline.
       }
@@ -428,13 +420,12 @@ function applyHardDropGates(
       state.droppedForFailedRefutationSurvival++
       args.onRefutationSurvivalFindingDropped?.(f, {
         reason: decision.reason,
-        dropped: demoted,
+        dropped: false,
         lens: "security",
       })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "refutation-survival" })
-        state.unanchoredFindings.push(f)
-        return { kind: "continue" }
+        if (args.trustLedgerEnabled) annotateFindingTrust(f, { demoteReason: "refutation-survival" })
+        return { kind: "proceed", finding: f }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -553,13 +544,12 @@ function applyHardDropGates(
       state.droppedForFailedRefutationSurvival++
       args.onRefutationSurvivalFindingDropped?.(f, {
         reason: decision.reason,
-        dropped: demoted,
+        dropped: false,
         lens: "performance",
       })
       if (demoted) {
-        if (args.trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "refutation-survival" })
-        state.unanchoredFindings.push(f)
-        return { kind: "continue" }
+        if (args.trustLedgerEnabled) annotateFindingTrust(f, { demoteReason: "refutation-survival" })
+        return { kind: "proceed", finding: f }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -687,16 +677,14 @@ function applyDemoteGates(
       state.droppedForFailedInlineGroundingValidation++
       args.onInlineGroundingFindingDropped?.(workingFinding, {
         reason: groundingDecision.reason,
-        dropped: demoted,
+        dropped: false,
       })
       if (demoted) {
         if (args.trustLedgerEnabled)
           annotateFindingTrust(workingFinding, {
-            surface: "body",
             demoteReason: "inline-grounding",
           })
-        state.unanchoredFindings.push(workingFinding)
-        return { kind: "continue" }
+        return { kind: "proceed", workingFinding, rewroteRange }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -707,16 +695,17 @@ function applyDemoteGates(
   // believable when the evidence that would confirm-or-refute the
   // absence was in the specialist's window. When it was PROVABLY not
   // (the sibling test was never inspected, or the cited path was
-  // dropped from the diff) the bot was GUESSING — DEMOTE to the body
-  // (content preserved, NOT hard-dropped). FP-safe: non-absence-claims,
-  // excluded phrases, performance findings, and every UNKNOWN keep.
+  // dropped from the diff) the bot was GUESSING — trust-demote the finding
+  // while preserving inline visibility when anchorable. FP-safe:
+  // non-absence-claims, excluded phrases, performance findings, and every
+  // UNKNOWN keep.
   //
   // PLACEMENT mirrors the inline-grounding block above (after the
   // hard-drop gates + anchor repair, so the demote routes `workingFinding`
   // with the repaired anchor). `off` skips the gate entirely; `shadow`
   // counts + telemeters and keeps the finding inline; only `enforce`
-  // demotes. No score floor — a P0/P1 ungrounded absence-claim is the
-  // worst case and is demoted too.
+  // trust-demotes. No score floor — a P0/P1 ungrounded absence-claim is the
+  // worst case and is trust-demoted too.
   if (args.absenceClaimValidatorMode !== "off") {
     const absenceDecision = evaluateAbsenceGrounding(workingFinding, {
       testingEvidence: args.testingEvidence,
@@ -729,16 +718,14 @@ function applyDemoteGates(
       state.droppedForFailedAbsenceGroundingValidation++
       args.onAbsenceFindingDropped?.(workingFinding, {
         reason: absenceDecision.reason,
-        dropped: demoted,
+        dropped: false,
       })
       if (demoted) {
         if (args.trustLedgerEnabled)
           annotateFindingTrust(workingFinding, {
-            surface: "body",
             demoteReason: "absence-grounding",
           })
-        state.unanchoredFindings.push(workingFinding)
-        return { kind: "continue" }
+        return { kind: "proceed", workingFinding, rewroteRange }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -749,9 +736,10 @@ function applyDemoteGates(
   // window-blindness FP when the guard on the SAME cited symbol is provably
   // present in the FULL file but OUTSIDE the diff window the model saw —
   // upstream of the flagged use, at a dominating indent, within the proximity
-  // bound. DEMOTE to the body (content preserved, NOT hard-dropped). FP-safe:
-  // non-logic, sub-4, non-misread, no full file, no out-of-window guard, and
-  // every ambiguity keep. The deterministic backstop to PR #327's prompt fence.
+  // bound. Trust-demote while preserving inline visibility when anchorable.
+  // FP-safe: non-logic, sub-4, non-misread, no full file, no out-of-window
+  // guard, and every ambiguity keep. The deterministic backstop to PR #327's
+  // prompt fence.
   //
   // PLACEMENT mirrors the absence-grounding block above (after the hard-drop
   // gates + anchor repair, so the demote routes `workingFinding` with the
@@ -769,16 +757,14 @@ function applyDemoteGates(
         reason: wbDecision.reason,
         matchedIdentifier: wbDecision.matchedIdentifier,
         guardLine: wbDecision.guardLine,
-        dropped: demoted,
+        dropped: false,
       })
       if (demoted) {
         if (args.trustLedgerEnabled)
           annotateFindingTrust(workingFinding, {
-            surface: "body",
             demoteReason: "window-blindness",
           })
-        state.unanchoredFindings.push(workingFinding)
-        return { kind: "continue" }
+        return { kind: "proceed", workingFinding, rewroteRange }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -788,18 +774,18 @@ function applyDemoteGates(
   // `secrets-exposure` (CWE-798) finding is only believable when the
   // cited code actually CONTAINS a credential token. One whose cited
   // line holds no credential (the #243 FP: a sev-3 finding that misread
-  // `console.log(payload.length)` as a leak) is a hallucination — DEMOTE
-  // to the body (content preserved, NOT hard-dropped). v1 gates ONLY
-  // secrets-exposure (the single line-level-detectable category); a
-  // corroborating scanner fact ALWAYS keeps. Scoped to SECURITY-sourced
-  // findings (provenance, like the SIG-108 evidence gate) so a non-
-  // security finding that merely carries CWE-798 is untouched.
+  // `console.log(payload.length)` as a leak) is trust-demoted while preserving
+  // inline visibility when anchorable. v1 gates ONLY secrets-exposure (the
+  // single line-level-detectable category); a corroborating scanner fact ALWAYS
+  // keeps. Scoped to SECURITY-sourced findings (provenance, like the SIG-108
+  // evidence gate) so a non-security finding that merely carries CWE-798 is
+  // untouched.
   //
   // PLACEMENT mirrors the inline/absence blocks above (after the hard-
   // drop gates + anchor repair, so the demote routes `workingFinding`
   // with the repaired anchor). `off` skips the gate; `shadow` counts +
-  // telemeters and keeps inline; only `enforce` demotes. No score floor —
-  // a P0/P1 ungrounded secrets claim is the worst case and is demoted too.
+  // telemeters and keeps inline; only `enforce` trust-demotes. No score floor —
+  // a P0/P1 ungrounded secrets claim is the worst case and is trust-demoted too.
   if (args.securityGroundingValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
     const sgDecision = evaluateSecurityGrounding(workingFinding, {
       addedLineTextByLine: args.addedLineTextByLine,
@@ -810,16 +796,14 @@ function applyDemoteGates(
       state.droppedForFailedSecurityGroundingValidation++
       args.onSecurityGroundingFindingDropped?.(workingFinding, {
         reason: sgDecision.reason,
-        dropped: demoted,
+        dropped: false,
       })
       if (demoted) {
         if (args.trustLedgerEnabled)
           annotateFindingTrust(workingFinding, {
-            surface: "body",
             demoteReason: "security-grounding",
           })
-        state.unanchoredFindings.push(workingFinding)
-        return { kind: "continue" }
+        return { kind: "proceed", workingFinding, rewroteRange }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -828,8 +812,9 @@ function applyDemoteGates(
   // SIG-311 Layers A+B: security USAGE-vs-MENTION gate. Demote a sev>=4
   // injection/xss finding on a detector/validator/test/doc path whose cited
   // token is a mention, not a live sink (the PR #296 self-FP family). Same
-  // off/shadow/enforce placement as the grounding gate above; DEMOTE-not-drop,
-  // keep on any uncertainty (the gate fails closed inside evaluateSecurityUsage).
+  // off/shadow/enforce placement as the grounding gate above; trust-demote
+  // but never drop, keep on any uncertainty (the gate fails closed inside
+  // evaluateSecurityUsage).
   if (args.securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
     const suDecision = evaluateSecurityUsage(workingFinding, {
       addedLineTextByLine: args.addedLineTextByLine,
@@ -839,13 +824,11 @@ function applyDemoteGates(
       state.droppedForFailedSecurityUsageValidation++
       args.onSecurityUsageFindingDropped?.(workingFinding, {
         reason: suDecision.reason,
-        dropped: demoted,
+        dropped: false,
       })
       if (demoted) {
-        if (args.trustLedgerEnabled)
-          annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-usage" })
-        state.unanchoredFindings.push(workingFinding)
-        return { kind: "continue" }
+        if (args.trustLedgerEnabled) annotateFindingTrust(workingFinding, { demoteReason: "security-usage" })
+        return { kind: "proceed", workingFinding, rewroteRange }
       }
       // shadow mode: fall through and keep the finding inline.
     }
@@ -868,16 +851,29 @@ function routeFinding(
 ): void {
   const side = deriveSide(args.reviewable, workingFinding.path, workingFinding.line)
   if (!side) {
-    const repairedLine =
-      workingFinding.startLine == null
-        ? findRepairableInlineAnchor({
-            finding: workingFinding,
-            reviewable: args.reviewable,
-            addedLineTextByLine: args.addedLineTextByLine,
-          })
-        : null
+    const repairedRange =
+      workingFinding.startLine != null ? findRangeAwareAnchor(args.reviewable, workingFinding) : null
+    if (repairedRange !== null) {
+      const { startLine: _originalStartLine, ...rest } = workingFinding
+      void _originalStartLine
+      state.cleanFindings.push(
+        repairedRange.startLine !== undefined
+          ? { ...rest, line: repairedRange.line, startLine: repairedRange.startLine }
+          : { ...rest, line: repairedRange.line },
+      )
+      if (provenance) state.cleanFindingProvenance.push(provenance)
+      state.remappedInvalidLineToInline++
+      return
+    }
+    const repairedLine = findRepairableInlineAnchor({
+      finding: workingFinding,
+      reviewable: args.reviewable,
+      addedLineTextByLine: args.addedLineTextByLine,
+    })
     if (repairedLine !== null) {
-      state.cleanFindings.push({ ...workingFinding, line: repairedLine })
+      const { startLine: _originalStartLine, ...rest } = workingFinding
+      void _originalStartLine
+      state.cleanFindings.push({ ...rest, line: repairedLine })
       if (provenance) state.cleanFindingProvenance.push(provenance)
       state.remappedInvalidLineToInline++
       return

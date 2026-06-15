@@ -206,12 +206,10 @@ describe("buildReviewSubmission", () => {
       unanchored: [unanchored],
     })
 
-    // SIG-281 PR B (Rec 6): a score>=4 body-only finding is now a Fix Plan
-    // table row + a collapsed evidence block (NOT the lower "Review Body
-    // Findings" section, which holds only score<4 findings). Its evidence
-    // (Example / "Why this wasn't caught") still renders, inside the
-    // collapsed details block.
-    expect(out.submission.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    // SIG-440: a score>=4 body-only finding is a Fix Plan table row and
+    // its details render in the single non-inline dropdown. Its evidence
+    // (Example / "Why this wasn't caught") still renders there.
+    expect(out.submission.body).toContain("couldn't be anchored to a line")
     expect(out.submission.body).toContain("missing idempotency guard")
     expect(out.submission.body).not.toContain("### Review Body Findings")
     expect(out.submission.body).toContain("**Example:**")

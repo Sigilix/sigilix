@@ -4,31 +4,31 @@
       "summary": "T",
       "confidence": 3,
       "confidenceReason": "R.",
-      "findings": []
+      "findings": [
+        {
+          "path": "src/lib/ast-rules/scan-dynamic-html-sink.ts",
+          "line": 10,
+          "score": 5,
+          "category": "security",
+          "cweId": "CWE-78",
+          "headline": "Command injection sink via shell interpolation in `exec`",
+          "body": "`re.exec(line)` executes attacker-controlled input as a shell command.",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "security"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
     },
-    "unanchoredFindings": [
-      {
-        "path": "src/lib/ast-rules/scan-dynamic-html-sink.ts",
-        "line": 10,
-        "score": 5,
-        "category": "security",
-        "cweId": "CWE-78",
-        "headline": "Command injection sink via shell interpolation in `exec`",
-        "body": "`re.exec(line)` executes attacker-controlled input as a shell command.",
-        "evidence": {
-          "specialistsThatFlagged": [
-            "security"
-          ],
-          "specialistsThatDeclined": [],
-          "deterministicFactIds": [],
-          "retrievalChunkIds": [],
-          "relatedPriorPRs": [],
-          "synthDecision": "kept",
-          "consensusScore": 1
-        },
-        "scope": "line"
-      }
-    ],
+    "unanchoredFindings": [],
     "droppedForInvalidLine": 0,
     "remappedInvalidLineToInline": 0,
     "droppedForHallucination": 0,
@@ -47,7 +47,18 @@
     "droppedForFailedWindowBlindnessValidation": 0,
     "droppedForFailedSecurityGroundingValidation": 0,
     "droppedForFailedSecurityUsageValidation": 1,
-    "cleanFindingProvenance": [],
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "security"
+        ],
+        "sourceFindingIds": [
+          "security-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
     "provenance": {
       "findings": [
         {
@@ -75,7 +86,7 @@
       },
       "payload": {
         "reason": "security-mention-not-usage",
-        "dropped": true
+        "dropped": false
       }
     }
   ]

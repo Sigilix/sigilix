@@ -402,17 +402,17 @@ describe("validateForSubmission — window-blindness gate wiring", () => {
     })
   })
 
-  it("ENFORCE: demotes the misread to the body (counter++, callback dropped:true, leaves verdict.findings)", () => {
+  it("SIG-440 ENFORCE: keeps the misread inline (counter++, callback dropped:false)", () => {
     const onDrop = vi.fn()
     const result = run([finding()], { mode: "enforce", onDrop })
     expect(result.droppedForFailedWindowBlindnessValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings.some((f) => f.headline.includes("amount"))).toBe(true)
+    expect(result.verdict.findings.some((f) => f.headline.includes("amount"))).toBe(true)
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "positive-misread-guard-out-of-window",
       matchedIdentifier: "amount",
       guardLine: 5,
-      dropped: true,
+      dropped: false,
     })
   })
 })

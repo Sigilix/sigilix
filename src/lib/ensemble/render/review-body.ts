@@ -4,8 +4,8 @@
 // `renderApproveBody` / `renderCommentBody` / `renderRequestChangesBody`, the
 // shared `renderFindingsReviewBody` assembler, the `RenderBodyArgs` shape, the
 // header lines (`renderDeltaBadge` / `renderCoverageLine` /
-// `renderStackParenthetical`), the Fix Plan renderers, the "Outside your changes"
-// section, the compact footer, and the 65k GitHub caps. No policy decisions — the
+// `renderStackParenthetical`), the Fix Plan renderers, the non-inline findings
+// dropdown, the compact footer, and the 65k GitHub caps. No policy decisions — the
 // review-EVENT decision (`chooseRenderedEventWithOverride` etc.) lives in
 // domain/verdict and is consumed by the submission/fallback modules, not here.
 //
@@ -20,7 +20,7 @@
 import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
 import { type StackContext } from "@/src/lib/pr-stack"
 import { ALL_DISMISS_REASONS } from "@/src/lib/dismiss-reasons"
-import { renderTrustSummary, renderOutsideDiffDropdown, renderPrLevelSection } from "@/src/lib/trust-ledger-render"
+import { renderTrustSummary } from "@/src/lib/trust-ledger-render"
 import { findingScope, stripAstMarkers, formatFindingCategory, type BodyFindingLinkContext } from "./finding-format"
 import { renderBodyOnlyFindings } from "./finding-comment"
 
@@ -114,24 +114,12 @@ export function renderStackParenthetical(stack: StackContext | undefined): strin
 }
 
 const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
-const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
-// SIG-281 PR B (Rec 6 / Kimi K2.6): this section now holds only
-// sub-blocker (score < 4) body-only findings — score >= 4 blockers are
-// surfaced in the Fix Plan table + a collapsed evidence block above.
-// SIG-281 PR C: copy covers the reasons a finding lands here — un-anchorable
-// scope, inline-comment-cap overflow (Rec 3), AND grounding (Rec 4) demotion.
-// (SIG-411 removed the Rec 5 confidence-tier demotion, so confidence no longer
-// routes a finding to the body.)
-const BODY_ONLY_FINDINGS_EXPLANATION =
-  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope), because the inline comment cap was exceeded, or because grounding made them better suited for body-only review.</sub>"
 // SIG-281 PR B (Rec 6 / Kimi K2.6): caption shown under the Fix Plan
 // table only when it contains body-only blockers (rows with no inline
 // thread), so a reviewer isn't confused by table rows that have no
 // corresponding inline comment.
 const FIX_PLAN_BODY_ONLY_CAPTION =
   "_Severity ≥ 4 only. Rows without a line number are file-level or PR-level findings that cannot be posted as inline review comments._"
-const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
-  "<summary><b>Evidence &amp; suggested changes for body-only blockers</b> (score ≥ 4)</summary>"
 
 /**
  * ARC-281: shared args for both `renderApproveBody` and
@@ -291,38 +279,38 @@ export interface ProvenanceCtx {
  *
  * Pure — exported for tests.
  */
-/**
- * Outside your changes (founder ask 2026-06-14 + Kimi redesign): the informational
- * section for findings about code NOT modified in this PR (`outOfPrScope`). A
- * COLLAPSED <details> dropdown so a long list doesn't eat the review body. The
- * summary states the scope ("outside this PR's changes") + count + non-blocking
- * framing, so a reader who never expands it still understands — that explicit,
- * scoped summary is what avoids the earlier confusion (a GENERIC collapsed
- * dropdown read like a mis-placed within-diff finding; this one cannot). FYI tone,
- * reuses the body-only row format. A blank line after `</summary>` and before
- * `</details>` is REQUIRED for the inner markdown rows to render. Empty when none.
- */
-function renderOutsideYourChanges(
-  findings: readonly PrReviewFinding[],
+function renderNonInlineFindingsDropdown(
+  inScopeFindings: readonly PrReviewFinding[],
+  outOfScopeFindings: readonly PrReviewFinding[],
   linkContext?: BodyFindingLinkContext,
   trustLedger?: boolean,
   showEvidence?: boolean,
 ): string[] {
-  if (findings.length === 0) return []
-  const n = findings.length
-  return [
-    "",
-    "### Outside your changes",
+  const n = inScopeFindings.length + outOfScopeFindings.length
+  if (n === 0) return []
+
+  const lines = [
     "",
     "<details>",
-    `<summary><b>▸ ${n} finding${n === 1 ? "" : "s"} outside this PR's changes</b> — awareness only, non-blocking</summary>`,
+    `<summary><b>${n} finding${n === 1 ? "" : "s"} that couldn't be anchored to a line</b></summary>`,
     "",
-    "<i>These relate to code <b>not modified in this PR</b> — shown for awareness; they don't block the merge.</i>",
-    "",
-    ...renderBodyOnlyFindings([...findings], linkContext, trustLedger, showEvidence),
-    "",
-    "</details>",
+    "<i>These need a review-body surface because they are file-level, PR-level, outside this PR's changes, beyond the inline cap, or have no reviewable diff line.</i>",
   ]
+
+  if (inScopeFindings.length > 0) {
+    lines.push("", "**In your changes**")
+    lines.push(...renderBodyOnlyFindings([...inScopeFindings], linkContext, trustLedger, showEvidence))
+  }
+
+  if (outOfScopeFindings.length > 0) {
+    lines.push("", "**Outside this PR's changes**")
+    lines.push("")
+    lines.push("<i>Shown for awareness; these don't block the merge.</i>")
+    lines.push(...renderBodyOnlyFindings([...outOfScopeFindings], linkContext, trustLedger, showEvidence))
+  }
+
+  lines.push("", "</details>")
+  return lines
 }
 
 /**
@@ -371,7 +359,7 @@ function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
   // 3. Policy — calm, collapsed, no ⚠️. The summary carries the full message;
   // the body lists the files so a previously-invisible skip is honestly exposed.
   // A blank line after `</summary>` (and before `</details>`) is REQUIRED for the
-  // inner markdown file list to render — same constraint as renderOutsideYourChanges.
+  // inner markdown file list to render.
   if (disclosure.policySkipped.length > 0) {
     const n = disclosure.policySkipped.length
     const files = disclosure.policySkipped.map((p) => `\`${p}\``).join(", ")
@@ -392,8 +380,8 @@ function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
 export function renderApproveBody(args: RenderBodyArgs): string {
   // SIG-94: marker-only on a CLEAN approve — GitHub's native "approved these
   // changes" line is the entire signal. EXCEPTION (founder ask): when the approve
-  // carries out-of-PR-scope findings (code not in this PR), POST them as an
-  // "Outside your changes" note and reconcile the approval up top — so the reader
+  // carries out-of-PR-scope findings (code not in this PR), POST them in the
+  // non-inline dropdown and reconcile the approval up top — so the reader
   // sees WHY a flagged item isn't blocking, instead of a silent approve hiding it
   // or a "Critical" row contradicting the green check (Kimi believability fix).
   // `unanchored` and `verdict.findings` are disjoint buckets in
@@ -432,7 +420,9 @@ export function renderApproveBody(args: RenderBodyArgs): string {
   }
   lines.push(...disclosureLines)
   if (outOfScope.length > 0) {
-    lines.push(...renderOutsideYourChanges(outOfScope, args.linkContext, args.trustLedger, args.showEvidence))
+    lines.push(
+      ...renderNonInlineFindingsDropdown([], outOfScope, args.linkContext, args.trustLedger, args.showEvidence),
+    )
   }
   return `${lines.join("\n")}\n`
 }
@@ -485,8 +475,8 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  *   ### Fix Plan
  *   ...
  *
- *   ### Review Body Findings
- *   ...
+ *   <details>
+ *   <summary><b>N findings that couldn't be anchored to a line</b></summary>
  *
  *   To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.
  *
@@ -534,12 +524,9 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     ...(args.unanchored ?? []),
     ...args.verdict.findings.filter((f) => findingScope(f) !== "line"),
   ]
-  // Outside your changes (founder ask, Codex-hardened): findings about code NOT
-  // in this PR's changed files (`outOfPrScope`) render in their OWN informational
-  // section and are EXCLUDED from the blocker counts / Fix Plan / in-scope body
-  // sections — so a P1 about other code never shows as a "Critical" blocker on a
-  // PR that (correctly) approved. (An inline finding anchored to a changed line,
-  // so it's never out-of-scope; only body findings can be.)
+  // Out-of-PR findings are excluded from blocker counts / Fix Plan rows, then
+  // folded into the same non-inline dropdown as other findings that cannot post
+  // as line comments.
   const outOfPrScopeFindings = allBodyFindings.filter((f) => f.outOfPrScope)
   const bodyOnlyFindings = allBodyFindings.filter((f) => !f.outOfPrScope)
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
@@ -583,9 +570,8 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     } else {
       // High-severity tier — includes body-only criticals per CR
       // Major. The "+ M lower-severity inline" clause tells the
-      // reader where the rest live; body-only findings already get
-      // their own "### Review Body Findings" section below so we
-      // don't double-count them in the lead.
+      // reader where the rest live; body-only findings get the single
+      // non-inline dropdown below so we don't double-count them in the lead.
       lead = `**${highOrCriticalCount} ${postureCopy}high-severity ${findingNoun(highOrCriticalCount)}**`
       if (lowerSeverityInlineCount > 0) {
         lead += ` + ${lowerSeverityInlineCount} lower-severity inline`
@@ -608,22 +594,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
 
   // SIG Trust Ledger v0: the per-review Trust Summary, immediately under the lead
   // line (the believability headline). Vanishes (null) on a clean approve / no
-  // trust activity. `demotedToBody` = the gate demotions (NOT outside-diff, which
-  // is a location constraint); `suppressed` = the upstream hard-drops (threaded in).
+  // trust activity. `demotedToBody` counts only findings whose trust metadata says
+  // the final surface really is body; trust-demote reasons that now render inline
+  // are confidence metadata, not quieted findings.
   if (args.trustLedger) {
     const demotedToBody = bodyOnlyFindings.filter((f) => {
       const r = f.trust?.demoteReason
-      return (
-        r === "inline-grounding" ||
-        r === "absence-grounding" ||
-        r === "security-grounding" ||
-        r === "security-usage" ||
-        r === "security-evidence" ||
-        r === "verification-refuted" ||
-        r === "do-race" ||
-        r === "tests-coverage" ||
-        r === "refutation-survival"
-      )
+      return f.trust?.surface === "body" && r !== undefined && r !== "outside-diff"
     }).length
     const trustLine = renderTrustSummary({
       inlineFindings,
@@ -652,13 +629,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   // SIG-281 PR B (Rec 6 / Kimi K2.6): the Fix Plan table is the HIGH-SEVERITY
   // (P0/P1, score >= 4) prominence surface — a body-only P0/P1 that can't anchor
   // inline still belongs there so the blocker isn't buried in the detail section.
-  // Lower-severity (score < 4) body findings render in the "Other findings"
-  // section below. NOTE: the SECTION is a presentation tier (by severity), NOT
+  // Lower-severity (score < 4) body findings render in the same non-inline
+  // dropdown below. NOTE: the SECTION is a presentation tier (by severity), NOT
   // the blocking decision — the founder verdict rule (`chooseReviewEventFor-
   // RenderedFindings`) blocks on ANY substantive finding regardless of which
   // section renders it; only a truly trivial style/docs nit is non-blocking.
   const bodyOnlyBlockers = bodyOnlyFindings.filter((f) => f.score >= 4)
-  const bodyOnlyNonBlockers = bodyOnlyFindings.filter((f) => f.score < 4)
+  const nonInlineFindings = [...bodyOnlyFindings, ...outOfPrScopeFindings]
 
   const fixPlanTable = renderFixPlanTable([...inlineFindings, ...bodyOnlyBlockers])
   if (fixPlanTable) {
@@ -668,81 +645,25 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       // Clarify the table can contain non-inline-anchored rows.
       lines.push("")
       lines.push(FIX_PLAN_BODY_ONLY_CAPTION)
-      // Full evidence for body-only blockers, collapsed by default.
-      lines.push("")
-      lines.push("<details>")
-      lines.push(BODY_ONLY_BLOCKER_DETAILS_SUMMARY)
-      lines.push("")
-      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext, args.trustLedger, args.showEvidence))
-      lines.push("")
-      lines.push("</details>")
     }
   }
 
   // Phase-3 (founder ask): everything pushed up to HERE is the MUST-KEEP head
-  // (lead + summary + Fix Plan table with every blocker row + body-only blocker
-  // details). The low-severity non-blocker section below is the DROPPABLE tail
-  // that the severity-aware 65k cap sheds first, so a body-scoped security P0/P1
-  // is never the thing that gets sliced out of an oversized review body.
+  // (lead + summary + Fix Plan table with every blocker row). The non-inline
+  // dropdown below is the DROPPABLE tail that the severity-aware 65k cap sheds
+  // first, so a body-scoped security P0/P1's table row is never the thing that
+  // gets sliced out of an oversized review body.
   const headLineCount = lines.length
 
-  // Body-only findings BELOW the blocker floor (score < 4) — unanchored
-  // or non-line-scoped or inline-cap overflow. The explanation copy is
-  // load-bearing (these can't anchor to a diff line, or overflowed the
-  // inline cap). Blockers were rendered above (table + collapsed
-  // evidence) and are intentionally excluded here to avoid duplication.
-  if (bodyOnlyNonBlockers.length > 0) {
-    if (args.trustLedger) {
-      // SIG Trust Ledger v0 (PR3b): restructure the body-only (non-blocker)
-      // findings by WHY they're in the body. A genuinely PR-scoped finding
-      // (no-test / architectural, `findingScope === "pr"`) gets the **PR-level**
-      // mini-section; findings in this PR that couldn't be anchored to a line
-      // (demoteReason "outside-diff") collapse into a dropdown — note these are
-      // IN the PR; genuinely-out-of-PR findings already split to "Outside your
-      // changes" via outOfPrScope; EVERYTHING ELSE (gate-demoted-from-inline + file/line-scoped
-      // body-routed findings) renders through the normal body-row helper, keeping
-      // its canonical severity/path sort + the pills. The old generic disclaimer
-      // is dropped — the structure now communicates the semantics. (CR #269:
-      // PR-level must be strictly pr-scoped, not "everything without a gate reason".)
-      const unanchorableFindings = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
-      const prLevel = bodyOnlyNonBlockers.filter(
-        (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) === "pr",
-      )
-      const flat = bodyOnlyNonBlockers.filter(
-        (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) !== "pr",
-      )
-      // Per-finding row formatter for the PR-level + dropdown sections.
-      const renderRow = (f: PrReviewFinding): string =>
-        renderBodyOnlyFindings([f], args.linkContext, args.trustLedger, args.showEvidence).join("\n").trimStart()
-      lines.push("")
-      lines.push(BODY_ONLY_FINDINGS_HEADING)
-      if (flat.length > 0) {
-        lines.push(...renderBodyOnlyFindings(flat, args.linkContext, args.trustLedger, args.showEvidence))
-      }
-      const prSection = renderPrLevelSection(prLevel, renderRow)
-      if (prSection) {
-        lines.push("")
-        lines.push(prSection)
-      }
-      const odDropdown = renderOutsideDiffDropdown(unanchorableFindings, renderRow)
-      if (odDropdown) {
-        lines.push("")
-        lines.push(odDropdown)
-      }
-    } else {
-      lines.push("")
-      lines.push(BODY_ONLY_FINDINGS_HEADING)
-      lines.push("")
-      lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-      lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger, args.showEvidence))
-    }
-  }
-
-  // Outside your changes (founder ask): the informational section for findings
-  // about code NOT in this PR's changes — below the in-scope findings, so it
-  // reads as a postscript, not a directive. It's in the droppable tail (after
-  // the headLineCount snapshot) so the 65k cap sheds it before any blocker.
-  lines.push(...renderOutsideYourChanges(outOfPrScopeFindings, args.linkContext, args.trustLedger, args.showEvidence))
+  lines.push(
+    ...renderNonInlineFindingsDropdown(
+      bodyOnlyFindings,
+      outOfPrScopeFindings,
+      args.linkContext,
+      args.trustLedger,
+      args.showEvidence,
+    ),
+  )
 
   // Single-line footer (replaces the four separate metadata lines).
   // Built separately from `lines` so the 65k cap can truncate the
@@ -756,16 +677,15 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     headShort,
   })
 
-  // Phase-3 (founder ask): severity-aware cap — shed the low-severity
-  // non-blocker tail first so an oversized body never slices out a security
-  // (or any) blocker. `headLineCount` was snapshotted right before the
-  // non-blocker section was appended.
+  // Phase-3 (founder ask): severity-aware cap — shed the non-inline detail
+  // tail first so an oversized body never slices out a blocker row.
+  // `headLineCount` was snapshotted right before the dropdown was appended.
   const headStr = lines.slice(0, headLineCount).join("\n")
   const tailStr = lines.slice(headLineCount).join("\n")
   return capForGitHubPrioritized({
     head: headStr,
     droppable: tailStr,
-    droppedCountIfOmitted: bodyOnlyNonBlockers.length,
+    droppedCountIfOmitted: nonInlineFindings.length,
     footer,
   })
 }
@@ -838,18 +758,17 @@ function capForGitHub(body: string, footer: string): string {
 }
 
 // Phase-3 (founder ask): SEVERITY-AWARE 65k cap. A blind tail-cut slices
-// whatever renders LAST — the low-severity body-only findings, but also a
-// body-scoped security P0/P1's evidence if the review is large enough — which
-// is a PRESENTATION false-negative (a real blocker the partner never sees).
+// whatever renders LAST — now the non-inline dropdown — which can include
+// unanchorable security P0/P1 evidence if the review is large enough.
 //
-// `head` is the MUST-KEEP prefix: the lead, summary, the Fix Plan table (every
-// score>=4 blocker row, security included), and the body-only BLOCKER details.
-// `droppable` is the low-severity body-only non-blocker section. When the body
-// overflows, we drop the DROPPABLE tail first — cleanly, with a count — so the
-// head (every blocker) always survives intact. Only if the head ALONE still
-// overflows (pathological — a single huge blocker) do we fall back to the blind
-// content cut, which now can only ever truncate a blocker's tail, never silently
-// vanish one whose row was already shown.
+// `head` is the MUST-KEEP prefix: the lead, summary, and the Fix Plan table
+// (every score>=4 blocker row, security included). `droppable` is the non-inline
+// detail dropdown. When the body overflows, we drop the DROPPABLE tail first —
+// cleanly, with a count — so the head (every blocker row) always survives
+// intact. Only if the head ALONE still overflows (pathological — a single huge
+// blocker) do we fall back to the blind content cut, which now can only ever
+// truncate a blocker's tail, never silently vanish one whose row was already
+// shown.
 export function capForGitHubPrioritized(args: {
   head: string
   droppable: string
@@ -867,7 +786,7 @@ export function capForGitHubPrioritized(args: {
   // Drop the low-severity tail and tell the reader exactly what was omitted.
   const omitted =
     args.droppedCountIfOmitted > 0
-      ? `\n\n_${args.droppedCountIfOmitted} lower-severity body ${args.droppedCountIfOmitted === 1 ? "finding" : "findings"} omitted to meet GitHub's 65,535-character limit — every blocker is shown above._`
+      ? `\n\n_${args.droppedCountIfOmitted} non-inline ${args.droppedCountIfOmitted === 1 ? "finding" : "findings"} omitted to meet GitHub's 65,535-character limit — every blocker is shown above._`
       : "\n\n_[lower-severity detail omitted to meet GitHub's 65,535-character limit]_"
   const headFirst = `${head}${omitted}\n\n${footer}`
   if (headFirst.length <= GH_BODY_CAP) return headFirst

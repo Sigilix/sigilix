@@ -313,7 +313,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     )
   })
 
-  it("out-of-PR-scope: renders in 'Outside your changes', NOT the Fix Plan; lead counts only in-scope (inlines-only)", () => {
+  it("out-of-PR-scope: renders inside the single non-inline dropdown, NOT the Fix Plan; lead counts only in-scope", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({
         findings: [
@@ -331,16 +331,17 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       prov: { headSha: HEAD, nowMs: NOW },
     })
     expect(body).toContain("real in-PR blocker") // Fix Plan
-    expect(body).toContain("### Outside your changes")
+    expect(body).not.toContain("### Outside your changes")
+    expect(body).toContain("Outside this PR's changes")
     expect(body).toContain("issue in another file")
-    expect(body).toContain("not modified in this PR")
+    expect(body).toContain("Shown for awareness; these don't block the merge")
     // the lead counts ONLY the in-scope blocker (1), not the out-of-scope finding
     expect(body).toContain("**1 high-severity finding**")
     // the out-of-scope P1 is NOT in the Fix Plan table (no second Critical row)
     expect(body).not.toMatch(/Critical \(5\)[^|]*issue in another file/)
   })
 
-  it("renderApproveBody: marker-only on a clean approve; posts 'Outside your changes' + reconciliation when out-of-scope findings exist", () => {
+  it("renderApproveBody: marker-only on a clean approve; posts the non-inline dropdown + reconciliation when out-of-scope findings exist", () => {
     const clean = renderApproveBody({
       verdict: verdict({ findings: [] }),
       prov: { headSha: HEAD, nowMs: NOW },
@@ -355,11 +356,12 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     })
     expect(withNote).toContain("**Approved**")
     expect(withNote).toContain("1 note about code outside this PR")
-    expect(withNote).toContain("### Outside your changes")
+    expect(withNote).not.toContain("### Outside your changes")
+    expect(withNote).toContain("Outside this PR's changes")
     expect(withNote).toContain("SQLi in unrelated module")
   })
 
-  it("Outside your changes: collapses into a scoped, default-collapsed <details> dropdown (founder 2026-06-14 + Kimi)", () => {
+  it("outside-this-PR findings collapse into the single default-collapsed non-inline dropdown", () => {
     const body = renderApproveBody({
       verdict: verdict({
         findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })],
@@ -372,10 +374,40 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toContain("<details open") // default collapsed
     // Summary states scope + count so a reader who never expands still understands.
     expect(body).toContain("<summary>")
-    expect(body).toContain("1 finding outside this PR's changes")
-    expect(body).toContain("awareness only, non-blocking")
+    expect(body).toContain("1 finding that couldn't be anchored to a line")
+    expect(body).toContain("Outside this PR's changes")
+    expect(body).toContain("Shown for awareness; these don't block the merge")
     // The finding itself lives inside the dropdown.
     expect(body).toContain("SQLi in unrelated module")
+  })
+
+  it("SIG-440: all non-inline findings share one dropdown and the Review Body Findings heading is gone", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({
+        findings: [
+          finding({ scope: "file", score: 3, headline: "file-level note" }),
+          finding({
+            scope: "file",
+            score: 5,
+            outOfPrScope: true,
+            headline: "issue in untouched file",
+            body: "Not in this PR.",
+          }),
+        ],
+      }),
+      unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3, headline: "no reviewable line" })],
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+
+    expect(body).not.toContain("### Review Body Findings")
+    expect(body).not.toContain("### Outside your changes")
+    expect(body).toContain("couldn't be anchored to a line")
+    expect(body).toContain("Outside this PR's changes")
+    expect(body).toContain("file-level note")
+    expect(body).toContain("issue in untouched file")
+    expect(body).toContain("no reviewable line")
+    expect(body.match(/<details>/g) ?? []).toHaveLength(1)
   })
 
   it("Phase 3 (#333): an oversized body sheds the low-severity tail end-to-end, NEVER the security blocker (Sigilix #333)", () => {
@@ -412,7 +444,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // ...the SHA-bearing footer survives...
     expect(body).toContain("`abcdef1`")
     // ...the low-sev tail is shed with an honest counted marker...
-    expect(body).toContain("lower-severity body findings omitted to meet GitHub's 65,535-character limit")
+    expect(body).toContain("non-inline findings omitted to meet GitHub's 65,535-character limit")
     expect(body).toContain("every blocker is shown above")
     // ...and the dropped findings' bodies are actually gone.
     expect(body).not.toContain("UNIQUE_NONBLOCKER_MARKER_11")
@@ -484,10 +516,9 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toContain("### Review Body Findings")
-    // SIG-281 PR B (Rec 6 / Kimi): explanation copy reworded to cover
-    // both reasons a finding lands here (un-anchorable scope + inline cap).
-    expect(body).toContain("could not be anchored to specific diff lines")
+    expect(body).not.toContain("### Review Body Findings")
+    expect(body).toContain("couldn't be anchored to a line")
+    expect(body.match(/<details>/g) ?? []).toHaveLength(1)
     expect(body).toContain("`src/bar.ts:99`")
     expect(body).not.toContain("**src/bar.ts**")
     expect(body).toContain("could not anchor")
@@ -501,7 +532,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toMatch(/\+ \d+ body/)
   })
 
-  it("SIG-281 PR B (Rec 6) — body-only blockers surface in the Fix Plan table + a collapsed evidence block", () => {
+  it("SIG-440 — body-only blockers surface in the Fix Plan table + the single non-inline dropdown", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 2, headline: "minor inline note" })] }),
       unanchored: [
@@ -517,14 +548,12 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     })
     // No legacy "### Fix Plan" H3 heading (it's a table now).
     expect(body).not.toContain("### Fix Plan")
-    // SIG-281 PR B (Rec 6): the score-5 body-only blocker now lives in the
-    // Fix Plan table + the collapsed evidence block — NOT the lower
-    // "Review Body Findings" section (which would hold only score < 4).
+    // SIG-440: the score-5 body-only blocker lives in the Fix Plan table for
+    // prominence, with detail in the same dropdown as every other non-inline finding.
     expect(body).toContain("| Severity | Location | Issue |")
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).not.toContain("### Review Body Findings")
-    // SIG-216: meta tightened to `\`src/bar.ts:99\` · score 5` (rendered
-    // inside the collapsed evidence block).
+    // SIG-216: meta tightened to `\`src/bar.ts:99\` · score 5`.
     expect(body).toContain("**`src/bar.ts:99`**:")
     expect(body).toContain("score 5")
     expect(body).not.toContain("(critical, score 5)")
@@ -546,11 +575,11 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // High-severity tier copy must fire even though there are zero
     // inline findings — the unanchored critical IS the signal.
     expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
-    // SIG-281 PR B (Rec 6): the body-only critical now surfaces in the
-    // Fix Plan table + collapsed evidence block (no separate "+ 1 body"
+    // SIG-440: the body-only critical now surfaces in the
+    // Fix Plan table + single non-inline dropdown (no separate "+ 1 body"
     // clause in the lead — it's already counted in the high-severity tier).
     expect(body).toContain("| Severity | Location | Issue |")
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).toContain("unanchored critical")
   })
 
@@ -576,11 +605,10 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // "**1 high-severity finding**" — the critical IS the signal.
     expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
     expect(body).not.toContain("### Fix Plan")
-    // SIG-281 PR B (Rec 6): pr-scope critical surfaces in the Fix Plan
-    // table + collapsed evidence block, not the "Review Body Findings"
-    // section.
+    // SIG-440: pr-scope critical surfaces in the Fix Plan table and the
+    // single non-inline dropdown, not the deleted body-findings section.
     expect(body).toContain("| Severity | Location | Issue |")
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).not.toContain("### Review Body Findings")
     // SIG-216: pr-scope renders the bare path (no `:line`) + tightened
     // `<anchor> · score N` meta — no "PR-level (critical, ...)" prefix.
@@ -649,17 +677,17 @@ describe("renderRequestChangesBody (ARC-281)", () => {
   // happy path; this block pins it across every variant combination.
   describe("summary-before-findings ordering invariant", () => {
     const SUMMARY_PARAGRAPH = "The PR adds a feature flag and a test."
-    const FIX_PLAN_HEADING = "### Fix Plan"
-    const BODY_ONLY_HEADING = "### Review Body Findings"
+    const FIX_PLAN_TABLE = "| Severity | Location | Issue |"
+    const BODY_ONLY_SUMMARY = "couldn't be anchored to a line"
 
     function assertSummaryFirst(body: string, label: string): void {
       const summaryIdx = body.indexOf(SUMMARY_PARAGRAPH)
       expect(summaryIdx, `${label}: summary paragraph must appear in body`).toBeGreaterThan(-1)
-      const fixPlanIdx = body.indexOf(FIX_PLAN_HEADING)
+      const fixPlanIdx = body.indexOf(FIX_PLAN_TABLE)
       if (fixPlanIdx !== -1) {
         expect(summaryIdx, `${label}: summary must precede Fix Plan`).toBeLessThan(fixPlanIdx)
       }
-      const bodyOnlyIdx = body.indexOf(BODY_ONLY_HEADING)
+      const bodyOnlyIdx = body.indexOf(BODY_ONLY_SUMMARY)
       if (bodyOnlyIdx !== -1) {
         expect(summaryIdx, `${label}: summary must precede body-only findings`).toBeLessThan(bodyOnlyIdx)
       }
@@ -720,7 +748,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       assertSummaryFirst(body, "with unanchored")
       // Fix Plan must also precede body-only findings — diff context
       // (anchored, severity-gated) remains the primary repair queue.
-      expect(body.indexOf(FIX_PLAN_HEADING)).toBeLessThan(body.indexOf(BODY_ONLY_HEADING))
+      expect(body.indexOf(FIX_PLAN_TABLE)).toBeLessThan(body.indexOf("couldn't be anchored to a line"))
     })
 
     it("summary precedes body-only findings even when Fix Plan is absent (low-severity only)", () => {
@@ -731,7 +759,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
         prov: { headSha: HEAD, nowMs: NOW },
       })
       // Fix Plan header MUST be absent when no score >= 4 finding exists.
-      expect(body).not.toContain(FIX_PLAN_HEADING)
+      expect(body).not.toContain(FIX_PLAN_TABLE)
       assertSummaryFirst(body, "low-severity only")
     })
 
@@ -913,7 +941,7 @@ describe("renderApproveBody disclosure exception (SIG-414 Phase 1.2)", () => {
     expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("the APPROVE policy note coexists with an 'Outside your changes' note", () => {
+  it("the APPROVE policy note coexists with the non-inline dropdown", () => {
     const body = renderApproveBody({
       verdict: verdict({ findings: [] }),
       unanchored: [
@@ -923,7 +951,8 @@ describe("renderApproveBody disclosure exception (SIG-414 Phase 1.2)", () => {
       prov: { headSha: HEAD, nowMs: NOW },
     })
     expect(body).toContain("note") // out-of-scope reconciliation line
-    expect(body).toContain("### Outside your changes")
+    expect(body).toContain("Outside this PR's changes")
+    expect(body).not.toContain("### Outside your changes")
     expect(body).toContain("📋 1 file skipped")
   })
 })

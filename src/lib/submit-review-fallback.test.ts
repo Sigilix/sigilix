@@ -84,12 +84,10 @@ describe("buildFallbackBody", () => {
       { ...baseFinding, path: "src/m.ts", line: 30, headline: "m-issue" },
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
-    // SIG-281 PR B (Rec 6): baseFinding is score 4, so these body-only
-    // findings are blockers — they render in the Fix Plan table + the
-    // collapsed evidence block (which reuses the same compact-anchor /
-    // no-orphan-heading rendering), not the lower "Review Body Findings"
-    // section.
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    // SIG-440: baseFinding is score 4, so these body-only findings are
+    // blockers — they render in the Fix Plan table + the single non-inline
+    // dropdown, not the deleted "Review Body Findings" section.
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).toContain("| Severity | Location | Issue |")
     expect(body).toContain("`src/a.ts:20`")
     expect(body).toContain("`src/m.ts:30`")
@@ -124,11 +122,10 @@ describe("buildFallbackBody", () => {
     const body = buildFallbackBody({ ...baseVerdict, findings: [anchored] }, [unanchored])
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
-    // SIG-281 PR B (Rec 6): both findings are score 4 (P1) blockers, so
-    // the anchorless-fallback pours them into the Fix Plan table + the
-    // collapsed evidence block, not the lower "Review Body Findings"
-    // section.
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    // SIG-440: both findings are score 4 (P1) blockers, so the
+    // anchorless-fallback pours them into the Fix Plan table + the single
+    // non-inline dropdown, not the deleted body section.
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).not.toContain("### Review Body Findings")
     // SIG-281 PR A: 1 anchored + 1 unanchored, both score 4 (P1) and all
     // body-only → 2 blockers → REQUEST_CHANGES posture, "high-severity
@@ -192,9 +189,9 @@ describe("buildFallbackBody", () => {
     expect(populated).not.toContain("Clear off-by-one.")
     const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
     // Summary still renders; the single score-4 (P1) finding flows into
-    // the Fix Plan table + collapsed evidence block (SIG-281 PR B / Rec 6).
+    // the Fix Plan table + single non-inline dropdown.
     expect(blank).toContain("One real bug.")
-    expect(blank).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(blank).toContain("couldn't be anchored to a line")
   })
 })
 
@@ -354,11 +351,9 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
-    // SIG-281 PR B (Rec 6): the unanchored finding is score 4 (P1), so it
-    // is rolled into the Fix Plan table + the collapsed evidence block
-    // (not lost) — its detail surface moved from "Review Body Findings"
-    // to the body-only blocker details block.
-    expect(submission.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    // SIG-440: the unanchored finding is score 4 (P1), so it is rolled into
+    // the Fix Plan table + the single non-inline dropdown (not lost).
+    expect(submission.body).toContain("couldn't be anchored to a line")
   })
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {

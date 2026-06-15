@@ -4,30 +4,30 @@
       "summary": "T",
       "confidence": 3,
       "confidenceReason": "R.",
-      "findings": []
+      "findings": [
+        {
+          "path": "src/lib/fee.ts",
+          "line": 17,
+          "score": 5,
+          "category": "logic",
+          "headline": "`amount` can be NaN",
+          "body": "computeFee(amount) returns NaN; no finite check guards it.",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "logic"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
     },
-    "unanchoredFindings": [
-      {
-        "path": "src/lib/fee.ts",
-        "line": 17,
-        "score": 5,
-        "category": "logic",
-        "headline": "`amount` can be NaN",
-        "body": "computeFee(amount) returns NaN; no finite check guards it.",
-        "evidence": {
-          "specialistsThatFlagged": [
-            "logic"
-          ],
-          "specialistsThatDeclined": [],
-          "deterministicFactIds": [],
-          "retrievalChunkIds": [],
-          "relatedPriorPRs": [],
-          "synthDecision": "kept",
-          "consensusScore": 1
-        },
-        "scope": "line"
-      }
-    ],
+    "unanchoredFindings": [],
     "droppedForInvalidLine": 0,
     "remappedInvalidLineToInline": 0,
     "droppedForHallucination": 0,
@@ -46,7 +46,18 @@
     "droppedForFailedWindowBlindnessValidation": 1,
     "droppedForFailedSecurityGroundingValidation": 0,
     "droppedForFailedSecurityUsageValidation": 0,
-    "cleanFindingProvenance": [],
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "logic"
+        ],
+        "sourceFindingIds": [
+          "logic-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
     "provenance": {
       "findings": [
         {
@@ -76,7 +87,7 @@
         "reason": "positive-misread-guard-out-of-window",
         "matchedIdentifier": "amount",
         "guardLine": 5,
-        "dropped": true
+        "dropped": false
       }
     }
   ]

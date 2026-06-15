@@ -19,7 +19,7 @@
 import type { CheckRunAnnotation, SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
 import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { type StackContext } from "@/src/lib/pr-stack"
-import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
+import { isSubstantiveAnchorLine, isSubstantiveCodeAnchorLine } from "@/src/shared/util/anchor-lines"
 import { hasStructuredFix, isDeletionSuggestion } from "@/src/shared/domain/pr-review-finding"
 import type { PrReviewFinding, PrReviewVerdict, CoverageRoles } from "@/src/shared/domain/pr-review-finding"
 import {
@@ -189,6 +189,15 @@ interface BuildReviewArgs {
    *  oversized / spillover). Forwarded to `RenderBodyArgs.disclosure` so the body
    *  renders three distinct, calm notices instead of one lumped "size budget" one. */
   disclosure?: ReviewDisclosure
+  /**
+   * SIG-436: forwarded to `prepareReviewSubmissionFindings.anchorPrecision`. When
+   * true, the substantive-anchor forward-walk treats a whole-line COMMENT as
+   * non-substantive, so a finding the model anchored to the `// comment` line
+   * above the bug is re-homed onto the buggy statement. Default OFF (omitted →
+   * byte-identical anchoring). Gated by `OPENCLAW_ANCHOR_PRECISION` in the app
+   * layer; passed down as a boolean so this render module stays pure.
+   */
+  anchorPrecision?: boolean
 }
 
 /**
@@ -337,8 +346,21 @@ export function prepareReviewSubmissionFindings(args: {
   headSha: string
   reviewable?: ReviewableMap
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /**
+   * SIG-436: when true, the substantive-anchor forward-walk uses the STRICTER
+   * `isSubstantiveCodeAnchorLine` classifier, which also treats a WHOLE-LINE
+   * comment (`// …`, `/* … *​/`, ` * …`, `#`, `{/* … *​/}`) as non-substantive —
+   * so a finding the model anchored to the comment line directly ABOVE the bug
+   * is re-homed forward onto the buggy code statement it describes. Default
+   * `false` → byte-identical to the pre-SIG-436 walk (`isSubstantiveAnchorLine`).
+   * Gated by `OPENCLAW_ANCHOR_PRECISION` (parsed in the app layer; this render
+   * layer stays pure). Recall-safe: if no substantive code line is in
+   * window/range the finding still body-demotes (surfaced, never dropped) and is
+   * never anchored to a wrong line.
+   */
+  anchorPrecision?: boolean
 }): PreparedReviewSubmissionFindings {
-  const { rawVerdict, rawUnanchored, headSha, reviewable, addedLineTextByLine } = args
+  const { rawVerdict, rawUnanchored, headSha, reviewable, addedLineTextByLine, anchorPrecision = false } = args
   const sanitizedVerdict = sanitizeVerdictForGitHub(rawVerdict)
   const verdict: PrReviewVerdict = {
     ...sanitizedVerdict,
@@ -388,10 +410,18 @@ export function prepareReviewSubmissionFindings(args: {
       // demoting to the body. For THIS anchoring step, fall back to the body only
       // when there's no substantive added line at/after the anchor. (The other
       // body-routing path below — the inline-comment cap overflow — can still body-route.)
+      // SIG-436: with `anchorPrecision`, a whole-line COMMENT is also non-substantive,
+      // so a finding anchored to the `// comment` above the bug walks onto the bug.
+      // NOTE (SIG-436 scope): findings carrying a structured fix (`hasSuggestion`)
+      // skip this walk ENTIRELY (the `!hasSuggestion` guard above), so the
+      // precision pass deliberately never re-homes a committable ```suggestion —
+      // its anchor is bound to the replacement range and moving it could break the
+      // block. Suggestions keep their current anchoring under the flag (v1 scope).
       const resolved = pickSubstantiveAnchorLineForward(
         addedLinesForPath,
         findingForInline.line,
         findingForInline.startLine,
+        anchorPrecision,
       )
       if (resolved === null) {
         if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
@@ -474,6 +504,9 @@ export interface PreviewReviewSubmissionEventArgs {
   reviewable?: ReviewableMap
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
   eventOverride?: ReviewEventOverride
+  /** SIG-436: forwarded to `prepareReviewSubmissionFindings` so the previewed
+   *  event matches the built submission's inline/body split under the flag. */
+  anchorPrecision?: boolean
 }
 
 export function previewReviewSubmissionEvent({
@@ -483,6 +516,7 @@ export function previewReviewSubmissionEvent({
   reviewable,
   addedLineTextByLine,
   eventOverride,
+  anchorPrecision,
 }: PreviewReviewSubmissionEventArgs): ReviewEvent {
   const prepared = prepareReviewSubmissionFindings({
     rawVerdict,
@@ -490,6 +524,7 @@ export function previewReviewSubmissionEvent({
     headSha,
     ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+    ...(anchorPrecision !== undefined ? { anchorPrecision } : {}),
   })
   return chooseRenderedEventWithOverride(
     {
@@ -546,6 +581,7 @@ export function buildReviewSubmissionWithMetadata({
   showEvidence,
   trustLedgerSuppressed,
   disclosure,
+  anchorPrecision,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const { verdict, renderVerdict, inlineFindings, inlineOriginalIndex, unanchored } = prepareReviewSubmissionFindings({
     rawVerdict,
@@ -553,6 +589,9 @@ export function buildReviewSubmissionWithMetadata({
     headSha,
     ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+    // SIG-436: forward the (default-off) anchor-precision flag so the
+    // substantive-anchor walk can skip a whole-line comment above the bug.
+    ...(anchorPrecision !== undefined ? { anchorPrecision } : {}),
   })
   const event = chooseRenderedEventWithOverride(
     {
@@ -710,20 +749,29 @@ export function pickAnchorLineForward(
  * substantive added line WITHIN [rangeStartLine..requestedLine] instead of
  * demoting the finding to the body — bounded by the model's own asserted
  * range, so it can't drift to unrelated code. Recall-safe (body → inline only).
+ *
+ * SIG-436 `codeOnly`: when true the walk uses the stricter
+ * `isSubstantiveCodeAnchorLine` — a whole-line COMMENT (`// …`, `/* … *​/`,
+ * ` * …`, `{/* … *​/}`) is also non-substantive, so a finding the model anchored
+ * to the `// comment` line directly above the bug is re-homed forward onto the
+ * buggy code statement the comment annotates. Default false → byte-identical
+ * pre-SIG-436 behavior (a comment counts as substantive and stops the walk).
  */
 export const MAX_SUBSTANTIVE_ANCHOR_WALK = 25
 export function pickSubstantiveAnchorLineForward(
   addedLinesForPath: ReadonlyMap<number, string> | undefined,
   requestedLine: number,
   rangeStartLine?: number,
+  codeOnly = false,
 ): number | null {
   if (addedLinesForPath === undefined) return null
+  const isSubstantive = codeOnly ? isSubstantiveCodeAnchorLine : isSubstantiveAnchorLine
   let best: number | null = null
   for (const [line, text] of addedLinesForPath) {
     if (
       line >= requestedLine &&
       line - requestedLine <= MAX_SUBSTANTIVE_ANCHOR_WALK &&
-      isSubstantiveAnchorLine(text) &&
+      isSubstantive(text) &&
       (best === null || line < best)
     ) {
       best = line
@@ -747,7 +795,7 @@ export function pickSubstantiveAnchorLineForward(
       if (
         line >= rangeStartLine &&
         line < requestedLine &&
-        isSubstantiveAnchorLine(text) &&
+        isSubstantive(text) &&
         (backBest === null || line > backBest)
       ) {
         backBest = line

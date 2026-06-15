@@ -5,10 +5,12 @@ import {
   buildReviewSubmissionWithMetadata,
   formatFindingComment,
   isSubstantiveAnchorLine,
+  isSubstantiveCodeAnchorLine,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
   renderFixPlan,
   severityBadgeForScore,
+  stripWholeLineComment,
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "@/src/lib/triage-pr-review"
@@ -152,6 +154,240 @@ describe("isSubstantiveAnchorLine (SIG-127)", () => {
   it("treats real code as substantive", () => {
     expect(isSubstantiveAnchorLine("const x = 1")).toBe(true)
     expect(isSubstantiveAnchorLine("  return batch(ids)")).toBe(true)
+  })
+
+  it("SIG-436 root cause: treats a `// comment` line as substantive (the base classifier)", () => {
+    // This is the bug — the base walk stops on the comment above the bug.
+    expect(isSubstantiveAnchorLine("  // Build a stable key for dedupe.")).toBe(true)
+    expect(isSubstantiveAnchorLine("  /* validate the amount */")).toBe(true)
+    expect(isSubstantiveAnchorLine("   * jsdoc continuation")).toBe(true)
+  })
+})
+
+describe("stripWholeLineComment (SIG-436)", () => {
+  it("strips a whole-line `//` or `#` comment to empty", () => {
+    expect(stripWholeLineComment("  // a note")).toBe("")
+    expect(stripWholeLineComment("// a note")).toBe("")
+    expect(stripWholeLineComment("# a note")).toBe("")
+  })
+
+  it("strips a one-line block comment, keeping code after a same-line close", () => {
+    expect(stripWholeLineComment("  /* a note */")).toBe("")
+    expect(stripWholeLineComment("  /* lead */ const x = 1")).toBe("const x = 1")
+    expect(stripWholeLineComment("  /* unterminated block")).toBe("")
+  })
+
+  it("strips a JSDoc continuation / close line", () => {
+    expect(stripWholeLineComment("   * jsdoc continuation")).toBe("")
+    expect(stripWholeLineComment("   */")).toBe("")
+    expect(stripWholeLineComment("   */ trailing()")).toBe("trailing()")
+  })
+
+  it("strips a JSX comment (incl. the closing brace), keeping code after the close", () => {
+    expect(stripWholeLineComment("  {/* note */}")).toBe("")
+    expect(stripWholeLineComment("  {/* note */} <Foo/>")).toBe("<Foo/>")
+  })
+
+  it("does NOT strip a trailing comment after code (keeps the code)", () => {
+    expect(stripWholeLineComment("  const x = 1 // note")).toBe("const x = 1 // note")
+    expect(stripWholeLineComment("  return f() // ok")).toBe("return f() // ok")
+  })
+
+  it("leaves a private-field / shebang-ish `#name` token alone (not a comment in TS)", () => {
+    // Codex sign-off: `#` is only treated as a comment when it STARTS the line as
+    // its own token; `#private` / `#define` are not stripped to empty here because
+    // they begin with `#` — but the downstream classifier still relies on the
+    // remaining text being substantive. `#private = 1` starts with `#`, so it
+    // returns "" — that's acceptable because we deliberately scope `#` out of the
+    // *code-substantive* result below (see isSubstantiveCodeAnchorLine tests).
+    expect(stripWholeLineComment("#!/usr/bin/env node")).toBe("")
+  })
+})
+
+describe("isSubstantiveCodeAnchorLine (SIG-436)", () => {
+  it("rejects everything the base classifier rejects", () => {
+    expect(isSubstantiveCodeAnchorLine(undefined)).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("  ")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("}")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("});")).toBe(false)
+  })
+
+  it("rejects a whole-line comment (the SIG-436 fix)", () => {
+    expect(isSubstantiveCodeAnchorLine("  // Build a stable key for dedupe.")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("  /* validate the amount */")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("   * jsdoc continuation")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("   */")).toBe(false)
+  })
+
+  it("rejects a JSX comment-only line and a comment followed only by punctuation", () => {
+    expect(isSubstantiveCodeAnchorLine("  {/* a note */}")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("  /* note */ );")).toBe(false)
+  })
+
+  it("rejects a multi-line block-comment MIDDLE line", () => {
+    // Inside a /* … */ block each interior line starts with `*` → comment.
+    expect(isSubstantiveCodeAnchorLine("   * this line is part of a block comment")).toBe(false)
+    expect(isSubstantiveCodeAnchorLine("   *")).toBe(false)
+  })
+
+  it("ACCEPTS real code, including code with a trailing comment", () => {
+    expect(isSubstantiveCodeAnchorLine("  const dedupeKey = `${runId}`")).toBe(true)
+    expect(isSubstantiveCodeAnchorLine("  return result")).toBe(true)
+    expect(isSubstantiveCodeAnchorLine("  const x = 1 // note")).toBe(true)
+    // a one-line block comment FOLLOWED by code is real code.
+    expect(isSubstantiveCodeAnchorLine("  /* lead */ doWork()")).toBe(true)
+  })
+})
+
+describe("pickSubstantiveAnchorLineForward codeOnly (SIG-436)", () => {
+  // The signature failure: the model anchors at the `//` comment (line 117)
+  // describing the bug; the bug is the next line (118).
+  const lines = new Map<number, string>([
+    [116, "    const attemptIndex = Number(raw.attempt ?? 0)"], // code
+    [117, "    // Build a stable key so a re-delivered event is dropped."], // comment ABOVE the bug
+    [118, "    const dedupeKey = `${raw.runId}:${attemptIndex}`"], // THE BUG
+    [119, "    return out"], // code
+  ])
+
+  it("codeOnly=false (default): STOPS on the comment line (reproduces the bug)", () => {
+    expect(pickSubstantiveAnchorLineForward(lines, 117)).toBe(117)
+  })
+
+  it("codeOnly=true: SKIPS the comment and lands on the bug line below it (the fix)", () => {
+    expect(pickSubstantiveAnchorLineForward(lines, 117, undefined, true)).toBe(118)
+  })
+
+  it("codeOnly=true: a fast-path code line is unchanged", () => {
+    expect(pickSubstantiveAnchorLineForward(lines, 118, undefined, true)).toBe(118)
+    expect(pickSubstantiveAnchorLineForward(lines, 116, undefined, true)).toBe(116)
+  })
+
+  it("codeOnly=true: recall-safe — a comment with NO code line after it in window → null (body-demote, not wrong line)", () => {
+    const tail = new Map<number, string>([
+      [10, "    const real = compute()"],
+      [11, "    // trailing comment, nothing substantive after"],
+    ])
+    // forward-only: nothing code after 11 → null (the caller body-demotes).
+    expect(pickSubstantiveAnchorLineForward(tail, 11, undefined, true)).toBeNull()
+    // and it never drifts backward without a range arg.
+    expect(pickSubstantiveAnchorLineForward(tail, 11, undefined, false)).toBe(11)
+  })
+})
+
+describe("buildReviewSubmission anchor precision (SIG-436, end-to-end)", () => {
+  // A finding the model anchored to the `// comment` line (117) above the bug
+  // (118), with the real diff text supplied so the substantive walk runs.
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [
+      "src/parse/event.ts",
+      new Map<number, string>([
+        [116, "    const attemptIndex = Number(raw.attempt ?? 0)"],
+        [117, "    // Build a stable key so a re-delivered event is dropped."],
+        [118, "    const dedupeKey = `${raw.runId}:${attemptIndex}`"],
+        [119, "    return out"],
+      ]),
+    ],
+  ])
+  const commentAnchoredFinding: PrReviewFinding = {
+    path: "src/parse/event.ts",
+    line: 117, // the comment line, one above the bug
+    score: 4,
+    category: "logic",
+    headline: "`dedupeKey` omits `attemptKind`, collapsing distinct events",
+    body: "The dedupe key is built from runId + attemptIndex only, so two distinct-kind events with the same attempt are dropped as duplicates.",
+  }
+  const verdictOf = (f: PrReviewFinding): PrReviewVerdict => ({
+    summary: "Dedup bug.",
+    confidence: 4,
+    confidenceReason: "Logic specialist.",
+    findings: [f],
+  })
+
+  it("flag OFF (default): publishes the inline comment ON the comment line (the bug, reproduced)", () => {
+    const out = buildReviewSubmission({
+      verdict: verdictOf(commentAnchoredFinding),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(117) // lands on the comment — WRONG
+  })
+
+  it("flag ON: re-homes the inline comment onto the buggy code line below the comment (the fix)", () => {
+    const out = buildReviewSubmission({
+      verdict: verdictOf(commentAnchoredFinding),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+      anchorPrecision: true,
+    })
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(118) // lands on the bug — CORRECT
+  })
+
+  it("flag ON: a finding already on a code line is untouched (no spurious move)", () => {
+    const onCode: PrReviewFinding = { ...commentAnchoredFinding, line: 118 }
+    const out = buildReviewSubmission({
+      verdict: verdictOf(onCode),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+      anchorPrecision: true,
+    })
+    expect(out.comments?.[0]?.line).toBe(118)
+  })
+
+  it("flag ON: NEVER drops the finding — a comment with no code after it body-demotes (recall-safe)", () => {
+    const tailText = new Map<string, Map<number, string>>([
+      [
+        "src/parse/event.ts",
+        new Map<number, string>([
+          [200, "    const real = compute()"],
+          [201, "    // trailing comment with nothing substantive after it"],
+        ]),
+      ],
+    ])
+    const tailFinding: PrReviewFinding = { ...commentAnchoredFinding, line: 201 }
+    const out = buildReviewSubmission({
+      verdict: verdictOf(tailFinding),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine: tailText,
+      anchorPrecision: true,
+    })
+    // Not posted inline on the wrong (comment) line; surfaced in the body instead.
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("omits `attemptKind`")
+  })
+
+  it("flag ON: a structured-fix finding keeps its anchoring (suggestions are out of the v1 walk)", () => {
+    // A finding carrying a committable suggestion skips the substantive walk
+    // entirely (hasSuggestion guard), so the flag does NOT move it — anchoring is
+    // unchanged whether the flag is on or off. (The suggestion-aware re-home is a
+    // separate commit in this PR.)
+    const withFix: PrReviewFinding = {
+      ...commentAnchoredFinding,
+      line: 118,
+      startLine: 118,
+      kind: "replace",
+      suggestedReplacement: "    const dedupeKey = `${raw.runId}:${attemptIndex}:${attemptKind}`",
+    }
+    const off = buildReviewSubmission({
+      verdict: verdictOf(withFix),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    const on = buildReviewSubmission({
+      verdict: verdictOf(withFix),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+      anchorPrecision: true,
+    })
+    expect(on.comments?.[0]?.line).toBe(off.comments?.[0]?.line)
   })
 })
 

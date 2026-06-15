@@ -219,6 +219,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_SECURITY_RECALL_MODE: "on",
       // SIG-399: reasoning-process directive flag (logic).
       OPENCLAW_LOGIC_REASONING_PROMPT_MODE: "on",
+      // SIG-436: inline anchor-precision pass (=== "on").
+      OPENCLAW_ANCHOR_PRECISION: "on",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -256,6 +258,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
       invariantLensRecallContract: "shadow-background",
       multiBatchMode: parseMultiBatchMode(env.OPENCLAW_REVIEW_MULTIBATCH_MODE),
+      anchorPrecision: env.OPENCLAW_ANCHOR_PRECISION === "on",
       recallRoles: new Set(
         [
           env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
@@ -305,6 +308,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       invariantLensMode: "off",
       invariantLensRecallContract: "blocking",
       multiBatchMode: "off",
+      anchorPrecision: false,
       recallRoles: new Set(),
       // SIG-399: reasoning-process directive default off → empty set.
       reasoningPromptRoles: new Set(),

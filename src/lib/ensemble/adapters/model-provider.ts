@@ -687,8 +687,12 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * @internal Exported for ARC-283 tests + shadow runner only. Do not
- * call from prod code paths other than `handlePrReviewEnsemble` and
- * `src/lib/shadow-bakeoff-runner.ts`.
+ * call from prod code paths other than `handlePrReviewEnsemble`,
+ * `src/lib/shadow-bakeoff-runner.ts`, and (SIG-426) the CI-failure-triage
+ * synth pass (`src/lib/ci-triage-synth-run.ts`) — an INTENTIONAL contract
+ * expansion: the CI pass runs ONE grounded synth over a CI-evidence
+ * `userMessage` (failed log + diff + named-file context) with the CI preamble,
+ * so a CI-derived diagnosis inherits the same grounding/anchoring/dedup stack.
  */
 export interface SynthesizerRunArgs {
   apiKey: string | undefined
@@ -780,8 +784,12 @@ export function parseSynthAnswer(
 
 /**
  * @internal Exported for ARC-283 tests + shadow runner only. Do not
- * call from prod code paths other than `handlePrReviewEnsemble` and
- * `src/lib/shadow-bakeoff-runner.ts`.
+ * call from prod code paths other than `handlePrReviewEnsemble`,
+ * `src/lib/shadow-bakeoff-runner.ts`, and (SIG-426) the CI-failure-triage
+ * synth pass (`src/lib/ci-triage-synth-run.ts`). The CI use is an INTENTIONAL
+ * contract expansion — `runSynthesizer` is content-agnostic (specialist
+ * verdicts only ever live inside `userMessage`), so a CI-evidence bundle works
+ * with no shape change.
  */
 export async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()

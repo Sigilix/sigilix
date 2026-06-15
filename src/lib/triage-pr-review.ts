@@ -190,6 +190,14 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (fixExample) finalFinding.fixExample = fixExample
     const testGap = normalizeFindingDetail(finding.testGap)
     if (testGap) finalFinding.testGap = testGap
+    // SIG-426: retain the CI synth's verbatim `logExcerpt` (the failing log span
+    // the finding quotes) so the CI-triage-synth pass can substring-verify it
+    // against the real log (`isLogGrounded`). Trim-only — the value is matched,
+    // never rendered. The standard PR-review prompts never emit it (so this is a
+    // no-op for the review path); only `CI_SYNTH_PREAMBLE` adds it.
+    if (typeof finding.logExcerpt === "string" && finding.logExcerpt.trim().length > 0) {
+      finalFinding.logExcerpt = finding.logExcerpt.trim()
+    }
     // SIG-101: read per-finding confidence when the model supplies it.
     // Clamped to 1-5. Absent → leave undefined; downstream renderers
     // call `resolveFindingConfidence` which falls back to the

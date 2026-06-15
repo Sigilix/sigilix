@@ -25,6 +25,7 @@ import type { SecurityGroundingValidatorMode } from "./gates/validate-security-g
 import type { SecurityUsageValidatorMode } from "./gates/validate-security-usage"
 import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import type { LogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
+import type { LogicInputCompositionMode } from "./logic-input-composition"
 import type { AstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
 import type { TrustLedgerMode } from "./gates/trust-ledger-thread"
 import type { ClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
@@ -107,6 +108,11 @@ export interface EnsembleFeatureFlags {
   toctouHints: AstScanMode
   receiptJoinMode: ReceiptJoinMode
   logicPromptBudgetMode: LogicPromptBudgetMode
+  /** SIG-369(b): `OPENCLAW_LOGIC_INPUT_COMPOSITION` "off" | "shadow" (default
+   *  "off"). When "shadow", the logic specialist's input-token composition is
+   *  measured + emitted + attached to the KV review-telemetry record. Pure no-op
+   *  when off — telemetry only, no context cut. */
+  logicInputCompositionMode: LogicInputCompositionMode
   /** Normalized `OPENCLAW_SYNTH_RECOVERY` (default "off", trim + lowercase). */
   synthRecovery: AstScanMode
   astEmitFloorMode: AstEmitFloorMode

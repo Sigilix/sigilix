@@ -15,7 +15,6 @@
 // Tier-1). These point sideways/up and are deliberately left
 // as-is until a later PR pulls them to ports.
 
-import { chat } from "@/src/shared/adapters/model"
 import type { ChatMessage } from "@/src/shared/ports/model"
 import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "@/src/lib/ensemble/domain/model-policy"
 import type { CostProjectionLineup } from "@/src/lib/ensemble/domain/cost-projection"
@@ -48,7 +47,8 @@ import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { parsePrReviewResponse } from "@/src/lib/triage-pr-review"
 import type { McpToolId } from "@/src/shared/domain/config/types"
 import { createSpecialistMcpTools } from "./specialist-mcp-tools"
-import { runSpecialistToolConversation, type SpecialistRuntimeTool } from "./specialist-tool-loop"
+import { type SpecialistRuntimeTool } from "./specialist-tool-loop"
+import { attemptChat } from "./model-provider-attempt"
 
 /**
  * Per-role model lineup (SIG-406 alpha, 2026-06-14): the OpenRouter LIVE DEFAULT.
@@ -198,6 +198,19 @@ export interface SpecialistRunArgs {
   mcpTools?: {
     toolIds: McpToolId[]
   }
+  /**
+   * SIG-369(b): optional per-attempt input-composition observer (logic role,
+   * shadow mode only). Fired once per settled attempt with that attempt's
+   * per-call input-token split + tool-loop stats, INSIDE the existing protected
+   * `onAttempt` try/catch — so it inherits the fail-open guard and a telemetry
+   * throw can never convert a valid verdict into a dropped specialist (Codex
+   * sign-off A). Absent → byte-identical to today (no observation).
+   */
+  onInputComposition?: (info: {
+    perCallInputTokens: Array<number | undefined>
+    toolCallsMade: number
+    toolResultTokens: number
+  }) => void
 }
 
 export interface SpecialistRunResult {
@@ -298,6 +311,17 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
         // attempt — incl. retries/fallback/parse-fail — burned tokens).
         // SIG-417: also accumulate the actual per-call cost (credits ≈ USD).
         args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens, info.costUsd)
+        // SIG-369(b): feed the per-call input split + tool-loop stats to the
+        // logic-input-composition recorder (shadow only; absent otherwise). In
+        // this SAME protected block so it's fail-open. `perCallInputTokens` is
+        // absent on the exception path (no call completed) — nothing to record.
+        if (args.onInputComposition !== undefined && info.perCallInputTokens !== undefined) {
+          args.onInputComposition({
+            perCallInputTokens: info.perCallInputTokens,
+            toolCallsMade: info.toolCallsMade ?? 0,
+            toolResultTokens: info.toolResultTokens ?? 0,
+          })
+        }
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSpecialist` runs inside
@@ -368,6 +392,18 @@ export interface AttemptCallbackInfo {
   /** SIG-287: cumulative thinking-char count for the attempt (length only,
    *  never the CoT text). Absent on the default-off `think:false` path. */
   thinkingChars?: number
+  /** SIG-369(b): input tokens of EACH `chat()` call this attempt made, in
+   *  order — single-shot is one entry (`[inputTokens]`), the tool conversation
+   *  is two (`[toolTurn, final]`, the final re-sends everything). A `undefined`
+   *  entry = that call's provider reported no usage (kept distinct from 0).
+   *  Absent on the exception path (no call completed). Telemetry only. */
+  perCallInputTokens?: Array<number | undefined>
+  /** SIG-369(b): tool calls executed this attempt (tool conversation only; 0 /
+   *  absent on the single-shot path). */
+  toolCallsMade?: number
+  /** SIG-369(b): estimated tokens of the tool-result block fed into the final
+   *  tool-conversation call (tool path only; 0 / absent single-shot). */
+  toolResultTokens?: number
 }
 
 export async function runWithRetryAndFallback<T>(args: {
@@ -486,6 +522,12 @@ export async function runWithRetryAndFallback<T>(args: {
       // SIG-417: forward the actual per-call cost alongside the token counts.
       ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287
+      // SIG-369(b): forward the per-call input split + tool-loop stats so the
+      // logic-input-composition recorder (wired via onInputComposition) can see
+      // the tool-turn-vs-final doubling separately.
+      ...(outcome.perCallInputTokens !== undefined ? { perCallInputTokens: outcome.perCallInputTokens } : {}),
+      ...(outcome.toolCallsMade !== undefined ? { toolCallsMade: outcome.toolCallsMade } : {}),
+      ...(outcome.toolResultTokens !== undefined ? { toolResultTokens: outcome.toolResultTokens } : {}),
     })
     if (outcome.verdict !== null) {
       return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.primary, attemptsUsed }
@@ -556,6 +598,10 @@ export async function runWithRetryAndFallback<T>(args: {
       // SIG-417: forward the actual per-call cost on the fallback path too.
       ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       ...(outcome.thinkingChars !== undefined ? { thinkingChars: outcome.thinkingChars } : {}), // SIG-287 (fallback: normally absent)
+      // SIG-369(b): forward the per-call input split + tool-loop stats on the fallback too.
+      ...(outcome.perCallInputTokens !== undefined ? { perCallInputTokens: outcome.perCallInputTokens } : {}),
+      ...(outcome.toolCallsMade !== undefined ? { toolCallsMade: outcome.toolCallsMade } : {}),
+      ...(outcome.toolResultTokens !== undefined ? { toolResultTokens: outcome.toolResultTokens } : {}),
     })
     if (outcome.verdict !== null) {
       return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.fallback, attemptsUsed }
@@ -577,90 +623,6 @@ export async function runWithRetryAndFallback<T>(args: {
     attemptsUsed,
     startedAt,
   )
-}
-
-async function attemptChat<T>(args: {
-  model: string
-  apiKey: string
-  messages: ChatMessage[]
-  signal: AbortSignal
-  chatEnabled: "on" | "off"
-  format: Record<string, unknown> | undefined
-  parseAnswer: (content: string) => T | null
-  parseFailureLabel: string
-  /** SIG-287: bounded reasoning level for THIS attempt. Only the primary loop
-   *  passes it; the fallback attempt omits it (stays `think:false`). */
-  reasoning?: "high" | "medium" | "low"
-  specialistTools?: SpecialistRuntimeTool[]
-}): Promise<{
-  verdict: T | null
-  failureReason?: string
-  failureRawAnswer?: string
-  // SIG-212: usage is present on BOTH success and parse-failure paths
-  // (chat() round-trip completed, model consumed tokens producing the
-  // output — even if that output didn't parse). Absent on the
-  // exception path where no tokens were exchanged.
-  inputTokens?: number
-  outputTokens?: number
-  // SIG-417: actual per-call cost (credits ≈ USD), same paths as the tokens.
-  costUsd?: number
-  // SIG-287: cumulative thinking-char count from the adapter (length only).
-  thinkingChars?: number
-}> {
-  try {
-    const result =
-      args.specialistTools && args.specialistTools.length > 0 && args.format
-        ? await runSpecialistToolConversation({
-            chat,
-            model: args.model,
-            messages: args.messages,
-            apiKey: args.apiKey,
-            signal: args.signal,
-            chatEnabled: args.chatEnabled,
-            tools: args.specialistTools,
-            format: args.format,
-            ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
-            temperature: 0,
-          })
-        : await chat({
-            model: args.model,
-            messages: args.messages,
-            apiKey: args.apiKey,
-            signal: args.signal,
-            chatEnabled: args.chatEnabled,
-            ...(args.format ? { format: args.format } : {}),
-            // SIG-287: byte-identical when undefined (default-off → think:false).
-            ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
-            temperature: 0,
-          })
-    // SIG-212: capture token usage from chat()'s result. Forward on
-    // BOTH success and parse-failure paths so cost telemetry stays
-    // accurate even when the model produced unparseable output.
-    // `usage` is optional on ChatResult to keep test mocks lightweight;
-    // the production accumulator always returns `usage: {...}`. SIG-287:
-    // thinkingChars rides alongside usage on the same paths.
-    const usagePayload: { inputTokens?: number; outputTokens?: number; costUsd?: number; thinkingChars?: number } = {}
-    if (result.usage?.inputTokens !== undefined) usagePayload.inputTokens = result.usage.inputTokens
-    if (result.usage?.outputTokens !== undefined) usagePayload.outputTokens = result.usage.outputTokens
-    // SIG-417: capture the actual per-call cost when the provider reported it.
-    if (result.usage?.costUsd !== undefined) usagePayload.costUsd = result.usage.costUsd
-    if (result.thinkingChars !== undefined) usagePayload.thinkingChars = result.thinkingChars
-    const verdict = args.parseAnswer(result.message.content)
-    if (!verdict) {
-      return {
-        verdict: null,
-        failureReason: args.parseFailureLabel,
-        failureRawAnswer: result.message.content.slice(0, 32_000),
-        ...usagePayload,
-      }
-    }
-    return { verdict, ...usagePayload }
-  } catch (e) {
-    return {
-      verdict: null,
-      failureReason: e instanceof Error ? e.message : String(e),
-    }
-  }
 }
 
 async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {

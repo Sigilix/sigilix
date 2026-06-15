@@ -133,6 +133,87 @@ describe("runSpecialistToolConversation", () => {
     expect(out.usage?.costUsd).toBeUndefined()
   })
 
+  // SIG-369(b): the tool conversation surfaces each call's input tokens
+  // SEPARATELY (tool-turn then final) + the executed-tool-call count + the
+  // tool-result block size, so a 2-call doubling is visible in telemetry.
+  it("surfaces per-call input tokens (tool-turn + final) and tool-loop counters", async () => {
+    const tool = makeTool()
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      .mockResolvedValueOnce(toolResult([{ id: "a", function: { name: "file_grep", arguments: { query: "x" } } }]))
+      .mockResolvedValueOnce(finalResult())
+    const out = await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+    // toolResult.usage.inputTokens === 1, finalResult.usage.inputTokens === 3.
+    expect(out.toolConversation.perCallInputTokens).toEqual([1, 3])
+    expect(out.toolConversation.toolCallsMade).toBe(1)
+    // The tool executed once; its JSON-stringified result has a positive size.
+    expect(out.toolConversation.toolResultTokens).toBeGreaterThan(0)
+  })
+
+  it("reports zero tool calls (but still both per-call inputs) when the model emits no tool call", async () => {
+    const tool = makeTool()
+    // No tool_calls on the first turn → loop skips execution, still makes a final call.
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "" },
+        hasToolCalls: false,
+        usage: { inputTokens: 7 },
+      })
+      .mockResolvedValueOnce(finalResult())
+    const out = await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+    expect(out.toolConversation.perCallInputTokens).toEqual([7, 3])
+    expect(out.toolConversation.toolCallsMade).toBe(0)
+    expect(out.toolConversation.toolResultTokens).toBe(0)
+  })
+
+  it("preserves undefined per-call input when a turn reports no usage", async () => {
+    const tool = makeTool()
+    const chat = vi
+      .fn<(args: ChatArgs) => Promise<ChatResult>>()
+      // tool-turn reports no usage at all (usage omitted)
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "a", function: { name: "file_grep", arguments: { query: "x" } } }],
+        },
+        hasToolCalls: true,
+      })
+      .mockResolvedValueOnce(finalResult())
+    const out = await runSpecialistToolConversation({
+      chat,
+      model: "model:cloud",
+      apiKey: "k",
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      tools: [tool],
+      format: FINAL_SCHEMA,
+    })
+    // First call's input is undefined (no usage), final is 3 — kept distinct from 0.
+    expect(out.toolConversation.perCallInputTokens).toEqual([undefined, 3])
+    expect(out.toolConversation.toolCallsMade).toBe(1)
+  })
+
   it("returns invalid argument errors as tool messages instead of throwing", async () => {
     const tool = makeTool()
     const chat = vi

@@ -21,6 +21,7 @@ import { parseSecurityGroundingValidatorMode } from "@/src/lib/ensemble/domain/g
 import { parseSecurityUsageValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
+import { parseLogicInputCompositionMode } from "@/src/lib/ensemble/domain/logic-input-composition"
 import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
 import { parseTrustLedgerMode } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 import { resolveClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
@@ -193,6 +194,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_TOCTOU_HINTS: "On",
       OPENCLAW_RECEIPTJOIN_MODE: "enforce",
       OPENCLAW_LOGIC_PROMPT_BUDGET: "shadow",
+      // SIG-369(b): logic-input-composition telemetry flag (off|shadow).
+      OPENCLAW_LOGIC_INPUT_COMPOSITION: "shadow",
       OPENCLAW_SYNTH_RECOVERY: "  ON  ",
       OPENCLAW_AST_EMIT_FLOOR: "shadow",
       OPENCLAW_TRUST_LEDGER: "on",
@@ -239,6 +242,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // parsed via each field's own dedicated parser
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
+      logicInputCompositionMode: parseLogicInputCompositionMode(env.OPENCLAW_LOGIC_INPUT_COMPOSITION),
       astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
       trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
       reviewMemoryClaimShadowMode: resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW),
@@ -290,6 +294,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       synthRecovery: "off",
       receiptJoinMode: parseReceiptJoinMode(undefined),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(undefined),
+      logicInputCompositionMode: parseLogicInputCompositionMode(undefined),
       astEmitFloorMode: parseAstEmitFloorMode(undefined),
       trustLedgerMode: parseTrustLedgerMode(undefined),
       reviewMemoryClaimShadowMode: resolveClaimShadowMode(undefined),

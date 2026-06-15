@@ -196,7 +196,12 @@ async function runCiTriageSynthImpl(args: RunCiTriageSynthArgs, t0: number): Pro
       // grounded findings and mandates the verbatim `logExcerpt`).
       systemPrompt: CI_SYNTH_PREAMBLE + SYNTHESIZER_PROMPT,
       userMessage,
-      chatEnabled: "off",
+      // Derive the kill-switch the SAME way the ensemble synth path does
+      // (synthesize.ts:544) — "off" HARD-throws in the chat adapter
+      // (openrouter-chat.ts:78 / ollama-chat.ts:62), it is NOT a no-tools mode.
+      // Hardcoding "off" here killed every CI synth call. Honor the
+      // OLLAMA_CHAT_ENABLE kill-switch instead so CI triage runs iff chat is on.
+      chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
       signal: controller.signal,
       perfCtx: { owner, repo, prNumber, headSha },
       // No specialist sources on the CI path — provenance reconstruction is a

@@ -24,6 +24,7 @@
     "performance-overfire-eval": "vitest run e2e/performance-overfire-eval.live.test.ts",
     "tests-overfire-eval": "vitest run e2e/tests-overfire-eval.live.test.ts",
     "synth-retention-eval": "vitest run e2e/synth-retention-eval.live.test.ts",
+    "ci-triage-synth-eval": "vitest run e2e/ci-triage-synth-eval.live.test.ts",
     "evals": "tsx evals/cli.ts",
     "retrieval-ab-report": "tsx scripts/retrieval-ab-report.ts",
     "phase4-calibrate": "tsx scripts/phase4-calibrate.ts",

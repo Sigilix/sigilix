@@ -119,6 +119,9 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     OPENCLAW_JOBS: {} as Queue<never>,
     OLLAMA_API_KEY: "ollama-key",
     OPENROUTER_API_KEY: "openrouter-key",
+    // SIG-431: chat must be ENABLED for the synth call to fire — the run derives
+    // `chatEnabled` from this (parity with the ensemble synth path). Mirrors prod.
+    OLLAMA_CHAT_ENABLE: "on",
     GITHUB_APP_ID: "1",
     GITHUB_PRIVATE_KEY: "key",
     ...overrides,
@@ -222,6 +225,26 @@ describe("SIG-426 CI-triage synth wiring (E2E through handleCiTriage)", () => {
     // Legacy standalone sticky is SUPPRESSED in enforce.
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(gh.createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("(a') SIG-431: the synth call forwards chatEnabled from OLLAMA_CHAT_ENABLE — NOT hardcoded off", async () => {
+    // The bug this guards: chatEnabled was hardcoded "off", which HARD-throws in
+    // the chat adapter (openrouter-chat.ts:78), so the synth never ran. With chat
+    // ENABLED the run MUST forward "on"; with it disabled it MUST fail closed to
+    // "off" (the same kill-switch the ensemble synth path honors). Enforce mode so
+    // the legacy glm path is suppressed and only the synth seam is exercised.
+    mockRunSynthesizer.mockResolvedValue(synthOk(synthVerdict(LOG_EXCERPT_REAL)))
+
+    await handleCiTriage(args(makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce", OLLAMA_CHAT_ENABLE: "on" })))
+    expect(mockRunSynthesizer).toHaveBeenCalledOnce()
+    expect(mockRunSynthesizer.mock.calls[0]?.[0]).toMatchObject({ chatEnabled: "on" })
+
+    mockRunSynthesizer.mockClear()
+    // Anything other than "on" (here "off", same as unset) → fail closed to
+    // "off" (would throw in the real adapter; the mock just records it). Proves
+    // the value is DERIVED from the env, not a literal "on".
+    await handleCiTriage(args(makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce", OLLAMA_CHAT_ENABLE: "off" })))
+    expect(mockRunSynthesizer.mock.calls[0]?.[0]).toMatchObject({ chatEnabled: "off" })
   })
 
   it("(b) enforce: anchored but UNcorroborated → HEDGED inline (default, not dropped)", async () => {

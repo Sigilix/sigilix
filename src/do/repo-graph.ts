@@ -32,6 +32,7 @@ import {
   MAX_BLAST_IDS,
   DEFAULT_EXPANSION_ROWS,
 } from "./repo-graph-internals"
+import { expansionForIds, resolveEnclosingSymbolId } from "./repo-graph-expansion"
 export { resolveRelative, MAX_BLAST_IDS, DEFAULT_EXPANSION_ROWS }
 
 // ─── Public result types ──────────────────────────────────────────
@@ -54,8 +55,16 @@ import type {
   GraphCallerRow,
   GraphImportRow,
   GraphContextExpansion,
+  GraphHitExpansion,
 } from "@/src/shared/domain/graph-context"
-export type { GraphContextNode, GraphDefinitionRow, GraphCallerRow, GraphImportRow, GraphContextExpansion }
+export type {
+  GraphContextNode,
+  GraphDefinitionRow,
+  GraphCallerRow,
+  GraphImportRow,
+  GraphContextExpansion,
+  GraphHitExpansion,
+}
 
 // ─── Public arg types ─────────────────────────────────────────────
 
@@ -545,6 +554,23 @@ export class RepoGraphDO extends DurableObject<Env> {
   }
 
   /**
+   * SIG-407: the active graph version's id AND its indexed `head_sha`, or null
+   * when none is active. `debugActiveVersion` returns only the version string;
+   * `enclosingSymbolsForHits` also needs the head_sha to detect line-drift (the
+   * graph indexed at a different HEAD than the question's HEAD).
+   */
+  private activeVersionRow(): { graphVersion: string; headSha: string } | null {
+    const sql = this.sql()
+    const rows = [
+      ...sql.exec<{ graph_version: string; head_sha: string }>(
+        "SELECT graph_version, head_sha FROM graph_versions WHERE status = 'active'",
+      ),
+    ]
+    const r = rows[0]
+    return r ? { graphVersion: r.graph_version, headSha: r.head_sha } : null
+  }
+
+  /**
    * Given a set of changed symbol IDs, return the files that directly call
    * those symbols and the files that import them — both scoped to the ACTIVE
    * graph version.
@@ -822,89 +848,76 @@ export class RepoGraphDO extends DurableObject<Env> {
       return { graphAvailable: true, definitionRows: [], callerRows: [], importRows: [] }
     }
 
-    const idPlaceholders = ids.map(() => "?").join(",")
-
-    // definitionRows: the changed symbols' own declaration spans.
-    const definitionRows: GraphDefinitionRow[] = [
-      ...sql.exec<{
-        symbol_id: string
-        path: string
-        name: string
-        kind: string
-        start_line: number
-        end_line: number
-      }>(
-        `SELECT symbol_id, path, name, kind, start_line, end_line FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders}) ORDER BY path, start_line LIMIT ?`,
-        active,
-        ...ids,
-        maxRows,
-      ),
-    ].map((r) => ({
-      symbolId: r.symbol_id,
-      path: r.path,
-      name: r.name,
-      kind: r.kind,
-      startLine: r.start_line,
-      endLine: r.end_line,
-    }))
-
-    // callerRows: call sites of a changed symbol (same-file + SIG-286 resolved
-    // cross-file imported_binding callers, both matched on callee_symbol_id),
-    // LEFT JOINed to the caller symbol's span so the consumer can render the
-    // whole caller body.
-    const callerRows: GraphCallerRow[] = [
-      ...sql.exec<{
-        source_path: string
-        callee_name: string
-        call_kind: string
-        start_line: number
-        start_col: number
-        caller_symbol_id: string | null
-        caller_start_line: number | null
-        caller_end_line: number | null
-      }>(
-        `SELECT ce.source_path, ce.callee_name, ce.call_kind, ce.start_line, ce.start_col,
-                ce.caller_symbol_id,
-                cs.start_line AS caller_start_line, cs.end_line AS caller_end_line
-           FROM call_edges ce
-           LEFT JOIN symbols cs
-             ON cs.graph_version = ce.graph_version AND cs.symbol_id = ce.caller_symbol_id
-          WHERE ce.graph_version = ? AND ce.callee_symbol_id IN (${idPlaceholders})
-          ORDER BY ce.source_path, ce.start_line
-          LIMIT ?`,
-        active,
-        ...ids,
-        maxRows,
-      ),
-    ].map((r) => ({
-      sourcePath: r.source_path,
-      calleeName: r.callee_name,
-      callKind: r.call_kind,
-      startLine: r.start_line,
-      startCol: r.start_col,
-      callerSymbolId: r.caller_symbol_id,
-      callerStartLine: r.caller_start_line,
-      callerEndLine: r.caller_end_line,
-    }))
-
-    // importRows: import edges referencing a changed symbol (resolved
-    // target_symbol_id) OR a changed file (target_path). Matching either side
-    // captures both symbol-resolved and ambiguous-but-path-resolved importers.
-    const importRows: GraphImportRow[] = [
-      ...sql.exec<{ source_path: string; imported_name: string | null; start_line: number }>(
-        `SELECT DISTINCT source_path, imported_name, start_line FROM file_edges WHERE graph_version = ? AND (target_symbol_id IN (${idPlaceholders}) OR target_path IN (${pathPlaceholders})) ORDER BY source_path, start_line LIMIT ?`,
-        active,
-        ...ids,
-        ...paths,
-        maxRows,
-      ),
-    ].map((r) => ({
-      sourcePath: r.source_path,
-      importedName: r.imported_name,
-      startLine: r.start_line,
-    }))
-
+    const { definitionRows, callerRows, importRows } = expansionForIds(sql, active, ids, paths, maxRows)
     return { graphAvailable: true, definitionRows, callerRows, importRows }
+  }
+
+  /**
+   * SIG-407: resolve retrieval hits (path + line range) to their ENCLOSING
+   * symbols, then expand to callers/importers — the coordinate-keyed sibling of
+   * `contextExpansionForChangedSymbols` (which is name-keyed). The @-mention Q&A
+   * path holds hit coordinates, not changed symbol names, so it needs this entry.
+   *
+   * Per hit, the enclosing symbol is the one whose declaration span has the
+   * GREATEST line overlap with the hit's [lineStart,lineEnd]; ties broken by the
+   * INNERMOST (smallest) span, then the lowest start_line (fully deterministic).
+   * Resolution is range-aware because hits are arbitrary ~30-line windows / AST
+   * chunks, not points — a single-line lookup would mis-home a hit that straddles
+   * a boundary. A hit in a non-indexed file (no symbols) resolves to nothing and
+   * contributes no rows: partial enrichment, by design.
+   *
+   * Returns the active version's `headSha` so the caller can detect line-drift
+   * vs the question's HEAD and fall back to the raw slice. Degrades gracefully to
+   * `{ graphAvailable: false, headSha: null, …empty }` when there is no active
+   * version or `hits` is empty.
+   */
+  async enclosingSymbolsForHits(args: {
+    hits: { path: string; lineStart: number; lineEnd: number }[]
+    maxRows?: number
+  }): Promise<GraphHitExpansion> {
+    const empty: GraphHitExpansion = {
+      graphAvailable: false,
+      headSha: null,
+      definitionRows: [],
+      callerRows: [],
+      importRows: [],
+    }
+    if (args.hits.length === 0) return empty
+
+    const active = this.activeVersionRow()
+    if (!active) return empty
+
+    // Floor + clamp to ≥1 (mirrors contextExpansionForChangedSymbols): a positive
+    // fractional arg must not floor to 0 and turn every row query into LIMIT 0.
+    const maxRowsReq = Math.floor(args.maxRows ?? DEFAULT_EXPANSION_ROWS)
+    const maxRows = Number.isFinite(maxRowsReq) && maxRowsReq >= 1 ? maxRowsReq : DEFAULT_EXPANSION_ROWS
+    const sql = this.sql()
+
+    // Resolve each hit → its innermost, max-overlap enclosing symbol. Dedup ids
+    // (several hits can land in the same symbol). Collect every hit's path for the
+    // import-edge match — a file a hit touches is in scope even when that hit
+    // resolved to no symbol.
+    const ids = new Set<string>()
+    const paths = new Set<string>()
+    for (const hit of args.hits) {
+      paths.add(hit.path)
+      const symbolId = resolveEnclosingSymbolId(sql, active.graphVersion, hit)
+      if (symbolId) ids.add(symbolId)
+    }
+
+    if (ids.size === 0) {
+      // Active version exists but no hit landed in a symbol — still "available".
+      return { graphAvailable: true, headSha: active.headSha, definitionRows: [], callerRows: [], importRows: [] }
+    }
+
+    const { definitionRows, callerRows, importRows } = expansionForIds(
+      sql,
+      active.graphVersion,
+      [...ids],
+      [...paths],
+      maxRows,
+    )
+    return { graphAvailable: true, headSha: active.headSha, definitionRows, callerRows, importRows }
   }
 
   /**

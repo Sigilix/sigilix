@@ -7,7 +7,13 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { indexNamespace } from "./repo-index-manifest"
-import type { RepoGraphDO, UpsertFileGraphArgs, GraphContextNode, GraphContextExpansion } from "@/src/do/repo-graph"
+import type {
+  RepoGraphDO,
+  UpsertFileGraphArgs,
+  GraphContextNode,
+  GraphContextExpansion,
+  GraphHitExpansion,
+} from "@/src/do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
 // Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,
@@ -103,4 +109,21 @@ export async function contextExpansionForChangedSymbolsFor(
   args: { changedNames: string[]; changedPaths: string[]; maxRows?: number },
 ): Promise<GraphContextExpansion> {
   return graphStub(env, owner, repo).contextExpansionForChangedSymbols(args)
+}
+
+/**
+ * SIG-407: coordinate-keyed context expansion for the @-mention Q&A path.
+ * Resolves each retrieval hit (path + line range) to its ENCLOSING symbol, then
+ * returns the same definition/caller/import rows as
+ * contextExpansionForChangedSymbolsFor — plus the active version's `headSha` for
+ * line-drift detection. Returns `{ graphAvailable: false, headSha: null, …empty }`
+ * when there is no active version or `hits` is empty (fast-path inside the DO).
+ */
+export async function enclosingSymbolsForHitsFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: { hits: { path: string; lineStart: number; lineEnd: number }[]; maxRows?: number },
+): Promise<GraphHitExpansion> {
+  return graphStub(env, owner, repo).enclosingSymbolsForHits(args)
 }

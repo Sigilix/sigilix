@@ -76,3 +76,14 @@ export interface GraphContextExpansion {
   callerRows: GraphCallerRow[]
   importRows: GraphImportRow[]
 }
+
+/**
+ * SIG-407: result of `enclosingSymbolsForHits` — the coordinate-keyed sibling of
+ * `GraphContextExpansion`. Same row vocabulary, plus the active version's
+ * `headSha` so the @-mention Q&A consumer can detect line-drift (the graph was
+ * indexed at a different HEAD than the question) and fall back to the raw slice.
+ * `headSha` is null exactly when `graphAvailable` is false (no active version).
+ */
+export interface GraphHitExpansion extends GraphContextExpansion {
+  headSha: string | null
+}

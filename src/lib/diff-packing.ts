@@ -173,18 +173,55 @@ export function packFilesIntoBatches(
 }
 
 /**
- * SIG-414: stable risk-ordering for review coverage. When a PR spans more than
- * one batch, only `batches[0]` is reviewed — so the riskiest files must land
- * first. Partitions `files` into (high-risk, rest), preserving original order
- * within each tier (deterministic). Returns the input UNCHANGED when all-or-none
- * are high-risk (nothing to promote), so callers stay byte-identical in the
- * common case. `isHighRisk` is injected so this leaf stays dependency-free (the
- * predicate lives in the ensemble domain).
+ * SIG-440 follow-up: review paths that rarely carry a real finding — unit/e2e
+ * test files, golden/fixture data, and snapshots. On a large PR these can crowd
+ * substantive production source out of the reviewed `batch[0]` (the only batch
+ * reviewed when a PR spans batches), so `riskOrderFiles` sinks them to the BACK.
+ * Pure path-string check — no domain knowledge — so it lives in this leaf next
+ * to the orderer. (Lockfiles/generated/vendored/minified are excluded from
+ * review entirely upstream, so they aren't covered here.)
+ */
+export function isLowReviewPriority(path: string): boolean {
+  const p = path.toLowerCase()
+  return (
+    /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) ||
+    p.endsWith(".test-helpers.ts") ||
+    p.includes("/_golden/") ||
+    p.includes("/validation-matrix/") ||
+    p.includes("/__fixtures__/") ||
+    p.includes("/fixtures/") ||
+    p.endsWith(".snap")
+  )
+}
+
+/**
+ * SIG-414 + SIG-440 follow-up: stable risk-ordering for review coverage. When a
+ * PR spans more than one batch, only `batches[0]` is reviewed — so the riskiest,
+ * most substantive files must land first. Three stable tiers, original order
+ * preserved within each:
+ *   1. high-risk source  (auth/secret/payment/… via injected `isHighRisk`)
+ *   2. ordinary source   (everything else)
+ *   3. low-priority      (tests / goldens / fixtures / snapshots — `isLowReviewPriority`)
+ *
+ * Low-priority is checked FIRST, so an `auth.test.ts` sinks to tier 3 (a test of
+ * a risky file is still a test), never tier 1 — which is the whole point: a big
+ * PR with lots of test/golden churn no longer crowds the production logic out of
+ * `batch[0]`. Returns the input UNCHANGED (same ref) when every file is in one
+ * tier, so the common case stays byte-identical. `isHighRisk` is injected so this
+ * leaf stays free of the domain keyword list.
  */
 export function riskOrderFiles(files: DiffFileBlock[], isHighRisk: (path: string) => boolean): DiffFileBlock[] {
-  const high = files.filter((f) => isHighRisk(f.path))
-  if (high.length === 0 || high.length === files.length) return files
-  return [...high, ...files.filter((f) => !isHighRisk(f.path))]
+  const high: DiffFileBlock[] = []
+  const normal: DiffFileBlock[] = []
+  const low: DiffFileBlock[] = []
+  for (const file of files) {
+    if (isLowReviewPriority(file.path)) low.push(file)
+    else if (isHighRisk(file.path)) high.push(file)
+    else normal.push(file)
+  }
+  // No reordering when every file is in a single tier — preserve same-ref byte-identity.
+  if (high.length === files.length || normal.length === files.length || low.length === files.length) return files
+  return [...high, ...normal, ...low]
 }
 
 /**

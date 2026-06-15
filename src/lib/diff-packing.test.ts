@@ -8,6 +8,7 @@ import {
   packFilesIntoBatches,
   batchToDiff,
   riskOrderFiles,
+  isLowReviewPriority,
   DEFAULT_MAX_DIFF_TOKENS_PER_CALL,
 } from "@/src/lib/diff-packing"
 
@@ -42,6 +43,63 @@ describe("riskOrderFiles (SIG-414)", () => {
   it("returns a single file unchanged (same ref)", () => {
     const input = [f("auth.ts")]
     expect(riskOrderFiles(input, isRisky)).toBe(input)
+  })
+
+  // SIG-440 follow-up: sink low-priority (test/golden) files to the BACK so
+  // production source fills batch[0] first on a big PR.
+  it("sinks test/golden files to the back, behind production source", () => {
+    const ordered = riskOrderFiles(
+      [f("a.test.ts"), f("src/validation-walk.ts"), f("auth.ts"), f("e2e/validation-matrix/x.json")],
+      isRisky,
+    )
+    expect(ordered.map((x) => x.path)).toEqual([
+      "auth.ts", // high-risk source
+      "src/validation-walk.ts", // ordinary source
+      "a.test.ts", // low-priority (test) → back
+      "e2e/validation-matrix/x.json", // low-priority (golden) → back
+    ])
+  })
+
+  it("reorders even with NO high-risk file — production source ahead of test churn (the #579 case)", () => {
+    const ordered = riskOrderFiles([f("a.test.ts"), f("src/foo.ts"), f("b.test.ts")], isRisky)
+    expect(ordered.map((x) => x.path)).toEqual(["src/foo.ts", "a.test.ts", "b.test.ts"])
+  })
+
+  it("a high-risk-keyword TEST file still sinks to the back (a test of a risky file is a test)", () => {
+    const ordered = riskOrderFiles([f("auth.test.ts"), f("src/foo.ts")], isRisky)
+    expect(ordered.map((x) => x.path)).toEqual(["src/foo.ts", "auth.test.ts"])
+  })
+
+  it("returns the input UNCHANGED (same ref) when every file is low-priority", () => {
+    const input = [f("a.test.ts"), f("b.test.ts")]
+    expect(riskOrderFiles(input, isRisky)).toBe(input)
+  })
+})
+
+describe("isLowReviewPriority (SIG-440 follow-up)", () => {
+  it.each([
+    "src/lib/foo.test.ts",
+    "src/lib/foo.spec.ts",
+    "e2e/index-webhook.test.ts",
+    "src/lib/foo.test-helpers.ts",
+    "e2e/validation-matrix/never-drop-p1.json",
+    "e2e/_golden/ensemble-fixtures/case.json",
+    "src/__fixtures__/sample.ts",
+    "test/fixtures/payload.json",
+    "components/Button.test.tsx",
+    "src/render.snap",
+  ])("is low-priority: %s", (p) => {
+    expect(isLowReviewPriority(p)).toBe(true)
+  })
+
+  it.each([
+    "src/lib/diff-packing.ts",
+    "src/lib/ensemble/domain/validation-walk.ts",
+    "src/lib/auth.ts",
+    "src/lib/latest.ts", // contains "test" substring but not a .test. file
+    "README.md",
+  ])("is NOT low-priority (production source / docs): %s", (p) => {
+    expect(isLowReviewPriority(p)).toBe(false)
   })
 })
 

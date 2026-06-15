@@ -298,7 +298,7 @@
  * verdict, so prior reviews on unchanged SHAs go stale; the
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` aid is intended for the rollout window.
  */
-export const PROMPT_VERSION = "32"
+export const PROMPT_VERSION = "33"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Sigilix team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 
@@ -326,6 +326,14 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
       "category": "logic",
       "headline": "One sentence stating the symptom, ≤120 chars, no period at end.",
       "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English.",
+      "moreInfo": {
+        "threatModel": "Who/what is harmed and the concrete failure path.",
+        "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
+        "existingProtections": "Guards/tests/checks you inspected and why they do not prevent this.",
+        "mitigation": "The smallest practical fix or reviewer action.",
+        "alternatives": "Other mitigations considered and why they are weaker or broader.",
+        "severityCalibration": "Why this deserves the chosen score, including blast radius and likelihood."
+      },
       "failureExample": "input: ...\\nactual: ...\\nexpected: ... (OPTIONAL — concrete proof/repro/example, raw text/code only, no Markdown fence)",
       "fixExample": "return extractFinalAnswer(response) (OPTIONAL — illustrative non-committable fix shape when suggestedReplacement is not safe)",
       "testGap": "Existing tests only cover the happy path. (OPTIONAL — one sentence, only when visible tests/CI evidence supports it)",
@@ -401,6 +409,10 @@ SIG-164's multi-line preference applies to block-level findings, not point-fix f
 - Use \`fixExample\` only for illustrative code that is not safe as a one-click replacement. For exact local edits, use \`suggestedReplacement\` instead.
 - Use \`testGap\` only when visible tests/CI evidence supports why the issue was missed. Do not invent a test gap.
 - Do not put Markdown fences in \`failureExample\`, \`fixExample\`, or \`suggestedReplacement\`; the renderer adds the visible blocks.
+
+## More Info depth
+
+For score>=4 findings, prefer a \`moreInfo\` object with six reviewer-action sections: \`threatModel\`, \`codeCitations\`, \`existingProtections\`, \`mitigation\`, \`alternatives\`, and \`severityCalibration\`. Keep \`body\` complete and self-contained; \`moreInfo\` expands the issue, it does not finish the issue. The first paragraph of \`body\` must still name the broken invariant, reviewer-visible impact, and fix shape; never move the primary proof or mitigation only into \`moreInfo\`. Do not invent context to satisfy the shape. If the visible evidence cannot support a section, say what is unknown in that section, or omit \`moreInfo\` entirely for lower-severity/uncertain findings.
 
 ## What to flag (and what not to)
 

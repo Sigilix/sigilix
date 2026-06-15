@@ -183,6 +183,39 @@ describe("synthesizer prompt — perf field preservation", () => {
   })
 })
 
+describe("SIG-249 More Info prompt contract", () => {
+  const sectionKeys = [
+    "threatModel",
+    "codeCitations",
+    "existingProtections",
+    "mitigation",
+    "alternatives",
+    "severityCalibration",
+  ]
+
+  it("teaches every specialist the six structured More Info sections", () => {
+    for (const role of ["logic", "security", "performance", "tests"] as const) {
+      const prompt = SPECIALIST_PROMPTS[role]
+      expect(prompt).toContain("SIG-249 MORE INFO DEPTH")
+      expect(prompt).toContain("moreInfo")
+      expect(prompt).toContain("Never move the primary proof or mitigation only into `moreInfo`")
+      for (const key of sectionKeys) {
+        expect(prompt).toContain(key)
+      }
+    }
+  })
+
+  it("tells synth to preserve or merge More Info instead of dropping it during rewrites", () => {
+    expect(SYNTHESIZER_PROMPT).toContain("moreInfo")
+    expect(SYNTHESIZER_PROMPT).toContain("PRESERVE/MERGE")
+    expect(SYNTHESIZER_PROMPT).toContain("Do NOT invent unsupported detail")
+    expect(SYNTHESIZER_PROMPT).toContain("Keep `body` self-contained with the core defect, impact, and fix")
+    for (const key of sectionKeys) {
+      expect(SYNTHESIZER_PROMPT).toContain(key)
+    }
+  })
+})
+
 describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
   it("lists the optional perf evidence fields so generation can emit them", () => {
     const props = PR_REVIEW_SCHEMA.properties.findings.items.properties as Record<string, unknown>
@@ -206,6 +239,24 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
       type: "string",
       enum: ["delete", "replace", "insert", "describe"],
     })
+  })
+
+  it("lists optional structured More Info sections without making them required", () => {
+    const props = PR_REVIEW_SCHEMA.properties.findings.items.properties as Record<string, unknown>
+    const required = PR_REVIEW_SCHEMA.properties.findings.items.required as readonly string[]
+    expect(props.moreInfo).toEqual({
+      type: "object",
+      properties: {
+        threatModel: { type: "string" },
+        codeCitations: { type: "string" },
+        existingProtections: { type: "string" },
+        mitigation: { type: "string" },
+        alternatives: { type: "string" },
+        severityCalibration: { type: "string" },
+      },
+      additionalProperties: true,
+    })
+    expect(required).not.toContain("moreInfo")
   })
 })
 

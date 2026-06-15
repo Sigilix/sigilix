@@ -96,6 +96,14 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "score": 1-5,
         "headline": "...",
         "body": "...",
+        "moreInfo": {
+          "threatModel": "Who/what is harmed and the concrete failure path.",
+          "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
+          "existingProtections": "Guards/tests/checks inspected and why they do not prevent this.",
+          "mitigation": "The smallest practical fix or reviewer action.",
+          "alternatives": "Other mitigations considered and why they are weaker or broader.",
+          "severityCalibration": "Why this deserves the chosen score, including blast radius and likelihood."
+        },   (SIG-249 — PRESERVE/MERGE from kept source findings when present, especially for score>=4. Choose the clearest supported text per section, or combine compatible source snippets. Do NOT invent unsupported detail and do NOT drop existing \`moreInfo\` just because you rewrote \`body\`. Keep \`body\` self-contained with the core defect, impact, and fix before any \`moreInfo\` detail.)
         "failureExample": "input: ...\\nactual: ...\\nexpected: ...",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it. Keep examples out of \`body\`; the renderer shows them as separate fenced blocks. OMIT only when no kept source finding had one.)
         "fixExample": "return extractFinalAnswer(response)",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it when no exact \`suggestedReplacement\` is available. Do NOT convert it into a committable replacement. OMIT when no kept source finding had one, or when preserving \`suggestedReplacement\` already gives the exact fix.)
         "testGap": "The sibling test file only covers the single FINAL(...) case, not multiple matches.",   (Structured details — PRESERVE VERBATIM from a kept source finding when it is backed by testing evidence. Do NOT invent a test-gap sentence during synthesis.)

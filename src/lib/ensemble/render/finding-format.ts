@@ -20,6 +20,12 @@ import { isContiguousRightRange, deriveSide, type ReviewableMap } from "@/src/sh
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {
+  FINDING_MORE_INFO_SECTION_KEYS,
+  FINDING_MORE_INFO_SECTION_LABELS,
+  hasFindingMoreInfo,
+  type FindingMoreInfo,
+} from "@/src/shared/domain/finding-more-info"
+import {
   REVIEW_FINDING_SCOPES,
   isDeletionSuggestion,
   isReplacementSuggestion,
@@ -61,6 +67,14 @@ export function wrapInlineHtmlTags(s: string): string {
   return s.replace(INLINE_HTML_TAG_RE, "`$1`")
 }
 
+const MARKDOWN_HEADING_LINE_RE = /^(\s{0,3})(#{1,6})(\s+)/gm
+const MARKDOWN_TASK_LIST_LINE_RE = /^(\s{0,3})([-+*]\s+\[[ xX]\])(\s+)/gm
+
+export function sanitizeMoreInfoMarkdownText(s: string): string {
+  const htmlSafe = wrapInlineHtmlTags(s)
+  return htmlSafe.replace(MARKDOWN_HEADING_LINE_RE, "$1\\$2$3").replace(MARKDOWN_TASK_LIST_LINE_RE, "$1\\$2$3")
+}
+
 /**
  * Apply `wrapInlineHtmlTags` to every prose field on a verdict so
  * downstream renderers see GitHub-safe markdown. Pure.
@@ -87,7 +101,22 @@ function sanitizeFindingForGitHub(f: PrReviewFinding): PrReviewFinding {
   if (f.failureExample) sanitized.failureExample = f.failureExample
   if (f.fixExample) sanitized.fixExample = f.fixExample
   if (f.testGap) sanitized.testGap = wrapInlineHtmlTags(f.testGap)
+  if (f.moreInfo) {
+    const moreInfo = sanitizeFindingMoreInfo(f.moreInfo)
+    if (moreInfo) sanitized.moreInfo = moreInfo
+    else delete sanitized.moreInfo
+  }
   return sanitized
+}
+
+function sanitizeFindingMoreInfo(moreInfo: FindingMoreInfo): FindingMoreInfo | undefined {
+  const sanitized: FindingMoreInfo = {}
+  for (const key of FINDING_MORE_INFO_SECTION_KEYS) {
+    const value = moreInfo[key]
+    const clean = typeof value === "string" ? value.trim() : ""
+    if (clean) sanitized[key] = sanitizeMoreInfoMarkdownText(clean)
+  }
+  return hasFindingMoreInfo(sanitized) ? sanitized : undefined
 }
 
 export function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | undefined {
@@ -451,6 +480,20 @@ function formatFindingStructuredDetailsMarkdown(
   return sections.join("\n\n")
 }
 
+function formatFindingMoreInfoMarkdown(finding: PrReviewFinding): string {
+  const moreInfo = finding.moreInfo
+  if (!hasFindingMoreInfo(moreInfo)) return ""
+  const sections: string[] = []
+  for (const key of FINDING_MORE_INFO_SECTION_KEYS) {
+    const value = moreInfo[key]
+    const clean = typeof value === "string" ? stripAstMarkers(value).trim() : ""
+    if (clean.length === 0) continue
+    sections.push(`**${FINDING_MORE_INFO_SECTION_LABELS[key]}**\n\n${sanitizeMoreInfoMarkdownText(clean)}`)
+  }
+  if (sections.length === 0) return ""
+  return ["<details><summary>More Info</summary>", "", sections.join("\n\n"), "", "</details>"].join("\n")
+}
+
 function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
   const repl = finding.suggestedReplacement
   const isDeletion = isDeletionSuggestion(finding)
@@ -752,6 +795,7 @@ export {
   formatBodyFindingSeverity,
   formatBodyFindingLocation,
   formatBodyFindingAnchor,
+  formatFindingMoreInfoMarkdown,
   formatFindingStructuredDetailsMarkdown,
   formatBodyFindingSuggestedChange,
   renderFindingEvidenceBlock,

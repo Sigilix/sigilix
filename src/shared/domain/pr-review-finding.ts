@@ -4,6 +4,7 @@
 // symbol, so existing importers are unchanged.
 
 import type { FindingCategory } from "./finding-category"
+import type { FindingMoreInfo } from "./finding-more-info"
 
 /**
  * ARC-182: stack-origin tag attached to findings on Graphite-style
@@ -96,6 +97,12 @@ export interface PrReviewFinding {
   category: FindingCategory
   headline: string
   body: string
+  /**
+   * SIG-249: optional structured deep-dive sections for high-severity
+   * findings. Parsed and rendered when present, but not required by the
+   * recall gates until we have fill-rate evidence that enforcement is safe.
+   */
+  moreInfo?: FindingMoreInfo
   /** SIG Trust Ledger v0: runtime-only trust metadata (the renderer reads this);
    *  attached at submission time, never parsed from model output. */
   trust?: FindingTrust

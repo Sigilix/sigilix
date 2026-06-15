@@ -307,6 +307,15 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
 OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
 
+# SIG-433: deterministic anchor remap — re-homes a correctly-diagnosed CI finding
+# from the test-assertion line / enclosing function header onto the exact changed
+# source line it implicates, so the grounded inline lands instead of being withheld.
+# Eval (5 archetypes, K=12): ON-diff catch 79%→98% (the dedupeKey archetype
+# 17%→100%), hallucination 0, off-diff still 100% withheld (no fabricated anchors).
+# Only re-homes to a real changed RIGHT line; no confident match → withheld.
+# Code default is off (parseCiTriageAnchorRemap).
+OPENCLAW_CI_TRIAGE_ANCHOR_REMAP = "on"
+
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /
 # import-dependent bodies) and emit the `graph-expansion-shadow` telemetry.

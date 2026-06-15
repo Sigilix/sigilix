@@ -209,4 +209,65 @@ describe("runMultiBatchShadow — PR 2 shadow contract", () => {
     expect(r.erroredBatches).toBe(2)
     expect(r.wouldBeUnionSize).toBe(3) // baseline only; no spillover findings added
   })
+
+  it("cost-isolated: the production recordTokens sink is NEVER called by the shadow", async () => {
+    // The shadow runs REAL model calls; they must not pollute the posted run's
+    // token/cost accounting. The module strips `recordTokens` before any call, so
+    // the prod sink never fires even when verdicts come back.
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [finding()] } as unknown as PrReviewVerdict,
+      elapsedMs: 50,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+    const recordTokens = vi.fn()
+    await runMultiBatchShadow(
+      args({ perfCtx: { owner: "o", repo: "r", prNumber: 1, headSha: "a".repeat(40), recordTokens } }),
+    )
+    // The shadow passed an isolated perfCtx (no recordTokens) into runSpecialist.
+    const passedPerfCtx = mockedRunSpecialist.mock.calls[0]?.[0]?.perfCtx
+    expect(passedPerfCtx?.recordTokens).toBeUndefined()
+    expect(recordTokens).not.toHaveBeenCalled()
+  })
+
+  it("coverage delta counts REVIEWED files, not just files with findings", async () => {
+    // A spillover batch reviewed cleanly (no findings) still covers its files.
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [] } as unknown as PrReviewVerdict,
+      elapsedMs: 50,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+    await runMultiBatchShadow(args())
+    const summary = loggedEvents().find((e) => e["event"] === "multibatch-summary")
+    // 2 spillover batches (server/spill1.ts, server/spill2.ts) reviewed, zero
+    // findings, but coverageDeltaFiles = 2 (both reviewed files are covered).
+    expect(summary).toMatchObject({ coverageDeltaFiles: 2 })
+  })
+
+  it("pre-launch head re-check: a MOVED head aborts the whole pass with zero model calls", async () => {
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [finding()] } as unknown as PrReviewVerdict,
+      elapsedMs: 50,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+    const r = await runMultiBatchShadow(args({ checkHeadFresh: async () => false }))
+    expect(r.staleHeadAborted).toBe(true)
+    expect(r.batchesLaunched).toBe(0)
+    expect(mockedRunSpecialist).not.toHaveBeenCalled()
+    expect(loggedEvents().find((e) => e["event"] === "multibatch-shadow-stale-head-abort")).toBeDefined()
+  })
+
+  it("a fresh head re-check proceeds normally", async () => {
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [finding()] } as unknown as PrReviewVerdict,
+      elapsedMs: 50,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+    const r = await runMultiBatchShadow(args({ checkHeadFresh: async () => true }))
+    expect(r.staleHeadAborted).toBe(false)
+    expect(r.batchesLaunched).toBe(2)
+  })
 })

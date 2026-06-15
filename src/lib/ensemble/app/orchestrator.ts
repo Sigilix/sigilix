@@ -142,10 +142,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   // owned at the dispatcher level → single source of truth for the
   // final outcome.
 
-  // ARC-283 Phase B1b — shadow-mode bake-off state, lifted out of the try block so
-  // the `finally` settles every shadow promise + emits comparison telemetry on EVERY
-  // return path; empty `SHADOW_BAKEOFF_ROLES` → a zero-cost no-op. SIG-318 (PR 12b)
-  // bundled the four containers into one `ShadowBakeoffState` (rationale: `shadow-settle.ts`).
+  // ARC-283 Phase B1b — shadow-mode bake-off state, lifted out of the try block so the
+  // `finally` settles every shadow promise + emits comparison telemetry on EVERY return
+  // path; empty `SHADOW_BAKEOFF_ROLES` → a zero-cost no-op (rationale: `shadow-settle.ts`).
   const shadowState: ShadowBakeoffState = {
     specialistPromises: new Map<SpecialistRole, Promise<ShadowRunResult>>(),
     prodSnapshots: new Map<SpecialistRole, ProdSpecialistSnapshot>(),
@@ -712,6 +711,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       ...(sigilixConfig.guidance !== undefined ? { guidance: sigilixConfig.guidance } : {}),
       stackBlock,
       graphCtxForPrompt,
+      client,
     })
 
     // ─── Submit ────────────────────────────────────────────────

@@ -141,6 +141,11 @@ describe("maybeScheduleMultiBatchShadow — orchestrator entry point", () => {
     return { verdict: { findings } as unknown as PrReviewVerdictWithIds }
   }
 
+  // A client whose head matches the queued SHA → checkHeadFresh() resolves true.
+  function freshClient(headSha = "a".repeat(40)): MaybeScheduleMultiBatchShadowArgs["client"] {
+    return { getPullRequest: async () => ({ head: { sha: headSha } }) as never }
+  }
+
   function maybeArgs(
     mode: "off" | "shadow" | "on",
     over: Partial<MaybeScheduleMultiBatchShadowArgs> = {},
@@ -162,6 +167,7 @@ describe("maybeScheduleMultiBatchShadow — orchestrator entry point", () => {
       namespace: "ns",
       stackBlock: "",
       graphCtxForPrompt: "",
+      client: freshClient(),
       ...over,
     }
   }
@@ -227,5 +233,31 @@ describe("maybeScheduleMultiBatchShadow — orchestrator entry point", () => {
     // reviewed file AND the spillover file — not just batch-0's.
     expect(capturedMessage).toContain("server/reviewed.ts")
     expect(capturedMessage).toContain("server/spill1.ts")
+  })
+
+  it("shadow + head MOVED before the detached run → zero model calls (stale-head abort)", async () => {
+    // The detached shadow re-checks the head via the client; a moved head bails
+    // the whole pass with no spillover model calls (Codex review: the shadow must
+    // never spend on a superseded SHA after guard #2).
+    const registered: Array<Promise<void>> = []
+    const s = maybeScheduleMultiBatchShadow(
+      maybeArgs("shadow", {
+        // client reports a DIFFERENT head than the queued one → not fresh.
+        client: { getPullRequest: async () => ({ head: { sha: "b".repeat(40) } }) as never },
+        identity: {
+          env: ENV,
+          owner: "o",
+          repo: "r",
+          prNumber: 1,
+          headSha: "a".repeat(40),
+          backgroundWaitUntil: (p) => registered.push(p),
+        },
+      }),
+    )
+    expect(s.kind).toBe("shadow-scheduled")
+    await registered[0]
+    expect(mockedRunSpecialist).not.toHaveBeenCalled()
+    const ev = loggedEvents().find((e) => e["event"] === "multibatch-shadow-stale-head-abort")
+    expect(ev).toBeDefined()
   })
 })

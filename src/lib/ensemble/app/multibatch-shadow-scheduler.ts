@@ -15,6 +15,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
@@ -156,6 +157,9 @@ export interface MaybeScheduleMultiBatchShadowArgs {
   guidance?: string
   stackBlock: string
   graphCtxForPrompt: string
+  /** GitHub client — used to build the pre-launch head re-check closure so the
+   *  detached shadow never spends model calls on a head that moved after guard #2. */
+  client: Pick<GitHubClient, "getPullRequest">
 }
 
 /**
@@ -218,6 +222,15 @@ export function maybeScheduleMultiBatchShadow(a: MaybeScheduleMultiBatchShadowAr
         : {}),
     })
 
+  // Pre-launch head re-check: the detached shadow fires after the posted tail's
+  // own freshness boundary, so re-read the PR head and compare to the queued SHA.
+  // Bails the whole pass (zero model calls) if it moved — the shadow never spends
+  // on a superseded head (Codex review).
+  const checkHeadFresh = async (): Promise<boolean> => {
+    const live = await a.client.getPullRequest(owner, repo, prNumber)
+    return live.head?.sha === undefined || live.head.sha === headSha
+  }
+
   return scheduleMultiBatchShadow({
     env: a.identity.env,
     owner,
@@ -234,6 +247,7 @@ export function maybeScheduleMultiBatchShadow(a: MaybeScheduleMultiBatchShadowAr
     singleBatchFiles: a.filePaths,
     prGlobalSummary,
     buildBatchMessage,
+    checkHeadFresh,
     ...(a.identity.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: a.identity.backgroundWaitUntil } : {}),
   })
 }

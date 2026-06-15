@@ -1,32 +1,38 @@
-// CI-failure-triage synth recall ruler (SIG-431, parent SIG-424) — replays the
-// canonical #24 failure through the REAL CI-triage synth pipeline and measures
-// the dedupeKey CATCH rate + hallucination rate.
+// CI-failure-triage synth recall ruler (SIG-433, parent SIG-424) — replays a SET
+// of CI-failure archetypes through the REAL CI-triage synth pipeline and measures
+// the grounded-inline CATCH rate, the hallucination rate, and — the SIG-433
+// question — the lift from the deterministic anchor REMAP (OFF vs ON), plus the
+// withhold-correctness on bugs that live OFF the diff.
 //
 //   OPENROUTER_API_KEY=sk-or-... npm run ci-triage-synth-eval
 //   CI_SYNTH_RECALL_REPEATS=12 OPENROUTER_API_KEY=... npm run ci-triage-synth-eval
 //
-// This is the LIVE e2e that should have caught the P0 the merged stub-only e2e
-// (ci-triage-synth-run.e2e.test.ts, which vi.mocks runSynthesizer) hid: the
-// CI synth hardcoded chatEnabled:"off", a HARD model kill-switch — the chat
-// adapter throws on "off", runSynthesizer catches that as a non-permanent
-// failure and returns verdict:null, so enforce would post nothing (the run's
-// `synth-no-verdict` skip). With a mocked synth that signature is invisible.
-// It makes REAL model calls, so it's gated on the synth model's key and SKIPS in
-// normal CI (`npm run build`). The import chain still resolves via vitest's
-// `cloudflare:workers` shim, but no model is called without the key. It does NOT
-// vi.mock the model (that is the stub anti-pattern); it runs the prod CI-synth
-// system prompt + the FIXED chatEnabled through the same gate stack prod uses.
+// WHY a SET, not one fixture (SIG-433 Part 1): a catch/withhold number measured on
+// a single fixture is meaningless. Each fixture below is a self-consistent
+// {failure log, PR diff, ground-truth bug location} for a distinct CI archetype —
+// an assertion mismatch, a type error, a lint failure, a runtime throw — and
+// CRUCIALLY a mix of bugs that land ON the diff (catchable → must be caught AND
+// anchored to the changed cause line) and OFF the diff (flaky/infra → must be
+// WITHHELD). Only that mix makes the catch % real and the withhold behavior
+// measurable.
 //
-// The fixture is the canonical "#24" CI failure (the documented archetype the
-// SIG-426 code comments + spec call "the #24 'syntax error'"): a real
-// dedupeKey/attemptIndex/attemptKind bug whose changed SOURCE line lives at
-// src/parse/event.ts:118, surfaced by a failed assertion in tests/parse.test.ts.
-// The model's diagnosis is ~always correct; the catch hinges on whether it
-// anchors the CHANGED SOURCE line (counts) or the test-assertion line (off-diff
-// → correctly withheld). It must NOT invent the #24 "ndjson syntax error" red
-// herring (the hallucination measure). Real PR #24's head no longer carries
-// these paths (it merged green and was a different change), so this self-
-// consistent fixture IS the committed test data for the archetype.
+// WHAT THE REMAP DOES (SIG-431 measured the problem): the grounded synth diagnoses
+// ~100% correctly with 0% hallucination, but anchors the finding to the line that
+// WITNESSES the bug — the enclosing function header, a blank context line, the
+// interface-field declaration, or the off-diff test assertion — instead of the
+// changed SOURCE statement that PRODUCES it. Off-diff → correctly withheld (catch
+// lost); poor-but-reviewable changed line → posts on the WRONG line (still not a
+// catch). The deterministic remap (`remapCiFindingAnchor`, default OFF behind
+// `OPENCLAW_CI_TRIAGE_ANCHOR_REMAP`) re-homes such a finding to the changed cause
+// line. This eval runs each fixture through the EXACT same per-finding decision
+// the run layer uses (`ci-triage-synth-run.ts`), with the remap toggled OFF then
+// ON, so the before/after is a real A/B of production code — not a re-derivation.
+//
+// It makes REAL model calls, so it's gated on the synth model's key and SKIPS in
+// normal CI (`npm run build`). It does NOT vi.mock the model; it runs the prod
+// CI-synth system prompt + the FIXED chatEnabled through the same gate stack prod
+// uses. None of the fixture PRs correspond to a live PR head — each is committed,
+// self-consistent test data for its archetype.
 
 import { describe, it, expect } from "vitest"
 import { runSynthesizer, SYNTHESIZER_CONFIG } from "@/src/lib/ensemble/adapters/model-provider"
@@ -35,48 +41,105 @@ import { prepareReviewSubmissionFindings } from "@/src/lib/ensemble/render/submi
 import { SYNTHESIZER_PROMPT } from "@/src/prompts/specialists/synthesizer"
 import { CI_SYNTH_PREAMBLE } from "@/src/prompts/specialists/ci-synth"
 import { parseDiffToReviewablePositions, deriveSide } from "@/src/shared/util/diff-positions"
-import { buildCiSynthUserMessage, isLogGrounded, disposeCiFinding } from "@/src/lib/ci-triage-synth"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules/domain/diff-filter"
+import {
+  buildCiSynthUserMessage,
+  disposeCiFinding,
+  isCiTestPath,
+  isLogGrounded,
+  remapCiFindingAnchor,
+  type CiFileContext,
+} from "@/src/lib/ci-triage-synth"
+
+// A real unified diff from GitHub gives every IN-HUNK context line a leading
+// space — including blank lines (an unchanged blank line is ` `, a single space).
+// The fixtures below are written with human-readable truly-empty blank lines, so
+// normalize them to real-diff bytes before parsing: inside a hunk, a completely
+// empty line is an unchanged blank line → prefix one space. (Without this the
+// two diff parsers — `parseDiffToReviewablePositions` advances on empty lines,
+// `buildAddedLineTextByLine` does not — disagree on line numbers by the count of
+// blank context lines, which never happens on a real diff.) Lines OUTSIDE a hunk
+// are left as-is.
+function toRealDiff(diff: string): string {
+  const lines = diff.split("\n")
+  let inHunk = false
+  return lines
+    .map((line) => {
+      if (line.startsWith("@@")) {
+        inHunk = true
+        return line
+      }
+      if (line.startsWith("diff --git ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+        inHunk = false
+        return line
+      }
+      if (inHunk && line.length === 0) return " "
+      return line
+    })
+    .join("\n")
+}
 
 const PER_RUN_TIMEOUT_MS = 180_000
 // The synth is non-deterministic run-to-run; repeat K times (default 1) for a
-// stable catch rate. Re-baseline a prompt change at K>=12 (CLAUDE.md ruler).
+// stable catch rate. Re-baseline a change at K>=12 (CLAUDE.md ruler).
 const REPEATS = (() => {
   const n = Number(process.env.CI_SYNTH_RECALL_REPEATS ?? 1)
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1
 })()
-// Optional model swap (CI_SYNTH_RECALL_MODEL) — A/B a different synth model
-// against the same fixture. Default = the prod synth primary; when overriding we
-// null the fallback so every scored run is the requested model.
+// Optional model swap (CI_SYNTH_RECALL_MODEL) — A/B a different synth model.
 const MODEL_OVERRIDE = process.env.CI_SYNTH_RECALL_MODEL?.trim()
 const SYNTH_CONFIG = MODEL_OVERRIDE
   ? { ...SYNTHESIZER_CONFIG, primary: MODEL_OVERRIDE, fallback: null }
   : SYNTHESIZER_CONFIG
-// SIG-406: select the key by the EFFECTIVE synth model's shape — a `:cloud`
-// override → Ollama Turbo (no OpenRouter spend); the prod default (an OpenRouter
-// id) → OPENROUTER_API_KEY. The suite SKIPS unless the SELECTED provider's key
-// is set, and reads the SAME chatEnabled the run derives so the FIX is exercised.
+// SIG-406: select the key by the EFFECTIVE synth model's shape.
 const API_KEY = selectConfigApiKey(SYNTH_CONFIG, {
   ollama: process.env.OLLAMA_API_KEY,
   openrouter: process.env.OPENROUTER_API_KEY,
 })
-// The eval must EXERCISE the fixed kill-switch, so chat must be on for the call
-// to fire — same derivation the run uses (ci-triage-synth-run.ts). The eval pins
-// it on (the live run is the whole point); if a runner sets it off, we honor that
-// and the call will fail closed (proving the switch is real, not bypassed).
+// The eval must EXERCISE the fixed kill-switch, so chat must be on for the call to fire.
 const CHAT_ENABLED: "on" | "off" = (process.env.OLLAMA_CHAT_ENABLE ?? "on") === "on" ? "on" : "off"
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
 
-// ── the canonical #24 fixture ────────────────────────────────────────────────
+// ── fixture model ────────────────────────────────────────────────────────────
 
-// The PR diff. `src/parse/event.ts` is rewritten so each parsed CLI event gets a
-// `dedupeKey`; the BUG is on new-file line 118 — the key omits `attemptKind`, so
-// a "start" and an "end" event for the same attemptIndex collide and the second
-// is dropped as a duplicate. The fix is to fold `attemptKind` into the key. The
-// test file is also touched (a new assertion), but the CAUSE is the event.ts
-// line, not the assertion. Hunk header `@@ -107,18 +107,21 @@` makes the first
-// new-side line 107; the buggy `dedupeKey` line lands at 118 (asserted by the
-// fixture-integrity guard below so the catch detection can't silently rot).
-const PR_DIFF = `diff --git a/src/parse/event.ts b/src/parse/event.ts
+interface CiFixture {
+  /** Short archetype id, used in the report. */
+  id: string
+  /** One-line description of the CI failure shape. */
+  about: string
+  /** The PR's unified diff. */
+  diff: string
+  /** The failed-job log handed to the synth. */
+  ciLog: string
+  /** Current contents of the files the log names (the run pulls these). */
+  fileContexts: CiFileContext[]
+  /**
+   * The ground truth. For an ON-diff bug: the changed SOURCE path + line that
+   * PRODUCES the failure (catch = a grounded finding posts there ±window). For an
+   * OFF-diff bug: `expectCatchable:false` — the correct behavior is to WITHHOLD
+   * (post nothing inline), because the cause is not a changed line.
+   */
+  expectCatchable: boolean
+  /** Required when expectCatchable: the buggy changed SOURCE path. */
+  buggyPath?: string
+  /** Required when expectCatchable: the buggy changed SOURCE line (new-side). */
+  buggyLine?: number
+  /** Tolerate ±this many lines on the catch anchor (brace/comment drift). */
+  anchorWindow?: number
+  /** Lower-cased substrings that, if quoted, are a hallucination for this fixture. */
+  hallucinationTokens: string[]
+  /** A real verbatim log span the grounding gate must corroborate (integrity guard). */
+  groundedProbe: string
+}
+
+// ── fixture 1: assertion mismatch — the canonical #24 dedupeKey (ON diff) ─────
+// `dedupeKey` omits `attemptKind`; the buggy changed line is `const dedupeKey =`
+// at new-side 118. The log names ONLY the test assertion (tests/parse.test.ts:50);
+// the model must trace the wrong value back to the changed source line.
+const FX_DEDUPE: CiFixture = {
+  id: "dedupeKey-assertion",
+  about: "assertion mismatch; cause = a changed source assignment (ON diff)",
+  diff: `diff --git a/src/parse/event.ts b/src/parse/event.ts
 --- a/src/parse/event.ts
 +++ b/src/parse/event.ts
 @@ -107,18 +107,21 @@ export interface ParsedEvent {
@@ -123,29 +186,14 @@ diff --git a/tests/parse.test.ts b/tests/parse.test.ts
 +      parseEvent('{"runId":"r1","attempt":0,"kind":"start","payload":{}}'),
 +      parseEvent('{"runId":"r1","attempt":0,"kind":"end","payload":{}}'),
 +    ]
-+    // start + end for the same attempt are DISTINCT events, not duplicates.
 +    expect(dedupeEvents(events)).toHaveLength(2)
 +  })
 +
    it("normalizes unknown kinds", () => {
      expect(parseEvent('{"runId":"r1","attempt":0,"kind":"???"}').attemptKind).toBe("unknown")
    })
-`
-
-// The CHANGED SOURCE line that PRODUCES the bug (new-file line). The catch must
-// anchor here (or its immediate neighbours), NOT the test-assertion line.
-const BUGGY_SOURCE_PATH = "src/parse/event.ts"
-const BUGGY_SOURCE_LINE = 118
-const ANCHOR_WINDOW = 2 // tolerate ±2 lines (brace/comment drift)
-// The test-assertion line the LOG names — anchoring HERE is the 18%-catch failure
-// mode (it observes the bug; it is off the source diff for the cause).
-const TEST_ASSERT_PATH = "tests/parse.test.ts"
-
-// The failed-job log: vitest reports the assertion failure in tests/parse.test.ts.
-// It names the TEST line, never src/parse/event.ts — the model must trace the
-// wrong value back to the changed source line itself. It contains NO "syntax
-// error" / "ndjson" text: a finding that quotes those is a hallucination.
-const CI_LOG = `=== job: test ===
+`,
+  ciLog: `=== job: test ===
 $ vitest run
  ❯ tests/parse.test.ts (3 tests | 1 failed)
    ✓ dedupeEvents > drops a re-delivered event
@@ -170,15 +218,11 @@ AssertionError: expected [ { runId: 'r1', attemptIndex: 0, … } ] to have a len
 
  Test Files  1 failed
       Tests  1 failed | 2 passed
-`
-
-// The current contents of the named file (the test file the log points at), as
-// the run hands the synth (it pulls context for files the log names). The source
-// file is in the diff above; the synth still has to reason about it.
-const FILE_CONTEXTS = [
-  {
-    path: TEST_ASSERT_PATH,
-    content: `import { describe, it, expect } from "vitest"
+`,
+  fileContexts: [
+    {
+      path: "tests/parse.test.ts",
+      content: `import { describe, it, expect } from "vitest"
 import { parseEvent, dedupeEvents } from "../src/parse/event"
 
 describe("dedupeEvents", () => {
@@ -203,69 +247,275 @@ describe("dedupeEvents", () => {
   })
 })
 `,
-  },
-]
-
-// The "ndjson" / "syntax error" red herring the model must NEVER invent — the #24
-// hallucination. (Lower-cased so any casing variant is caught.)
-const HALLUCINATION_TOKENS = ["syntax error", "ndjson", "json.parse", "malformed json"]
-
-interface RunOutcome {
-  errored: boolean
-  candidates: number
-  // a grounded (logExcerpt corroborated) + anchored finding on the buggy SOURCE line
-  caught: boolean
-  // any finding whose headline/body invents the ndjson "syntax error" red herring
-  hallucinated: boolean
-  anchored: number // findings RIGHT-anchored to a changed line
-  corroborated: number // anchored findings whose logExcerpt is in the log
-  dispositions: Record<string, number>
+    },
+  ],
+  expectCatchable: true,
+  buggyPath: "src/parse/event.ts",
+  buggyLine: 118,
+  anchorWindow: 2,
+  hallucinationTokens: ["syntax error", "ndjson", "json.parse", "malformed json"],
+  groundedProbe: "expected [",
 }
 
-async function runOnce(apiKey: string): Promise<RunOutcome> {
-  const reviewable = parseDiffToReviewablePositions(PR_DIFF)
-  const userMessage = buildCiSynthUserMessage({ ciLog: CI_LOG, diff: PR_DIFF, fileContexts: FILE_CONTEXTS })
-  const dispositions: Record<string, number> = {}
+// ── fixture 2: TYPE ERROR (tsc TS2345) — cause = a changed source line (ON diff)
+// A new helper passes a `string` where a `number` is required. tsc names the file
+// + line of the OFFENDING source line directly. The model still tends to anchor
+// the function header / the call target; the cause is the `const totalCents =`
+// line that builds the wrong-typed value.
+const FX_TYPE: CiFixture = {
+  id: "type-error-ts2345",
+  about: "tsc TS2345 type error; cause = a changed source assignment (ON diff)",
+  diff: `diff --git a/src/billing/invoice.ts b/src/billing/invoice.ts
+--- a/src/billing/invoice.ts
++++ b/src/billing/invoice.ts
+@@ -18,10 +18,14 @@ export interface LineItem {
+   readonly quantity: number
+ }
+
+ export function invoiceTotal(items: readonly LineItem[]): number {
+-  return items.reduce((sum, it) => sum + it.unitCents * it.quantity, 0)
++  const totalCents = items.reduce((sum, it) => sum + it.unitCents * it.quantity, 0)
++  return formatCents(totalCents)
+ }
++
++export function formatCents(cents: number): string {
++  return \`\${(cents / 100).toFixed(2)}\`
++}
+`,
+  ciLog: `=== job: typecheck ===
+$ tsc --noEmit
+src/billing/invoice.ts:23:10 - error TS2322: Type 'string' is not assignable to type 'number'.
+
+23   return formatCents(totalCents)
+            ~~~~~~~~~~~~~~~~~~~~~~~~
+
+Found 1 error in src/billing/invoice.ts:23
+`,
+  fileContexts: [
+    {
+      path: "src/billing/invoice.ts",
+      content: `export interface LineItem {
+  readonly unitCents: number
+  readonly quantity: number
+}
+
+export function invoiceTotal(items: readonly LineItem[]): number {
+  const totalCents = items.reduce((sum, it) => sum + it.unitCents * it.quantity, 0)
+  return formatCents(totalCents)
+}
+
+export function formatCents(cents: number): string {
+  return \`\${(cents / 100).toFixed(2)}\`
+}
+`,
+    },
+  ],
+  expectCatchable: true,
+  // The cause line is the changed `return formatCents(totalCents)` at new-side 23
+  // (the return that yields a string from a number-typed function). The changed
+  // `const totalCents =` (22) and `formatCents` body (27) are within the window.
+  buggyPath: "src/billing/invoice.ts",
+  buggyLine: 23,
+  anchorWindow: 4,
+  hallucinationTokens: ["null", "undefined is not", "cannot read prop"],
+  groundedProbe: "is not assignable to type 'number'",
+}
+
+// ── fixture 3: LINT failure (no-floating-promises) — cause on a changed line (ON)
+// A changed line introduces a floating promise. ESLint names the exact file:line.
+// This fixture is the "clean" control: the cause line IS what the log names, so a
+// correct anchor needs no remap — it asserts the remap does NOT break an
+// already-correctly-anchored case (and stays caught both OFF and ON).
+const FX_LINT: CiFixture = {
+  id: "lint-floating-promise",
+  about: "eslint no-floating-promises; cause = the exact changed line (ON diff)",
+  diff: `diff --git a/src/queue/enqueue.ts b/src/queue/enqueue.ts
+--- a/src/queue/enqueue.ts
++++ b/src/queue/enqueue.ts
+@@ -30,7 +30,9 @@ export async function handleJob(job: Job, q: Queue): Promise<void> {
+   const parsed = parseJob(job)
+   if (!parsed.ok) return
+-  await q.publish(parsed.value)
++  // fire-and-forget the retry; the publish itself is awaited above
++  q.publishRetry(parsed.value)
++  metrics.increment("job.handled")
+ }
+`,
+  ciLog: `=== job: lint ===
+$ eslint .
+
+/repo/src/queue/enqueue.ts
+  33:3  error  Promises must be awaited, end with a call to .catch, or be explicitly marked as ignored with the \`void\` operator  @typescript-eslint/no-floating-promises
+
+✖ 1 problem (1 error, 0 warnings)
+`,
+  fileContexts: [
+    {
+      path: "src/queue/enqueue.ts",
+      content: `import { metrics } from "../obs/metrics"
+
+export async function handleJob(job: Job, q: Queue): Promise<void> {
+  const parsed = parseJob(job)
+  if (!parsed.ok) return
+  // fire-and-forget the retry; the publish itself is awaited above
+  q.publishRetry(parsed.value)
+  metrics.increment("job.handled")
+}
+`,
+    },
+  ],
+  expectCatchable: true,
+  // The floating-promise line `q.publishRetry(parsed.value)` is new-side 33.
+  buggyPath: "src/queue/enqueue.ts",
+  buggyLine: 33,
+  anchorWindow: 1,
+  hallucinationTokens: ["unhandled rejection at", "syntaxerror"],
+  groundedProbe: "no-floating-promises",
+}
+
+// ── fixture 4: RUNTIME throw in changed source (ON diff) ───────────────────────
+// A changed line dereferences a possibly-undefined value at runtime; the stack
+// frame names the changed source file:line directly. Cause = the changed
+// `.toUpperCase()` deref line.
+const FX_RUNTIME: CiFixture = {
+  id: "runtime-throw",
+  about: "runtime TypeError with a stack frame into changed source (ON diff)",
+  diff: `diff --git a/src/format/name.ts b/src/format/name.ts
+--- a/src/format/name.ts
++++ b/src/format/name.ts
+@@ -4,6 +4,8 @@ export interface User {
+   readonly middle?: string
+ }
+
+ export function initials(u: User): string {
+-  return u.first[0] + u.last[0]
++  const mid = u.middle.toUpperCase()
++  return u.first[0] + mid[0] + u.last[0]
+ }
+`,
+  ciLog: `=== job: test ===
+$ vitest run
+ FAIL  tests/name.test.ts > initials > handles a user with no middle name
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+ ❯ src/format/name.ts:8:24
+ ❯ tests/name.test.ts:11:18
+
+ Test Files  1 failed
+      Tests  1 failed
+`,
+  fileContexts: [
+    {
+      path: "src/format/name.ts",
+      content: `export interface User {
+  readonly first: string
+  readonly last: string
+  readonly middle?: string
+}
+
+export function initials(u: User): string {
+  const mid = u.middle.toUpperCase()
+  return u.first[0] + mid[0] + u.last[0]
+}
+`,
+    },
+  ],
+  expectCatchable: true,
+  // The deref `const mid = u.middle.toUpperCase()` is new-side 8.
+  buggyPath: "src/format/name.ts",
+  buggyLine: 8,
+  anchorWindow: 1,
+  hallucinationTokens: ["null pointer", "segfault", "stack overflow"],
+  groundedProbe: "Cannot read properties of undefined",
+}
+
+// ── fixture 5: FLAKY / INFRA failure — OFF diff (must WITHHOLD) ────────────────
+// The failed step is a network flake in a file this PR did NOT touch (the PR only
+// changed README). There is NO changed source line that causes it, so the correct
+// behavior is to WITHHOLD: post nothing inline. This measures withhold-correctness
+// — a remap that fabricated an anchor here would post a wrong inline comment.
+const FX_FLAKY: CiFixture = {
+  id: "flaky-infra-offdiff",
+  about: "network-flake in an untouched file; NO changed cause line (OFF diff → withhold)",
+  diff: `diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,4 @@
+ # widget-svc
+
++A service for widgets.
+ Run \`npm test\` to test.
+`,
+  ciLog: `=== job: integration ===
+$ vitest run tests/integration
+ FAIL  tests/integration/payments.int.test.ts > charges a card
+FetchError: request to https://api.payments.example/charge failed, reason: ETIMEDOUT
+ ❯ src/payments/gateway.ts:142:18
+ ❯ tests/integration/payments.int.test.ts:64:20
+
+ Test Files  1 failed
+      Tests  1 failed
+`,
+  fileContexts: [],
+  expectCatchable: false,
+  hallucinationTokens: ["readme", "documentation is wrong"],
+  groundedProbe: "ETIMEDOUT",
+}
+
+// Normalize every fixture diff to real-diff bytes (leading space on blank context
+// lines) so both diff parsers agree on line numbers, exactly as on a live diff.
+const FIXTURES: CiFixture[] = [FX_DEDUPE, FX_TYPE, FX_LINT, FX_RUNTIME, FX_FLAKY].map((fx) => ({
+  ...fx,
+  diff: toRealDiff(fx.diff),
+}))
+
+// ── the per-finding decision, mirroring ci-triage-synth-run.ts EXACTLY ─────────
+// This replays the production loop (prepareReviewSubmissionFindings → optional
+// remap → grounding/anchor → disposeCiFinding) with the remap toggled, so OFF vs
+// ON is a true A/B of the real code path, not a re-derivation.
+
+interface FixtureOutcome {
+  errored: boolean
+  /** A grounded finding that WOULD post inline, anchored to the buggy cause line. */
+  caught: boolean
+  /** Any emitted finding inventing this fixture's red herring. */
+  hallucinated: boolean
+  /** For an OFF-diff fixture: did the pass correctly post NOTHING inline? */
+  withheldCorrectly: boolean
+  /** Number of findings that would post inline (the inline surface). */
+  postedInline: number
+}
+
+async function runFixtureOnce(fx: CiFixture, apiKey: string, remapEnabled: boolean): Promise<FixtureOutcome> {
+  const reviewable = parseDiffToReviewablePositions(fx.diff)
+  const addedLineTextByPath = remapEnabled ? buildAddedLineTextByLine(fx.diff) : undefined
+  const userMessage = buildCiSynthUserMessage({ ciLog: fx.ciLog, diff: fx.diff, fileContexts: fx.fileContexts })
   let output: Awaited<ReturnType<typeof runSynthesizer>>
   try {
     output = await runSynthesizer({
       apiKey,
-      // The PROD CI-synth system prompt + order (preamble FIRST), the FIXED
-      // chatEnabled, and the prod config — exactly what ci-triage-synth-run.ts sends.
       systemPrompt: CI_SYNTH_PREAMBLE + SYNTHESIZER_PROMPT,
       userMessage,
       chatEnabled: CHAT_ENABLED,
       signal: AbortSignal.timeout(PER_RUN_TIMEOUT_MS),
-      perfCtx: { owner: "eval", repo: "eval", prNumber: 24, headSha: "0".repeat(40) },
+      perfCtx: { owner: "eval", repo: "eval", prNumber: 1, headSha: "0".repeat(40) },
       provenanceSources: [],
       ...(MODEL_OVERRIDE ? { configOverride: SYNTH_CONFIG } : {}),
     })
   } catch (e) {
-    console.log(`  run ERROR: ${e instanceof Error ? e.message : String(e)}`)
-    return {
-      errored: true,
-      candidates: 0,
-      caught: false,
-      hallucinated: false,
-      anchored: 0,
-      corroborated: 0,
-      dispositions,
-    }
+    console.log(`  [${fx.id}] run ERROR: ${e instanceof Error ? e.message : String(e)}`)
+    return { errored: true, caught: false, hallucinated: false, withheldCorrectly: false, postedInline: 0 }
   }
 
   const verdict = output.verdict
-  // A null/empty verdict is the P0 signature (the kill-switch). It is NOT a model
-  // error — surface it loudly as a non-caught run so the catch rate reflects it.
   if (verdict == null) {
-    console.log(`  run: verdict=null (P0 kill-switch signature?) failureReason=${output.failureReason ?? "n/a"}`)
+    console.log(`  [${fx.id}] verdict=null failureReason=${output.failureReason ?? "n/a"}`)
+    // An OFF-diff fixture that produces nothing is a correct withhold.
     return {
       errored: false,
-      candidates: 0,
       caught: false,
       hallucinated: false,
-      anchored: 0,
-      corroborated: 0,
-      dispositions,
+      withheldCorrectly: !fx.expectCatchable,
+      postedInline: 0,
     }
   }
 
@@ -276,150 +526,188 @@ async function runOnce(apiKey: string): Promise<RunOutcome> {
     reviewable,
   })
 
-  // Hallucination = ANY emitted finding (inline or body) that invents the red
-  // herring. Checked across the whole verdict, not just survivors — a fabricated
-  // root cause is a hallucination even if it gets withheld for being off-diff.
+  // Hallucination = ANY emitted finding inventing this fixture's red herring.
   const hallucinated = verdict.findings.some((f) => {
     const hay = `${f.headline ?? ""} ${f.body ?? ""} ${f.logExcerpt ?? ""}`.toLowerCase()
-    return HALLUCINATION_TOKENS.some((tok) => hay.includes(tok))
+    return fx.hallucinationTokens.some((tok) => hay.includes(tok))
   })
 
-  let anchored = 0
-  let corroborated = 0
   let caught = false
-  for (const finding of prepared.inlineFindings) {
-    const isAnchored = deriveSide(reviewable, finding.path, finding.line) === "RIGHT"
-    const logCorroborated = isAnchored && isLogGrounded(finding.logExcerpt ?? "", CI_LOG)
-    const disposition = disposeCiFinding({ anchored: isAnchored, logCorroborated, hardWithholdUncorroborated: false })
-    dispositions[disposition] = (dispositions[disposition] ?? 0) + 1
-    if (isAnchored) anchored += 1
-    if (logCorroborated) corroborated += 1
-    // CATCH = a finding that WOULD post inline (clean or hedged), corroborated
-    // against the log, AND anchored to the buggy SOURCE line (±window) — the real
-    // cause, not the test-assertion line. Recall-safe: corroboration is required,
-    // so this can never be inflated by weakening the grounding gate.
-    const onBuggySource =
-      finding.path === BUGGY_SOURCE_PATH && Math.abs(finding.line - BUGGY_SOURCE_LINE) <= ANCHOR_WINDOW
+  let postedInline = 0
+  for (const original of prepared.inlineFindings) {
+    let finding = original
+    const logGrounded = isLogGrounded(finding.logExcerpt ?? "", fx.ciLog)
+    // The EXACT remap call the run layer makes.
+    if (remapEnabled && addedLineTextByPath && logGrounded) {
+      const currentlyAnchored = deriveSide(reviewable, finding.path, finding.line) === "RIGHT"
+      const remap = remapCiFindingAnchor({
+        path: finding.path,
+        line: finding.line,
+        headline: finding.headline,
+        body: finding.body,
+        currentlyAnchored,
+        addedLineTextByPath,
+        isTestPath: isCiTestPath,
+      })
+      if (remap && deriveSide(reviewable, remap.path, remap.line) === "RIGHT") {
+        finding = { ...finding, path: remap.path, line: remap.line }
+      }
+    }
+    const anchored = deriveSide(reviewable, finding.path, finding.line) === "RIGHT"
+    const logCorroborated = anchored && logGrounded
+    const disposition = disposeCiFinding({ anchored, logCorroborated, hardWithholdUncorroborated: false })
     const wouldPost = disposition === "inline-clean" || disposition === "inline-hedged"
-    if (wouldPost && logCorroborated && onBuggySource) caught = true
-  }
-
-  const anchoredToTest = prepared.inlineFindings.some(
-    (f) => f.path === TEST_ASSERT_PATH && deriveSide(reviewable, f.path, f.line) === "RIGHT",
-  )
-  console.log(
-    `  run: ${prepared.inlineFindings.length} inline / ${prepared.unanchored.length} body · ${caught ? "✓ CAUGHT" : "✗ missed"}${hallucinated ? " · ⚠ HALLUCINATED" : ""}${anchoredToTest ? " · (anchored a TEST line)" : ""} · ${output.modelUsed} · ${output.elapsedMs}ms`,
-  )
-  // Diagnose a miss: dump what it anchored where.
-  if (!caught) {
-    for (const f of prepared.inlineFindings) {
-      console.log(`      ↳ ${f.path}:${f.line} score=${f.score} — ${f.headline ?? ""}`)
+    if (wouldPost) postedInline += 1
+    if (fx.expectCatchable && wouldPost && logCorroborated) {
+      const onBuggy =
+        finding.path === fx.buggyPath && Math.abs(finding.line - (fx.buggyLine ?? -999)) <= (fx.anchorWindow ?? 2)
+      if (onBuggy) caught = true
     }
   }
-  return {
-    errored: false,
-    candidates: prepared.inlineFindings.length + prepared.unanchored.length,
-    caught,
-    hallucinated,
-    anchored,
-    corroborated,
-    dispositions,
+
+  const withheldCorrectly = !fx.expectCatchable && postedInline === 0
+  const tag = fx.expectCatchable ? (caught ? "✓ CAUGHT" : "✗ missed") : withheldCorrectly ? "✓ WITHHELD" : "✗ POSTED!"
+  console.log(
+    `  [${fx.id}] ${tag}${hallucinated ? " · ⚠ HALLUCINATED" : ""} · ${postedInline} inline · ${output.modelUsed} · ${output.elapsedMs}ms`,
+  )
+  if ((fx.expectCatchable && !caught) || (!fx.expectCatchable && !withheldCorrectly)) {
+    for (const f of prepared.inlineFindings) {
+      console.log(`      ↳ ${f.path}:${f.line} — ${f.headline ?? ""}`)
+    }
   }
+  return { errored: false, caught, hallucinated, withheldCorrectly, postedInline }
 }
 
-// Fixture-integrity guard — runs in normal CI (no key, no model). The live
-// catch detection above is meaningless if BUGGY_SOURCE_LINE drifts off the diff
-// or stops being the dedupeKey line, so pin both here.
-describe("#24 fixture integrity (no model)", () => {
-  it("the buggy dedupeKey SOURCE line is RIGHT-reviewable at the asserted line", () => {
-    const reviewable = parseDiffToReviewablePositions(PR_DIFF)
-    expect([...reviewable.keys()].sort()).toEqual([BUGGY_SOURCE_PATH, TEST_ASSERT_PATH].sort())
-    // The catch anchors within ±ANCHOR_WINDOW of BUGGY_SOURCE_LINE; at least one
-    // of those lines must be a real RIGHT-side changed position.
-    const anchorable = Array.from(
-      { length: 2 * ANCHOR_WINDOW + 1 },
-      (_, i) => BUGGY_SOURCE_LINE - ANCHOR_WINDOW + i,
-    ).some((l) => deriveSide(reviewable, BUGGY_SOURCE_PATH, l) === "RIGHT")
-    expect(anchorable).toBe(true)
-    // And the exact asserted line must be the `dedupeKey` construction (the cause).
-    const addedByLine = new Map<number, string>()
-    let newLine = 0
-    let inEventHunk = false
-    for (const line of PR_DIFF.split("\n")) {
-      if (line.startsWith("+++ ")) {
-        inEventHunk = line.includes(BUGGY_SOURCE_PATH)
-        continue
-      }
-      if (line.startsWith("diff --git") || line.startsWith("--- ")) {
-        inEventHunk = false
-        continue
-      }
-      if (line.startsWith("@@")) {
-        newLine = Number(line.match(/\+(\d+)/)?.[1] ?? 0)
-        continue
-      }
-      if (!inEventHunk || newLine === 0) continue
-      if (line.startsWith("+")) {
-        addedByLine.set(newLine, line.slice(1))
-        newLine++
-      } else if (line.startsWith("-")) {
-        // old-side only
+// ── fixture-integrity guards — run in normal CI (no key, no model) ─────────────
+describe("CI-triage fixture integrity (no model)", () => {
+  for (const fx of FIXTURES) {
+    it(`[${fx.id}] is self-consistent (anchor reviewable iff catchable; probe grounded; no red herring)`, () => {
+      const reviewable = parseDiffToReviewablePositions(fx.diff)
+      // The grounding probe must corroborate against the fixture's own log.
+      expect(isLogGrounded(fx.groundedProbe, fx.ciLog)).toBe(true)
+      // The red-herring tokens must NOT be in the log (else a quote isn't a hallucination).
+      for (const tok of fx.hallucinationTokens) expect(fx.ciLog.toLowerCase()).not.toContain(tok)
+      if (fx.expectCatchable) {
+        // The buggy line must be a real RIGHT-reviewable changed line (±window).
+        const w = fx.anchorWindow ?? 2
+        const anchorable = Array.from({ length: 2 * w + 1 }, (_, i) => (fx.buggyLine as number) - w + i).some(
+          (l) => deriveSide(reviewable, fx.buggyPath as string, l) === "RIGHT",
+        )
+        expect(anchorable).toBe(true)
+        // And the asserted buggy line is an ADDED (`+`) line (the cause a fix edits).
+        const added = buildAddedLineTextByLine(fx.diff)
+        expect(added.get(fx.buggyPath as string)?.has(fx.buggyLine as number)).toBe(true)
       } else {
-        addedByLine.set(newLine, line.replace(/^ /, ""))
-        newLine++
+        // An OFF-diff fixture must NOT have the failing source file in its diff.
+        const failFile = /❯ (src\/[^\s:]+):/.exec(fx.ciLog)?.[1]
+        expect(failFile).toBeTruthy()
+        expect([...reviewable.keys()]).not.toContain(failFile as string)
       }
-    }
-    expect(addedByLine.get(BUGGY_SOURCE_LINE)).toContain("const dedupeKey =")
-  })
+    })
+  }
 
-  it("the failed log names the test-assert line, never the source (so anchoring is non-trivial)", () => {
-    expect(CI_LOG).toContain(`${TEST_ASSERT_PATH}:50`)
-    expect(CI_LOG).not.toContain(BUGGY_SOURCE_PATH)
-    // The grounding gate must be able to corroborate a real log span.
-    expect(isLogGrounded("expected [", CI_LOG)).toBe(true)
-    // And the red herring must NOT be present (so a finding quoting it is a hallucination).
-    for (const tok of HALLUCINATION_TOKENS) expect(CI_LOG.toLowerCase()).not.toContain(tok)
+  it("the dedupeKey cause line (118) is the `const dedupeKey =` construction", () => {
+    const fx = FIXTURES.find((f) => f.id === "dedupeKey-assertion")!
+    const added = buildAddedLineTextByLine(fx.diff)
+    expect(added.get("src/parse/event.ts")?.get(118)).toContain("const dedupeKey =")
   })
 })
 
+// ── the LIVE recall ruler — OFF vs ON across the fixture set ────────────────────
 describe.skipIf(!API_KEY)(
   "CI-triage synth recall (LIVE — needs OPENROUTER_API_KEY or OLLAMA_API_KEY, K-repeated)",
   () => {
     it(
-      "catches the #24 dedupeKey bug on the changed SOURCE line, grounded, with no hallucination",
+      "remap OFF vs ON: catch lift on ON-diff bugs, withhold-correctness on OFF-diff bugs, hallucination ~0",
       async () => {
-        let runs = 0
-        let errors = 0
-        let caught = 0
-        let hallucinated = 0
-        const dispositions: Record<string, number> = {}
-        for (let k = 0; k < REPEATS; k++) {
-          const r = await runOnce(API_KEY as string) // sequential — don't hammer the model
-          if (r.errored) {
-            errors += 1
-            continue
-          }
-          runs += 1
-          if (r.caught) caught += 1
-          if (r.hallucinated) hallucinated += 1
-          for (const [d, n] of Object.entries(r.dispositions)) dispositions[d] = (dispositions[d] ?? 0) + n
+        interface Agg {
+          runs: number
+          errors: number
+          caught: number
+          hallucinated: number
+          withheldCorrectly: number
         }
-        const catchRate = runs ? caught / runs : 0
-        const hallRate = runs ? hallucinated / runs : 0
-        const dispoStr = Object.entries(dispositions)
-          .map(([d, n]) => `${d}=${n}`)
-          .join(" · ")
-        const lines = [
+        const mk = (): Agg => ({ runs: 0, errors: 0, caught: 0, hallucinated: 0, withheldCorrectly: 0 })
+        // per fixture id → { off, on }
+        const acc = new Map<string, { off: Agg; on: Agg }>()
+        for (const fx of FIXTURES) acc.set(fx.id, { off: mk(), on: mk() })
+
+        for (let k = 0; k < REPEATS; k++) {
+          for (const fx of FIXTURES) {
+            const bucket = acc.get(fx.id)!
+            // Run OFF then ON back-to-back per fixture per repeat (sequential —
+            // don't hammer the model). Both calls hit the SAME prompt; only the
+            // post-hoc remap differs, so the model's diagnosis variance is shared.
+            for (const [mode, agg] of [
+              ["off", bucket.off],
+              ["on", bucket.on],
+            ] as const) {
+              const r = await runFixtureOnce(fx, API_KEY as string, mode === "on")
+              if (r.errored) {
+                agg.errors += 1
+                continue
+              }
+              agg.runs += 1
+              if (r.caught) agg.caught += 1
+              if (r.hallucinated) agg.hallucinated += 1
+              if (r.withheldCorrectly) agg.withheldCorrectly += 1
+            }
+          }
+        }
+
+        // Report.
+        const lines: string[] = [
           "",
-          `┌─ CI-TRIAGE SYNTH RECALL · model=${SYNTH_CONFIG.primary} · ${REPEATS}×, fixture=#24/dedupeKey ─┐`,
-          `dedupeKey CATCH rate ${pct(catchRate)} (${caught}/${runs})  ·  HALLUCINATION rate ${pct(hallRate)} (${hallucinated}/${runs})${errors ? `  · ${errors} errored run(s) excluded` : ""}`,
-          `target: catch >= 70%, hallucination ~0`,
-          `dispositions (inline findings): ${dispoStr || "(none)"}`,
-          "└────────────────────────────────────────────────────────────────┘",
+          `┌─ CI-TRIAGE SYNTH RECALL · model=${SYNTH_CONFIG.primary} · ${REPEATS}× · remap OFF→ON ─┐`,
         ]
+        let onDiff = 0
+        let catchOffSum = 0
+        let catchOnSum = 0
+        for (const fx of FIXTURES) {
+          const { off, on } = acc.get(fx.id)!
+          if (fx.expectCatchable) {
+            onDiff += 1
+            const cOff = off.runs ? off.caught / off.runs : 0
+            const cOn = on.runs ? on.caught / on.runs : 0
+            catchOffSum += cOff
+            catchOnSum += cOn
+            lines.push(
+              `[${fx.id}] (ON-diff) catch ${pct(cOff)}→${pct(cOn)} (${off.caught}/${off.runs}→${on.caught}/${on.runs}) · halluc ${on.hallucinated}/${on.runs}`,
+            )
+          } else {
+            const wOff = off.runs ? off.withheldCorrectly / off.runs : 0
+            const wOn = on.runs ? on.withheldCorrectly / on.runs : 0
+            lines.push(
+              `[${fx.id}] (OFF-diff) withhold-correct ${pct(wOff)}→${pct(wOn)} (${off.withheldCorrectly}/${off.runs}→${on.withheldCorrectly}/${on.runs}) · halluc ${on.hallucinated}/${on.runs}`,
+            )
+          }
+        }
+        const aggCatchOff = onDiff ? catchOffSum / onDiff : 0
+        const aggCatchOn = onDiff ? catchOnSum / onDiff : 0
+        const totalHallucOn = [...acc.values()].reduce((s, b) => s + b.on.hallucinated, 0)
+        lines.push(
+          `─ AGGREGATE (ON-diff fixtures): catch ${pct(aggCatchOff)} → ${pct(aggCatchOn)} · total hallucination (ON) ${totalHallucOn}`,
+        )
+        lines.push(`target: catch lift toward 70%, hallucination ~0, withhold-correct 100% on OFF-diff`)
+        lines.push("└────────────────────────────────────────────────────────────────┘")
         console.log(lines.join("\n"))
+
+        // Assertions the eval enforces (recall-safety, not a hard catch threshold —
+        // the catch % is reported honestly, never widened to hit a number):
+        //   1. the remap NEVER raises hallucination above the OFF baseline.
+        const totalHallucOff = [...acc.values()].reduce((s, b) => s + b.off.hallucinated, 0)
+        expect(totalHallucOn).toBeLessThanOrEqual(totalHallucOff)
+        //   2. the remap NEVER lowers aggregate catch below OFF (it only re-homes).
+        expect(aggCatchOn).toBeGreaterThanOrEqual(aggCatchOff - 1e-9)
+        //   3. OFF-diff withhold-correctness is not harmed by the remap.
+        for (const fx of FIXTURES) {
+          if (fx.expectCatchable) continue
+          const { off, on } = acc.get(fx.id)!
+          expect(on.withheldCorrectly).toBeGreaterThanOrEqual(off.withheldCorrectly)
+        }
       },
-      REPEATS * PER_RUN_TIMEOUT_MS + 60_000,
+      // OFF+ON per fixture per repeat.
+      REPEATS * FIXTURES.length * 2 * PER_RUN_TIMEOUT_MS + 120_000,
     )
   },
 )

@@ -352,6 +352,106 @@ describe("SIG-426 CI-triage synth wiring (E2E through handleCiTriage)", () => {
     expect(gh.submitReview).not.toHaveBeenCalled()
   })
 
+  // ── SIG-433: anchor remap wiring (default OFF; flip with OPENCLAW_CI_TRIAGE_ANCHOR_REMAP) ──
+  // A diff where the model's anchor (the function HEADER, a RIGHT-reviewable
+  // context line) is NOT the cause; the cause is the changed `const dedupeKey =`
+  // assignment. No blank context lines (so the two diff parsers agree on line
+  // numbers, as on a real diff). Only ONE changed strong-assignment line names a
+  // finding symbol (`dedupeKey`), so the remap target is unambiguous. Header
+  // `export function parseEvent` = new-side 3; the assignment = new-side 7.
+  const REMAP_DIFF = `diff --git a/src/parse/event.ts b/src/parse/event.ts
+--- a/src/parse/event.ts
++++ b/src/parse/event.ts
+@@ -2,5 +2,7 @@ import { normalizeKind } from "./kind"
+ type RawEvent = { runId: string; attempt?: number; kind?: string }
+ export function parseEvent(line: string): ParsedEvent {
+   const raw = JSON.parse(line) as RawEvent
+   const attemptIndex = Number(raw.attempt ?? 0)
++  // build a stable key
++  const dedupeKey = \`\${raw.runId}:\${attemptIndex}\`
+   return { runId: raw.runId, attemptIndex }
+ }
+`
+  const REMAP_LOG = `=== job: test ===
+ FAIL  tests/parse.test.ts > dedupeEvents > keeps distinct-kind events
+AssertionError: expected length 2 but got 1
+ ❯ tests/parse.test.ts:50:38
+`
+  const REMAP_EXCERPT = "expected length 2 but got 1"
+
+  /** A synth verdict that DIAGNOSES the dedupeKey bug but ANCHORS the header (line 6). */
+  function remapVerdict(line: number): PrReviewVerdict {
+    return {
+      summary: "CI failure analysis",
+      confidence: 4,
+      confidenceReason: "log-grounded",
+      findings: [
+        {
+          path: "src/parse/event.ts",
+          line,
+          score: 4,
+          category: "logic",
+          headline: "dedupeKey omits attemptKind",
+          body: "The `dedupeKey` is built from runId and attemptIndex only, so distinct-kind events collide.",
+          logExcerpt: REMAP_EXCERPT,
+        } as PrReviewVerdict["findings"][number],
+      ],
+    }
+  }
+
+  function wireRemapGitHub(): void {
+    gh.getPullRequestDiff.mockResolvedValue(REMAP_DIFF)
+    gh.getWorkflowJobLog.mockResolvedValue(REMAP_LOG)
+  }
+
+  it("(g) remap ON: a grounded finding anchored on the function header is re-homed to the dedupeKey assignment", async () => {
+    wireRemapGitHub()
+    // Model anchors the header (line 3) — a RIGHT-reviewable context line, but the
+    // WITNESS, not the cause. With remap ON it must post on the assignment (line 7).
+    mockRunSynthesizer.mockResolvedValue(synthOk(remapVerdict(3)))
+    const env = makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce", OPENCLAW_CI_TRIAGE_ANCHOR_REMAP: "on" })
+
+    await handleCiTriage(args(env))
+
+    expect(gh.submitReview).toHaveBeenCalledOnce()
+    expect(gh.submitReview.mock.calls[0]?.[3].comments[0]).toMatchObject({
+      path: "src/parse/event.ts",
+      line: 7, // remapped from 3 → the `const dedupeKey =` line
+      side: "RIGHT",
+    })
+  })
+
+  it("(g') remap OFF (default): the SAME finding posts on the model's original header line — proves OFF is a no-op", async () => {
+    wireRemapGitHub()
+    mockRunSynthesizer.mockResolvedValue(synthOk(remapVerdict(3)))
+    // No OPENCLAW_CI_TRIAGE_ANCHOR_REMAP → default OFF.
+    const env = makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce" })
+
+    await handleCiTriage(args(env))
+
+    expect(gh.submitReview).toHaveBeenCalledOnce()
+    expect(gh.submitReview.mock.calls[0]?.[3].comments[0]).toMatchObject({
+      path: "src/parse/event.ts",
+      line: 3, // unchanged — the remap did NOT fire
+      side: "RIGHT",
+    })
+  })
+
+  it("(g'') remap ON but the model's anchor is ALREADY the cause line → no-op (posts on the same line)", async () => {
+    wireRemapGitHub()
+    // Model already anchored the assignment (line 7) — a substantive cause line.
+    mockRunSynthesizer.mockResolvedValue(synthOk(remapVerdict(7)))
+    const env = makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce", OPENCLAW_CI_TRIAGE_ANCHOR_REMAP: "on" })
+
+    await handleCiTriage(args(env))
+
+    expect(gh.submitReview).toHaveBeenCalledOnce()
+    expect(gh.submitReview.mock.calls[0]?.[3].comments[0]).toMatchObject({
+      path: "src/parse/event.ts",
+      line: 7,
+    })
+  })
+
   it("shadow: synth pass runs + telemeters, posts NOTHING new, legacy sticky still posts", async () => {
     mockRunSynthesizer.mockResolvedValue(synthOk(synthVerdict(LOG_EXCERPT_REAL)))
     mockGenerate.mockResolvedValue({

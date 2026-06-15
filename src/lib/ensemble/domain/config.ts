@@ -160,6 +160,14 @@ export interface EnsembleFeatureFlags {
    *  not yet consumed by the orchestrator (the batch loop is PR 2), so off is
    *  byte-identical to today. */
   multiBatchMode: MultiBatchMode
+  /** SIG-436: `OPENCLAW_ANCHOR_PRECISION === "on"` (default false). When true the
+   *  submission substantive-anchor forward-walk treats a whole-line COMMENT as
+   *  non-substantive, so a finding the model anchored to the `// comment` line
+   *  above the bug is re-homed onto the buggy code statement it describes. Default
+   *  OFF → byte-identical inline anchoring (the live surface is unchanged until the
+   *  K=12 exactness eval proves the lift). Threaded into the render layer via
+   *  `buildReviewSubmissionWithMetadata`'s `anchorPrecision` arg. */
+  anchorPrecision: boolean
 }
 
 /**

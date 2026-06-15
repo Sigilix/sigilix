@@ -609,6 +609,8 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     unanchored: renderableUnanchoredForSubmission,
     reviewable,
     addedLineTextByLine,
+    // SIG-436: keep the previewed event consistent with the built submission.
+    anchorPrecision: ensembleConfig.flags.anchorPrecision,
     ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
   })
   const primaryAffordance = await prepareSubmissionAffordance({
@@ -666,6 +668,11 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     // `}`, blank line) route to the summary body instead of an
     // inline comment "on an empty line."
     addedLineTextByLine,
+    // SIG-436: the (default-OFF) anchor-precision flag. When on, a finding the
+    // model anchored to the `// comment` line directly above the bug is re-homed
+    // forward onto the buggy statement (the substantive-anchor walk also treats a
+    // whole-line comment as non-substantive). Off → byte-identical anchoring.
+    anchorPrecision: ensembleConfig.flags.anchorPrecision,
     // SIG-216 fix-up: thread the source-repo coordinates so the
     // body-only finding anchors render as clickable Markdown links
     // (`[path:line](https://github.com/...blob/<sha>/<path>#L<line>)`)

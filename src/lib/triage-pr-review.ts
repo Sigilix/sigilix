@@ -381,8 +381,16 @@ export type {
 // (@/shared/util/anchor-lines) so domain/feature code can reference it without
 // importing this god-file (which would invert the dependency rule). Re-exported
 // here so the existing importers of this module are unchanged.
-import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
-export { isSubstantiveAnchorLine }
+// SIG-436: `isSubstantiveCodeAnchorLine` is the stricter (comment-aware)
+// classifier the anchor-precision walk uses; `stripWholeLineComment` is its pure
+// helper. Re-exported here alongside `isSubstantiveAnchorLine` so tests + callers
+// of this module reach them without importing the god-file's dependents.
+import {
+  isSubstantiveAnchorLine,
+  isSubstantiveCodeAnchorLine,
+  stripWholeLineComment,
+} from "@/src/shared/util/anchor-lines"
+export { isSubstantiveAnchorLine, isSubstantiveCodeAnchorLine, stripWholeLineComment }
 
 // SIG-365 (PR 13): the RENDER layer lives in `ensemble/render/`. Every render
 // name the god-file used to export is re-exported here (value/type split) so the
@@ -427,6 +435,7 @@ export {
   previewFallbackSubmissionEvent,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
+  rehomeSuggestionAnchorForward,
   MAX_SUBSTANTIVE_ANCHOR_WALK,
 } from "./ensemble/render/submission"
 export type {

@@ -155,6 +155,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_GRAPH_RETRIEVAL?: string | undefined
   OPENCLAW_SYNTH_BYPASS_ENABLED?: string | undefined
   OPENCLAW_REVIEW_MANIFEST_ENABLED?: string | undefined
+  // SIG-436: inline anchor-precision pass (default OFF; `=== "on"` to enable)
+  OPENCLAW_ANCHOR_PRECISION?: string | undefined
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
@@ -267,6 +269,11 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       graphRetrievalMode: parseGraphRetrievalMode(env.OPENCLAW_GRAPH_RETRIEVAL),
       synthBypassEnabled: parseSynthBypassEnabled(env.OPENCLAW_SYNTH_BYPASS_ENABLED),
       reviewManifestEnabled: env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off",
+      // SIG-436: inline anchor-precision pass. Default OFF — only the literal
+      // "on" (trim + lowercase) enables it; the inline-anchoring surface is LIVE
+      // and a benchmark runs on prod, so this must not change posted anchors
+      // until the K=12 exactness eval proves the lift.
+      anchorPrecision: (env.OPENCLAW_ANCHOR_PRECISION ?? "").trim().toLowerCase() === "on",
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
       recallRoles: buildRecallRoles(env),

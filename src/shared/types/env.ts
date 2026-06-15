@@ -480,6 +480,15 @@ export interface Env {
   // posts apply-able `suggestion` review comments on CI-failure fixes.
   OPENCLAW_CI_SUGGESTIONS_MODE?: string
 
+  // CI-triage → review-synth (grounded inline). "off" (default; any value
+  // other than the literal "shadow"/"enforce") leaves the legacy standalone
+  // CI-triage path unchanged; "shadow" runs the synth + ground + dedup pass
+  // and telemeters the would-post grounded inline findings without posting;
+  // "enforce" posts the grounded inline findings and suppresses the legacy
+  // sticky + SIG-333 suggestions. Parsed by `parseCiTriageSynthMode`
+  // (ci-triage-synth.ts). Ships dark (off) — PR 1 wires nothing.
+  OPENCLAW_CI_TRIAGE_SYNTH_MODE?: string
+
   // SIG-109: logic-finding evidence gate mode. "shadow" (default; any
   // value other than "enforce") counts + telemeters what the gate WOULD
   // drop without dropping; "enforce" actually drops sev>=4 logic findings

@@ -322,6 +322,54 @@ function validatedStructuredFixForSubmission(
   return finding
 }
 
+/**
+ * SIG-436 (suggestion path): re-home a STRUCTURED-FIX finding's anchor off a
+ * whole-line COMMENT onto the buggy code line below it — BEFORE the suggestion is
+ * validated against its anchored line. Structured-fix findings skip the inline
+ * substantive-anchor walk (a suggestion's anchor is bound to its replacement), so
+ * without this a committable ```suggestion the model anchored to the `// comment`
+ * above the bug would post on the comment line.
+ *
+ * DELIBERATELY narrow + recall-safe (mirrors `applyReanchors` + the SIG-433
+ * remap's conservatism):
+ *   - only when `anchorPrecision` is on and the finding HAS a structured fix;
+ *   - SINGLE-LINE only (`startLine` unset or == `line`) — a multi-line suggestion
+ *     range is never moved (its endpoints anchor the replacement span);
+ *   - only when the CURRENT anchor is a real added line whose text is a whole-line
+ *     comment (`!isSubstantiveCodeAnchorLine` but the line text exists) — an
+ *     off-diff or already-substantive anchor is left exactly as-is;
+ *   - the target is the nearest SUBSTANTIVE CODE added line forward in window
+ *     (`pickSubstantiveAnchorLineForward(..., codeOnly=true)`) and must be
+ *     RIGHT-reviewable; no such line → NO move (the finding is unchanged, never
+ *     dropped — validation/anchoring then proceed exactly as today).
+ *
+ * Returns the finding with `line` (and `startLine`, kept single-line) moved, or
+ * the finding unchanged. Pure — exported for tests.
+ */
+export function rehomeSuggestionAnchorForward(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap | undefined,
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined,
+): PrReviewFinding {
+  if (addedLineTextByLine === undefined) return finding
+  if (!hasStructuredFix(finding)) return finding
+  // Single-line suggestions only — never move a multi-line replacement range.
+  if (finding.startLine !== undefined && finding.startLine !== finding.line) return finding
+  const addedLinesForPath = addedLineTextByLine.get(finding.path)
+  if (addedLinesForPath === undefined) return finding
+  const currentText = addedLinesForPath.get(finding.line)
+  // Only re-home off a real added line that is a whole-line COMMENT. An off-diff
+  // anchor (no text) or an already-substantive code line is left untouched.
+  if (currentText === undefined) return finding
+  if (isSubstantiveCodeAnchorLine(currentText)) return finding
+  const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, finding.line, undefined, true)
+  if (resolved === null || resolved === finding.line) return finding
+  if (reviewable !== undefined && deriveSide(reviewable, finding.path, resolved) !== "RIGHT") return finding
+  return finding.startLine !== undefined
+    ? { ...finding, line: resolved, startLine: resolved }
+    : { ...finding, line: resolved }
+}
+
 // SIG-281 PR B: carries an inline candidate with its ORIGINAL
 // verdict.findings index so the Rec 3 priority sort + cap can reorder /
 // truncate WITHOUT decoupling a finding from the index its SIG-247
@@ -372,7 +420,13 @@ export function prepareReviewSubmissionFindings(args: {
 
   const inlineCandidates: InlineFindingCandidate[] = []
   const bodyFindings: PrReviewFinding[] = []
-  verdict.findings.forEach((f, i) => {
+  verdict.findings.forEach((rawFinding, i) => {
+    // SIG-436 (suggestion path): re-home a single-line structured-fix finding off
+    // a whole-line comment onto the buggy code line BEFORE validation, so the
+    // suggestion's no-op / contiguous-range checks run against the corrected line.
+    // No-op unless `anchorPrecision` is on and the current anchor is a comment
+    // with a substantive code line forward in window (else returns `rawFinding`).
+    const f = anchorPrecision ? rehomeSuggestionAnchorForward(rawFinding, reviewable, addedLineTextByLine) : rawFinding
     const validatedFinding = validatedStructuredFixForSubmission(f, reviewable, addedLineTextByLine)
     const structuredFixWasStripped = hasStructuredFix(f) && !hasStructuredFix(validatedFinding)
     const hasSuggestion = hasStructuredFix(validatedFinding)
@@ -412,11 +466,11 @@ export function prepareReviewSubmissionFindings(args: {
       // body-routing path below — the inline-comment cap overflow — can still body-route.)
       // SIG-436: with `anchorPrecision`, a whole-line COMMENT is also non-substantive,
       // so a finding anchored to the `// comment` above the bug walks onto the bug.
-      // NOTE (SIG-436 scope): findings carrying a structured fix (`hasSuggestion`)
-      // skip this walk ENTIRELY (the `!hasSuggestion` guard above), so the
-      // precision pass deliberately never re-homes a committable ```suggestion —
-      // its anchor is bound to the replacement range and moving it could break the
-      // block. Suggestions keep their current anchoring under the flag (v1 scope).
+      // NOTE: findings carrying a structured fix (`hasSuggestion`) skip THIS walk
+      // (the `!hasSuggestion` guard above) — their comment-anchor re-home is handled
+      // separately and more conservatively by `rehomeSuggestionAnchorForward` (run
+      // at the top of this loop), which only moves a SINGLE-LINE suggestion and
+      // re-validates the replacement against the corrected line.
       const resolved = pickSubstantiveAnchorLineForward(
         addedLinesForPath,
         findingForInline.line,

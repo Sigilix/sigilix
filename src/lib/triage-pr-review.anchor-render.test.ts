@@ -8,6 +8,7 @@ import {
   isSubstantiveCodeAnchorLine,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
+  rehomeSuggestionAnchorForward,
   renderFixPlan,
   severityBadgeForScore,
   stripWholeLineComment,
@@ -362,32 +363,115 @@ describe("buildReviewSubmission anchor precision (SIG-436, end-to-end)", () => {
     expect(out.body).toContain("omits `attemptKind`")
   })
 
-  it("flag ON: a structured-fix finding keeps its anchoring (suggestions are out of the v1 walk)", () => {
-    // A finding carrying a committable suggestion skips the substantive walk
-    // entirely (hasSuggestion guard), so the flag does NOT move it — anchoring is
-    // unchanged whether the flag is on or off. (The suggestion-aware re-home is a
-    // separate commit in this PR.)
-    const withFix: PrReviewFinding = {
+  it("flag OFF: a comment-anchored single-line SUGGESTION stays on the comment line", () => {
+    // A committable suggestion the model anchored to the comment line (117).
+    const fixOnComment: PrReviewFinding = {
       ...commentAnchoredFinding,
-      line: 118,
-      startLine: 118,
+      line: 117,
       kind: "replace",
       suggestedReplacement: "    const dedupeKey = `${raw.runId}:${attemptIndex}:${attemptKind}`",
     }
-    const off = buildReviewSubmission({
-      verdict: verdictOf(withFix),
+    const out = buildReviewSubmission({
+      verdict: verdictOf(fixOnComment),
       prAuthor: "alice",
       headSha: "abc",
       addedLineTextByLine,
     })
-    const on = buildReviewSubmission({
-      verdict: verdictOf(withFix),
+    expect(out.comments?.[0]?.line).toBe(117) // on the comment — WRONG (default)
+  })
+
+  it("flag ON: a comment-anchored single-line SUGGESTION is re-homed onto the bug line", () => {
+    const fixOnComment: PrReviewFinding = {
+      ...commentAnchoredFinding,
+      line: 117,
+      kind: "replace",
+      suggestedReplacement: "    const dedupeKey = `${raw.runId}:${attemptIndex}:${attemptKind}`",
+    }
+    const out = buildReviewSubmission({
+      verdict: verdictOf(fixOnComment),
       prAuthor: "alice",
       headSha: "abc",
       addedLineTextByLine,
       anchorPrecision: true,
     })
-    expect(on.comments?.[0]?.line).toBe(off.comments?.[0]?.line)
+    expect(out.comments?.[0]?.line).toBe(118) // re-homed onto the bug — CORRECT
+  })
+
+  it("flag ON: a MULTI-LINE suggestion range is NOT moved (only single-line suggestions re-home)", () => {
+    const rangedFix: PrReviewFinding = {
+      ...commentAnchoredFinding,
+      line: 118,
+      startLine: 117, // range spans the comment + the bug — do not move
+      kind: "replace",
+      suggestedReplacement: "    // key\n    const dedupeKey = `${raw.runId}:${attemptIndex}:${attemptKind}`",
+    }
+    const out = buildReviewSubmission({
+      verdict: verdictOf(rangedFix),
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+      anchorPrecision: true,
+    })
+    // Unchanged: the multi-line range is left exactly where the model put it.
+    expect(out.comments?.[0]?.line).toBe(118)
+    expect(out.comments?.[0]?.start_line).toBe(117)
+  })
+})
+
+describe("rehomeSuggestionAnchorForward (SIG-436 suggestion path)", () => {
+  const added = new Map<string, Map<number, string>>([
+    [
+      "src/parse/event.ts",
+      new Map<number, string>([
+        [110, "  // Build a stable key so a re-delivered event is dropped."],
+        [111, "  const dedupeKey = `${raw.runId}:${attemptIndex}`"],
+      ]),
+    ],
+  ])
+  const base: PrReviewFinding = {
+    path: "src/parse/event.ts",
+    line: 110,
+    score: 4,
+    category: "logic",
+    scope: "line",
+    headline: "dedupeKey omits attemptKind",
+    body: "...",
+    kind: "replace",
+    suggestedReplacement: "  const dedupeKey = `${raw.runId}:${attemptIndex}:${attemptKind}`",
+  }
+
+  it("re-homes a single-line suggestion off the comment onto the code line below", () => {
+    const out = rehomeSuggestionAnchorForward(base, undefined, added)
+    expect(out.line).toBe(111)
+  })
+
+  it("is a no-op for a finding WITHOUT a structured fix", () => {
+    const { kind: _k, suggestedReplacement: _s, ...noFix } = base
+    expect(rehomeSuggestionAnchorForward(noFix as PrReviewFinding, undefined, added).line).toBe(110)
+  })
+
+  it("is a no-op for a MULTI-LINE suggestion (startLine != line)", () => {
+    const ranged: PrReviewFinding = { ...base, line: 111, startLine: 110 }
+    const out = rehomeSuggestionAnchorForward(ranged, undefined, added)
+    expect(out.line).toBe(111)
+    expect(out.startLine).toBe(110)
+  })
+
+  it("is a no-op when the anchor is already a substantive code line", () => {
+    const onCode: PrReviewFinding = { ...base, line: 111 }
+    expect(rehomeSuggestionAnchorForward(onCode, undefined, added).line).toBe(111)
+  })
+
+  it("is a no-op (recall-safe) when there is no code line after the comment", () => {
+    const tail = new Map<string, Map<number, string>>([
+      ["src/parse/event.ts", new Map<number, string>([[200, "  // trailing comment only"]])],
+    ])
+    const onTail: PrReviewFinding = { ...base, line: 200 }
+    expect(rehomeSuggestionAnchorForward(onTail, undefined, tail).line).toBe(200)
+  })
+
+  it("is a no-op when the added-line map is absent (off-diff)", () => {
+    expect(rehomeSuggestionAnchorForward(base, undefined, undefined).line).toBe(110)
   })
 })
 

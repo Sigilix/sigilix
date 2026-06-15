@@ -435,6 +435,7 @@ export {
   previewFallbackSubmissionEvent,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
+  rehomeSuggestionAnchorForward,
   MAX_SUBSTANTIVE_ANCHOR_WALK,
 } from "./ensemble/render/submission"
 export type {

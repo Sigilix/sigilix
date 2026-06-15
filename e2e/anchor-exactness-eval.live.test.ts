@@ -33,6 +33,13 @@
 // it's gated on the synth model's key and SKIPS in normal CI (`npm run build`).
 // None of the fixture PRs correspond to a live PR head — each is committed,
 // self-consistent test data for its archetype.
+//
+// The SUGGESTION (structured-fix) re-home path — a committable ```suggestion the
+// model anchored to a comment, re-homed by `rehomeSuggestionAnchorForward` — is
+// covered DETERMINISTICALLY in `triage-pr-review.anchor-render.test.ts` (it runs
+// in `npm run build`), not here: whether the live synth emits a `suggestedReplacement`
+// is model-dependent, so a live suggestion fixture would be flaky. This live ruler
+// measures the dominant comment-above-bug signature end-to-end.
 
 import { describe, it, expect } from "vitest"
 import {

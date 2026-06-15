@@ -68,17 +68,31 @@ export function summaryTriggerRegex(triggers: string[]): RegExp {
   return new RegExp(`^[ \\t]*@(?:${alternation})[ \\t]+summary[ \\t]*$`, "im")
 }
 
-/** True when `body` contains a managed summary block in the correct order
- *  (a single start before its matching end). */
+/**
+ * Every well-formed `[start … end]` managed-block range in `body`, left-to-right
+ * and non-overlapping (each `end` matched to the nearest preceding `start`).
+ * SIG-437 P1 (Sigilix review): the body can hold MORE than one complete block —
+ * a manual paste / merge conflict leaves `start … end … start … end` — so the
+ * apply + strip paths must see ALL of them, not just the first pair. A malformed
+ * `start … start … end` shape yields one range whose inner `start` is content.
+ */
+function summaryBlockRanges(body: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+  let from = 0
+  for (;;) {
+    const s = body.indexOf(SUMMARY_MARKERS.start, from)
+    if (s === -1) break
+    const e = body.indexOf(SUMMARY_MARKERS.end, s + SUMMARY_MARKERS.start.length)
+    if (e === -1) break
+    ranges.push({ start: s, end: e + SUMMARY_MARKERS.end.length })
+    from = e + SUMMARY_MARKERS.end.length
+  }
+  return ranges
+}
+
+/** True when `body` contains at least one well-formed managed summary block. */
 export function hasSummaryBlock(body: string): boolean {
-  const startIdx = body.indexOf(SUMMARY_MARKERS.start)
-  const endIdx = body.indexOf(SUMMARY_MARKERS.end)
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return false
-  // Guard the malformed `start … start … end` shape (a second start before the
-  // first end) — treated as no usable block so the replace path doesn't orphan
-  // the second start. Mirrors describe-apply's L8 guard.
-  const secondStartIdx = body.indexOf(SUMMARY_MARKERS.start, startIdx + SUMMARY_MARKERS.start.length)
-  return secondStartIdx === -1 || secondStartIdx > endIdx
+  return summaryBlockRanges(body).length > 0
 }
 
 /**
@@ -90,10 +104,14 @@ export function hasSummaryBlock(body: string): boolean {
  * the parser + tests.
  */
 export function stripSummaryBlock(body: string): string {
-  if (!hasSummaryBlock(body)) return body
-  const startIdx = body.indexOf(SUMMARY_MARKERS.start)
-  const endIdx = body.indexOf(SUMMARY_MARKERS.end)
-  return body.slice(0, startIdx) + body.slice(endIdx + SUMMARY_MARKERS.end.length)
+  const ranges = summaryBlockRanges(body)
+  if (ranges.length === 0) return body
+  // Remove right-to-left so earlier indices stay valid as we splice.
+  let out = body
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    out = out.slice(0, ranges[i]!.start) + out.slice(ranges[i]!.end)
+  }
+  return out
 }
 
 /** True when `body` contains a `@sigilix summary` trigger line. */
@@ -128,14 +146,16 @@ export function applySummaryToBody(args: ApplySummaryArgs): string {
   // Trim trailing whitespace on the inner content for byte-idempotency.
   const block = `${start}\n${sectionContent.replace(/\s+$/, "")}\n${end}`
 
-  // Mode 1 — managed block already present: replace the whole fenced range
-  // (markers inclusive) with the fresh block. This is the steady state.
-  if (hasSummaryBlock(body)) {
-    const startIdx = body.indexOf(start)
-    const endIdx = body.indexOf(end)
-    const before = body.slice(0, startIdx)
-    const after = body.slice(endIdx + end.length)
-    return before + block + after
+  // Mode 1 — one or more managed blocks present: collapse ALL of them into a
+  // single fresh block at the FIRST block's position. This is the steady-state
+  // single-block replace AND repairs a body that accumulated a SECOND complete
+  // block (manual paste / merge conflict), upholding the never-double-fence +
+  // byte-idempotency guarantees (SIG-437 P1, Sigilix review).
+  const ranges = summaryBlockRanges(body)
+  if (ranges.length > 0) {
+    const at = ranges[0]!.start
+    const stripped = stripSummaryBlock(body)
+    return stripped.slice(0, at) + block + stripped.slice(at)
   }
 
   // Mode 2 — no block, but a `@sigilix summary` trigger line is present:

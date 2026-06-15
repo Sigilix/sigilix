@@ -54,10 +54,26 @@ describe("hasSummaryBlock / stripSummaryBlock", () => {
     expect(stripSummaryBlock(body)).toBe(body)
   })
 
-  it("rejects a duplicate-start shape (start … start … end)", () => {
+  it("treats a stray inner start as block content (start … start … end → one block)", () => {
+    // The inner start sits inside the first start→end pair, so it's content of a
+    // single block — stripped/replaced whole, not orphaned.
     const body = `${START}\na\n${START}\nb\n${END}`
-    expect(hasSummaryBlock(body)).toBe(false)
-    expect(stripSummaryBlock(body)).toBe(body)
+    expect(hasSummaryBlock(body)).toBe(true)
+    expect(stripSummaryBlock(body)).toBe("")
+  })
+
+  it("SIG-437 P1: TWO complete blocks collapse to ONE on apply (never double-fence)", () => {
+    const body = `intro\n${START}\nold1\n${END}\nmid\n${START}\nold2\n${END}\noutro`
+    expect(hasSummaryBlock(body)).toBe(true)
+    // strip removes BOTH managed blocks
+    expect(stripSummaryBlock(body)).toBe("intro\n\nmid\n\noutro")
+    // apply collapses to a SINGLE fresh block at the first block's position
+    const out = applySummaryToBody({ currentBody: body, sectionContent: "fresh" })
+    expect(out).toBe(`intro\n${START}\nfresh\n${END}\nmid\n\noutro`)
+    expect(out.split(START).length - 1).toBe(1)
+    expect(out.split(END).length - 1).toBe(1)
+    // idempotent: re-apply same content → byte-identical
+    expect(applySummaryToBody({ currentBody: out, sectionContent: "fresh" })).toBe(out)
   })
 
   it("rejects a missing-end shape (start with no end)", () => {

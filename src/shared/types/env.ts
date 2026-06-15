@@ -488,9 +488,10 @@ export interface Env {
   // other than the literal "shadow"/"enforce") leaves the legacy standalone
   // CI-triage path unchanged; "shadow" runs the synth + ground + dedup pass
   // and telemeters the would-post grounded inline findings without posting;
-  // "enforce" posts the grounded inline findings and suppresses the legacy
-  // sticky + SIG-333 suggestions. Parsed by `parseCiTriageSynthMode`
-  // (ci-triage-synth.ts). Ships dark (off) — PR 1 wires nothing.
+  // "enforce" posts the grounded inline findings and suppresses ONLY the legacy
+  // ungrounded sticky, while STILL running the SIG-333 inline committable
+  // suggestions (SIG-434). Parsed by `parseCiTriageSynthMode`
+  // (ci-triage-synth.ts).
   OPENCLAW_CI_TRIAGE_SYNTH_MODE?: string
 
   // SIG-426: when "true", the CI-triage-synth anchored-but-uncorroborated

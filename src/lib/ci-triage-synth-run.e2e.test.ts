@@ -194,6 +194,20 @@ beforeEach(() => {
   for (const fn of Object.values(gh)) fn.mockReset()
   mockRunSynthesizer.mockReset()
   mockGenerate.mockReset()
+  // SIG-434: the legacy glm pass now runs in enforce too (it feeds SIG-333), so
+  // a safe default keeps it from throwing on the destructured `text`. The default
+  // diagnosis carries NO patches, so SIG-333 posts nothing unless a test both
+  // wires anchorable patches AND sets OPENCLAW_CI_SUGGESTIONS_MODE=enforce. Tests
+  // that need a specific diagnosis override this.
+  mockGenerate.mockResolvedValue({
+    text: JSON.stringify({
+      rootCause: "type error",
+      affectedFiles: ["src/a.ts"],
+      failureExcerpt: "TS2322",
+      confidence: "high",
+      patches: [],
+    }),
+  })
   mockGetInstallationToken.mockClear().mockResolvedValue("test-token")
   wireBaseGitHub()
 })
@@ -205,6 +219,18 @@ afterEach(() => {
 describe("SIG-426 CI-triage synth wiring (E2E through handleCiTriage)", () => {
   it("(a) enforce: anchored + log-corroborated → inline-CLEAN comment posted", async () => {
     mockRunSynthesizer.mockResolvedValue(synthOk(synthVerdict(LOG_EXCERPT_REAL)))
+    // SIG-434: the legacy glm pass still runs in enforce (it feeds SIG-333).
+    // No suggestions-mode set here → SIG-333 stays shadow → no suggestion posts,
+    // so the only submitReview is the grounded-inline synth review.
+    mockGenerate.mockResolvedValue({
+      text: JSON.stringify({
+        rootCause: "type error",
+        affectedFiles: ["src/a.ts"],
+        failureExcerpt: "TS2322",
+        confidence: "high",
+        patches: [],
+      }),
+    })
     const env = makeEnv({ OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce" })
 
     await handleCiTriage(args(env))
@@ -222,9 +248,82 @@ describe("SIG-426 CI-triage synth wiring (E2E through handleCiTriage)", () => {
     expect(body).toContain(`<!-- sigilix:ci-run:${HEAD}:${RUN_ID} -->`)
     expect(body).toMatch(/<!-- sigilix:fingerprint:[0-9a-f]{64} -->/)
     expect(body).toContain(`actions/runs/${RUN_ID}`)
-    // Legacy standalone sticky is SUPPRESSED in enforce.
-    expect(mockGenerate).not.toHaveBeenCalled()
+    // SIG-434: the legacy ungrounded STICKY is suppressed in enforce (no issue
+    // comment), even though the glm pass ran to feed SIG-333.
     expect(gh.createIssueComment).not.toHaveBeenCalled()
+    expect(gh.updateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("(a-sig434) enforce: grounded inline posts, SIG-333 suggestions STILL post, legacy sticky suppressed", async () => {
+    // Synth catches a grounded-inline finding on src/a.ts:2 …
+    mockRunSynthesizer.mockResolvedValue(synthOk(synthVerdict(LOG_EXCERPT_REAL)))
+    // … AND the legacy glm diagnosis carries an anchorable patch on the same
+    // RIGHT-reviewable line, so SIG-333 (suggestions-mode=enforce) posts a
+    // committable `suggestion` review. The sticky must NOT post.
+    mockGenerate.mockResolvedValue({
+      text: JSON.stringify({
+        rootCause: "type error",
+        affectedFiles: ["src/a.ts"],
+        failureExcerpt: "TS2322",
+        confidence: "high",
+        patches: [{ path: "src/a.ts", line: 2, replacement: "const y: number = 2" }],
+      }),
+    })
+    const env = makeEnv({
+      OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce",
+      OPENCLAW_CI_SUGGESTIONS_MODE: "enforce",
+    })
+
+    await handleCiTriage(args(env))
+
+    // Both the synth grounded-inline AND the SIG-333 suggestion posted (2 reviews).
+    expect(mockRunSynthesizer).toHaveBeenCalledOnce()
+    expect(mockGenerate).toHaveBeenCalledOnce()
+    expect(gh.submitReview).toHaveBeenCalledTimes(2)
+    const reviewBodies = gh.submitReview.mock.calls.map((c) => String(c[3].body))
+    // The grounded-inline (synth) review carries the ci-review marker …
+    expect(reviewBodies.some((b) => b.includes("<!-- sigilix:ci-review -->"))).toBe(true)
+    // … and the SIG-333 review carries the ci-suggestion marker.
+    expect(reviewBodies.some((b) => b.includes("<!-- sigilix:ci-suggestion -->"))).toBe(true)
+    // The SIG-333 review carries an applyable `suggestion` block on the diff line.
+    const suggestionReview = gh.submitReview.mock.calls
+      .map((c) => c[3])
+      .find((r) => String(r.body).includes("<!-- sigilix:ci-suggestion -->"))
+    expect(suggestionReview?.comments?.[0]?.body).toContain("```suggestion")
+    expect(suggestionReview?.comments?.[0]).toMatchObject({ path: "src/a.ts", line: 2, side: "RIGHT" })
+    // Legacy ungrounded sticky is SUPPRESSED.
+    expect(gh.createIssueComment).not.toHaveBeenCalled()
+    expect(gh.updateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("(a-sig434-revert) revert-check: keep-SIG-333 logic is load-bearing (glm runs + suggestion posts in enforce)", async () => {
+    // This guards the keep-SIG-333 change: if SIG-434 were reverted to the old
+    // `if (synthMode === "enforce") return` early-return, the legacy glm pass +
+    // SIG-333 would never run — so mockGenerate would NOT be called and no
+    // ci-suggestion review would post. Both assertions below would then fail.
+    mockRunSynthesizer.mockResolvedValue(synthOk(synthVerdict(LOG_EXCERPT_REAL)))
+    mockGenerate.mockResolvedValue({
+      text: JSON.stringify({
+        rootCause: "type error",
+        affectedFiles: ["src/a.ts"],
+        failureExcerpt: "TS2322",
+        confidence: "high",
+        patches: [{ path: "src/a.ts", line: 2, replacement: "const y: number = 2" }],
+      }),
+    })
+    const env = makeEnv({
+      OPENCLAW_CI_TRIAGE_SYNTH_MODE: "enforce",
+      OPENCLAW_CI_SUGGESTIONS_MODE: "enforce",
+    })
+
+    await handleCiTriage(args(env))
+
+    // Reverting the keep-SIG-333 change makes BOTH of these fail:
+    expect(mockGenerate).toHaveBeenCalledOnce()
+    const postedSuggestion = gh.submitReview.mock.calls
+      .map((c) => String(c[3].body))
+      .some((b) => b.includes("<!-- sigilix:ci-suggestion -->"))
+    expect(postedSuggestion).toBe(true)
   })
 
   it("(a') SIG-431: the synth call forwards chatEnabled from OLLAMA_CHAT_ENABLE — NOT hardcoded off", async () => {

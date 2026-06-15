@@ -303,9 +303,20 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # "enforce". "shadow": on a failed CI run, run the nemotron-ultra synth pass +
 # telemeter the would-post grounded-inline decisions, but keep the legacy sticky
 # (NO customer-visible change) — the data-gathering window before enforce.
-# "enforce": post the grounded inline finding(s); suppress the legacy sticky +
-# SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
-OPENCLAW_CI_TRIAGE_SYNTH_MODE = "shadow"
+# "enforce": post the grounded inline finding(s) and suppress ONLY the legacy
+# ungrounded sticky, while STILL posting the SIG-333 inline committable
+# suggestions (SIG-434 — the synth's ~33% catch leaves the patch surface valuable
+# on the rest). Code default is off (parseCiTriageSynthMode).
+# SIG-431 (#561): enforceable (the chatEnabled kill-switch is fixed); K=12 on the
+# #24 fixture = 33% catch / 0% hallucination. SIG-434: flipped shadow → enforce.
+OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
+
+# SIG-333 / SIG-434: CI-triage inline committable `suggestion` mode. "shadow"
+# (default) | "enforce". MUST be "enforce" for the SIG-333 patches to actually
+# post — `planCiSuggestions` only emits the inline review when this is "enforce"
+# (and the repo is not sensitive). Paired with the synth-enforce flip above so a
+# CI failure gets BOTH the grounded inline diagnosis AND the apply-able patches.
+OPENCLAW_CI_SUGGESTIONS_MODE = "enforce"
 
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /

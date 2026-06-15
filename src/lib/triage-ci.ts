@@ -203,12 +203,22 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   //   - shadow  → run the pass + telemeter the would-post decisions, post
   //               nothing new, then KEEP running the legacy sticky (customer
   //               surface unchanged while we watch telemetry).
-  //   - enforce → post grounded inline; SUPPRESS the legacy sticky + the
-  //               SIG-333 suggestions (return before the legacy path runs).
+  //   - enforce → post grounded inline, then SUPPRESS ONLY the legacy ungrounded
+  //               sticky while STILL running the SIG-333 inline committable
+  //               suggestions (SIG-434). The synth's grounded inline is the
+  //               prose surface, so the ungrounded sticky is redundant — but at
+  //               ~33% catch the SIG-333 `suggestion` blocks remain the patch
+  //               surface on the failures the synth doesn't anchor, so they keep
+  //               posting. The legacy glm pass below still runs because it
+  //               produces the diagnosis `patches` SIG-333 needs.
   // Sensitive repos NEVER post — fall back to the legacy path (its own
   // SIG-333 gating already suppresses inline on sensitive repos).
   const synthMode = parseCiTriageSynthMode(env.OPENCLAW_CI_TRIAGE_SYNTH_MODE)
   const synthSensitive = isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)
+  // SIG-434: in enforce the grounded inline replaces ONLY the legacy ungrounded
+  // sticky; the legacy glm pass + SIG-333 suggestions below still run. We just
+  // skip the sticky upsert. off/shadow keep posting the sticky exactly as before.
+  let suppressLegacySticky = false
   if (synthMode !== "off" && !synthSensitive) {
     const summary = await runCiTriageSynth({
       client,
@@ -225,9 +235,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     })
     since(`ci-triage-synth-${synthMode}-posted-${summary.posted}`)
     if (synthMode === "enforce") {
-      // The grounded inline path is authoritative — suppress the legacy sticky
-      // + SIG-333 suggestions entirely.
-      return
+      suppressLegacySticky = true
     }
     // shadow falls through to the legacy path below (telemetry already emitted).
   }
@@ -298,27 +306,35 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     headSha,
   })
 
-  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
-  const body = draft.body + plan.stickySuffix + footer
+  // SIG-434: in enforce the grounded inline already carries the prose diagnosis,
+  // so the legacy ungrounded sticky is suppressed (only the SIG-333 inline
+  // suggestions below still post). off/shadow post the sticky exactly as before.
+  // `plan.stickySuffix` (un-anchorable patches) is a sticky-only surface, so it
+  // is only appended when the sticky actually posts.
+  if (!suppressLegacySticky) {
+    const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
+    const body = draft.body + plan.stickySuffix + footer
 
-  const existing = await findExistingCiComment(client, owner, repo, prNumber)
-  if (existing != null) {
-    await client.updateIssueComment(owner, repo, existing, body)
-    since("comment-updated")
-    console.log(`ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${verdict})`)
-  } else {
-    const created = await client.createIssueComment(owner, repo, prNumber, body)
-    since("comment-created")
-    console.log(
-      `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`,
-    )
+    const existing = await findExistingCiComment(client, owner, repo, prNumber)
+    if (existing != null) {
+      await client.updateIssueComment(owner, repo, existing, body)
+      since("comment-updated")
+      console.log(`ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${verdict})`)
+    } else {
+      const created = await client.createIssueComment(owner, repo, prNumber, body)
+      since("comment-created")
+      console.log(
+        `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`,
+      )
+    }
   }
 
-  // SIG-333: submit the planned inline review (enforce only). The extracted
-  // helper handles dedup (skip if already posted), the bulk happy path, and
-  // split-on-422 (one bad anchor only drops itself) — all unit-tested in
-  // tests/ci-suggestions.test.ts. The sticky was already posted above, so a
-  // total failure here never loses the diagnosis.
+  // SIG-333: submit the planned inline review (suggestions-enforce only). The
+  // extracted helper handles dedup (skip if already posted), the bulk happy path,
+  // and split-on-422 (one bad anchor only drops itself) — all unit-tested in
+  // src/lib/ci-suggestions.test.ts. The diagnosis surface was already posted above
+  // (the legacy sticky in off/shadow, or — in synth-enforce — the grounded inline
+  // from runCiTriageSynth), so a total failure here never loses the diagnosis.
   let inlineResult: { posted: number; skip: string | null } = { posted: 0, skip: null }
   if (plan.review != null) {
     inlineResult = await submitCiSuggestionReview(client, owner, repo, prNumber, plan.review)

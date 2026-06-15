@@ -28,8 +28,9 @@
  *                 (default; the reversible fallback). PR 1 ships here.
  *   - "shadow"  — run the synth + ground + dedup pass and telemeter it, post
  *                 nothing new. (Wired in PR 2.)
- *   - "enforce" — post the grounded inline findings; suppress the legacy
- *                 sticky + SIG-333 suggestions. (Wired in PR 2.)
+ *   - "enforce" — post the grounded inline findings and suppress ONLY the legacy
+ *                 ungrounded sticky, while STILL running the SIG-333 inline
+ *                 committable suggestions (SIG-434). (Wired in PR 2.)
  */
 export type CiTriageSynthMode = "off" | "shadow" | "enforce"
 

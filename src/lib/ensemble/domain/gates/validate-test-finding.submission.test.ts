@@ -32,13 +32,11 @@ function testsProvenance(sourceId = "tests-0"): SynthesizerProvenance {
 }
 
 describe("validateForSubmission — SIG-111 tests specificity gate", () => {
-  it("ENFORCE: DEMOTES a vague insufficient-test finding to a NON-blocking body note + increments counter + fires callback", () => {
-    // SIG-245 demote-conversion: in enforce the FP-shape finding leaves the
-    // inline set (verdict.findings) but lands in unanchoredFindings (the body),
-    // so a residual real coverage gap stays visible. FN-safe. AND its score is
-    // capped below the score>=4 REQUEST_CHANGES floor so the gate-flagged FP
-    // does NOT block the merge (founder decision: a low-confidence coverage
-    // over-fire should not gate a PR).
+  it("SIG-440 ENFORCE: keeps a vague insufficient-test finding inline as a NON-blocking note + increments counter + fires callback", () => {
+    // SIG-440: in enforce the FP-shape finding stays inline when its line is
+    // anchorable, so a residual real coverage gap stays visible on the code.
+    // Its score is still capped below the score>=4 REQUEST_CHANGES floor so
+    // the gate-flagged FP does NOT block the merge.
     const onDrop = vi.fn()
     const f = finding({
       headline: "Module needs more tests",
@@ -58,25 +56,24 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
       onTestFindingDropped: onDrop,
     })
     expect(result.droppedForFailedTestValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0) // left the inline set
-    expect(result.unanchoredFindings).toHaveLength(1) // demoted to the body, NOT dropped
-    expect(result.unanchoredFindings[0]!.headline).toBe("Module needs more tests")
-    expect(result.unanchoredFindings[0]!.score).toBe(3) // capped to exactly 3 — non-blocking (below the score>=4 floor)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(result.verdict.findings[0]!.headline).toBe("Module needs more tests")
+    expect(result.verdict.findings[0]!.score).toBe(3) // capped to exactly 3 — non-blocking (below the score>=4 floor)
     // CR #284: the demote clones — the original synth finding (which aliases
     // telemetry.synthesizer.verdict) must NOT be mutated by the score-cap.
     expect(f.score).toBe(4)
     expect(f.trust).toBeUndefined()
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "vague-insufficient-test",
-      dropped: true,
+      dropped: false,
     })
   })
 
-  it("ENFORCE + ledger ON: tags the demoted finding with demoteReason tests-coverage", () => {
-    // Mirrors the SIG-108 demote-conversion test discipline: with the trust
-    // ledger ON, the body-demoted finding carries surface:"body" +
-    // demoteReason:"tests-coverage" so the Trust Summary counts it. Covers the
-    // annotateFindingTrust wiring + the demotedToBody filter branch.
+  it("SIG-440 ENFORCE + ledger ON: tags the inline finding with demoteReason tests-coverage", () => {
+    // With the trust ledger ON, the inline finding carries
+    // demoteReason:"tests-coverage" so the MODEL pill explains confidence
+    // without moving the finding to the body.
     const f = finding({
       headline: "Module needs more tests",
       body: "This module could use additional tests to improve coverage overall.",
@@ -94,11 +91,10 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
       testsValidatorMode: "enforce",
       trustLedgerEnabled: true,
     })
-    expect(result.verdict.findings).toHaveLength(0) // CR #284: not dual-placed — removed from inline
-    expect(result.unanchoredFindings).toHaveLength(1)
-    expect(result.unanchoredFindings[0]!.trust).toEqual({
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(result.verdict.findings[0]!.trust).toEqual({
       tier: "body-only-ungrounded",
-      surface: "body",
       demoteReason: "tests-coverage",
     })
   })
@@ -246,7 +242,7 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
 })
 
 describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio damper", () => {
-  it("ENFORCE: demotes a cross-referenced insufficient-test finding to the body (AC #2)", () => {
+  it("SIG-440 ENFORCE: keeps a cross-referenced insufficient-test finding inline as non-blocking (AC #2)", () => {
     const onDrop = vi.fn()
     const f = finding({
       path: "src/lib/foo.ts",
@@ -278,11 +274,12 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
     })
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "cross-referenced-in-sibling-test",
-      dropped: true,
+      dropped: false,
     })
     expect(result.droppedForFailedTestValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.score).toBe(3)
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("AC #3: lowers a KEPT testing finding's score by 1 on a test-heavy PR (ratio > 0.3)", () => {

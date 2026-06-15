@@ -1,9 +1,9 @@
 // Phase-3 (founder ask): severity-aware 65k cap tests.
 //
-// A blind tail-cut slices whatever renders last — which can be a body-scoped
-// security blocker's evidence. This cap sheds the LOW-severity non-blocker tail
-// first, so the head (lead + Fix Plan table with every blocker row + body-only
-// blocker details) + footer always survive intact.
+// A blind tail-cut slices whatever renders last — which can be a non-inline
+// security blocker's evidence. This cap sheds the dropdown tail first, so the
+// head (lead + Fix Plan table with every blocker row) + footer always survive
+// intact.
 
 import { describe, it, expect } from "vitest"
 import { capForGitHubPrioritized } from "@/src/lib/triage-pr-review"
@@ -15,7 +15,8 @@ describe("capForGitHubPrioritized — severity-aware 65k cap", () => {
   it("under the cap: returns head + droppable + footer unchanged", () => {
     const out = capForGitHubPrioritized({
       head: "## blockers\n| Severity | Issue |\n| Critical | SQLi |",
-      droppable: "\n### Review Body Findings\n- a nit",
+      droppable:
+        "\n<details>\n<summary><b>1 finding that couldn't be anchored to a line</b></summary>\n- a nit\n</details>",
       droppedCountIfOmitted: 1,
       footer: FOOTER,
     })
@@ -27,7 +28,10 @@ describe("capForGitHubPrioritized — severity-aware 65k cap", () => {
 
   it("over the cap: DROPS the low-severity tail with a counted marker, KEEPS the head + footer", () => {
     const head = "## blockers\n| Critical | SQL injection in auth |"
-    const droppable = "\n### Review Body Findings\n" + "- low-sev nit padding\n".repeat(6000) // huge tail
+    const droppable =
+      "\n<details>\n<summary><b>6000 findings that couldn't be anchored to a line</b></summary>\n" +
+      "- low-sev nit padding\n".repeat(6000) +
+      "</details>"
     const out = capForGitHubPrioritized({
       head,
       droppable,
@@ -41,20 +45,23 @@ describe("capForGitHubPrioritized — severity-aware 65k cap", () => {
     expect(out).toContain(FOOTER)
     // ...the tail is gone, with an honest counted marker...
     expect(out).not.toContain("low-sev nit padding")
-    expect(out).toContain("6000 lower-severity body findings omitted")
+    expect(out).toContain("6000 non-inline findings omitted")
     expect(out).toContain("every blocker is shown above")
   })
 
   it("singular marker copy for a single omitted finding", () => {
     const head = "## blockers\n| Critical | XSS |"
-    const droppable = "\n### Review Body Findings\n" + "x".repeat(70000)
+    const droppable =
+      "\n<details>\n<summary><b>1 finding that couldn't be anchored to a line</b></summary>\n" +
+      "x".repeat(70000) +
+      "</details>"
     const out = capForGitHubPrioritized({
       head,
       droppable,
       droppedCountIfOmitted: 1,
       footer: FOOTER,
     })
-    expect(out).toContain("1 lower-severity body finding omitted")
+    expect(out).toContain("1 non-inline finding omitted")
     expect(out).not.toContain("findings omitted")
     expect(out).toContain("XSS")
   })

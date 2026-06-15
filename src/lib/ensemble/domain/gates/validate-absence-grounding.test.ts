@@ -448,15 +448,15 @@ describe("validateForSubmission — SIG-290 absence-grounding gate", () => {
     })
   })
 
-  it("ENFORCE: demotes the ungrounded absence-claim to the body (counter++, callback dropped:true, leaves verdict.findings)", () => {
+  it("SIG-440 ENFORCE: keeps the ungrounded absence-claim inline (counter++, callback dropped:false)", () => {
     const onDrop = vi.fn()
     const result = run([absenceFinding()], { mode: "enforce", droppedPaths: [PATH], onDrop })
     expect(result.droppedForFailedAbsenceGroundingValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings.some((f) => f.headline.includes("no null check"))).toBe(true)
+    expect(result.verdict.findings.some((f) => f.headline.includes("no null check"))).toBe(true)
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "absence-claim-ungrounded-by-truncation",
-      dropped: true,
+      dropped: false,
     })
   })
 
@@ -477,7 +477,7 @@ describe("validateForSubmission — SIG-290 absence-grounding gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
-  it("ENFORCE: no score floor — a score-4 ungrounded absence-claim is demoted too", () => {
+  it("SIG-440 ENFORCE: no score floor — a score-4 ungrounded absence-claim stays inline too", () => {
     const onDrop = vi.fn()
     const result = run([absenceFinding({ score: 4 })], {
       mode: "enforce",
@@ -485,11 +485,11 @@ describe("validateForSubmission — SIG-290 absence-grounding gate", () => {
       onDrop,
     })
     expect(result.droppedForFailedAbsenceGroundingValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings.some((f) => f.headline.includes("no null check"))).toBe(true)
+    expect(result.verdict.findings.some((f) => f.headline.includes("no null check"))).toBe(true)
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "absence-claim-ungrounded-by-truncation",
-      dropped: true,
+      dropped: false,
     })
   })
 })

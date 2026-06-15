@@ -75,7 +75,7 @@ function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
 }
 
 describe("validateForSubmission — SIG-108 security evidence gate", () => {
-  it("ENFORCE: DEMOTES a sev>=4 security finding with a fabricated evidenceId to the body (not dropped) + increments counter + fires callback", () => {
+  it("SIG-440 ENFORCE: keeps an anchorable sev>=4 security finding with fabricated evidence inline + increments counter + fires callback", () => {
     const dropped: Array<{ reason: string; dropped: boolean }> = []
     const onDrop = vi.fn((_f: PrReviewFinding, info: { reason: string; dropped: boolean }) => {
       dropped.push(info)
@@ -98,13 +98,11 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       trustLedgerEnabled: true,
     })
     expect(result.droppedForFailedValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0) // no longer inline
-    // SIG-108 demote-conversion (2026-06-01): the finding is DEMOTED to the body,
-    // NOT hard-dropped — it stays visible with a security-evidence demote reason.
-    expect(result.unanchoredFindings).toHaveLength(1)
-    // Assert the FULL demoted record — path/line/evidenceId survive the move, proving
-    // the finding was DEMOTED in place (not reconstructed or dropped) (CodeRabbit #271).
-    expect(result.unanchoredFindings).toEqual([
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    // Assert the FULL inline record — path/line/evidenceId survive the trust
+    // annotation, proving the finding was not reconstructed or dropped.
+    expect(result.verdict.findings).toEqual([
       expect.objectContaining({
         path: "src/db.ts",
         line: 17,
@@ -113,13 +111,12 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         evidenceId: "sarif:fake:000000000000:17",
         trust: {
           tier: "body-only-ungrounded",
-          surface: "body",
           demoteReason: "security-evidence",
         },
       }),
     ])
     expect(onDrop).toHaveBeenCalledTimes(1)
-    expect(dropped[0]).toEqual({ reason: "fabricated-evidence-id", dropped: true })
+    expect(dropped[0]).toEqual({ reason: "fabricated-evidence-id", dropped: false })
   })
 
   it("SIG-392 reclass ON: a failing sev>=4 security finding WITH a concrete failureExample is recategorized to logic and stays INLINE (e2e-frontend#20 regression)", () => {
@@ -223,7 +220,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(result.unanchoredFindings).toHaveLength(0)
   })
 
-  it("SIG-392 reclass ON: a mechanism-less failing finding still DEMOTES exactly as before (the wall stands)", () => {
+  it("SIG-440 reclass ON: a mechanism-less failing finding still stays security-scoped but renders inline", () => {
     const onDrop = vi.fn()
     const result = validateForSubmission({
       synthOutput: {
@@ -243,13 +240,13 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       onSecurityFindingDropped: onDrop,
       trustLedgerEnabled: true,
     })
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toHaveLength(1)
-    expect(result.unanchoredFindings[0]).toEqual(expect.objectContaining({ category: "security" }))
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]).toEqual(expect.objectContaining({ category: "security" }))
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledTimes(1)
   })
 
-  it("SIG-392 reclass OFF (default): failureExample alone changes nothing — byte-identical demote", () => {
+  it("SIG-440 reclass OFF (default): failureExample alone changes nothing except anchorable surface remains inline", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -271,11 +268,11 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       securityValidatorMode: "enforce",
       trustLedgerEnabled: true,
     })
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
-  it("ENFORCE + ledger OFF: still DEMOTES to the body but leaves the finding un-annotated (no trust)", () => {
+  it("SIG-440 ENFORCE + ledger OFF: keeps the anchorable finding inline but leaves it un-annotated (no trust)", () => {
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -290,14 +287,14 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
-      // trustLedgerEnabled omitted (off): demotion still happens, but the finding must
-      // NOT be trust-annotated — guards against silently writing trust when the ledger
+      // trustLedgerEnabled omitted (off): the finding still stays visible inline, but
+      // must NOT be trust-annotated — guards against silently writing trust when the ledger
       // is disabled (CodeRabbit #271).
     })
     expect(result.droppedForFailedValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toHaveLength(1)
-    expect(result.unanchoredFindings[0]?.trust).toBeUndefined()
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]?.trust).toBeUndefined()
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("SHADOW: counts the would-drop + fires callback with dropped:false but KEEPS the finding", () => {
@@ -606,7 +603,8 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       securityValidatorMode: "enforce",
     })
     expect(result.droppedForFailedValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("derives security applicability from a sourceFindingId prefix when sourceSpecialists omits it", () => {
@@ -638,7 +636,8 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       securityValidatorMode: "enforce",
     })
     expect(result.droppedForFailedValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("back-compat: when no securityManifest is supplied, the gate no-ops", () => {

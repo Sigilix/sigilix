@@ -172,24 +172,26 @@ function run(args: {
 }
 
 describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
-  it("ENFORCE: DEMOTES a sev>=4 self-originated security finding lacking a rationale to the body + counter + callback", () => {
+  it("SIG-440 ENFORCE: keeps an anchorable sev>=4 self-originated security finding lacking a rationale inline + counter + callback", () => {
     const onDrop = vi.fn()
     const result = run({ finding: finding(), mode: "enforce", onDrop })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0) // no longer inline
-    expect(result.unanchoredFindings).toEqual([
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings).toEqual([
       expect.objectContaining({
         path: "src/parse/ndjson.ts",
         category: "security",
         cweId: "CWE-918",
-        trust: expect.objectContaining({ surface: "body", demoteReason: "refutation-survival" }),
+        trust: expect.objectContaining({ demoteReason: "refutation-survival" }),
       }),
     ])
+    expect(result.verdict.findings[0]?.trust).not.toEqual(expect.objectContaining({ surface: "body" }))
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledTimes(1)
     expect(onDrop.mock.calls[0]![1]).toEqual({
       reason: "refutation-survival-missing",
-      dropped: true,
+      dropped: false,
       lens: "security",
     })
   })
@@ -266,10 +268,11 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop.mock.calls[0]![1]).toMatchObject({
       reason: "refutation-survival-missing",
-      dropped: true,
+      dropped: false,
       lens: "security",
     })
   })
@@ -287,7 +290,9 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
-    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: true, lens: "security" })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: false, lens: "security" })
   })
 
   it("does NOT flag a self-originated finding below the severity floor", () => {
@@ -346,7 +351,9 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
-    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: true, lens: "security" })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: false, lens: "security" })
   })
 
   it("CR-B: KEEPS a pure-security finding carrying a synth-authored rationale no source had (no clobber-to-empty)", () => {
@@ -457,21 +464,23 @@ function runPerf(args: {
 }
 
 describe("validateForSubmission — SIG-325 refutation-survival gate (performance lens)", () => {
-  it("ENFORCE: DEMOTES a sev>=4 self-originated (no-AST-hit) perf finding lacking a rationale + callback lens=performance", () => {
+  it("SIG-440 ENFORCE: keeps an anchorable sev>=4 self-originated (no-AST-hit) perf finding inline + callback lens=performance", () => {
     const onDrop = vi.fn()
     const result = runPerf({ finding: perfFinding(), mode: "enforce", onDrop })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings).toEqual([
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings).toEqual([
       expect.objectContaining({
         category: "performance",
-        trust: expect.objectContaining({ surface: "body", demoteReason: "refutation-survival" }),
+        trust: expect.objectContaining({ demoteReason: "refutation-survival" }),
       }),
     ])
+    expect(result.verdict.findings[0]?.trust).not.toEqual(expect.objectContaining({ surface: "body" }))
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop.mock.calls[0]![1]).toEqual({
       reason: "refutation-survival-missing",
-      dropped: true,
+      dropped: false,
       lens: "performance",
     })
   })

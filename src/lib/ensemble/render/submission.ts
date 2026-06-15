@@ -75,21 +75,20 @@ interface BuildReviewArgs {
    */
   nowMs?: number
   /**
-   * Findings that passed the hallucination guard but failed the
-   * line-validity check. The inline-comments path can't anchor them
-   * (GitHub would 422), so they get rolled into the review body as
-   * compact body-only findings. Without this, unanchored findings were
-   * silently dropped on the success path of the orchestrator (only
-   * the submit-fallback path recovered them). CodeRabbit + Sigilix
-   * both caught the regression on PR #38.
+   * Findings that passed the hallucination guard but cannot be posted as
+   * inline comments (GitHub would 422), so they get rolled into the single
+   * non-inline dropdown in the review body. Without this, unanchored findings
+   * were silently dropped on the success path of the orchestrator (only the
+   * submit-fallback path recovered them). CodeRabbit + Sigilix both caught
+   * the regression on PR #38.
    *
    * Default `[]` — the common case where every finding anchored
    * cleanly. When non-empty:
    *   - The chosen review event takes ALL findings into account
    *     (anchored + unanchored), so a verdict with only-unanchored
    *     blocking findings doesn't post as APPROVE.
-   *   - The body grows with a "Review Body Findings" section listing
-   *     the body-only set.
+   *   - The body grows with the single non-inline dropdown listing findings
+   *     that genuinely cannot be anchored to a line.
    */
   unanchored?: PrReviewFinding[]
   /**

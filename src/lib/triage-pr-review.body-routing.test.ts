@@ -301,11 +301,10 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-281 PR B (Rec 6): a body-only BLOCKER (score >= 4) is now a Fix
-    // Plan table row + a collapsed evidence block — NOT the lower "Review
-    // Body Findings" section (which holds only score < 4 findings).
+    // SIG-440: a body-only BLOCKER (score >= 4) is a Fix Plan table row and
+    // its detail appears in the single non-inline dropdown.
     expect(out.body).toContain("| Severity | Location | Issue |")
-    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).not.toContain("### Review Body Findings")
     // Kimi prominence: the location leads the row in BOLD; the score
     // collapses into a trailing <sub>. (Was the `<anchor> · score N`
@@ -344,12 +343,12 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-281 PR B (Rec 6): file-scoped score-5 blocker → Fix Plan table
-    // row + collapsed evidence block, not the "Review Body Findings"
+    // SIG-440: file-scoped score-5 blocker → Fix Plan table row +
+    // single non-inline dropdown, not the "Review Body Findings"
     // section. Per Kimi Q3 the table Location cell for a file-level
     // finding is the bare path (no `:line`).
     expect(out.body).toContain("| Severity | Location | Issue |")
-    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).not.toContain("### Review Body Findings")
     // SIG-216: file-scope anchor is the bare path (no `:line`) and
     // the meta line is just `<anchor> · score N` — no "File-level
@@ -459,10 +458,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     // Fix Plan row — surfacing it is the whole point. Previously it was
     // suppressed from the table, leaving a real blocker buried below.
     expect(out.body).toContain("`security`: dismiss command trusts")
-    // ...and its full evidence lives in the collapsed body-only blocker
-    // block, with the tightened `<anchor> · score N` meta (no
-    // "Comment-level" prefix).
-    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    // ...and its full evidence lives in the single non-inline dropdown,
+    // with the tightened `<anchor> · score N` meta (no "Comment-level" prefix).
+    expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).toContain("**`src/lib/github-mention.ts:436`**:")
     expect(out.body).toContain("score 4")
     expect(out.body).not.toContain("Comment-level")
@@ -639,17 +637,18 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
   const submit = (findings: PrReviewFinding[]) =>
     buildReviewSubmission({ verdict: mkVerdict(findings), prAuthor: "a", headSha: "abc" })
 
-  it("a body-only blocker renders in the Fix Plan table + collapsed evidence, NOT Review Body Findings", () => {
+  it("a body-only blocker renders in the Fix Plan table + single dropdown detail, NOT Review Body Findings", () => {
     const out = submit([lf({ scope: "file", score: 5, headline: "file blocker" })])
     expect(out.body).toContain("| Severity | Location | Issue |")
-    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).toContain("file blocker")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
-  it("a body-only NON-blocker (score < 4) stays in the Review Body Findings section", () => {
+  it("a body-only NON-blocker (score < 4) stays visible in the single non-inline dropdown", () => {
     const out = submit([lf({ scope: "file", score: 3, headline: "file nit" })])
-    expect(out.body).toContain("### Review Body Findings")
+    expect(out.body).not.toContain("### Review Body Findings")
+    expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).toContain("file nit")
     expect(out.body).not.toContain("Evidence &amp; suggested changes for body-only blockers")
   })
@@ -681,9 +680,10 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
     const body = out.submission.body
     expect(out.submission.comments).toHaveLength(1) // inline blocker
     expect(body).toContain("inline blocker") // Fix Plan row
-    expect(body).toContain("body-only blocker") // Fix Plan row + details
-    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
-    expect(body).toContain("### Review Body Findings") // the nit
+    expect(body).toContain("body-only blocker") // Fix Plan row + dropdown detail
+    expect(body).toContain("couldn't be anchored to a line")
+    expect(body).not.toContain("### Review Body Findings")
+    expect(body).toContain("couldn't be anchored to a line")
     expect(body).toContain("body-only nit")
   })
 })

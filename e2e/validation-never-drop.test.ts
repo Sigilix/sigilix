@@ -4,18 +4,19 @@
 //
 // "The output" of vFS, mapped onto the real `ValidatedOutput` fields:
 //   - INLINE / submission set  → `result.verdict.findings`
-//   - BODY-DEMOTED set         → `result.unanchoredFindings`
+//   - NON-INLINE set           → `result.unanchoredFindings`
 // A finding is CONSERVED iff it appears in either set. (Other ValidatedOutput
 // fields are counters/provenance, not finding containers.)
 //
 // VERIFIED behavior split (this is the recall-safety contract being pinned):
 // the 13 gates fall into two classes when they FIRE in enforce on a P0/P1 —
 //
-//   DEMOTE-class (8): the finding leaves the inline set but is conserved in
-//     `unanchoredFindings` (body) — security-evidence (SIG-108),
-//     tests-specificity (SIG-111), refutation-survival (SIG-325),
-//     inline-grounding (SIG-281), absence-grounding (SIG-290),
-//     window-blindness, security-grounding (SIG-293), security-usage (SIG-311).
+//   TRUST-DEMOTE-class (8): the finding stays inline when it has a reviewable
+//     line and is conserved in `unanchoredFindings` only when no line can anchor
+//     it — security-evidence (SIG-108), tests-specificity (SIG-111),
+//     refutation-survival (SIG-325), inline-grounding (SIG-281),
+//     absence-grounding (SIG-290), window-blindness, security-grounding
+//     (SIG-293), security-usage (SIG-311).
 //
 //   HARD-DROP-class (5): the gate's verdict is that the finding is a
 //     hallucination (vague/unanchored/provably-refuted/uncited), so it is
@@ -26,7 +27,7 @@
 //     pin this hard drop directly; the golden matrix pins the exact counters.
 //
 // The CONSERVATION INVARIANT therefore is: a P0/P1 input finding is either
-// (a) conserved (inline or body) when NO gate hard-dropped it, OR (b) removed
+// (a) conserved (inline or non-inline) when NO gate hard-dropped it, OR (b) removed
 // by a HARD-DROP-class gate that recorded the drop in its counter. There is no
 // third case where a P0/P1 vanishes with no recorded decision — that is the
 // recall-safety property. NEVER-DROP failures would mean a real bug got buried

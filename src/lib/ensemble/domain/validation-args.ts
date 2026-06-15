@@ -609,7 +609,7 @@ export type ValidateForSubmissionArgs = {
   securityUsageValidatorMode?: SecurityUsageValidatorMode
   /** SIG-311: telemetry callback per usage-gate-flagged finding (reuses the
    *  `pr-review-finding-rejected-validation` event, `gate: "security-usage"`).
-   *  `dropped` = demoted to body (enforce). */
+   *  `dropped` remains false for SIG-440 trust-demoted inline findings. */
   onSecurityUsageFindingDropped?: (
     finding: PrReviewFinding,
     info: { reason: SecurityUsageDropReason; dropped: boolean },
@@ -620,10 +620,9 @@ export type ValidateForSubmissionArgs = {
    * score-1 nits from customer-visible output entirely.
    */
   profile?: SigilixProfile
-  /** SIG Trust Ledger v0: when true (flag != off), tag each body-demoted finding
-   *  with its `demoteReason` (inline/absence/security-grounding, outside-diff) so
-   *  the PR3 render can split outside-diff vs PR-level. Inert metadata nothing reads
-   *  yet; gated so `off` stays a true no-op. */
+  /** SIG Trust Ledger v0: when true (flag != off), tag trust-demoted and
+   *  non-inline findings with `demoteReason` so the renderer can show the right
+   *  pill and split outside-diff vs PR-level. Gated so `off` stays a true no-op. */
   trustLedgerEnabled?: boolean
   /**
    * SIG-314: the `ast/<ruleId>/<hash>/<line>` ids of the deterministic AST

@@ -18,6 +18,7 @@ import {
   emitSpecialistFanoutSummary,
   emitSynthSummary,
   emitDoReviewRunTiming,
+  emitLogicInputComposition,
   computeSpecialistFanoutSummary,
   narrowSynthRetryOutcome,
 } from "@/src/lib/ensemble-perf-telemetry"
@@ -383,6 +384,45 @@ describe("emitDoReviewRunTiming", () => {
     expect(event["finishedAtMs"]).toBe(1_700_000_566_000)
     expect(event["consumerWallMs"]).toBe(566_000)
     expect(event["finalState"]).toBe("completed")
+  })
+})
+
+// ─── emitLogicInputComposition (SIG-369(b)) ─────────────────────────
+
+describe("emitLogicInputComposition", () => {
+  const composition = {
+    systemPromptTokens: 250,
+    initialMessageTokens: 13_000,
+    sections: { diff: { present: true, tokens: 12_000 } },
+    toolLoop: { toolsAvailable: false, toolCallsMade: 0, toolResultTokens: 0 },
+    perCallInputTokens: [140_000],
+    summedInputTokens: 140_000,
+    callsMissingInputUsage: 0,
+  }
+
+  it("emits the full composition + reconciliation pair with correlation fields", () => {
+    emitLogicInputComposition(CTX, composition, { logicModel: "openai/o3", summedFromTokenUsage: 140_000 })
+    const event = lastLogged()
+    expect(event["event"]).toBe("logic-input-composition")
+    expect(event["owner"]).toBe("Sigilix")
+    expect(event["repo"]).toBe("sigilix")
+    expect(event["prNumber"]).toBe(94)
+    expect(event["headSha"]).toBe("abcdef1") // truncated to 7
+    expect(event["logicModel"]).toBe("openai/o3")
+    expect(event["systemPromptTokens"]).toBe(250)
+    expect(event["initialMessageTokens"]).toBe(13_000)
+    expect(event["toolLoop"]).toEqual({ toolsAvailable: false, toolCallsMade: 0, toolResultTokens: 0 })
+    expect(event["perCallInputTokens"]).toEqual([140_000])
+    expect(event["summedInputTokens"]).toBe(140_000)
+    expect(event["callsMissingInputUsage"]).toBe(0)
+    // The reconciliation field: summedInputTokens should match this.
+    expect(event["summedInputTokensFromTokenUsage"]).toBe(140_000)
+  })
+
+  it("emits null for an absent tokenUsage reconciliation value (not a misleading 0)", () => {
+    emitLogicInputComposition(CTX, composition, { logicModel: "openai/o3", summedFromTokenUsage: undefined })
+    const event = lastLogged()
+    expect(event["summedInputTokensFromTokenUsage"]).toBeNull()
   })
 })
 

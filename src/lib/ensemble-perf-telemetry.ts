@@ -502,3 +502,71 @@ export function emitDoReviewRunTiming(ctx: EnsembleRunCtx, timing: DoReviewRunTi
     }),
   )
 }
+
+// ─── logic-input-composition (SIG-369(b)) ───────────────────────────
+
+/**
+ * SIG-369(b): emit the logic specialist's input-token decomposition (shadow
+ * mode only — the caller gates on `flags.logicInputCompositionMode`). The
+ * composition is assembled by the pure domain helper
+ * (`buildLogicInputComposition` in `ensemble/domain/logic-input-composition`);
+ * this is the IO/observability seam that logs it (keeping the domain module
+ * env/console-free, per the dependency rule — Codex sign-off C).
+ *
+ * The `composition` parameter is a STRUCTURAL shape (not an imported type) so
+ * this module stays import-free — the same convention `recordTokens` uses for
+ * its inline function type (this leaf is imported BY others, never the reverse).
+ * `LogicInputComposition` satisfies it structurally.
+ *
+ * Console.log-only — pure observability, no behavior change. Catches its own
+ * throw so a degenerate JSON shape can never abort the fan-out path (mirrors
+ * `maybeEmitLogicPromptBudget`).
+ *
+ * `reconcile` carries the cost-attribution pair: the configured logic model id
+ * and the matching `tokenUsageByModel[logicModel].inputTokens`, so a dashboard
+ * can confirm `summedInputTokens` lines up with the per-model accumulator
+ * without a join. A mismatch flags a capture gap, not a cost change.
+ */
+export interface LogicInputCompositionEvent {
+  systemPromptTokens: number
+  initialMessageTokens: number
+  sections: unknown
+  toolLoop: { toolsAvailable: boolean; toolCallsMade: number; toolResultTokens: number }
+  perCallInputTokens: number[]
+  summedInputTokens: number
+  callsMissingInputUsage: number
+}
+
+export function emitLogicInputComposition(
+  ctx: EnsembleRunCtx,
+  composition: LogicInputCompositionEvent,
+  reconcile: { logicModel: string; summedFromTokenUsage: number | undefined },
+): void {
+  try {
+    console.log(
+      JSON.stringify({
+        event: "logic-input-composition",
+        ...correlationFields(ctx),
+        logicModel: reconcile.logicModel,
+        systemPromptTokens: composition.systemPromptTokens,
+        initialMessageTokens: composition.initialMessageTokens,
+        sections: composition.sections,
+        toolLoop: composition.toolLoop,
+        perCallInputTokens: composition.perCallInputTokens,
+        summedInputTokens: composition.summedInputTokens,
+        callsMissingInputUsage: composition.callsMissingInputUsage,
+        summedInputTokensFromTokenUsage: reconcile.summedFromTokenUsage ?? null,
+      }),
+    )
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "logic-input-composition-emit-failed",
+        owner: ctx.owner,
+        repo: ctx.repo,
+        prNumber: ctx.prNumber,
+        reason: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+}

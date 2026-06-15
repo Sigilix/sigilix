@@ -1,7 +1,26 @@
 import type { ChatArgs, ChatMessage, ChatResult, ChatToolDef, LlmUsage, ToolCall } from "@/src/shared/ports/model"
+import { estimateToolResultTokens } from "@/src/lib/ensemble/domain/logic-input-composition"
 
 const DEFAULT_MAX_TOOL_CALLS = 2
 const DEFAULT_TOOL_TIMEOUT_MS = 5_000
+
+/**
+ * SIG-369(b): per-CALL input-token + tool-loop telemetry the tool conversation
+ * surfaces so the two model calls (tool-turn + final, the final re-sends
+ * everything) are visible SEPARATELY rather than collapsed into the summed
+ * `usage`. `perCallInputTokens` keeps `undefined` for a call whose provider
+ * reported no usage (distinguishes "no data" from 0). Additive observability
+ * only — never changes the conversation.
+ */
+export interface ToolConversationStats {
+  /** Input tokens of the tool-turn call then the final call, in order. A value
+   *  is `undefined` when that call's provider reported no usage. */
+  perCallInputTokens: Array<number | undefined>
+  /** Number of tool calls the model actually executed this conversation. */
+  toolCallsMade: number
+  /** Estimated tokens of the tool RESULT contents fed back into the final call. */
+  toolResultTokens: number
+}
 
 export interface SpecialistRuntimeTool {
   id: string
@@ -26,7 +45,14 @@ export interface SpecialistToolConversationArgs {
   maxToolCalls?: number
 }
 
-export async function runSpecialistToolConversation(args: SpecialistToolConversationArgs): Promise<ChatResult> {
+/** SIG-369(b): `ChatResult` extended with the per-call / tool-loop telemetry
+ *  (`toolConversation`). The base `ChatResult` shape (message / hasToolCalls /
+ *  summed `usage`) is UNCHANGED — the extra field is purely additive. */
+export type SpecialistToolConversationResult = ChatResult & { toolConversation: ToolConversationStats }
+
+export async function runSpecialistToolConversation(
+  args: SpecialistToolConversationArgs,
+): Promise<SpecialistToolConversationResult> {
   const toolsByName = new Map(args.tools.map((tool) => [tool.id, tool]))
   const messages: ChatMessage[] = [
     ...args.messages,
@@ -48,6 +74,10 @@ export async function runSpecialistToolConversation(args: SpecialistToolConversa
     temperature: args.temperature ?? 0,
   })
   const usage = addUsage({}, toolTurn.usage)
+  // SIG-369(b): capture each call's input tokens separately + the tool-result
+  // block size, so the tool-turn vs final-call doubling is visible in telemetry.
+  let toolCallsMade = 0
+  const toolResultContents: string[] = []
   if (toolTurn.hasToolCalls) {
     const toolTurnMessage = withStableToolCallIds(toolTurn.message)
     messages.push(toolTurnMessage)
@@ -61,6 +91,8 @@ export async function runSpecialistToolConversation(args: SpecialistToolConversa
         timeoutMs: args.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
         withinBudget: index < (args.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS),
       })
+      toolCallsMade += 1
+      toolResultContents.push(content)
       messages.push({
         role: "tool",
         tool_call_id: call.id ?? `auto_${index}`,
@@ -86,7 +118,15 @@ export async function runSpecialistToolConversation(args: SpecialistToolConversa
     ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
     temperature: args.temperature ?? 0,
   })
-  return { ...final, usage: addUsage(usage, final.usage) }
+  return {
+    ...final,
+    usage: addUsage(usage, final.usage),
+    toolConversation: {
+      perCallInputTokens: [toolTurn.usage?.inputTokens, final.usage?.inputTokens],
+      toolCallsMade,
+      toolResultTokens: estimateToolResultTokens(toolResultContents),
+    },
+  }
 }
 
 function toChatToolDef(tool: SpecialistRuntimeTool): ChatToolDef {

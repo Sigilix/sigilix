@@ -29,6 +29,7 @@ import { parseSecurityGroundingValidatorMode } from "./domain/gates/validate-sec
 import { parseSecurityUsageValidatorMode } from "./domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
+import { parseLogicInputCompositionMode } from "./domain/logic-input-composition"
 import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
 import { parseTrustLedgerMode } from "./domain/gates/trust-ledger-thread"
 import { resolveClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
@@ -143,6 +144,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_TOCTOU_HINTS?: string | undefined
   OPENCLAW_RECEIPTJOIN_MODE?: string | undefined
   OPENCLAW_LOGIC_PROMPT_BUDGET?: string | undefined
+  // SIG-369(b): logic-input-composition telemetry (off | shadow; default off)
+  OPENCLAW_LOGIC_INPUT_COMPOSITION?: string | undefined
   OPENCLAW_SYNTH_RECOVERY?: string | undefined
   OPENCLAW_AST_EMIT_FLOOR?: string | undefined
   OPENCLAW_TRUST_LEDGER?: string | undefined
@@ -253,6 +256,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       toctouHints: scanMode(env.OPENCLAW_TOCTOU_HINTS),
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
+      // SIG-369(b): logic-input-composition telemetry mode (default off → no-op).
+      logicInputCompositionMode: parseLogicInputCompositionMode(env.OPENCLAW_LOGIC_INPUT_COMPOSITION),
       synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
       astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
       trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),

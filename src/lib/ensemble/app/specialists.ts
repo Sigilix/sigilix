@@ -12,10 +12,10 @@
 // EXTRACT-METHOD discipline: the moved statements are byte-identical apart from
 // the plumbing — the one coverage-gate bail wraps `bailWithSkipNotice` in the
 // `{ kind: "exit" }` arm, and `shadowState.` container prefixes were already in
-// place from PR 12b. The two god-file-private helpers it owned (`appendRoleRule`,
-// `collectSpecialistVerdicts`) move with it (both private; `collectSpecialistVerdicts`
-// reads the model-provider adapter, which only the app layer may import). ZERO
-// behavior change.
+// place from PR 12b. `appendRoleRule` stays private here; `collectSpecialistVerdicts`
+// was later lifted to `./specialists-collect-verdicts` (SIG-369(b), to hold the 1k
+// size budget — it reads the model-provider adapter, which only the app layer may
+// import). ZERO behavior change.
 //
 // Dependency rule: every dependency imports from its canonical NON-god-file home.
 // It never imports the orchestrator god-file.
@@ -34,6 +34,12 @@ import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
 import { evaluateScanFactDismissal } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
 import { buildClearedLogicCandidateTelemetry } from "@/src/lib/triage-pr-review"
 import { applyLogicPromptBudget } from "@/src/lib/logic-prompt-budget"
+import {
+  type LogicInputCompositionCapture,
+  type LogicInputCompositionTelemetrySink,
+  emitAndAttachLogicInputComposition,
+  setupLogicInputComposition,
+} from "./specialists-input-composition"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { type SarifFinding, runSarifEvidence } from "@/src/features/sarif-evidence"
 import { runAstRules } from "@/src/features/ast-rules"
@@ -51,14 +57,14 @@ import { type FindingForOverlap } from "@/src/lib/shadow-bakeoff-telemetry"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import {
   SPECIALIST_CONFIGS,
-  SPECIALIST_MODELS,
   modelApiKeys,
   runSpecialist,
   type SpecialistRunResult,
 } from "@/src/lib/ensemble/adapters/model-provider"
+import { type CollectSpecialistVerdictsTelemetry, collectSpecialistVerdicts } from "./specialists-collect-verdicts"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { decideEarlyExitAction, computeDegradedCoverage } from "@/src/lib/ensemble/domain/policy"
-import { assignStableFindingIds, type PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
+import { type PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
 import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
@@ -79,30 +85,15 @@ type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChang
 type SynthInputVerdict = CollectedVerdict & { verdict: PrReviewVerdictWithIds }
 
 /**
- * The telemetry slice `collectSpecialistVerdicts` writes by reference (the
- * orchestrator's telemetry object satisfies it). It only pushes per-role entries
- * into `specialistVerdicts`; the entry shape mirrors `EnsembleTelemetry`'s.
- */
-interface CollectSpecialistVerdictsTelemetry {
-  specialistVerdicts: Array<{
-    role: SpecialistRole
-    model: string
-    modelUsed?: string
-    attemptsUsed?: number
-    verdict: PrReviewVerdictWithIds | null
-    failureReason?: string
-    failureRawAnswer?: string
-    elapsedMs: number
-    timedOut: boolean
-  }>
-}
-
-/**
  * The full telemetry slice the specialists phase mutates by reference: its own
  * writes (`specialistVerdicts`, `degradedCoverage`, `fellBack*`) plus everything
- * the delegated synthesize phase writes (it shares the same object).
+ * the delegated synthesize phase writes (it shares the same object). It also
+ * carries `tokenUsageByModel` + the SIG-369(b) `logicInputComposition?` via
+ * `LogicInputCompositionTelemetrySink` (the slice the input-composition helper
+ * reads/writes).
  */
-export interface SpecialistsTelemetry extends SynthesizeTelemetry, CollectSpecialistVerdictsTelemetry {
+export interface SpecialistsTelemetry
+  extends SynthesizeTelemetry, CollectSpecialistVerdictsTelemetry, LogicInputCompositionTelemetrySink {
   degradedCoverage?: {
     rolesReturned: SpecialistRole[]
     rolesMissing: SpecialistRole[]
@@ -251,6 +242,12 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   // section breakdown.
   const logicPromptBudgetMode = ensembleConfig.flags.logicPromptBudgetMode
 
+  // SIG-369(b) — logic INPUT-composition telemetry (shadow only; default off →
+  // no-op; see `./specialists-input-composition`). Holder is an object (not a
+  // bare `let`) so the closure assignment narrows at the post-fan-out read.
+  const logicInputCompositionMode = ensembleConfig.flags.logicInputCompositionMode
+  const logicInputCompositionState: { capture: LogicInputCompositionCapture | null } = { capture: null }
+
   // SIG-235 — min-specialists early exit. Build per-role AbortControllers
   // (mirroring the shadow path) so the quorum collector can cancel a single
   // laggard's attempts without affecting others; composeSignals fires on EITHER
@@ -310,6 +307,22 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     // SIG-287: role's bounded reasoning level — empty map by default → think:false.
     const reasoningForRole = ensembleConfig.flags.reasoningByRole.get(role)
     const { recallRoles, reasoningPromptRoles } = ensembleConfig.flags
+    // SIG-369(b): compute systemPrompt + mcpTools ONCE so the input-composition
+    // telemetry measures EXACTLY what runSpecialist sends (Codex sign-off).
+    const systemPrompt = specialistSystemPrompt(role, recallRoles, reasoningPromptRoles)
+    const mcpTools = resolveSpecialistMcpTools(sigilixConfig, role)
+    // SIG-369(b): for the logic role in shadow mode, build the recorder +
+    // per-attempt observer and capture the exact model input (off / non-logic →
+    // empty, so the observer is omitted and the path is byte-identical).
+    const logicComposition = setupLogicInputComposition({
+      role,
+      mode: logicInputCompositionMode,
+      systemPrompt,
+      initialMessage,
+      toolsAvailable: mcpTools !== undefined && mcpTools.toolIds.length > 0,
+    })
+    if (logicComposition.capture !== undefined) logicInputCompositionState.capture = logicComposition.capture
+    const onInputComposition = logicComposition.onInputComposition
     const promise = withComposedTimeout(
       // Use the composed signal `withComposedTimeout` provides (per-specialist
       // timer + orch abort + early-exit), not `orchCtrl.signal` (CR PR #42).
@@ -318,7 +331,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           role,
           // SIG-406: runSpecialist selects the key by model-id shape (OR id → OR key).
           apiKeys: modelApiKeys(env),
-          systemPrompt: specialistSystemPrompt(role, recallRoles, reasoningPromptRoles),
+          systemPrompt,
           // SIG-113: tests get the testing-evidence block; others the classification block.
           initialMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
@@ -327,7 +340,9 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           ...(reasoningForRole !== undefined ? { reasoning: reasoningForRole } : {}),
           // ARC-283 B1b: perfCtx correlates per-attempt telemetry.
           perfCtx,
-          mcpTools: resolveSpecialistMcpTools(sigilixConfig, role),
+          mcpTools,
+          // SIG-369(b): logic shadow-mode input-composition observer (else omitted).
+          ...(onInputComposition !== undefined ? { onInputComposition } : {}),
         }),
       SPECIALIST_TIMEOUT_MS,
       composedSignal,
@@ -619,6 +634,20 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   const fanoutEndMs = Date.now()
   emitPhaseCompleted(perfCtx, "specialist_fanout", fanoutStartMs, fanoutEndMs)
 
+  // SIG-369(b): the logic attempt has settled — assemble its INPUT composition
+  // (shadow only; capture is null otherwise), attach it to the KV review-telemetry
+  // record + emit the `logic-input-composition` event. Reconciliation +
+  // fail-open are owned by the helper.
+  emitAndAttachLogicInputComposition({
+    capture: logicInputCompositionState.capture,
+    telemetry,
+    perfCtx,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+  })
+
   // Collect specialist verdicts (with stable IDs assigned).
   const specialistVerdicts = collectSpecialistVerdicts(router.specialists, specialistResults, telemetry)
 
@@ -899,99 +928,4 @@ function appendRoleRule(baseMessage: string, role: SpecialistRole, config: Sigil
   const rule = config.rules?.[role]
   if (!rule) return baseMessage
   return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
-}
-
-function collectSpecialistVerdicts(
-  roles: SpecialistRole[],
-  results: Array<PromiseSettledResult<SpecialistRunResult>>,
-  telemetry: CollectSpecialistVerdictsTelemetry,
-): CollectedVerdict[] {
-  const out: CollectedVerdict[] = []
-  for (let i = 0; i < roles.length; i++) {
-    const role = roles[i]!
-    const settled = results[i]
-    if (!settled || settled.status === "rejected") {
-      const reason =
-        settled?.status === "rejected"
-          ? settled.reason instanceof Error
-            ? settled.reason.message
-            : String(settled.reason)
-          : "unknown_settlement"
-      const collected: CollectedVerdict = {
-        role,
-        verdict: null,
-        elapsedMs: 0,
-        failureReason: reason,
-      }
-      out.push(collected)
-      // No attemptsUsed available — the wrapper threw before runSpecialist
-      // returned, so we don't know how many attempts ran. Leave undefined
-      // so finalize()'s defensive `?? 1` kicks in.
-      telemetry.specialistVerdicts.push({
-        role,
-        model: SPECIALIST_MODELS[role],
-        verdict: null,
-        failureReason: reason,
-        elapsedMs: 0,
-        timedOut: reason.includes("timeout") || reason.includes("aborted"),
-      })
-      continue
-    }
-    const value = settled.value
-    if (!value.verdict) {
-      const collected: CollectedVerdict = {
-        role,
-        verdict: null,
-        elapsedMs: value.elapsedMs,
-        attemptsUsed: value.attemptsUsed,
-        modelUsed: value.modelUsed,
-      }
-      if (value.failureReason) collected.failureReason = value.failureReason
-      if (value.failureRawAnswer) collected.failureRawAnswer = value.failureRawAnswer
-      out.push(collected)
-      // Phase 4a.2: aborts (timer- or parent-signal-driven) now reach
-      // this branch via withComposedTimeout's grace window — the
-      // factory's structured wrapFailure(reason="aborted", ...) flows
-      // through Promise.allSettled as a fulfilled value with verdict
-      // null. Derive timedOut from the reason string so timer-driven
-      // aborts stay visible in telemetry. The reason can be the
-      // canonical "aborted" (signal.aborted check between attempts),
-      // a DOMException message like "The operation was aborted." (when
-      // fetch threw mid-attempt), or `fallback_failed: ... aborted`
-      // (primary AND fallback both aborted) — a single /abort/i regex
-      // captures all three.
-      const reason = value.failureReason ?? ""
-      const telEntry: CollectSpecialistVerdictsTelemetry["specialistVerdicts"][number] = {
-        role,
-        model: SPECIALIST_MODELS[role],
-        modelUsed: value.modelUsed,
-        attemptsUsed: value.attemptsUsed,
-        verdict: null,
-        elapsedMs: value.elapsedMs,
-        timedOut: /abort/i.test(reason) || /timeout/i.test(reason),
-      }
-      if (value.failureReason) telEntry.failureReason = value.failureReason
-      if (value.failureRawAnswer) telEntry.failureRawAnswer = value.failureRawAnswer
-      telemetry.specialistVerdicts.push(telEntry)
-      continue
-    }
-    const withIds = assignStableFindingIds(role, value.verdict)
-    out.push({
-      role,
-      verdict: withIds,
-      elapsedMs: value.elapsedMs,
-      attemptsUsed: value.attemptsUsed,
-      modelUsed: value.modelUsed,
-    })
-    telemetry.specialistVerdicts.push({
-      role,
-      model: SPECIALIST_MODELS[role],
-      modelUsed: value.modelUsed,
-      attemptsUsed: value.attemptsUsed,
-      verdict: withIds,
-      elapsedMs: value.elapsedMs,
-      timedOut: false,
-    })
-  }
-  return out
 }

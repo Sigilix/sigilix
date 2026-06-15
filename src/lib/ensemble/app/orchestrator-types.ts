@@ -33,6 +33,7 @@ import type { ScanSkipReason as DepVulnSkipReason } from "@/src/features/dep-vul
 import type { ScanSkipReason as SarifSkipReason } from "@/src/features/sarif-evidence"
 import type { ReviewMemorySkipReason } from "@/src/lib/review-memory/types"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
+import type { LogicInputComposition } from "@/src/lib/ensemble/domain/logic-input-composition"
 import type { PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import type { SynthAttemptOutcome } from "@/src/lib/ensemble/domain/synth"
@@ -284,6 +285,15 @@ export interface EnsembleTelemetry {
    * before fan-out) — never absent, so the cost path is branch-free.
    */
   tokenUsageByModel: TokenUsageByModel
+  /**
+   * SIG-369(b): the logic specialist's INPUT-token decomposition for this run.
+   * Present ONLY when `OPENCLAW_LOGIC_INPUT_COMPOSITION === "shadow"` AND the
+   * logic role was dispatched; absent otherwise (telemetry-only, default-off).
+   * Rides into the `ensemble-review-telemetry` KV record so the 140K-vs-13K
+   * input gap is readable PER-PR without live-tailing. `summedInputTokens`
+   * reconciles with `tokenUsageByModel[<logic model>].inputTokens`.
+   */
+  logicInputComposition?: LogicInputComposition
   /**
    * SIG-149: time-to-first-overview — `startMs` → the moment the inline
    * PR overview/walkthrough is posted (first customer-visible content).

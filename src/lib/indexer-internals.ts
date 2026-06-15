@@ -20,8 +20,13 @@
 // `indexer.ts`.
 
 import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
+import type { GitHubClient } from "@/src/shared/adapters/github"
+import type { IndexTarget } from "@/src/lib/index-branch"
 import type { Chunk } from "@/src/lib/chunk-core"
 import { readActiveRunId, shouldFinalize } from "@/src/lib/repo-index-active-run"
+
+type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
 
 // ---------------------------------------------------------------------
 // Constants
@@ -198,6 +203,58 @@ export function shouldSkipForLength(id: string, namespace: string): boolean {
  *  proceed to persist a manifest / enqueue the next shard. */
 export async function leaseAllows(env: Env, owner: string, repo: string, runId: string): Promise<boolean> {
   return shouldFinalize(await readActiveRunId(env, owner, repo), runId)
+}
+
+/**
+ * SIG-422: resolve the commit + tree SHA to index this run at.
+ *
+ * PUSH path, push chain INTACT (`priorHeadSha === job.before`): pin to the
+ * exact pushed commit (`job.after`) via `getCommit` instead of re-reading the
+ * live branch tip. Pinning makes `manifest.headSha` equal the pushed commit,
+ * so the NEXT push's `before` matches it and the cheap push fast-path chain
+ * stays intact (fewer Compare-API recoveries). When the chain is intact,
+ * `after` is the IMMEDIATE next commit after the manifest head, so the manifest
+ * can only advance (A→B), never regress.
+ *
+ * The chain-intact gate is the recall-safety guard: a backlogged / out-of-order
+ * push (manifest already AHEAD of this job's `before`) is NOT pinned — pinning
+ * it to its older `after` would let the full-fallback regress the manifest to
+ * that older tree. Instead it falls through to the live branch tip, where the
+ * freshness check skips it (manifest already at the live tip) or compare-
+ * recovery (#550) computes a safe forward delta — no regression either way.
+ *
+ * Non-push reasons (`merged-pr` / `pull-request` / `install` / `manual`) carry
+ * no `after` and keep resolving the live branch tip — compare-recovery handles
+ * their delta. A `getCommit` 404 (commit GC'd after a force-push) also falls
+ * back to the live tip; the fast-path's `headSha === job.after` check (in
+ * `resolveIncrementalChanged`) then forces a safe compare since the live tip is
+ * no longer the pinned `after`.
+ */
+export async function resolveIndexHead(args: {
+  client: GitHubClient
+  owner: string
+  repo: string
+  target: IndexTarget
+  job: IndexRepoMessage
+  priorHeadSha: string | undefined
+}): Promise<{ headSha: string; treeSha: string } | null> {
+  const { client, owner, repo, target, job, priorHeadSha } = args
+  const chainIntact =
+    typeof job.before === "string" && job.before.length > 0 && priorHeadSha !== undefined && priorHeadSha === job.before
+  if (job.reason === "push" && chainIntact && typeof job.after === "string" && job.after.length > 0) {
+    const pinned = await client.getCommit(owner, repo, job.after)
+    if (pinned) return pinned
+    console.warn(
+      JSON.stringify({
+        event: "index-pin-after-miss-fallback-live",
+        owner,
+        repo,
+        branch: target.isDefault ? null : target.branch,
+        after: job.after,
+      }),
+    )
+  }
+  return client.getBranch(owner, repo, target.branch)
 }
 
 // Constants consumed by the slice pipeline leaf (indexer-slice.ts).

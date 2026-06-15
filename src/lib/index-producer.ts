@@ -499,6 +499,7 @@ export async function maybeEnqueuePushIndexJob(args: MaybeEnqueuePushIndexJobArg
       reason: "push"
       branch?: string
       before?: string
+      after?: string
       changedPaths?: PushChangedPaths
     } = {
       type: "index-repo",
@@ -519,6 +520,16 @@ export async function maybeEnqueuePushIndexJob(args: MaybeEnqueuePushIndexJobArg
     if (branchToIndex) message.branch = branchToIndex
     if (typeof args.before === "string" && args.before.length > 0) {
       message.before = args.before
+    }
+    // SIG-422: carry the pushed tip SHA so the consumer can pin the index
+    // head to the exact pushed commit (keeping the push fast-path chain
+    // tight) instead of re-reading the live branch tip. `after` is the same
+    // value already logged as `after_sha`. The local guard is the real
+    // backstop: the ZERO_SHA delete case already returned above, but the
+    // `!== ZERO_SHA` + non-empty checks also defend against a malformed
+    // webhook with a missing/empty `payload.after` (which arrives undefined).
+    if (typeof after === "string" && after.length > 0 && after !== ZERO_SHA) {
+      message.after = after
     }
     if (args.changedPaths !== undefined) {
       message.changedPaths = args.changedPaths
@@ -715,6 +726,18 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
     )
   }
 
+  // SIG-422 de-dupe decision: a PR merge fires BOTH this `merged-pr` index of
+  // the base AND (usually) a `push` index from the merge commit's push webhook.
+  // The consumer's freshness check (`index-job-skip-fresh`) already makes
+  // whichever runs second a cheap no-op skip, so the work is de-duped at the
+  // cost of one extra queue message. We deliberately KEEP this `merged-pr`
+  // enqueue rather than removing it: the base push webhook is NOT guaranteed in
+  // every flow (some squash/rebase merge configurations, App installs whose
+  // `push` event subscription differs from `pull_request`, or pushes suppressed
+  // for the default branch), and dropping it would silently stop re-indexing
+  // the base after a merge in those setups — a recall regression to save one
+  // message. Correctness over the saved enqueue; the freshness-skip is the
+  // cheap de-dup. (Codex + Claude code-review both signed off on keeping it.)
   if (action === "closed" && merged === true && baseRef) {
     try {
       await env.OPENCLAW_JOBS.send({

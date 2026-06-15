@@ -16,6 +16,7 @@ const {
   mockGetInstallationToken,
   mockGetRepository,
   mockGetBranch,
+  mockGetCommit,
   mockGetRepoTree,
   mockGetFileContent,
   mockCompareCommits,
@@ -28,6 +29,7 @@ const {
   mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
   mockGetBranch: vi.fn(),
+  mockGetCommit: vi.fn(),
   mockGetRepoTree: vi.fn(),
   mockGetFileContent: vi.fn(),
   mockCompareCommits: vi.fn(),
@@ -55,6 +57,9 @@ vi.mock("@/src/shared/adapters/github", async () => {
     }
     async getBranch(owner: string, repo: string, branch: string): Promise<unknown> {
       return mockGetBranch(owner, repo, branch)
+    }
+    async getCommit(owner: string, repo: string, sha: string): Promise<unknown> {
+      return mockGetCommit(owner, repo, sha)
     }
     async getRepoTree(owner: string, repo: string, treeSha: string): Promise<unknown> {
       return mockGetRepoTree(owner, repo, treeSha)
@@ -98,6 +103,8 @@ import {
   makeEnv as makeEnvShared,
   seedIndexedRepo,
   pushJobWithChangedPaths,
+  pushJobPinned,
+  pullRequestJob,
   mergedPrJob,
 } from "@/src/lib/indexer-incremental.test-helpers"
 
@@ -116,6 +123,13 @@ beforeEach(() => {
   mockGetInstallationToken.mockClear()
   mockGetRepository.mockReset().mockResolvedValue({ default_branch: "main" })
   mockGetBranch.mockReset().mockResolvedValue({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
+  // SIG-422: `getCommit` resolves a pinned push `after` to its tree. Default
+  // echoes the requested SHA as headSha with the same tree the live branch +
+  // `getRepoTree` mock use, so a pinned head walks the same indexable files.
+  mockGetCommit.mockReset().mockImplementation(async (_owner, _repo, sha: string) => ({
+    headSha: sha,
+    treeSha: "d".repeat(40),
+  }))
   mockGetRepoTree.mockReset().mockResolvedValue({
     tree: [
       { path: "src/changed.ts", type: "blob", size: 100 },
@@ -399,5 +413,174 @@ describe("handleIndexRepoJob — SIG-422 compare-recovery incremental", () => {
     expect(mockCompareCommits).not.toHaveBeenCalled()
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+  })
+
+  it("labels a pull-request compare-recovery as `pull-request`, not `merged-pr`", async () => {
+    // SIG-422 telemetry: a pull-request re-index recovers via compare just
+    // like merged-pr, but the recovered log's `trigger` must distinguish it.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    await handleIndexRepoJob({ job: pullRequestJob(), env })
+
+    const recovered = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.event === "index-incremental-compare-recovered")
+    expect(recovered).toBeDefined()
+    expect(recovered!.trigger).toBe("pull-request")
+    logSpy.mockRestore()
+  })
+
+  it("threads the trigger AND the fallback cause into the fallback-full log", async () => {
+    // SIG-422 telemetry: a merged-pr that falls back (here: diverged) logs
+    // BOTH axes — trigger=merged-pr (what routed it) and reason=diverged (why
+    // the compare delta was rejected).
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    mockCompareCommits.mockResolvedValue({
+      status: "diverged",
+      totalCommits: 1,
+      files: [{ status: "modified", filename: "src/changed.ts", previous_filename: null }],
+    })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+
+    await handleIndexRepoJob({ job: mergedPrJob(), env })
+
+    const fallback = warnSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.event === "index-incremental-compare-fallback-full")
+    expect(fallback).toBeDefined()
+    expect(fallback!.trigger).toBe("merged-pr")
+    expect(fallback!.reason).toBe("diverged")
+    warnSpy.mockRestore()
+  })
+})
+
+describe("handleIndexRepoJob — SIG-422 pin index head to the pushed `after`", () => {
+  it("pins the index head to the pushed `after` and keeps the chain (no Compare call)", async () => {
+    // The key follow-up. A chain-intact push (before == manifest head) pins
+    // the head to the pushed commit via getCommit instead of the live tip,
+    // trusts the cheap changedPaths delta (no Compare call), and writes
+    // manifest.headSha === after — so the NEXT push's `before` matches it.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobPinned(), env })
+
+    // Head resolved via getCommit(after), NOT the live branch tip.
+    expect(mockGetCommit).toHaveBeenCalledWith("Sigilix", "sigilix", "e".repeat(40))
+    expect(mockGetBranch).not.toHaveBeenCalled()
+    // Cheap fast-path: changedPaths trusted, no Compare recovery.
+    expect(mockCompareCommits).not.toHaveBeenCalled()
+    // Files fetched at the PINNED head, not the live tip "c".
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "e".repeat(40))
+    expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "e".repeat(40))
+
+    // The chain stays tight: manifest head == pushed after.
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("e".repeat(40))
+  })
+
+  it("a second pinned push from the new head stays on the cheap fast-path (chain holds)", async () => {
+    // Proves the chain self-sustains: after one pinned index lands at "e"…,
+    // the next push with before=="e"… (== the new manifest head) pins again
+    // with no Compare call. This is the whole point — fewer recoveries.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobPinned(), env })
+    const afterFirst = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(afterFirst.headSha).toBe("e".repeat(40))
+
+    mockGetCommit.mockClear()
+    mockCompareCommits.mockClear()
+    // Second push: before is the prior pushed tip, after is a new tip "f"….
+    const secondPush = { ...pushJobPinned(), before: "e".repeat(40), after: "f".repeat(40) } as Extract<
+      JobMessage,
+      { type: "index-repo" }
+    >
+
+    await handleIndexRepoJob({ job: secondPush, env })
+
+    expect(mockGetCommit).toHaveBeenCalledWith("Sigilix", "sigilix", "f".repeat(40))
+    expect(mockCompareCommits).not.toHaveBeenCalled()
+    const afterSecond = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(afterSecond.headSha).toBe("f".repeat(40))
+  })
+
+  it("does NOT pin a chain-broken push — uses the live tip and recovers via Compare", async () => {
+    // Recall-safety guard #1: when before != manifest head (out-of-order /
+    // backlogged push), pinning to its older `after` could regress the index,
+    // so we DON'T pin. We resolve the live tip and let compare-recovery
+    // compute a safe forward delta. getCommit is never called.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    // before "b"… does not match the seeded manifest head "a"….
+    const driftedPush = { ...pushJobPinned(), before: "b".repeat(40) } as Extract<JobMessage, { type: "index-repo" }>
+
+    await handleIndexRepoJob({ job: driftedPush, env })
+
+    expect(mockGetCommit).not.toHaveBeenCalled()
+    expect(mockGetBranch).toHaveBeenCalled()
+    // Live tip "c"… → compare(manifest "a"…, "c"…) recovers the delta.
+    expect(mockCompareCommits).toHaveBeenCalledWith("Sigilix", "sigilix", "a".repeat(40), "c".repeat(40))
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+  })
+
+  it("an out-of-order OLDER push does NOT regress the manifest head", async () => {
+    // Recall-safety guard #1, the regression scenario Codex flagged: the
+    // manifest is already AHEAD (at "c"…). A late older push (before "a"… !=
+    // "c"…) must NOT pin to its older after and full-index that older tree.
+    // It uses the live tip "c"…; freshness then skips it (manifest already
+    // at "c"…). The head never goes backwards.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv, { headSha: "c".repeat(40) })
+    const oldPush = { ...pushJobPinned(), before: "a".repeat(40), after: "b".repeat(40) } as Extract<
+      JobMessage,
+      { type: "index-repo" }
+    >
+
+    await handleIndexRepoJob({ job: oldPush, env })
+
+    // Not pinned to the older "b"… (would regress); live tip used.
+    expect(mockGetCommit).not.toHaveBeenCalled()
+    // Manifest already fresh at the live tip → no re-embed, head unchanged.
+    expect(mockGetFileContent).not.toHaveBeenCalled()
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+  })
+
+  it("on a getCommit 404, falls back to the live tip AND forces a safe Compare (guard #2)", async () => {
+    // Recall-safety guard #2: a pinned push whose `after` 404s (commit GC'd)
+    // falls back to the live tip. Because the resolved head (live "c"…) no
+    // longer equals `after` ("e"…), the fast-path is NOT trusted — compare
+    // recovers the full live delta so the after→tip commits aren't missed.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    mockGetCommit.mockResolvedValue(null)
+
+    await handleIndexRepoJob({ job: pushJobPinned(), env })
+
+    expect(mockGetCommit).toHaveBeenCalledWith("Sigilix", "sigilix", "e".repeat(40))
+    expect(mockGetBranch).toHaveBeenCalled()
+    // Live tip "c"… → safe compare against the manifest head, NOT a blind
+    // trust of the stale before→after changedPaths at the wrong head.
+    expect(mockCompareCommits).toHaveBeenCalledWith("Sigilix", "sigilix", "a".repeat(40), "c".repeat(40))
+  })
+
+  it("a chain-intact push WITHOUT `after` keeps the legacy cheap fast-path (no getCommit, no Compare)", async () => {
+    // Legacy in-flight push messages (pre-SIG-422) have before+changedPaths
+    // but no `after`. They must keep the original behavior: live tip + cheap
+    // changedPaths trust, no Compare, no getCommit.
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetCommit).not.toHaveBeenCalled()
+    expect(mockCompareCommits).not.toHaveBeenCalled()
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
   })
 })

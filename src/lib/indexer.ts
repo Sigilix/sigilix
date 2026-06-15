@@ -64,6 +64,7 @@ import {
   computeRunId,
   walkIndexableFiles,
   leaseAllows,
+  resolveIndexHead,
 } from "@/src/lib/indexer-internals"
 import { processSlice } from "@/src/lib/indexer-slice"
 import { maybeHandleIncrementalPushIndex } from "@/src/lib/indexer-incremental"
@@ -182,8 +183,16 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   })
   const namespace = target.namespace
   const stateRepo = target.stateRepo
-  const branch = await client.getBranch(owner, repo, target.branch)
-  if (!branch) {
+
+  // SIG-422: read the prior manifest BEFORE resolving the head. The PUSH
+  // pin (below) is only safe to apply when this run's push chain is intact
+  // (`prior.headSha === job.before`) — i.e. `job.after` is the immediate
+  // next commit, so the manifest can only advance, never regress. The read
+  // is otherwise unchanged (the freshness check + incremental path reuse it).
+  const existing = await readRepoIndexManifest(env, owner, stateRepo)
+  const priorHeadSha = existing.kind === "ok" ? existing.manifest.headSha : undefined
+  const head = await resolveIndexHead({ client, owner, repo, target, job, priorHeadSha })
+  if (!head) {
     console.log(
       JSON.stringify({
         event: "index-job-skip-branch-not-found",
@@ -196,7 +205,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     )
     return
   }
-  const { headSha, treeSha } = branch
+  const { headSha, treeSha } = head
 
   const runId = await computeRunId({
     owner,
@@ -208,7 +217,6 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   // Freshness check — Codex v1 MAJOR. Skip when (owner, headSha,
   // modelId, chunkerVersion, embeddingDim) all match the prior run.
-  const existing = await readRepoIndexManifest(env, owner, stateRepo)
   if (existing.kind === "ok") {
     const fresh = isManifestFresh({
       manifest: existing.manifest,

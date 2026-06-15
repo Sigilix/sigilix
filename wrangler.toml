@@ -726,6 +726,15 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # fixture proving the recall delta. Code default is off (parseEnsembleConfig).
 OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
 
+# SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
+# finding off a comment/blank/structural/header line onto the substantive code
+# line it describes within the diff (lands the comment ON the bug, not the `//`
+# above it). Eval (5 archetypes, K=12): reproduced comment-above-bug 0%→100%,
+# aggregate exact-line 40%→80%, wrong-line (hallucination-equiv) rate DROPS
+# (recall-safe). Only re-homes to a real changed RIGHT line; no confident target
+# → unchanged. Code default is off (parseEnsembleConfig).
+OPENCLAW_ANCHOR_PRECISION = "on"
+
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
 # the dispatcher returns exactly 1 specialist AND none of that

@@ -18,6 +18,7 @@ import { handlePrLabels } from "@/src/lib/triage-pr-labels"
 import { handleCiTriage } from "@/src/lib/triage-ci"
 import { handlePrImprove } from "@/src/lib/triage-pr-improve"
 import { handlePrDescribe } from "@/src/lib/triage-pr-describe"
+import { handlePrSummary } from "@/src/lib/triage-pr-summary"
 import {
   handlePrPause,
   handlePrResume,
@@ -842,6 +843,9 @@ export async function dispatchJob(
         apply: job.apply,
         env,
       })
+    case "pr-summary":
+      // SIG-437: `@sigilix summary` — handler soft-fails on every branch.
+      return handlePrSummary(job, env)
     case "pr-stale-mark":
       // ARC-184: review-provenance stale marker. Independent of any
       // model call; consumes only GitHub-side metadata + a single

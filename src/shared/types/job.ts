@@ -248,6 +248,22 @@ export type JobMessage =
       mode: import("@/src/lib/slash-commands").DescribeMode
       apply: boolean
     }
+  // SIG-437: `@sigilix summary` — PR-body one-liner expanded into a
+  // detailed PR description (What / How it works / How verified /
+  // notable risks) grounded in the diff + retrieval, with related PRs +
+  // the Linear issue linked. Enqueued from the `pull_request`
+  // opened/edited webhook when the body carries the `@sigilix summary`
+  // trigger AND the OPENCLAW_PR_SUMMARY_MODE flag is on. `headSha` is
+  // pinned at enqueue for the stale-head guard + dedupe key. The
+  // handler writes the result into the PR body's managed block.
+  | {
+      type: "pr-summary"
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      installationId: number
+    }
   // ARC-184: review provenance + stale markers. Enqueued from the
   // webhook handler alongside `pr-review` on `synchronize` / `edited`
   // when a prior review-manifest exists. The consumer reads the live

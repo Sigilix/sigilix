@@ -18,6 +18,7 @@ import {
   hasStaleDismissedReviewFeedbackSignal,
 } from "@/src/lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig } from "@/src/lib/sigilix-config"
+import { maybeEnqueuePrSummary } from "@/src/lib/pr-summary-trigger"
 import { postDraftPrSkipNotice, supersedeDraftPrSkipNotice } from "@/src/lib/pr-draft-skip-notice"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import { computeDiffHash, readPriorReviewDiffHash } from "@/src/lib/noop-merge-detect"
@@ -391,6 +392,9 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     if (pr.base?.ref) decideArgs.baseRef = pr.base.ref
     if (pr.head?.ref) decideArgs.headRef = pr.head.ref
     const decision = decidePullRequestJobs(decideArgs)
+    // SIG-437: `@sigilix summary` gate + best-effort enqueue (default-off →
+    // no-op), BEFORE the overview/review early return so a summary-only edit fires.
+    maybeEnqueuePrSummary({ env, ctx, action, owner, repo, installationId, pr })
     if (!decision.overview && !decision.review) {
       return new Response("skip pr action\n", { status: 200 })
     }

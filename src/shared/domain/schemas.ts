@@ -74,6 +74,26 @@ export const PR_OVERVIEW_SCHEMA = {
   required: ["summary", "confidence", "confidenceReason", "files", "bullets"],
 } as const
 
+const FINDING_MORE_INFO_SCHEMA = {
+  type: "object",
+  properties: {
+    threatModel: { type: "string" },
+    codeCitations: { type: "string" },
+    existingProtections: { type: "string" },
+    mitigation: { type: "string" },
+    alternatives: { type: "string" },
+    severityCalibration: { type: "string" },
+  },
+  // `moreInfo` is optional reviewer-supporting text, never a recall gate. Keep
+  // constrained decode permissive so a typo in this optional object can only
+  // lose optional detail, not invalidate an otherwise valid high-severity
+  // finding. The safety filter is `normalizeFindingMoreInfo`: runtime consumers
+  // must go through it, and it drops unknown keys before rendering. Typoed
+  // section keys such as `threat_model` are therefore intentionally silent
+  // optional-detail loss, not finding loss.
+  additionalProperties: true,
+} as const
+
 /**
  * pr-review verdict (proactive primary review with inline findings).
  * Mirrors PrReviewVerdict in src/lib/triage-pr-review.ts.
@@ -118,6 +138,10 @@ export const PR_REVIEW_SCHEMA = {
             description:
               "Write the COMPLETE issue first: a self-contained explanation of the problem that a reader understands on its own — what is wrong, where, and why it matters — WITHOUT expanding anything. Keep it tight (typically 1-4 sentences). Then, ONLY if there is genuinely deeper analysis for HOW you reached this conclusion (evidence walk-through, edge cases, alternatives considered), add a SINGLE BLANK LINE and put that deeper reasoning after it. The text before the blank line must stand alone as the full issue; everything after is an optional deep-dive shown in a collapsed dropdown. Do not split a single thought across the blank line.",
           },
+          // SIG-249: optional structured high-severity deep dive. Kept out
+          // of `required` so older prompt paths and constrained decoding can
+          // still emit valid findings while rollout data proves fill-rate.
+          moreInfo: FINDING_MORE_INFO_SCHEMA,
           // Structured details: proof/fix/test-gap fields for richer
           // review comments. Optional so older prompt paths and clean
           // findings can omit them; the renderer decides where each

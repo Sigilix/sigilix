@@ -23,6 +23,7 @@
     "security-overfire-eval": "vitest run e2e/security-overfire-eval.live.test.ts",
     "performance-overfire-eval": "vitest run e2e/performance-overfire-eval.live.test.ts",
     "tests-overfire-eval": "vitest run e2e/tests-overfire-eval.live.test.ts",
+    "more-info-eval": "vitest run e2e/more-info-eval.live.test.ts",
     "synth-retention-eval": "vitest run e2e/synth-retention-eval.live.test.ts",
     "ci-triage-synth-eval": "vitest run e2e/ci-triage-synth-eval.live.test.ts",
     "anchor-exactness-eval": "vitest run e2e/anchor-exactness-eval.live.test.ts",

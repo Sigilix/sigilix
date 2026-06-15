@@ -23,6 +23,7 @@ import { trustPill, trustSubTag } from "@/src/lib/trust-ledger-render"
 import { remediationForFinding } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
 import { isDeletionSuggestion, isReplacementSuggestion } from "@/src/shared/domain/pr-review-finding"
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import { FINDING_MORE_INFO_SECTION_KEYS, FINDING_MORE_INFO_SECTION_LABELS } from "@/src/shared/domain/finding-more-info"
 import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"
 import {
   stripAstMarkers,
@@ -34,6 +35,7 @@ import {
   formatBodyFindingLocation,
   formatBodyFindingAnchor,
   formatFindingBodyMarkdown,
+  formatFindingMoreInfoMarkdown,
   formatFindingStructuredDetailsMarkdown,
   formatBodyFindingSuggestedChange,
   formatProposedChangeBlock,
@@ -42,6 +44,7 @@ import {
   extensionToFenceLang,
   fenceForContent,
   isFindingAnchorable,
+  sanitizeMoreInfoMarkdownText,
   type BodyFindingLinkContext,
 } from "./finding-format"
 
@@ -99,6 +102,7 @@ export function renderBodyOnlyFindings(
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
+      formatFindingMoreInfoMarkdown(f),
       showEvidence ? renderFindingEvidenceBlock(f) : "",
       formatFindingStructuredDetailsMarkdown(f),
       formatBodyFindingSuggestedChange(f),
@@ -139,6 +143,7 @@ export function buildBodyOnlyCheckAnnotations(findings: PrReviewFinding[]): Chec
         const message = truncateCheckAnnotationText(
           [
             formatFindingBodyMarkdown(f.body),
+            formatFindingMoreInfoMarkdown(f),
             formatFindingStructuredDetailsMarkdown(f),
             "",
             `${location} (${formatBodyFindingSeverity(f)}) · ${anchor}${f.anchorNote ? ` · ${f.anchorNote}` : ""}`,
@@ -213,6 +218,13 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
   if (finding.failureExample) {
     promptLines.push("", "Example:", stripAstMarkers(finding.failureExample))
   }
+  if (finding.moreInfo) {
+    for (const key of FINDING_MORE_INFO_SECTION_KEYS) {
+      const value = finding.moreInfo[key]
+      const clean = typeof value === "string" ? stripAstMarkers(value).trim() : ""
+      if (clean) promptLines.push("", `${FINDING_MORE_INFO_SECTION_LABELS[key]}:`, sanitizeMoreInfoMarkdownText(clean))
+    }
+  }
   if (finding.fixExample) {
     promptLines.push("", "Suggested fix shape:", stripAstMarkers(finding.fixExample))
   }
@@ -279,6 +291,7 @@ export function formatFindingComment(
   }
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
+  const moreInfo = formatFindingMoreInfoMarkdown(finding)
   const evidenceBlock = showEvidence ? renderFindingEvidenceBlock(finding) : ""
   if (confidence <= 2 && finding.score < 4) {
     // Low-confidence findings collapse the body so the thread skims
@@ -291,6 +304,10 @@ export function formatFindingComment(
     lines.push("<summary>Low-confidence finding — expand to read</summary>")
     lines.push("")
     lines.push(body)
+    if (moreInfo) {
+      lines.push("")
+      lines.push(moreInfo)
+    }
     if (structuredDetails) {
       lines.push("")
       lines.push(structuredDetails)
@@ -299,6 +316,10 @@ export function formatFindingComment(
     lines.push("</details>")
   } else {
     lines.push(body)
+    if (moreInfo) {
+      lines.push("")
+      lines.push(moreInfo)
+    }
     if (structuredDetails) {
       lines.push("")
       lines.push(structuredDetails)

@@ -58,7 +58,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown
 fence around the JSON. Same shape as the existing PR_REVIEW_SCHEMA,
 PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
 
-JSON-string safety: inside \`headline\`, \`body\`, \`failureExample\`, \`fixExample\`, and \`testGap\`, do NOT write raw double-quote characters around test names, strings, labels, or code snippets. Use backticks/single quotes instead, or escape them as \`\\"\`. For code examples inside a JSON string, write \`throw new Error('boom')\`, NOT \`throw new Error("boom")\`; write \`rejects.toThrow('retry failed')\`, NOT \`rejects.toThrow("retry failed")\`. One unescaped \`"\` inside a string makes the whole verdict unparseable.
+JSON-string safety: inside \`headline\`, \`body\`, \`moreInfo.*\`, \`failureExample\`, \`fixExample\`, and \`testGap\`, do NOT write raw double-quote characters around test names, strings, labels, or code snippets. Use backticks/single quotes instead, or escape them as \`\\"\`. For code examples inside a JSON string, write \`throw new Error('boom')\`, NOT \`throw new Error("boom")\`; write \`rejects.toThrow('retry failed')\`, NOT \`rejects.toThrow("retry failed")\`. One unescaped \`"\` inside a string makes the whole verdict unparseable.
 
 {
   "summary": "1-2 sentence top-level read on the PR's risk in YOUR lens.",
@@ -75,6 +75,14 @@ JSON-string safety: inside \`headline\`, \`body\`, \`failureExample\`, \`fixExam
       "score": 1-5,
       "headline": "<concise issue summary>",
       "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
+      "moreInfo": {
+        "threatModel": "Who/what is harmed and the concrete failure path.",
+        "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
+        "existingProtections": "Guards/tests/checks you inspected and why they do not prevent this.",
+        "mitigation": "The smallest practical fix or reviewer action.",
+        "alternatives": "Other mitigations considered and why they are weaker or broader.",
+        "severityCalibration": "Why this deserves the chosen score, including blast radius and likelihood."
+      },   (SIG-249 — OPTIONAL but expected on score>=4 when the evidence supports a substantive deep dive. Fill all six sections for P0/P1 findings from visible code/context; if you cannot support a section, either say exactly what is unknown or omit \`moreInfo\` rather than inventing facts. The \`body\` must still stand alone.)
       "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
       "confidence": 1-5,   (SIG-161 — per-finding probability an expert reviewer would label this a TP. NOT severity (use \`score\`), NOT confidence in your own reasoning. See the [SIG-161 FINDING CONFIDENCE] rubric block below for the band definitions.)
       "primaryLens": "logic" | "security" | "performance" | "tests",
@@ -120,6 +128,13 @@ Do NOT round up. A finding you would describe to a teammate as "I think there's 
 - Use \`fixExample\` only for illustrative code that is not a safe one-click contiguous replacement. For exact local edits, use \`suggestedReplacement\` instead.
 - Use \`testGap\` only when the supplied testing evidence or visible tests justify the claim. If you did not inspect tests, omit \`testGap\`.
 - Do NOT put Markdown fences in \`failureExample\` or \`fixExample\`; Sigilix adds fences.
+
+[SIG-249 MORE INFO DEPTH]
+- For score>=4 findings, prefer a \`moreInfo\` object with six reviewer-action sections: \`threatModel\`, \`codeCitations\`, \`existingProtections\`, \`mitigation\`, \`alternatives\`, and \`severityCalibration\`.
+- Keep \`body\` complete and self-contained. Do not split one sentence or one thought between \`body\` and \`moreInfo\`; \`moreInfo\` expands the issue, it does not finish the issue.
+- The first paragraph of \`body\` must still name the broken invariant, reviewer-visible impact, and fix shape for score>=4 findings. Never move the primary proof or mitigation only into \`moreInfo\`.
+- Make each section substantive and code-grounded. A good \`codeCitations\` section names the relevant identifiers/lines; a good \`existingProtections\` section names the guard/test/check you inspected and why it is insufficient.
+- Do not fabricate context to satisfy the shape. If the provided evidence cannot support a section, say what is unknown in that section, or omit \`moreInfo\` entirely for lower-severity/uncertain findings.
 
 [SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.
 

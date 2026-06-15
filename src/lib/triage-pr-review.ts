@@ -48,6 +48,7 @@ export type { ReviewEvent, ReviewEventOverride }
 
 import { FINDING_CATEGORIES } from "@/src/shared/domain/finding-category"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
+import { normalizeFindingMoreInfo } from "@/src/shared/domain/finding-more-info"
 
 // SIG-318: `FindingCategory` + `FINDING_CATEGORIES` moved to a shared/domain leaf
 // so features can reference the finding-category vocabulary without importing
@@ -190,6 +191,8 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (fixExample) finalFinding.fixExample = fixExample
     const testGap = normalizeFindingDetail(finding.testGap)
     if (testGap) finalFinding.testGap = testGap
+    const moreInfo = normalizeFindingMoreInfo(finding.moreInfo)
+    if (moreInfo) finalFinding.moreInfo = moreInfo
     // SIG-426: retain the CI synth's verbatim `logExcerpt` (the failing log span
     // the finding quotes) so the CI-triage-synth pass can substring-verify it
     // against the real log (`isLogGrounded`). Trim-only — the value is matched,

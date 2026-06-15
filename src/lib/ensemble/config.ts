@@ -38,6 +38,7 @@ import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
+import { parseMultiBatchMode } from "./domain/multibatch-budget"
 import type { Env } from "@/src/shared/types/env"
 import type { AstScanMode, EnsembleConfig, ReasoningLevel } from "./domain/config"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
@@ -107,6 +108,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_RESWEEP_MAX_REGIONS?: string | undefined
   OPENCLAW_INVARIANT_LENS_MODE?: string | undefined
   OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT?: string | undefined
+  // SIG-418 Phase 2 (Design B′) in-invocation multi-batch review (dark in PR 1)
+  OPENCLAW_REVIEW_MULTIBATCH_MODE?: string | undefined
   OPENCLAW_WEAK_RANDOM_SCAN?: string | undefined
   OPENCLAW_OPEN_REDIRECT_SCAN?: string | undefined
   OPENCLAW_SSRF_SCAN?: string | undefined
@@ -275,6 +278,10 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       // SIG-395: invariant-lens rollout flag (off → shadow → on).
       invariantLensMode: parseInvariantLensMode(env.OPENCLAW_INVARIANT_LENS_MODE),
       invariantLensRecallContract: parseInvariantLensRecallContract(env.OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT),
+      // SIG-418 Phase 2 (Design B′): in-invocation multi-batch review rollout
+      // flag (off → shadow → on). DARK in PR 1 — parsed but not yet read by the
+      // orchestrator, so default off is byte-identical to today.
+      multiBatchMode: parseMultiBatchMode(env.OPENCLAW_REVIEW_MULTIBATCH_MODE),
     },
     tunables: {
       maxRetrieveCallsPerPr: parseIntEnv(

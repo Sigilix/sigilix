@@ -427,6 +427,10 @@ export interface Env {
   /** SIG-417: per-call fixed-overhead token estimate for the projection
    *  (system prompt + retrieval + output budget; default 4000). */
   OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST?: string
+  /** SIG-418 Phase 2 (Design B′): in-invocation multi-batch review mode —
+   *  "off" (default) | "shadow" | "on". DARK in PR 1 (pure infra only, no
+   *  orchestrator wiring), so any value is currently a no-op on review behavior. */
+  OPENCLAW_REVIEW_MULTIBATCH_MODE?: string
   /** SIG-395: invariant lens mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_INVARIANT_LENS_MODE?: string
   /** SIG-400/SIG-401: "blocking" (default) | "shadow-background" |

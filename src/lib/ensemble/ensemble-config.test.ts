@@ -27,6 +27,7 @@ import { resolveClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import { resolvePrecisionMode } from "@/src/features/precision-profile"
 import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "@/src/lib/ensemble/domain/policy"
+import { parseMultiBatchMode } from "@/src/lib/ensemble/domain/multibatch-budget"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -211,6 +212,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // SIG-395: invariant-lens rollout flag.
       OPENCLAW_INVARIANT_LENS_MODE: "ON",
       OPENCLAW_INVARIANT_LENS_RECALL_CONTRACT: "shadow-background",
+      // SIG-418: in-invocation multi-batch review rollout flag (off|shadow|on).
+      OPENCLAW_REVIEW_MULTIBATCH_MODE: "Shadow",
       // SIG-392: recall-eliciting logic prompt (=== "on").
       OPENCLAW_LOGIC_RECALL_MODE: "on",
       OPENCLAW_SECURITY_RECALL_MODE: "on",
@@ -252,6 +255,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       resweepMode: scanMode(env.OPENCLAW_RESWEEP_MODE),
       invariantLensMode: scanMode(env.OPENCLAW_INVARIANT_LENS_MODE),
       invariantLensRecallContract: "shadow-background",
+      multiBatchMode: parseMultiBatchMode(env.OPENCLAW_REVIEW_MULTIBATCH_MODE),
       recallRoles: new Set(
         [
           env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
@@ -300,6 +304,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       resweepMode: "off",
       invariantLensMode: "off",
       invariantLensRecallContract: "blocking",
+      multiBatchMode: "off",
       recallRoles: new Set(),
       // SIG-399: reasoning-process directive default off → empty set.
       reasoningPromptRoles: new Set(),

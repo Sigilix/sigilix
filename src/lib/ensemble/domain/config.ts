@@ -30,6 +30,7 @@ import type { TrustLedgerMode } from "./gates/trust-ledger-thread"
 import type { ClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import type { PrecisionMode } from "@/src/features/precision-profile"
 import type { ResweepMode } from "./resweep"
+import type { MultiBatchMode } from "./multibatch-budget"
 import type { InvariantLensMode, InvariantLensRecallContract } from "./invariant-lens"
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
@@ -154,6 +155,11 @@ export interface EnsembleFeatureFlags {
    *  runs. `pending-check-amendment` is parsed but fails closed until a
    *  merge-gated follow-up lane owns check completion. */
   invariantLensRecallContract: InvariantLensRecallContract
+  /** SIG-418 Phase 2 (Design B′): in-invocation multi-batch review mode —
+   *  "off" (default) | "shadow" | "on". DARK in PR 1: parsed into the config but
+   *  not yet consumed by the orchestrator (the batch loop is PR 2), so off is
+   *  byte-identical to today. */
+  multiBatchMode: MultiBatchMode
 }
 
 /**

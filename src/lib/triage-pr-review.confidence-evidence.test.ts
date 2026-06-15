@@ -9,6 +9,7 @@ import {
   extensionToFenceLang,
 } from "@/src/lib/triage-pr-review"
 import { badgeAssetUrl } from "@/src/lib/badge-assets"
+import { sanitizeFindingsForGitHub } from "@/src/lib/ensemble/render/finding-format"
 import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 import { baseFinding } from "@/src/lib/triage-pr-review.test-helpers"
 
@@ -159,6 +160,133 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("<summary>More Info</summary>")
     expect(out).toContain(body)
     expect(out).not.toContain("...")
+  })
+
+  it("SIG-249: renders structured More Info sections after the standalone issue body", () => {
+    const body = "Tenant lookup happens before the membership check, so a forged tenant id can read another tenant."
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        body,
+        moreInfo: {
+          threatModel: "An authenticated user can request a tenant they do not belong to.",
+          codeCitations: "`src/auth.ts:42` reads `tenantId` before `authorizeTenant`.",
+          existingProtections: "The route checks login state, but that does not prove tenant membership.",
+          mitigation: "Move `authorizeTenant` before the read.",
+          alternatives: "A database policy would also work, but it is broader than this patch.",
+          severityCalibration: "Score 5 because this is cross-tenant data exposure.",
+        },
+      }),
+      5,
+    )
+
+    expect(out).toContain(body)
+    expect(out).toContain("<summary>More Info</summary>")
+    for (const label of [
+      "Threat model",
+      "Specific code citations",
+      "Existing protections",
+      "Proposed mitigation",
+      "Alternative mitigations considered",
+      "Severity calibration",
+    ]) {
+      expect(out).toContain(`**${label}**`)
+    }
+    expect(out.indexOf(body)).toBeLessThan(out.indexOf("<summary>More Info</summary>"))
+    expect(out).toContain("Threat model:\nAn authenticated user can request a tenant they do not belong to.")
+    expect(out).toContain("How can I resolve this?")
+  })
+
+  it("SIG-249: wraps raw HTML-like tags inside More Info section text", () => {
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        moreInfo: {
+          codeCitations: "The changed sink passes user input into <script>alert(1)</script>.",
+        },
+      }),
+      5,
+    )
+
+    expect(out).toContain("`<script>`alert(1)`</script>`")
+    expect(out).not.toContain("into <script>alert")
+  })
+
+  it("SIG-249: neutralizes Markdown control lines inside More Info section text", () => {
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        moreInfo: {
+          threatModel: "# Fake heading\n- [ ] Fake checklist\nReal threat detail.",
+        },
+      }),
+      5,
+    )
+
+    expect(out).toContain("\\# Fake heading")
+    expect(out).toContain("\\- [ ] Fake checklist")
+    expect(out).not.toContain("\n# Fake heading")
+    expect(out).not.toContain("\n- [ ] Fake checklist")
+  })
+
+  it("SIG-249: does not render whitespace-only More Info sections", () => {
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        moreInfo: {
+          threatModel: "   ",
+          codeCitations: "",
+        },
+      }),
+      5,
+    )
+
+    expect(out).not.toContain("<summary>More Info</summary>")
+  })
+
+  it("SIG-249: drops More Info from sanitized findings when all sections are empty", () => {
+    const [sanitized] = sanitizeFindingsForGitHub([
+      fnd({
+        score: 5,
+        moreInfo: {
+          threatModel: "   ",
+          codeCitations: "",
+        },
+      }),
+    ])
+
+    expect(sanitized?.moreInfo).toBeUndefined()
+  })
+
+  it("SIG-249: More Info sanitization is idempotent for HTML-like tags", () => {
+    const [sanitized] = sanitizeFindingsForGitHub([
+      fnd({
+        score: 5,
+        moreInfo: {
+          codeCitations: "The changed sink passes user input into <script>alert(1)</script>.",
+        },
+      }),
+    ])
+    const out = formatFindingComment(sanitized!, 5)
+
+    expect(out).toContain("`<script>`alert(1)`</script>`")
+    expect(out).not.toContain("``<script>``")
+    expect(out).not.toContain("``</script>``")
+  })
+
+  it("SIG-249: preserves code-like hash tokens that are not Markdown headings", () => {
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        moreInfo: {
+          codeCitations: "#define MAX_TENANTS 4 is cited in the changed guard.",
+        },
+      }),
+      5,
+    )
+
+    expect(out).toContain("#define MAX_TENANTS 4")
+    expect(out).not.toContain("\\#define MAX_TENANTS 4")
   })
 
   it("splits at the FIRST blank-line break — every later paragraph goes to the dropdown", () => {

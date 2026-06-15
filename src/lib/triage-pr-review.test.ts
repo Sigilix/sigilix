@@ -235,6 +235,56 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.testGap).toBe("The existing test only covers one FINAL(...) token.")
   })
 
+  it("SIG-249: parses structured More Info sections without requiring every field", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [
+          {
+            ...baseFinding,
+            moreInfo: {
+              threatModel: "  A forged tenant id can expose another tenant's records.  ",
+              codeCitations: "```text\nsrc/auth.ts:42 reads tenantId before authorization\n```",
+              existingProtections: "The route checks authentication but not tenant membership.",
+              mitigation: "Check membership before reading the record.",
+              alternatives: "",
+              unknown: "ignored",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(out?.findings[0]?.moreInfo).toEqual({
+      threatModel: "A forged tenant id can expose another tenant's records.",
+      codeCitations: "src/auth.ts:42 reads tenantId before authorization",
+      existingProtections: "The route checks authentication but not tenant membership.",
+      mitigation: "Check membership before reading the record.",
+    })
+  })
+
+  it("SIG-249: drops malformed More Info without dropping the finding", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [
+          {
+            ...baseFinding,
+            moreInfo: {
+              threat_model: "typoed keys are optional detail only",
+              codeCitations: 42,
+              existingProtections: "   ",
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.findings[0]?.body).toBe(baseFinding.body)
+    expect(out?.findings[0]?.moreInfo).toBeUndefined()
+  })
+
   it("normalizes fenced structured examples and caps long details", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({

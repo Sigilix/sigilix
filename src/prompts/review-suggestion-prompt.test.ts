@@ -116,7 +116,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // evidence they inspect/refute, not as an unquestionable verdict).
     // SIG-406 31→32 (security recall-suffix gains the authz-RESOLUTION addendum;
     // synth gains the RETENTION DIRECTIVE — both shift the posted verdict).
-    expect(PROMPT_VERSION).toBe("32")
+    // SIG-249 32→33 (structured More Info sections render richer P0/P1 support
+    // without enforcing a recall-affecting drop gate during rollout).
+    expect(PROMPT_VERSION).toBe("33")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

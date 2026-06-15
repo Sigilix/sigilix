@@ -97,7 +97,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForHallucination).toBe(0)
   })
 
-  it("SIG-311 demotes a security-sourced usage-vs-mention finding to the body in enforce mode", () => {
+  it("SIG-440 keeps a security-sourced usage-vs-mention finding inline in enforce mode", () => {
     const path = "src/lib/ast-rules/scan-dynamic-html-sink.ts"
     const securityFinding: PrReviewFinding = {
       path,
@@ -161,12 +161,11 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       securityUsageValidatorMode: "enforce",
       trustLedgerEnabled: true,
     })
-    expect(enforce.verdict.findings).toHaveLength(0)
-    expect(enforce.unanchoredFindings).toHaveLength(1)
-    expect(enforce.unanchoredFindings[0]?.headline).toContain("Command injection")
-    expect(enforce.unanchoredFindings[0]?.trust).toEqual({
+    expect(enforce.verdict.findings).toHaveLength(1)
+    expect(enforce.unanchoredFindings).toHaveLength(0)
+    expect(enforce.verdict.findings[0]?.headline).toContain("Command injection")
+    expect(enforce.verdict.findings[0]?.trust).toEqual({
       tier: "body-only-ungrounded",
-      surface: "body",
       demoteReason: "security-usage",
     })
     expect(enforce.droppedForFailedSecurityUsageValidation).toBe(1)
@@ -709,12 +708,12 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.unanchoredFindings[0]?.suggestedReplacement).toBe("  return safeResult")
   })
 
-  it("keeps invalid multi-line range findings body-only instead of collapsing them to one line", () => {
+  it("SIG-440 repairs an invalid multi-line range to the first reviewable RIGHT line instead of body-routing it", () => {
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
           ...baseVerdict,
-          findings: [{ ...baseFinding, startLine: 44, line: 47, score: 4 }],
+          findings: [{ ...baseFinding, startLine: 40, line: 47, score: 4 }],
         },
         provenance: {
           findings: [
@@ -732,11 +731,12 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       specialistVerdicts,
       addedLineTextByLine: new Map([["src/lib/foo.ts", new Map([[50, "  return result"]])]]),
     })
-    expect(out.verdict.findings).toHaveLength(0)
-    expect(out.droppedForInvalidLine).toBe(1)
-    expect(out.remappedInvalidLineToInline).toBe(0)
-    expect(out.unanchoredFindings[0]?.startLine).toBe(44)
-    expect(out.unanchoredFindings[0]?.line).toBe(47)
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.line).toBe(42)
+    expect(out.verdict.findings[0]?.startLine).toBeUndefined()
+    expect(out.droppedForInvalidLine).toBe(0)
+    expect(out.remappedInvalidLineToInline).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
   })
 
   it("keeps header-line findings body-only instead of repairing them", () => {

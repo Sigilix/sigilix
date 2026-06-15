@@ -4,30 +4,30 @@
       "summary": "T",
       "confidence": 3,
       "confidenceReason": "R.",
-      "findings": []
+      "findings": [
+        {
+          "path": "src/lib/orders.ts",
+          "line": 17,
+          "score": 4,
+          "category": "security",
+          "headline": "no null check on `userInput` before deref",
+          "body": "A null `userInput` would throw.",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "security"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        }
+      ]
     },
-    "unanchoredFindings": [
-      {
-        "path": "src/lib/orders.ts",
-        "line": 17,
-        "score": 4,
-        "category": "security",
-        "headline": "no null check on `userInput` before deref",
-        "body": "A null `userInput` would throw.",
-        "evidence": {
-          "specialistsThatFlagged": [
-            "security"
-          ],
-          "specialistsThatDeclined": [],
-          "deterministicFactIds": [],
-          "retrievalChunkIds": [],
-          "relatedPriorPRs": [],
-          "synthDecision": "kept",
-          "consensusScore": 1
-        },
-        "scope": "line"
-      }
-    ],
+    "unanchoredFindings": [],
     "droppedForInvalidLine": 0,
     "remappedInvalidLineToInline": 0,
     "droppedForHallucination": 0,
@@ -46,7 +46,18 @@
     "droppedForFailedWindowBlindnessValidation": 0,
     "droppedForFailedSecurityGroundingValidation": 0,
     "droppedForFailedSecurityUsageValidation": 0,
-    "cleanFindingProvenance": [],
+    "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "security"
+        ],
+        "sourceFindingIds": [
+          "security-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      }
+    ],
     "provenance": {
       "findings": [
         {
@@ -74,7 +85,7 @@
       },
       "payload": {
         "reason": "absence-claim-ungrounded-by-truncation",
-        "dropped": true
+        "dropped": false
       }
     }
   ]

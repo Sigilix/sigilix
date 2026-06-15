@@ -470,7 +470,7 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     expect(off.submission.body).not.toContain("**1 finding**")
   })
 
-  it("PR3b: restructures body findings — collapsed outside-diff dropdown + PR-level section (on only)", () => {
+  it("SIG-440: body findings render in one non-inline dropdown with trust pills when enabled", () => {
     const bf = (over: Partial<PrReviewFinding>): PrReviewFinding => ({
       ...baseFinding,
       score: 3,
@@ -504,11 +504,13 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       unanchored,
       trustLedger: true,
     }).submission.body
-    expect(on).toContain("couldn't be anchored to a specific line") // the collapsed unanchorable dropdown
+    expect(on).toContain("couldn't be anchored to a line")
     expect(on).toContain("<details>")
-    expect(on).toContain("**PR-level**")
-    expect(on).not.toContain("could not be anchored") // the old generic disclaimer is dropped
-    // off → the generic flat section + disclaimer, no dropdown / no PR-level heading.
+    expect(on).toContain("**In your changes**")
+    expect(on).toContain("outside the diff")
+    expect(on).toContain("no test for this")
+    expect(on).toContain("ungrounded nit")
+    // off → same single dropdown, but no trust pills.
     const off = buildReviewSubmissionWithMetadata({
       verdict,
       prAuthor: null,
@@ -516,9 +518,8 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       unanchored,
       trustLedger: false,
     }).submission.body
-    expect(off).not.toContain("couldn't be anchored to a specific line")
-    expect(off).not.toContain("**PR-level**")
-    expect(off).toContain("could not be anchored")
+    expect(off).toContain("couldn't be anchored to a line")
+    expect(off).not.toContain("trust-grounded")
   })
 
   it("body-row glyph layout: the trust pill LEADS with the badges (before the location), not orphaned after the headline", () => {

@@ -8,6 +8,26 @@
         {
           "path": "src/lib/orders.ts",
           "line": 17,
+          "score": 2,
+          "category": "style",
+          "headline": "naming is inconsistent here",
+          "body": "rename for clarity",
+          "evidence": {
+            "specialistsThatFlagged": [
+              "logic"
+            ],
+            "specialistsThatDeclined": [],
+            "deterministicFactIds": [],
+            "retrievalChunkIds": [],
+            "relatedPriorPRs": [],
+            "synthDecision": "kept",
+            "consensusScore": 1
+          },
+          "scope": "line"
+        },
+        {
+          "path": "src/lib/orders.ts",
+          "line": 17,
           "score": 4,
           "category": "logic",
           "headline": "off-by-one accessing `compute`",
@@ -27,28 +47,7 @@
         }
       ]
     },
-    "unanchoredFindings": [
-      {
-        "path": "src/lib/orders.ts",
-        "line": 17,
-        "score": 2,
-        "category": "style",
-        "headline": "naming is inconsistent here",
-        "body": "rename for clarity",
-        "evidence": {
-          "specialistsThatFlagged": [
-            "logic"
-          ],
-          "specialistsThatDeclined": [],
-          "deterministicFactIds": [],
-          "retrievalChunkIds": [],
-          "relatedPriorPRs": [],
-          "synthDecision": "kept",
-          "consensusScore": 1
-        },
-        "scope": "line"
-      }
-    ],
+    "unanchoredFindings": [],
     "droppedForInvalidLine": 0,
     "remappedInvalidLineToInline": 0,
     "droppedForHallucination": 0,
@@ -68,6 +67,16 @@
     "droppedForFailedSecurityGroundingValidation": 0,
     "droppedForFailedSecurityUsageValidation": 0,
     "cleanFindingProvenance": [
+      {
+        "sourceSpecialists": [
+          "logic"
+        ],
+        "sourceFindingIds": [
+          "logic-0"
+        ],
+        "action": "kept",
+        "verifiedViaRetrieval": false
+      },
       {
         "sourceSpecialists": [
           "logic"
@@ -126,7 +135,7 @@
       },
       "payload": {
         "reason": "ungrounded-inline-finding",
-        "dropped": true
+        "dropped": false
       }
     }
   ]

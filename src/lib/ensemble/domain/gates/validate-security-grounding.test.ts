@@ -398,15 +398,15 @@ describe("validateForSubmission — SIG-293 security-grounding gate", () => {
     })
   })
 
-  it("ENFORCE: demotes the ungrounded secrets claim to the body (counter++, callback dropped:true)", () => {
+  it("SIG-440 ENFORCE: keeps the ungrounded secrets claim inline (counter++, callback dropped:false)", () => {
     const onDrop = vi.fn()
     const result = run([secretsFinding()], { mode: "enforce", onDrop })
     expect(result.droppedForFailedSecurityGroundingValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings.some((f) => f.headline.includes("secret leaked"))).toBe(true)
+    expect(result.verdict.findings.some((f) => f.headline.includes("secret leaked"))).toBe(true)
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "secrets-exposure-ungrounded-no-credential-token",
-      dropped: true,
+      dropped: false,
     })
   })
 

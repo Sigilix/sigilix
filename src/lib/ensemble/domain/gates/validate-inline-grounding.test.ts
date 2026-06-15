@@ -13,6 +13,7 @@ import {
   parseInlineGroundingValidatorMode,
   type InlineGroundingEvidence,
 } from "@/src/lib/ensemble/domain/gates/validate-inline-grounding"
+import { buildReviewSubmissionWithMetadata } from "@/src/lib/triage-pr-review"
 import { validateForSubmission } from "@/src/lib/triage-pr-review-ensemble"
 import type { SynthesizerProvenance } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
@@ -245,7 +246,7 @@ function ungrounded(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
 
 function run(
   findings: PrReviewFinding[],
-  opts: { mode?: "shadow" | "enforce"; onDrop?: (...a: unknown[]) => void } = {},
+  opts: { mode?: "shadow" | "enforce"; onDrop?: (...a: unknown[]) => void; trustLedgerEnabled?: boolean } = {},
 ) {
   return validateForSubmission({
     synthOutput: {
@@ -257,20 +258,45 @@ function run(
     addedLineTextByLine: ADDED,
     ...(opts.mode ? { inlineGroundingValidatorMode: opts.mode } : {}),
     ...(opts.onDrop ? { onInlineGroundingFindingDropped: opts.onDrop } : {}),
+    ...(opts.trustLedgerEnabled ? { trustLedgerEnabled: true } : {}),
   })
 }
 
 describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
-  it("ENFORCE: demotes an ungrounded score-2 finding to the body (counter++, callback dropped:true, leaves verdict.findings)", () => {
+  it("SIG-440 ENFORCE: keeps an anchorable ungrounded score-2 finding inline (counter++, callback dropped:false)", () => {
     const onDrop = vi.fn()
     const result = run([ungrounded()], { mode: "enforce", onDrop })
     expect(result.droppedForFailedInlineGroundingValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
-    expect(result.unanchoredFindings.some((f) => f.headline === "naming is inconsistent here")).toBe(true)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]?.headline).toBe("naming is inconsistent here")
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
       reason: "ungrounded-inline-finding",
-      dropped: true,
+      dropped: false,
     })
+  })
+
+  it("SIG-440 ENFORCE + ledger ON: anchorable trust-demoted findings render inline with the MODEL pill", () => {
+    const result = run([ungrounded()], { mode: "enforce", trustLedgerEnabled: true })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.unanchoredFindings).toHaveLength(0)
+    expect(result.verdict.findings[0]?.trust).toEqual({
+      tier: "body-only-ungrounded",
+      demoteReason: "inline-grounding",
+    })
+
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: result.verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      reviewable: makeReviewable(),
+      addedLineTextByLine: ADDED,
+      trustLedger: true,
+    })
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.body).toContain("trust-model")
+    expect(out.bodyOnlyFindings).toHaveLength(0)
+    expect(out.submission.body).not.toContain("Review Body Findings")
   })
 
   it("SHADOW: counts the would-demote + fires callback dropped:false but KEEPS the finding inline", () => {
@@ -344,9 +370,10 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
       addedLineTextByLine: new Map([[PATH, new Map([[1, "  const total = compute(items)"]])]]),
       inlineGroundingValidatorMode: "enforce",
     })
-    expect(result.verdict.findings).toHaveLength(0) // demoted by inline-grounding, NOT inlined at line 1
+    expect(result.verdict.findings).toHaveLength(1) // trust-demoted, but still inline on the reviewable line
+    expect(result.verdict.findings[0]?.line).toBe(1)
     expect(result.droppedForFailedInlineGroundingValidation).toBe(1)
-    expect(result.unanchoredFindings.some((f) => f.line === 1)).toBe(true)
+    expect(result.unanchoredFindings).toHaveLength(0)
   })
 
   it("ENFORCE: processes a mixed grounded/ungrounded batch correctly (counter + callback reflect only the ungrounded)", () => {
@@ -358,9 +385,13 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     ]
     const result = run(findings, { mode: "enforce", onDrop })
     expect(result.droppedForFailedInlineGroundingValidation).toBe(2)
-    expect(result.verdict.findings).toHaveLength(1) // only the grounded one stays inline
-    expect(result.verdict.findings[0]?.headline).toBe("rename `compute` for clarity")
-    expect(result.unanchoredFindings).toHaveLength(2)
+    expect(result.verdict.findings).toHaveLength(3) // anchorable findings all stay inline
+    expect(result.verdict.findings.map((f) => f.headline)).toEqual([
+      "ungrounded nit one",
+      "rename `compute` for clarity",
+      "ungrounded nit two",
+    ])
+    expect(result.unanchoredFindings).toHaveLength(0)
     expect(onDrop).toHaveBeenCalledTimes(2)
   })
 

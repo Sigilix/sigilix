@@ -760,7 +760,8 @@ export const MATRIX_CASES: MatrixCase[] = [
   { id: "multi-gate-interaction", gate: "interaction", buildArgs: () => multiGateCase(), callbacks: ["onInlineGroundingFindingDropped"] },
 
   // Never-drop: P0/P1 findings that TRIGGER a gate under enforce must survive
-  // (inline or body-demoted, never absent). These are the recall-safety pins.
+  // (inline when anchorable, otherwise non-inline, never absent). These are the
+  // recall-safety pins.
   { id: "never-drop-p1-inline-grounding-enforce", gate: "never-drop", buildArgs: () => inlineGroundingNeverDropP1(), callbacks: ["onInlineGroundingFindingDropped"] },
   { id: "never-drop-p0-window-blindness-enforce", gate: "never-drop", buildArgs: () => windowBlindnessCase("enforce", true), callbacks: ["onWindowBlindnessFindingDropped"] },
   { id: "never-drop-p1-security-enforce", gate: "never-drop", buildArgs: () => securityCase("enforce", true), callbacks: ["onSecurityFindingDropped"] },
@@ -789,8 +790,8 @@ function inlineGroundingNeverDropP1(): ValidateArgs {
 }
 
 // A P1 (score-4) ungrounded absence-claim under enforce: absence-grounding has
-// NO score floor, so this P1 is demoted to the body (NOT dropped) — it must
-// still appear in unanchoredFindings.
+// NO score floor, so this P1 is trust-demoted but still inline because it has a
+// reviewable line.
 function absenceGroundingNeverDropP1(): ValidateArgs {
   const f: PrReviewFinding = {
     path: ABSENCE_PATH,

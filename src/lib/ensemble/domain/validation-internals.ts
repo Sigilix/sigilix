@@ -15,7 +15,7 @@
 
 import type { PrReviewFinding, EvidenceRecord } from "@/src/shared/domain/pr-review-finding"
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
-import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import { deriveSide, isContiguousRightRange, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
 import type { CollectedVerdict, SynthesizerProvenance } from "./validation"
 
@@ -421,12 +421,10 @@ export function hasStructuredFixForInlineRepair(finding: PrReviewFinding): boole
  * `deriveSide` at the line-validity check fails, the finding routes to
  * `unanchoredFindings` anyway. PR #175 dogfood class.
  *
- * GitHub multi-line inline-comment semantics: `line` is the bottom of
- * the visible underline; `start_line` is the top. Both must be on the
- * diff (`isCommentAnchorable`). When neither original endpoint
- * survives, we pick the LAST RIGHT anchor in range as the new `line`
- * (closest to the original bottom) and the FIRST RIGHT anchor as the
- * new `start_line` when distinct.
+ * SIG-440: keep a multi-line range only when the ORIGINAL full range is
+ * contiguous RIGHT-reviewable. Otherwise collapse to one reliable RIGHT line
+ * (prefer `startLine`, then the first RIGHT anchor inside the range), because a
+ * single-line inline comment is the only endpoint-safe fallback.
  *
  * Returns null when (a) the finding is single-line (caller falls
  * through to the existing single-line repair / unanchored routing),
@@ -452,21 +450,21 @@ export function findRangeAwareAnchor(
   const lo = Math.min(startLine, endLine)
   const hi = Math.max(startLine, endLine)
 
-  // Single-pass scan: pick the FIRST and LAST RIGHT-side anchor inside
-  // the inclusive [lo, hi] range. Last = closest to the original bottom
-  // (becomes the new `line`); first = top of the underline
-  // (becomes the new `start_line` if distinct from `line`).
+  if (startLine < endLine && isContiguousRightRange(reviewable, path, startLine, endLine)) {
+    return { line: endLine, startLine }
+  }
+
+  if (deriveSide(reviewable, path, startLine) === "RIGHT") return { line: startLine }
+
   let firstLine: number | null = null
-  let lastLine: number | null = null
   for (const a of anchors) {
     if (a.side !== "RIGHT") continue
     if (a.line < lo || a.line > hi) continue
     if (firstLine === null || a.line < firstLine) firstLine = a.line
-    if (lastLine === null || a.line > lastLine) lastLine = a.line
   }
-  if (lastLine === null || firstLine === null) return null
+  if (firstLine === null) return null
 
-  return firstLine < lastLine ? { line: lastLine, startLine: firstLine } : { line: lastLine }
+  return { line: firstLine }
 }
 
 export function findRepairableInlineAnchor(args: {

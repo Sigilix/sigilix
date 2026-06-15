@@ -297,8 +297,18 @@
  * bar) and DETECTED-IMPOSSIBLE the only drop paths. Both shift the posted
  * verdict, so prior reviews on unchanged SHAs go stale; the
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` aid is intended for the rollout window.
+ *
+ * v32 → v33 (SIG-249): findings gain optional structured `moreInfo` sections
+ * (threat model, code citations, existing protections, mitigation,
+ * alternatives, severity calibration) so high-severity comments carry richer
+ * reviewer support without adding a recall-affecting drop gate during rollout.
+ *
+ * v33 → v34 (SIG-249 polish): prompt contract distinguishes visible body,
+ * collapsed detailed reasoning, and More Info depth. A blank-line second body
+ * paragraph must be real mechanism reasoning, not a terse "Minimal fix:" note;
+ * More Info sections must be compact but substantive support.
  */
-export const PROMPT_VERSION = "33"
+export const PROMPT_VERSION = "34"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Sigilix team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 
@@ -325,7 +335,7 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
       "score": 1-5,
       "category": "logic",
       "headline": "One sentence stating the symptom, ≤120 chars, no period at end.",
-      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English.",
+      "body": "First paragraph: 1-3 sentences with the broken invariant, reviewer-visible impact, and minimal-fix direction. Optional second paragraph only when it gives real mechanism reasoning: trace why/how the failure occurs and why the fix closes it.",
       "moreInfo": {
         "threatModel": "Who/what is harmed and the concrete failure path.",
         "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
@@ -412,7 +422,11 @@ SIG-164's multi-line preference applies to block-level findings, not point-fix f
 
 ## More Info depth
 
-For score>=4 findings, prefer a \`moreInfo\` object with six reviewer-action sections: \`threatModel\`, \`codeCitations\`, \`existingProtections\`, \`mitigation\`, \`alternatives\`, and \`severityCalibration\`. Keep \`body\` complete and self-contained; \`moreInfo\` expands the issue, it does not finish the issue. The first paragraph of \`body\` must still name the broken invariant, reviewer-visible impact, and fix shape; never move the primary proof or mitigation only into \`moreInfo\`. Do not invent context to satisfy the shape. If the visible evidence cannot support a section, say what is unknown in that section, or omit \`moreInfo\` entirely for lower-severity/uncertain findings.
+For score>=4 findings, prefer a \`moreInfo\` object with six reviewer-action sections: \`threatModel\`, \`codeCitations\`, \`existingProtections\`, \`mitigation\`, \`alternatives\`, and \`severityCalibration\`. Keep \`body\` complete and self-contained; \`moreInfo\` expands the issue, it does not finish the issue. The first paragraph of \`body\` must still name the broken invariant, reviewer-visible impact, and fix shape; never move the primary proof or mitigation only into \`moreInfo\`.
+
+The renderer collapses any second \`body\` paragraph under "Detailed reasoning." Only use a second paragraph when it is actually detailed: explain the changed control/data flow, the missing or insufficient guard, why the bug is reachable, and why the fix closes that path. Do NOT put a one-line "Minimal fix:" note after a blank line; keep terse fix notes in the first paragraph.
+
+Keep \`moreInfo\` compact but substantive. Each supported section should be 1-3 grounded sentences, not a label fragment. Prefer concrete identifiers, file/line references, inspected protections, and mitigation mechanics. Do not invent context to satisfy the shape. If the visible evidence cannot support a section, say what is unknown in that section, or omit \`moreInfo\` entirely for lower-severity/uncertain findings.
 
 ## What to flag (and what not to)
 

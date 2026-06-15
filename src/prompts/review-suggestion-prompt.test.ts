@@ -118,7 +118,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // synth gains the RETENTION DIRECTIVE — both shift the posted verdict).
     // SIG-249 32→33 (structured More Info sections render richer P0/P1 support
     // without enforcing a recall-affecting drop gate during rollout).
-    expect(PROMPT_VERSION).toBe("33")
+    // SIG-249 polish 33→34 (blank-line body split must be real detailed
+    // reasoning; More Info sections must be compact but substantive).
+    expect(PROMPT_VERSION).toBe("34")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

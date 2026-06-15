@@ -59,6 +59,10 @@ import { writeLastReviewedSha } from "@/src/lib/incremental-review"
 import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import { writeReviewManifestForEnsemble } from "@/src/lib/ensemble/adapters/persistence"
+import {
+  writeIncrementalReviewCoverage,
+  type IncrementalReviewCoverageWriteEntry,
+} from "@/src/lib/ensemble/adapters/incremental-coverage"
 import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { emitPhaseCompleted, type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
@@ -113,6 +117,7 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
   stack: StackContext
   coverage: CoverageRoles
   deltaCounts: DeltaBadgeCounts | null
+  incrementalCoverageEntries?: IncrementalReviewCoverageWriteEntry[]
   /** SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
    *  oversized / spillover), forwarded to the anchorless-fallback renderer so the
    *  422-retry path carries the same three notices. `null` = nothing dropped. */
@@ -170,6 +175,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     stack,
     coverage,
     deltaCounts,
+    incrementalCoverageEntries,
     disclosure,
     currentFindingsForManifest,
     reviewManifestEnabled,
@@ -603,6 +609,16 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         }),
       )
     }
+    if (incrementalCoverageEntries !== undefined) {
+      await writeIncrementalReviewCoverage(env, {
+        owner,
+        repo,
+        prNumber,
+        ...(repoId !== undefined ? { repoId } : {}),
+        headSha,
+        entries: incrementalCoverageEntries,
+      })
+    }
     // SIG-89: stash the diff hash so the next synchronize push can
     // detect no-op merges (Update-branch button, rebase-no-op force
     // push, empty commit) and skip dispatch. Same best-effort
@@ -926,6 +942,16 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
           err: err instanceof Error ? err.message : String(err),
         }),
       )
+    }
+    if (incrementalCoverageEntries !== undefined) {
+      await writeIncrementalReviewCoverage(env, {
+        owner,
+        repo,
+        prNumber,
+        ...(repoId !== undefined ? { repoId } : {}),
+        headSha,
+        entries: incrementalCoverageEntries,
+      })
     }
     // SIG-89: mirror the primary path — stash the diff hash for
     // noop-merge skip on the next synchronize. Same best-effort

@@ -36,6 +36,7 @@ import { resolveClaimShadowMode } from "@/src/lib/review-memory/shadow-match"
 import { resolvePrecisionMode } from "@/src/features/precision-profile"
 import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
+import { parseIncrementalReviewMode } from "./domain/incremental-coverage"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
@@ -160,6 +161,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_REVIEW_MANIFEST_ENABLED?: string | undefined
   // SIG-436: inline anchor-precision pass (default OFF; `=== "on"` to enable)
   OPENCLAW_ANCHOR_PRECISION?: string | undefined
+  // SIG-439: incremental PR re-review coverage mode (off | shadow | on)
+  OPENCLAW_INCREMENTAL_REVIEW_MODE?: string | undefined
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
@@ -279,6 +282,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       // and a benchmark runs on prod, so this must not change posted anchors
       // until the K=12 exactness eval proves the lift.
       anchorPrecision: (env.OPENCLAW_ANCHOR_PRECISION ?? "").trim().toLowerCase() === "on",
+      incrementalReviewMode: parseIncrementalReviewMode(env.OPENCLAW_INCREMENTAL_REVIEW_MODE),
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
       recallRoles: buildRecallRoles(env),

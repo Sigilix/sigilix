@@ -52,6 +52,8 @@ export interface PrChangedFile {
   status: string
   additions: number
   deletions: number
+  /** Blob SHA for the file at the PR head when GitHub supplies it. */
+  sha?: string
   /**
    * ARC-263: per-file unified diff returned by GitHub's
    * `/pulls/{n}/files` endpoint. Used as the cache key input for

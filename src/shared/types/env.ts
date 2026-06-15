@@ -153,6 +153,12 @@ export interface Env {
   // off the trigger never enqueues a pr-summary job → pure no-op.
   OPENCLAW_PR_SUMMARY_MODE?: string
 
+  // SIG-439 incremental PR re-review mode. "off" (default) keeps the
+  // current sampled full-review behavior byte-identical; "shadow" records
+  // coverage without changing file selection; "on" reviews changed or
+  // never-reviewed files only.
+  OPENCLAW_INCREMENTAL_REVIEW_MODE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.
@@ -419,6 +425,13 @@ export interface Env {
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */
   OPENCLAW_RESWEEP_MAX_REGIONS?: string
+  /** SIG-369(b): route the SECOND-PASS recall phases' LOGIC re-runs
+   *  (SIG-395 invariant-lens, SIG-393 resweep) to a cheaper strong reasoner
+   *  (`deepseek/deepseek-v4-pro`) instead of `openai/o3` — "off" (default) |
+   *  "on". Cost lever only; the primary logic specialist is never affected.
+   *  Default off is byte-identical (those passes stay on o3). A live recall
+   *  gauge gates the flip; never enable here without it. */
+  OPENCLAW_SECONDPASS_REASONER_MODE?: string
   /** SIG-417: the dark projected-cost governor (TRIM). "on" enables trimming
    *  low-risk files when the projection exceeds the ceiling; default off →
    *  capture + projection telemetry only, review byte-identical. Trim is

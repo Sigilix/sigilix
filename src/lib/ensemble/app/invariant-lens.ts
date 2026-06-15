@@ -21,8 +21,9 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
-import { modelApiKeys, runSpecialist } from "@/src/lib/ensemble/adapters/model-provider"
+import { modelApiKeys, runSpecialist, SPECIALIST_CONFIGS } from "@/src/lib/ensemble/adapters/model-provider"
 import { buildInvariantFamilyPrompt, INVARIANT_FAMILIES } from "@/src/prompts/specialists/invariant-lens"
+import { parseSecondPassReasonerMode, secondPassReasonerOverride } from "@/src/lib/ensemble/domain/secondpass-reasoner"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import { splitDiffByFile } from "@/src/lib/diff-packing"
@@ -100,6 +101,13 @@ export function startInvariantLens(a: InvariantLensStartArgs): InvariantLensHand
   }
 
   const chatEnabled = a.env.OLLAMA_CHAT_ENABLE === "on" ? ("on" as const) : ("off" as const)
+  // SIG-369(b): default-off second-pass model override. Off → undefined → the
+  // call uses SPECIALIST_CONFIGS.logic (openai/o3) exactly as today
+  // (byte-identical). On → routes these lens re-runs to the cheaper reasoner.
+  const lensModelOverride = secondPassReasonerOverride({
+    mode: parseSecondPassReasonerMode(a.env.OPENCLAW_SECONDPASS_REASONER_MODE),
+    baseConfig: SPECIALIST_CONFIGS.logic,
+  })
   const outcomes = Promise.all(
     INVARIANT_FAMILIES.filter((f) => decision.dispatched.includes(f.id)).map(async (family): Promise<FamilyOutcome> => {
       try {
@@ -115,6 +123,8 @@ export function startInvariantLens(a: InvariantLensStartArgs): InvariantLensHand
           // any abort/throw degrades this family to zero candidates.
           signal: composeSignals(a.orchCtrl.signal, AbortSignal.timeout(SPECIALIST_TIMEOUT_MS)),
           perfCtx: a.perfCtx,
+          // SIG-369(b): absent when off → byte-identical o3 path.
+          ...(lensModelOverride !== undefined ? { modelOverride: lensModelOverride } : {}),
         })
         const errored = r.verdict === null
         return { familyId: family.id, findings: errored ? [] : r.verdict!.findings, errored }

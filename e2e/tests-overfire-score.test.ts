@@ -10,7 +10,7 @@ import {
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
 
-const EXPECTED_TESTS_PROMPT_HASH = "e0a67631"
+const EXPECTED_TESTS_PROMPT_HASH = "4cacbadb"
 
 const branchCase = TESTS_OVERFIRE_CASES.find((c) => c.id === "real-missing-branch-assertion")!
 const docsCase = TESTS_OVERFIRE_CASES.find((c) => c.id === "safe-docs-only-release-note")!

@@ -116,4 +116,23 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
     expect(res.modelUsed).toBe("openai/o3")
     expect(mockChat).not.toHaveBeenCalled()
   })
+
+  // SIG-369(b): a per-call modelOverride replaces SPECIALIST_CONFIGS[role].
+  it("modelOverride present → chat gets the override model (key still by id-shape); modelUsed reflects it", async () => {
+    const override: ModelConfig = { primary: "deepseek/deepseek-v4-pro", retries: 1, fallback: null }
+    const res = await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, modelOverride: override, ...baseArgs })
+    expect(mockChat).toHaveBeenCalledTimes(1)
+    const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
+    expect(call.model).toBe("deepseek/deepseek-v4-pro")
+    // deepseek/* is an OpenRouter id → still the OpenRouter key (no leak).
+    expect(call.apiKey).toBe("openrouter-key")
+    expect(res.modelUsed).toBe("deepseek/deepseek-v4-pro")
+  })
+
+  it("modelOverride absent → byte-identical to the role default (openai/o3)", async () => {
+    const res = await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
+    const call = mockChat.mock.calls[0]![0] as { model: string }
+    expect(call.model).toBe("openai/o3")
+    expect(res.modelUsed).toBe("openai/o3")
+  })
 })

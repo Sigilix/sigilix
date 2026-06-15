@@ -724,7 +724,11 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # prod token accounting is untouched (cost-isolated). Gathers organic large-PR
 # data. "on" (output-union enforce) ships in SIG-432, gated on a distributed-bug
 # fixture proving the recall delta. Code default is off (parseEnsembleConfig).
-OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
+# 2026-06-15: set OFF — the shadow batch makes REAL o3 calls on every spillover PR
+# (telemetry-cost-isolated but still BILLED on OpenRouter), so it was untracked
+# credit burn. Paused to stop that spend while SIG-432 enforce is deprioritized;
+# re-enable "shadow" when actively sizing SIG-432.
+OPENCLAW_REVIEW_MULTIBATCH_MODE = "off"
 
 # SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
 # finding off a comment/blank/structural/header line onto the substantive code

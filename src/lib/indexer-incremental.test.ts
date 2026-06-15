@@ -13,6 +13,8 @@ const {
   mockVectorizeDeleteByIds,
   mockDebugActiveGraphVersion,
   mockDeleteLexicalIds,
+  mockWriteFileGraph,
+  mockCommitGraph,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
@@ -31,6 +33,9 @@ const {
   mockVectorizeDeleteByIds: vi.fn(async (..._args: unknown[]) => undefined),
   mockDebugActiveGraphVersion: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
   mockDeleteLexicalIds: vi.fn(async (..._args: unknown[]): Promise<number> => 0),
+  // SIG-423: assertable spies for the graph write/commit path.
+  mockWriteFileGraph: vi.fn(async (..._args: unknown[]) => undefined),
+  mockCommitGraph: vi.fn(async (..._args: unknown[]) => undefined),
 }))
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
@@ -69,8 +74,8 @@ vi.mock("@/src/shared/adapters/github", async () => {
 })
 
 vi.mock("@/src/lib/repo-graph-client", () => ({
-  writeFileGraph: vi.fn(async (..._args: unknown[]) => undefined),
-  commitGraph: vi.fn(async (..._args: unknown[]) => undefined),
+  writeFileGraph: (...args: unknown[]) => mockWriteFileGraph(...args),
+  commitGraph: (...args: unknown[]) => mockCommitGraph(...args),
   debugActiveGraphVersion: (...args: unknown[]) => mockDebugActiveGraphVersion(...args),
 }))
 
@@ -150,6 +155,8 @@ beforeEach(() => {
       { status: "removed", filename: "src/deleted.ts", previous_filename: null },
     ],
   })
+  mockWriteFileGraph.mockReset().mockResolvedValue(undefined)
+  mockCommitGraph.mockReset().mockResolvedValue(undefined)
 })
 
 describe("handleIndexRepoJob — incremental push indexing", () => {
@@ -372,6 +379,40 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
     expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
     expect(mockVectorizeUpsert).toHaveBeenCalled()
+    // SIG-423: the FULL-TREE fallback still writes + commits the graph — the
+    // skip is incremental-path-only. (Guards against the gate leaking to the
+    // path that builds the active graph the reviewer reads.)
+    expect(mockWriteFileGraph).toHaveBeenCalled()
+    expect(mockCommitGraph).toHaveBeenCalled()
+  })
+
+  // SIG-423: when the incremental push path PROCEEDS (graph writer on, the
+  // manifest's graphRunId still matches the DO's active version), it embeds only
+  // the changed file but must NOT write graph rows — those rows would land under
+  // an uncommitted runId no read path ever resolves (all graph reads use
+  // debugActiveVersion → the unchanged old active version). Writing them is pure
+  // SQLite waste; skipping is recall-neutral. Reverting writeGraph:false fails
+  // this assertion (processSlice would call writeFileGraph for the changed file).
+  it("does not write graph rows on the incremental push path (SIG-423)", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "on"
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    // graphRunId matches the DO's active version → incremental PROCEEDS (no
+    // graph-version-drift fallback to full indexing).
+    manifest.graphRunId = "active-graph-run"
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockResolvedValue("active-graph-run")
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    // Incremental delta ran: only the changed file embedded, stale vectors gone.
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/changed.ts", "c".repeat(40))
+    expect(mockGetFileContent).not.toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+    // The whole point of SIG-423: NO graph writes (and no commit) on this path.
+    expect(mockWriteFileGraph).not.toHaveBeenCalled()
+    expect(mockCommitGraph).not.toHaveBeenCalled()
   })
 
   it("falls back to full indexing when scoped rule files change", async () => {

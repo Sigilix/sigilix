@@ -291,12 +291,24 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
   // not the gate. `shadow` observes-only (counts the would-demote). Off = no
   // work. The move runs BEFORE buildReviewSubmissionWithMetadata so the event +
   // marker alignment recompute over the post-demote split.
+  // SIG-423: coalesce the three VerificationMetricsDO writes (worker-token,
+  // receipt-join, trust-ledger) into ONE batched RPC / one SQLite transaction to
+  // cut Durable Object rows-written. Each item carries its own `category`, so the
+  // DO's `recordBatch` and `/metrics/verification`'s per-category split treat the
+  // three corpora exactly as the three separate calls did. `occurredAt` is
+  // stamped once here so every item buckets to the SAME UTC day — byte-identical
+  // to the prior behavior even across a UTC-midnight boundary, where three
+  // separate end-of-block RPCs could otherwise land in different day buckets. The
+  // single flush runs at the very end so trust-ledger items reflect the
+  // post-refuted-demotion visible surface (the demotion mutates
+  // submissionVerdict.findings between these blocks).
+  const verificationOccurredAt = new Date().toISOString()
+  const verificationMetricItems: RecordVerificationArgs[] = []
   if (verificationMode !== "off") {
     // Cover EVERY submitted score>=4 logic/security finding — inline AND the
     // body-only (unanchored) ones — so the refutable-FP measurement isn't
     // biased by which surface a finding landed on (CR).
     const submittedFindings = [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]
-    const verificationItems: RecordVerificationArgs[] = []
     for (const finding of submittedFindings) {
       if (finding.score < 4) continue
       if (finding.category !== "logic" && finding.category !== "security") continue
@@ -320,7 +332,11 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
           ...(result.check ? { checkKind: result.check.kind, checkStatus: result.check.status } : {}),
         }),
       )
-      verificationItems.push({ verdict: result.verdict, category: finding.category })
+      verificationMetricItems.push({
+        verdict: result.verdict,
+        category: finding.category,
+        occurredAt: verificationOccurredAt,
+      })
       // Trust Ledger: a CONFIRMED worker-token re-check (the cited token is
       // present at the cited line) is a proof signal. Annotate in place — the
       // finding object's identity is reused by selectRefutedInlineDemotions +
@@ -330,13 +346,11 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
         annotateFindingTrust(finding, { signals: ["worker-token-confirmed"] })
       }
     }
-    // SIG-285 PR 2: persist the review's verdict distribution to
-    // VerificationMetricsDO (one batched RPC). Best-effort + bounded so a
-    // stalled DO can't eat orchestrator time, and a failure NEVER breaks the
-    // review (telemetry only). Read via GET /metrics/verification.
-    await recordVerificationMetricsBounded(env, verificationItems, 1_500, (event, detail) =>
-      console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-    )
+    // SIG-285 PR 2 / SIG-423: the worker-token verdict distribution accrues to
+    // `verificationMetricItems`; it is flushed once with the receipt-join +
+    // trust-ledger corpora at the end of the phase (one RPC / one transaction).
+    // Best-effort + bounded; a failure NEVER breaks the review (telemetry only).
+    // Read via GET /metrics/verification.
     // SIG-285 PR 4: the demote subset = the REFUTED inline findings (pure,
     // unit-tested helper). Record the demote decision per finding on the shared
     // validation corpus (gate `verification-refuted`, readable at
@@ -444,7 +458,6 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     // under RECEIPTJOIN_CATEGORY (a separate corpus from worker-token) so the
     // refutable-eligible fraction is readable at GET /metrics/verification —
     // the load-bearing measurement, not just live `wrangler tail`.
-    const receiptJoinItems: RecordVerificationArgs[] = []
     for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
       if (finding.score < 4 || finding.category !== "security") continue
       const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)
@@ -465,7 +478,11 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
           ...(result.check ? { checkStatus: result.check.status } : {}),
         }),
       )
-      receiptJoinItems.push({ verdict: result.verdict, category: RECEIPTJOIN_CATEGORY })
+      verificationMetricItems.push({
+        verdict: result.verdict,
+        category: RECEIPTJOIN_CATEGORY,
+        occurredAt: verificationOccurredAt,
+      })
       // Trust Ledger: a CONFIRMED receipt join (the same rule still fires in the
       // VERIFIED runner receipt's HEAD scan) is the STRONGEST proof tier. In place
       // (identity already preserved by this point — post-demote). Flag-gated.
@@ -473,11 +490,8 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
         annotateFindingTrust(finding, { signals: ["runner-confirmed"] })
       }
     }
-    // Best-effort + bounded (same as the worker-token block) — a stalled DO or
-    // a record failure NEVER breaks the review (measurement only).
-    await recordVerificationMetricsBounded(env, receiptJoinItems, 1_500, (event, detail) =>
-      console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-    )
+    // SIG-423: receipt-join verdicts accrue to the shared batch (flushed once at
+    // the end). Best-effort + bounded — a record failure NEVER breaks the review.
   }
 
   // SIG Trust Ledger v0: give every final visible
@@ -512,19 +526,27 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
         surface: "body",
       })
     }
-    const trustItems: RecordVerificationArgs[] = [
-      ...submissionVerdict.findings,
-      ...renderableUnanchoredForSubmission,
-    ].map((finding) => ({
-      verdict: finding.trust?.tier ?? "body-only-ungrounded",
-      category: TRUSTLEDGER_CATEGORY,
-    }))
-    // Best-effort + bounded (same as the verification blocks) — a stalled DO or a
-    // record failure NEVER breaks the review (measurement only).
-    await recordVerificationMetricsBounded(env, trustItems, 1_500, (event, detail) =>
-      console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
-    )
+    for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
+      verificationMetricItems.push({
+        verdict: finding.trust?.tier ?? "body-only-ungrounded",
+        category: TRUSTLEDGER_CATEGORY,
+        occurredAt: verificationOccurredAt,
+      })
+    }
   }
+
+  // SIG-423: ONE batched VerificationMetricsDO write for the whole phase
+  // (worker-token + receipt-join + trust-ledger), replacing the three separate
+  // RPCs/transactions. The DO's `recordBatch` writes every item in a single
+  // transaction and `/metrics/verification` splits the corpora by `category`, so
+  // the persisted counts and read output are identical — only the SQLite
+  // transaction count drops 3→1. Runs after the trust-ledger block so the batch
+  // reflects the post-refuted-demotion visible surface. Best-effort + bounded;
+  // empty batch is a no-op (the client early-returns), and a stalled DO or record
+  // failure NEVER breaks the review (telemetry only).
+  await recordVerificationMetricsBounded(env, verificationMetricItems, 1_500, (event, detail) =>
+    console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
+  )
 
   if (showEvidence) {
     for (const [index, finding] of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission].entries()) {

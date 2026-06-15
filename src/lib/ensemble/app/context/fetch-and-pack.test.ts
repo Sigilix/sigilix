@@ -143,6 +143,48 @@ describe("packAndRoute — byte-identity", () => {
   })
 })
 
+describe("packAndRoute — SIG-418 spilloverBatches (effective post-governor boundary)", () => {
+  // A file whose body exceeds one ~12K-token (~48K-char) batch, so packing splits
+  // the PR into ≥2 batches. `reviewedFiles` = batch[0]; the rest are the EFFECTIVE
+  // spillover the dark multi-batch shadow loop measures.
+  function bigFileBlock(path: string, approxChars: number): string {
+    const filler = "x".repeat(approxChars)
+    return [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, "@@ -0,0 +1 @@", `+${filler}`].join(
+      "\n",
+    )
+  }
+
+  it("single-batch PR → spilloverBatches is empty (nothing deferred)", async () => {
+    const a = fileBlock("src/util.ts", "export const a = 1")
+    const b = fileBlock("src/helpers.ts", "export const b = 2")
+    const result = await packAndRoute(makeArgs({ fullDiff: `${a}\n${b}` }))
+    expect(result.filesNotReviewed).toEqual([])
+    expect(result.spilloverBatches).toEqual([])
+  })
+
+  it("multi-batch PR → spilloverBatches holds exactly the deferred files (effective boundary)", async () => {
+    // Three files each ~40K chars → each ~10K tokens, so each lands in its own
+    // batch (cap 12K). batch[0] = first file (reviewed); the other two spill over.
+    const f1 = bigFileBlock("src/a.ts", 40_000)
+    const f2 = bigFileBlock("src/b.ts", 40_000)
+    const f3 = bigFileBlock("src/c.ts", 40_000)
+    const result = await packAndRoute(makeArgs({ fullDiff: `${f1}\n${f2}\n${f3}` }))
+
+    // The posted path reviewed only batch[0].
+    expect(result.reviewedFiles).toHaveLength(1)
+    const reviewedPath = result.reviewedFiles[0]!.path
+    // The spillover batches cover EXACTLY the files NOT in the reviewed batch —
+    // the same boundary the posted single-batch path deferred.
+    const spilloverPaths = result.spilloverBatches.flat().map((f) => f.path)
+    expect(new Set(spilloverPaths)).toEqual(new Set(result.filesNotReviewed))
+    expect(spilloverPaths).not.toContain(reviewedPath)
+    expect(spilloverPaths).toHaveLength(2)
+    // Each oversized file is its own batch (revert-detector: empty spilloverBatches
+    // or batch[0] re-inclusion would fail here).
+    expect(result.spilloverBatches.length).toBe(2)
+  })
+})
+
 // SIG-417 — the cost-projection telemetry + dark-governor seam, driven through
 // `packAndRoute` model-free (same harness as above). A realistic lineup so
 // MODEL_PRICING applies; the governor env vars flow via `parseEnsembleConfig`.
@@ -207,6 +249,12 @@ describe("packAndRoute — SIG-417 cost projection + dark governor", () => {
     expect(result.filesNotReviewed.sort()).toEqual(["src/b.ts", "src/c.ts"])
     expect(telemetry.costProjection?.governorTrimmed).toBe(true)
     expect(telemetry.costProjection?.trimmedPaths.sort()).toEqual(["src/b.ts", "src/c.ts"])
+    // SIG-418: the governor-trimmed files are SUBTRACTED from the dark shadow's
+    // spillover — the governor dropped them intentionally for cost, so the shadow
+    // must NOT spend re-reviewing them. Here EVERY spillover file was trimmed →
+    // spilloverBatches is empty (revert-detector: without the subtraction, the
+    // two trimmed files would be re-packed into spilloverBatches).
+    expect(result.spilloverBatches).toEqual([])
   })
 
   it("ENABLED but NEVER trims a high-risk file (kept even under a tiny ceiling)", async () => {

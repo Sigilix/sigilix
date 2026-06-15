@@ -4,13 +4,19 @@
 import { describe, expect, it } from "vitest"
 import {
   parseCiTriageSynthMode,
+  parseCiTriageAnchorRemap,
   buildCiSynthUserMessage,
   isLogGrounded,
   disposeCiFinding,
   ciFindingCoarseKey,
+  isCiTestPath,
   isDuplicateOfExistingReview,
   matchesExistingCoarseKey,
   renderCiFindingComment,
+  extractFindingSymbols,
+  classifyChangedLineForSymbol,
+  isLowQualityAnchorLine,
+  remapCiFindingAnchor,
   CI_HEDGE_LINE,
   CI_REVIEW_MARKER,
   type CiDedupCandidate,
@@ -244,5 +250,286 @@ describe("CI_REVIEW_MARKER", () => {
     expect(CI_REVIEW_MARKER).toBe("<!-- sigilix:ci-review -->")
     expect(CI_REVIEW_MARKER).not.toBe("<!-- sigilix:ci-triage -->")
     expect(CI_REVIEW_MARKER).not.toBe("<!-- sigilix:ci-suggestion -->")
+  })
+})
+
+// ─────────────────────────── anchor remap (SIG-433) ─────────────────────────
+
+describe("parseCiTriageAnchorRemap", () => {
+  it("is OFF for unset / empty / unknown / 'off' / 'true' (dark default)", () => {
+    expect(parseCiTriageAnchorRemap(undefined)).toBe(false)
+    expect(parseCiTriageAnchorRemap("")).toBe(false)
+    expect(parseCiTriageAnchorRemap("off")).toBe(false)
+    expect(parseCiTriageAnchorRemap("true")).toBe(false)
+    expect(parseCiTriageAnchorRemap("enforce")).toBe(false)
+  })
+  it("is ON only for the literal 'on' (trim + case-insensitive)", () => {
+    expect(parseCiTriageAnchorRemap("on")).toBe(true)
+    expect(parseCiTriageAnchorRemap("  ON ")).toBe(true)
+  })
+})
+
+describe("isCiTestPath", () => {
+  it("flags *.test.* / *.spec.* and tests/ __tests__/ directories", () => {
+    expect(isCiTestPath("tests/parse.test.ts")).toBe(true)
+    expect(isCiTestPath("src/foo.spec.ts")).toBe(true)
+    expect(isCiTestPath("packages/a/__tests__/x.ts")).toBe(true)
+    expect(isCiTestPath("test/util.ts")).toBe(true)
+  })
+  it("does NOT flag ordinary source paths", () => {
+    expect(isCiTestPath("src/parse/event.ts")).toBe(false)
+    expect(isCiTestPath("src/lib/latest/contestant.ts")).toBe(false) // 'test' as a substring, not a segment
+  })
+})
+
+describe("extractFindingSymbols", () => {
+  it("pulls specific (camelCase / snake_case / backticked) identifiers", () => {
+    const syms = extractFindingSymbols("dedupeKey omits attemptKind", "the `dedupeKey` collapses start/end events")
+    expect(syms).toContain("dedupeKey")
+    expect(syms).toContain("attemptKind")
+  })
+  it("drops the generic stop-list and bare lowercase English words (no false strong match)", () => {
+    const syms = extractFindingSymbols("the value is wrong", "data and result and key and the parse step")
+    expect(syms).not.toContain("value")
+    expect(syms).not.toContain("data")
+    expect(syms).not.toContain("result")
+    expect(syms).not.toContain("key")
+    expect(syms).not.toContain("parse") // bare lowercase word → not specific
+    expect(syms).toEqual([]) // nothing specific named → no remap material
+  })
+  it("drops sentence-initial Capitalized English words (the P3 review caught), keeps real identifiers", () => {
+    const syms = extractFindingSymbols("The Property is wrong", "Name does not exist; see attemptKind and TS2339")
+    expect(syms).not.toContain("The")
+    expect(syms).not.toContain("Property")
+    expect(syms).not.toContain("Name")
+    expect(syms).toContain("attemptKind") // camelCase identifier
+    expect(syms).toContain("TS2339") // has a digit (error-code-like)
+  })
+})
+
+describe("classifyChangedLineForSymbol", () => {
+  it("STRONG on a real `=` assignment or a return of the symbol", () => {
+    expect(classifyChangedLineForSymbol("  const dedupeKey = `${runId}:${idx}`", "dedupeKey")).toBe("strong")
+    expect(classifyChangedLineForSymbol("  let dedupeKey = makeKey()", "dedupeKey")).toBe("strong")
+    expect(classifyChangedLineForSymbol("  dedupeKey = computeIt()", "dedupeKey")).toBe("strong")
+    expect(classifyChangedLineForSymbol("  this.dedupeKey = k", "dedupeKey")).toBe("strong")
+    expect(classifyChangedLineForSymbol("  const dedupeKey: string = build()", "dedupeKey")).toBe("strong")
+    expect(classifyChangedLineForSymbol("  return computeDedupeKey(e)", "computeDedupeKey")).toBe("strong")
+  })
+  it("NOT strong on an EQUALITY / comparison of the symbol (the P1 review caught: `===` is not `=`)", () => {
+    expect(classifyChangedLineForSymbol("  if (dedupeKey === expected) return true", "dedupeKey")).toBe("weak")
+    expect(classifyChangedLineForSymbol("  const ok = dedupeKey === expected", "dedupeKey")).toBe("weak")
+    expect(classifyChangedLineForSymbol("  if (dedupeKey == other) {", "dedupeKey")).toBe("weak")
+    expect(classifyChangedLineForSymbol("  if (dedupeKey !== other) {", "dedupeKey")).toBe("weak")
+    expect(classifyChangedLineForSymbol("  if (dedupeKey >= max) {", "dedupeKey")).toBe("weak")
+    expect(classifyChangedLineForSymbol("  dedupeKey += 1", "dedupeKey")).toBe("weak") // compound mutation, not a build
+  })
+  it("INELIGIBLE on a type/interface field declaration — INCLUDING one with a trailing comma (the P1 review caught)", () => {
+    expect(classifyChangedLineForSymbol("  readonly dedupeKey: string", "dedupeKey")).toBe("ineligible")
+    expect(classifyChangedLineForSymbol("  dedupeKey: string", "dedupeKey")).toBe("ineligible")
+    expect(classifyChangedLineForSymbol("  dedupeKey: string,", "dedupeKey")).toBe("ineligible") // trailing comma ≠ value
+    expect(classifyChangedLineForSymbol("  dedupeKey?: AttemptKind", "dedupeKey")).toBe("ineligible")
+  })
+  it("a colon-form object-property VALUE (`sym: expr,`) is NOT strong — ambiguous with a type field → weak", () => {
+    // We can't tell `sym: makeKey(e),` (value) from `sym: SomeType,` (field) on one
+    // line, so it's never a strong remap target (bias to withhold).
+    expect(classifyChangedLineForSymbol("    dedupeKey: buildKey(e),", "dedupeKey")).not.toBe("strong")
+  })
+  it("INELIGIBLE on a header / brace / import / a line missing the symbol", () => {
+    expect(classifyChangedLineForSymbol("export function parseEvent(line: string): ParsedEvent {", "dedupeKey")).toBe(
+      "ineligible",
+    )
+    expect(classifyChangedLineForSymbol("}", "dedupeKey")).toBe("ineligible")
+    expect(classifyChangedLineForSymbol("import { x } from './y'", "dedupeKey")).toBe("ineligible")
+    expect(classifyChangedLineForSymbol("  const other = 1", "dedupeKey")).toBe("ineligible")
+  })
+  it("is case-sensitive and word-bounded (no substring false match)", () => {
+    expect(classifyChangedLineForSymbol("  const dedupeKeyMap = new Map()", "dedupeKey")).toBe("ineligible")
+    expect(classifyChangedLineForSymbol("  const DEDUPEKEY = 1", "dedupeKey")).toBe("ineligible")
+  })
+})
+
+describe("isLowQualityAnchorLine", () => {
+  it("TRUE for an unknown (off-diff) line, a header, a brace, and a type-field declaration", () => {
+    expect(isLowQualityAnchorLine(undefined, ["dedupeKey"])).toBe(true)
+    expect(isLowQualityAnchorLine("export function parseEvent(): void {", ["dedupeKey"])).toBe(true)
+    expect(isLowQualityAnchorLine("", ["dedupeKey"])).toBe(true)
+    expect(isLowQualityAnchorLine("  readonly dedupeKey: string", ["dedupeKey"])).toBe(true)
+  })
+  it("FALSE for a substantive statement (don't move a good anchor)", () => {
+    expect(isLowQualityAnchorLine("  const dedupeKey = `${runId}:${idx}`", ["dedupeKey"])).toBe(false)
+  })
+})
+
+describe("remapCiFindingAnchor (the deterministic remap)", () => {
+  // The canonical #24 geometry: an interface field (110, declaration), the
+  // function header (113), and the buggy assignment (118) are all changed lines.
+  const ADDED = new Map<string, ReadonlyMap<number, string>>([
+    [
+      "src/parse/event.ts",
+      new Map<number, string>([
+        [110, "  readonly dedupeKey: string"],
+        [117, "  // Build a stable key so a re-delivered event is dropped as a duplicate."],
+        [118, "  const dedupeKey = `${raw.runId}:${attemptIndex}`"],
+        [121, "    dedupeKey,"],
+      ]),
+    ],
+  ])
+  const base = {
+    headline: "dedupeKey omits attemptKind, collapsing distinct-kind events",
+    body: "The `dedupeKey` is built from only runId and attemptIndex, so a start and end event for the same attempt collide.",
+    addedLineTextByPath: ADDED,
+    isTestPath: isCiTestPath,
+  }
+
+  it("remaps an anchor on the function HEADER (113) to the dedupeKey assignment (118)", () => {
+    const remap = remapCiFindingAnchor({ ...base, path: "src/parse/event.ts", line: 113, currentlyAnchored: true })
+    expect(remap).toEqual({ path: "src/parse/event.ts", line: 118, reason: "strong:dedupeKey" })
+  })
+
+  it("remaps an OFF-DIFF anchor (currentlyAnchored:false) into the diff at the assignment", () => {
+    // e.g. the model anchored the test-assertion line; not RIGHT-reviewable.
+    const remap = remapCiFindingAnchor({ ...base, path: "tests/parse.test.ts", line: 50, currentlyAnchored: false })
+    expect(remap).toEqual({ path: "src/parse/event.ts", line: 118, reason: "strong:dedupeKey" })
+  })
+
+  it("does NOT pick the interface-field declaration (110) over the assignment (118)", () => {
+    const remap = remapCiFindingAnchor({ ...base, path: "src/parse/event.ts", line: 113, currentlyAnchored: true })
+    expect(remap?.line).not.toBe(110)
+    expect(remap?.line).toBe(118)
+  })
+
+  it("NO-OP when the flag-gated caller never invokes it — (covered by run-layer test); here: NO-OP on a good anchor", () => {
+    // currentlyAnchored on the substantive assignment line itself → leave it.
+    const remap = remapCiFindingAnchor({ ...base, path: "src/parse/event.ts", line: 118, currentlyAnchored: true })
+    expect(remap).toBeNull()
+  })
+
+  it("NO-OP for a generic-only finding (no specific identifier named)", () => {
+    const remap = remapCiFindingAnchor({
+      path: "src/parse/event.ts",
+      line: 113,
+      currentlyAnchored: true,
+      headline: "the value is wrong",
+      body: "the result and the data are off",
+      addedLineTextByPath: ADDED,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
+  })
+
+  it("NO-OP (ambiguous) when TWO distinct lines are equally-strong for named symbols (metamorphic)", () => {
+    const twoStrong = new Map<string, ReadonlyMap<number, string>>([
+      [
+        "src/parse/event.ts",
+        new Map<number, string>([
+          [118, "  const dedupeKey = `${raw.runId}:${attemptIndex}`"],
+          [130, "  const groupKey = `${raw.runId}`"],
+        ]),
+      ],
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "src/parse/event.ts",
+      line: 113,
+      currentlyAnchored: true,
+      headline: "dedupeKey and groupKey are both wrong",
+      body: "`dedupeKey` and `groupKey` both omit the kind",
+      addedLineTextByPath: twoStrong,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
+  })
+
+  it("NEVER targets a test file (cause is non-test source) — a strong test line is not a target", () => {
+    const testOnly = new Map<string, ReadonlyMap<number, string>>([
+      ["tests/parse.test.ts", new Map<number, string>([[42, "  const dedupeKey = makeKey(e)"]])],
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "tests/parse.test.ts",
+      line: 10,
+      currentlyAnchored: false,
+      headline: "dedupeKey omits the kind",
+      body: "`dedupeKey` is wrong",
+      addedLineTextByPath: testOnly,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
+  })
+
+  it("does NOT pull a finding off a TEST line it is ALREADY anchored to", () => {
+    const both = new Map<string, ReadonlyMap<number, string>>([
+      ["tests/parse.test.ts", new Map<number, string>([[20, "  expect(dedupeEvents(e)).toHaveLength(2)"]])],
+      ["src/parse/event.ts", new Map<number, string>([[118, "  const dedupeKey = `${raw.runId}:${attemptIndex}`"]])],
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "tests/parse.test.ts",
+      line: 20,
+      currentlyAnchored: true, // genuinely-in-test anchor → leave it
+      headline: "dedupeKey omits the kind",
+      body: "`dedupeKey` is wrong",
+      addedLineTextByPath: both,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
+  })
+
+  it("for a non-test SOURCE anchor, restricts the search to the SAME file (no cross-file remap)", () => {
+    const twoFiles = new Map<string, ReadonlyMap<number, string>>([
+      ["src/parse/event.ts", new Map<number, string>([[113, "export function parseEvent(): void {"]])], // only a header here
+      ["src/other.ts", new Map<number, string>([[5, "  const dedupeKey = makeKey(e)"]])], // strong, different file
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "src/parse/event.ts",
+      line: 113,
+      currentlyAnchored: true,
+      headline: "dedupeKey omits the kind",
+      body: "`dedupeKey` is wrong",
+      addedLineTextByPath: twoFiles,
+      isTestPath: isCiTestPath,
+    })
+    // Same-file has no strong candidate; cross-file is NOT allowed for a source
+    // anchor → no-op (never blame src/other.ts from a finding anchored in event.ts).
+    expect(remap).toBeNull()
+  })
+
+  it("NEVER targets a line absent from the changed-`+`-line map (no fabricated anchor)", () => {
+    const remap = remapCiFindingAnchor({ ...base, path: "src/parse/event.ts", line: 113, currentlyAnchored: true })
+    expect(remap).not.toBeNull()
+    // The returned line is a key of the added-line map (a real `+` line).
+    expect(ADDED.get(remap!.path)?.has(remap!.line)).toBe(true)
+  })
+
+  it("NO-OP when the only changed line naming the symbol is a COMPARISON/read, not an assignment (P1 regression)", () => {
+    // The model names `dedupeKey`; the only changed line is an equality check —
+    // that line WITNESSES, it doesn't PRODUCE. Must not be chosen as a target.
+    const cmpOnly = new Map<string, ReadonlyMap<number, string>>([
+      ["src/parse/event.ts", new Map<number, string>([[60, "  if (dedupeKey === expected) return out"]])],
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "tests/parse.test.ts",
+      line: 50,
+      currentlyAnchored: false, // off-diff anchor that would otherwise want a re-home
+      headline: "dedupeKey omits attemptKind",
+      body: "`dedupeKey` is wrong",
+      addedLineTextByPath: cmpOnly,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
+  })
+
+  it("NO-OP when the only changed line naming the symbol is a TYPE FIELD with a trailing comma (P1 regression)", () => {
+    const fieldOnly = new Map<string, ReadonlyMap<number, string>>([
+      ["src/parse/event.ts", new Map<number, string>([[110, "  dedupeKey: string,"]])],
+    ])
+    const remap = remapCiFindingAnchor({
+      path: "tests/parse.test.ts",
+      line: 50,
+      currentlyAnchored: false,
+      headline: "dedupeKey omits attemptKind",
+      body: "`dedupeKey` is wrong",
+      addedLineTextByPath: fieldOnly,
+      isTestPath: isCiTestPath,
+    })
+    expect(remap).toBeNull()
   })
 })

@@ -299,6 +299,23 @@ SHADOW_BAKEOFF_ROLES = ""
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-426: CI-failure triage → review synth (grounded inline). "off" | "shadow" |
+# "enforce". "shadow": on a failed CI run, run the nemotron-ultra synth pass +
+# telemeter the would-post grounded-inline decisions, but keep the legacy sticky
+# (NO customer-visible change) — the data-gathering window before enforce.
+# "enforce": post the grounded inline finding(s); suppress the legacy sticky +
+# SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
+OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
+
+# SIG-433: deterministic anchor remap — re-homes a correctly-diagnosed CI finding
+# from the test-assertion line / enclosing function header onto the exact changed
+# source line it implicates, so the grounded inline lands instead of being withheld.
+# Eval (5 archetypes, K=12): ON-diff catch 79%→98% (the dedupeKey archetype
+# 17%→100%), hallucination 0, off-diff still 100% withheld (no fabricated anchors).
+# Only re-homes to a real changed RIGHT line; no confident match → withheld.
+# Code default is off (parseCiTriageAnchorRemap).
+OPENCLAW_CI_TRIAGE_ANCHOR_REMAP = "on"
+
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /
 # import-dependent bodies) and emit the `graph-expansion-shadow` telemetry.
@@ -699,6 +716,24 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # (the actual prune / cost-saving) once the shadow trail validates the picks;
 # "enforce_rules" (rules-only, no LLM call) or "off" reverts.
 OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
+
+# SIG-418 Phase 2 (Design B′): in-invocation multi-batch review for large PRs.
+# "off" | "shadow" | "on". "shadow": on a PR that spills past the single-batch
+# pack cap, run the batch loop DETACHED + telemeter the would-be union / coverage
+# delta / cost — the posted review stays BYTE-IDENTICAL (output unchanged) and
+# prod token accounting is untouched (cost-isolated). Gathers organic large-PR
+# data. "on" (output-union enforce) ships in SIG-432, gated on a distributed-bug
+# fixture proving the recall delta. Code default is off (parseEnsembleConfig).
+OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
+
+# SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
+# finding off a comment/blank/structural/header line onto the substantive code
+# line it describes within the diff (lands the comment ON the bug, not the `//`
+# above it). Eval (5 archetypes, K=12): reproduced comment-above-bug 0%→100%,
+# aggregate exact-line 40%→80%, wrong-line (hallucination-equiv) rate DROPS
+# (recall-safe). Only re-homes to a real changed RIGHT line; no confident target
+# → unchanged. Code default is off (parseEnsembleConfig).
+OPENCLAW_ANCHOR_PRECISION = "on"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when

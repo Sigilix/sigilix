@@ -108,6 +108,10 @@ export function decideNextBatchLaunch(input: NextBatchLaunchInput): NextBatchLau
  * Convenience wrapper over `decideNextBatchLaunch` that supplies the real
  * `budget.ts` timeout constants, so call sites pass only the live wall-clock
  * inputs. Kept thin and pure (the constants are module-level values, not env).
+ *
+ * PRE-synth variant: reserves the FULL synth tail (`SYNTHESIZER_TIMEOUT_MS +
+ * RESERVED_HEADROOM_MS`). Use this for a batch loop that runs BEFORE the synth
+ * (synth still has to fit after the launched batch).
  */
 export function decideNextBatchLaunchWithBudget(args: {
   startMs: number
@@ -120,6 +124,33 @@ export function decideNextBatchLaunchWithBudget(args: {
     minUsefulBatchMs: args.minUsefulBatchMs,
     specialistMs: SPECIALIST_TIMEOUT_MS,
     synthesizerMs: SYNTHESIZER_TIMEOUT_MS,
+    reservedHeadroomMs: RESERVED_HEADROOM_MS,
+    orchestratorMs: ORCHESTRATOR_TIMEOUT_MS,
+  })
+}
+
+/**
+ * POST-synth variant: the synth has ALREADY run (e.g. the SIG-418 PR-2 shadow
+ * pass, which the orchestrator schedules after the single-batch synth + stale-head
+ * guard #2). Synth's budget is already spent, so reserving it again would make the
+ * deadline doubly conservative and halt the loop immediately. We reserve only the
+ * tail that STILL has to run after this pass — render → verify → publish →
+ * finalize — for which `RESERVED_HEADROOM_MS` (the conservative tail envelope,
+ * `budget.ts`) is the available bound; `synthesizerMs` is 0. A launched batch +
+ * that tail can never exceed the orchestrator wall, so the posted review's
+ * finalize is never starved (recall-safe).
+ */
+export function decideNextBatchLaunchAfterSynthWithBudget(args: {
+  startMs: number
+  now: number
+  minUsefulBatchMs: number
+}): NextBatchLaunchDecision {
+  return decideNextBatchLaunch({
+    startMs: args.startMs,
+    now: args.now,
+    minUsefulBatchMs: args.minUsefulBatchMs,
+    specialistMs: SPECIALIST_TIMEOUT_MS,
+    synthesizerMs: 0,
     reservedHeadroomMs: RESERVED_HEADROOM_MS,
     orchestratorMs: ORCHESTRATOR_TIMEOUT_MS,
   })

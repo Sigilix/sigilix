@@ -303,3 +303,364 @@ export function renderCiFindingComment(presentation: CiFindingPresentation, hedg
   blocks.push(`Surfaced from failed CI run [${presentation.runId}](${presentation.runUrl}).`)
   return blocks.join("\n\n")
 }
+
+// ─────────────────────────── anchor remap (SIG-433) ─────────────────────────
+//
+// THE CATCH PROBLEM (SIG-431 measured it): the grounded CI synth diagnoses the
+// failure ~100% correctly with 0% hallucination, but it anchors the finding to a
+// line that only WITNESSES the bug — the enclosing function header / a blank
+// context line / an interface-field declaration — instead of the exact changed
+// SOURCE statement that PRODUCES it (e.g. the `const dedupeKey = …` line). When
+// the witnessed line is off-diff the finding is correctly withheld (catch lost);
+// when it's a poor-but-reviewable changed line it posts on the WRONG line (still
+// not a catch). Prompt-tuning the model toward the cause line plateaued.
+//
+// The fix is a DETERMINISTIC, default-OFF remap: when the finding's text names a
+// specific identifier and there is exactly ONE changed RIGHT-side NON-test source
+// line that ASSIGNS/RETURNS/sets that identifier, move the anchor to that line.
+// This NEVER fabricates — it only re-homes the anchor among real `+`-lines of the
+// diff — and it is biased HARD toward leaving the finding untouched: any ambiguity
+// (no strong candidate, two-or-more equally-strong candidates, only a generic
+// identifier, the original anchor already a good substantive statement) is a no-op.
+// Codex signed off on this contract (single unique strong candidate, else
+// withhold; require log-grounding first; stop-list generic identifiers; same-file
+// for non-test source anchors; never target a test / structural / context line).
+
+/**
+ * Parse `OPENCLAW_CI_TRIAGE_ANCHOR_REMAP`. Only the literal "on" (trimmed,
+ * case-insensitive) enables it; everything else — unset, "off", "true", garbage
+ * — is OFF. Default OFF is mandatory: CI-triage enforce is LIVE, so the remap
+ * must not change posted anchors until the eval proves the catch lift.
+ */
+export function parseCiTriageAnchorRemap(raw: string | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase() === "on"
+}
+
+/**
+ * Generic identifiers that, ALONE, can never qualify as the "strong" symbol that
+ * licenses a remap — they collide across unrelated changed lines and would let
+ * the remap match a coincidental token. A finding must name a NON-generic
+ * identifier (e.g. `dedupeKey`, `attemptKind`) for the remap to fire; a
+ * generic-only finding is a no-op. (Codex sign-off point 3.)
+ */
+const GENERIC_SYMBOL_STOPLIST: ReadonlySet<string> = new Set([
+  "data",
+  "value",
+  "result",
+  "key",
+  "id",
+  "type",
+  "name",
+  "error",
+  "err",
+  "payload",
+  "body",
+  "config",
+  "options",
+  "opts",
+  "state",
+  "props",
+  "item",
+  "items",
+  "args",
+  "arg",
+  "obj",
+  "res",
+  "req",
+  "ctx",
+  "fn",
+  "cb",
+  "tmp",
+  "out",
+  "input",
+  "output",
+])
+
+/**
+ * Extract the candidate identifier symbols a finding NAMES (pure). Pulls
+ * backtick-quoted spans and bare JS identifiers from `headline`+`body`, keeps
+ * only well-formed identifiers (`[A-Za-z_$][\w$]*`), drops the generic stop-list,
+ * and — to bias toward SPECIFIC names — keeps only identifiers that are NOT
+ * all-lowercase-single-word unless they're clearly compound (contain `_`) OR are
+ * camelCase/contain an uppercase letter. So `dedupeKey`, `attemptKind`,
+ * `snake_case_thing` qualify; a bare `parse`/`length`/`expected` does not. Case
+ * is preserved (identifier matching downstream is case-sensitive).
+ */
+export function extractFindingSymbols(headline: string, body: string): string[] {
+  const text = `${headline}\n${body}`
+  const found = new Set<string>()
+  // Backtick-quoted spans first (the model's own emphasis), then bare identifiers.
+  const backtickSpans = text.match(/`[^`]+`/g) ?? []
+  const haystacks = [...backtickSpans.map((s) => s.slice(1, -1)), text]
+  for (const hay of haystacks) {
+    const idents = hay.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []
+    for (const ident of idents) {
+      if (ident.length < 3) continue
+      if (GENERIC_SYMBOL_STOPLIST.has(ident.toLowerCase())) continue
+      if (isSpecificIdentifier(ident)) found.add(ident)
+    }
+  }
+  return [...found]
+}
+
+/**
+ * A SPECIFIC code identifier (not a capitalized English sentence word). True for
+ * camelCase (`dedupeKey`), snake_case (`max_retries`), `$`-bearing (`$ref`), a
+ * digit-bearing token (`utf8Len`, `TS2339`), or an ALL-CAPS constant
+ * (`MAX_LEN`/`TS2339`). FALSE for a leading-capital single English word like
+ * `The`/`Property`/`Name` — those slip in at sentence start and are not
+ * identifiers. Conservative: when in doubt it's NOT specific (bias to no-op).
+ */
+function isSpecificIdentifier(ident: string): boolean {
+  if (ident.includes("_") || ident.includes("$")) return true
+  if (/\d/.test(ident)) return true
+  // camelCase: a lowercase letter somewhere BEFORE an uppercase letter.
+  if (/[a-z].*[A-Z]/.test(ident)) return true
+  // ALL-CAPS constant (>=2 letters, no lowercase) — e.g. an error-code-like token.
+  if (ident.length >= 2 && ident === ident.toUpperCase() && /[A-Z]/.test(ident)) return true
+  return false
+}
+
+/**
+ * Is `path` a TEST file (pure)? A test line WITNESSES a bug; it is never the
+ * cause, so the remap excludes test files as targets and won't pull a finding off
+ * a test line. Matches the repo's standard test-path shape (the AST rules'
+ * `SKIP_PATH`): `*.test.*` / `*.spec.*` / a `tests`/`__tests__` directory
+ * segment. Exported so the call site and tests share ONE definition.
+ */
+export function isCiTestPath(path: string): boolean {
+  return /(\.test\.|\.spec\.|(^|\/)(__tests__|tests?)\/)/.test(path)
+}
+
+/**
+ * Word-boundary, CASE-SENSITIVE presence of `symbol` as a whole JS identifier.
+ * `symbol` is `escapeRegExp`-sanitized before interpolation (defense in depth —
+ * the extractor already restricts it to `[A-Za-z_$][\w$]*`), so no regex
+ * metacharacter can reach the pattern.
+ */
+function lineMentionsSymbol(lineText: string, symbol: string): boolean {
+  const re = new RegExp(`(?<![A-Za-z0-9_$])${escapeRegExp(symbol)}(?![A-Za-z0-9_$])`)
+  return re.test(lineText)
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * How a changed line relates to a named symbol (pure, deterministic):
+ *
+ *   - "strong"     — the line ASSIGNS or RETURNS the symbol as a VALUE:
+ *                    `const sym = …` / `let sym = …` / `sym = …` / `this.sym = …`
+ *                    (a real `=` assignment, NOT a comparison) or `return …sym…`.
+ *                    This is the cause line a one-line fix would edit.
+ *   - "ineligible" — the line is NEVER a remap target: a brace/blank/structural
+ *                    line, an import, a TYPE/INTERFACE field declaration
+ *                    (`readonly sym: T` / `sym: T`), a function / class / type /
+ *                    interface HEADER, or a line that doesn't mention the symbol.
+ *   - "weak"       — mentions the symbol but is neither a `=` assignment nor a
+ *                    return of it (a read / use / comparison / a `sym: expr`
+ *                    property whose colon form is AMBIGUOUS with a type field).
+ *                    Not strong enough to license a remap on its own.
+ *
+ * DELIBERATELY conservative (Codex + code-review sign-off): a `sym:`-colon line is
+ * NEVER strong (it's indistinguishable from a type/interface field on one line —
+ * both can carry a trailing `,`), and an EQUALITY (`==`/`===`/`!=`/`<=`/`>=`) is
+ * NOT an assignment. Both omissions bias toward no-op, never toward a wrong anchor.
+ */
+export type ChangedLineSymbolTier = "strong" | "weak" | "ineligible"
+
+/**
+ * Is `trimmed` a colon-form field line for `symbol` — `readonly sym: T` /
+ * `sym?: T` / `sym: expr,` — with NO real `=`? Such a line is AMBIGUOUS between a
+ * type/interface field and an object-literal property, so it is NEVER a strong
+ * cause site AND is a poor original anchor. ONE definition shared by
+ * `classifyChangedLineForSymbol` (→ ineligible) and `isLowQualityAnchorLine`
+ * (→ low-quality) so the two can't diverge (code-review sign-off). `trimmed` must
+ * already be `.trim()`-ed.
+ */
+function isColonFieldLineForSymbol(trimmed: string, symbol: string): boolean {
+  const sym = escapeRegExp(symbol)
+  return new RegExp(`^(readonly\\s+)?${sym}\\??\\s*:`).test(trimmed) && !/=/.test(trimmed)
+}
+
+export function classifyChangedLineForSymbol(lineText: string, symbol: string): ChangedLineSymbolTier {
+  const trimmed = lineText.trim()
+  if (!lineMentionsSymbol(lineText, symbol)) return "ineligible"
+  // Structural / never-a-cause lines.
+  if (isStructuralOrDeclarationLine(trimmed)) return "ineligible"
+  const sym = escapeRegExp(symbol)
+  // A colon-form line (`readonly sym: T` / `sym?: T` / `sym: expr,`) is AMBIGUOUS:
+  // it's either a type/interface field (shape, ineligible) OR an object-literal
+  // property value. We can't tell from one line, so a colon-form WITHOUT a real
+  // `=` is never strong (it falls through to "weak" at most, and a leading
+  // type-field shape is rejected as ineligible) — bias to withhold.
+  if (isColonFieldLineForSymbol(trimmed, symbol)) return "ineligible"
+  // Assignment of the symbol: `const sym =`, `let sym =`, `sym =`, `this.sym =`,
+  // optionally with a type annotation (`sym: T = …`). The `=` must be a REAL
+  // assignment operator: not part of `==`/`===` (lookahead `(?!=)`) and not the
+  // tail of `!=`/`<=`/`>=`/a compound op (negative lookbehind on the char before).
+  const isAssignment = new RegExp(
+    `(^|[^A-Za-z0-9_$])(const\\s+|let\\s+|var\\s+|this\\.)?${sym}\\s*(:\\s*[^=<>!]+?)?\\s*(?<![=<>!+\\-*/%&|^])=(?!=)`,
+  ).test(trimmed)
+  // Returned/computed with the symbol in it.
+  const isReturnOfSymbol = /^return\b/.test(trimmed) && lineMentionsSymbol(trimmed, symbol)
+  if (isAssignment || isReturnOfSymbol) return "strong"
+  return "weak"
+}
+
+/**
+ * Lines that are NEVER a remap target regardless of symbol: a bare brace / blank,
+ * an import/export-from, or a function / class / type / interface / enum HEADER.
+ * (Codex: no structural-line target, no header target.)
+ */
+function isStructuralOrDeclarationLine(trimmed: string): boolean {
+  if (trimmed.length === 0) return true
+  if (/^[{}()[\];,]+$/.test(trimmed)) return true
+  if (/^import\b/.test(trimmed) || /^export\s+(\{|\*|type\b|default\b)/.test(trimmed)) return true
+  // A declaration HEADER (the container, not a statement inside it).
+  if (/^(export\s+)?(async\s+)?function\b/.test(trimmed)) return true
+  if (/^(export\s+)?(abstract\s+)?class\b/.test(trimmed)) return true
+  if (/^(export\s+)?(interface|type|enum|namespace)\b/.test(trimmed)) return true
+  return false
+}
+
+/**
+ * Is the finding's ORIGINAL anchored line a poor anchor worth moving FROM (pure)?
+ * We only remap an already-reviewable finding when its current line is clearly
+ * low-quality — a structural/blank/import line, a header, a type-field
+ * declaration, or a line the finding's symbol merely passes through. We do NOT
+ * move a finding already sitting on a substantive statement (Codex sign-off
+ * point 1). When the original line text is unknown (off-diff: no `+`-line text),
+ * the finding wasn't reviewable anyway, so it's always eligible to remap.
+ */
+export function isLowQualityAnchorLine(originalLineText: string | undefined, symbols: readonly string[]): boolean {
+  if (originalLineText === undefined) return true // off-diff / not a known added line
+  const trimmed = originalLineText.trim()
+  if (isStructuralOrDeclarationLine(trimmed)) return true
+  // An ambiguous colon-form field line for a named symbol is a poor anchor — the
+  // SAME predicate `classifyChangedLineForSymbol` uses to mark it ineligible, so a
+  // line that is never a strong TARGET is also never wrongly KEPT as a good anchor.
+  for (const sym of symbols) {
+    if (isColonFieldLineForSymbol(trimmed, sym)) return true
+  }
+  // Otherwise it's a substantive statement — leave it where it is.
+  return false
+}
+
+/** Inputs the pure remap needs about ONE finding + the diff geometry. */
+export interface CiAnchorRemapInput {
+  /** The finding's current anchor path. */
+  path: string
+  /** The finding's current anchor line (new-side). */
+  line: number
+  /** The finding's headline (symbol source). */
+  headline: string
+  /** The finding's body (symbol source). */
+  body: string
+  /**
+   * Whether the finding is ALREADY RIGHT-anchored to its current line. When true
+   * we only remap if the current line is low-quality; when false (off-diff) the
+   * finding is currently withheld and any confident remap is a strict gain.
+   */
+  currentlyAnchored: boolean
+  /**
+   * Per-path map of changed `+`-line NUMBER → its added TEXT, from
+   * `buildAddedLineTextByLine(diff)`. The ONLY lines a remap may target (so the
+   * target is provably a real changed RIGHT-side line, never a context line).
+   */
+  addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /** True iff `path` is a TEST file (a test line witnesses, never causes). */
+  isTestPath: (path: string) => boolean
+}
+
+/** A confident remap decision (the new anchor + why), or null = leave as-is. */
+export interface CiAnchorRemap {
+  path: string
+  line: number
+  /** The matched symbol + tier, for telemetry (never customer-facing). */
+  reason: string
+}
+
+/**
+ * The deterministic anchor remap (pure). Returns a new `{path, line}` ONLY when
+ * exactly one changed RIGHT-side NON-test source line is the STRONG (assignment/
+ * return/property) site of a SPECIFIC identifier the finding names; otherwise
+ * null (leave the finding exactly as it is). Guardrails, all enforced here:
+ *
+ *   - target is always a real `+`-line from `addedLineTextByPath` (never a
+ *     context line, never invented);
+ *   - test files are excluded as targets, and a finding ALREADY anchored to a
+ *     test line is not pulled off it (we just return null);
+ *   - for a finding currently anchored to a NON-test source line, the search is
+ *     restricted to that SAME file (cross-file remap only re-homes a finding
+ *     whose original anchor is a test file or off-diff — Codex's extra guard);
+ *   - an already-substantive original anchor is never moved;
+ *   - generic-only / no-symbol findings are a no-op (stop-list);
+ *   - TWO-OR-MORE equally-strong candidates → ambiguous → no-op.
+ *
+ * Log-grounding is enforced by the CALLER (it must pass `isLogGrounded` before
+ * invoking this) — keeping that gate at the call site keeps catch a strict subset
+ * of grounded findings and this function single-purpose.
+ */
+export function remapCiFindingAnchor(input: CiAnchorRemapInput): CiAnchorRemap | null {
+  // A finding already anchored to a TEST line is left alone (don't pull a
+  // genuinely-in-test defect off its real line).
+  if (input.currentlyAnchored && input.isTestPath(input.path)) return null
+
+  const symbols = extractFindingSymbols(input.headline, input.body)
+  if (symbols.length === 0) return null
+
+  // Only move an already-anchored finding off a LOW-QUALITY line.
+  if (input.currentlyAnchored) {
+    const originalText = input.addedLineTextByPath.get(input.path)?.get(input.line)
+    if (!isLowQualityAnchorLine(originalText, symbols)) return null
+  }
+
+  // Candidate target files: NON-test files. For a non-test, currently-anchored
+  // source finding, restrict to its OWN file; otherwise (test-anchored or
+  // off-diff) any non-test changed file is fair game.
+  const sameFileOnly = input.currentlyAnchored && !input.isTestPath(input.path)
+  const candidateFiles: string[] = []
+  for (const path of input.addedLineTextByPath.keys()) {
+    if (input.isTestPath(path)) continue
+    if (sameFileOnly && path !== input.path) continue
+    candidateFiles.push(path)
+  }
+  if (candidateFiles.length === 0) return null
+
+  // Collect every STRONG (path,line) site across the candidate files, keyed by the
+  // target line so the same line being strong for >1 symbol is ONE target (not an
+  // ambiguity). The first symbol that proves a line strong labels it (telemetry).
+  interface StrongTarget {
+    path: string
+    line: number
+    symbol: string
+  }
+  const distinctTargets = new Map<string, StrongTarget>()
+  for (const path of candidateFiles) {
+    const byLine = input.addedLineTextByPath.get(path)
+    if (!byLine) continue
+    for (const [line, text] of byLine) {
+      for (const symbol of symbols) {
+        if (classifyChangedLineForSymbol(text, symbol) !== "strong") continue
+        const key = `${path}:${line}`
+        if (!distinctTargets.has(key)) distinctTargets.set(key, { path, line, symbol })
+        break // this line is already a target; other symbols don't add a new one
+      }
+    }
+  }
+  const targets = [...distinctTargets.values()]
+
+  // EXACTLY ONE strong target → confident remap. Zero → nothing to anchor; two or
+  // more → ambiguous: no-op (bias to withhold; never guess between two plausible
+  // cause lines).
+  if (targets.length !== 1) return null
+  const target = targets[0]
+  if (!target) return null
+
+  // Don't "remap" a finding onto the line it's already on.
+  if (target.path === input.path && target.line === input.line) return null
+
+  return { path: target.path, line: target.line, reason: `strong:${target.symbol}` }
+}

@@ -501,6 +501,31 @@ export interface Env {
   // `ci-triage-synth-run.ts`.
   OPENCLAW_CI_TRIAGE_SYNTH_HARD_WITHHOLD?: string
 
+  // SIG-433: when "on", the CI-triage-synth applies a DETERMINISTIC anchor remap
+  // — a log-grounded finding the model anchored to a witness/header/declaration
+  // line is re-homed to the changed SOURCE line (the assignment/return/property
+  // of an identifier the finding names) that PRODUCES the failure, so a correct
+  // diagnosis posts on (and is caught at) the buggy line instead of being
+  // withheld or posted on the wrong line. DEFAULT OFF (any other value): enforce
+  // is LIVE, so the remap ships dark until the eval proves the catch lift. Only
+  // ever MOVES an anchor among real changed `+`-lines (never fabricates); a wrong
+  // remap = a wrong inline comment, so it's biased to no-op on any ambiguity.
+  // Parsed by `parseCiTriageAnchorRemap`; read in `ci-triage-synth-run.ts`.
+  OPENCLAW_CI_TRIAGE_ANCHOR_REMAP?: string
+
+  // SIG-436: when "on", the MAIN PR-review inline submission applies a
+  // DETERMINISTIC anchor-precision pass — a finding the model anchored to the
+  // `// comment` line directly ABOVE the bug (a whole-line comment, which the
+  // base substantive-anchor walk treats as substantive) is re-homed forward onto
+  // the buggy code statement the comment describes. DEFAULT OFF (any other
+  // value): inline anchoring is a LIVE surface and a benchmark runs on prod, so
+  // this ships dark until the K=12 exactness eval proves the lift. Only ever
+  // re-homes among real changed `+`-lines (never fabricates); no substantive code
+  // line in window → the finding body-demotes (surfaced, never dropped), never a
+  // wrong-line anchor. Parsed in `parseEnsembleConfig` → `flags.anchorPrecision`;
+  // threaded into the render layer via `buildReviewSubmissionWithMetadata`.
+  OPENCLAW_ANCHOR_PRECISION?: string
+
   // SIG-109: logic-finding evidence gate mode. "shadow" (default; any
   // value other than "enforce") counts + telemeters what the gate WOULD
   // drop without dropping; "enforce" actually drops sev>=4 logic findings

@@ -19,6 +19,7 @@ import { prepareReviewSubmissionFindings } from "@/src/lib/ensemble/render/submi
 import { SYNTHESIZER_PROMPT } from "@/src/prompts/specialists/synthesizer"
 import { CI_SYNTH_PREAMBLE } from "@/src/prompts/specialists/ci-synth"
 import { parseDiffToReviewablePositions, deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import { buildAddedLineTextByLine } from "@/src/features/ast-rules"
 import { computeContentFingerprint } from "@/src/lib/review-withdrawal-store"
 import { readReviewManifest } from "@/src/lib/review-manifest"
 import { parseFindingFingerprint } from "@/src/lib/pr-finding-markers"
@@ -31,9 +32,12 @@ import {
   buildCiSynthUserMessage,
   ciFindingCoarseKey,
   disposeCiFinding,
+  isCiTestPath,
   isDuplicateOfExistingReview,
   isLogGrounded,
   matchesExistingCoarseKey,
+  parseCiTriageAnchorRemap,
+  remapCiFindingAnchor,
   renderCiFindingComment,
   type CiFileContext,
   type CiFindingDisposition,
@@ -196,7 +200,12 @@ async function runCiTriageSynthImpl(args: RunCiTriageSynthArgs, t0: number): Pro
       // grounded findings and mandates the verbatim `logExcerpt`).
       systemPrompt: CI_SYNTH_PREAMBLE + SYNTHESIZER_PROMPT,
       userMessage,
-      chatEnabled: "off",
+      // Derive the kill-switch the SAME way the ensemble synth path does
+      // (synthesize.ts:544) — "off" HARD-throws in the chat adapter
+      // (openrouter-chat.ts:78 / ollama-chat.ts:62), it is NOT a no-tools mode.
+      // Hardcoding "off" here killed every CI synth call. Honor the
+      // OLLAMA_CHAT_ENABLE kill-switch instead so CI triage runs iff chat is on.
+      chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
       signal: controller.signal,
       perfCtx: { owner, repo, prNumber, headSha },
       // No specialist sources on the CI path — provenance reconstruction is a
@@ -240,9 +249,39 @@ async function runCiTriageSynthImpl(args: RunCiTriageSynthArgs, t0: number): Pro
   const surviving: Array<{ finding: PrReviewFinding; disposition: InlineDisposition }> = []
 
   const hardWithhold = hardWithholdUncorroborated(env)
-  for (const finding of prepared.inlineFindings) {
+  // SIG-433: deterministic anchor remap (default OFF — enforce is LIVE). When ON,
+  // a grounded finding the model anchored to a witness/header line is re-homed to
+  // the changed SOURCE line that produces the bug, BEFORE the anchored check below.
+  // Built once per run; only the `+`-lines of the diff are remap targets.
+  const remapEnabled = parseCiTriageAnchorRemap(env.OPENCLAW_CI_TRIAGE_ANCHOR_REMAP)
+  const addedLineTextByPath = remapEnabled ? buildAddedLineTextByLine(diff) : undefined
+  for (const original of prepared.inlineFindings) {
+    let finding = original
+    // Grounding is computed INDEPENDENT of the anchor (Codex sign-off point 4):
+    // only re-home a finding the CI log actually corroborates, so the remap can
+    // never expand the inline surface for an ungrounded finding.
+    const logGrounded = isLogGrounded(finding.logExcerpt ?? "", ciLog)
+    if (remapEnabled && addedLineTextByPath && logGrounded) {
+      const currentlyAnchored = deriveSide(reviewable, finding.path, finding.line) === "RIGHT"
+      const remap = remapCiFindingAnchor({
+        path: finding.path,
+        line: finding.line,
+        headline: finding.headline,
+        body: finding.body,
+        currentlyAnchored,
+        addedLineTextByPath,
+        isTestPath: isCiTestPath,
+      })
+      // A remap target is provably a changed `+`-line, so it MUST be RIGHT-
+      // reviewable — assert it before moving (defense in depth; never post a
+      // fabricated anchor).
+      if (remap && deriveSide(reviewable, remap.path, remap.line) === "RIGHT") {
+        emitRemap(args, finding, remap)
+        finding = { ...finding, path: remap.path, line: remap.line }
+      }
+    }
     const anchored = deriveSide(reviewable, finding.path, finding.line) === "RIGHT"
-    const logCorroborated = anchored && isLogGrounded(finding.logExcerpt ?? "", ciLog)
+    const logCorroborated = anchored && logGrounded
     const disposition = disposeCiFinding({
       anchored,
       logCorroborated,
@@ -524,6 +563,30 @@ function emitDecision(
       score: s.finding.score,
       disposition: s.disposition,
       outcome,
+    }),
+  )
+}
+
+/** SIG-433: one line per anchor remap (the model's line → the cause line). */
+function emitRemap(
+  args: RunCiTriageSynthArgs,
+  finding: PrReviewFinding,
+  remap: { path: string; line: number; reason: string },
+): void {
+  console.log(
+    JSON.stringify({
+      event: "ci-triage-synth-remap",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      runId: args.runId,
+      headSha: args.headSha.slice(0, 7),
+      mode: args.mode,
+      fromPath: finding.path,
+      fromLine: finding.line,
+      toPath: remap.path,
+      toLine: remap.line,
+      reason: remap.reason,
     }),
   )
 }

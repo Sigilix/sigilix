@@ -153,6 +153,13 @@ describe("isSubstantiveAnchorLine (SIG-127)", () => {
     expect(isSubstantiveAnchorLine("const x = 1")).toBe(true)
     expect(isSubstantiveAnchorLine("  return batch(ids)")).toBe(true)
   })
+
+  it("SIG-436 root cause: treats a `// comment` line as substantive (the base classifier)", () => {
+    // This is the bug — the base walk stops on the comment above the bug.
+    expect(isSubstantiveAnchorLine("  // Build a stable key for dedupe.")).toBe(true)
+    expect(isSubstantiveAnchorLine("  /* validate the amount */")).toBe(true)
+    expect(isSubstantiveAnchorLine("   * jsdoc continuation")).toBe(true)
+  })
 })
 
 describe("provenance footer (ARC-184)", () => {

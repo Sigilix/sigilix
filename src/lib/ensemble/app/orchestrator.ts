@@ -38,6 +38,7 @@ import {
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
 import { runSpecialistsAndSynthesize } from "./specialists"
+import { maybeScheduleMultiBatchShadow } from "./multibatch-shadow-scheduler"
 import { buildCostProjectionLineup } from "@/src/lib/ensemble/adapters/model-provider"
 import { fetchDiffAndConfig, packAndRoute } from "./context/fetch-and-pack"
 import { gatherRetrievalEvidence } from "./context/gather-evidence"
@@ -141,33 +142,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   // owned at the dispatcher level → single source of truth for the
   // final outcome.
 
-  // ARC-283 Phase B1b — shadow-mode bake-off state. Lifted out of
-  // the try block so the `finally` cleanup can settle every shadow
-  // promise + emit comparison telemetry regardless of which return
-  // path the prod orchestrator took (success, bail-with-skip-notice,
-  // outer-catch). When `SHADOW_BAKEOFF_ROLES` is unset/empty the
-  // maps stay empty, the synth promise stays null, and the finally
-  // block runs a zero-cost no-op.
-  //
-  // Snapshots are written as soon as the corresponding prod outcome
-  // settles — by the time `finally` runs, each entry is either:
-  //   - present (prod settled → shadow comparison can fire)
-  //   - absent (prod errored before settle → shadow still emits with
-  //     a synthetic "prod did not run" prod outcome)
-  // The shadow promise itself never throws — `runShadowSpecialist` /
-  // `runShadowSynth` catch + return structured failure on every path.
-  //
-  // SIG-318 (PR 12b): the four loose containers (`specialistPromises`,
-  // `prodSnapshots`, `abortControllers`, `synthPromise`) are bundled into one
-  // `ShadowBakeoffState` holder threaded by reference into `settleShadowBakeoff`.
-  // `abortControllers` (ARC-283 Phase B1b CR-2): per-shadow AbortController so the
-  // finally block can `.abort(reason)` any shadow request that didn't settle
-  // before the grace deadline / orch tear-down (pre-CR-2 we emitted
-  // `shadow-cut-short` but left the in-flight HTTP request alive, silently
-  // doubling provider rate-limit pressure past the cut). Keyed by the role the
-  // controller belongs to; `"synth"` is the single shadow synth controller. Map
-  // cleared as each entry settles so the finally loop only sees still-pending
-  // shadows.
+  // ARC-283 Phase B1b — shadow-mode bake-off state, lifted out of the try block so the
+  // `finally` settles every shadow promise + emits comparison telemetry on EVERY return
+  // path; empty `SHADOW_BAKEOFF_ROLES` → a zero-cost no-op (rationale: `shadow-settle.ts`).
   const shadowState: ShadowBakeoffState = {
     specialistPromises: new Map<SpecialistRole, Promise<ShadowRunResult>>(),
     prodSnapshots: new Map<SpecialistRole, ProdSpecialistSnapshot>(),
@@ -382,6 +359,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       filesAfterFilter,
       reviewedFiles,
       filesNotReviewed,
+      spilloverBatches,
       droppedTooLarge,
       filesDroppedByFilter,
       matchedPathInstructions,
@@ -713,6 +691,28 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
+
+    // SIG-418 Phase 2 (Design B′): DARK multi-batch SHADOW — after guard #2, detached, output-unchanged (helper header).
+    maybeScheduleMultiBatchShadow({
+      mode: ensembleConfig.flags.multiBatchMode,
+      identity: args,
+      perfCtx,
+      orchCtrl,
+      startMs,
+      spilloverBatches,
+      roles: router.specialists,
+      synthInputVerdicts,
+      filePaths,
+      filesNotReviewed,
+      graphBlastCallerPaths,
+      graphBlastDependentPaths,
+      meta,
+      namespace,
+      ...(sigilixConfig.guidance !== undefined ? { guidance: sigilixConfig.guidance } : {}),
+      stackBlock,
+      graphCtxForPrompt,
+      client,
+    })
 
     // ─── Submit ────────────────────────────────────────────────
     // SIG-318 (PR 12d): the render-prep phase — review-memory soften, the SIG-280 warm

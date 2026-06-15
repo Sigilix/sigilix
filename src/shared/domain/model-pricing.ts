@@ -13,30 +13,24 @@ export interface ModelPricing {
   outputPerMTokUsd: number
 }
 
-/** Operator-maintained estimate. Keys match the `model` string the
- *  ensemble passes to `chat()` (e.g. `deepseek-v4-pro:cloud`). Keep this
- *  table in sync with `SPECIALIST_CONFIGS` / synth config when models
- *  change. Numbers are deliberately conservative cloud-inference
- *  estimates — used only as a FALLBACK when the provider didn't report an
- *  actual `usage.cost` (SIG-417). */
+/** OpenRouter published-rate FALLBACK table. Prod runs the ensemble on
+ *  OpenRouter, so the provider reports an actual `usage.cost` per call and
+ *  that measured figure is what `computeReviewCost` bills (SIG-417). These
+ *  rows are only the fallback rate, used to *estimate* the cost of tokens
+ *  that arrived with no reported cost — both in the post-hoc SLO roll-up
+ *  and in the pre-flight cost projection / cost governor.
+ *
+ *  Keys are the OpenRouter model ids the ensemble passes to `chat()`, and
+ *  the numbers are OpenRouter's PUBLISHED list rates (per-MTok, from the
+ *  /models catalog). Keep this table in sync with `SPECIALIST_CONFIGS` /
+ *  `SYNTHESIZER_CONFIG` / `CLAIM_EXTRACTOR_CONFIG` / `DISPATCHER_LLM_MODEL`
+ *  (the dynamic-dispatcher.ts classifier).
+ *
+ *  Any model NOT listed here — including a local-eval `:cloud` override run
+ *  against Ollama Turbo — falls back to `DEFAULT_PRICING`. (SIG-417 removed
+ *  the legacy non-OpenRouter `:cloud` / Ollama estimate rows: prod no longer
+ *  runs them, and their estimate-only cost is now covered by the default.) */
 export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
-  "deepseek-v4-pro:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 1.7 },
-  "kimi-k2.7-code:cloud": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.5 },
-  "glm-5.1:cloud": { inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },
-  "qwen3:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 0.9 },
-  "minimax:cloud": { inputPerMTokUsd: 0.3, outputPerMTokUsd: 1.1 },
-  // SIG-392: the synth primary (swapped from gpt-oss:120b). gemma4:31b is the
-  // SMALLEST model in the lineup (31B vs the 100-670B others), so it sits at
-  // the low end of the estimate table. Without this row the synth's most-
-  // frequent call fell through to DEFAULT_PRICING (0.6/2.5) — hiding the ~4×
-  // per-call cost drop the swap measured. Estimate sized so the synth cost line
-  // on the dashboard reflects the real drop, not the over-estimating default.
-  "gemma4:31b": { inputPerMTokUsd: 0.15, outputPerMTokUsd: 0.6 },
-  // SIG-406 alpha — the OpenRouter lineup. Unlike the rows above (conservative
-  // cloud estimates), these are OpenRouter's PUBLISHED list rates (per-MTok, from
-  // the /models catalog), so the cost dashboard reflects real OpenRouter spend.
-  // Keep in sync with SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG / CLAIM_EXTRACTOR_CONFIG
-  // / DISPATCHER_LLM_MODEL (the dynamic-dispatcher.ts classifier).
   "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 },
   "deepseek/deepseek-v4-flash": { inputPerMTokUsd: 0.09, outputPerMTokUsd: 0.18 },
   "deepseek/deepseek-v4-pro": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 },

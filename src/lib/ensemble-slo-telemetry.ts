@@ -23,12 +23,14 @@
 //     (SIG-41). The SLO table below ships a single `default` tier; the
 //     shape is keyed by tier string so SIG-41 can add `free`/`pro`/…
 //     rows without touching emitters or the dashboard query.
-//   - COST: `MODEL_PRICING` is an operator-maintained ESTIMATE, not a
-//     billed figure. Self-hosted/Ollama-cloud rates drift and are not
-//     exposed by the provider per-call, so the cost field is "what we
-//     model it at," surfaced for relative trend + budget-breach signal,
-//     not for invoicing. Unknown models fall back to `DEFAULT_PRICING`
-//     so a new model name never silently drops to $0.
+//   - COST: prod runs on OpenRouter, which reports an actual `usage.cost`
+//     per call — that measured figure is what the cost field bills
+//     (SIG-417). `MODEL_PRICING` is only the published-rate FALLBACK,
+//     used to ESTIMATE the cost of tokens that arrived with no reported
+//     cost (a torn stream, or an Ollama `:cloud` eval override). The
+//     field is still surfaced for relative trend + budget-breach signal,
+//     not invoicing. Unknown models fall back to `DEFAULT_PRICING` so a
+//     new model name never silently drops to $0.
 
 import { type EnsembleRunCtx } from "./ensemble-perf-telemetry"
 import { pricingForModel } from "@/src/shared/domain/model-pricing"

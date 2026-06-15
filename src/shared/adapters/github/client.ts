@@ -329,6 +329,7 @@ export class GitHubClient {
           status: it.status ?? "",
           additions: typeof it.additions === "number" ? it.additions : 0,
           deletions: typeof it.deletions === "number" ? it.deletions : 0,
+          ...(typeof it.sha === "string" && it.sha.length > 0 ? { sha: it.sha } : {}),
           ...(typeof it.patch === "string" && it.patch.length > 0 ? { patch: it.patch } : {}),
         })
       }

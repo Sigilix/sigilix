@@ -328,14 +328,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       }
     }
 
-    // SIG-318 (PR 12g-1): the hunk-level split/filter/pack + char-level
-    // truncation, the AI-instructions ingest (which reassigns `sigilixConfig`),
-    // the path-instructions + scoped-rules resolution, the `reviewable` map, the
-    // deterministic-checks + secret-scan, the legacy router, and the SIG-226/
-    // SIG-224 dynamic-dispatcher block (which mutates `router`) moved to
-    // ensemble/app/context/fetch-and-pack. It mutates `telemetry` (diffPacking /
-    // deterministicChecks / secretScan / router writes) by reference; the final
-    // (post-dispatcher) router flows out for the orchestral router-empty gate below.
     const packed = await packAndRoute({
       env,
       client,
@@ -343,6 +335,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       repo,
       prNumber,
       headSha,
+      ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       ensembleConfig,
       orchCtrl,
       meta,
@@ -372,18 +365,18 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       secretHits,
       router,
       costTrimmedPaths,
+      incrementalCoverage,
     } = packed
 
-    // SIG-414 Phase 1.2: the honest 3-way un-reviewed disclosure (policy /
-    // oversized / spillover), built once from the packer outputs and threaded to
-    // every render path (primary + both fallbacks). `reviewedFiles.length` is the
-    // honest `n`. Pure factory; `null` when nothing was dropped.
     const disclosure = buildReviewDisclosure({
       policySkipped: filesDroppedByFilter,
       oversized: droppedTooLarge,
-      spillover: filesNotReviewed,
-      reviewedCount: reviewedFiles.length,
+      spillover:
+        incrementalCoverage?.summary.unreviewedPaths.filter((path) => !costTrimmedPaths.includes(path)) ??
+        filesNotReviewed,
+      reviewedCount: incrementalCoverage?.summary.reviewedCount ?? reviewedFiles.length,
       costTrimmed: costTrimmedPaths, // SIG-417: default-off → empty
+      ...(incrementalCoverage !== undefined ? { scope: "cumulative" } : {}),
     })
 
     if (router.specialists.length === 0) {
@@ -903,6 +896,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         coverage,
         deltaCounts,
         disclosure,
+        ...(incrementalCoverage?.coverageEntries !== undefined
+          ? { incrementalCoverageEntries: incrementalCoverage.coverageEntries }
+          : {}),
         currentFindingsForManifest,
         reviewManifestEnabled: ensembleConfig.flags.reviewManifestEnabled,
         reviewEventOverride,

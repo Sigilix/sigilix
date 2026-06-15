@@ -40,13 +40,18 @@ vi.mock("@/src/shared/adapters/github", async () => {
 
 // A KV stub for the scoped-rules manifest read — the only IO `packAndRoute` makes
 // on this path. `get` → null means "no manifest", so `scopedRulesBlock` is empty.
-function makeEnv(): Env {
+function makeEnv(initial: Record<string, string> = {}): Env {
+  const store = { ...initial }
   const kv = {
-    async get(): Promise<string | null> {
-      return null
+    async get(key: string): Promise<string | null> {
+      return store[key] ?? null
     },
-    async put(): Promise<void> {},
-    async delete(): Promise<void> {},
+    async put(key: string, value: string): Promise<void> {
+      store[key] = value
+    },
+    async delete(key: string): Promise<void> {
+      delete store[key]
+    },
   } as unknown as Env["OPENCLAW_STATE"]
   return { OPENCLAW_STATE: kv } as unknown as Env
 }
@@ -140,6 +145,105 @@ describe("packAndRoute — byte-identity", () => {
     expect(result.droppedTooLarge).toEqual([])
     expect(result.wasTruncated).toBe(false)
     expect(result.diff).toBe(fullDiff)
+  })
+
+  it("incremental review DEFAULT-OFF: does not fetch file metadata and keeps output byte-identical", async () => {
+    const a = fileBlock("src/util.ts", "export const a = 1")
+    const b = fileBlock("src/helpers.ts", "export const b = 2")
+    const fullDiff = `${a}\n${b}`
+    const listPullRequestFiles = vi.fn(async () => {
+      throw new Error("should not be called while incremental review is off")
+    })
+
+    const result = await packAndRoute(
+      makeArgs({
+        fullDiff,
+        client: { listPullRequestFiles } as unknown as PackAndRouteArgs["client"],
+      }),
+    )
+
+    expect(listPullRequestFiles).not.toHaveBeenCalled()
+    expect(result.reviewedFiles.map((f) => f.path)).toEqual(["src/util.ts", "src/helpers.ts"])
+    expect(result.filesNotReviewed).toEqual([])
+    expect(result.diff).toBe(fullDiff)
+    expect(result.incrementalCoverage).toBeUndefined()
+  })
+})
+
+describe("packAndRoute — SIG-439 incremental coverage selection", () => {
+  it("ON: reviews changed files plus never-reviewed files, skipping unchanged reviewed blobs", async () => {
+    const changed = fileBlock("src/changed.ts", "export const changed = true")
+    const unchanged = fileBlock("src/unchanged.ts", "export const unchanged = true")
+    const never = fileBlock("src/never-reviewed.ts", "export const never = true")
+    const fullDiff = `${changed}\n${unchanged}\n${never}`
+    const priorCoverage = {
+      schemaVersion: 1,
+      files: {
+        "src/changed.ts": {
+          reviewedAtBlobSha: "old-blob",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+        "src/unchanged.ts": {
+          reviewedAtBlobSha: "same-blob",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+      },
+    }
+    const listPullRequestFiles = vi.fn(async () => [
+      {
+        filename: "src/changed.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        sha: "new-blob",
+      },
+      {
+        filename: "src/unchanged.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        sha: "same-blob",
+      },
+      {
+        filename: "src/never-reviewed.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        sha: "never-blob",
+      },
+    ])
+
+    const result = await packAndRoute(
+      makeArgs({
+        env: makeEnv({
+          "pr-review-coverage:Sigilix/sigilix#1": JSON.stringify(priorCoverage),
+        }),
+        client: { listPullRequestFiles } as unknown as PackAndRouteArgs["client"],
+        ensembleConfig: parseEnsembleConfig({ OPENCLAW_INCREMENTAL_REVIEW_MODE: "on" }),
+        fullDiff,
+      }),
+    )
+
+    expect(listPullRequestFiles).toHaveBeenCalledOnce()
+    expect(result.reviewedFiles.map((f) => f.path)).toEqual(["src/changed.ts", "src/never-reviewed.ts"])
+    expect(result.filesNotReviewed).toEqual([])
+    expect(result.diff).toBe(`${changed}\n${never}`)
+    expect(result.incrementalCoverage?.selection).toMatchObject({
+      changedPaths: ["src/changed.ts"],
+      neverReviewedPaths: ["src/never-reviewed.ts"],
+      skippedUnchangedPaths: ["src/unchanged.ts"],
+    })
+    expect(result.incrementalCoverage?.coverageEntries.map((entry) => entry.path)).toEqual([
+      "src/changed.ts",
+      "src/never-reviewed.ts",
+    ])
+    expect(result.incrementalCoverage?.summary).toMatchObject({
+      reviewedCount: 3,
+      totalCount: 3,
+      unreviewedPaths: [],
+    })
   })
 })
 

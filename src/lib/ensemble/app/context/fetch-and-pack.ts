@@ -67,6 +67,18 @@ import { readLastReviewedSha, selectDiff } from "@/src/lib/incremental-review"
 import { decideSpecialists, type RouterDecision } from "@/src/lib/ensemble-router"
 import { decideSpecialistsDynamic } from "@/src/lib/dynamic-dispatcher"
 import type { EnsembleConfig, CostGovernorConfig } from "@/src/lib/ensemble/domain/config"
+import {
+  buildChangedPathSet,
+  selectIncrementalReviewPaths,
+  summarizeIncrementalCoverage,
+  type IncrementalReviewCoverageSummary,
+  type IncrementalReviewPathSelection,
+  type IncrementalReviewFile,
+} from "@/src/lib/ensemble/domain/incremental-coverage"
+import {
+  readIncrementalReviewCoverage,
+  type IncrementalReviewCoverageWriteEntry,
+} from "@/src/lib/ensemble/adapters/incremental-coverage"
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 import { buildDispatcherSavingsSummary, emitDispatcherSavingsSummary } from "@/src/lib/ensemble-perf-telemetry"
@@ -229,6 +241,16 @@ export interface PackAndRouteTelemetry {
     /** True when a floor stopped the trim before the ceiling (still over budget). */
     ceilingUnmet: boolean
   }
+  incrementalCoverage?: {
+    mode: "shadow" | "on"
+    pathsToReview: string[]
+    changedPaths: string[]
+    neverReviewedPaths: string[]
+    skippedUnchangedPaths: string[]
+    reviewedCount: number
+    totalCount: number
+    unreviewedPaths: string[]
+  }
 }
 
 export interface PackAndRouteArgs {
@@ -238,6 +260,7 @@ export interface PackAndRouteArgs {
   repo: string
   prNumber: number
   headSha: string
+  repoId?: number
   ensembleConfig: EnsembleConfig
   orchCtrl: AbortController
   meta: PullRequestMeta
@@ -292,6 +315,12 @@ export interface PackAndRouteResult {
    *  trimmed file is disclosed with its own copy (never the spillover wording),
    *  and uses non-empty as the "force a notice, not a silent skip" signal. */
   costTrimmedPaths: string[]
+  incrementalCoverage?: {
+    mode: "shadow" | "on"
+    selection: IncrementalReviewPathSelection
+    summary: IncrementalReviewCoverageSummary
+    coverageEntries: IncrementalReviewCoverageWriteEntry[]
+  }
 }
 
 export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteResult> {
@@ -302,6 +331,7 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     repo,
     prNumber,
     headSha,
+    repoId,
     ensembleConfig,
     orchCtrl,
     meta,
@@ -367,12 +397,29 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     filterPatterns.length === 0
       ? []
       : splitFiles.filter((f) => !shouldReview(f.path, filterPatterns)).map((f) => f.path)
+  const incrementalCoveragePlan = await buildIncrementalCoveragePlan({
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    ...(repoId !== undefined ? { repoId } : {}),
+    meta,
+    mode: ensembleConfig.flags.incrementalReviewMode,
+    filesAfterFilter,
+    signal: orchCtrl.signal,
+  })
+  const coverageFilteredFiles =
+    incrementalCoveragePlan !== null && incrementalCoveragePlan.mode === "on"
+      ? filesAfterFilter.filter((f) => incrementalCoveragePlan.pathsToReview.has(f.path))
+      : filesAfterFilter
+
   // SIG-414: risk-order so the reviewed batch[0] holds the highest-risk files
   // (auth/secret/session/token/… per `isHighRiskPath` — the same paths that
   // trigger a re-sweep), not an arbitrary diff-order slice. Stable + a no-op
   // when all-or-none are high-risk; a single-batch no-filter PR's diff stays
   // `fullDiff` below, so the common case is byte-identical.
-  const riskOrderedFiles = riskOrderFiles(filesAfterFilter, isHighRiskPath)
+  const riskOrderedFiles = riskOrderFiles(coverageFilteredFiles, isHighRiskPath)
   const { batches, droppedTooLarge } = packFilesIntoBatches(riskOrderedFiles)
   // SIG-417: the reviewed batch is `let` because the dark cost governor (when
   // explicitly enabled — default OFF) may trim its lowest-risk TAIL right here,
@@ -491,6 +538,26 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
         final_chars: diff.length,
       }),
     )
+  }
+  const incrementalCoverage =
+    incrementalCoveragePlan !== null
+      ? finalizeIncrementalCoveragePlan({
+          plan: incrementalCoveragePlan,
+          reviewedFiles,
+          wasTruncated,
+        })
+      : undefined
+  if (incrementalCoverage !== undefined) {
+    telemetry.incrementalCoverage = {
+      mode: incrementalCoverage.mode,
+      pathsToReview: incrementalCoverage.selection.pathsToReview,
+      changedPaths: incrementalCoverage.selection.changedPaths,
+      neverReviewedPaths: incrementalCoverage.selection.neverReviewedPaths,
+      skippedUnchangedPaths: incrementalCoverage.selection.skippedUnchangedPaths,
+      reviewedCount: incrementalCoverage.summary.reviewedCount,
+      totalCount: incrementalCoverage.summary.totalCount,
+      unreviewedPaths: incrementalCoverage.summary.unreviewedPaths,
+    }
   }
 
   telemetry.diffPacking = {
@@ -717,17 +784,103 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     secretHits,
     router,
     costTrimmedPaths,
+    ...(incrementalCoverage !== undefined ? { incrementalCoverage } : {}),
+  }
+}
+
+interface IncrementalCoveragePlan {
+  mode: "shadow" | "on"
+  currentFiles: IncrementalReviewFile[]
+  priorCoverage: Awaited<ReturnType<typeof readIncrementalReviewCoverage>>
+  pathsToReview: ReadonlySet<string>
+  selection: IncrementalReviewPathSelection
+}
+
+async function buildIncrementalCoveragePlan(args: {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  repoId?: number
+  meta: PullRequestMeta
+  mode: EnsembleConfig["flags"]["incrementalReviewMode"]
+  filesAfterFilter: readonly SplitFile[]
+  signal: AbortSignal
+}): Promise<IncrementalCoveragePlan | null> {
+  if (args.mode === "off" || args.filesAfterFilter.length === 0) return null
+  try {
+    const maxFiles = Math.max(args.filesAfterFilter.length, args.meta.changed_files ?? 0, 50)
+    const prFiles = await args.client.listPullRequestFiles(args.owner, args.repo, args.prNumber, {
+      maxFiles,
+      signal: args.signal,
+    })
+    const blobShaByPath = new Map(prFiles.map((file) => [file.filename, file.sha ?? null]))
+    const currentFiles = args.filesAfterFilter.map((file) => ({
+      path: file.path,
+      blobSha: blobShaByPath.get(file.path) ?? null,
+    }))
+    const priorCoverage = await readIncrementalReviewCoverage(
+      args.env,
+      args.owner,
+      args.repo,
+      args.prNumber,
+      args.repoId,
+    )
+    const changedPaths = buildChangedPathSet(priorCoverage, currentFiles)
+    const selection = selectIncrementalReviewPaths({
+      priorCoverage,
+      currentFiles,
+      changedPaths,
+    })
+    return {
+      mode: args.mode,
+      currentFiles,
+      priorCoverage,
+      pathsToReview: new Set(selection.pathsToReview),
+      selection,
+    }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "incremental-review-coverage-plan-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return null
+  }
+}
+
+function finalizeIncrementalCoveragePlan(args: {
+  plan: IncrementalCoveragePlan
+  reviewedFiles: readonly SplitFile[]
+  wasTruncated: boolean
+}): NonNullable<PackAndRouteResult["incrementalCoverage"]> {
+  const reviewedThisPassPaths = new Set(args.wasTruncated ? [] : args.reviewedFiles.map((file) => file.path))
+  const summary = summarizeIncrementalCoverage({
+    priorCoverage: args.plan.priorCoverage,
+    currentFiles: args.plan.currentFiles,
+    reviewedThisPassPaths,
+  })
+  const blobShaByPath = new Map(args.plan.currentFiles.map((file) => [file.path, file.blobSha]))
+  return {
+    mode: args.plan.mode,
+    selection: args.plan.selection,
+    summary,
+    coverageEntries: args.wasTruncated
+      ? []
+      : args.reviewedFiles.map((file) => ({
+          path: file.path,
+          blobSha: blobShaByPath.get(file.path) ?? null,
+        })),
   }
 }
 
 /**
- * SIG-417 — the cost-projection telemetry + dark-governor seam, factored out of
- * `packAndRoute` for readability. Two responsibilities:
- *
- *   1. ALWAYS (observe-only): project the review's cost from the model lineup ×
- *      the reviewed-batch token size and emit a `cost-projection` event. No
- *      enforcement, no mutation — pure telemetry, recall-neutral. Skipped only
- *      when no lineup was passed (non-edge/test callers).
+ * SIG-417 — cost-projection telemetry + dark-governor seam.
  *   2. WHEN the governor is explicitly ENABLED with a ceiling (default OFF):
  *      trim the lowest-risk TAIL of `reviewedFiles` until the projection is
  *      at/under the ceiling, with HARD recall floors — never below

@@ -153,6 +153,12 @@ export interface Env {
   // off the trigger never enqueues a pr-summary job → pure no-op.
   OPENCLAW_PR_SUMMARY_MODE?: string
 
+  // SIG-439 incremental PR re-review mode. "off" (default) keeps the
+  // current sampled full-review behavior byte-identical; "shadow" records
+  // coverage without changing file selection; "on" reviews changed or
+  // never-reviewed files only.
+  OPENCLAW_INCREMENTAL_REVIEW_MODE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

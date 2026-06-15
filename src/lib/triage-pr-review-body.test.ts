@@ -840,6 +840,20 @@ describe("renderReviewDisclosure (SIG-414 Phase 1.2) — three distinct cases", 
     expect(body).toContain("the remaining 1 was below the priority cutoff")
   })
 
+  it("SPILLOVER: cumulative incremental coverage copy", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 5 })] }),
+      coverage: FULL,
+      disclosure: disclosure({
+        spillover: ["src/deferred.ts"],
+        reviewedCount: 4,
+        totalChangedCount: 5,
+        scope: "cumulative",
+      }),
+    })
+    expect(body).toContain("Reviewed 4 of 5 changed files across this PR so far")
+  })
+
   it("ALL THREE render together, each independent (a PR can hit every case)", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 5 })] }),

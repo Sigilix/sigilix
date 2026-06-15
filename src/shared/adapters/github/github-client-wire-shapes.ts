@@ -40,6 +40,7 @@ export interface RawPrFile {
   status?: string
   additions?: number
   deletions?: number
+  sha?: string
   patch?: string
 }
 

@@ -29,6 +29,7 @@ import { resolvePrecisionMode } from "@/src/features/precision-profile"
 import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "@/src/lib/ensemble/domain/policy"
 import { parseMultiBatchMode } from "@/src/lib/ensemble/domain/multibatch-budget"
+import { parseIncrementalReviewMode } from "@/src/lib/ensemble/domain/incremental-coverage"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -224,6 +225,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_LOGIC_REASONING_PROMPT_MODE: "on",
       // SIG-436: inline anchor-precision pass (=== "on").
       OPENCLAW_ANCHOR_PRECISION: "on",
+      OPENCLAW_INCREMENTAL_REVIEW_MODE: "Shadow",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -263,6 +265,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       invariantLensRecallContract: "shadow-background",
       multiBatchMode: parseMultiBatchMode(env.OPENCLAW_REVIEW_MULTIBATCH_MODE),
       anchorPrecision: env.OPENCLAW_ANCHOR_PRECISION === "on",
+      incrementalReviewMode: parseIncrementalReviewMode(env.OPENCLAW_INCREMENTAL_REVIEW_MODE),
       recallRoles: new Set(
         [
           env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
@@ -314,6 +317,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       invariantLensRecallContract: "blocking",
       multiBatchMode: "off",
       anchorPrecision: false,
+      incrementalReviewMode: "off",
       recallRoles: new Set(),
       // SIG-399: reasoning-process directive default off → empty set.
       reasoningPromptRoles: new Set(),

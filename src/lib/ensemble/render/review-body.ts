@@ -151,17 +151,8 @@ const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
  * customer-facing body. Per-finding inline comments still use it
  * via `formatFindingComment` (ARC-282 will revisit).
  */
-/**
- * SIG-414 Phase 1.2: the honest "what wasn't reviewed" disclosure — distinct,
- * calm notices per cause (replacing the pre-SIG-414 lumped "size budget" note).
- * `reviewedCount` (n) / `totalChangedCount` (m) drive the spillover "Reviewed n
- * of m" copy; m is the RECONCILED denominator (n + spillover + costTrimmed) so
- * `remaining = m - n` never contradicts the separate notices (Codex sign-off).
- */
 export interface ReviewDisclosure {
-  /** Files excluded by `pathFilters` — "not applicable", NOT a coverage gap. */
   policySkipped: string[]
-  /** Files whose individual diff exceeded the per-call cap (`droppedTooLarge`). */
   oversized: string[]
   /** Changed files beyond the reviewed batch on a very large PR (`filesNotReviewed`). */
   spillover: string[]
@@ -173,13 +164,14 @@ export interface ReviewDisclosure {
   reviewedCount: number
   /** m — reconciled total = reviewedCount + spillover + costTrimmed. */
   totalChangedCount: number
+  /** SIG-439: cumulative PR coverage wording for incremental re-review. */
+  scope?: "pass" | "cumulative"
 }
 
 /**
- * SIG-414 Phase 1.2: pure factory for `ReviewDisclosure` (exported for render-prep
- * + tests). Reconciles `totalChangedCount` (m) = n + spillover + costTrimmed.
- * Returns `null` when nothing was dropped (byte-identical common case). SIG-417:
- * `costTrimmed` (optional) — omitted/empty → builder + renderer behave as 1.2.
+ * SIG-414 Phase 1.2: pure factory for `ReviewDisclosure`. Reconciles
+ * `totalChangedCount` (m) = n + spillover + costTrimmed. Returns `null` when
+ * nothing was dropped (byte-identical common case).
  */
 export function buildReviewDisclosure(args: {
   policySkipped: string[]
@@ -187,6 +179,7 @@ export function buildReviewDisclosure(args: {
   spillover: string[]
   reviewedCount: number
   costTrimmed?: string[]
+  scope?: "pass" | "cumulative"
 }): ReviewDisclosure | null {
   const { policySkipped, oversized, spillover, reviewedCount } = args
   const costTrimmed = args.costTrimmed ?? []
@@ -200,6 +193,7 @@ export function buildReviewDisclosure(args: {
     ...(costTrimmed.length > 0 ? { costTrimmed } : {}),
     reviewedCount,
     totalChangedCount: reviewedCount + spillover.length + costTrimmed.length,
+    ...(args.scope !== undefined ? { scope: args.scope } : {}),
   }
 }
 
@@ -350,8 +344,12 @@ function renderReviewDisclosure(disclosure: ReviewDisclosure): string[] {
   if (disclosure.spillover.length > 0) {
     const count = disclosure.spillover.length
     lines.push("")
+    const prefix =
+      disclosure.scope === "cumulative"
+        ? `Reviewed ${disclosure.reviewedCount} of ${disclosure.totalChangedCount} changed files across this PR so far`
+        : `Reviewed ${disclosure.reviewedCount} of ${disclosure.totalChangedCount} changed files`
     lines.push(
-      `> 📊 Reviewed ${disclosure.reviewedCount} of ${disclosure.totalChangedCount} changed files — the remaining ${count} ${count === 1 ? "was" : "were"} below the priority cutoff for this very large PR. Split into smaller PRs to cover them.`,
+      `> 📊 ${prefix} — the remaining ${count} ${count === 1 ? "was" : "were"} below the priority cutoff for this very large PR. Split into smaller PRs to cover them.`,
     )
   }
 

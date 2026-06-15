@@ -217,7 +217,7 @@ export interface ReviewSubmissionBuildResult {
   suggestionEmissions: ReviewSuggestionEmission[]
 }
 
-interface PreparedReviewSubmissionFindings {
+export interface PreparedReviewSubmissionFindings {
   verdict: PrReviewVerdict
   renderVerdict: PrReviewVerdict
   inlineFindings: PrReviewFinding[]
@@ -323,7 +323,15 @@ interface InlineFindingCandidate {
   confidence: number
 }
 
-function prepareReviewSubmissionFindings(args: {
+// SIG-426: exported so the CI-failure-triage synth pass (ci-triage-synth-run.ts)
+// can reuse the SAME inline-vs-body routing the PR-review path uses — its
+// `inlineFindings` are the anchorable survivors. Callers that pass only
+// `reviewable` (no `addedLineTextByLine`, as the CI pass does) must STILL gate
+// inline posting on `deriveSide(reviewable, path, line) === "RIGHT"`: without
+// `addedLineTextByLine` the substantive-anchor forward-walk is skipped, so a
+// line-scoped finding lands in `inlineFindings` regardless of whether its line
+// is in the diff. The CI pass does that RIGHT-side check explicitly.
+export function prepareReviewSubmissionFindings(args: {
   rawVerdict: PrReviewVerdict
   rawUnanchored: readonly PrReviewFinding[]
   headSha: string

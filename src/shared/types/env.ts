@@ -493,6 +493,14 @@ export interface Env {
   // (ci-triage-synth.ts). Ships dark (off) — PR 1 wires nothing.
   OPENCLAW_CI_TRIAGE_SYNTH_MODE?: string
 
+  // SIG-426: when "true", the CI-triage-synth anchored-but-uncorroborated
+  // bucket is HARD-WITHHELD instead of hedged-inline. DEFAULT (any other value)
+  // is hedged-inline — the uncorroborated finding is surfaced with one honest
+  // hedge line, NOT dropped (recall-safety). The shadow window's true/false
+  // rate on that bucket decides whether to flip this on. Read in
+  // `ci-triage-synth-run.ts`.
+  OPENCLAW_CI_TRIAGE_SYNTH_HARD_WITHHOLD?: string
+
   // SIG-109: logic-finding evidence gate mode. "shadow" (default; any
   // value other than "enforce") counts + telemeters what the gate WOULD
   // drop without dropping; "enforce" actually drops sev>=4 logic findings

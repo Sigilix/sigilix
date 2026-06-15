@@ -22,6 +22,8 @@ import { CI_TRIAGE_PROMPT } from "@/src/prompts/ci-triage"
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { isRepoSensitive } from "./repo-policy"
 import { parseCiSuggestionsMode, planCiSuggestions, submitCiSuggestionReview } from "./ci-suggestions"
+import { parseCiTriageSynthMode } from "./ci-triage-synth"
+import { runCiTriageSynth } from "./ci-triage-synth-run"
 import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -192,6 +194,43 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     if (content != null) fileContexts.push({ path, content })
   }
   since(`file-context-${fileContexts.length}`)
+
+  // SIG-426: CI-triage → review-synth (grounded inline). Behind
+  // OPENCLAW_CI_TRIAGE_SYNTH_MODE (default off). The synth pass reuses the
+  // evidence gathered above (ciLog, diff, fileContexts) and runs ONE grounded
+  // ultra synth → ground + anchor → dedup vs the prior review.
+  //   - off     → fall through to the legacy standalone glm sticky path below.
+  //   - shadow  → run the pass + telemeter the would-post decisions, post
+  //               nothing new, then KEEP running the legacy sticky (customer
+  //               surface unchanged while we watch telemetry).
+  //   - enforce → post grounded inline; SUPPRESS the legacy sticky + the
+  //               SIG-333 suggestions (return before the legacy path runs).
+  // Sensitive repos NEVER post — fall back to the legacy path (its own
+  // SIG-333 gating already suppresses inline on sensitive repos).
+  const synthMode = parseCiTriageSynthMode(env.OPENCLAW_CI_TRIAGE_SYNTH_MODE)
+  const synthSensitive = isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)
+  if (synthMode !== "off" && !synthSensitive) {
+    const summary = await runCiTriageSynth({
+      client,
+      env,
+      owner,
+      repo,
+      prNumber,
+      runId,
+      headSha,
+      mode: synthMode,
+      ciLog,
+      diff,
+      fileContexts,
+    })
+    since(`ci-triage-synth-${synthMode}-posted-${summary.posted}`)
+    if (synthMode === "enforce") {
+      // The grounded inline path is authoritative — suppress the legacy sticky
+      // + SIG-333 suggestions entirely.
+      return
+    }
+    // shadow falls through to the legacy path below (telemetry already emitted).
+  }
 
   // Codebase retrieval — semantic similarity on the failure log + diff.
   // Soft-fails to no chunks if the index is empty / unconfigured.

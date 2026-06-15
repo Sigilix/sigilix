@@ -290,6 +290,16 @@ export interface PrReviewFinding {
    * See DESIGN.md §3 for the naming rationale (`gateScore` over `calibratedScore`).
    */
   gateScore?: number
+  /**
+   * SIG-426: verbatim excerpt the model copied from the `[FAILED CI LOG]`, used
+   * ONLY by the CI-failure-triage synth pass (`ci-triage-synth-run.ts`) to
+   * corroborate the finding against the real log via `isLogGrounded`. Emitted by
+   * the CI synth preamble (`CI_SYNTH_PREAMBLE`, ci-synth.ts) as a top-level
+   * `logExcerpt` field; the standard PR-review specialists never emit it, so this
+   * is undefined on every non-CI finding and the PR-review path is unaffected.
+   * Parsed by `parsePrReviewResponse` (trim-only; never rendered).
+   */
+  logExcerpt?: string
 }
 
 /**

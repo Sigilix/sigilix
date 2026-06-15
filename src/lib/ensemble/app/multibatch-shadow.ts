@@ -50,8 +50,20 @@ export interface MultiBatchShadowArgs {
   repo: string
   prNumber: number
   headSha: string
+  /** The PRODUCTION perf context — used ONLY for its correlation fields (owner/
+   *  repo/pr/sha). Its `recordTokens` sink is deliberately STRIPPED before any
+   *  model call (see `runMultiBatchShadow`) so the dark shadow's token/cost spend
+   *  never pollutes the posted review's `tokenUsageByModel` / SLO / daily-cost
+   *  accounting (Codex review: cost-identity hole). */
   perfCtx: EnsembleRunCtx
   orchCtrl: AbortController
+  /** Re-checks the PR's CURRENT head SHA against the queued `headSha` just before
+   *  launching (the shadow runs on a detached `setTimeout`, so the head can move
+   *  between stale-head guard #2 and the shadow firing). Returns `true` if still
+   *  fresh, `false` if it moved. Optional — when omitted (tests / non-edge), the
+   *  pass proceeds (the orchestrator always supplies it on the prod path). A
+   *  stale head bails the WHOLE pass with zero model calls (recall/cost-safe). */
+  checkHeadFresh?: () => Promise<boolean>
   /** The orchestrator timer ORIGIN (epoch ms) — the same `startMs` the orch wall
    *  uses, so the synth-budgeted guard sees the true elapsed time (pre-flight +
    *  packing + the whole single-batch fan-out + synth already consumed). */
@@ -90,6 +102,9 @@ export interface MultiBatchShadowResult {
    *  PR 3's enforce path merged them). Size only — nothing is merged here. */
   wouldBeUnionSize: number
   erroredBatches: number
+  /** True if the pre-launch head re-check found the head moved → the whole pass
+   *  bailed with zero model calls (the shadow never runs on a stale head). */
+  staleHeadAborted: boolean
 }
 
 function correlation(a: MultiBatchShadowArgs): Record<string, string | number> {
@@ -110,9 +125,41 @@ export async function runMultiBatchShadow(a: MultiBatchShadowArgs): Promise<Mult
     haltedAtBatch: null,
     wouldBeUnionSize: a.singleBatchFindingCount,
     erroredBatches: 0,
+    staleHeadAborted: false,
   }
   // Nothing deferred → nothing to measure (the common single-batch PR).
   if (a.spilloverBatches.length === 0) return result
+
+  // Pre-launch freshness re-check (Codex review): the shadow runs on a detached
+  // timer AFTER stale-head guard #2, so the head can move before it fires. If it
+  // did, bail the WHOLE pass with ZERO model calls — the shadow must never spend
+  // on a superseded SHA. Best-effort: a failed re-check proceeds (degraded, not a
+  // false stale) so a transient GitHub blip doesn't silently kill measurement.
+  if (a.checkHeadFresh) {
+    let fresh = true
+    try {
+      fresh = await a.checkHeadFresh()
+    } catch {
+      fresh = true
+    }
+    if (!fresh) {
+      result.staleHeadAborted = true
+      console.log(JSON.stringify({ event: "multibatch-shadow-stale-head-abort", ...correlation(a) }))
+      return result
+    }
+  }
+
+  // Isolated token sink (Codex review: cost-identity hole). The dark shadow runs
+  // REAL model calls; if it recorded into the production `recordTokens`, its spend
+  // would pollute the posted review's `tokenUsageByModel` / SLO / daily cost. Use
+  // the prod perfCtx ONLY for its correlation fields, with `recordTokens` stripped
+  // so shadow attempts are cost-isolated from the posted run.
+  const shadowPerfCtx: EnsembleRunCtx = {
+    owner: a.perfCtx.owner,
+    repo: a.perfCtx.repo,
+    prNumber: a.perfCtx.prNumber,
+    headSha: a.perfCtx.headSha,
+  }
 
   const chatEnabled = a.env.OLLAMA_CHAT_ENABLE === "on" ? ("on" as const) : ("off" as const)
   const coveredFiles = new Set(a.singleBatchFiles)
@@ -161,6 +208,11 @@ export async function runMultiBatchShadow(a: MultiBatchShadowArgs): Promise<Mult
 
       const batchDiff = batchToDiff([...batch])
       const batchStartMs = Date.now()
+      // This spillover batch's files ARE covered once launched, regardless of
+      // whether any finding lands (Codex review: a reviewed-but-clean file is still
+      // covered). Add them up front so the coverage delta counts review breadth,
+      // not just finding breadth.
+      for (const f of batch) coveredFiles.add(f.path)
       // Fan out the same role lineup over this spillover batch. Per-call try/catch
       // (like resweep) — a failed batch contributes nothing, never throws upward.
       const roleResults = await Promise.all(
@@ -176,7 +228,9 @@ export async function runMultiBatchShadow(a: MultiBatchShadowArgs): Promise<Mult
               // in-flight call. The guard guarantees `batchTimeoutMs` leaves the
               // post-synth tail (render→publish→finalize) its room.
               signal: composeSignals(a.orchCtrl.signal, AbortSignal.timeout(decision.batchTimeoutMs)),
-              perfCtx: a.perfCtx,
+              // Cost-isolated sink (no `recordTokens`) so shadow spend never
+              // pollutes the posted run's token/cost accounting.
+              perfCtx: shadowPerfCtx,
             })
             return { role, findings: r.verdict?.findings ?? [], errored: r.verdict === null }
           } catch {
@@ -233,8 +287,10 @@ export async function runMultiBatchShadow(a: MultiBatchShadowArgs): Promise<Mult
       wouldBeUnionSize: result.wouldBeUnionSize,
       singleBatchFindingCount: a.singleBatchFindingCount,
       // How many MORE files the multi-batch pass covered vs the posted single-batch
-      // path — the recovered-coverage signal that decides enforce in PR 3.
-      coverageDeltaFiles: coveredFiles.size - a.singleBatchFiles.length,
+      // path — the recovered-coverage signal that decides enforce in PR 3. Baseline
+      // is the DEDUPED single-batch set (Set vs array length) so a duplicate path in
+      // the input can't make the delta over- or under-count.
+      coverageDeltaFiles: coveredFiles.size - new Set(a.singleBatchFiles).size,
       erroredBatches: result.erroredBatches,
       // The namespaced spillover finding ids (collision-free across batches by
       // construction) the PR-3 enforce merge will key on — count + a small sample.

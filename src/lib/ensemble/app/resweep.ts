@@ -17,8 +17,9 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
-import { modelApiKeys, runSpecialist } from "@/src/lib/ensemble/adapters/model-provider"
+import { modelApiKeys, runSpecialist, SPECIALIST_CONFIGS } from "@/src/lib/ensemble/adapters/model-provider"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import { parseSecondPassReasonerMode, secondPassReasonerOverride } from "@/src/lib/ensemble/domain/secondpass-reasoner"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import { splitDiffByFile } from "@/src/lib/diff-packing"
@@ -115,6 +116,14 @@ export async function runResweepPhase(a: ResweepArgs): Promise<ResweepResult> {
   const startedAtMs = Date.now()
   const roles = a.succeeded.map((v) => v.role)
   const chatEnabled = a.env.OLLAMA_CHAT_ENABLE === "on" ? ("on" as const) : ("off" as const)
+  // SIG-369(b): default-off second-pass model override, applied ONLY to the
+  // LOGIC role's re-sweep calls — logic runs on openai/o3 (the expensive model
+  // this lever targets); security/perf/tests keep their own cheaper configs
+  // untouched. Off → undefined → byte-identical o3 path for logic.
+  const logicResweepOverride = secondPassReasonerOverride({
+    mode: parseSecondPassReasonerMode(a.env.OPENCLAW_SECONDPASS_REASONER_MODE),
+    baseConfig: SPECIALIST_CONFIGS.logic,
+  })
 
   // Per region × succeeded role. Bounded: regions ≤ maxRegions, roles ≤ 4,
   // each call under the standard per-specialist timeout + orch abort.
@@ -145,6 +154,11 @@ export async function runResweepPhase(a: ResweepArgs): Promise<ResweepResult> {
           // lost call can never corrupt the pass-1 verdicts.
           signal: composeSignals(a.orchCtrl.signal, AbortSignal.timeout(SPECIALIST_TIMEOUT_MS)),
           perfCtx: a.perfCtx,
+          // SIG-369(b): override the LOGIC role's model only (absent for other
+          // roles AND when the flag is off → byte-identical to today).
+          ...(job.role === "logic" && logicResweepOverride !== undefined
+            ? { modelOverride: logicResweepOverride }
+            : {}),
         })
         return { job, findings: r.verdict?.findings ?? [], errored: r.verdict === null }
       } catch {

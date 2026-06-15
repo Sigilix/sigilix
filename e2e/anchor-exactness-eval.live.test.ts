@@ -601,16 +601,30 @@ describe.skipIf(!API_KEY)(
         lines.push("└──────────────────────────────────────────────────────────────────┘")
         console.log(lines.join("\n"))
 
-        // Recall-safety assertions (honest — not a hard exactness threshold):
-        //   1. the precision pass NEVER raises the wrong-line (hallucination-equivalent) count.
-        expect(wrongOn).toBeLessThanOrEqual(wrongOff)
-        //   2. the precision pass NEVER drops a finding (surfaced ON >= OFF, per fixture).
+        // Recall-safety assertions — RATE-based so a transient per-fixture model
+        // error (which desyncs OFF vs ON run counts) can't fail the gate; the
+        // model is non-deterministic, so these are the K-aggregated rates, with a
+        // small epsilon for sampling noise. (Run K>=12 for a number you act on.)
+        const rate = (num: number, den: number): number => (den > 0 ? num / den : 0)
+        const EPS = 1e-9
+        //   1. the precision pass NEVER raises the wrong-line (hallucination-equivalent) RATE.
+        const wrongRateOff = rate(
+          wrongOff,
+          [...acc.values()].reduce((s, b) => s + b.off.runs, 0),
+        )
+        const wrongRateOn = rate(
+          wrongOn,
+          [...acc.values()].reduce((s, b) => s + b.on.runs, 0),
+        )
+        expect(wrongRateOn).toBeLessThanOrEqual(wrongRateOff + EPS)
+        //   2. the precision pass NEVER drops a finding — the surfaced RATE per
+        //      fixture (over the runs that actually completed) does not fall.
         for (const fx of FIXTURES) {
           const { off, on } = acc.get(fx.id)!
-          expect(on.surfaced).toBeGreaterThanOrEqual(off.surfaced)
+          expect(rate(on.surfaced, on.runs)).toBeGreaterThanOrEqual(rate(off.surfaced, off.runs) - EPS)
         }
         //   3. it NEVER lowers aggregate exactness below OFF (it only re-homes off comments).
-        expect(aggExactOn).toBeGreaterThanOrEqual(aggExactOff - 1e-9)
+        expect(aggExactOn).toBeGreaterThanOrEqual(aggExactOff - EPS)
       },
       REPEATS * FIXTURES.length * 2 * PER_RUN_TIMEOUT_MS + 120_000,
     )

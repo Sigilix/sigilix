@@ -353,14 +353,26 @@ export function rehomeSuggestionAnchorForward(
 ): PrReviewFinding {
   if (addedLineTextByLine === undefined) return finding
   if (!hasStructuredFix(finding)) return finding
+  // DELETION suggestions are NEVER re-homed. A deletion renders an empty
+  // committable ```suggestion ("delete the anchored line") and `validatedStructuredFixForSubmission`
+  // skips the no-op content check for deletions — so moving a comment-targeted
+  // deletion onto real code would turn it into a one-click delete of the wrong
+  // statement. Only REPLACEMENT suggestions (content-validated against the
+  // corrected line below) may re-home.
+  if (isDeletionSuggestion(finding)) return finding
   // Single-line suggestions only — never move a multi-line replacement range.
   if (finding.startLine !== undefined && finding.startLine !== finding.line) return finding
   const addedLinesForPath = addedLineTextByLine.get(finding.path)
   if (addedLinesForPath === undefined) return finding
   const currentText = addedLinesForPath.get(finding.line)
-  // Only re-home off a real added line that is a whole-line COMMENT. An off-diff
-  // anchor (no text) or an already-substantive code line is left untouched.
+  // Only re-home off a real added line that is a whole-line COMMENT — NOT a
+  // brace/blank/structural line (the pre-SIG-436 structured-fix shield left those
+  // alone, and moving a suggestion off them is out of scope here). A whole-line
+  // comment is the line that is substantive by the BASE classifier (so not
+  // blank/brace) yet NOT code-substantive (so it's a comment). Off-diff (no text)
+  // or an already-code-substantive anchor is left untouched.
   if (currentText === undefined) return finding
+  if (!isSubstantiveAnchorLine(currentText)) return finding
   if (isSubstantiveCodeAnchorLine(currentText)) return finding
   const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, finding.line, undefined, true)
   if (resolved === null || resolved === finding.line) return finding

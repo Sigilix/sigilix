@@ -40,8 +40,13 @@ export function isSubstantiveAnchorLine(text: string | undefined): boolean {
 export function stripWholeLineComment(text: string): string {
   const trimmed = text.trim()
   if (trimmed === "") return ""
-  // A `//`- or `#`-comment that starts the line: the entire remainder is a comment.
-  if (trimmed.startsWith("//") || trimmed.startsWith("#")) return ""
+  // A `//`-comment that starts the line: the entire remainder is a comment.
+  if (trimmed.startsWith("//")) return ""
+  // A `#`-comment (shell / Python / YAML), but NOT a TS `#private` field or
+  // method (`#count = 0`, `#flush()`). This is a TS-strict codebase, so `#`
+  // immediately followed by an identifier char is CODE, not a comment; only
+  // `#` + whitespace/end (a real `# note`) or a `#!` shebang is a comment.
+  if (trimmed === "#" || /^#(\s|!)/.test(trimmed)) return ""
   // A JSX comment that starts the line (`{/* … *​/}`): strip the braced span;
   // keep any code that follows the close. (Checked before the bare `/*` case.)
   if (trimmed.startsWith("{/*")) {
@@ -55,9 +60,15 @@ export function stripWholeLineComment(text: string): string {
     const close = trimmed.indexOf("*/", 2)
     return close === -1 ? "" : trimmed.slice(close + 2).trim()
   }
-  // A JSDoc / block continuation or close line (`* …`, `*​/ …`): strip up to a
-  // same-line `*​/` close if present, else the whole line is comment.
-  if (trimmed.startsWith("*")) {
+  // A JSDoc / block continuation or close line — `*​/`, a bare `*`, or `* …`
+  // (star + whitespace). NOT a generator method (`*entries() {`,
+  // `*[Symbol.iterator]()`): a `*` immediately followed by an identifier/`[` char
+  // is CODE, so it stays substantive. Strip up to a same-line `*​/` close if
+  // present, else the whole continuation line is comment. (Limitation: a `*`-leading
+  // continuation whose first `*​/` sits inside a string/regex literal would
+  // mis-slice — vanishingly rare, and the failure is conservative: it strips more,
+  // at worst yielding a body-demote, never a fabricated wrong target.)
+  if (trimmed.startsWith("*/") || trimmed === "*" || /^\*\s/.test(trimmed)) {
     const close = trimmed.indexOf("*/")
     return close === -1 ? "" : trimmed.slice(close + 2).trim()
   }

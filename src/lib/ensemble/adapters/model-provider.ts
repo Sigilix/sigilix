@@ -30,8 +30,8 @@ import {
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
 // SIG-287: `wrapFailure` joined the leaf for the same budget reason (private —
 // not re-exported, only `runWithRetryAndFallback` calls it).
-import { isPermanentFailure, isValidProvenance, wrapFailure } from "./model-provider-internals"
-export { isPermanentFailure, isValidProvenance } from "./model-provider-internals"
+import { breaksSameModelRetry, isValidProvenance, wrapFailure } from "./model-provider-internals"
+export { breaksSameModelRetry, isPermanentFailure, isValidProvenance } from "./model-provider-internals"
 // SIG-405/406: per-model API-key selection (key-by-id-shape) — OpenRouter id →
 // OPENROUTER_API_KEY, `:cloud` tag → OLLAMA_API_KEY. The latter lets local eval runs
 // hit Ollama Turbo (no OpenRouter spend) via a `:cloud` model override. Re-exported.
@@ -355,14 +355,19 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
  *
  * Sequence:
  *   1. Try primary (attempt 1)
- *   2. If retryable failure (503/429/network/abort-not-from-orch) AND
- *      retries remaining → backoff + retry (attempts 2..N+1)
+ *   2. If retryable failure (503/429/network/abort-not-from-orch, OR a parse
+ *      failure) AND retries remaining → backoff + retry (attempts 2..N+1)
  *   3. If primary exhausted AND fallback configured → try fallback once
  *   4. Return final outcome (success OR last failure)
  *
- * Parse failures are NOT retried — they indicate a model output
- * problem, not a capacity problem; retrying the same prompt at
- * temperature 0 will yield the same bad output.
+ * SIG-438: a parse failure IS retried on the same model. It indicates a
+ * (non-deterministic) output-format glitch, not a fixed property of the prompt —
+ * a re-roll of the same model often parses (PR #574: the security specialist
+ * parsed one pass and failed the next on identical input). Only the genuinely
+ * unretryable failures break early (auth / 404 / 400 / missing-key / aborted) —
+ * see `breaksSameModelRetry`. (Pre-SIG-406 parse failures broke to the
+ * cross-provider fallback; `fallback: null` since SIG-406 left them no recovery,
+ * so the same-model retry is now it.)
  */
 export interface AttemptCallbackInfo {
   /** 1-indexed across the entire retry+fallback chain (primary
@@ -534,20 +539,22 @@ export async function runWithRetryAndFallback<T>(args: {
     }
     lastFailureReason = outcome.failureReason
     lastFailureRaw = outcome.failureRawAnswer
-    // Failure classification:
+    // Failure classification (SIG-438):
     //
-    //   Permanent (404 missing-model, 401/403 auth, 400 validation,
-    //   parse failure) → don't retry primary (same prompt → same error).
-    //   But DO try the cross-provider fallback (arc PR #37 catch): a
-    //   404 on deepseek-v4-pro says nothing about whether kimi-k2.5
-    //   exists — they're different providers entirely. Same for parse
-    //   failures: a different model may format output correctly. So
-    //   `break` out of the retry loop to skip ahead to fallback.
+    //   Break-early (404 missing-model, 401/403 auth, 400 validation,
+    //   missing_api_key, aborted) → a re-roll of the SAME model can't fix it.
+    //   Still try the cross-provider fallback below (arc PR #37 catch): a 404
+    //   on deepseek-v4-pro says nothing about whether the fallback exists —
+    //   they're different providers entirely.
     //
-    //   Transient (5xx upstream-overload, 429 rate-limited, network
-    //   errors, timeout) → keep retrying primary; backoff helps. Fall
-    //   back if all retries exhausted.
-    if (isPermanentFailure(outcome.failureReason, parseFailureLabel)) {
+    //   Retry the same model (5xx upstream-overload, 429 rate-limited, network
+    //   errors, timeout, AND parse failures) → backoff helps the transient
+    //   classes, and a parse failure is non-deterministic so a re-roll of the
+    //   same model often parses. Pre-SIG-406 parse failures broke to the
+    //   fallback ("a different model may format correctly"); with `fallback:
+    //   null` the same-model retry is now their ONLY recovery (PR #574 dropped
+    //   the security specialist this way). Fall back if all retries exhausted.
+    if (breaksSameModelRetry(outcome.failureReason, parseFailureLabel)) {
       break
     }
   }

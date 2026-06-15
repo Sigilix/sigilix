@@ -135,6 +135,7 @@ export {
   runWithRetryAndFallback,
   runSynthesizer,
   isPermanentFailure,
+  breaksSameModelRetry,
   parseSynthAnswer,
   // SIG-406: per-model API-key selection (key-by-id-shape) — used by the live eval
   // harnesses so a `:cloud` model override routes to OLLAMA_API_KEY and an OpenRouter

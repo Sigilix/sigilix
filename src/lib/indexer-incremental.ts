@@ -419,12 +419,17 @@ type ChangedSet = { upsert: string[]; remove: string[] }
  *
  * Two sources, one downstream flow:
  *   - Cheap push fast-path: when the job carries a usable `changedPaths`
- *     payload AND the push chain is intact (`prior.headSha === job.before`),
- *     trust it directly — unchanged pre-SIG-422 behavior.
+ *     payload AND the push chain is intact (`prior.headSha === job.before`)
+ *     AND the resolved head is the pushed commit, trust it directly. The
+ *     head-pinning (`resolveIndexHead`) normally makes `headSha === job.after`,
+ *     so this holds and the `before → after` delta is applied at `after`.
  *   - Compare-recovery: otherwise (merged-pr / pull-request, which carry
- *     neither; or a push whose chain drifted off the manifest head, or whose
- *     `changedPaths` was dropped as too-large/truncated) recover the delta
- *     from the GitHub Compare API between the manifest head and the live head.
+ *     neither; a push whose chain drifted off the manifest head; a push whose
+ *     `changedPaths` was dropped as too-large/truncated; OR a pinned push that
+ *     fell back to the LIVE tip on a `getCommit` 404 so `headSha !== job.after`
+ *     — applying the `before → after` delta at a different head would miss the
+ *     `after → tip` commits) recover the delta from the GitHub Compare API
+ *     between the manifest head and the resolved head.
  *
  * Returns the changed set, or null to signal a recall-unsafe situation the
  * caller must answer with a full-tree re-index.
@@ -434,7 +439,12 @@ async function resolveIncrementalChanged(
   prior: RepoIndexManifestV1,
 ): Promise<ChangedSet | null> {
   const pushChanged = normalizeChangedPaths(args.job.changedPaths)
-  if (pushChanged !== null && prior.headSha === args.job.before) {
+  // The head-match guard rejects the fast-path only when `after` is present
+  // but the resolved head drifted off it (the `getCommit`-404 live-tip
+  // fallback) — legacy push messages without `after` keep the pre-SIG-422
+  // behavior and trust the chain-intact delta as before.
+  const headMatchesPushed = args.job.after === undefined || args.headSha === args.job.after
+  if (pushChanged !== null && prior.headSha === args.job.before && headMatchesPushed) {
     return pushChanged
   }
   return await recoverChangedViaCompare(args, prior)
@@ -454,40 +464,39 @@ async function resolveIncrementalChanged(
  * manifest head to re-establish the push chain for the next push.
  */
 async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexManifestV1): Promise<ChangedSet | null> {
-  const reason: "merged-pr" | "push-drift" | "large-push" =
-    args.job.reason === "push" ? (args.job.changedPaths === undefined ? "large-push" : "push-drift") : "merged-pr"
+  const trigger = compareTrigger(args.job)
 
   let compare: Awaited<ReturnType<GitHubClient["compareCommits"]>>
   try {
     compare = await args.client.compareCommits(args.owner, args.repo, prior.headSha, args.headSha)
   } catch (err) {
-    return logCompareFallbackFull(args, prior, "compare-failed", {
+    return logCompareFallbackFull(args, prior, trigger, "compare-failed", {
       err: err instanceof Error ? err.message : String(err),
     })
   }
   if (compare === null) {
-    return logCompareFallbackFull(args, prior, "compare-failed", {})
+    return logCompareFallbackFull(args, prior, trigger, "compare-failed", {})
   }
   if (compare.status !== "ahead" && compare.status !== "identical") {
-    return logCompareFallbackFull(args, prior, "diverged", { compare_status: compare.status })
+    return logCompareFallbackFull(args, prior, trigger, "diverged", { compare_status: compare.status })
   }
   // A comparison spanning more than the no-paging commit cap (or one whose
   // commit count we couldn't read) can omit files changed in the dropped
   // commits, so the `files` delta may be incomplete — fall back to full.
   if (compare.totalCommits === null || compare.totalCommits > COMPARE_COMMITS_NO_PAGING_CAP) {
-    return logCompareFallbackFull(args, prior, "too-many-commits", { total_commits: compare.totalCommits })
+    return logCompareFallbackFull(args, prior, trigger, "too-many-commits", { total_commits: compare.totalCommits })
   }
   if (compare.files.length >= COMPARE_FILES_PAGE_CAP) {
-    return logCompareFallbackFull(args, prior, "too-many", { file_count: compare.files.length })
+    return logCompareFallbackFull(args, prior, trigger, "too-many", { file_count: compare.files.length })
   }
 
   const mapped = mapCompareFiles(compare.files)
   if (mapped === null) {
-    return logCompareFallbackFull(args, prior, "unknown-status", {})
+    return logCompareFallbackFull(args, prior, trigger, "unknown-status", {})
   }
   const changed = normalizeChangeSet(mapped.upsert, mapped.remove)
   if (changed === null) {
-    return logCompareFallbackFull(args, prior, "too-many", {
+    return logCompareFallbackFull(args, prior, trigger, "too-many", {
       file_count: mapped.upsert.length + mapped.remove.length,
     })
   }
@@ -501,10 +510,38 @@ async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexM
       base: prior.headSha,
       head: args.headSha,
       file_count: changed.upsert.length + changed.remove.length,
-      reason,
+      trigger,
     }),
   )
   return changed
+}
+
+type CompareTrigger = "merged-pr" | "pull-request" | "push-drift" | "large-push" | "unknown"
+
+/**
+ * SIG-422: which change-trigger routed this job to compare-recovery — so a
+ * recovered/fallback log shows the cause:
+ *   - push, no `changedPaths` (dropped as too-large/truncated) → `large-push`
+ *   - push, `changedPaths` present but chain drifted / head off `after`
+ *     → `push-drift`
+ *   - `pull-request` re-index (no push payload) → `pull-request`
+ *   - `merged-pr` re-index (no push payload) → `merged-pr`
+ *
+ * Only the three `INCREMENTAL_REASONS` reach here. Each is matched explicitly
+ * so a future reason added to that set surfaces as an `unknown` label in
+ * telemetry rather than being silently mislabeled `merged-pr`.
+ */
+function compareTrigger(job: IndexRepoMessage): CompareTrigger {
+  switch (job.reason) {
+    case "push":
+      return job.changedPaths === undefined ? "large-push" : "push-drift"
+    case "pull-request":
+      return "pull-request"
+    case "merged-pr":
+      return "merged-pr"
+    default:
+      return "unknown"
+  }
 }
 
 /**
@@ -544,6 +581,11 @@ function mapCompareFiles(
 function logCompareFallbackFull(
   args: IncrementalArgs,
   prior: RepoIndexManifestV1,
+  trigger: CompareTrigger,
+  // The fallback CAUSE (why the compare delta was rejected). Kept distinct
+  // from `trigger` (which change-event routed the job to compare) so the log
+  // carries both axes — e.g. a `merged-pr` (trigger) that fell back because
+  // the comparison `diverged` (reason).
   reason: "diverged" | "too-many" | "too-many-commits" | "unknown-status" | "compare-failed",
   extra: Record<string, unknown>,
 ): null {
@@ -555,6 +597,7 @@ function logCompareFallbackFull(
       branch: args.target.isDefault ? null : args.target.branch,
       base: prior.headSha,
       head: args.headSha,
+      trigger,
       reason,
       ...extra,
     }),

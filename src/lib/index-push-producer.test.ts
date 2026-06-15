@@ -331,6 +331,7 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
         installationId: 99,
         reason: "push",
         branch: "feature-branch",
+        after: "b".repeat(40),
       },
     ])
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("index-push-open-pr-lookup-failed"))
@@ -350,12 +351,15 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     })
     expect(outcome).toEqual({ enqueued: true, reason: "push" })
     expect(sent).toHaveLength(1)
+    // SIG-422: the pushed tip SHA (`after`) rides on the job so the consumer
+    // can pin the index head to the exact pushed commit.
     expect(sent[0]).toEqual({
       type: "index-repo",
       owner: "Sigilix",
       repo: "sigilix",
       installationId: 99,
       reason: "push",
+      after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
     })
   })
 
@@ -383,6 +387,9 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
       repo: "sigilix",
       reason: "push",
       before: "a".repeat(40),
+      // SIG-422: `before` + `after` together let the consumer pin the head and
+      // keep the push fast-path chain intact.
+      after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
       changedPaths: {
         upsert: ["src/changed.ts"],
         remove: ["src/deleted.ts"],
@@ -424,6 +431,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
       githubRepoId: 808247824,
       installationId: 99,
       reason: "push",
+      after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
     })
   })
 
@@ -481,6 +489,7 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
         installationId: 99,
         reason: "push",
         branch: "dev",
+        after: "b".repeat(40),
       },
     ])
   })

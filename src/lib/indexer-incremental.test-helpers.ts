@@ -72,7 +72,7 @@ export function makeEnv(
   return { env, kv: store, sent }
 }
 
-export function seedIndexedRepo(kv: Map<string, string>): void {
+export function seedIndexedRepo(kv: Map<string, string>, manifestOver: Partial<RepoIndexManifestV1> = {}): void {
   const manifest: RepoIndexManifestV1 = {
     v: 1,
     repo: "sigilix",
@@ -91,6 +91,9 @@ export function seedIndexedRepo(kv: Map<string, string>): void {
     chunkerVersion: 2,
     windowLines: 30,
     overlapLines: 10,
+    // SIG-422: callers can override e.g. `headSha` to seed a manifest that is
+    // already AHEAD of an out-of-order push (the no-regression test).
+    ...manifestOver,
   }
   const vectors: RepoIndexVectorsV1 = {
     v: 1,
@@ -132,6 +135,41 @@ export function mergedPrJob(): Extract<JobMessage, { type: "index-repo" }> {
     repo: "sigilix",
     installationId: 99,
     reason: "merged-pr",
+    branch: "main",
+  } as unknown as Extract<JobMessage, { type: "index-repo" }>
+}
+
+// SIG-422: a chain-intact pinned push — carries `before` (matches the seeded
+// manifest head "a"…), `after` (the pushed tip "e"…), and `changedPaths`. The
+// consumer pins the index head to `after` and trusts the changedPaths delta
+// without a Compare call, so the manifest advances to "e"… and the next push's
+// `before` will match it (the chain stays tight).
+export function pushJobPinned(): Extract<JobMessage, { type: "index-repo" }> {
+  return {
+    type: "index-repo",
+    owner: "Sigilix",
+    repo: "sigilix",
+    installationId: 99,
+    reason: "push",
+    before: "a".repeat(40),
+    after: "e".repeat(40),
+    changedPaths: {
+      upsert: ["src/changed.ts"],
+      remove: ["src/deleted.ts"],
+    },
+  } as unknown as Extract<JobMessage, { type: "index-repo" }>
+}
+
+// SIG-422: a default-branch pull-request re-index job — no `before`, no
+// `changedPaths` (same shape as merged-pr). Used to prove compare-recovery
+// telemetry labels its trigger `pull-request`, not `merged-pr`.
+export function pullRequestJob(): Extract<JobMessage, { type: "index-repo" }> {
+  return {
+    type: "index-repo",
+    owner: "Sigilix",
+    repo: "sigilix",
+    installationId: 99,
+    reason: "pull-request",
     branch: "main",
   } as unknown as Extract<JobMessage, { type: "index-repo" }>
 }

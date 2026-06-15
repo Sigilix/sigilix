@@ -225,6 +225,50 @@ export class GitHubClient {
   }
 
   /**
+   * SIG-422: resolve a single commit SHA to its commit + tree SHAs via the
+   * Git Data API. The push-driven indexer pins the index head to the exact
+   * pushed commit (`payload.after`) rather than re-reading the live branch
+   * tip, so it needs that commit's TREE SHA for the `getRepoTree` walk —
+   * the same commit/tree split `getBranch` returns. Returns the commit's
+   * own `sha` as `headSha` (echoing the input on success) so callers get a
+   * single validated `{ headSha, treeSha }` shape.
+   *
+   * Returns null ONLY on 404 — the commit is genuinely gone (e.g. GC'd
+   * after a force-push), so the caller falls back to the live branch tip
+   * and lets compare-recovery handle the delta. Any OTHER HTTP error
+   * rethrows (mirroring `getBranch`) so a transient failure retries the
+   * whole job instead of silently degrading to a possibly-stale live tip.
+   *
+   * Resolves ANY commit object in the repo — it does NOT validate that the
+   * SHA is reachable from a branch. The caller (`resolveIndexHead`) bounds
+   * that: it only pins when the push chain is intact (`prior.headSha ===
+   * before`), and the next push's compare-recovery heals forward, so a
+   * dangling (pre-GC) commit can never leave the index regressed below the
+   * manifest head.
+   */
+  async getCommit(
+    owner: string,
+    repo: string,
+    sha: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ headSha: string; treeSha: string } | null> {
+    try {
+      const res = await this.restGet<{ sha?: string; tree?: { sha?: string } }>(
+        `/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`,
+        opts,
+      )
+      const headSha = res.sha
+      const treeSha = res.tree?.sha
+      if (typeof headSha !== "string" || typeof treeSha !== "string") return null
+      if (headSha.length === 0 || treeSha.length === 0) return null
+      return { headSha, treeSha }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  /**
    * ARC-235: walk a git tree object recursively. GitHub truncates
    * responses at ~100,000 entries or 7 MB and sets `truncated: true`
    * on the response. The indexer treats truncated trees as a refusal

@@ -305,7 +305,7 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # (NO customer-visible change) — the data-gathering window before enforce.
 # "enforce": post the grounded inline finding(s); suppress the legacy sticky +
 # SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
-OPENCLAW_CI_TRIAGE_SYNTH_MODE = "shadow"
+OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
 
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /

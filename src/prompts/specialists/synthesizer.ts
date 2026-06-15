@@ -95,7 +95,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "startLine": null | int,
         "score": 1-5,
         "headline": "...",
-        "body": "...",
+        "body": "First paragraph: actionable claim with broken invariant, impact, and fix shape. Optional second paragraph only when it gives real mechanism reasoning: trace why/how the failure occurs and why the fix closes it.",
         "moreInfo": {
           "threatModel": "Who/what is harmed and the concrete failure path.",
           "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
@@ -103,7 +103,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
           "mitigation": "The smallest practical fix or reviewer action.",
           "alternatives": "Other mitigations considered and why they are weaker or broader.",
           "severityCalibration": "Why this deserves the chosen score, including blast radius and likelihood."
-        },   (SIG-249 — PRESERVE/MERGE from kept source findings when present, especially for score>=4. Choose the clearest supported text per section, or combine compatible source snippets. Do NOT invent unsupported detail and do NOT drop existing \`moreInfo\` just because you rewrote \`body\`. Keep \`body\` self-contained with the core defect, impact, and fix before any \`moreInfo\` detail.)
+        },   (SIG-249 — PRESERVE/MERGE from kept source findings when present, especially for score>=4. Choose the clearest supported text per section, or combine compatible source snippets. Do NOT invent unsupported detail and do NOT drop existing \`moreInfo\` just because you rewrote \`body\`. Keep \`body\` self-contained with the core defect, impact, and fix before any \`moreInfo\` detail. More Info sections must be real 1-3 sentence support: mechanism, citations, inspected protections, and mitigation reasoning, not one-word fragments.)
         "failureExample": "input: ...\\nactual: ...\\nexpected: ...",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it. Keep examples out of \`body\`; the renderer shows them as separate fenced blocks. OMIT only when no kept source finding had one.)
         "fixExample": "return extractFinalAnswer(response)",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it when no exact \`suggestedReplacement\` is available. Do NOT convert it into a committable replacement. OMIT when no kept source finding had one, or when preserving \`suggestedReplacement\` already gives the exact fix.)
         "testGap": "The sibling test file only covers the single FINAL(...) case, not multiple matches.",   (Structured details — PRESERVE VERBATIM from a kept source finding when it is backed by testing evidence. Do NOT invent a test-gap sentence during synthesis.)
@@ -152,6 +152,12 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
 CRITICAL: \`provenance.findings[i]\` MUST correspond to \`verdict.findings[i]\` BY INDEX (orchestrator validates by array index, not by headline string match — headlines collide).
 
 If a finding came from only one specialist, \`sourceSpecialists\` has one entry and \`sourceFindingIds\` has one entry. That's fine — single-source findings are admissible.
+
+# BODY / MORE INFO DEPTH (SIG-249 polish)
+
+The renderer treats a blank line inside \`body\` as: first paragraph visible immediately, remaining paragraphs collapsed as "Detailed reasoning." Only create that blank-line split when the later paragraph is truly detailed reasoning. It must explain the concrete mechanism: the changed control/data flow, the missing or insufficient guard, the runtime/user-visible consequence, and why the fix closes the path. Do NOT put a one-line "Minimal fix:" or generic mitigation note after a blank line; keep terse fix notes in the visible first paragraph.
+
+When preserving or merging \`moreInfo\`, keep the six sections compact but substantive. Each section should be 1-3 grounded sentences when evidence supports it. Prefer specific identifiers, path/line references, and inspected protections over labels like "None" or "no production impact." If a source section is too terse but the source verdict/diff contains the missing reasoning, enrich it from that supplied evidence; if the supplied evidence does not support enrichment, preserve the source claim without inventing details.
 
 [REVIEW MEMORY] handling (ARC-189): when the user message contains a [REVIEW MEMORY] block, treat each entry as evidence the team has rejected this finding class on this repo. For each KEPT finding whose category matches a memory entry's \`category\` (and, when memory is path-scoped, whose path also matches the memory's \`pathSha12\`), do NOT lower the finding's \`score\` or shorten its \`body\` yourself — emit the finding at its TRUE severity and full body. The orchestrator applies any soften deterministically (one tier down for P2/P3 findings; P0/P1 blockers are NEVER softened). Just add an entry to \`provenance.softened[]\` with \`reason: "review-memory/<category>"\` for repo-scope memories or \`reason: "review-memory/<category>/<pathSha12>"\` for path-scope. Do NOT omit findings entirely in v1 — drop is reserved for v2 once telemetry tunes the threshold.
 

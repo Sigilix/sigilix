@@ -142,14 +142,61 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
   // length-based. The complete issue stays inline (never a mid-thought "..."),
   // only the deeper reasoning collapses into a "Detailed reasoning" dropdown.
   it("splits the body at the first blank-line break: complete issue inline, reasoning in the dropdown", () => {
-    const body = "This is the complete issue, stated plainly.\n\nDeeper reasoning for how the model concluded this."
+    const body =
+      "This is the complete issue, stated plainly.\n\nThe changed call now runs before the guard that used to reject the bad state. That ordering means the failure path reaches the side effect first, and moving the guard back above the call closes that path without changing the success case."
     const out = formatFindingComment(fnd({ body }), 5)
     expect(out).toContain("This is the complete issue, stated plainly.")
     expect(out).toContain("<summary>Detailed reasoning</summary>")
     expect(out).not.toContain("More Info")
     expect(out).not.toContain("...") // NEVER a mid-thought ellipsis
     const detailsMatch = /<details><summary>Detailed reasoning<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
-    expect(detailsMatch?.[1]).toBe("Deeper reasoning for how the model concluded this.")
+    expect(detailsMatch?.[1]).toBe(
+      "The changed call now runs before the guard that used to reject the bad state. That ordering means the failure path reaches the side effect first, and moving the guard back above the call closes that path without changing the success case.",
+    )
+  })
+
+  it("keeps terse fix-note second paragraphs inline instead of labeling them detailed reasoning", () => {
+    const body =
+      "`hasSummaryBlock` treats multiple managed blocks as one and leaves a duplicate block behind.\n\nMinimal fix: scan after the first end marker for another start or end marker before replacing."
+    const out = formatFindingComment(fnd({ body }), 5)
+
+    expect(out).toContain("Minimal fix: scan after the first end marker")
+    expect(out).not.toContain("<summary>Detailed reasoning</summary>")
+  })
+
+  it("keeps real Fix-prefixed mechanism reasoning in the detailed reasoning dropdown", () => {
+    const body =
+      "The changed ordering bypasses the tenant guard before the read.\n\nFix: the authorization guard must move above `loadInvoice` because the current control flow reaches the data read while the caller's tenant precondition is still unchecked. That restores the invariant that no tenant-scoped read runs until membership has been proven."
+    const out = formatFindingComment(fnd({ body }), 5)
+
+    expect(out).toContain("<summary>Detailed reasoning</summary>")
+    expect(out).toContain("because the current control flow reaches the data read")
+  })
+
+  it("does not label generic multi-sentence notes as detailed reasoning", () => {
+    const body =
+      "The handler can post duplicate managed blocks.\n\nCheck the markers carefully. Keep the output stable."
+    const out = formatFindingComment(fnd({ body }), 5)
+
+    expect(out).toContain("Check the markers carefully. Keep the output stable.")
+    expect(out).not.toContain("<summary>Detailed reasoning</summary>")
+  })
+
+  it("keeps short second paragraphs visible instead of dropping them", () => {
+    const body = "The handler can post duplicate managed blocks.\n\nThe scan stops early. It misses the second block."
+    const out = formatFindingComment(fnd({ body }), 5)
+
+    expect(out).toContain("The handler can post duplicate managed blocks.")
+    expect(out).toContain("The scan stops early. It misses the second block.")
+  })
+
+  it("collapses concrete mechanism reasoning even when it avoids narrow signal words", () => {
+    const body =
+      "The handler can post duplicate managed blocks.\n\nThe scan finds the first end marker and stops. When a second managed block exists, the replacement range ends before that block and leaves its fence in the body. Extending the range across the final marker makes the update idempotent."
+    const out = formatFindingComment(fnd({ body }), 5)
+
+    expect(out).toContain("<summary>Detailed reasoning</summary>")
+    expect(out).toContain("The scan finds the first end marker and stops.")
   })
 
   it("a single-paragraph body (no blank-line break) renders fully inline — no dropdown, no truncation", () => {
@@ -162,7 +209,7 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("...")
   })
 
-  it("SIG-249: renders structured More Info sections after the standalone issue body", () => {
+  it("SIG-249: renders structured More Info sections compactly after the standalone issue body", () => {
     const body = "Tenant lookup happens before the membership check, so a forged tenant id can read another tenant."
     const out = formatFindingComment(
       fnd({
@@ -190,10 +237,25 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
       "Alternative mitigations considered",
       "Severity calibration",
     ]) {
-      expect(out).toContain(`**${label}**`)
+      expect(out).toContain(`- **${label}:**`)
+      expect(out).not.toContain(`**${label}**\n\n`)
     }
     expect(out.indexOf(body)).toBeLessThan(out.indexOf("<summary>More Info</summary>"))
-    expect(out).toContain("Threat model:\nAn authenticated user can request a tenant they do not belong to.")
+    expect(out).toContain("- **Threat model:** An authenticated user can request a tenant they do not belong to.")
+    expect(out).toContain(
+      [
+        "<details><summary>More Info</summary>",
+        "",
+        "- **Threat model:** An authenticated user can request a tenant they do not belong to.",
+        "- **Specific code citations:** `src/auth.ts:42` reads `tenantId` before `authorizeTenant`.",
+        "- **Existing protections:** The route checks login state, but that does not prove tenant membership.",
+        "- **Proposed mitigation:** Move `authorizeTenant` before the read.",
+        "- **Alternative mitigations considered:** A database policy would also work, but it is broader than this patch.",
+        "- **Severity calibration:** Score 5 because this is cross-tenant data exposure.",
+        "",
+        "</details>",
+      ].join("\n"),
+    )
     expect(out).toContain("How can I resolve this?")
   })
 
@@ -289,12 +351,36 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("\\#define MAX_TENANTS 4")
   })
 
+  it("SIG-249: keeps multiline More Info compact inside list items", () => {
+    const out = formatFindingComment(
+      fnd({
+        score: 5,
+        moreInfo: {
+          codeCitations: "  `parseA|B` feeds the state machine.  ",
+          mitigation:
+            "Move the authorization check before `a < b` reads.\nThen assert the rejected tenant path in tests.",
+          alternatives: "Use a database policy | keep the handler guard.",
+        },
+      }),
+      5,
+    )
+
+    expect(out).toContain("- **Specific code citations:** `parseA|B` feeds the state machine.")
+    expect(out).toContain(
+      "- **Proposed mitigation:** Move the authorization check before `a < b` reads.<br>Then assert the rejected tenant path in tests.",
+    )
+    expect(out).toContain("- **Alternative mitigations considered:** Use a database policy | keep the handler guard.")
+  })
+
   it("splits at the FIRST blank-line break — every later paragraph goes to the dropdown", () => {
-    const body = "The issue.\n\nReason one.\n\nReason two."
+    const body =
+      "The issue.\n\nReason one explains the concrete mechanism and cites why the old guard no longer protects this path. Reason two explains why the proposed order restores the invariant.\n\nReason three covers the remaining edge case."
     const out = formatFindingComment(fnd({ body }), 5)
     expect(out).toContain("The issue.")
     const detailsMatch = /<details><summary>Detailed reasoning<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
-    expect(detailsMatch?.[1]).toBe("Reason one.\n\nReason two.")
+    expect(detailsMatch?.[1]).toBe(
+      "Reason one explains the concrete mechanism and cites why the old guard no longer protects this path. Reason two explains why the proposed order restores the invariant.\n\nReason three covers the remaining edge case.",
+    )
   })
 
   it("never cuts a long issue mid-sentence — a no-break body is shown complete", () => {

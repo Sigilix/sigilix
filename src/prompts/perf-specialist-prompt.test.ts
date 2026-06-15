@@ -199,6 +199,9 @@ describe("SIG-249 More Info prompt contract", () => {
       expect(prompt).toContain("SIG-249 MORE INFO DEPTH")
       expect(prompt).toContain("moreInfo")
       expect(prompt).toContain("Never move the primary proof or mitigation only into `moreInfo`")
+      expect(prompt).toContain("Use a second paragraph in `body` only for true detailed reasoning")
+      expect(prompt).toContain('Do NOT put a one-line "Minimal fix:" note after a blank line')
+      expect(prompt).toContain("A useful section is normally 1-3 sentences")
       for (const key of sectionKeys) {
         expect(prompt).toContain(key)
       }
@@ -210,6 +213,9 @@ describe("SIG-249 More Info prompt contract", () => {
     expect(SYNTHESIZER_PROMPT).toContain("PRESERVE/MERGE")
     expect(SYNTHESIZER_PROMPT).toContain("Do NOT invent unsupported detail")
     expect(SYNTHESIZER_PROMPT).toContain("Keep `body` self-contained with the core defect, impact, and fix")
+    expect(SYNTHESIZER_PROMPT).toContain("blank-line split")
+    expect(SYNTHESIZER_PROMPT).toContain('Do NOT put a one-line "Minimal fix:"')
+    expect(SYNTHESIZER_PROMPT).toContain("More Info sections must be real 1-3 sentence support")
     for (const key of sectionKeys) {
       expect(SYNTHESIZER_PROMPT).toContain(key)
     }

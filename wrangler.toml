@@ -299,6 +299,14 @@ SHADOW_BAKEOFF_ROLES = ""
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-426: CI-failure triage → review synth (grounded inline). "off" | "shadow" |
+# "enforce". "shadow": on a failed CI run, run the nemotron-ultra synth pass +
+# telemeter the would-post grounded-inline decisions, but keep the legacy sticky
+# (NO customer-visible change) — the data-gathering window before enforce.
+# "enforce": post the grounded inline finding(s); suppress the legacy sticky +
+# SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
+OPENCLAW_CI_TRIAGE_SYNTH_MODE = "shadow"
+
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /
 # import-dependent bodies) and emit the `graph-expansion-shadow` telemetry.

@@ -193,3 +193,52 @@ describe("invariant lens — mode contract", () => {
     expect(perFamily.every((f) => f.errored)).toBe(true)
   })
 })
+
+// SIG-369(b): the lens honors the default-off second-pass model override. Off
+// (the default) → NO modelOverride reaches runSpecialist (byte-identical o3
+// path); on → every dispatched family call carries the v4-pro override.
+describe("invariant lens — SIG-369(b) second-pass reasoner override", () => {
+  beforeEach(() => {
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [] } as unknown as PrReviewVerdict,
+      elapsedMs: 5,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+  })
+
+  function startWith(env: Env) {
+    return startInvariantLens({
+      env,
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+      headSha: "a".repeat(40),
+      mode: "on",
+      perfCtx: { owner: "o", repo: "r", prNumber: 1, headSha: "a".repeat(40) },
+      orchCtrl: new AbortController(),
+      diff: DIFF,
+      userMessage: "msg",
+    })
+  }
+
+  it("flag unset (default off): no modelOverride on any call — byte-identical o3 path", async () => {
+    const lens = startWith(ENV)
+    await lens.outcomes
+    expect(mockedRunSpecialist).toHaveBeenCalled()
+    for (const call of mockedRunSpecialist.mock.calls) {
+      expect(call[0]).not.toHaveProperty("modelOverride")
+    }
+  })
+
+  it('flag "on": every dispatched call carries the v4-pro override (logic config shape preserved)', async () => {
+    const env = { ...ENV, OPENCLAW_SECONDPASS_REASONER_MODE: "on" } as unknown as Env
+    const lens = startWith(env)
+    await lens.outcomes
+    expect(mockedRunSpecialist.mock.calls.length).toBe(lens.dispatched.length)
+    for (const call of mockedRunSpecialist.mock.calls) {
+      expect(call[0].role).toBe("logic")
+      expect(call[0].modelOverride?.primary).toBe("deepseek/deepseek-v4-pro")
+    }
+  })
+})

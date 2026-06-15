@@ -199,6 +199,17 @@ export interface SpecialistRunArgs {
     toolIds: McpToolId[]
   }
   /**
+   * SIG-369(b): optional per-CALL model-config override. When present it
+   * REPLACES `SPECIALIST_CONFIGS[role]` for this call (model + retry/fallback/
+   * timeout knobs all come from the override); the API key is still selected by
+   * the override's model-id shape, so an OpenRouter override stays on the
+   * OpenRouter key. Used ONLY by the second-pass recall phases (invariant-lens,
+   * resweep) to route their re-runs to a cheaper reasoner behind a default-off
+   * flag. Absent → byte-identical to today (the role's shipped config). The
+   * primary specialist fan-out never passes it.
+   */
+  modelOverride?: ModelConfig
+  /**
    * SIG-369(b): optional per-attempt input-composition observer (logic role,
    * shadow mode only). Fired once per settled attempt with that attempt's
    * per-call input-token split + tool-loop stats, INSIDE the existing protected
@@ -235,7 +246,11 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
   // SIG-406: the role's OpenRouter config; the API key is picked by model-id shape
   // (a `:cloud` eval override → the Ollama key). Missing key → fail closed below
   // (the other provider's key is never substituted).
-  const config = SPECIALIST_CONFIGS[args.role]
+  // SIG-369(b): a per-call `modelOverride` (second-pass phases only) REPLACES the
+  // role config; absent → byte-identical to the shipped role config. The key is
+  // selected from `config` either way, so the override's model-id shape decides
+  // the provider key (an OpenRouter override → the OpenRouter key, no leak).
+  const config = args.modelOverride ?? SPECIALIST_CONFIGS[args.role]
   const apiKey = selectConfigApiKey(config, args.apiKeys)
   if (!apiKey) {
     return {

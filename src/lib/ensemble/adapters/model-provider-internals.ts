@@ -80,6 +80,33 @@ export function isPermanentFailure(failureReason: string | undefined, parseFailu
   return false
 }
 
+/**
+ * SIG-438: should the SAME-MODEL retry loop in `runWithRetryAndFallback` stop
+ * early (`break`) on this failure? True only for failures a re-roll of the same
+ * model cannot fix: auth (missing key / 401 / 403), model-missing (404),
+ * bad-request (400), and `aborted`.
+ *
+ * A PARSE failure is deliberately EXCLUDED (returns false → keep retrying the
+ * same model). LLM output is non-deterministic, so re-rolling the same model
+ * frequently parses — observed in prod: a specialist parsed one review pass and
+ * failed the next on byte-identical input (PR #574 dropped the security
+ * specialist this way). Pre-SIG-406 a parse failure broke here to skip to the
+ * cross-provider fallback ("a different model may format correctly"); SIG-406
+ * set `fallback: null` on every specialist, so that recovery is gone — without
+ * this exclusion a parse failure gets ZERO retries and the specialist is
+ * dropped fail-open.
+ *
+ * STRICTER than `isPermanentFailure`: every reason this returns true for,
+ * `isPermanentFailure` also does — but NOT the parse label. `isPermanentFailure`
+ * is left unchanged — it stays a re-exported public predicate with its own test
+ * suite and, by design, still classes the parse label as permanent (the two
+ * diverge only there).
+ */
+export function breaksSameModelRetry(failureReason: string | undefined, parseFailureLabel: string): boolean {
+  if (failureReason === parseFailureLabel) return false
+  return isPermanentFailure(failureReason, parseFailureLabel)
+}
+
 // SIG-392: relocated from model-provider.ts to keep that adapter <=1k lines
 // (the SIG-386 pattern). Pure wire-shape validator; body byte-identical.
 export function isValidProvenance(value: unknown): value is SynthesizerProvenance {

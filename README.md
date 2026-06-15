@@ -851,6 +851,15 @@ Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. 
 | `/sigilix describe [pr\|internal\|external]` | Single-shot LLM draft of a PR description (`pr`, default) or internal / external changelog. Posted as a top-level comment with `<!-- sigilix:describe:<mode>:start/end -->` markers around the draft body and a hidden `<!-- sigilix-meta: {...} -->` line for future apply-verb parsing. The PR body itself is **never** auto-edited by v1; copy the section between markers manually. Per-repo opt-OUT via `sigilix.json` (`describe.enabled: false`). External-mode disclosure is prompt-level best-effort, NOT a security control — disable for repos that need hard guarantees. |
 | `/sigilix help` | Posts an inline list of supported commands. No model call, no diff fetch — just an authenticated comment post. |
 
+### `@sigilix summary` (SIG-437)
+
+A **PR-body** one-liner (not a comment / slash command): drop `@sigilix summary` on its own line in the PR **description**, and Sigilix replaces it with a detailed, structured PR description in the house style (**What / How it works / How verified / notable risks**), grounded in the diff + retrieved codebase context, with related PRs and the associated Linear issue linked.
+
+- Triggers on the `pull_request` `opened` / `edited` / `reopened` / `ready_for_review` webhook (the marker lives in the body), parsed alongside the mention triggers (code-fenced / blockquoted markers are ignored).
+- The generated text is written into the PR body between `<!-- sigilix:summary:start -->` / `<!-- sigilix:summary:end -->` sentinels. **Idempotent** — re-editing replaces the managed block in place (never double-appends), and a marker echoed inside the block can't re-trigger.
+- Related PRs come from the stack detector; the Linear issue is resolved deterministically from the body's `Closes/Fixes/Resolves <KEY-N>` (preferred) or the branch name (`sig-437-…`) — no Linear API call.
+- **Flag-gated, default-off** via `OPENCLAW_PR_SUMMARY_MODE` (`off` | `on`). Off → the trigger never enqueues (pure no-op). Best-effort + soft-fail: nothing here can block or fail the webhook ack. Sensitive repos (`OPENCLAW_SENSITIVE_REPOS`) are skipped silently.
+
 Recognition rules:
 
 - Must be at the **start of a line** (after leading whitespace). Quoted/inline references like `> /sigilix review` or `Hey /sigilix review please` don't trigger.

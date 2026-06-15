@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   validateForSubmission,
   isPermanentFailure,
+  breaksSameModelRetry,
   SPECIALIST_TIMEOUT_MS,
   SYNTHESIZER_TIMEOUT_MS,
   SYNTHESIZER_RETRY_TIMEOUT_MS,
@@ -69,6 +70,37 @@ describe("isPermanentFailure", () => {
 
   it("matches HTTP status case-insensitively", () => {
     expect(isPermanentFailure("ollama http 404: nope", PARSE_LABEL)).toBe(true)
+  })
+})
+
+describe("breaksSameModelRetry (SIG-438)", () => {
+  // The same-model retry-loop break decision. STRICTER than isPermanentFailure:
+  // identical EXCEPT a parse failure is now retryable (non-deterministic re-roll),
+  // because SIG-406's fallback:null removed the parse failure's only other
+  // recovery path — without retrying the same model, the specialist is dropped.
+  const PARSE_LABEL = "specialist_did_not_parse"
+
+  it("returns FALSE for the parse failure label — retry the same model (the SIG-438 fix)", () => {
+    expect(breaksSameModelRetry(PARSE_LABEL, PARSE_LABEL)).toBe(false)
+    expect(breaksSameModelRetry("synth_failed_parse", "synth_failed_parse")).toBe(false)
+    // ...whereas isPermanentFailure STILL classes parse as permanent — the two
+    // predicates diverge ONLY on the parse label.
+    expect(isPermanentFailure(PARSE_LABEL, PARSE_LABEL)).toBe(true)
+  })
+
+  it("returns true for genuinely unretryable reasons (auth / 404 / 400 / missing-key / aborted)", () => {
+    expect(breaksSameModelRetry("missing_api_key", PARSE_LABEL)).toBe(true)
+    expect(breaksSameModelRetry("aborted", PARSE_LABEL)).toBe(true)
+    expect(breaksSameModelRetry("Ollama HTTP 404: model not found", PARSE_LABEL)).toBe(true)
+    expect(breaksSameModelRetry("Ollama HTTP 401: unauthorized", PARSE_LABEL)).toBe(true)
+    expect(breaksSameModelRetry("Ollama HTTP 400: bad request", PARSE_LABEL)).toBe(true)
+  })
+
+  it("returns false for transient classes (5xx / 429 / network / undefined) — same as isPermanentFailure", () => {
+    expect(breaksSameModelRetry("Ollama HTTP 503: overloaded", PARSE_LABEL)).toBe(false)
+    expect(breaksSameModelRetry("Ollama HTTP 429: rate limited", PARSE_LABEL)).toBe(false)
+    expect(breaksSameModelRetry("fetch failed", PARSE_LABEL)).toBe(false)
+    expect(breaksSameModelRetry(undefined, PARSE_LABEL)).toBe(false)
   })
 })
 

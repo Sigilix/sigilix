@@ -453,3 +453,24 @@ export const PR_DESCRIBE_SCHEMA = {
   },
   required: ["summary", "body"],
 } as const
+
+/**
+ * pr-summary verdict (SIG-437: `@sigilix summary`).
+ * Mirrors PrSummaryVerdict in src/lib/triage-pr-summary.ts.
+ *
+ * Same shape + length discipline as PR_DESCRIBE_SCHEMA — a one-shot
+ * generation where `summary` is a one-line orientation (kept for
+ * parity + a possible future comment fallback) and `body` is the
+ * detailed PR description (What / How it works / How verified /
+ * Notable risks) written into the PR body's managed block. The
+ * deterministic "Related" block (PRs + Linear) is appended by the
+ * handler, NOT emitted by the model.
+ */
+export const PR_SUMMARY_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string", minLength: 10, maxLength: 500 },
+    body: { type: "string", minLength: 50, maxLength: 32000 },
+  },
+  required: ["summary", "body"],
+} as const

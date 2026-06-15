@@ -147,6 +147,12 @@ export interface Env {
   // so the release PR still gets a summary blurb.
   OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES?: string
 
+  // SIG-437 feature flag for `@sigilix summary` (PR-body one-liner →
+  // detailed PR description). "off" (default / unset) | "on". A
+  // webhook/product flag read at the `pull_request` trigger gate; when
+  // off the trigger never enqueues a pr-summary job → pure no-op.
+  OPENCLAW_PR_SUMMARY_MODE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

@@ -138,18 +138,50 @@ describe("runWithRetryAndFallback — permanent failures (arc PR #37 catch)", ()
     expect(result.modelUsed).toBe("fallback-model:cloud")
     expect(result.attemptsUsed).toBe(2)
   })
+})
 
-  it("parse failure on primary skips retries but tries fallback", async () => {
-    // Parse failure = same prompt at temp=0 → same bad output. No
-    // retry. But a different model (fallback) may format output
-    // correctly — try once before giving up.
+describe("runWithRetryAndFallback — parse failures retry the same model (SIG-438)", () => {
+  it("retries the SAME model on a parse failure (non-deterministic re-roll), not the fallback", async () => {
+    // SIG-438: a parse failure is no longer "permanent". LLM output is
+    // non-deterministic, so a re-roll of the SAME model often parses. (Pre-SIG-406
+    // a parse failure broke straight to the cross-provider fallback; fallback:null
+    // since SIG-406 left it with no recovery.)
     mockChat
-      .mockResolvedValueOnce(ok("not-json")) // primary returns unparseable
+      .mockResolvedValueOnce(ok("not-json")) // primary attempt 1: unparseable
+      .mockResolvedValueOnce(ok("GOOD")) // primary attempt 2 (retry): parses
+    const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
+    expect(result.verdict).toEqual({ ok: true })
+    expect(result.modelUsed).toBe("primary-model:cloud") // retry stayed on primary
+    expect(result.attemptsUsed).toBe(2)
+  })
+
+  it("prod shape (retries:1, fallback:null) recovers a parse glitch via the same-model retry — PR #574 security", async () => {
+    // The exact live regression: security = deepseek/deepseek-v4-flash, retries:1,
+    // fallback:null. Before SIG-438 the parse failure broke at attemptsUsed:1 and
+    // the specialist was dropped fail-open.
+    mockChat
+      .mockResolvedValueOnce(ok("not-json")) // primary attempt 1: unparseable
+      .mockResolvedValueOnce(ok("GOOD")) // primary attempt 2 (retry): parses
+    const result = await runWithRetryAndFallback({
+      config: { primary: "p", retries: 1, fallback: null },
+      ...baseArgs,
+    })
+    expect(result.verdict).toEqual({ ok: true })
+    expect(result.modelUsed).toBe("p")
+    expect(result.attemptsUsed).toBe(2)
+  })
+
+  it("parse failure on ALL primary attempts still falls through to the cross-provider fallback", async () => {
+    // retries:2 → 3 primary attempts parse-fail, THEN the fallback gets its shot.
+    mockChat
+      .mockResolvedValueOnce(ok("not-json")) // primary attempt 1
+      .mockResolvedValueOnce(ok("not-json")) // primary attempt 2 (retry)
+      .mockResolvedValueOnce(ok("not-json")) // primary attempt 3 (retry)
       .mockResolvedValueOnce(ok("GOOD")) // fallback parses
     const result = await runWithRetryAndFallback({ config: baseConfig, ...baseArgs })
     expect(result.verdict).toEqual({ ok: true })
     expect(result.modelUsed).toBe("fallback-model:cloud")
-    expect(result.attemptsUsed).toBe(2)
+    expect(result.attemptsUsed).toBe(4) // 3 primary + 1 fallback
   })
 })
 

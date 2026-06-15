@@ -730,6 +730,16 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # re-enable "shadow" when actively sizing SIG-432.
 OPENCLAW_REVIEW_MULTIBATCH_MODE = "off"
 
+# SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
+# CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at
+# an unchanged blob-sha are skipped. Kills the per-commit finding "dribble" (the
+# old per-pass shifting sample). Recall-safe by construction: a file is skipped
+# only when byte-identical to its last review, and any plan error fails open to a
+# full review. Code default is off; ON in prod per founder (2026-06-15 — the
+# dribble is the top product-trust problem). "shadow" measures coverage without
+# filtering.
+OPENCLAW_INCREMENTAL_REVIEW_MODE = "on"
+
 # SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
 # finding off a comment/blank/structural/header line onto the substantive code
 # line it describes within the diff (lands the comment ON the bug, not the `//`

@@ -47,6 +47,7 @@ import {
   batchToDiff,
   estimateTokens,
   riskOrderFiles,
+  type DiffFileBlock,
 } from "@/src/lib/diff-packing"
 import { isHighRiskPath } from "@/src/lib/ensemble/domain/resweep"
 import {
@@ -262,6 +263,14 @@ export interface PackAndRouteResult {
   filesAfterFilter: SplitFile[]
   reviewedFiles: SplitFile[]
   filesNotReviewed: string[]
+  /** SIG-418 Phase 2 (Design B′): the EFFECTIVE spillover batches — the files the
+   *  posted single-batch path deferred (everything not in `reviewedFiles`), packed
+   *  into the same ≤12K-token batches, derived AFTER the cost-governor seam so the
+   *  boundary matches what the posted path actually reviewed. Empty for a fully
+   *  single-batch PR. Consumed ONLY by the dark `multiBatchMode` shadow loop (PR 2);
+   *  the single-batch posted path ignores it, so this is purely additive. `droppedTooLarge`
+   *  files are excluded (they exceed one batch and stay in the SIG-414 disclosure). */
+  spilloverBatches: DiffFileBlock[][]
   droppedTooLarge: string[]
   /** SIG-414: paths excluded by `pathFilters` BEFORE packing (lockfiles /
    *  generated / vendored / minified / binary). Previously this was only ever
@@ -393,6 +402,20 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
       filesNotReviewed = [...filesNotReviewed, ...paths]
     },
   })
+  // SIG-418 Phase 2 (Design B′): the EFFECTIVE spillover batches the posted
+  // single-batch path deferred. Derived HERE — after the cost-governor seam has
+  // finalized `filesNotReviewed` — so the boundary matches what the posted path
+  // actually reviewed (never the raw pre-governor `batches`). The post-filter,
+  // risk-ordered blocks restricted to the deferred set, re-packed into the same
+  // ≤12K-token batches. The cost-governor-trimmed files are SUBTRACTED: the
+  // governor dropped them intentionally for cost (they get their own SIG-414
+  // disclosure), so the dark shadow pass must NOT spend model calls re-reviewing
+  // them — recall/cost-safe. Default-off governor → `costTrimmedPaths` is empty,
+  // so this is exactly the genuine `batches.slice(1)` spillover. Consumed only by
+  // the dark `multiBatchMode` shadow loop (PR 2); zero effect on the posted path.
+  const trimmedSet = new Set(costTrimmedPaths)
+  const spilloverSet = new Set(filesNotReviewed.filter((p) => !trimmedSet.has(p)))
+  const { batches: spilloverBatches } = packFilesIntoBatches(riskOrderedFiles.filter((f) => spilloverSet.has(f.path)))
   const baseDiff =
     reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0 ? fullDiff : batchToDiff(reviewedFiles)
   const matchedPathInstructions = resolvePathInstructionsForChangedPaths(
@@ -681,6 +704,7 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     filesAfterFilter,
     reviewedFiles,
     filesNotReviewed,
+    spilloverBatches,
     droppedTooLarge,
     filesDroppedByFilter,
     matchedPathInstructions,

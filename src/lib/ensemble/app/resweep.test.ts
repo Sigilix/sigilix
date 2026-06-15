@@ -188,6 +188,50 @@ describe("runResweepPhase — mode contract", () => {
   })
 })
 
+// SIG-369(b): the re-sweep honors the default-off second-pass model override,
+// applied to the LOGIC role ONLY. Off (default) → no override anywhere
+// (byte-identical o3 path); on → only the logic-role calls carry the v4-pro
+// override, security/perf/tests keep their own configs (no modelOverride).
+describe("runResweepPhase — SIG-369(b) second-pass reasoner override", () => {
+  beforeEach(() => {
+    mockedRunSpecialist.mockResolvedValue({
+      verdict: { findings: [] } as unknown as PrReviewVerdict,
+      elapsedMs: 50,
+      modelUsed: "m",
+      attemptsUsed: 1,
+    })
+  })
+
+  it("flag unset (default off): NO call carries modelOverride — byte-identical o3 path", async () => {
+    await runResweepPhase(args("on", SUCCEEDED))
+    expect(mockedRunSpecialist).toHaveBeenCalledTimes(4)
+    for (const call of mockedRunSpecialist.mock.calls) {
+      expect(call[0]).not.toHaveProperty("modelOverride")
+    }
+  })
+
+  it('flag "on": ONLY the logic-role calls get the v4-pro override; other roles untouched', async () => {
+    const env = { ...ENV, OPENCLAW_SECONDPASS_REASONER_MODE: "on" } as unknown as Env
+    await runResweepPhase({ ...args("on", SUCCEEDED), env })
+    expect(mockedRunSpecialist).toHaveBeenCalledTimes(4)
+    const byRole = new Map<string, Array<(typeof mockedRunSpecialist.mock.calls)[number][0]>>()
+    for (const call of mockedRunSpecialist.mock.calls) {
+      const list = byRole.get(call[0].role) ?? []
+      list.push(call[0])
+      byRole.set(call[0].role, list)
+    }
+    // regions(2) × {logic, security}: 2 logic calls (overridden), 2 security (not).
+    expect(byRole.get("logic")!.length).toBe(2)
+    for (const c of byRole.get("logic")!) {
+      expect(c.modelOverride?.primary).toBe("deepseek/deepseek-v4-pro")
+    }
+    expect(byRole.get("security")!.length).toBe(2)
+    for (const c of byRole.get("security")!) {
+      expect(c).not.toHaveProperty("modelOverride")
+    }
+  })
+})
+
 /** Pull the region path back out of the prompt (the focused-re-review title). */
 function extractRegion(initialMessage: string): string {
   const m = /Focused re-review: (\S+)/.exec(initialMessage)

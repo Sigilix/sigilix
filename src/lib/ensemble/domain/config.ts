@@ -35,6 +35,7 @@ import type { MultiBatchMode } from "./multibatch-budget"
 import type { InvariantLensMode, InvariantLensRecallContract } from "./invariant-lens"
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
+import type { IncrementalReviewMode } from "./incremental-coverage"
 
 /** Normalized `off | shadow | post` mode for an AST security scanner. Kept as a
  *  string to preserve the call sites' exact contract (`mode !== "post"`,
@@ -174,6 +175,9 @@ export interface EnsembleFeatureFlags {
    *  K=12 exactness eval proves the lift). Threaded into the render layer via
    *  `buildReviewSubmissionWithMetadata`'s `anchorPrecision` arg. */
   anchorPrecision: boolean
+  /** SIG-439: incremental PR re-review coverage mode. Default "off" preserves
+   *  current file selection and performs no coverage-memory IO. */
+  incrementalReviewMode: IncrementalReviewMode
 }
 
 /**

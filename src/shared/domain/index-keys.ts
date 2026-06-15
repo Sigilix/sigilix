@@ -13,3 +13,11 @@
 
 /** Keyspace segment marking a branch-scoped index namespace. */
 export const BRANCH_STATE_SEGMENT = "__branch__"
+
+export function prReviewCoverageKey(owner: string, repo: string, prNumber: number): string {
+  return `pr-review-coverage:${owner}/${repo}#${prNumber}`
+}
+
+export function prReviewCoverageRepoIdKey(repoId: number, prNumber: number): string {
+  return `pr-review-coverage:repo:${repoId}#${prNumber}`
+}

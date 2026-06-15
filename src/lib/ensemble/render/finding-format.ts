@@ -437,7 +437,55 @@ export function formatFindingBodyMarkdown(body: string): string {
   const reasoning = clean.slice(breakIdx + 2).trimStart()
   // Degenerate split (empty issue or empty reasoning) → just show the whole body.
   if (main.length === 0 || reasoning.length === 0) return clean.trimEnd()
+  if (!isDetailedReasoningBlock(reasoning)) return clean.trimEnd()
   return [main, "", "<details><summary>Detailed reasoning</summary>", "", reasoning, "", "</details>"].join("\n")
+}
+
+function isDetailedReasoningBlock(reasoning: string): boolean {
+  const clean = reasoning.trim()
+  if (isTerseFixNote(clean)) return false
+  const sentences = sentenceParts(clean)
+  if (sentences.length >= 3 && clean.length >= 200) return true
+  if (!hasMechanismReasoningShape(clean)) return false
+  return sentences.length >= 2 || clean.length >= 160
+}
+
+function isTerseFixNote(value: string): boolean {
+  if (!hasFixNotePrefix(value)) return false
+  const sentences = sentenceParts(value)
+  return value.length < 320 && sentences.length < 2 && !hasMechanismReasoningShape(value)
+}
+
+function hasFixNotePrefix(value: string): boolean {
+  return /^(?:the\s+)?(?:minimal\s+fix|fix|fix\s+suggestion|mitigation|patch|possible\s+fix|proposed\s+fix|quick\s+fix|recommended\s+fix|suggested\s+(?:change|fix)|to\s+fix|workaround)\s*(?::|[-–—])/i.test(
+    value,
+  )
+}
+
+function sentenceParts(value: string): string[] {
+  return value.split(/[.!?](?:\s+|$)/).filter((part) => part.trim().length > 0)
+}
+
+function hasMechanismReasoningShape(value: string): boolean {
+  return hasCausalSignal(value) && (hasMechanismSignal(value) || hasCodeReferenceSignal(value))
+}
+
+function hasCausalSignal(value: string): boolean {
+  return /\b(?:because|so|therefore|why|when|while|before|after|until|unless|means|as a result|root cause|causes?|leaves?|results? in|lets?|allows?|prevents?|bypasses?|skips?|misses?|fails? to|cannot|never|no longer|too early|too late)\b/i.test(
+    value,
+  )
+}
+
+function hasMechanismSignal(value: string): boolean {
+  return /\b(?:auth(?:orization)?|boundary|cache|call|check|condition|control flow|data flow|decode|encode|escape|event|guard|handler|idempotenc(?:y|e)|invariant|lifetime|lock|marker|normalize|order(?:ing)?|parser?|precondition|promise|race|range|read|reachable|replacement|round-?trip|scan|serialize|session|side effect|state|transaction|trigger|validate|write)\b/i.test(
+    value,
+  )
+}
+
+function hasCodeReferenceSignal(value: string): boolean {
+  return /`[^`]+`|\b[A-Za-z_$][\w$]*\s*\(|\b[\w./-]+\.(?:[cm]?[jt]sx?|json|ya?ml|py|rb|go|rs|java|sh|sql|md):\d+\b/.test(
+    value,
+  )
 }
 
 function formatFenceSection(label: string, content: string, lang: string): string {
@@ -483,15 +531,21 @@ function formatFindingStructuredDetailsMarkdown(
 function formatFindingMoreInfoMarkdown(finding: PrReviewFinding): string {
   const moreInfo = finding.moreInfo
   if (!hasFindingMoreInfo(moreInfo)) return ""
-  const sections: string[] = []
+  const items: string[] = []
   for (const key of FINDING_MORE_INFO_SECTION_KEYS) {
     const value = moreInfo[key]
     const clean = typeof value === "string" ? stripAstMarkers(value).trim() : ""
     if (clean.length === 0) continue
-    sections.push(`**${FINDING_MORE_INFO_SECTION_LABELS[key]}**\n\n${sanitizeMoreInfoMarkdownText(clean)}`)
+    items.push(`- **${FINDING_MORE_INFO_SECTION_LABELS[key]}:** ${formatMoreInfoDetailText(clean)}`)
   }
-  if (sections.length === 0) return ""
-  return ["<details><summary>More Info</summary>", "", sections.join("\n\n"), "", "</details>"].join("\n")
+  if (items.length === 0) return ""
+  return ["<details><summary>More Info</summary>", "", ...items, "", "</details>"].join("\n")
+}
+
+function formatMoreInfoDetailText(value: string): string {
+  return sanitizeMoreInfoMarkdownText(value)
+    .replace(/\r?\n+/g, "<br>")
+    .trim()
 }
 
 function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {

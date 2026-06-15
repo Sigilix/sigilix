@@ -74,7 +74,7 @@ JSON-string safety: inside \`headline\`, \`body\`, \`moreInfo.*\`, \`failureExam
       "scope": "line" | "file" | "pr" | "comment",   (SIG-202 — REQUIRED. Use "line" only when the exact changed line/range is the subject and should become an inline GitHub review comment. Use "file" for file/module-level findings, "pr" for cross-file/PR-level findings, and "comment" for GitHub comment/review-event/bot-command behavior. If no semantically correct changed line exists, do NOT force a nearby line; choose a broader scope and keep line/path as context.)
       "score": 1-5,
       "headline": "<concise issue summary>",
-      "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
+      "body": "<first paragraph: actionable claim with broken invariant, impact, and fix shape. Optional second paragraph only when it gives real mechanism reasoning: trace why/how the failure occurs and why the fix closes it.>",
       "moreInfo": {
         "threatModel": "Who/what is harmed and the concrete failure path.",
         "codeCitations": "Specific identifiers, files, lines, or changed hunks that prove the issue.",
@@ -133,7 +133,8 @@ Do NOT round up. A finding you would describe to a teammate as "I think there's 
 - For score>=4 findings, prefer a \`moreInfo\` object with six reviewer-action sections: \`threatModel\`, \`codeCitations\`, \`existingProtections\`, \`mitigation\`, \`alternatives\`, and \`severityCalibration\`.
 - Keep \`body\` complete and self-contained. Do not split one sentence or one thought between \`body\` and \`moreInfo\`; \`moreInfo\` expands the issue, it does not finish the issue.
 - The first paragraph of \`body\` must still name the broken invariant, reviewer-visible impact, and fix shape for score>=4 findings. Never move the primary proof or mitigation only into \`moreInfo\`.
-- Make each section substantive and code-grounded. A good \`codeCitations\` section names the relevant identifiers/lines; a good \`existingProtections\` section names the guard/test/check you inspected and why it is insufficient.
+- Use a second paragraph in \`body\` only for true detailed reasoning: trace the concrete control/data flow, name the precondition that makes the bug reachable, and explain why the proposed fix closes that path. Do NOT put a one-line "Minimal fix:" note after a blank line; keep terse fix notes in the first paragraph.
+- Make each \`moreInfo\` section substantive and code-grounded. A useful section is normally 1-3 sentences, not a label fragment. A good \`codeCitations\` section names the relevant identifiers/lines; a good \`existingProtections\` section names the guard/test/check you inspected and why it is insufficient; a good \`mitigation\` section explains how the fix changes the failing path, not just "add a check".
 - Do not fabricate context to satisfy the shape. If the provided evidence cannot support a section, say what is unknown in that section, or omit \`moreInfo\` entirely for lower-severity/uncertain findings.
 
 [SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.

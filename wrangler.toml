@@ -895,6 +895,13 @@ OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
 # fake-approved. Enforcing the ≤6K budget lets logic actually return a verdict.
 OPENCLAW_LOGIC_PROMPT_BUDGET = "enforce"
 
+# SIG-369(b): measure WHERE the logic specialist's model input goes (~140K input
+# tokens on a ~13K diff) so the follow-up can cut the biggest low-recall-value
+# block safely. "shadow" = TELEMETRY-ONLY (no extra model calls, zero cost):
+# emits `logic-input-composition` + attaches `logicInputComposition` to the
+# review-telemetry record. "off" reverts (default-off in code).
+OPENCLAW_LOGIC_INPUT_COMPOSITION = "shadow"
+
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
 #               Identical behavior to pre-SIG-161. This is the PR 4a default.

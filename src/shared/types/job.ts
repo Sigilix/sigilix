@@ -323,6 +323,17 @@ export type JobMessage =
        */
       before?: string
       /**
+       * SIG-422: `payload.after` from the push webhook — the exact tip
+       * commit pushed. On the PUSH path the consumer pins the index head to
+       * this SHA (and resolves its tree) instead of re-reading the live
+       * branch tip, so `manifest.headSha` equals the pushed commit and the
+       * NEXT push's `before` matches it — keeping the cheap push fast-path
+       * chain intact (fewer Compare-API recoveries). Absent on non-push
+       * reasons (`merged-pr` / `pull-request` / `install` / `manual`), which
+       * keep resolving the live branch tip, and on legacy in-flight messages.
+       */
+      after?: string
+      /**
        * SIG-369 cost control: bounded changed-path set from a GitHub push
        * webhook. When present, the consumer may update only these paths;
        * absence keeps the existing full-tree index path as the safe fallback.

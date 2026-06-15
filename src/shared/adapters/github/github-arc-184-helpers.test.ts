@@ -246,6 +246,52 @@ describe("compareCommits", () => {
   })
 })
 
+// SIG-422 — `getCommit` resolves a pushed commit SHA to its commit + tree
+// SHAs so the push-driven indexer can pin the index head to the exact pushed
+// commit (`payload.after`) instead of re-reading the live branch tip.
+describe("getCommit (SIG-422)", () => {
+  it("returns the commit + tree SHAs on 200", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResp({ sha: "c".repeat(40), tree: { sha: "d".repeat(40) } }),
+    )
+    const c = newClient()
+    const out = await c.getCommit("o", "r", "c".repeat(40))
+    expect(out).toEqual({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
+  })
+
+  it("hits the git/commits endpoint with the url-encoded sha", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResp({ sha: "c".repeat(40), tree: { sha: "d".repeat(40) } }))
+    const c = newClient()
+    await c.getCommit("o", "r", "c".repeat(40))
+    const call = fetchSpy.mock.calls[0]!
+    const url =
+      typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
+    expect(url).toContain(`/repos/o/r/git/commits/${"c".repeat(40)}`)
+  })
+
+  it("returns null when the tree sha is missing from the response", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ sha: "c".repeat(40) }))
+    const c = newClient()
+    const out = await c.getCommit("o", "r", "c".repeat(40))
+    expect(out).toBeNull()
+  })
+
+  it("returns null on 404 (commit GC'd after a force-push) so the caller falls back to the live tip", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(404))
+    const c = newClient()
+    const out = await c.getCommit("o", "r", "c".repeat(40))
+    expect(out).toBeNull()
+  })
+
+  it("RETHROWS on a non-404 HTTP error so a transient failure retries instead of degrading to a stale live tip", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(500))
+    const c = newClient()
+    await expect(c.getCommit("o", "r", "c".repeat(40))).rejects.toThrow(/HTTP 500/)
+  })
+})
+
 // ARC-258 — Check Run lifecycle for the customer-visible in-progress
 // reviewer indicator. The bot creates a Check Run in `in_progress`
 // state at the head of the ensemble pipeline so customers see

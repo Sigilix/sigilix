@@ -4,6 +4,7 @@ const {
   mockGetInstallationToken,
   mockGetRepository,
   mockGetBranch,
+  mockGetCommit,
   mockGetRepoTree,
   mockGetFileContent,
   mockCompareCommits,
@@ -16,6 +17,7 @@ const {
   mockGetInstallationToken: vi.fn(async (_args: unknown) => "test-token"),
   mockGetRepository: vi.fn(),
   mockGetBranch: vi.fn(),
+  mockGetCommit: vi.fn(),
   mockGetRepoTree: vi.fn(),
   mockGetFileContent: vi.fn(),
   mockCompareCommits: vi.fn(),
@@ -43,6 +45,9 @@ vi.mock("@/src/shared/adapters/github", async () => {
     }
     async getBranch(owner: string, repo: string, branch: string): Promise<unknown> {
       return mockGetBranch(owner, repo, branch)
+    }
+    async getCommit(owner: string, repo: string, sha: string): Promise<unknown> {
+      return mockGetCommit(owner, repo, sha)
     }
     async getRepoTree(owner: string, repo: string, treeSha: string): Promise<unknown> {
       return mockGetRepoTree(owner, repo, treeSha)
@@ -107,6 +112,13 @@ beforeEach(() => {
   mockGetInstallationToken.mockClear()
   mockGetRepository.mockReset().mockResolvedValue({ default_branch: "main" })
   mockGetBranch.mockReset().mockResolvedValue({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
+  // SIG-422: a chain-intact push pins the head to `after` via getCommit. The
+  // default echoes the requested SHA with the live tree, so the existing
+  // before:"a"…/after:"c"… push tests resolve head "c"… (same as the live tip).
+  mockGetCommit.mockReset().mockImplementation(async (_owner, _repo, sha: string) => ({
+    headSha: sha,
+    treeSha: "d".repeat(40),
+  }))
   mockGetRepoTree.mockReset().mockResolvedValue({
     tree: [
       { path: "src/changed.ts", type: "blob", size: 100 },

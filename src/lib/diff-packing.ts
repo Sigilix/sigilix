@@ -19,6 +19,11 @@
 //     the policy needs to change)
 //   - Caller orchestrates the multi-batch fanout + verdict merge
 
+// SIG-369(b) THROWAWAY PROBE — opens one PR so a real review runs the logic
+// specialist through the shadow input-composition instrumentation. DO NOT MERGE;
+// the branch is closed right after the telemetry is read.
+export const SIG369B_PROBE = 1
+
 /**
  * One file's worth of diff content extracted from a unified diff.
  * `path` is the new-file path (i.e. the right side); for pure

@@ -824,6 +824,13 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 # unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
 # (inert); both are safe one-line changes.
 OPENCLAW_INVARIANT_LENS_MODE = "on"
+# SIG-369(b): route the SECOND-PASS logic re-runs (invariant-lens + resweep) to a
+# cheaper strong reasoner (deepseek/deepseek-v4-pro) instead of openai/o3 — these
+# passes are the dominant logic-input cost on dense PRs (~142K of #574's 172.8K).
+# "on" swaps ONLY the second-pass model; the primary logic specialist stays o3.
+# Recall gauge = the live Sigilix review of a real substantive PR (#440) — keep on
+# if recall holds, else flip back to "off" (one-line, inert). Code default off.
+OPENCLAW_SECONDPASS_REASONER_MODE = "on"
 # SIG-392 — recall-eliciting LOGIC prompt (#508). "on" appends the recall
 # directive to the logic specialist's system prompt. Per-PR logic bake-off
 # (dense fixture, K=6, citation-judged): default prompt 6.0/20 logic recall →

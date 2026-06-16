@@ -31,11 +31,23 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
-  it("caps security + performance at 120s per attempt (SIG-449 — was the bare 60s default that aborted slow OpenRouter routes → 'unavailable')", () => {
-    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(120_000)
-    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(120_000)
-    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
-    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
+  it("gives security + performance retries:2 @ 90s — SIG-449 rework: parse re-rolls (not a longer cap) recover our-side stream/parse failures, and the 3-attempt chain still fits the wall", () => {
+    // The OpenRouter activity log showed both fast roles finishing well under 90s
+    // (flash p99/max 51.6s, glm-5.1 p99/max 54.9s) with zero provider cancels/errors,
+    // so "unavailable" was an our-side parse/stream failure. The lever is an extra
+    // attempt (retries:1→2), and the tighter 90s cap keeps the 3-attempt chain inside
+    // the role wall while still clearing the observed max by ~35s.
+    for (const role of ["security", "performance"] as const) {
+      const cfg = SPECIALIST_CONFIGS[role]
+      expect(cfg.perAttemptTimeoutMs).toBe(90_000)
+      expect(cfg.retries).toBe(2)
+      expect(cfg.fallback).toBeNull()
+      expect(cfg.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
+      // Full chain — 3 attempts (primary + 2 retries) + both backoffs — fits the wall.
+      const backoffMs = RETRY_BACKOFF_MS.slice(0, cfg.retries).reduce((a, b) => a + b, 0)
+      const chainMs = (cfg.retries + 1) * cfg.perAttemptTimeoutMs! + backoffMs
+      expect(chainMs).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
+    }
   })
 
   it("gives logic retries:1 + no fallback (SIG-406: OpenRouter self-routes) whose attempt chain fits the wall", () => {

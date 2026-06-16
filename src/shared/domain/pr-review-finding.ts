@@ -308,6 +308,18 @@ export interface PrReviewFinding {
    * Parsed by `parsePrReviewResponse` (trim-only; never rendered).
    */
   logExcerpt?: string
+  /**
+   * SIG-104 PR-3: runtime-only "applied learning" attribution — set at the
+   * deterministic soften gate (render-prep) when a `polarity:"suppress"` learning
+   * narrowly matched this finding but a recall-safety carve-out KEPT it (it is a
+   * P0/P1, or security/logic by provenance, or deterministically grounded). The
+   * renderer surfaces a small `<sub>shaped by learned rule: …</sub>` provenance
+   * line so the customer sees memory at work inline — our differentiator (neither
+   * CodeRabbit nor Greptile attributes a learning per finding). `ruleText` is the
+   * stored normalized rule (already secret-redacted at capture). Never parsed
+   * from model output; gated behind the trust-ledger render flag.
+   */
+  shapedByLearning?: { ruleText: string }
 }
 
 /**

@@ -69,10 +69,13 @@ import { detectHelperCoverage } from "@/src/lib/helper-coverage"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import {
   loadLearnings,
+  renderBoostedCategoriesForPrompt,
   renderLearningsForPrompt,
   resolveLearningsMode,
   selectRelevantForPaths,
 } from "@/src/features/learnings"
+import { isCategoryBoosted, loadPrecisionProfile } from "@/src/features/precision-profile"
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
 import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
 import type { GraphContextNode } from "@/src/do/repo-graph"
@@ -729,6 +732,51 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       }),
     )
     if (learningsMode === "on") learningsBlock = renderLearningsForPrompt(relevantLearnings)
+  }
+  // SIG-104 PR-3: co-locate the precision-profile BOOST at this learnings gate
+  // (spec §5 + the precision-profile README integration note). The boost is the
+  // "computed-but-unused" half of the precision profile — repeatedly-ACCEPTED
+  // categories get a priority nudge in the prompt (never a score mutation, so no
+  // over-escalation). KEY GOTCHA (spec §12.6): the profile keys on the `owner/repo`
+  // slug despite its `repoId` field name — NOT the numeric repo id — so it
+  // round-trips with the dismiss path that records under `${owner}/${repo}`; that
+  // means the boost runs even when the numeric `repoId` is absent. Telemeter in
+  // both shadow + on; inject only in `on`. Best-effort (loader no-throws).
+  if (learningsMode !== "off") {
+    try {
+      const profile = await loadPrecisionProfile(env, `${owner}/${repo}`)
+      const boostedCategories = profile
+        ? (Object.entries(profile.categories) as [FindingCategory, (typeof profile.categories)[FindingCategory]][])
+            .filter(([, stat]) => isCategoryBoosted(stat))
+            .map(([category]) => category)
+        : []
+      if (boostedCategories.length > 0) {
+        console.log(
+          JSON.stringify({
+            event: "learnings-boost-inject",
+            owner,
+            repo,
+            prNumber,
+            mode: learningsMode,
+            boostedCategories,
+          }),
+        )
+        if (learningsMode === "on") {
+          const boostLine = renderBoostedCategoriesForPrompt(boostedCategories)
+          learningsBlock = learningsBlock.length > 0 ? `${learningsBlock}\n${boostLine}` : boostLine
+        }
+      }
+    } catch (err) {
+      console.warn(
+        JSON.stringify({
+          event: "learnings-boost-load-failed",
+          owner,
+          repo,
+          prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
+    }
   }
   const messageForRole = (role: SpecialistRole): string => {
     const cached = specialistMessageCache.get(role)

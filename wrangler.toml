@@ -732,11 +732,20 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # prod token accounting is untouched (cost-isolated). Gathers organic large-PR
 # data. "on" (output-union enforce) ships in SIG-432, gated on a distributed-bug
 # fixture proving the recall delta. Code default is off (parseEnsembleConfig).
-# 2026-06-15: set OFF — the shadow batch makes REAL o3 calls on every spillover PR
-# (telemetry-cost-isolated but still BILLED on OpenRouter), so it was untracked
-# credit burn. Paused to stop that spend while SIG-432 enforce is deprioritized;
-# re-enable "shadow" when actively sizing SIG-432.
-OPENCLAW_REVIEW_MULTIBATCH_MODE = "off"
+# 2026-06-15: paused OFF earlier today (the shadow batch makes REAL o3 calls on
+# every spillover PR — telemetry-cost-isolated but still BILLED on OpenRouter —
+# i.e. untracked credit burn). RE-ENABLED "shadow" (same date, founder) as the
+# deliberate, time-boxed cost+coverage canary the OFF note reserved: size the
+# spend on a few dense PRs (#584 landed the "on"/enforce path dark), then flip
+# back OFF once sized — or to "on" if the recall delta justifies the spend. The
+# posted review is UNCHANGED in shadow (recall-safe by construction).
+OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
+
+# SIG-437: `@sigilix summary` webhook feature. "on" => the trigger enqueues a job
+# that writes a structured PR summary into the PR description. A webhook/product
+# flag (NOT the review pipeline), parsed by parsePrSummaryMode. Default-off => the
+# trigger never enqueues (pure no-op). ON in prod per founder (2026-06-15).
+OPENCLAW_PR_SUMMARY_MODE = "on"
 
 # SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
 # CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at

@@ -1,6 +1,6 @@
 // SIG-418 Phase 2 (Design B′) — the multi-batch SHADOW scheduler tests.
 // Pins the detachment contract (mirrors the resweep-scheduler guarantee):
-//   - off / on → no-op (zero model calls; `on` enforcement is PR 3);
+//   - off / on → no-op (zero shadow model calls; `on` is handled by enforce);
 //   - shadow → detached run via setTimeout + backgroundWaitUntil; the background
 //     promise NEVER rejects (a thrown run resolves after logging), so a shadow
 //     failure can't convert a posted review into a queue failure.
@@ -83,7 +83,7 @@ describe("scheduleMultiBatchShadow — detachment contract", () => {
     expect(mockedRunSpecialist).not.toHaveBeenCalled()
   })
 
-  it("on → no-op in PR 2 (enforce is PR 3; the run is NOT scheduled)", async () => {
+  it("on → no-op in the shadow scheduler (enforce owns output union)", async () => {
     const s = scheduleMultiBatchShadow(args("on"))
     expect(s.kind).toBe("noop")
     await new Promise((r) => setTimeout(r, 0))
@@ -125,7 +125,7 @@ describe("scheduleMultiBatchShadow — detachment contract", () => {
 })
 
 // The orchestrator entry point — owns the mode decision, the whole-PR summary
-// build, the per-batch message builder, and the `on`-unsupported log. Driven
+// build, and the per-batch message builder. Driven
 // directly (the orchestrator-boundary test can't reach the post-synth call site).
 describe("maybeScheduleMultiBatchShadow — orchestrator entry point", () => {
   function vWithFindings(n: number): { verdict: PrReviewVerdictWithIds } {
@@ -191,11 +191,10 @@ describe("maybeScheduleMultiBatchShadow — orchestrator entry point", () => {
     expect(loggedEvents().some((e) => String(e["event"]).startsWith("multibatch-"))).toBe(false)
   })
 
-  it("on → no-op + a multibatch-mode-unsupported log (PR 2 inert; enforce is PR 3)", () => {
+  it("on → no-op here with no unsupported log because enforce owns the mode", () => {
     const s = maybeScheduleMultiBatchShadow(maybeArgs("on"))
     expect(s.kind).toBe("noop")
-    const ev = loggedEvents().find((e) => e["event"] === "multibatch-mode-unsupported")
-    expect(ev).toMatchObject({ requestedMode: "on", effectiveMode: "off", outputUnion: false })
+    expect(loggedEvents().find((e) => e["event"] === "multibatch-mode-unsupported")).toBeUndefined()
   })
 
   it("shadow with empty spillover → no-op", () => {

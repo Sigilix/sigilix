@@ -152,6 +152,7 @@ export interface SynthesizeArgs<R> {
   degradedCoverage: { rolesReturned: SpecialistRole[]; rolesMissing: SpecialistRole[] } | null
   /** Hoisted out of the orchestrator so both the bypass + synth branches read the same truncated verdicts. */
   synthInputVerdicts: SynthInputVerdict[]
+  coverageScopeBlock?: string
   /** SIG-392: finding id → lever origin for merged re-sweep/lens findings; stamped
    *  into the synth-visible verdict JSON at render time only. Empty in shadow mode. */
   leverOrigins: ReadonlyMap<string, "resweep" | "lens">
@@ -198,6 +199,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     succeeded,
     degradedCoverage,
     synthInputVerdicts,
+    coverageScopeBlock,
     synthBypassEnabled,
   } = a
   const synthBypassEligible =
@@ -316,6 +318,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
       // synth which roles it's missing so it can constrain its
       // output and acknowledge the gap in `summary`.
       ...(degradedCoverage ? { degradedCoverage } : {}),
+      ...(coverageScopeBlock !== undefined && coverageScopeBlock.length > 0 ? { coverageScopeBlock } : {}),
       // SIG-138 Phase 2: synth sees graph neighbors in post mode.
       ...(graphCtxForPrompt.length > 0 ? { graphContext: graphCtxForPrompt } : {}),
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),

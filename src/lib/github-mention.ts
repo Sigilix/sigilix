@@ -18,6 +18,8 @@ import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import { GITHUB_MENTION_SCHEMA } from "@/src/shared/domain/schemas"
 import { GITHUB_MENTION_PROMPT } from "@/src/prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { expandHitsToSymbols } from "./symbol-expansion"
+import { mentionSymbolExpansionMode } from "./graph-flags"
 import { indexNamespace } from "./repo-index-manifest"
 import { arcInThreadAbove, bodyMentionsBot, getMentionTriggers, stripMentionFromBody } from "./mention"
 import { runAgentLoop } from "./agent-loop"
@@ -341,6 +343,44 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   })
   since("retrieval-done", { chunks: chunks.length })
 
+  // The PR HEAD sha (or branch ref) — the ref every file body is fetched at.
+  // Hoisted here so the SIG-407 symbol expander fetches bodies at the SAME ref
+  // the citation verifier later uses.
+  const citationRef =
+    typeof meta.head?.sha === "string" && meta.head.sha.length > 0 ? meta.head.sha : (meta.head?.ref ?? "main")
+
+  // SIG-407: symbol-aware retrieval. When the flag is `on`/`shadow` and we have
+  // hits, expand each hit (path + line range) into its enclosing symbol body +
+  // direct callers from the SIG-138 graph. `shadow` builds the block + telemeters
+  // but injects NOTHING (output byte-identical to today); `on` prepends the block
+  // above the raw chunks. `off`/unset never even queries the DO. The expander
+  // never throws — a no-graph / fetch failure returns `{block:null}`, so the
+  // mention path can only ever GAIN symbol context, never lose a chunk.
+  const symbolMode = mentionSymbolExpansionMode(env)
+  const formattedChunks = formatChunksForPrompt(chunks)
+  let codebaseChunks = formattedChunks
+  if (symbolMode !== "off" && chunks.length > 0) {
+    const expansion = await expandHitsToSymbols({
+      env,
+      owner,
+      repo,
+      hits: chunks,
+      fetchFileContent: (path) => client.getFileContent(owner, repo, path, citationRef),
+    })
+    since("symbol-expansion", {
+      mode: symbolMode,
+      injected: symbolMode === "on" && !!expansion.block,
+      ...expansion.telemetry,
+    })
+    if (symbolMode === "on" && expansion.block) {
+      // Additive: the symbol block goes ABOVE the raw chunks (never replaces
+      // them — recall-safe). `formattedChunks` is null when chunks are empty or
+      // all exceed the budget; in that case inject the block alone (joining with
+      // "null" would leak the literal string into the prompt).
+      codebaseChunks = formattedChunks ? `${expansion.block}\n\n${formattedChunks}` : expansion.block
+    }
+  }
+
   const prompt = buildPrompt({
     surface,
     prNumber,
@@ -352,7 +392,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     inlineAnchor: surface === "review-comment" ? extractAnchor(sourceComment) : null,
     thread,
     sourceCommentId: commentId,
-    codebaseChunks: formatChunksForPrompt(chunks),
+    codebaseChunks,
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -438,8 +478,6 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     return
   }
 
-  const citationRef =
-    typeof meta.head?.sha === "string" && meta.head.sha.length > 0 ? meta.head.sha : (meta.head?.ref ?? "main")
   const citationCheck = await verifyAndSanitizeCitations({
     answer: verdict.answer,
     ref: citationRef,

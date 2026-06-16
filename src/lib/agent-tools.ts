@@ -24,6 +24,8 @@ import { fetchPullRequestContext } from "./github-pr-context"
 import { encodeBranchName, parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
+import { expandHitsToSymbols } from "./symbol-expansion"
+import { mentionSymbolExpansionMode } from "./graph-flags"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { withTimeout } from "@/src/shared/util/with-timeout"
@@ -210,6 +212,15 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         chunks.length === 0
           ? `Retrieval returned no chunks for repo '${namespace}'. Refine the query; if this persists, retrieval may be temporarily unavailable.`
           : undefined
+      // SIG-407: the agentic seam. The single-shot mention path expands hits to
+      // enclosing symbols; this tool returns RAW chunks to the agent loop, so
+      // without this a future OPENCLAW_AGENTIC_GITHUB_MODE=on would silently
+      // BYPASS symbol expansion (the chatEnabled kill-switch lesson — a flag that
+      // covers one path is a latent P0). Attach the same expanded block as a NEW
+      // optional field; the `chunks` array is unchanged (additive). Only fires for
+      // the GitHub surface (it needs a file fetcher + owner/repo) with the flag
+      // `on`; `off`/`shadow`/Linear omit it → tool output byte-identical.
+      const symbolContext = await maybeExpandSymbolsForTool(ctx, namespace, chunks)
       return {
         ok: true,
         repo: namespace,
@@ -226,9 +237,44 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         })),
         count: chunks.length,
         ...(noChunksMessage ? { message: noChunksMessage } : {}),
+        ...(symbolContext ? { symbolContext } : {}),
       }
     },
   }
+}
+
+/**
+ * SIG-407: build the symbol-expansion block for the agentic `retrieve_codebase`
+ * tool, or return null when it should not / cannot fire. Returns null unless:
+ *   - the flag mode is `on` (`off`/`shadow` never inject — `shadow` measures
+ *     cost in the SINGLE-SHOT path; the tool stays byte-identical), AND
+ *   - the surface has a GitHub client + repo identity (the expander needs a file
+ *     fetcher and owner/repo; the Linear surface has neither), AND
+ *   - the resolved Vectorize `namespace` maps back to EXACTLY ONE allowed
+ *     `{owner,repo}` (so the body fetcher targets the right repo; a branch
+ *     namespace or an ambiguous match falls through to no expansion).
+ * Never throws: `expandHitsToSymbols` already soft-fails to `{block:null}`.
+ */
+async function maybeExpandSymbolsForTool(
+  ctx: AgentToolsContext,
+  namespace: string,
+  chunks: RetrievedChunk[],
+): Promise<string | null> {
+  if (chunks.length === 0) return null
+  if (mentionSymbolExpansionMode(ctx.env) !== "on") return null
+  const gh = ctx.github
+  if (!gh) return null
+  const matches = gh.allowedRepos.filter((r) => indexNamespace(r.owner, r.repo) === namespace)
+  if (matches.length !== 1) return null
+  const { owner, repo } = matches[0] as { owner: string; repo: string }
+  const expansion = await expandHitsToSymbols({
+    env: ctx.env,
+    owner,
+    repo,
+    hits: chunks,
+    fetchFileContent: (path) => gh.githubClient.getFileContent(owner, repo, path, gh.defaultRef),
+  })
+  return expansion.block
 }
 
 interface BranchChoice {

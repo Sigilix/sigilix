@@ -456,7 +456,11 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
 
     expect(explicitOff).toEqual(unset)
     expect(explicitShadow).toEqual(unset)
-  })
+    // SIG-450: this case runs the full ensemble pipeline 3× (unset/off/shadow) to prove
+    // byte-identity, so it's the heaviest test in the suite (~5s). The default 5000ms
+    // budget is too tight in the resource-constrained Cloudflare Workers Build container
+    // (it intermittently times out at 5138ms and reds the prod deploy); give it headroom.
+  }, 20_000)
 
   it("ON posts a source-floor-restored batch-1 P1 as an inline comment on the batch-1 file", async () => {
     configureReviewFixture({

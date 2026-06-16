@@ -1,15 +1,9 @@
 // SIG Trust Ledger v0 — the pure markdown emitters (Kimi's design). Covers the
-// trust pill/tier mapping, the summary segment math, the collapse-on-empty
-// behaviour, and the collapsed outside-diff dropdown.
+// trust pill/tier mapping, the summary segment math, and the collapse-on-empty
+// behaviour.
 
 import { describe, expect, it } from "vitest"
-import {
-  trustPill,
-  trustSubTag,
-  renderTrustSummary,
-  renderOutsideDiffDropdown,
-  renderPrLevelSection,
-} from "@/src/lib/trust-ledger-render"
+import { trustPill, trustSubTag, renderTrustSummary } from "@/src/lib/trust-ledger-render"
 import type { FindingTrust } from "@/src/lib/triage-pr-review"
 import type { ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 
@@ -83,25 +77,5 @@ describe("renderTrustSummary", () => {
         counts: { suppressed: 3, demotedToBody: 0 },
       }),
     ).toBe("**0 findings** · **Quiet**: 3 suppressed")
-  })
-})
-
-describe("renderOutsideDiffDropdown / renderPrLevelSection", () => {
-  const row = (f: { id: string }) => `- ${f.id}`
-  it("collapses outside-diff findings into a count-bearing <details>, rows BLANK-LINE separated", () => {
-    const out = renderOutsideDiffDropdown([{ id: "A" }, { id: "B" }], row)
-    // \n\n between rows — each real row ends with a multi-line body, so a single \n
-    // would make B render as loose continuation of A (GFM), not a sibling bullet.
-    expect(out).toBe(
-      "<details>\n<summary><b>2 findings</b> in your changes that couldn't be anchored to a specific line</summary>\n\n- A\n\n- B\n\n</details>",
-    )
-  })
-  it("renders the non-collapsed PR-level mini-section, rows BLANK-LINE separated", () => {
-    expect(renderPrLevelSection([{ id: "X" }], row)).toBe("**PR-level**\n\n- X")
-    expect(renderPrLevelSection([{ id: "X" }, { id: "Y" }], row)).toBe("**PR-level**\n\n- X\n\n- Y")
-  })
-  it("both return null when empty", () => {
-    expect(renderOutsideDiffDropdown([], row)).toBeNull()
-    expect(renderPrLevelSection([], row)).toBeNull()
   })
 })

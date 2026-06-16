@@ -17,7 +17,7 @@
 // triage-pr-review.ts; only the import paths and the wrapper are new.
 
 import type { CheckRunAnnotation, SubmitReviewBody, SubmitReviewComment } from "@/src/shared/types/github"
-import { deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import { deriveSide, isPositionReviewable, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import { type StackContext } from "@/src/lib/pr-stack"
 import { isSubstantiveAnchorLine, isSubstantiveCodeAnchorLine } from "@/src/shared/util/anchor-lines"
 import { hasStructuredFix, isDeletionSuggestion } from "@/src/shared/domain/pr-review-finding"
@@ -230,6 +230,9 @@ export interface PreparedReviewSubmissionFindings {
   renderVerdict: PrReviewVerdict
   inlineFindings: PrReviewFinding[]
   inlineOriginalIndex: number[]
+  // SIG-456: per-inline-finding diff side, aligned 1:1 with `inlineFindings` (and
+  // `inlineOriginalIndex`). "RIGHT" unless the finding anchors to a deleted line.
+  inlineSides: ("LEFT" | "RIGHT")[]
   unanchored: PrReviewFinding[]
 }
 
@@ -389,6 +392,9 @@ interface InlineFindingCandidate {
   finding: PrReviewFinding
   originalIndex: number
   confidence: number
+  // SIG-456: diff side this comment anchors to. "RIGHT" (added/context) is the
+  // default; "LEFT" is a deleted-line finding posted on the deletion side.
+  side: "LEFT" | "RIGHT"
 }
 
 // SIG-426: exported so the CI-failure-triage synth pass (ci-triage-synth-run.ts)
@@ -418,8 +424,24 @@ export function prepareReviewSubmissionFindings(args: {
    * never anchored to a wrong line.
    */
   anchorPrecision?: boolean
+  /**
+   * SIG-456: when true, a finding whose anchor line is a DELETED line (LEFT side of
+   * the diff) is posted as an inline comment on the deletion side instead of routed
+   * to the body. Opt-in so the CI-failure-triage synth consumer (which re-gates RIGHT
+   * and builds its own RIGHT payload) stays byte-identical; the PR-review payload
+   * builder passes `true`.
+   */
+  allowDeletedLineAnchor?: boolean
 }): PreparedReviewSubmissionFindings {
-  const { rawVerdict, rawUnanchored, headSha, reviewable, addedLineTextByLine, anchorPrecision = false } = args
+  const {
+    rawVerdict,
+    rawUnanchored,
+    headSha,
+    reviewable,
+    addedLineTextByLine,
+    anchorPrecision = false,
+    allowDeletedLineAnchor = false,
+  } = args
   const sanitizedVerdict = sanitizeVerdictForGitHub(rawVerdict)
   const verdict: PrReviewVerdict = {
     ...sanitizedVerdict,
@@ -460,6 +482,26 @@ export function prepareReviewSubmissionFindings(args: {
     if (scope !== "line" && !hasSuggestion) {
       if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
       bodyFindings.push(validatedFinding)
+      return
+    }
+
+    // SIG-456: deleted-line finding → anchor on the LEFT (deletion) side and keep it
+    // inline instead of body-routing. The added-line substantive forward-walk below is
+    // RIGHT-only (reads new-file added-line text), so a deleted-line finding would always
+    // fail it and demote to the body. Validate the LEFT endpoint directly with
+    // isPositionReviewable (deriveSide prefers RIGHT on an ambiguous same-numbered line).
+    // Opt-in via `allowDeletedLineAnchor` so the CI-synth consumer stays RIGHT-only.
+    // A line that exists on BOTH sides (a replaced/collision line) deliberately stays RIGHT
+    // (deriveSide prefers RIGHT): such findings already post inline on RIGHT — they were never
+    // bodied — so they're out of scope here (that's anchor-exactness, SIG-436 lineage, not a
+    // body-leak). Only a LEFT-exclusive deleted line (deriveSide === "LEFT") was being bodied.
+    if (
+      allowDeletedLineAnchor &&
+      reviewable !== undefined &&
+      deriveSide(reviewable, findingForInline.path, findingForInline.line) === "LEFT" &&
+      isPositionReviewable(reviewable, findingForInline.path, findingForInline.line, "LEFT")
+    ) {
+      inlineCandidates.push({ finding: findingForInline, originalIndex: i, confidence, side: "LEFT" })
       return
     }
 
@@ -541,7 +583,7 @@ export function prepareReviewSubmissionFindings(args: {
     // The forward-walk above already guaranteed a SUBSTANTIVE anchor line (or
     // routed to the body), so a separate non-substantive demotion is no longer
     // needed — the finding keeps its inline thread.
-    inlineCandidates.push({ finding: effective, originalIndex: i, confidence })
+    inlineCandidates.push({ finding: effective, originalIndex: i, confidence, side: "RIGHT" })
   })
 
   // SIG-281 PR B (Rec 3): cap inline comments at MAX_INLINE_COMMENTS.
@@ -574,6 +616,7 @@ export function prepareReviewSubmissionFindings(args: {
 
   const inlineFindings: PrReviewFinding[] = kept.map((c) => c.finding)
   const inlineOriginalIndex: number[] = kept.map((c) => c.originalIndex)
+  const inlineSides: ("LEFT" | "RIGHT")[] = kept.map((c) => c.side)
   const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
   const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
 
@@ -582,6 +625,7 @@ export function prepareReviewSubmissionFindings(args: {
     renderVerdict,
     inlineFindings,
     inlineOriginalIndex,
+    inlineSides,
     unanchored,
   }
 }
@@ -672,16 +716,19 @@ export function buildReviewSubmissionWithMetadata({
   disclosure,
   anchorPrecision,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
-  const { verdict, renderVerdict, inlineFindings, inlineOriginalIndex, unanchored } = prepareReviewSubmissionFindings({
-    rawVerdict,
-    rawUnanchored,
-    headSha,
-    ...(reviewable !== undefined ? { reviewable } : {}),
-    ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
-    // SIG-436: forward the (default-off) anchor-precision flag so the
-    // substantive-anchor walk can skip a whole-line comment above the bug.
-    ...(anchorPrecision !== undefined ? { anchorPrecision } : {}),
-  })
+  const { verdict, renderVerdict, inlineFindings, inlineOriginalIndex, inlineSides, unanchored } =
+    prepareReviewSubmissionFindings({
+      rawVerdict,
+      rawUnanchored,
+      headSha,
+      // SIG-456: the PR-review payload posts LEFT-side comments on deleted lines.
+      allowDeletedLineAnchor: true,
+      ...(reviewable !== undefined ? { reviewable } : {}),
+      ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+      // SIG-436: forward the (default-off) anchor-precision flag so the
+      // substantive-anchor walk can skip a whole-line comment above the bug.
+      ...(anchorPrecision !== undefined ? { anchorPrecision } : {}),
+    })
   const event = chooseRenderedEventWithOverride(
     {
       inlineFindings,
@@ -738,10 +785,13 @@ export function buildReviewSubmissionWithMetadata({
     const confidence = resolveFindingConfidence(f, verdict.confidence)
     const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine, trustLedger, showEvidence)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
+    // SIG-456: anchor on the side prepareReviewSubmissionFindings derived (LEFT for a
+    // deleted-line finding); default RIGHT for the test/fallback path with no sides.
+    const side = inlineSides[i] ?? "RIGHT"
     const c: SubmitReviewComment = {
       path: f.path,
       line: f.line,
-      side: "RIGHT",
+      side,
       body: fullBody,
     }
     // SIG-164 PR 5: emit `start_line` only when both endpoints survive
@@ -755,10 +805,11 @@ export function buildReviewSubmissionWithMetadata({
     // the prior trust-the-model behavior (emit `start_line` as
     // model-given). Production paths always pass `reviewable`.
     const emitStartLine =
-      f.startLine != null && (reviewable === undefined || isCommentAnchorable(reviewable, f.path, f.startLine, f.line))
+      f.startLine != null &&
+      (reviewable === undefined || isCommentAnchorable(reviewable, f.path, f.startLine, f.line, side))
     if (emitStartLine && f.startLine != null) {
       c.start_line = f.startLine
-      c.start_side = "RIGHT"
+      c.start_side = side
     }
     return c
   })

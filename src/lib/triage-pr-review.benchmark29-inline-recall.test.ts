@@ -26,7 +26,7 @@ interface Bug {
   id: string
   pr: number
   file: string
-  lineRange: [number, number]
+  lineRange: number[] // [start, end] as stored in the fixture JSON
   category: string
   severity: string
   title: string
@@ -51,7 +51,7 @@ function renderBug(
   const diff = diffs[String(bug.pr)] ?? ""
   const reviewable = parseDiffToReviewablePositions(diff)
   const addedLineTextByLine = buildAddedLineTextByLine(diff)
-  const lo = bug.lineRange[0]
+  const [lo = 1] = bug.lineRange
   const finding: PrReviewFinding = {
     path: bug.file,
     line: lo,
@@ -87,19 +87,14 @@ describe("benchmark #29 inline-recall replication (SIG-451 found-but-bodied regr
     const inlineCount = results.filter((r) => r.inline).length
     const rightBugs = results.filter((r) => r.side === "RIGHT")
 
-    // Diagnostic table (shown in test output).
-    for (const r of results) {
-      // eslint-disable-next-line no-console
-      console.log(`  ${r.id} ${r.sev} side=${r.side ?? "off-diff"} -> ${r.inline ? "INLINE@" + r.line : "BODY"}`)
-    }
-    // eslint-disable-next-line no-console
-    console.log(`\n  INLINE RECALL: ${inlineCount}/${bugs.length} = ${Math.round((inlineCount / bugs.length) * 100)}%`)
-
     // CORE SIG-451 GUARANTEE: a planted bug whose documented start line is RIGHT-reviewable (added OR
     // context) MUST render inline. This is exactly the class that was being body-routed pre-SIG-451.
-    for (const r of rightBugs) {
-      expect(r.inline, `${r.id}: RIGHT-reviewable bug must render INLINE (SIG-451 found-but-bodied guard)`).toBe(true)
-    }
+    // The per-bug id in the assertion message is the diagnostic on failure (which bug regressed).
+    const bodied = rightBugs.filter((r) => !r.inline).map((r) => r.id)
+    expect(
+      bodied,
+      `RIGHT-reviewable bugs must render INLINE (SIG-451 found-but-bodied guard); bodied: ${bodied.join(", ")}`,
+    ).toEqual([])
 
     // Overall guard: inline recall must stay well above the 45% pre-SIG-451 baseline. (Deletion/off-diff
     // anchored bugs are the known residual — absence-anchoring is a separate follow-up.)

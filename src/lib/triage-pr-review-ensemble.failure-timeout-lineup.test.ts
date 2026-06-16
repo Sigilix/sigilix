@@ -187,10 +187,13 @@ describe("Phase 4a.3 — timeout schedule", () => {
 
 describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // SIG-406 (2026-06-14): the whole review ensemble cut over to OpenRouter. Every
-  // role is `retries: 1, fallback: null` — OpenRouter routes each call across its
-  // upstream providers, so the Ollama-era cross-provider fallback is gone; one
-  // retry covers a transient OpenRouter blip. Per-attempt caps preserved where the
-  // role set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
+  // role is `fallback: null` — OpenRouter routes each call across its upstream
+  // providers, so the Ollama-era cross-provider fallback is gone. SIG-449 (rework)
+  // then raised the two FAST roles (security/performance) to `retries: 2 @ 90s`
+  // because their "unavailable" partials were our-side parse/stream failures that a
+  // re-roll recovers (the CSV showed both finishing < 55s, zero provider cancels);
+  // logic/tests/synth stay `retries: 1`. Per-attempt caps preserved where the role
+  // set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
   it("logic specialist runs openai/o3 (retries:1, no fallback, 120s attempt cap)", () => {
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("openai/o3")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
@@ -198,16 +201,18 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)
   })
 
-  it("performance specialist runs z-ai/glm-5.1 (retries:1, no fallback)", () => {
+  it("performance specialist runs z-ai/glm-5.1 (SIG-449: retries:2 @ 90s, no fallback)", () => {
     expect(SPECIALIST_CONFIGS.performance.primary).toBe("z-ai/glm-5.1")
     expect(SPECIALIST_CONFIGS.performance.fallback).toBeNull()
-    expect(SPECIALIST_CONFIGS.performance.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.performance.retries).toBe(2)
+    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(90_000)
   })
 
-  it("security specialist runs deepseek/deepseek-v4-flash (retries:1, no fallback)", () => {
+  it("security specialist runs deepseek/deepseek-v4-flash (SIG-449: retries:2 @ 90s, no fallback)", () => {
     expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek/deepseek-v4-flash")
     expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
-    expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.security.retries).toBe(2)
+    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(90_000)
   })
 
   it("tests specialist runs deepseek/deepseek-v4-pro (retries:1, no fallback, 160s attempt cap)", () => {
@@ -242,23 +247,23 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (12)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (14)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves before
     // admitting a PR, so the regression asserts against it directly — not a
     // hand-calc that would silently drift. Pre-flight retrieve is a Vectorize
     // call, not a model call, so it is intentionally NOT counted here.
     //
-    // Worst-case model calls per ensemble run (all roles retries:1, fallback:null):
+    // Worst-case model calls per ensemble run (SIG-449: security/perf retries:2):
     //   logic:       primary + 1 retry                        = 2
-    //   security:    primary + 1 retry                        = 2
-    //   performance: primary + 1 retry                        = 2
+    //   security:    primary + 2 retries (SIG-449)            = 3
+    //   performance: primary + 2 retries (SIG-449)            = 3
     //   tests:       primary + 1 retry                        = 2
     //   synth:       primary + 1 retry                        = 2
     //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 12.  OpenRouter routes each call across upstreams, so no
+    //   total: 14.  OpenRouter routes each call across upstreams, so no
     //   per-role cross-provider fallback adds to the count.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(12)
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(14)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

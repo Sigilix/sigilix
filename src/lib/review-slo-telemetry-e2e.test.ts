@@ -339,11 +339,11 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
   })
 
   it("charges EACH parse-FAILED attempt's tokens even when the run then fails (SIG-212 + SIG-438)", async () => {
-    // SIG-438: a parse-fail now RETRIES the same model (it's non-deterministic, a
-    // re-roll often parses). security = { primary: "deepseek/deepseek-v4-flash",
-    // retries: 1, fallback: null } → 2 attempts. Here BOTH parse-fail and there is
-    // no fallback → the run fails. Each attempt still BURNED tokens producing the
-    // unparseable output, so BOTH must be charged (the SIG-212 invariant: settled
+    // SIG-438: a parse-fail RETRIES the same model (it's non-deterministic, a re-roll
+    // often parses). SIG-449: security = { primary: "deepseek/deepseek-v4-flash",
+    // retries: 2, fallback: null } → 3 attempts. Here ALL parse-fail and there is no
+    // fallback → the run fails. Each attempt still BURNED tokens producing the
+    // unparseable output, so ALL must be charged (the SIG-212 invariant: settled
     // attempts cost money even when the verdict fails).
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }
@@ -351,8 +351,9 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     const primaryModel = SPECIALIST_CONFIGS.security.primary
 
     mockChat
-      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // primary attempt 1: parse-fail
-      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // primary attempt 2 (retry): parse-fail
+      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 1 (primary):  parse-fail
+      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 2 (retry 1):  parse-fail
+      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 3 (retry 2):  parse-fail
 
     const res = await runSpecialist({
       role: "security",
@@ -363,27 +364,28 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
       signal: new AbortController().signal,
       perfCtx,
     })
-    // Both attempts parse-failed and there's no fallback → the run fails.
+    // All attempts parse-failed and there's no fallback → the run fails.
     expect(res.verdict).toBeNull()
     expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
-    // Two chat calls: a parse-fail now retries the same model (SIG-438).
-    expect(mockChat).toHaveBeenCalledTimes(2)
+    // Three chat calls: a parse-fail retries the same model (SIG-438), and security now
+    // allows two retries (SIG-449), so primary + 2 retries = 3 attempts.
+    expect(mockChat).toHaveBeenCalledTimes(3)
 
-    // BOTH failed attempts' tokens are charged (accumulated), keyed by the primary
+    // ALL THREE failed attempts' tokens are charged (accumulated), keyed by the primary
     // model. SIG-417: this mock reports no `usage.cost`, so the tokens land in the
     // `unpriced*` buckets too (priced via MODEL_PRICING, not dropped).
     expect(sink[primaryModel]).toEqual({
-      inputTokens: 4000,
-      outputTokens: 100,
-      unpricedInputTokens: 4000,
-      unpricedOutputTokens: 100,
+      inputTokens: 6000,
+      outputTokens: 150,
+      unpricedInputTokens: 6000,
+      unpricedOutputTokens: 150,
     })
 
-    // Cost = both failed attempts' spend, priced for the primary model (no silent drop).
+    // Cost = all failed attempts' spend, priced for the primary model (no silent drop).
     const cost = computeReviewCost(sink)
     const expectedUsd =
-      (4000 / 1_000_000) * pricingForModel(primaryModel).inputPerMTokUsd +
-      (100 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd
+      (6000 / 1_000_000) * pricingForModel(primaryModel).inputPerMTokUsd +
+      (150 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd
     expect(cost.totalUsd).toBeCloseTo(expectedUsd, 9)
   })
 

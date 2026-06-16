@@ -641,6 +641,20 @@ export interface Env {
   // flips via `wrangler secret put OPENCLAW_SYMBOL_RETRIEVAL on`.
   OPENCLAW_SYMBOL_RETRIEVAL?: string
 
+  // SIG-407: symbol-aware retrieval for the @-mention Q&A path. Expands each
+  // retrieval hit (a ~30-line slice) into its ENCLOSING symbol body + direct
+  // callers from the SIG-138 graph, so the answer model reasons over the whole
+  // symbol. Distinct from SIG-121's OPENCLAW_SYMBOL_RETRIEVAL above: that is a
+  // REVIEW-time second query-term bias for the logic specialist; this is a
+  // MENTION-time graph EXPANSION. Tri-state, default off:
+  //   - "off"/unset → no expansion; DO never queried; output byte-identical.
+  //   - "shadow"    → build the block + telemeter, inject NOTHING (byte-identical).
+  //   - "on"        → inject the expanded symbol block.
+  // Both the single-shot mention path AND the agentic retrieve_codebase tool
+  // honor it (so a future OPENCLAW_AGENTIC_GITHUB_MODE=on can't bypass it).
+  // Flip via `wrangler secret put OPENCLAW_MENTION_SYMBOL_EXPANSION shadow`.
+  OPENCLAW_MENTION_SYMBOL_EXPANSION?: string
+
   // SIG-129: branch-aware retrieval. When "on", the PR-review ensemble
   // overlays the changed-file HEAD content onto the main-index retrieval
   // results (head wins on path collision) so a PR's new/changed code is

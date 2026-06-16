@@ -6,12 +6,24 @@ const mockRetrieveChunks = vi.fn()
 const mockFetchPullRequestContext = vi.fn()
 const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
 const mockGetFileContent = vi.fn()
+// SIG-407: the graph-DO boundary the symbol expander calls. Default-off means the
+// existing tests never reach it; only the SIG-407 agentic-seam tests below set the
+// flag and exercise it.
+const mockEnclosing = vi.fn()
 
 vi.mock("@/src/lib/retrieval", async () => {
   const actual = await vi.importActual<typeof import("@/src/lib/retrieval")>("@/src/lib/retrieval")
   return {
     ...actual,
     retrieveChunks: (args: unknown) => mockRetrieveChunks(args),
+  }
+})
+
+vi.mock("@/src/lib/repo-graph-client", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/repo-graph-client")>("@/src/lib/repo-graph-client")
+  return {
+    ...actual,
+    enclosingSymbolsForHitsFor: (...args: unknown[]) => mockEnclosing(...args),
   }
 })
 
@@ -47,6 +59,7 @@ beforeEach(() => {
   mockFetchPullRequestContext.mockReset()
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
   mockGetFileContent.mockReset()
+  mockEnclosing.mockReset()
 })
 
 afterEach(() => {
@@ -645,5 +658,112 @@ describe("read_file_lines", () => {
       "f.ts",
       "main", // defaultRef
     )
+  })
+})
+
+// SIG-407 — the agentic seam. The single-shot mention path expands hits to
+// enclosing symbols; this proves the AGENTIC retrieve_codebase tool honors the
+// SAME OPENCLAW_MENTION_SYMBOL_EXPANSION flag, so a future
+// OPENCLAW_AGENTIC_GITHUB_MODE=on flip can't silently bypass expansion (the
+// chatEnabled kill-switch lesson — a flag that covers one path is a latent P0).
+describe("retrieve_codebase — SIG-407 symbol expansion (agentic seam)", () => {
+  function hitExp() {
+    return {
+      graphAvailable: true,
+      headSha: "abc123def456",
+      definitionRows: [
+        {
+          symbolId: "src/foo.ts function foo 10 0",
+          path: "src/foo.ts",
+          name: "foo",
+          kind: "function",
+          startLine: 10,
+          endLine: 30,
+        },
+      ],
+      callerRows: [],
+      importRows: [],
+    }
+  }
+  const FOO_SRC = Array.from({ length: 40 }, (_, i) => `// foo line ${i + 1}`).join("\n")
+
+  function setupHit() {
+    mockRetrieveChunks.mockResolvedValue([
+      { path: "src/foo.ts", lineStart: 12, lineEnd: 18, score: 0.9, content: "// slice" },
+    ])
+    mockGetFileContent.mockResolvedValue(FOO_SRC)
+    mockEnclosing.mockResolvedValue(hitExp())
+  }
+
+  async function run(mode: string | undefined): Promise<{ symbolContext?: string }> {
+    setupHit()
+    const env = mode === undefined ? makeEnv() : makeEnv({ OPENCLAW_MENTION_SYMBOL_EXPANSION: mode })
+    const tools = createAgentTools({ env, surface: "github-mention", github: makeGithubCtx() })
+    const tool = tools.find((t) => t.name === "retrieve_codebase")!
+    return (await tool.execute(
+      { query: "where is foo", repo: "Sigilix/rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { symbolContext?: string }
+  }
+
+  it("ON: attaches a symbolContext block (additive — chunks unchanged), github surface", async () => {
+    const result = await run("on")
+    expect(mockEnclosing).toHaveBeenCalledTimes(1)
+    expect(typeof result.symbolContext).toBe("string")
+    expect(result.symbolContext).toContain("[SYMBOL CONTEXT")
+    expect(result.symbolContext).toContain("src/foo.ts:10-30 — function foo")
+    // The raw chunks array is still present and unchanged.
+    expect((result as { chunks: unknown[] }).chunks).toHaveLength(1)
+  })
+
+  it("OFF / unset: no symbolContext, DO never queried (byte-identical tool output)", async () => {
+    const result = await run(undefined)
+    expect(mockEnclosing).not.toHaveBeenCalled()
+    expect(result.symbolContext).toBeUndefined()
+  })
+
+  it("SHADOW: tool output stays byte-identical (no symbolContext) and DO not queried by the tool", async () => {
+    // `shadow` measures cost in the SINGLE-SHOT path; the tool must NOT inject,
+    // so it does not even query the DO here → byte-identical agentic output.
+    const result = await run("shadow")
+    expect(mockEnclosing).not.toHaveBeenCalled()
+    expect(result.symbolContext).toBeUndefined()
+  })
+
+  it("ON but Linear surface (no github client): never expands", async () => {
+    setupHit()
+    const tools = createAgentTools({
+      env: makeEnv({ OPENCLAW_MENTION_SYMBOL_EXPANSION: "on" }),
+      surface: "linear-mention",
+      allowedRepos: ["sigilix/rubberfit"],
+    })
+    const tool = tools.find((t) => t.name === "retrieve_codebase")!
+    const result = (await tool.execute(
+      { query: "where is foo", repo: "sigilix/rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { symbolContext?: string }
+    expect(mockEnclosing).not.toHaveBeenCalled()
+    expect(result.symbolContext).toBeUndefined()
+  })
+
+  it("ON, no graph available: omits symbolContext (block null) — still byte-safe", async () => {
+    mockRetrieveChunks.mockResolvedValue([
+      { path: "src/foo.ts", lineStart: 12, lineEnd: 18, score: 0.9, content: "// slice" },
+    ])
+    mockEnclosing.mockResolvedValue({ ...hitExp(), graphAvailable: false, headSha: null, definitionRows: [] })
+    const tools = createAgentTools({
+      env: makeEnv({ OPENCLAW_MENTION_SYMBOL_EXPANSION: "on" }),
+      surface: "github-mention",
+      github: makeGithubCtx(),
+    })
+    const tool = tools.find((t) => t.name === "retrieve_codebase")!
+    const result = (await tool.execute(
+      { query: "where is foo", repo: "Sigilix/rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { symbolContext?: string }
+    expect(result.symbolContext).toBeUndefined()
   })
 })

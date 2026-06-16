@@ -26,8 +26,8 @@ const LEARNING_DEDUPE_PREFIX = "learning-capture-seen:github-mention"
 const LEARNING_COMMAND_DEDUPE_TTL = 60 * 60 * 24 * 30
 
 type LearningsCommand = { kind: "remember"; rule: string } | { kind: "forget" } | { kind: "list" }
-type GithubMentionLearningSurface = "issue" | "review-comment"
-type LearningCommandClient = Pick<GitHubClient, "createIssueComment" | "replyToReviewComment" | "restGet">
+export type GithubMentionLearningSurface = "issue" | "review-comment"
+export type GithubMentionLearningClient = Pick<GitHubClient, "createIssueComment" | "replyToReviewComment" | "restGet">
 
 export interface GithubMentionLearningSourceComment {
   author: string
@@ -35,7 +35,7 @@ export interface GithubMentionLearningSourceComment {
 }
 
 export async function handleGithubMentionLearningsCommand(args: {
-  client: LearningCommandClient
+  client: GithubMentionLearningClient
   env: Env
   owner: string
   repo: string
@@ -121,7 +121,7 @@ async function handleRememberLearningCommand(
   const appended = await appendLearning(env, "repo", subjectId, entry, Date.parse(createdTs))
   if (!appended) return
 
-  const replyCommentId = await postReply({
+  const replyCommentId = await postGithubMentionLearningReply({
     client,
     owner,
     repo,
@@ -179,7 +179,7 @@ async function handleForgetLearningCommand(
   const forgot = await forgetLearning(env, mapping.scope, mapping.subjectId, mapping.learningId)
   if (!forgot) return
 
-  const replyCommentId = await postReply({
+  const replyCommentId = await postGithubMentionLearningReply({
     client,
     owner,
     repo,
@@ -211,7 +211,7 @@ async function handleListLearningCommand(
   const store = await loadLearnings(env, "repo", subjectId)
   const entries = store?.entries ?? []
   const body = entries.length > 0 ? renderOverviewFooter(entries) : "No learned rules for this repo yet."
-  const replyCommentId = await postReply({
+  const replyCommentId = await postGithubMentionLearningReply({
     client,
     owner,
     repo,
@@ -230,7 +230,7 @@ async function postLearningHintReply(
   args: Omit<Parameters<typeof handleGithubMentionLearningsCommand>[0], "command">,
 ): Promise<void> {
   const { client, owner, repo, prNumber, surface, commentId, threadRootId, env, dedupeKey } = args
-  const replyCommentId = await postReply({
+  const replyCommentId = await postGithubMentionLearningReply({
     client,
     owner,
     repo,
@@ -286,8 +286,8 @@ async function recordLearningCommandSeen(
   })
 }
 
-async function postReply(args: {
-  client: LearningCommandClient
+export async function postGithubMentionLearningReply(args: {
+  client: GithubMentionLearningClient
   owner: string
   repo: string
   prNumber: number

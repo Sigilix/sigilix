@@ -224,7 +224,7 @@ export async function dispatchReviewMemoryCapture(args: {
   repo: string
   prNumber: number
   installationId: number
-  comment: { id: number; body: string; path: string; in_reply_to_id?: number }
+  comment: { id: number; body: string; path: string; in_reply_to_id?: number; authorLogin?: string }
   /**
    * SIG-247 Phase 1: GitHub's immutable repo.id from the webhook
    * payload. When present and positive-integer, threads through to
@@ -300,7 +300,7 @@ export async function dispatchTopLevelReviewMemoryCapture(args: {
   repo: string
   prNumber: number
   installationId: number
-  comment: { id: number; body: string }
+  comment: { id: number; body: string; authorLogin?: string }
   repoId?: number
 }): Promise<void> {
   const { env, owner, repo, prNumber, installationId, comment, repoId } = args

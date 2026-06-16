@@ -33,6 +33,7 @@ import {
   learningCommandDedupeKey,
   validGithubRepoId,
 } from "./github-mention-learnings"
+import { captureGithubMentionQaLearning } from "./github-mention-auto-learnings"
 import { parseLearningsCommand, resolveLearningsMode } from "@/src/features/learnings"
 import { parseFindingCategory, parseFindingFingerprint, parseFindingSeverity } from "./pr-finding-markers"
 import { verifyAndSanitizeCitations } from "./citation-verifier"
@@ -575,6 +576,20 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     body: replyBody,
   })
   since("reply-posted", { newId })
+
+  await captureGithubMentionQaLearning({
+    client,
+    env,
+    owner,
+    repo,
+    prNumber,
+    surface,
+    commentId,
+    sourceComment,
+    ...(repoId !== undefined ? { repoId } : {}),
+    threadRootId: args.threadRootId ?? commentId,
+    question,
+  })
 
   // SIG-160 PR3: when the model explicitly concedes on an inline thread,
   // persist a WithdrawalRecord so the review-emit path drops the

@@ -125,6 +125,18 @@ export const CLAIM_EXTRACTOR_CONFIG: ModelConfig = {
  *  fail-open, so a slow model must not extend customer-visible latency. */
 export const CLAIM_EXTRACTOR_TIMEOUT_MS = 25_000
 
+/**
+ * SIG-104 PR-2: the conversational learning extractor. Same cheap,
+ * single-shot, fail-open shape as the claim extractor; a failed call just
+ * means no durable learning is minted.
+ */
+export const LEARNING_EXTRACTOR_CONFIG: ModelConfig = {
+  primary: "deepseek/deepseek-v4-flash",
+  retries: 0,
+  fallback: null,
+}
+export const LEARNING_EXTRACTOR_TIMEOUT_MS = 25_000
+
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */
 export const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
   logic: SPECIALIST_CONFIGS.logic.primary,

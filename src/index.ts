@@ -80,6 +80,7 @@ export { prMetaIsClosedOrMerged } from "@/src/index-dispatch"
 export {
   decidePullRequestJobs,
   queueGithubMention,
+  dispatchReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
 } from "@/src/index-internals"

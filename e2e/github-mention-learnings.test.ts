@@ -14,6 +14,7 @@ const {
   createIssueCommentMock,
   replyToReviewCommentMock,
   restGetMock,
+  extractLearningMock,
 } = vi.hoisted(() => ({
   generateMock: vi.fn(),
   retrieveChunksMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
   createIssueCommentMock: vi.fn(),
   replyToReviewCommentMock: vi.fn(),
   restGetMock: vi.fn(),
+  extractLearningMock: vi.fn(),
 }))
 
 vi.mock("@/src/shared/adapters/model", async (importActual) => {
@@ -59,6 +61,11 @@ vi.mock("@/src/shared/adapters/github", async (importActual) => {
     restGet = restGetMock
   }
   return { ...actual, GitHubClient: FakeGitHubClient }
+})
+
+vi.mock("@/src/features/learnings", async (importActual) => {
+  const actual = await importActual<typeof import("@/src/features/learnings")>()
+  return { ...actual, extractLearning: extractLearningMock }
 })
 
 import { queueGithubMention } from "@/src/index"
@@ -166,6 +173,7 @@ beforeEach(() => {
   generateMock.mockResolvedValue({
     text: JSON.stringify({ answer: "regular Q&A fallback", confidence: 4, abstain: false }),
   })
+  extractLearningMock.mockResolvedValue(null)
   retrieveChunksMock.mockResolvedValue([])
   replyToReviewCommentMock.mockResolvedValue({ id: 9_001 })
   createIssueCommentMock.mockResolvedValue({ id: 8_001 })
@@ -265,6 +273,57 @@ describe("handleGithubMention learnings commands", () => {
     expect(restGetMock).not.toHaveBeenCalled()
     expect(replyToReviewCommentMock).not.toHaveBeenCalled()
     expect(generateMock).not.toHaveBeenCalled()
+  })
+
+  it("captures explicit remember intent from normal Q&A after posting the answer", async () => {
+    const { env, store } = makeEnv("on")
+    const rule = "Prefer service-layer database access in controllers."
+    extractLearningMock.mockResolvedValueOnce({
+      rule,
+      polarity: "context",
+      category: null,
+      pathGlob: null,
+    })
+    replyToReviewCommentMock.mockResolvedValueOnce({ id: 9_010 }).mockResolvedValueOnce({ id: 9_011 })
+    listPullRequestReviewCommentsMock.mockResolvedValue([
+      reviewComment({
+        id: 506,
+        body: "@sigilix can you explain this? Please remember that controllers use service-layer database access.",
+      }),
+    ])
+
+    await runReviewMention({ env, commentId: 506, repoId: REPO_ID })
+
+    expect(generateMock).toHaveBeenCalledOnce()
+    expect(replyToReviewCommentMock).toHaveBeenNthCalledWith(
+      1,
+      OWNER,
+      REPO,
+      PR,
+      506,
+      expect.stringContaining("regular Q&A fallback"),
+    )
+    expect(extractLearningMock).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        surface: "qa",
+        replyText: "can you explain this? Please remember that controllers use service-layer database access.",
+      }),
+    )
+    const stored = JSON.parse(store.get(`learnings:repo:${REPO_ID}`) ?? "{}") as {
+      entries?: Array<{ id: string; rule: string; source?: { kind?: string; commentId?: number } }>
+    }
+    expect(stored.entries?.[0]).toMatchObject({
+      rule,
+      source: { kind: "qa", commentId: 506 },
+    })
+    expect(replyToReviewCommentMock).toHaveBeenNthCalledWith(2, OWNER, REPO, PR, 506, renderConfirmReply(rule))
+    expect(JSON.parse(store.get("learning-confirmation:9011") ?? "{}")).toEqual({
+      scope: "repo",
+      subjectId: String(REPO_ID),
+      learningId: stored.entries?.[0]?.id,
+    })
+    expect(store.get("gh-mention:506")).toBe("9010")
   })
 
   it("lists learned rule text without public ids", async () => {

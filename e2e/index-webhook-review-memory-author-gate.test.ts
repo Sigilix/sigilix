@@ -1,5 +1,7 @@
-// SIG-185 follow-up — top-level review-memory capture must not parse
-// copied Sigilix markers from non-Sigilix PR conversation comments.
+// SIG-185 follow-up / SIG-104 PR-2 — top-level review-memory capture
+// schedules human PR conversation comments that carry copied Sigilix
+// markers, but the capture layer still verifies the marker against a
+// real Sigilix-authored source before any write.
 //
 // Exercises the real signed GitHub webhook route because the hardening
 // boundary lives at dispatch time, before ctx.waitUntil schedules the
@@ -80,7 +82,7 @@ function makeEnv(): Env {
   } as Env
 }
 
-function makeIssueCommentPayload(login: string) {
+function makeIssueCommentPayload(login: string, body = `${VALID_MARKER}\n\nfalse positive`) {
   return {
     action: "created",
     installation: { id: 99 },
@@ -96,7 +98,7 @@ function makeIssueCommentPayload(login: string) {
     },
     comment: {
       id: 123,
-      body: `${VALID_MARKER}\n\nfalse positive`,
+      body,
       user: { login },
       author_association: "MEMBER",
     },
@@ -135,19 +137,30 @@ beforeEach(() => {
   mockLoadSigilixConfig.mockClear()
 })
 
-describe("issue_comment webhook review-memory author gate", () => {
-  it("does not schedule top-level review-memory capture for copied markers from humans", async () => {
+describe("issue_comment webhook review-memory author plumbing", () => {
+  it("schedules top-level review-memory capture for copied markers from humans and threads author login", async () => {
     const waitUntilPromises: Promise<unknown>[] = []
 
     const res = await postIssueCommentWebhook(makeIssueCommentPayload("human-reviewer"), waitUntilPromises)
+    await Promise.all(waitUntilPromises)
 
     expect(res.status).toBe(200)
-    expect(waitUntilPromises).toHaveLength(0)
-    // The author gate must run before the marker parser can schedule
-    // the token/config/capture I/O chain.
-    expect(mockGetInstallationToken).not.toHaveBeenCalled()
-    expect(mockLoadSigilixConfig).not.toHaveBeenCalled()
-    expect(mockCaptureTopLevelReviewFeedback).not.toHaveBeenCalled()
+    expect(waitUntilPromises).toHaveLength(1)
+    expect(mockGetInstallationToken).toHaveBeenCalledOnce()
+    expect(mockLoadSigilixConfig).toHaveBeenCalledOnce()
+    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "acme",
+        repo: "site",
+        prNumber: 7,
+        repoId: 555,
+        comment: {
+          id: 123,
+          body: `${VALID_MARKER}\n\nfalse positive`,
+          authorLogin: "human-reviewer",
+        },
+      }),
+    )
   })
 
   it("still schedules top-level review-memory capture for Sigilix-authored markers", async () => {
@@ -169,6 +182,27 @@ describe("issue_comment webhook review-memory author gate", () => {
         comment: {
           id: 123,
           body: `${VALID_MARKER}\n\nfalse positive`,
+          authorLogin: "sigilix[bot]",
+        },
+      }),
+    )
+  })
+
+  it("schedules teachable top-level comments even without a dismissal keyword", async () => {
+    const waitUntilPromises: Promise<unknown>[] = []
+    const body = `${VALID_MARKER}\n\nGoing forward, prefer service-layer database access in controllers.`
+
+    const res = await postIssueCommentWebhook(makeIssueCommentPayload("human-reviewer", body), waitUntilPromises)
+    await Promise.all(waitUntilPromises)
+
+    expect(res.status).toBe(200)
+    expect(waitUntilPromises).toHaveLength(1)
+    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comment: {
+          id: 123,
+          body,
+          authorLogin: "human-reviewer",
         },
       }),
     )

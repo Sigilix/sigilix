@@ -1,8 +1,10 @@
 export { emitLearningAudit } from "./adapters/audit"
 export { hasRepoWriteAccess } from "./adapters/authz"
 export { recordConfirmationMap, resolveConfirmationMap } from "./adapters/confirmation-map"
+export { extractLearning } from "./adapters/extractor-model"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
 export { parseLearningsCommand } from "./domain/command"
+export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
 export { resolveLearningsMode } from "./domain/mode"
 export {
   renderConfirmReply,
@@ -27,3 +29,5 @@ export type {
   LearningStore,
   LearningsMode,
 } from "./domain/types"
+export type { ExtractLearningArgs } from "./adapters/extractor-model"
+export type { ExtractedLearning, ExtractionSurface } from "./domain/extractor"

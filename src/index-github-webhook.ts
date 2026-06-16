@@ -10,7 +10,6 @@ import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { verifyGitHubWebhook } from "@/src/shared/adapters/github/github-webhook-verify"
-import { SIGILIX_BOT_LOGIN } from "@/src/lib/dismiss-prior-reviews"
 import { readReviewManifest } from "@/src/lib/review-manifest"
 import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import {
@@ -833,7 +832,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
       reviewMemoryComment &&
       typeof reviewMemoryComment.id === "number" &&
       typeof reviewMemoryComment.body === "string" &&
-      reviewMemoryComment.user?.login === SIGILIX_BOT_LOGIN &&
+      typeof reviewMemoryComment.user?.login === "string" &&
       typeof reviewMemoryPrNumber === "number" &&
       hasExplicitTopLevelReviewFeedbackSignal(reviewMemoryComment.body)
     ) {
@@ -853,6 +852,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
           comment: {
             id: reviewMemoryComment.id,
             body: reviewMemoryComment.body,
+            authorLogin: reviewMemoryComment.user.login,
           },
           ...(reviewMemoryRepoId !== undefined ? { repoId: reviewMemoryRepoId } : {}),
         }),
@@ -959,6 +959,9 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
             id: reviewMemoryComment.id,
             body: reviewMemoryComment.body,
             path: reviewMemoryComment.path,
+            ...(typeof reviewMemoryComment.user?.login === "string"
+              ? { authorLogin: reviewMemoryComment.user.login }
+              : {}),
             ...(typeof reviewMemoryComment.in_reply_to_id === "number"
               ? { in_reply_to_id: reviewMemoryComment.in_reply_to_id }
               : {}),

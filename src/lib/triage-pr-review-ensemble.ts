@@ -130,6 +130,8 @@ export type { ModelConfig } from "./ensemble/domain/model-policy"
 export {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
+  LEARNING_EXTRACTOR_CONFIG,
+  LEARNING_EXTRACTOR_TIMEOUT_MS,
   MAX_CALLS_PER_ENSEMBLE_RUN,
   runSpecialist,
   runWithRetryAndFallback,

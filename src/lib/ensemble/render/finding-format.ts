@@ -16,7 +16,12 @@
 // byte-identical to their HEAD form in triage-pr-review.ts; only the import paths
 // (canonicalized to `@/…` / the verdict-domain leaf) and the wrapper are new.
 
-import { isContiguousRightRange, deriveSide, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import {
+  isContiguousRightRange,
+  deriveSide,
+  isPositionReviewable,
+  type ReviewableMap,
+} from "@/src/shared/util/diff-positions"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {
@@ -844,10 +849,17 @@ export function isCommentAnchorable(
   path: string,
   startLine: number | undefined,
   line: number,
+  side: "LEFT" | "RIGHT" = "RIGHT",
 ): boolean {
-  if (deriveSide(reviewable, path, line) !== "RIGHT") return false
+  // RIGHT keeps the exact pre-existing semantics (deriveSide prefers RIGHT on an
+  // ambiguous same-numbered line). For an explicit LEFT endpoint (SIG-456 deleted-line
+  // anchoring), validate against the LEFT/deletion side directly via isPositionReviewable —
+  // deriveSide would wrongly prefer RIGHT there.
+  const endpointOk = (n: number): boolean =>
+    side === "RIGHT" ? deriveSide(reviewable, path, n) === "RIGHT" : isPositionReviewable(reviewable, path, n, "LEFT")
+  if (!endpointOk(line)) return false
   if (startLine === undefined || startLine >= line) return true
-  return deriveSide(reviewable, path, startLine) === "RIGHT"
+  return endpointOk(startLine)
 }
 
 /**

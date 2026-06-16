@@ -712,7 +712,11 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   if (learningsMode !== "off" && repoId !== undefined) {
     const learningsStore = await loadLearnings(env, "repo", String(repoId))
     const candidateLearnings = learningsStore?.entries ?? []
-    const relevantLearnings = selectRelevantForPaths(candidateLearnings, filePaths)
+    // Select over the FULL PR path scope (changed + not-yet-reviewed) so the
+    // SAME block is correct for both messageForRole (changed files) and the
+    // spillover messageForBatchRole (filesNotReviewed) — else later batches miss
+    // repo guidance matching their files (CR major).
+    const relevantLearnings = selectRelevantForPaths(candidateLearnings, [...filePaths, ...filesNotReviewed])
     console.log(
       JSON.stringify({
         event: "learnings-prompt-inject",

@@ -233,13 +233,15 @@ describe("rendering", () => {
 
 describe("adapters/store", () => {
   it("round-trips learnings through KV and never sets a TTL", async () => {
-    const { env, values } = makeEnv()
+    const { env, values, expirations } = makeEnv()
     await appendLearning(env, "repo", "123", entry({ id: "one" }), Date.parse(TS))
     await appendLearning(env, "repo", "123", entry({ id: "one" }), Date.parse(TS) + 1)
     const loaded = await loadLearnings(env, "repo", "123")
     expect(loaded?.entries).toHaveLength(1)
     expect(loaded?.entries[0]?.appliedCount).toBe(1)
     expect(values.has("learnings:repo:123")).toBe(true)
+    // Learnings are durable — the write must NOT carry a TTL (CR).
+    expect(expirations.has("learnings:repo:123")).toBe(false)
   })
 
   it("forgets one learning and hard-deletes the whole scoped store", async () => {
@@ -286,6 +288,15 @@ describe("adapters/confirmation-map", () => {
     const { env, values } = makeEnv()
     values.set("learning-confirmation:bad", JSON.stringify({ subjectId: "123" }))
     await expect(resolveConfirmationMap(env, "bad")).resolves.toBeNull()
+    // KV get throws → fail closed (null), never propagate (CR).
+    const throwingEnv = {
+      OPENCLAW_STATE: {
+        async get(): Promise<string | null> {
+          throw new Error("kv down")
+        },
+      },
+    } as unknown as Env
+    await expect(resolveConfirmationMap(throwingEnv, 456)).resolves.toBeNull()
   })
 })
 
@@ -297,6 +308,10 @@ describe("adapters/authz", () => {
         return { permission } as T
       },
     }
+    await expect(hasRepoWriteAccess(client, "o", "r", "alice")).resolves.toBe(true)
+    permission = "admin"
+    await expect(hasRepoWriteAccess(client, "o", "r", "alice")).resolves.toBe(true)
+    permission = "maintain"
     await expect(hasRepoWriteAccess(client, "o", "r", "alice")).resolves.toBe(true)
     permission = "read"
     await expect(hasRepoWriteAccess(client, "o", "r", "alice")).resolves.toBe(false)

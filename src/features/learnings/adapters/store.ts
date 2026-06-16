@@ -24,6 +24,15 @@ export async function loadLearnings(env: Env, scope: LearningScope, subjectId: s
   }
 }
 
+/**
+ * Append (or upsert-by-id) a learning. Read-modify-write over KV, which has NO
+ * compare-and-swap — so two concurrent appends to the SAME scope+subject can
+ * lose one (the same accepted caveat as review-memory's `appendSignal` /
+ * precision-profile's `recordOutcome`). It's rare (two teaches on one repo
+ * inside the write window), and the content-addressed id makes a redelivery an
+ * idempotent upsert; the transactional fix is the planned D1 migration (SIG-448).
+ * Best-effort: returns false + logs on any failure, never throws.
+ */
 export async function appendLearning(
   env: Env,
   scope: LearningScope,

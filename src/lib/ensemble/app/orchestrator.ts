@@ -755,6 +755,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       owner,
       repo,
       prNumber,
+      ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       headSha,
       ensembleConfig,
       sigilixConfig,

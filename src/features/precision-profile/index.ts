@@ -4,7 +4,7 @@
 // private behind this re-export. No logic here.
 
 export { loadPrecisionProfile, recordOutcome } from "./adapters/store"
-export { applyPrecisionProfile } from "./domain/apply"
+export { applyPrecisionProfile, SUPPRESS_FLOOR_TIER } from "./domain/apply"
 export { resolvePrecisionMode } from "./domain/mode"
 export { BOOST_THRESHOLD, SUPPRESS_THRESHOLD, isCategoryBoosted, isPatternSuppressed } from "./domain/ema"
 export type { PrecisionProfile, PrecisionMode, FindingOutcome } from "./domain/types"

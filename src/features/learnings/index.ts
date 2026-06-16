@@ -7,6 +7,7 @@ export { parseLearningsCommand } from "./domain/command"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
 export { resolveLearningsMode } from "./domain/mode"
 export {
+  renderBoostedCategoriesForPrompt,
   renderConfirmReply,
   renderForgetConfirm,
   renderLearningsForPrompt,
@@ -20,6 +21,14 @@ export {
   selectRelevantForPaths,
   upsertEntry,
 } from "./domain/store-ops"
+export { decideLearningSuppressions } from "./domain/suppress"
+export type {
+  LearningCarveOutKeep,
+  LearningSuppressDecision,
+  LearningSuppressResult,
+  SuppressBasis,
+  SuppressibleFinding,
+} from "./domain/suppress"
 export type {
   LearningEntry,
   LearningPolarity,

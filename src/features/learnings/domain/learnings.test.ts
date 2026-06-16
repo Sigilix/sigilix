@@ -12,6 +12,7 @@ import {
 } from "@/src/features/learnings/domain/store-ops"
 import { parseLearningsCommand } from "@/src/features/learnings/domain/command"
 import {
+  renderBoostedCategoriesForPrompt,
   renderConfirmReply,
   renderForgetConfirm,
   renderLearningsForPrompt,
@@ -228,6 +229,14 @@ describe("rendering", () => {
         - Prefer service-layer database access.
         </details>"
       `)
+  })
+
+  it("renders the precision-profile boost line and dedupes, empty when no category is boosted", () => {
+    // SIG-104 PR-3: the computed-but-unused boost finally applied at the prompt gate.
+    expect(renderBoostedCategoriesForPrompt([])).toBe("")
+    expect(renderBoostedCategoriesForPrompt(["security", "logic", "security"])).toBe(
+      "Prioritize findings in these repeatedly-valued categories (do not lower the bar elsewhere): security, logic.",
+    )
   })
 })
 

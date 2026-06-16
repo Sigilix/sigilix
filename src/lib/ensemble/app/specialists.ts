@@ -126,6 +126,9 @@ export interface SpecialistsArgs<R> {
   stackBlock: string
   graphCtxForPrompt: string
   dynamicEvidenceBlockForPrompt: string
+  /** SIG-452: the SYNTH-locus removed-guarding-tests block (empty unless enforce
+   *  + symbol-grade signal). Threaded straight through to the synth phase. */
+  adversarialFramingSynthBlock: string
   astResult: AstResult
   astRulesConfig: AstRulesConfig
   sarifFindings: readonly SarifFinding[]
@@ -180,6 +183,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     stackBlock,
     graphCtxForPrompt,
     dynamicEvidenceBlockForPrompt,
+    adversarialFramingSynthBlock,
     astResult,
     astRulesConfig,
     sarifFindings,
@@ -940,6 +944,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     stackBlock,
     graphCtxForPrompt,
     dynamicEvidenceBlockForPrompt,
+    adversarialFramingSynthBlock,
     astResult,
     astRulesConfig,
     sarifFindings,

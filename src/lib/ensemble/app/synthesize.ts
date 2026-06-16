@@ -146,6 +146,9 @@ export interface SynthesizeArgs<R> {
   stackBlock: string
   graphCtxForPrompt: string
   dynamicEvidenceBlockForPrompt: string
+  /** SIG-452: the SYNTH-locus removed-guarding-tests keep-rule block. Empty
+   *  unless enforce + symbol-grade signal → byte-identical synth message otherwise. */
+  adversarialFramingSynthBlock: string
   astResult: AstResult
   astRulesConfig: AstRulesConfig
   sarifFindings: readonly SarifFinding[]
@@ -195,6 +198,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     stackBlock,
     graphCtxForPrompt,
     dynamicEvidenceBlockForPrompt,
+    adversarialFramingSynthBlock,
     astResult,
     astRulesConfig,
     sarifFindings,
@@ -330,6 +334,13 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
     })
 
+    // SIG-452: the SYNTH locus. Append the enforce-gated removed-guarding-tests
+    // keep-rule so the synth won't wave a behavioral change with a same-PR removed
+    // guard through as "intentional contract change." Empty unless enforce +
+    // symbol-grade → byte-identical synth message for off/shadow.
+    const synthMessageWithAdversarialFraming =
+      adversarialFramingSynthBlock.length > 0 ? `${synthMessage}\n\n${adversarialFramingSynthBlock}` : synthMessage
+
     // ARC-181 Task 8: thread structured AST findings into the synth
     // prompt for (path, line, role_hint) supersession matching.
     const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
@@ -337,7 +348,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     // posted (autoInline ON). With it OFF (default) the drop silently loses
     // double-detected real findings — see buildAstFindingsSynthBlock.
     const synthMessageWithAst =
-      synthMessage + buildAstFindingsSynthBlock(astFindingsForSynth, astRulesConfig.autoInline)
+      synthMessageWithAdversarialFraming + buildAstFindingsSynthBlock(astFindingsForSynth, astRulesConfig.autoInline)
 
     // ARC-188: append SARIF structured findings + SBOM summary on
     // top of the AST-augmented prompt. Synth gets the machine-

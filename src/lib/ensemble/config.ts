@@ -37,6 +37,7 @@ import { resolvePrecisionMode } from "@/src/features/precision-profile"
 import { parseReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { parseIncrementalReviewMode } from "./domain/incremental-coverage"
+import { parseAdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import { parseGraphRetrievalEnabled, parseGraphRetrievalMode } from "./domain/graph-context-format"
 import { parseSynthBypassEnabled, isSynthBypassEligible as isSynthBypassEligibleCore } from "./domain/synth"
@@ -163,6 +164,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_ANCHOR_PRECISION?: string | undefined
   // SIG-439: incremental PR re-review coverage mode (off | shadow | on)
   OPENCLAW_INCREMENTAL_REVIEW_MODE?: string | undefined
+  // SIG-452: adversarial-framing hardening mode (off | shadow | enforce)
+  OPENCLAW_ADVERSARIAL_FRAMING_MODE?: string | undefined
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
@@ -283,6 +286,10 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       // until the K=12 exactness eval proves the lift.
       anchorPrecision: (env.OPENCLAW_ANCHOR_PRECISION ?? "").trim().toLowerCase() === "on",
       incrementalReviewMode: parseIncrementalReviewMode(env.OPENCLAW_INCREMENTAL_REVIEW_MODE),
+      // SIG-452: adversarial-framing hardening (off → shadow → enforce). off/shadow
+      // are byte-identical to today's output; enforce injects the inverted-inference
+      // blocks. Default off.
+      adversarialFramingMode: parseAdversarialFramingMode(env.OPENCLAW_ADVERSARIAL_FRAMING_MODE),
       // SIG-393: region re-sweep rollout flag (off → shadow → on).
       // SIG-392: recall-eliciting logic prompt (default off).
       recallRoles: buildRecallRoles(env),

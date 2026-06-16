@@ -708,6 +708,22 @@ export interface Env {
   // specialist + synth prompts. Any other value keeps it off.
   OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
 
+  // SIG-452: adversarial-framing hardening. off (default) | shadow | enforce.
+  // The "removed guarding test for a CHANGED symbol" signal (benchmark #29: a
+  // plausible behavioral change that removes its regression test in the SAME PR,
+  // which the model was waving through as "intentional contract change").
+  //   - "off"     → signal not computed, no prompt block, no extra IO →
+  //                 byte-identical to today.
+  //   - "shadow"  → compute the signal + log counts by correlation strength ONLY.
+  //                 Output stays byte-identical (no prompt block, no would-flag/
+  //                 would-keep — that needs an extra model call, out of v1 scope).
+  //   - "enforce" → also fetch GitHub file metadata (status/previous_filename for
+  //                 rename exclusion), build the SYMBOL-grade signal, and inject
+  //                 the enforce-gated conditional blocks into BOTH the logic
+  //                 specialist's and the synth's user messages (the inverted-
+  //                 inference rule). Parsed by parseAdversarialFramingMode.
+  OPENCLAW_ADVERSARIAL_FRAMING_MODE?: string
+
   // SIG-112: dev/dogfood override for visible finding evidence blocks.
   // "on" renders the per-finding collapsible provenance block regardless of
   // sigilix.json; any other value leaves customer visibility to

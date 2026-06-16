@@ -497,6 +497,18 @@ function classifyDeletedTestFocusHint(line: string): TestingFocusHintKind | null
   return null
 }
 
+/**
+ * SIG-452: whether a deleted diff line is a test ASSERTION/case line — the same
+ * classification `classifyDeletedTestFocusHint` already uses. Exported so the
+ * adversarial-framing detector (`removed-guarding-tests.ts`) reuses ONE source
+ * of truth for "this removed line was a guarding assertion" instead of
+ * re-implementing the regex. `line` may carry a leading `-`/`+` diff marker; it
+ * is stripped before classification.
+ */
+export function isDeletedTestAssertionLine(line: string): boolean {
+  return classifyDeletedTestFocusHint(line) === "deleted-test"
+}
+
 function testingFocusToken(line: string): string {
   const text = stripRawDiffLinePrefix(line).trim().replace(/\s+/g, " ")
   return text.length > 160 ? text.slice(0, 157) + "..." : text

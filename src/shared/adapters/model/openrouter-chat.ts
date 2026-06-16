@@ -50,7 +50,7 @@ interface OpenRouterDelta {
 // some routes/models omit it — so we capture only when it's a number and omit
 // otherwise (the cost aggregator then falls back to the MODEL_PRICING estimate).
 interface OpenRouterChunk {
-  choices?: Array<{ delta?: OpenRouterDelta; message?: { content?: string } }>
+  choices?: Array<{ delta?: OpenRouterDelta; message?: { content?: string }; finish_reason?: string | null }>
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number }
   error?: { message?: string; code?: number | string }
 }
@@ -206,6 +206,10 @@ async function accumulateStream(
   let costUsd: number | undefined
   let saw = false
   let done = false
+  // SIG-449 (rework): the terminal finish_reason — the ONLY signal that the model
+  // actually COMPLETED generating (vs the stream being cut mid-flight). Load-bearing for
+  // the salvage decision below; see the long note there.
+  let finishReason: string | undefined
 
   const handleData = (payload: string): void => {
     if (payload === "[DONE]") {
@@ -224,11 +228,15 @@ async function accumulateStream(
         `OpenRouter stream error: ${String(chunk.error.message ?? chunk.error.code ?? "unknown").slice(0, 500)}`,
       )
     }
-    const delta = chunk.choices?.[0]?.delta
+    const choice = chunk.choices?.[0]
+    const delta = choice?.delta
     if (delta) {
       if (typeof delta.content === "string") content += delta.content
       if (typeof delta.reasoning === "string") thinkingChars += delta.reasoning.length
     }
+    // Capture the terminal finish_reason when the model emits it (it arrives on the
+    // final content chunk, just before `[DONE]`). A cut-mid-flight stream never has it.
+    if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason
     if (chunk.usage) {
       if (typeof chunk.usage.prompt_tokens === "number") promptTokens = chunk.usage.prompt_tokens
       if (typeof chunk.usage.completion_tokens === "number") completionTokens = chunk.usage.completion_tokens
@@ -255,14 +263,25 @@ async function accumulateStream(
   if (!saw) {
     throw new Error("OpenRouter stream produced no chunks")
   }
-  // The stream ended without the `[DONE]` sentinel — the body was cut mid-flight
-  // (edge idle-timeout, dropped connection, a partial last frame). Returning the
-  // partial `content` would surface a truncated review as a success; throw so retry
-  // classifies it as transient and re-runs (mirrors a torn Ollama stream).
-  // NOTE: `isPermanentFailure` classifies by message text — it treats an `HTTP <4xx>`
-  // substring as permanent. This message intentionally contains no such substring so it
-  // stays transient/retryable; do not reword it to include an HTTP-status-shaped token.
-  if (!done) {
+  // SIG-449 (rework): the stream ended without `[DONE]`. SALVAGE — return the partial
+  // `content` instead of throwing — ONLY when the model signaled a NORMAL completion
+  // (`finish_reason: "stop"`). That is the exact case the salvage exists for: a COMPLETE
+  // body whose only defect is a lost `[DONE]` sentinel (an edge idle-timeout or dropped
+  // connection AFTER generation finished; OpenRouter returns 200 + full content, and the
+  // pre-rework code THREW it away → "specialist unavailable"). With finish_reason:"stop"
+  // the JSON is whole, so the caller's `parseAnswer` parses it cleanly.
+  //
+  // Without that signal — a cut MID-generation (no finish_reason) or a `length` cap — the
+  // body is genuinely truncated → THROW so the retry ladder re-runs. This guard is
+  // LOAD-BEARING for recall: `parsePrReviewResponse` runs `jsonrepair`, which auto-closes
+  // a truncated object into a structurally-valid verdict; the specialist schema emits
+  // `findings` LAST, so a cut before that array would parse as a 0-finding "clean" review
+  // and be counted as FULL coverage — a SILENT false sign-off, strictly worse than the
+  // honest "[DEGRADED COVERAGE]" disclosure a null verdict produces. finish_reason is the
+  // only thing that distinguishes "complete, [DONE] lost" from "cut mid-review", so we
+  // never salvage without it. Error wording stays HTTP-token-free so `isPermanentFailure`
+  // classifies it transient/retryable.
+  if (!done && (finishReason !== "stop" || content.trim().length === 0)) {
     throw new Error("OpenRouter stream ended without a [DONE] terminator (likely truncated)")
   }
 

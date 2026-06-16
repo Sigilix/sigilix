@@ -94,8 +94,59 @@ describe("openrouter-chat", () => {
     expect(r.message.content).toBe("split")
   })
 
-  it("throws when the stream ends without a [DONE] terminator (truncated)", async () => {
+  it("salvages a complete body when only the [DONE] sentinel was lost (finish_reason:stop present)", async () => {
+    // SIG-449 rework: the salvage exists for ONE case — a COMPLETE generation whose only
+    // defect is a dropped [DONE] (edge idle-timeout / disconnect AFTER the model finished).
+    // finish_reason:"stop" proves completion, so we return the content rather than throwing
+    // it away (the pre-rework throw was the dominant "specialist unavailable" cause).
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":null}]}\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+        // NB: no "data: [DONE]\n" — the sentinel was lost after the model completed.
+      ]),
+    )
+    const r = await chat({ ...base, format: {} })
+    expect(r.message.content).toBe('{"ok":true}')
+  })
+
+  it("THROWS on a mid-generation cut — content present but NO finish_reason (recall P0 guard)", async () => {
+    // The critical guard: a stream cut mid-review (no finish_reason) must NEVER be salvaged.
+    // jsonrepair would auto-close the truncated JSON into a structurally-valid 0-finding
+    // verdict counted as full coverage — a SILENT false clean review. It must throw →
+    // transient → retry (an honest re-roll / degraded-coverage disclosure instead).
     vi.stubGlobal("fetch", mockFetch(['data: {"choices":[{"delta":{"content":"partial"}}]}\n']))
+    await expect(chat({ ...base, format: {} })).rejects.toThrow(/truncated|DONE/)
+  })
+
+  it("a truncated REVIEW (summary present, findings array cut, no finish_reason) never escapes the adapter", async () => {
+    // End-to-end recall-safety for the exact danger case: a real review cut right at the
+    // `findings` array (the schema emits findings LAST). Without the finish_reason gate,
+    // jsonrepair + parsePrReviewResponse would surface this as a 0-finding "clean" sign-off.
+    // With the gate, chat() throws so the truncated body never reaches the parser.
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        'data: {"choices":[{"delta":{"content":"{\\"summary\\":\\"SQL injection + auth bypass\\",\\"confidence\\":5,\\"findings\\":["},"finish_reason":null}]}\n',
+        // stream cut here — no finish_reason:stop, no [DONE].
+      ]),
+    )
+    await expect(chat({ ...base, format: {} })).rejects.toThrow(/truncated|DONE/)
+  })
+
+  it("applies the same gate on the FREE-FORM (synth, format:undefined) path — mid-cut throws", async () => {
+    // The salvage gate reads choice.finish_reason, not args.format, so it protects the
+    // free-form synthesizer call too: a cut synth stream (no finish_reason) must throw
+    // rather than salvage a partial summary that could be posted as the merged review.
+    vi.stubGlobal("fetch", mockFetch(['data: {"choices":[{"delta":{"content":"partial synth"}}]}\n']))
+    await expect(chat(base)).rejects.toThrow(/truncated|DONE/)
+  })
+
+  it("still throws when the stream ends with NO content to salvage (empty + no completion)", async () => {
+    // Chunks arrived but nothing was emitted before the cut — nothing to parse; surface a
+    // transient error and let the retry ladder re-run (asserted below).
+    vi.stubGlobal("fetch", mockFetch(['data: {"choices":[{"delta":{"content":""}}]}\n']))
     await expect(chat({ ...base, format: {} })).rejects.toThrow(/truncated|DONE/)
   })
 

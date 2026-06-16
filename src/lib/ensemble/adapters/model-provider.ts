@@ -77,24 +77,27 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // regresses flash), recall-suffix + authz-resolution addendum carry recall.
   security: {
     primary: "deepseek/deepseek-v4-flash",
-    retries: 1,
+    retries: 2,
     fallback: null,
-    // SIG-449: 120s per-attempt cap (mirrors logic's o3 cap; flash is faster than
-    // o3, so this is ample headroom). The bare 60s global default aborted slow
-    // OpenRouter routes mid-generation on BOTH attempts → null verdict → "security
-    // unavailable" partial reviews. Chain 2×120+0.8 = 240.8s, 129s slack under the
-    // 370s role wall (SPECIALIST_TIMEOUT_MS).
-    perAttemptTimeoutMs: 120_000,
+    // SIG-449 (rework): the "security unavailable" partials are OUR-SIDE parse/stream
+    // failures, NOT slow routes. The OpenRouter activity log shows flash p99 51.6s /
+    // max 51.6s (zero generations over 90s) and zero provider cancels/errors/truncations.
+    // So the lever is MORE ATTEMPTS, not a longer cap: retries:2 (3 tries) lets a re-roll
+    // recover a transient parse failure (see the runWithRetry rationale below), and the
+    // tighter 90s cap still clears the observed max by ~35s. Chain 3×90 + (0.8+2.5) =
+    // 273.3s, 96.7s slack under the 370s role wall (SPECIALIST_TIMEOUT_MS).
+    perAttemptTimeoutMs: 90_000,
   },
   // performance — z-ai/glm-5.1: perf bugs are universal structural patterns; no
   // reasoning (off), fast + cheap on the highest-volume role.
   performance: {
     primary: "z-ai/glm-5.1",
-    retries: 1,
+    retries: 2,
     fallback: null,
-    // SIG-449: 120s per-attempt cap (see security). glm-5.1 on the bare 60s default
-    // aborted under OpenRouter routing variance → "performance unavailable".
-    perAttemptTimeoutMs: 120_000,
+    // SIG-449 (rework): same as security. glm-5.1 p99 54.9s / max 54.9s in the activity
+    // log (none over 90s), so retries:2 (more parse re-rolls) is the lever, not a longer
+    // cap. Chain 3×90 + (0.8+2.5) = 273.3s, 96.7s slack under the 370s role wall.
+    perAttemptTimeoutMs: 90_000,
   },
   // tests — deepseek/deepseek-v4-pro: edges flash on subtle test-quality cases;
   // reasoning medium (via [vars]).
@@ -175,10 +178,11 @@ export function buildCostProjectionLineup(): CostProjectionLineup {
   }
 }
 
-// SIG-406: baseline fanout + synth reservation ONLY — 4 specialists ×
-// maxAttempts(retries:1, fallback:null)=2 + 2×synth(2) = 12. The SIG-393 re-sweep +
-// SIG-395 invariant-lens add-on phases make extra `runSpecialist` calls NOT counted
-// here (unchanged from pre-alpha accounting; full add-on budgeting is SIG-369).
+// SIG-406: baseline fanout + synth reservation ONLY. SIG-449 raised security +
+// performance to retries:2 (maxAttempts 3 each), so the worst case is now
+// logic(2) + security(3) + performance(3) + tests(2) + 2×synth(2) = 14. The SIG-393
+// re-sweep + SIG-395 invariant-lens add-on phases make extra `runSpecialist` calls NOT
+// counted here (unchanged from pre-alpha accounting; full add-on budgeting is SIG-369).
 export const MAX_CALLS_PER_ENSEMBLE_RUN =
   maxAttempts(SPECIALIST_CONFIGS.logic) +
   maxAttempts(SPECIALIST_CONFIGS.security) +

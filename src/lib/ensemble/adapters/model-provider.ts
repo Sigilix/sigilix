@@ -79,6 +79,12 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     primary: "deepseek/deepseek-v4-flash",
     retries: 1,
     fallback: null,
+    // SIG-449: 120s per-attempt cap (mirrors logic's o3 cap; flash is faster than
+    // o3, so this is ample headroom). The bare 60s global default aborted slow
+    // OpenRouter routes mid-generation on BOTH attempts → null verdict → "security
+    // unavailable" partial reviews. Chain 2×120+0.8 = 240.8s, 129s slack under the
+    // 370s role wall (SPECIALIST_TIMEOUT_MS).
+    perAttemptTimeoutMs: 120_000,
   },
   // performance — z-ai/glm-5.1: perf bugs are universal structural patterns; no
   // reasoning (off), fast + cheap on the highest-volume role.
@@ -86,6 +92,9 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     primary: "z-ai/glm-5.1",
     retries: 1,
     fallback: null,
+    // SIG-449: 120s per-attempt cap (see security). glm-5.1 on the bare 60s default
+    // aborted under OpenRouter routing variance → "performance unavailable".
+    perAttemptTimeoutMs: 120_000,
   },
   // tests — deepseek/deepseek-v4-pro: edges flash on subtle test-quality cases;
   // reasoning medium (via [vars]).

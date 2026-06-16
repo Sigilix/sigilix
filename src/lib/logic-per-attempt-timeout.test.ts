@@ -31,9 +31,11 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
-  it("leaves security and performance on the global default (no per-role override)", () => {
-    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBeUndefined()
-    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBeUndefined()
+  it("caps security + performance at 120s per attempt (SIG-449 — was the bare 60s default that aborted slow OpenRouter routes → 'unavailable')", () => {
+    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(120_000)
+    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(120_000)
+    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
+    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
   it("gives logic retries:1 + no fallback (SIG-406: OpenRouter self-routes) whose attempt chain fits the wall", () => {

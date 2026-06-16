@@ -1,0 +1,332 @@
+{
+ "note": "sigilix-monitor#29 Greptile-style benchmark fixtures (20 planted bugs / 5 PRs). Used by the in-repo inline-recall replication test (SIG-451). DO NOT EDIT BY HAND \u2014 regenerated from the benchmark PR.",
+ "bugs": [
+  {
+   "id": "A1",
+   "prBranch": "bench/ingest-parse",
+   "pr": 24,
+   "file": "src/ingest/handler.ts",
+   "lineRange": [
+    95,
+    99
+   ],
+   "category": "robustness",
+   "severity": "P1",
+   "hardest": false,
+   "title": "Missing R2 object null-check after .get()",
+   "description": "Removed the `if (!obj)` guard after env.SIGILIX_TELEMETRY.get(key) and used obj!.arrayBuffer(); a missing/deleted object now throws and drops the whole batch.",
+   "source": "revert 6f26f61"
+  },
+  {
+   "id": "A2",
+   "prBranch": "bench/ingest-parse",
+   "pr": 24,
+   "file": "src/parse/event.ts",
+   "lineRange": [
+    105,
+    124
+   ],
+   "category": "data-integrity",
+   "severity": "P1",
+   "hardest": true,
+   "title": "dedupeKey tuple omits attempt-identity fields",
+   "description": "attemptIndex/attemptKind dropped from the dedupeKey tuple (SIG-277 class): distinct model-attempt-completed events for the same role now hash identically and the second is silently dropped by INSERT OR IGNORE. Subtle: only multi-attempt/rerun events collide.",
+   "source": "fresh (SIG-277 class)"
+  },
+  {
+   "id": "A3",
+   "prBranch": "bench/ingest-parse",
+   "pr": 24,
+   "file": "src/parse/ndjson.ts",
+   "lineRange": [
+    31,
+    33
+   ],
+   "category": "robustness",
+   "severity": "P2",
+   "hardest": false,
+   "title": "gzip magic-byte check uses >= instead of ===",
+   "description": "Second magic byte compared with `bytes[1]! >= 0x8b` instead of `=== 0x8b` mis-detects compression for some inputs.",
+   "source": "fresh"
+  },
+  {
+   "id": "A4",
+   "prBranch": "bench/ingest-parse",
+   "pr": 24,
+   "file": "src/parse/envelope.ts",
+   "lineRange": [
+    75,
+    79
+   ],
+   "category": "logic",
+   "severity": "P2",
+   "hardest": true,
+   "title": "Inverted envelope fallback-timestamp precedence",
+   "description": "`const ts = fallbackTs ?? asNumber(entry.TimestampMs)` prefers the invocation-level fallback over the per-entry timestamp, bucketing events into the wrong time window. Subtle: only wrong when both are present.",
+   "source": "fresh"
+  },
+  {
+   "id": "B1",
+   "prBranch": "bench/query-correlation",
+   "pr": 25,
+   "file": "src/ui/queries/latency.ts",
+   "lineRange": [
+    75,
+    84
+   ],
+   "category": "data-integrity",
+   "severity": "P1",
+   "hardest": false,
+   "title": "end_to_end GROUP BY check_run_id without owner/repo",
+   "description": "Grouping the end-to-end sample by check_run_id alone (owner/repo removed from GROUP BY) risks cross-repo sample contamination.",
+   "source": "revert 49f5e8e"
+  },
+  {
+   "id": "B2",
+   "prBranch": "bench/query-correlation",
+   "pr": 25,
+   "file": "src/ui/queries/recent-runs.ts",
+   "lineRange": [
+    60,
+    66
+   ],
+   "category": "logic",
+   "severity": "P3",
+   "hardest": false,
+   "title": "Non-deterministic recent-runs ordering under LIMIT",
+   "description": "Dropped the `, r.head_sha7 DESC` tiebreaker, so ORDER BY COALESCE(started, ended) DESC alone makes the LIMITed page non-deterministic.",
+   "source": "revert db3deb7"
+  },
+  {
+   "id": "B3",
+   "prBranch": "bench/query-correlation",
+   "pr": 25,
+   "file": "src/ui/queries/latency.ts",
+   "lineRange": [
+    86,
+    92
+   ],
+   "category": "logic",
+   "severity": "P2",
+   "hardest": true,
+   "title": "Percentile index off-by-one",
+   "description": "Percentile index computed as Math.floor(p * sorted.length) instead of p * (sorted.length - 1), returning the wrong sample (p95 ~ max). Subtle: off by one bucket.",
+   "source": "fresh"
+  },
+  {
+   "id": "B4",
+   "prBranch": "bench/query-correlation",
+   "pr": 25,
+   "file": "src/ui/queries/drilldown.ts",
+   "lineRange": [
+    76,
+    86
+   ],
+   "category": "data-integrity",
+   "severity": "P2",
+   "hardest": false,
+   "title": "Drilldown union not scoped to boundary events",
+   "description": "Removed the `event_name IN (boundary events)` gate, so the head_sha7/check_run_id union arm leaks a sibling PR's specialist/fanout events into the timeline.",
+   "source": "revert ebcfc89"
+  },
+  {
+   "id": "C1",
+   "prBranch": "bench/auth-session",
+   "pr": 26,
+   "file": "src/auth/session.ts",
+   "lineRange": [
+    69,
+    72
+   ],
+   "category": "security",
+   "severity": "P0",
+   "hardest": true,
+   "title": "Session expiry no longer enforced",
+   "description": "The `nowMs > payload.exp` clause was dropped from verifySession, so expired session tokens are accepted indefinitely (nowMs becomes unused). Subtle: valid logins still work; expiry silently never enforced.",
+   "source": "fresh"
+  },
+  {
+   "id": "C2",
+   "prBranch": "bench/auth-session",
+   "pr": 26,
+   "file": "src/ui/app.tsx",
+   "lineRange": [
+    37,
+    42
+   ],
+   "category": "security",
+   "severity": "P1",
+   "hardest": false,
+   "title": "Protected routes missing no-store",
+   "description": "Dropped `c.header('Cache-Control', 'private, no-store')` in the session gate, letting private dashboard HTML be cached/bfcached.",
+   "source": "revert b40270c"
+  },
+  {
+   "id": "C3",
+   "prBranch": "bench/auth-session",
+   "pr": 26,
+   "file": "src/ui/app.tsx",
+   "lineRange": [
+    59,
+    67
+   ],
+   "category": "security",
+   "severity": "P0",
+   "hardest": false,
+   "title": "OAuth state not validated on callback",
+   "description": "The state-cookie comparison was removed from /auth/callback, removing CSRF protection on the login flow.",
+   "source": "fresh"
+  },
+  {
+   "id": "C4",
+   "prBranch": "bench/auth-session",
+   "pr": 26,
+   "file": "src/ui/app.tsx",
+   "lineRange": [
+    82,
+    85
+   ],
+   "category": "security",
+   "severity": "P1",
+   "hardest": false,
+   "title": "Open redirect via unsanitized post-login target",
+   "description": "A `?next=` value is stored in a cookie at /auth/login and redirected to at callback without same-origin validation \u2014 an open redirect (also accepts absolute/`//` URLs).",
+   "source": "fresh"
+  },
+  {
+   "id": "D1",
+   "prBranch": "bench/prune-scrub",
+   "pr": 27,
+   "file": "src/cron/prune.ts",
+   "lineRange": [
+    35,
+    35
+   ],
+   "category": "data-integrity",
+   "severity": "P2",
+   "hardest": false,
+   "title": "Prune cutoff off-by-one (deletes a day early)",
+   "description": "cutoff computed with `(opts.retentionDays - 1) * DAY_MS`, pruning events one day inside the retention window (extra day of data deleted).",
+   "source": "fresh"
+  },
+  {
+   "id": "D2",
+   "prBranch": "bench/prune-scrub",
+   "pr": 27,
+   "file": "src/cron/prune.ts",
+   "lineRange": [
+    34,
+    41
+   ],
+   "category": "robustness",
+   "severity": "P1",
+   "hardest": true,
+   "title": "batchSize clamp removed \u2192 unbounded loop",
+   "description": "Removed the Math.max(1, ...) clamp on batchSize; a 0 batch yields LIMIT 0 (deletes nothing) and the loop's `changes < batchSize` exit never trips \u2014 infinite loop. Subtle: only on a 0/negative config value.",
+   "source": "fresh"
+  },
+  {
+   "id": "D3",
+   "prBranch": "bench/prune-scrub",
+   "pr": 27,
+   "file": "src/scrub/scrub.ts",
+   "lineRange": [
+    4,
+    17
+   ],
+   "category": "privacy",
+   "severity": "P0",
+   "hardest": true,
+   "title": "ALWAYS_DROP no longer drops reviewerEmail",
+   "description": "`reviewerEmail` removed from the ALWAYS_DROP set, so reviewer email PII now survives scrubbing into D1. Subtle: nothing fails; one field of a pair silently persists.",
+   "source": "fresh"
+  },
+  {
+   "id": "D4",
+   "prBranch": "bench/prune-scrub",
+   "pr": 27,
+   "file": "src/scrub/scrub.ts",
+   "lineRange": [
+    4,
+    17
+   ],
+   "category": "security",
+   "severity": "P3",
+   "hardest": false,
+   "title": "Producer-supplied pathHash trusted over computed",
+   "description": "`pathHash` removed from ALWAYS_DROP, so a producer-supplied pathHash survives and can overwrite the locally computed hash \u2014 path-hash spoofing.",
+   "source": "fresh"
+  },
+  {
+   "id": "E1",
+   "prBranch": "bench/frontend",
+   "pr": 28,
+   "file": "src/ui/screens/pr-drilldown.tsx",
+   "lineRange": [
+    80,
+    85
+   ],
+   "category": "security",
+   "severity": "P1",
+   "hardest": false,
+   "title": "Operational-event reason rendered as raw HTML (XSS)",
+   "description": "OpsEventsPanel renders e.props.reason via dangerouslySetInnerHTML, so producer-controlled content becomes stored XSS. (Sigilix flagged this class on PR #21.)",
+   "source": "fresh"
+  },
+  {
+   "id": "E2",
+   "prBranch": "bench/frontend",
+   "pr": 28,
+   "file": "src/ui/screens/latency-board.tsx",
+   "lineRange": [
+    13,
+    19
+   ],
+   "category": "logic",
+   "severity": "P3",
+   "hardest": false,
+   "title": "statusBadge threshold boundary flip",
+   "description": "`ratio <= 0.75` changed to `ratio < 0.75`, so a phase exactly at 75% of target is mislabeled 'approaching' instead of 'within budget'.",
+   "source": "fresh"
+  },
+  {
+   "id": "E3",
+   "prBranch": "bench/frontend",
+   "pr": 28,
+   "file": "src/ui/screens/recent-runs.tsx",
+   "lineRange": [
+    8,
+    12
+   ],
+   "category": "logic",
+   "severity": "P3",
+   "hardest": false,
+   "title": "fmtMs boundary at exactly 1000ms",
+   "description": "`ms < 1000` changed to `ms <= 1000`, so exactly 1000ms renders as '1000 ms' instead of '1.0 s'.",
+   "source": "fresh"
+  },
+  {
+   "id": "E4",
+   "prBranch": "bench/frontend",
+   "pr": 28,
+   "file": "src/ui/screens/pr-drilldown.tsx",
+   "lineRange": [
+    123,
+    131
+   ],
+   "category": "logic",
+   "severity": "P2",
+   "hardest": true,
+   "title": "Divide-by-zero in fanout fallback-rate \u2192 NaN%",
+   "description": "New 'Fallback rate' pill computes fallbacksUsed / totalAttemptsUsed * 100 with no zero guard; a run with totalAttemptsUsed=0 renders NaN%. Subtle: only on runs with no attempts.",
+   "source": "fresh"
+  }
+ ],
+ "diffs": {
+  "24": "diff --git a/src/ingest/handler.ts b/src/ingest/handler.ts\nindex 5617070..11062d5 100644\n--- a/src/ingest/handler.ts\n+++ b/src/ingest/handler.ts\n@@ -92,14 +92,11 @@ export async function ingestR2Object(\n     });\n     return { parsed: 0, inserted: 0, skipped: 0, parseErrors: 0 };\n   }\n+  // We subscribe to object-create only, so the object is always present here.\n   const obj = await env.SIGILIX_TELEMETRY.get(notification.object.key);\n-  if (!obj) {\n-    console.log({ event: \"ingest-r2-object-missing\", key: notification.object.key });\n-    return { parsed: 0, inserted: 0, skipped: 0, parseErrors: 0 };\n-  }\n   // Decode by content (gzip magic bytes), never by the `.gz` key suffix \u2014 real\n   // Logpush objects are named `*.log.gz` yet observed as plain text.\n-  const bytes = new Uint8Array(await obj.arrayBuffer());\n+  const bytes = new Uint8Array(await obj!.arrayBuffer());\n   // Sanity cap: skip an anomalously large object rather than decompress/parse it.\n   if (bytes.byteLength > MAX_OBJECT_BYTES) {\n     console.log({\ndiff --git a/src/parse/envelope.ts b/src/parse/envelope.ts\nindex db0a027..5f5ec59 100644\n--- a/src/parse/envelope.ts\n+++ b/src/parse/envelope.ts\n@@ -74,7 +74,7 @@ export function unwrapTraceEvents(text: string, sourceKey = \"\"): UnwrapResult {\n     for (const log of logs) {\n       if (log === null || typeof log !== \"object\") continue;\n       const entry = log as Record<string, unknown>;\n-      const ts = asNumber(entry.TimestampMs) ?? fallbackTs;\n+      const ts = fallbackTs ?? asNumber(entry.TimestampMs);\n       const messages = entry.Message;\n       if (ts === null || !Array.isArray(messages)) continue;\n \ndiff --git a/src/parse/event.ts b/src/parse/event.ts\nindex 0536fcb..c8732d6 100644\n--- a/src/parse/event.ts\n+++ b/src/parse/event.ts\n@@ -103,17 +103,11 @@ export function normalizeEvent(\n }\n \n export async function dedupeKey(n: NormalizedEvent): Promise<string> {\n-  // attemptIndex and attemptKind live in `props` because they are not in\n-  // HOT_KEYS \u2014 only the producer's identity-bearing top-level fields land\n-  // as first-class columns. Pull them out of props with the same defensive\n-  // typeof check used elsewhere in this module.\n-  const attemptIndex = typeof n.props.attemptIndex === \"number\" ? n.props.attemptIndex : 0;\n-  const attemptKind = typeof n.props.attemptKind === \"string\" ? n.props.attemptKind : \"\";\n-  // Tuple order is part of the dedupe contract \u2014 changing it changes every\n-  // key. Adding a new field at the END is safe (append-only); reordering\n-  // existing ones is not. `checkRunId` is appended last so check-run-created\n-  // and -completed events (which share owner/repo and carry no prNumber)\n-  // remain distinguishable.\n+  // Identity is the producer's top-level fields; attempt metadata lives in\n+  // `props` and is descriptive rather than identifying, so it stays out of the\n+  // dedupe tuple. `checkRunId` is appended last so check-run-created and\n+  // -completed events (which share owner/repo and carry no prNumber) remain\n+  // distinguishable.\n   const tuple = [\n     n.eventName,\n     String(n.eventTime),\n@@ -124,8 +118,6 @@ export async function dedupeKey(n: NormalizedEvent): Promise<string> {\n     n.installationId === null ? \"\" : String(n.installationId),\n     n.deliveryId ?? \"\",\n     n.role ?? \"\",\n-    String(attemptIndex),\n-    attemptKind,\n     n.outcome ?? \"\",\n     n.elapsedMs === null ? \"\" : String(n.elapsedMs),\n     n.checkRunId === null ? \"\" : String(n.checkRunId),\ndiff --git a/src/parse/ndjson.ts b/src/parse/ndjson.ts\nindex 23adafd..c82a400 100644\n--- a/src/parse/ndjson.ts\n+++ b/src/parse/ndjson.ts\n@@ -29,7 +29,7 @@ export function parseNdjson(text: string): NdjsonRow[] {\n  * plain-text), so detect by content, never by the key suffix.\n  */\n export function isGzip(bytes: Uint8Array): boolean {\n-  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;\n+  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1]! >= 0x8b;\n }\n \n /** Decompress gzipped bytes to text via the platform DecompressionStream. */\ndiff --git a/tests/parse.test.ts b/tests/parse.test.ts\nindex cb107cb..8085f4a 100644\n--- a/tests/parse.test.ts\n+++ b/tests/parse.test.ts\n@@ -128,8 +128,6 @@ describe(\"dedupeKey\", () => {\n   // it fail. Pre-production is the cheapest time to lock this in \u2014 once D1\n   // holds real dedupe keys, changing the order becomes a migration.\n   it(\"matches the canonical tuple order contract\", async () => {\n-    const attemptIndex = typeof FULL_BASE.props.attemptIndex === \"number\" ? FULL_BASE.props.attemptIndex : 0;\n-    const attemptKind = typeof FULL_BASE.props.attemptKind === \"string\" ? FULL_BASE.props.attemptKind : \"\";\n     const canonicalTuple = [\n       FULL_BASE.eventName,\n       String(FULL_BASE.eventTime),\n@@ -140,8 +138,6 @@ describe(\"dedupeKey\", () => {\n       FULL_BASE.installationId === null ? \"\" : String(FULL_BASE.installationId),\n       FULL_BASE.deliveryId ?? \"\",\n       FULL_BASE.role ?? \"\",\n-      String(attemptIndex),\n-      attemptKind,\n       FULL_BASE.outcome ?? \"\",\n       FULL_BASE.elapsedMs === null ? \"\" : String(FULL_BASE.elapsedMs),\n       FULL_BASE.checkRunId === null ? \"\" : String(FULL_BASE.checkRunId),\n@@ -171,8 +167,6 @@ describe(\"dedupeKey\", () => {\n     { field: \"installationId\", mutate: (n) => ({ ...n, installationId: 99999 }) },\n     { field: \"deliveryId\",     mutate: (n) => ({ ...n, deliveryId: \"delivery-uuid-other\" }) },\n     { field: \"role\",           mutate: (n) => ({ ...n, role: \"security\" }) },\n-    { field: \"attemptIndex\",   mutate: (n) => ({ ...n, props: { ...n.props, attemptIndex: 2 } }) },\n-    { field: \"attemptKind\",    mutate: (n) => ({ ...n, props: { ...n.props, attemptKind: \"fallback\" } }) },\n     { field: \"outcome\",        mutate: (n) => ({ ...n, outcome: \"failed\" }) },\n     { field: \"elapsedMs\",      mutate: (n) => ({ ...n, elapsedMs: 9999 }) },\n     { field: \"checkRunId\",     mutate: (n) => ({ ...n, checkRunId: 999888777 }) },\n",
+  "25": "diff --git a/src/ui/queries/drilldown.ts b/src/ui/queries/drilldown.ts\nindex 072e5ec..348bfed 100644\n--- a/src/ui/queries/drilldown.ts\n+++ b/src/ui/queries/drilldown.ts\n@@ -54,16 +54,8 @@ export async function prDrilldownQuery(\n   // Pull every event for this run. Most events carry pr_number directly, but the\n   // check-run lifecycle events don't (SIG-321): created has (head_sha7,\n   // check_run_id) and completed has only check_run_id. So we ALSO pull the\n-  // boundary events that share this PR's head_sha7 (created) or whose\n-  // check_run_id matches a created on those head_sha7(s) (completed).\n-  //\n-  // The head_sha7/check_run_id branches are gated to ONLY the two check-run\n-  // boundary event names, so all specialist/fanout/model-attempt data stays\n-  // strictly pr_number-scoped \u2014 a sibling PR that shares this commit's head_sha7\n-  // can never contaminate this PR's specialist lifecycle. Residual (irreducible\n-  // under the gapped contract): if two PRs share a head_sha7, the sibling's\n-  // check-run boundary rows may still appear in the timeline, because those\n-  // events carry no prNumber and head_sha7 is the only link.\n+  // events that share this PR's head_sha7 (created) or whose check_run_id matches\n+  // a created on those head_sha7(s) (completed).\n   //\n   // The PR's head_sha7 set and the run's check_run_id set are hoisted into CTEs\n   // so they're computed once and reused (rather than as inline IN-subqueries);\n@@ -85,13 +77,8 @@ export async function prDrilldownQuery(\n        FROM events\n        WHERE owner = ?1 AND repo = ?2 AND (\n          pr_number = ?3\n-         OR (\n-           event_name IN ('pr-review-check-run-created', 'pr-review-check-run-completed')\n-           AND (\n-             head_sha7 IN (SELECT head_sha7 FROM pr_shas)\n-             OR check_run_id IN (SELECT check_run_id FROM pr_check_ids)\n-           )\n-         )\n+         OR head_sha7 IN (SELECT head_sha7 FROM pr_shas)\n+         OR check_run_id IN (SELECT check_run_id FROM pr_check_ids)\n        )\n        ORDER BY event_time ASC, id ASC`,\n     )\ndiff --git a/src/ui/queries/latency.ts b/src/ui/queries/latency.ts\nindex 8332d3c..c0ba4d2 100644\n--- a/src/ui/queries/latency.ts\n+++ b/src/ui/queries/latency.ts\n@@ -69,9 +69,7 @@ const PHASES: PhaseDef[] = [\n     // One sample per run, grouped by check_run_id \u2014 the only field both the\n     // created and completed events carry (completed has no prNumber/head_sha).\n     // A run missing either marker yields ms = NULL and is dropped by the\n-    // Number.isFinite filter below. owner/repo are included in the GROUP BY for\n-    // defence-in-depth and to mirror recent-runs' completed CTE; check_run_id is\n-    // globally unique per GitHub, so they don't change the grouping in practice.\n+    // Number.isFinite filter below.\n     sampleSql: `\n       SELECT\n         MAX(CASE WHEN event_name = 'pr-review-check-run-completed' THEN event_time END)\n@@ -80,14 +78,14 @@ const PHASES: PhaseDef[] = [\n       WHERE event_name IN ('pr-review-check-run-created', 'pr-review-check-run-completed')\n         AND check_run_id IS NOT NULL\n         AND event_time >= ?1\n-      GROUP BY owner, repo, check_run_id\n+      GROUP BY check_run_id\n     `,\n   },\n ];\n \n function percentile(sorted: number[], p: number): number | null {\n   if (sorted.length === 0) return null;\n-  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1))));\n+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(p * sorted.length)));\n   return sorted[idx]!;\n }\n \ndiff --git a/src/ui/queries/recent-runs.ts b/src/ui/queries/recent-runs.ts\nindex 09f6382..bd13859 100644\n--- a/src/ui/queries/recent-runs.ts\n+++ b/src/ui/queries/recent-runs.ts\n@@ -59,10 +59,8 @@ const RECENT_RUNS_SQL = `\n   WHERE r.pr_number IS NOT NULL\n   -- Order by best-known time; runs with no in-window created sort last. A run\n   -- with neither a started nor an ended (created before the window, not yet\n-  -- completed) yields a NULL key \u2014 those sort last (NULLs last in DESC). The\n-  -- head_sha7 tiebreaker makes the order deterministic under LIMIT so the page\n-  -- doesn't reshuffle between refreshes.\n-  ORDER BY COALESCE(r.started, c.ended) DESC, r.head_sha7 DESC\n+  -- completed) yields a NULL key \u2014 those sort last (NULLs last in DESC).\n+  ORDER BY COALESCE(r.started, c.ended) DESC\n   LIMIT ?2\n `;\n \ndiff --git a/tests/queries.test.ts b/tests/queries.test.ts\nindex c00bd9e..a489dd8 100644\n--- a/tests/queries.test.ts\n+++ b/tests/queries.test.ts\n@@ -119,30 +119,6 @@ describe(\"prDrilldownQuery\", () => {\n     expect(out.fanoutSummary?.fanoutElapsedMs).toBe(12345);\n   });\n \n-  it(\"isolates specialist data when a sibling PR shares the same head_sha7 (rerun)\", async () => {\n-    // A second review of the SAME commit (REAL.sha7) under a different PR +\n-    // check_run_id, with a distinctly-named role. The head_sha7/check_run_id\n-    // union pulls only check-run BOUNDARY events, so the sibling's specialist\n-    // data must NOT leak into PR 350's drilldown.\n-    await ingestTelemetryText(\n-      env.DB,\n-      JSON.stringify({\n-        Logs: [\n-          { Message: [JSON.stringify({ event: \"model-attempt-completed\", owner: REAL.owner, repo: REAL.repo, prNumber: 351, headSha: REAL.sha7, role: \"tests-sibling\", attemptKind: \"primary\", attemptIndex: 1, model: \"x\", elapsedMs: 50, outcome: \"ok\" })], TimestampMs: 1780701300000 },\n-          { Message: [JSON.stringify({ event: \"pr-review-check-run-created\", owner: REAL.owner, repo: REAL.repo, head_sha: REAL.sha7, check_run_id: 999000111 })], TimestampMs: 1780701301000 },\n-        ],\n-      }),\n-      \"sibling.log.gz\",\n-    );\n-\n-    const out = await prDrilldownQuery(env.DB, { owner: REAL.owner, repo: REAL.repo, prNumber: REAL.prNumber });\n-    // Specialist data stays strictly pr_number-scoped \u2014 the sibling role is gone.\n-    expect(out.specialists.map((s) => s.role).sort()).toEqual([\"logic\", \"security\"]);\n-    expect(out.events.some((e) => e.role === \"tests-sibling\")).toBe(false);\n-    // (Documented residual: the sibling's check-run-created boundary row may\n-    // appear \u2014 a no-prNumber boundary event can't be attributed to one PR.)\n-  });\n-\n   it(\"returns empty result for a PR with no events\", async () => {\n     const out = await prDrilldownQuery(env.DB, { owner: \"nobody\", repo: \"none\", prNumber: 999 });\n     expect(out.events).toEqual([]);\n",
+  "26": "diff --git a/src/auth/session.ts b/src/auth/session.ts\nindex 3036f0f..533d420 100644\n--- a/src/auth/session.ts\n+++ b/src/auth/session.ts\n@@ -68,6 +68,6 @@ export async function verifySession(\n   } catch {\n     return null;\n   }\n-  if (typeof payload.exp !== \"number\" || nowMs > payload.exp) return null;\n+  if (typeof payload.exp !== \"number\") return null;\n   return payload;\n }\ndiff --git a/src/ui/app.tsx b/src/ui/app.tsx\nindex 6c5aa12..6289dd1 100644\n--- a/src/ui/app.tsx\n+++ b/src/ui/app.tsx\n@@ -26,6 +26,7 @@ export const app = new Hono<AppEnv>();\n // issue and verify ourselves \u2014 no server-side session store, no users table.\n const SESSION_COOKIE = \"monitor_session\";\n const STATE_COOKIE = \"monitor_oauth_state\";\n+const NEXT_COOKIE = \"monitor_next\";\n const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h\n const cookieOpts = { httpOnly: true, secure: true, sameSite: \"Lax\", path: \"/\" } as const;\n \n@@ -36,9 +37,6 @@ app.use(\"*\", async (c, next) => {\n   if (path === \"/health\" || path.startsWith(\"/auth/\")) return next();\n   const session = await verifySession(getCookie(c, SESSION_COOKIE), c.env.SESSION_SECRET, Date.now());\n   if (!session) return c.redirect(\"/auth/login\", 302);\n-  // Keep authenticated dashboard HTML out of shared/back-forward caches, so a\n-  // logout actually hides the data on a shared machine.\n-  c.header(\"Cache-Control\", \"private, no-store\");\n   c.set(\"userEmail\", session.email ?? session.login);\n   await next();\n });\n@@ -51,6 +49,9 @@ app.get(\"/auth/login\", (c) => {\n   c.header(\"Cache-Control\", \"no-store\");\n   const state = crypto.randomUUID();\n   setCookie(c, STATE_COOKIE, state, { ...cookieOpts, maxAge: 600 });\n+  // Remember where the user was headed so we can return them there after login.\n+  const next = c.req.query(\"next\");\n+  if (next) setCookie(c, NEXT_COOKIE, next, { ...cookieOpts, maxAge: 600 });\n   return c.redirect(authorizeUrl(c.env.GITHUB_CLIENT_ID, state), 302);\n });\n \n@@ -58,9 +59,6 @@ app.get(\"/auth/login\", (c) => {\n // confirm the user is an active member of the Sigilix org, then issue a session.\n app.get(\"/auth/callback\", async (c) => {\n   c.header(\"Cache-Control\", \"no-store\");\n-  const state = c.req.query(\"state\");\n-  const expected = getCookie(c, STATE_COOKIE);\n-  if (!state || !expected || state !== expected) return c.text(\"bad oauth state\", 400);\n   deleteCookie(c, STATE_COOKIE, { path: \"/\" });\n \n   const code = c.req.query(\"code\");\n@@ -81,7 +79,9 @@ app.get(\"/auth/callback\", async (c) => {\n     c.env.SESSION_SECRET,\n   );\n   setCookie(c, SESSION_COOKIE, session, { ...cookieOpts, maxAge: SESSION_TTL_MS / 1000 });\n-  return c.redirect(\"/\", 302);\n+  const next = getCookie(c, NEXT_COOKIE);\n+  deleteCookie(c, NEXT_COOKIE, { path: \"/\" });\n+  return c.redirect(next ?? \"/\", 302);\n });\n \n app.get(\"/auth/logout\", (c) => {\ndiff --git a/tests/auth.test.ts b/tests/auth.test.ts\nindex 65e6650..caae00d 100644\n--- a/tests/auth.test.ts\n+++ b/tests/auth.test.ts\n@@ -42,11 +42,6 @@ describe(\"session sign/verify\", () => {\n     expect(await verifySession(forged, SECRET, 5_000)).toBeNull();\n   });\n \n-  it(\"rejects an expired session (now past exp)\", async () => {\n-    const token = await signSession(payload, SECRET);\n-    expect(await verifySession(token, SECRET, 10_001)).toBeNull();\n-  });\n-\n   it(\"returns null for a missing or malformed token\", async () => {\n     expect(await verifySession(undefined, SECRET, 0)).toBeNull();\n     expect(await verifySession(\"not-a-token\", SECRET, 0)).toBeNull();\ndiff --git a/tests/ui.test.ts b/tests/ui.test.ts\nindex 021a023..df3aa2b 100644\n--- a/tests/ui.test.ts\n+++ b/tests/ui.test.ts\n@@ -47,19 +47,6 @@ describe(\"auth gate\", () => {\n     expect(res.headers.get(\"location\")).toBe(\"/auth/login\");\n   });\n \n-  it(\"redirects when the session cookie is expired\", async () => {\n-    const token = await signSession(\n-      { login: \"t\", email: \"t@sigilix.dev\", exp: Date.now() - 1_000 },\n-      TEST_SECRET,\n-    );\n-    const res = await SELF.fetch(\"http://x/\", {\n-      headers: { Cookie: `${SESSION_COOKIE}=${token}` },\n-      redirect: \"manual\",\n-    });\n-    expect(res.status).toBe(302);\n-    expect(res.headers.get(\"location\")).toBe(\"/auth/login\");\n-  });\n-\n   it(\"/auth/login redirects to GitHub and sets a state cookie\", async () => {\n     const res = await SELF.fetch(\"http://x/auth/login\", { redirect: \"manual\" });\n     expect(res.status).toBe(302);\n@@ -67,19 +54,6 @@ describe(\"auth gate\", () => {\n     expect(res.headers.get(\"set-cookie\")).toContain(\"monitor_oauth_state\");\n   });\n \n-  it(\"/auth/callback rejects a mismatched state (CSRF guard)\", async () => {\n-    const res = await SELF.fetch(\"http://x/auth/callback?code=abc&state=forged\", {\n-      headers: { Cookie: \"monitor_oauth_state=real\" },\n-      redirect: \"manual\",\n-    });\n-    expect(res.status).toBe(400);\n-  });\n-\n-  it(\"marks authenticated responses no-store so they aren't cached/bfcached\", async () => {\n-    const res = await authedFetch(\"/\");\n-    expect(res.headers.get(\"cache-control\")).toBe(\"private, no-store\");\n-  });\n-\n   it(\"falls back to the GitHub login when the session has no email\", async () => {\n     const res = await authedFetch(\"/\", { email: null });\n     expect(res.status).toBe(200);\n",
+  "27": "diff --git a/src/cron/prune.ts b/src/cron/prune.ts\nindex 2d21074..ed1b889 100644\n--- a/src/cron/prune.ts\n+++ b/src/cron/prune.ts\n@@ -32,10 +32,8 @@ export async function pruneOldEvents(\n   db: D1Database,\n   opts: { retentionDays: number; nowMs: number; batchSize?: number },\n ): Promise<{ deleted: number }> {\n-  const cutoff = opts.nowMs - opts.retentionDays * DAY_MS;\n-  // Clamp to >=1: a 0 batch would LIMIT 0 (delete nothing, never terminate) and a\n-  // negative batch is \"unlimited\" in SQLite \u2014 both break the loop's exit condition.\n-  const batchSize = Math.max(1, opts.batchSize ?? DEFAULT_PRUNE_BATCH);\n+  const cutoff = opts.nowMs - (opts.retentionDays - 1) * DAY_MS;\n+  const batchSize = opts.batchSize ?? DEFAULT_PRUNE_BATCH;\n   const stmt = db.prepare(\n     \"DELETE FROM events WHERE id IN (SELECT id FROM events WHERE event_time < ?1 LIMIT ?2)\",\n   );\ndiff --git a/src/scrub/scrub.ts b/src/scrub/scrub.ts\nindex 2b247c0..24adfba 100644\n--- a/src/scrub/scrub.ts\n+++ b/src/scrub/scrub.ts\n@@ -13,10 +13,7 @@ const ALWAYS_DROP = new Set<string>([\n   // Secrets \u2014 even redacted previews\n   \"preview\", \"redactedPreview\", \"secretValue\",\n   // Reviewer identity (mirrors ARC-189 privacy contract)\n-  \"reviewerLogin\", \"reviewerEmail\",\n-  // Producer-supplied path hashes are stripped so the computed value from the\n-  // `path` field is always authoritative \u2014 prevents path-hash spoofing.\n-  \"pathHash\",\n+  \"reviewerLogin\",\n ]);\n \n /** Recursively scrubs an event-props value: drops ALWAYS_DROP fields, hashes any string-valued `path` into `pathHash`, preserves the rest. */\ndiff --git a/tests/prune.test.ts b/tests/prune.test.ts\nindex de6de67..5801f1e 100644\n--- a/tests/prune.test.ts\n+++ b/tests/prune.test.ts\n@@ -73,20 +73,6 @@ describe(\"pruneOldEvents\", () => {\n     expect(results[0]?.c).toBe(0);\n   });\n \n-  it(\"clamps a non-positive batchSize so the loop still terminates\", async () => {\n-    const now = Date.now();\n-    await insertEvents(\n-      env.DB,\n-      Array.from({ length: 3 }, (_, i) => rowAged(100 + i, `z${i}`.padEnd(64, \"0\"), now)),\n-    );\n-    // batchSize 0 would LIMIT 0 (delete nothing, spin forever) without the clamp.\n-    const { deleted } = await pruneOldEvents(env.DB, {\n-      retentionDays: 90,\n-      nowMs: now,\n-      batchSize: 0,\n-    });\n-    expect(deleted).toBe(3);\n-  });\n });\n \n describe(\"resolveRetentionDays\", () => {\ndiff --git a/tests/scrub.test.ts b/tests/scrub.test.ts\nindex a57a5e0..6e9383d 100644\n--- a/tests/scrub.test.ts\n+++ b/tests/scrub.test.ts\n@@ -126,18 +126,6 @@ describe(\"scrubEventProps\", () => {\n     });\n   });\n \n-  it(\"drops producer-supplied pathHash so the computed value is authoritative\", async () => {\n-    const out = await scrubEventProps(\"pr-review-finished\", {\n-      findings: [\n-        { score: 3, category: \"logic\", path: \"src/auth/login.ts\", pathHash: \"attacker-controlled-value\", line: 42 },\n-      ],\n-    });\n-    const f = (out.findings as Array<Record<string, unknown>>)[0]!;\n-    expect(f.pathHash).toMatch(/^[0-9a-f]{64}$/);\n-    expect(f.pathHash).not.toBe(\"attacker-controlled-value\");\n-    expect(f.line).toBe(42);\n-  });\n-\n   it(\"preserves arrays of primitives\", async () => {\n     const out = await scrubEventProps(\"tag-added\", {\n       tagIds: [1, 2, 3],\n",
+  "28": "diff --git a/src/ui/screens/latency-board.tsx b/src/ui/screens/latency-board.tsx\nindex 394bafc..1285ffc 100644\n--- a/src/ui/screens/latency-board.tsx\n+++ b/src/ui/screens/latency-board.tsx\n@@ -13,7 +13,7 @@ function fmtMs(ms: number | null): string {\n export function statusBadge(p95: number | null, target: number): { cls: string; label: string } {\n   if (p95 === null) return { cls: \"muted\", label: \"no data\" };\n   const ratio = p95 / target;\n-  if (ratio <= 0.75) return { cls: \"status-ok\", label: \"\u2705 within budget\" };\n+  if (ratio < 0.75) return { cls: \"status-ok\", label: \"\u2705 within budget\" };\n   if (ratio <= 1.0) return { cls: \"status-warn\", label: \"\u26a0\ufe0f approaching\" };\n   return { cls: \"status-over\", label: \"\ud83d\udea8 over budget\" };\n }\ndiff --git a/src/ui/screens/pr-drilldown.tsx b/src/ui/screens/pr-drilldown.tsx\nindex b20bb09..01f7333 100644\n--- a/src/ui/screens/pr-drilldown.tsx\n+++ b/src/ui/screens/pr-drilldown.tsx\n@@ -79,7 +79,9 @@ const OpsEventsPanel: FC<{ events: DrilldownEvent[] }> = ({ events }) => {\n       {ops.map((e) => (\n         <li>\n           <code>{e.eventName}</code>\n-          {e.props.reason ? <span class=\"muted\"> \u2014 {String(e.props.reason)}</span> : null}\n+          {e.props.reason ? (\n+            <span class=\"muted\" dangerouslySetInnerHTML={{ __html: ` \u2014 ${String(e.props.reason)}` }} />\n+          ) : null}\n         </li>\n       ))}\n     </ul>\n@@ -122,6 +124,10 @@ export const PrDrilldownScreen: FC<{\n               </span>\n               <span class=\"pill\">Attempts: {result.fanoutSummary.totalAttemptsUsed}</span>\n               <span class=\"pill\">Fallbacks: {result.fanoutSummary.fallbacksUsed}</span>\n+              <span class=\"pill\">\n+                Fallback rate:{\" \"}\n+                {((result.fanoutSummary.fallbacksUsed / result.fanoutSummary.totalAttemptsUsed) * 100).toFixed(0)}%\n+              </span>\n             </>\n           ) : null}\n         </p>\ndiff --git a/src/ui/screens/recent-runs.tsx b/src/ui/screens/recent-runs.tsx\nindex 9d9b128..0816406 100644\n--- a/src/ui/screens/recent-runs.tsx\n+++ b/src/ui/screens/recent-runs.tsx\n@@ -7,7 +7,7 @@ import type { RecentRunRow } from \"../queries/recent-runs\";\n // use site would be premature; promote it if a second screen needs it.\n function fmtMs(ms: number | null): string {\n   if (ms === null) return \"\u2014\";\n-  if (ms < 1000) return `${ms} ms`;\n+  if (ms <= 1000) return `${ms} ms`;\n   return `${(ms / 1000).toFixed(1)} s`;\n }\n \ndiff --git a/tests/latency-board.test.ts b/tests/latency-board.test.ts\nindex 75ded14..4dab328 100644\n--- a/tests/latency-board.test.ts\n+++ b/tests/latency-board.test.ts\n@@ -5,8 +5,8 @@ import { statusBadge } from \"../src/ui/screens/latency-board\";\n // statusBadge maps p95/target ratio \u2192 badge: \u22640.75 ok, \u22641.0 warn, >1.0 over,\n // null \u2192 no data. Pure function, so exercised directly rather than through render.\n describe(\"statusBadge\", () => {\n-  it(\"is within budget when p95 is at or under 75% of target\", () => {\n-    const b = statusBadge(75, 100); // ratio 0.75 \u2014 boundary\n+  it(\"is within budget when p95 is well under 75% of target\", () => {\n+    const b = statusBadge(70, 100); // ratio 0.70\n     expect(b.cls).toBe(\"status-ok\");\n     expect(b.label).toContain(\"within budget\");\n   });\n"
+ }
+}

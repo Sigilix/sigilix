@@ -488,19 +488,43 @@ export function prepareReviewSubmissionFindings(args: {
         findingForInline.startLine,
         anchorPrecision,
       )
-      if (resolved === null) {
+      const resolvedIsRightAnchor =
+        resolved !== null &&
+        (reviewable === undefined || deriveSide(reviewable, findingForInline.path, resolved) === "RIGHT")
+      if (resolvedIsRightAnchor) {
+        // Preferred: the walk found a substantive ADDED line that's a valid RIGHT anchor (SIG-436
+        // anchor-exactness — moves a brace/blank/comment anchor onto the real code).
+        if (resolved !== findingForInline.line) {
+          const { startLine: _drop, ...rest } = findingForInline
+          effective = { ...rest, line: resolved }
+        }
+      } else if (
+        lineIsReviewable &&
+        validatedFinding.category !== "testing" &&
+        !(addedLinesForPath?.has(findingForInline.line) ?? false)
+      ) {
+        // SIG-451 (benchmark #29): the added-line walk found no usable substantive ADDED line, but the
+        // finding's OWN line is RIGHT-reviewable — a context/unchanged line inside the diff hunk, which
+        // GitHub DOES accept as an inline-comment anchor. Keep it INLINE on its own line instead of
+        // burying it in a collapsed body dropdown (the dominant "found-but-bodied" recall leak: subtle
+        // logic bugs anchor to a context line with no nearby `+` line). `effective` already ===
+        // findingForInline, so no reassignment — we just fall through to the inline path. This never
+        // demotes a real finding; it only UPGRADES a would-be-bodied one to inline.
+        //
+        // CONTEXT-LINE ONLY (`!addedLinesForPath.has(line)`): if the own line is an ADDED line that the
+        // walk already rejected as non-substantive (a bare brace/blank/comment with no substantive code
+        // after it), keep SIG-127/SIG-436's body-demotion — do NOT re-anchor an inline comment onto a
+        // bad added line. Only a true context (unchanged) line gets the inline upgrade. (Codex review.)
+        //
+        // EXCLUDES `category:"testing"` findings: SIG-222 keeps tests-lane findings inline-ONLY when they
+        // substantively anchor (else drop a missing-sibling, body-route coverage evidence). A context
+        // line is not a valid testing anchor, so testing findings fall through to the drop/body path below.
+      } else {
+        // No usable substantive added anchor AND the own line isn't a valid inline target (off-diff /
+        // LEFT-only) → body, as before.
         if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
         bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
-      }
-      if (reviewable !== undefined && deriveSide(reviewable, findingForInline.path, resolved) !== "RIGHT") {
-        if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
-        bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
-        return
-      }
-      if (resolved !== findingForInline.line) {
-        const { startLine: _drop, ...rest } = findingForInline
-        effective = { ...rest, line: resolved }
       }
     }
 

@@ -15,6 +15,7 @@ import {
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "@/src/lib/triage-pr-review"
+import type { ReviewableMap } from "@/src/shared/util/diff-positions"
 
 describe("stripWholeLineComment (SIG-436)", () => {
   it("strips a whole-line `//` or `#` comment to empty", () => {
@@ -363,5 +364,95 @@ describe("rehomeSuggestionAnchorForward (SIG-436 suggestion path)", () => {
     ])
     const onBrace: PrReviewFinding = { ...base, line: 110 }
     expect(rehomeSuggestionAnchorForward(onBrace, undefined, braceMap).line).toBe(110)
+  })
+})
+
+describe("SIG-451: context-line findings stay INLINE (the found-but-bodied recall leak, benchmark #29)", () => {
+  // The dominant "found-but-bodied" leak: a subtle-logic finding anchors to a CONTEXT (unchanged) line
+  // inside the diff hunk with NO `+`-added line at/after it, so the added-line substantive walk returns
+  // null. Pre-SIG-451 that body-demoted (a 15pp inline-recall loss). GitHub DOES accept an inline comment
+  // on a context line (it's RIGHT-reviewable), so we now keep it inline on its own line. This NEVER
+  // demotes a real finding — it only UPGRADES a would-be-bodied one to inline.
+  const path = "src/parse/correlate.ts"
+  // Added lines exist ONLY BEFORE the finding's line (40), so the forward walk finds no added line >= 52.
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [path, new Map<number, string>([[40, "  const windowMs = opts.windowMs"]])],
+  ])
+  const finding: PrReviewFinding = {
+    path,
+    line: 52, // a CONTEXT (unchanged) line in the hunk — RIGHT-reviewable but NOT in addedLineTextByLine
+    score: 3, // P2 — deliberately NOT a floor case, so this exercises the ANCHORING path, not a carve-out
+    category: "logic",
+    headline: "percentile index off-by-one drops the last sample",
+    body: "Math.floor(p * n) excludes the top sample at p=1 — the boundary the removed test used to pin.",
+  }
+  const verdict: PrReviewVerdict = {
+    summary: "Off-by-one in the percentile index.",
+    confidence: 4,
+    confidenceReason: "Logic specialist.",
+    findings: [finding],
+  }
+
+  it("keeps a context-line finding INLINE on its own line (was body-demoted before SIG-451)", () => {
+    // Reviewable hunk: both line 40 (added) and line 52 (context) are RIGHT-side, valid inline anchors.
+    const reviewable: ReviewableMap = new Map([
+      [
+        path,
+        [
+          { line: 40, side: "RIGHT" },
+          { line: 52, side: "RIGHT" }, // the context line the finding anchors to
+        ],
+      ],
+    ])
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+      anchorPrecision: true, // prod setting
+    })
+    // FIX: posted inline ON the context line (52), not buried in the body.
+    // Pre-SIG-451 this asserted 0 inline comments + the finding in the body — revert-failing.
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(52)
+  })
+
+  it("STILL body-demotes when the own line is NOT diff-reviewable (off-diff) — precision guard, no spurious inline", () => {
+    // Same finding, but line 52 is absent from `reviewable` (off-diff) → no valid inline anchor → body.
+    const offDiffReviewable: ReviewableMap = new Map([[path, [{ line: 40, side: "RIGHT" }]]])
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      reviewable: offDiffReviewable,
+      addedLineTextByLine,
+      anchorPrecision: true,
+    })
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("percentile index off-by-one")
+  })
+
+  it("does NOT inline a non-substantive ADDED line (brace) — keeps SIG-436 body-demotion (Codex P2 guard)", () => {
+    // The own line is an ADDED brace with no substantive added code after it. It IS RIGHT-reviewable, but
+    // it's a BAD anchor — SIG-127/SIG-436 body-demote it. The SIG-451 context-line fallback must NOT
+    // override that: it only upgrades true CONTEXT (unchanged) lines, not non-substantive ADDED lines.
+    // Without the `!addedLinesForPath.has(line)` guard this would (wrongly) inline a comment on the brace.
+    const bracePath = "src/parse/brace.ts"
+    const braceAdded = new Map<string, Map<number, string>>([
+      [bracePath, new Map<number, string>([[52, "  }"]])], // own line IS an added brace (non-substantive)
+    ])
+    const braceReviewable: ReviewableMap = new Map([[bracePath, [{ line: 52, side: "RIGHT" }]]])
+    const out = buildReviewSubmission({
+      verdict: { ...verdict, findings: [{ ...finding, path: bracePath, line: 52 }] },
+      prAuthor: "alice",
+      headSha: "abc",
+      reviewable: braceReviewable,
+      addedLineTextByLine: braceAdded,
+      anchorPrecision: true,
+    })
+    // Body-demoted (SIG-436 preserved), NOT inline on the brace.
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("percentile index off-by-one")
   })
 })

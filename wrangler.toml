@@ -866,9 +866,10 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 # (inert); both are safe one-line changes.
 OPENCLAW_INVARIANT_LENS_MODE = "on"
 # SIG-369(b): route the SECOND-PASS logic re-runs (invariant-lens + resweep) to a
-# cheaper strong reasoner (deepseek/deepseek-v4-pro) instead of openai/o3 — these
-# passes are the dominant logic-input cost on dense PRs (~142K of #574's 172.8K).
-# "on" swaps ONLY the second-pass model; the primary logic specialist stays o3.
+# cheaper strong reasoner (deepseek/deepseek-v4-pro) instead of the primary logic
+# model — these passes are the dominant logic-input cost on dense PRs (~142K of
+# #574's 172.8K). Still a win post-SIG-450 (v4-pro is cheaper than Kimi K2.7 too).
+# "on" swaps ONLY the second-pass model; the primary logic specialist is unaffected.
 # Recall gauge = the live Sigilix review of a real substantive PR (#440) — keep on
 # if recall holds, else flip back to "off" (one-line, inert). Code default off.
 OPENCLAW_SECONDPASS_REASONER_MODE = "on"
@@ -894,14 +895,16 @@ OPENCLAW_LOGIC_RECALL_MODE = "on"
 # tuning sweep validated; the code defaults stay OFF so local runs + the test suite
 # stay byte-identical without them. (OPENCLAW_LOGIC_RECALL_MODE above is part of this
 # lineup.)
-#   - reasoning EFFORT (SIG-287 harness): logic + tests at medium (o3 / v4-pro). The
-#     map is built from ROLES × LEVEL only when MODE === "on".
+#   - reasoning EFFORT (SIG-287 harness): logic at HIGH, tests at medium. SIG-450 added
+#     the per-role `role:level` token so logic (Kimi K2.7, screened at high) can run a
+#     different effort than tests (v4-pro, validated at medium) under one global LEVEL.
+#     A bare role uses LEVEL; the map is built only when MODE === "on".
 #   - SECURITY recall suffix: names the authz-resolution classes (flash reasoning OFF
 #     — it collapses flash; the suffix carries the lift instead).
-#   - LOGIC reasoning-PROMPT suffix (SIG-399): enumerate-then-judge / verify-the-value,
-#     validated on o3 (+3 net recall, 0 FP).
+#   - LOGIC reasoning-PROMPT suffix (SIG-399): enumerate-then-judge / verify-the-value
+#     (validated on o3; carried forward to the Kimi logic specialist, SIG-450).
 OPENCLAW_REASONING_MODE = "on"
-OPENCLAW_REASONING_ROLES = "logic,tests"
+OPENCLAW_REASONING_ROLES = "logic:high,tests"
 OPENCLAW_REASONING_LEVEL = "medium"
 OPENCLAW_SECURITY_RECALL_MODE = "on"
 OPENCLAW_LOGIC_REASONING_PROMPT_MODE = "on"

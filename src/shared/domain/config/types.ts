@@ -580,7 +580,8 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   // SIG-406 alpha — the OpenRouter lineup (the live-default review models). User
   // `commands.review.model` configs may name these; the `:cloud` tags above stay
   // valid for non-review command paths + local eval overrides.
-  "openai/o3", // logic
+  "openai/o3", // legacy logic (API removes it Aug 26 2026)
+  "moonshotai/kimi-k2.7-code", // logic primary (SIG-450, replaces o3)
   "deepseek/deepseek-v4-flash", // security + claim-extractor
   "deepseek/deepseek-v4-pro", // tests
   "z-ai/glm-5.1", // performance

@@ -110,8 +110,8 @@ export function emitAndAttachLogicInputComposition(args: {
     args.telemetry.logicInputComposition = composition
     // Reconcile against the configured PRIMARY logic model. This is exact today
     // because `SPECIALIST_CONFIGS.logic.fallback === null` — every logic call is
-    // `openai/o3`, so the recorder's per-call sum equals
-    // `tokenUsageByModel["openai/o3"].inputTokens`. If logic ever gains a
+    // the configured primary (`moonshotai/kimi-k2.7-code`, SIG-450), so the recorder's
+    // per-call sum equals `tokenUsageByModel[that model].inputTokens`. If logic ever gains a
     // cross-provider fallback, switch this to the model that actually answered
     // (or sum across the logic attempt's model keys) so the reconciliation
     // doesn't read a spurious mismatch.

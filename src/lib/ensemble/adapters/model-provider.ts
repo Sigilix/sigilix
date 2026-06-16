@@ -64,11 +64,14 @@ import { attemptChat } from "./model-provider-attempt"
  * is picked by shape. Pre-alpha Ollama lineup history lives in git.
  */
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
-  // logic — openai/o3: best deep multi-step reasoning for the subtle-correctness
-  // frontier (races/predicates/data-flow). Runs with the recall-suffix +
-  // reasoning-suffix-v1 at effort medium (via [vars]).
+  // logic — moonshotai/kimi-k2.7-code (SIG-450): replaces openai/o3, which the API
+  // removes Aug 26 2026. Screened on the K=12 subtle-logic recall ruler (Ollama,
+  // reasoning=high): 93% recall / 24% FP — recall tied with v4-pro, LOWEST FP of every
+  // candidate (o3 ~100/31, v4-pro 93/29). ~2.5× cheaper than o3 ($0.74/$3.50 vs $2/$8).
+  // Runs with the recall-suffix + reasoning-prompt suffix at effort HIGH (the screened
+  // setting — per-role via [vars]; tests stays medium). retry/timeout unchanged from o3.
   logic: {
-    primary: "openai/o3",
+    primary: "moonshotai/kimi-k2.7-code",
     retries: 1,
     fallback: null,
     perAttemptTimeoutMs: 120_000,

@@ -1,17 +1,18 @@
 // SIG-369(b) — second-pass reasoner model override: pure decision logic.
 //
 // The two SECOND-PASS recall phases (SIG-395 invariant-lens, SIG-393 resweep)
-// re-run the LOGIC specialist on `openai/o3` ($2/$8 per Mtok) — the most
-// expensive model in the lineup. The lens fires one o3 call per invariant
-// family (up to 6) and the re-sweep one per region; on a dense PR these
-// second-pass o3 re-runs are the dominant logic input-token spend (PR #574:
+// re-run the LOGIC specialist. The lens fires one call per invariant family (up
+// to 6) and the re-sweep one per region; on a dense PR these second-pass re-runs
+// are the dominant logic input-token spend (PR #574, when logic was openai/o3:
 // ~30.8K primary vs ~172.8K billed — the ~142K gap is these passes), NOT the
-// primary specialist.
+// primary specialist. (SIG-450 swapped the primary logic model o3 → Kimi K2.7;
+// the same multiplier applies to whatever the primary is.)
 //
 // This leaf decides, behind a default-off flag, whether to route those
 // second-pass calls to a cheaper strong reasoner (`deepseek/deepseek-v4-pro`,
-// $0.435/$0.87 — ~5x cheaper, already the `tests` specialist model) INSTEAD of
-// o3. It is pure (no env / network / provider knowledge): the flag string is
+// $0.435/$0.87 — cheaper than both legacy o3 and Kimi K2.7, already the `tests`
+// specialist model) INSTEAD of the primary logic model. It is pure (no env /
+// network / provider knowledge): the flag string is
 // parsed at the edge, the override is computed against a base `ModelConfig`
 // passed in, and the app-layer phases apply it. When off it returns
 // `undefined`, so the call uses `SPECIALIST_CONFIGS[role]` exactly as today

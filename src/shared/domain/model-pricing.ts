@@ -31,7 +31,8 @@ export interface ModelPricing {
  *  the legacy non-OpenRouter `:cloud` / Ollama estimate rows: prod no longer
  *  runs them, and their estimate-only cost is now covered by the default.) */
 export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
-  "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 },
+  "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 }, // legacy logic (removed Aug 26 2026)
+  "moonshotai/kimi-k2.7-code": { inputPerMTokUsd: 0.74, outputPerMTokUsd: 3.5 }, // logic (SIG-450)
   "deepseek/deepseek-v4-flash": { inputPerMTokUsd: 0.09, outputPerMTokUsd: 0.18 },
   "deepseek/deepseek-v4-pro": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 },
   "z-ai/glm-5.1": { inputPerMTokUsd: 0.98, outputPerMTokUsd: 3.08 },

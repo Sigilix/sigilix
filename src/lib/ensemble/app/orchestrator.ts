@@ -500,6 +500,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       headSha,
       mode,
       orchCtrlSignal: orchCtrl.signal,
+      ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       meta,
       sigilixConfig,
       diff,

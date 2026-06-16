@@ -298,6 +298,8 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
+      /** SIG-104: immutable GitHub repository id for repo-scoped learnings commands. */
+      repoId?: number
       surface: import("@/src/lib/github-mention").GhMentionSurface
       commentId: number
       threadRootId?: number

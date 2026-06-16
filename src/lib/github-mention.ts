@@ -28,6 +28,12 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
 import { recordOutcome } from "@/src/features/precision-profile"
+import {
+  handleGithubMentionLearningsCommand,
+  learningCommandDedupeKey,
+  validGithubRepoId,
+} from "./github-mention-learnings"
+import { parseLearningsCommand, resolveLearningsMode } from "@/src/features/learnings"
 import { parseFindingCategory, parseFindingFingerprint, parseFindingSeverity } from "./pr-finding-markers"
 import { verifyAndSanitizeCitations } from "./citation-verifier"
 export { parseFindingCategory } from "./pr-finding-markers"
@@ -90,6 +96,8 @@ export interface GithubMentionArgs {
   installationId: number
   surface: GhMentionSurface
   commentId: number
+  /** Immutable GitHub repository id. Required for repo-scoped learnings commands. */
+  repoId?: number
   /**
    * For "review-comment" surface — the comment to reply *under*. When
    * the asker's comment is a reply itself, this should be the thread
@@ -116,7 +124,7 @@ interface GithubMentionVerdict {
 }
 
 export async function handleGithubMention(args: GithubMentionArgs): Promise<void> {
-  const { owner, repo, prNumber, installationId, surface, commentId, env } = args
+  const { owner, repo, prNumber, installationId, surface, commentId, repoId, env } = args
   const t0 = Date.now()
   const since = (label: string, extra?: Record<string, unknown>): void => {
     console.log(`[gh-mention] ${label} +${Date.now() - t0}ms`, {
@@ -314,6 +322,74 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         err: err instanceof Error ? err.message : String(err),
       })
     })
+    return
+  }
+
+  const learningsCommand = explicit ? parseLearningsCommand(question) : null
+  if (learningsCommand !== null) {
+    const learningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
+    if (learningsMode === "off") {
+      since("learnings-command-inert-off", { command: learningsCommand.kind })
+      return
+    }
+
+    const subjectRepoId = validGithubRepoId(repoId)
+    if (subjectRepoId === undefined) {
+      console.log(
+        JSON.stringify({
+          event: "gh-mention-learning-command-skipped",
+          reason: "missing_repo_id",
+          command: learningsCommand.kind,
+          owner,
+          repo,
+          prNumber,
+          surface,
+          commentId,
+        }),
+      )
+      return
+    }
+
+    const learningDedupeKey = learningCommandDedupeKey(commentId)
+    if (await env.OPENCLAW_STATE.get(learningDedupeKey)) {
+      since("learnings-command-already-handled", { command: learningsCommand.kind })
+      return
+    }
+
+    try {
+      await handleGithubMentionLearningsCommand({
+        client,
+        env,
+        owner,
+        repo,
+        prNumber,
+        surface,
+        commentId,
+        sourceComment,
+        subjectId: String(subjectRepoId),
+        command: learningsCommand,
+        ...(args.threadRootId !== undefined ? { threadRootId: args.threadRootId } : {}),
+        dedupeKey: learningDedupeKey,
+      })
+      since("learnings-command-handled", { command: learningsCommand.kind })
+    } catch (err) {
+      // Best-effort: a learnings command must NEVER throw out of the webhook
+      // path — that would re-enter the queue retry machinery on a transient GH
+      // error. Log + swallow; the content-addressed learning id keeps the store
+      // consistent across any partial-then-retried write (code-review P1).
+      console.error(
+        JSON.stringify({
+          event: "gh-mention-learning-command-failed",
+          command: learningsCommand.kind,
+          owner,
+          repo,
+          prNumber,
+          surface,
+          commentId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
+    }
     return
   }
 
@@ -589,6 +665,7 @@ interface SourceComment {
   authorAssociation: string | null
   path?: string
   line?: number | null
+  inReplyToId?: number
 }
 
 async function fetchSourceComment(
@@ -620,6 +697,7 @@ async function fetchSourceComment(
     authorAssociation: hit.author_association ?? null,
     path: hit.path,
     line: hit.line,
+    ...(typeof hit.in_reply_to_id === "number" ? { inReplyToId: hit.in_reply_to_id } : {}),
   }
 }
 

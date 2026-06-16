@@ -747,6 +747,13 @@ OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
 # trigger never enqueues (pure no-op). ON in prod per founder (2026-06-15).
 OPENCLAW_PR_SUMMARY_MODE = "on"
 
+# SIG-104: conversational Learnings (per-repo memory). "off" (default, DARK) =
+# commands inert, no injection. "shadow" = @sigilix remember/forget/list + capture
+# active + would-inject telemetry, but the posted review/prompts are UNCHANGED
+# (bake the store). "on" = inject learned per-repo guidance into specialist + synth
+# prompts. Parsed by resolveLearningsMode (@/features/learnings).
+OPENCLAW_LEARNINGS_MODE = "off"
+
 # SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
 # CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at
 # an unchanged blob-sha are skipped. Kills the per-commit finding "dribble" (the

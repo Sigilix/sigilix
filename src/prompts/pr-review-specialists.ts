@@ -216,6 +216,15 @@ export interface SpecialistInitialMessageCtx {
    */
   pathInstructionsBlock?: string
   /**
+   * SIG-104: pre-rendered per-repo Learnings block (durable guidance the
+   * team taught Sigilix via conversation/`@sigilix remember`). Same block
+   * for every role (repo-specific, not role-split), injected with the
+   * other repo-guidance sources. Empty/absent when the feature is off,
+   * no learnings match the changed files, or mode is `shadow` (telemeter-
+   * only). Suppress-polarity rules render as recall-safe CONTEXT in PR-1.
+   */
+  learningsBlock?: string
+  /**
    * ARC-193: pre-rendered deterministic-check hits block. Injected
    * BEFORE the diff so the specialist sees these as authoritative
    * facts about lines the regex layer already flagged. Empty/absent
@@ -329,6 +338,12 @@ export function buildSpecialistInitialMessage(ctx: SpecialistInitialMessageCtx):
   // treat the two as peers (research §Q7).
   if (ctx.scopedRulesBlock && ctx.scopedRulesBlock.length > 0) {
     lines.push(ctx.scopedRulesBlock)
+    lines.push("")
+  }
+  // SIG-104: learned per-repo guidance, alongside the other repo-specific
+  // rule sources (guidance / pathInstructions / scopedRules).
+  if (ctx.learningsBlock && ctx.learningsBlock.length > 0) {
+    lines.push(ctx.learningsBlock)
     lines.push("")
   }
   if (ctx.profile === "chill") {

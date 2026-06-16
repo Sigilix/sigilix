@@ -51,7 +51,6 @@ import {
 } from "@/src/lib/pr-review-check-run"
 import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
-
 const POST_REVIEW_WORK_TIMEOUT_MS = 120_000
 type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
 
@@ -893,6 +892,7 @@ export async function dispatchJob(
         repo: job.repo,
         prNumber: job.prNumber,
         installationId: job.installationId,
+        ...(job.repoId !== undefined ? { repoId: job.repoId } : {}),
         surface: job.surface,
         commentId: job.commentId,
         ...(job.threadRootId !== undefined ? { threadRootId: job.threadRootId } : {}),

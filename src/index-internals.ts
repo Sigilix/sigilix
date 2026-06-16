@@ -703,12 +703,14 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     return new Response("no mention\n", { status: 200 })
   }
 
+  const mentionRepoId = validGithubRepoId(payload.repository?.id)
   const message: JobMessage = {
     type: "github-mention",
     owner,
     repo,
     prNumber,
     installationId,
+    ...(mentionRepoId !== undefined ? { repoId: mentionRepoId } : {}),
     surface,
     commentId: comment.id,
     ...(typeof comment.in_reply_to_id === "number" ? { threadRootId: comment.in_reply_to_id } : {}),
@@ -730,6 +732,10 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     }),
   )
   return new Response("queued\n", { status: 202 })
+}
+
+function validGithubRepoId(repoId: number | undefined): number | undefined {
+  return typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0 ? repoId : undefined
 }
 
 /**

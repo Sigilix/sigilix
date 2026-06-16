@@ -35,6 +35,12 @@ import {
 } from "@/src/prompts/pr-review-specialists"
 import { renderAstFindingsAsJsonForSynth, runAstRules } from "@/src/features/ast-rules"
 import { renderSarifFindingsAsJsonForSynth, type SarifFinding } from "@/src/features/sarif-evidence"
+import {
+  loadLearnings,
+  renderLearningsForPrompt,
+  resolveLearningsMode,
+  selectRelevantForPaths,
+} from "@/src/features/learnings"
 import { runSarifEvidence } from "@/src/features/sarif-evidence"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { runReviewMemoryLookup } from "@/src/lib/review-memory/lookup"
@@ -376,8 +382,34 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     shadowMemoriesForPhase3 = reviewMemoryResult.skipped ? [] : reviewMemoryResult.findings
     // Codex BLOCKING on plan v2: gate the append on memoryBlock
     // length, NOT sarifBlock length. The two blocks are independent.
-    const synthMessageWithMemory =
+    let synthMessageWithMemory =
       memoryBlock.length > 0 ? `${synthMessageWithSarif}\n\n${memoryBlock}` : synthMessageWithSarif
+    // SIG-104: append the per-repo Learnings block (the same guidance the
+    // specialists see, repo-scoped) to the synth prompt. `on` injects; `shadow`
+    // loads + telemeters the would-inject count but leaves the prompt UNCHANGED;
+    // `off` skips. Reassigned in place so every downstream synth attempt / retry /
+    // shadow path picks it up. Best-effort — the loader never throws.
+    const synthLearningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
+    if (synthLearningsMode !== "off" && repoId !== undefined) {
+      const learningsStore = await loadLearnings(env, "repo", String(repoId))
+      const relevantLearnings = selectRelevantForPaths(learningsStore?.entries ?? [], filePaths)
+      console.log(
+        JSON.stringify({
+          event: "learnings-synth-inject",
+          owner,
+          repo,
+          prNumber,
+          mode: synthLearningsMode,
+          selected: relevantLearnings.length,
+        }),
+      )
+      if (synthLearningsMode === "on") {
+        const synthLearningsBlock = renderLearningsForPrompt(relevantLearnings)
+        if (synthLearningsBlock.length > 0) {
+          synthMessageWithMemory = `${synthMessageWithMemory}\n\n${synthLearningsBlock}`
+        }
+      }
+    }
     telemetry.reviewMemory = reviewMemoryResult.skipped
       ? {
           skipped: true,

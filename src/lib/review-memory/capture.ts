@@ -40,8 +40,21 @@ import { recordDismissalMetric } from "@/src/lib/validation-metrics-client"
 import type { FindingOutcome } from "@/src/features/precision-profile"
 import { parseFindingOutcomeMarkers } from "@/src/lib/pr-finding-markers"
 import type { DismissReason } from "@/src/lib/dismiss-reasons"
+import {
+  appendLearning,
+  computeLearningId,
+  emitLearningAudit,
+  extractLearning,
+  hasRepoWriteAccess,
+  normalizeRule,
+  recordConfirmationMap,
+  renderConfirmReply,
+  resolveLearningsMode,
+} from "@/src/features/learnings"
+import type { ExtractionSurface, LearningEntry, LearningSourceKind } from "@/src/features/learnings"
 
 const SEEN_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60
+const LEARNING_CAPTURE_DEDUPE_TTL_SECONDS = 30 * 24 * 60 * 60
 
 interface CaptureArgs {
   env: Env
@@ -64,6 +77,7 @@ interface CaptureArgs {
     body: string
     in_reply_to_id?: number
     path: string
+    authorLogin?: string
   }
   config: ResolvedReviewMemoryConfig
   /**
@@ -85,6 +99,7 @@ interface TopLevelCaptureArgs {
   comment: {
     id: number
     body: string
+    authorLogin?: string
   }
   config: ResolvedReviewMemoryConfig
   repoId?: number
@@ -106,6 +121,8 @@ interface DismissedReviewCaptureArgs {
 }
 
 type SignalSource = "inline-reply" | "top-level-explicit" | "review-dismissed-stale"
+type LearningCaptureClient = Pick<GitHubClient, "createIssueComment" | "replyToReviewComment" | "restGet">
+type ReviewMemoryLearningSurface = Extract<ExtractionSurface, "inline-reply" | "top-level">
 
 interface TrustedSigilixSource {
   body: string
@@ -124,6 +141,10 @@ function captureGateOpen(env: Env, config: ResolvedReviewMemoryConfig): boolean 
 
 function seenKeyFor(source: SignalSource, id: number): string {
   return source === "inline-reply" ? `feedback-capture-seen:${id}` : `feedback-capture-seen:${source}:${id}`
+}
+
+function learningSeenKeyFor(surface: ExtractionSurface, id: number): string {
+  return `learning-capture-seen:${surface}:${id}`
 }
 
 async function markSeen(env: Env, key: string, fields: Record<string, unknown>): Promise<void> {
@@ -158,6 +179,152 @@ async function alreadySeen(env: Env, key: string, fields: Record<string, unknown
     })
   }
   return false
+}
+
+async function learningAlreadySeen(env: Env, key: string, fields: Record<string, unknown>): Promise<boolean> {
+  try {
+    const seen = await env.OPENCLAW_STATE.get(key)
+    if (seen !== null) {
+      emitTelemetry("learning-capture-skipped", {
+        ...fields,
+        reason: "already-seen",
+      })
+      return true
+    }
+  } catch (err) {
+    emitTelemetry("learning-capture-failed", {
+      ...fields,
+      stage: "dedupe-read",
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return false
+}
+
+async function markLearningSeen(env: Env, key: string, fields: Record<string, unknown>): Promise<void> {
+  try {
+    await env.OPENCLAW_STATE.put(key, "1", {
+      expirationTtl: LEARNING_CAPTURE_DEDUPE_TTL_SECONDS,
+    })
+  } catch (err) {
+    emitTelemetry("learning-capture-failed", {
+      ...fields,
+      stage: "dedupe-write",
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+async function captureConversationalLearning(args: {
+  env: Env
+  client: LearningCaptureClient
+  owner: string
+  repo: string
+  prNumber: number
+  repoId?: number
+  commentId: number
+  authorLogin?: string
+  surface: ReviewMemoryLearningSurface
+  sourceKind: LearningSourceKind
+  replyText: string
+  findingContext: string
+  changedPaths?: string[]
+}): Promise<void> {
+  const fields = {
+    owner: args.owner,
+    repo: args.repo,
+    prNumber: args.prNumber,
+    commentId: args.commentId,
+    surface: args.surface,
+  }
+  try {
+    const mode = resolveLearningsMode(args.env.OPENCLAW_LEARNINGS_MODE)
+    if (mode === "off") return
+    if (args.repoId === undefined) {
+      emitTelemetry("learning-capture-skipped", {
+        ...fields,
+        reason: "missing-repo-id",
+      })
+      return
+    }
+    const authorized = await hasRepoWriteAccess(args.client, args.owner, args.repo, args.authorLogin)
+    if (!authorized) {
+      emitTelemetry("learning-capture-skipped", {
+        ...fields,
+        reason: "missing-write-access",
+        actor_present: typeof args.authorLogin === "string" && args.authorLogin.trim().length > 0,
+      })
+      return
+    }
+
+    const seenKey = learningSeenKeyFor(args.surface, args.commentId)
+    if (mode === "on" && (await learningAlreadySeen(args.env, seenKey, fields))) return
+
+    const extracted = await extractLearning(args.env, {
+      surface: args.surface,
+      replyText: args.replyText,
+      findingContext: args.findingContext,
+      ...(args.changedPaths && args.changedPaths.length > 0 ? { changedPaths: args.changedPaths } : {}),
+    })
+    if (extracted === null) return
+
+    const rule = normalizeRule(extracted.rule)
+    if (rule.length === 0) return
+
+    if (mode === "shadow") {
+      emitTelemetry("learning-extract-shadow", {
+        ...fields,
+        actor: args.authorLogin,
+        subject_id: String(args.repoId),
+        rule,
+        polarity: extracted.polarity,
+        category: extracted.category ?? null,
+        path_glob: extracted.pathGlob ?? null,
+      })
+      return
+    }
+
+    await markLearningSeen(args.env, seenKey, fields)
+    const learningId = await computeLearningId(rule)
+    const createdTs = new Date().toISOString()
+    const subjectId = String(args.repoId)
+    const entry: LearningEntry = {
+      id: learningId,
+      rule,
+      polarity: extracted.polarity,
+      category: extracted.category ?? null,
+      pathGlob: extracted.pathGlob ?? null,
+      scope: "repo",
+      subjectId,
+      source: { kind: args.sourceKind, prNumber: args.prNumber, commentId: args.commentId },
+      createdTs,
+      appliedCount: 0,
+      ...(args.authorLogin !== undefined ? { authorLogin: args.authorLogin } : {}),
+    }
+    const appended = await appendLearning(args.env, "repo", subjectId, entry, Date.parse(createdTs))
+    if (!appended) return
+
+    const confirmBody = renderConfirmReply(rule)
+    const confirm =
+      args.surface === "inline-reply"
+        ? await args.client.replyToReviewComment(args.owner, args.repo, args.prNumber, args.commentId, confirmBody)
+        : await args.client.createIssueComment(args.owner, args.repo, args.prNumber, confirmBody)
+    await recordConfirmationMap(args.env, confirm.id, { scope: "repo", subjectId, learningId })
+    emitLearningAudit({
+      actor: args.authorLogin ?? "",
+      scope: "repo",
+      subjectId,
+      action: "capture",
+      learningId,
+      ts: createdTs,
+    })
+  } catch (err) {
+    emitTelemetry("learning-capture-failed", {
+      ...fields,
+      stage: "capture",
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
 }
 
 async function resolveRepoIdForCapture(args: {
@@ -488,6 +655,33 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     return
   }
 
+  // Step 5.5: resolve repoId before the additive learning branch so
+  // conversational capture and the existing dismissal write share the same
+  // keying fallback.
+  repoId = await resolveRepoIdForCapture({
+    client,
+    owner,
+    repo,
+    fields: baseFields,
+    ...(repoId !== undefined ? { repoId } : {}),
+  })
+
+  await captureConversationalLearning({
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    commentId: replyCommentId,
+    surface: "inline-reply",
+    sourceKind: "inline-reply",
+    replyText: replyComment.body,
+    findingContext: parentBody,
+    changedPaths: [replyComment.path],
+    ...(replyComment.authorLogin !== undefined ? { authorLogin: replyComment.authorLogin } : {}),
+    ...(repoId !== undefined ? { repoId } : {}),
+  })
+
   // Step 6: Feedback-signal parse
   const feedback = parseReviewFeedbackSignal(replyComment.body)
   if (!feedback) {
@@ -500,21 +694,6 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
 
   // Step 7: Write seen-marker FIRST (best-effort dedupe under no-CAS)
   await markSeen(env, seenKey, baseFields)
-
-  // Step 7.5 (SIG-247 Phase 1): resolve repoId for dual-write. The
-  // webhook handler passes `args.repoId` when `payload.repository.id`
-  // is a positive integer. On rare payload-shape gaps (legacy event,
-  // spoofed delivery, missing field), fall back to a one-call
-  // getRepository lookup — this keeps the new keyspace populated even
-  // when the payload is incomplete. Any fallback error degrades to
-  // legacy-only writes, never throws.
-  repoId = await resolveRepoIdForCapture({
-    client,
-    owner,
-    repo,
-    fields: baseFields,
-    ...(repoId !== undefined ? { repoId } : {}),
-  })
 
   // Step 8: normalized sinks
   await applyFeedbackToTrustedSource({
@@ -532,7 +711,6 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
 
 export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean {
   if (typeof body !== "string") return false
-  if (!parseReviewFeedbackSignal(body)) return false
   return extractSigilixMarker(body) !== null || parseFindingOutcomeMarkers(body).length > 0
 }
 
@@ -640,14 +818,6 @@ export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): 
     return
   }
 
-  const feedback = parseReviewFeedbackSignal(comment.body)
-  if (!feedback) {
-    emitTelemetry("review-memory-capture-skipped", {
-      ...baseFields,
-      reason: "no-dismissal-keyword",
-    })
-    return
-  }
   const explicitMarker = extractSigilixMarker(comment.body)
   const explicitFingerprints = new Set(parseFindingOutcomeMarkers(comment.body).map((m) => m.patternHash))
   if (explicitMarker === null && explicitFingerprints.size === 0) {
@@ -657,9 +827,6 @@ export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): 
     })
     return
   }
-
-  const seenKey = seenKeyFor(source, comment.id)
-  if (await alreadySeen(env, seenKey, baseFields)) return
 
   let trusted: TrustedSigilixSource | null
   try {
@@ -687,7 +854,6 @@ export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): 
     return
   }
 
-  await markSeen(env, seenKey, baseFields)
   const repoId = await resolveRepoIdForCapture({
     client,
     owner,
@@ -695,6 +861,35 @@ export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): 
     fields: baseFields,
     ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
   })
+  await captureConversationalLearning({
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    commentId: comment.id,
+    surface: "top-level",
+    sourceKind: "top-level",
+    replyText: comment.body,
+    findingContext: trusted.body,
+    ...(comment.authorLogin !== undefined ? { authorLogin: comment.authorLogin } : {}),
+    ...(trusted.path !== undefined ? { changedPaths: [trusted.path] } : {}),
+    ...(repoId !== undefined ? { repoId } : {}),
+  })
+
+  const feedback = parseReviewFeedbackSignal(comment.body)
+  if (!feedback) {
+    emitTelemetry("review-memory-capture-skipped", {
+      ...baseFields,
+      reason: "no-dismissal-keyword",
+    })
+    return
+  }
+
+  const seenKey = seenKeyFor(source, comment.id)
+  if (await alreadySeen(env, seenKey, baseFields)) return
+
+  await markSeen(env, seenKey, baseFields)
   await applyFeedbackToTrustedSource({
     env,
     owner,

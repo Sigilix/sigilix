@@ -5,6 +5,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { ResolvedReviewMemoryConfig } from "@/src/lib/review-memory/types"
 
 const {
+  mockCaptureReviewFeedback,
   mockCaptureDismissedReviewFeedback,
   mockCaptureTopLevelReviewFeedback,
   mockGetInstallationToken,
@@ -24,6 +25,7 @@ const {
     claimSoftening: false,
   }
   return {
+    mockCaptureReviewFeedback: vi.fn(async (..._args: unknown[]) => undefined),
     mockCaptureDismissedReviewFeedback: vi.fn(async (..._args: unknown[]) => undefined),
     mockCaptureTopLevelReviewFeedback: vi.fn(async (..._args: unknown[]) => undefined),
     mockGetInstallationToken: vi.fn(async (_args?: unknown) => "test-token"),
@@ -67,12 +69,17 @@ vi.mock("@/src/lib/review-memory/capture", async () => {
   )
   return {
     ...actual,
+    captureReviewFeedback: (...args: unknown[]) => mockCaptureReviewFeedback(...args),
     captureDismissedReviewFeedback: (...args: unknown[]) => mockCaptureDismissedReviewFeedback(...args),
     captureTopLevelReviewFeedback: (...args: unknown[]) => mockCaptureTopLevelReviewFeedback(...args),
   }
 })
 
-import { dispatchDismissedReviewMemoryCapture, dispatchTopLevelReviewMemoryCapture } from "@/src/index"
+import {
+  dispatchDismissedReviewMemoryCapture,
+  dispatchReviewMemoryCapture,
+  dispatchTopLevelReviewMemoryCapture,
+} from "@/src/index"
 
 function makeEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
   return {
@@ -95,7 +102,19 @@ function topLevelArgs(env: Env) {
     repo: "site",
     prNumber: 7,
     installationId: 99,
-    comment: { id: 123, body: "false positive" },
+    comment: { id: 123, body: "false positive", authorLogin: "alice" },
+    repoId: 555,
+  }
+}
+
+function inlineArgs(env: Env) {
+  return {
+    env,
+    owner: "acme",
+    repo: "site",
+    prNumber: 7,
+    installationId: 99,
+    comment: { id: 122, body: "false positive", path: "src/lib/foo.ts", in_reply_to_id: 50, authorLogin: "alice" },
     repoId: 555,
   }
 }
@@ -118,6 +137,7 @@ function dismissedArgs(env: Env, headSha = "h".repeat(40)) {
 }
 
 beforeEach(() => {
+  mockCaptureReviewFeedback.mockClear()
   mockCaptureDismissedReviewFeedback.mockClear()
   mockCaptureTopLevelReviewFeedback.mockClear()
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
@@ -199,6 +219,23 @@ describe("review-memory dispatch wrappers", () => {
       expect.objectContaining({
         client,
         comment: args.comment,
+        config: resolvedReviewMemoryConfig,
+        repoId: 555,
+      }),
+    )
+  })
+
+  it("delegates inline capture with the reply author's login", async () => {
+    const args = inlineArgs(makeEnv())
+
+    await dispatchReviewMemoryCapture(args)
+
+    const client = mockGitHubClient.mock.results[0]?.value
+    expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", "HEAD")
+    expect(mockCaptureReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client,
+        replyComment: args.comment,
         config: resolvedReviewMemoryConfig,
         repoId: 555,
       }),

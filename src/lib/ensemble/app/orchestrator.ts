@@ -619,11 +619,14 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     const filePathsForSubmission = multiBatchReviewUnion?.filePaths ?? filePaths
     const filesNotReviewedForSubmission = multiBatchReviewUnion?.filesNotReviewed ?? filesNotReviewed
     if (multiBatchReviewUnion !== undefined) {
+      const incrementalSpillover = incrementalCoverage?.summary.unreviewedPaths
+        .map((path) => path.trim())
+        .filter((path) => path.length > 0 && !costTrimmedPaths.includes(path))
       disclosure = buildReviewDisclosure({
         policySkipped: filesDroppedByFilter,
         oversized: droppedTooLarge,
-        spillover: filesNotReviewedForSubmission,
-        reviewedCount: multiBatchReviewUnion.reviewedFiles.length,
+        spillover: incrementalSpillover ?? filesNotReviewedForSubmission,
+        reviewedCount: incrementalCoverage?.summary.reviewedCount ?? multiBatchReviewUnion.reviewedFiles.length,
         costTrimmed: costTrimmedPaths,
         ...(incrementalCoverage !== undefined ? { scope: "cumulative" } : {}),
       })

@@ -200,7 +200,7 @@ describe("renderSynthCoverageScopeBlock", () => {
 describe("shouldHaltForSynthInputCap", () => {
   it("halts before launching another batch when the current source union plus candidate diff would exceed the synth-input cap", () => {
     const decision = shouldHaltForSynthInputCap({
-      currentSourceJsonChars: 1_000,
+      currentUnionInputChars: 1_000,
       candidateBatchDiffChars: 800,
       maxSynthInputChars: 1_500,
     })
@@ -210,7 +210,7 @@ describe("shouldHaltForSynthInputCap", () => {
 
   it("continues when the next batch can fit without requiring source-finding truncation", () => {
     const decision = shouldHaltForSynthInputCap({
-      currentSourceJsonChars: 1_000,
+      currentUnionInputChars: 1_000,
       candidateBatchDiffChars: 400,
       maxSynthInputChars: 1_500,
     })

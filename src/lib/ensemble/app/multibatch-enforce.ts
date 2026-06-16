@@ -140,7 +140,7 @@ export function renderSynthCoverageScopeBlock(input: SynthCoverageScopeInput): s
 }
 
 export interface SynthInputCapInput {
-  currentSourceJsonChars: number
+  currentUnionInputChars: number
   candidateBatchDiffChars: number
   maxSynthInputChars: number
 }
@@ -149,7 +149,7 @@ export function shouldHaltForSynthInputCap(input: SynthInputCapInput): {
   halt: boolean
   reason: "synth-input-cap" | null
 } {
-  const wouldUse = input.currentSourceJsonChars + input.candidateBatchDiffChars
+  const wouldUse = input.currentUnionInputChars + input.candidateBatchDiffChars
   return wouldUse > input.maxSynthInputChars ? { halt: true, reason: "synth-input-cap" } : { halt: false, reason: null }
 }
 
@@ -218,14 +218,14 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
   const collected: CollectedVerdict[] = []
   const launchedBatches: DiffFileBlock[][] = []
   let haltReason: MultiBatchHaltReason | null = null
-  let currentSourceJsonChars = args.currentSourceJsonChars
+  let currentUnionInputChars = args.currentSourceJsonChars
   let nextBatchIndex = args.spilloverBatches.length
 
   for (let k = 0; k < args.spilloverBatches.length; k++) {
     const batch = [...args.spilloverBatches[k]!]
     const batchDiff = batchToDiff(batch)
     const capDecision = shouldHaltForSynthInputCap({
-      currentSourceJsonChars,
+      currentUnionInputChars,
       candidateBatchDiffChars: batchDiff.length,
       maxSynthInputChars: args.maxSynthInputChars,
     })
@@ -246,6 +246,7 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
       break
     }
 
+    currentUnionInputChars += batchDiff.length
     const batchIdx = (args.firstBatchIdx ?? 1) + k
     const signal = composeSignals(args.orchCtrl.signal, AbortSignal.timeout(decision.batchTimeoutMs))
     const startedAt = Date.now()
@@ -264,7 +265,7 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
             return { role, verdict: null, elapsedMs: Date.now() - startedAt }
           }
           const withIds = namespaceBatchVerdict(role, batchIdx, verdict)
-          currentSourceJsonChars += JSON.stringify(withIds).length
+          currentUnionInputChars += JSON.stringify(withIds).length
           return { role, verdict: withIds, elapsedMs: Date.now() - startedAt }
         } catch (err) {
           return {
@@ -379,7 +380,10 @@ export async function runMultiBatchEnforceForSpecialists(args: {
     startMs: args.startMs,
     spilloverBatches: [seamBatch],
     roles: args.roles,
-    currentSourceJsonChars: args.currentSourceJsonChars + JSON.stringify(result.collected.map((v) => v.verdict)).length,
+    currentSourceJsonChars:
+      args.currentSourceJsonChars +
+      result.launchedBatches.reduce((sum, batch) => sum + batchToDiff(batch).length, 0) +
+      JSON.stringify(result.collected.map((v) => v.verdict)).length,
     maxSynthInputChars: MAX_MULTIBATCH_SYNTH_INPUT_CHARS,
     firstBatchIdx: args.spilloverBatches.length + 1,
     runRole,

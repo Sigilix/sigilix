@@ -14,6 +14,22 @@ index 0000000..1111111 100644
   return { path, body, charCount: body.length }
 }
 
+const paddedDiffBlock = (
+  path: string,
+  line: number,
+  paddingChars: number,
+): { path: string; body: string; charCount: number } => {
+  const padding = "x".repeat(paddingChars)
+  const body = `diff --git a/${path} b/${path}
+index 0000000..1111111 100644
+--- a/${path}
++++ b/${path}
+@@ -${line},0 +${line},1 @@
++const value${line} = "${padding}"
+`
+  return { path, body, charCount: body.length }
+}
+
 const verdictWithFinding = (path: string, line: number): PrReviewVerdict => ({
   summary: "found issue",
   confidence: 4,
@@ -88,5 +104,38 @@ describe("runMultiBatchEnforce", () => {
     expect(result.haltReason).toBe("deadline")
     expect(result.unlaunchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/b.ts"]])
     expect(runRole).not.toHaveBeenCalled()
+  })
+
+  it("counts launched batch diff chars toward the synth-input cap before considering the next batch", async () => {
+    const first = paddedDiffBlock("src/b.ts", 20, 1_000)
+    const second = paddedDiffBlock("src/c.ts", 30, 1_000)
+    const runRole = vi.fn(async () => ({
+      summary: "no findings",
+      confidence: 5,
+      confidenceReason: "test fixture",
+      findings: [],
+    }))
+
+    const result = await runMultiBatchEnforce({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 418,
+      headSha: "deadbeefdeadbeef",
+      perfCtx: { owner: "Sigilix", repo: "sigilix", prNumber: 418, headSha: "deadbeefdeadbeef" },
+      orchCtrl: new AbortController(),
+      startMs: Date.now(),
+      spilloverBatches: [[first], [second]],
+      roles: ["logic"],
+      currentSourceJsonChars: 0,
+      maxSynthInputChars: first.charCount + Math.floor(second.charCount / 2),
+      runRole,
+    })
+
+    expect(result.batchesLaunched).toBe(1)
+    expect(result.haltedEarly).toBe(true)
+    expect(result.haltReason).toBe("synth-input-cap")
+    expect(result.launchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/b.ts"]])
+    expect(result.unlaunchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/c.ts"]])
+    expect(runRole).toHaveBeenCalledTimes(1)
   })
 })

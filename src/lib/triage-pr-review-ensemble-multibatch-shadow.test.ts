@@ -1,5 +1,5 @@
-// SIG-418 Phase 2 (Design B′) — orchestrator-boundary tests for the dark
-// in-invocation multi-batch SHADOW wiring (`OPENCLAW_REVIEW_MULTIBATCH_MODE`).
+// SIG-418 — orchestrator-boundary tests for in-invocation multi-batch review
+// wiring (`OPENCLAW_REVIEW_MULTIBATCH_MODE`).
 //
 // These pin the output-safety + recall/cost-safety invariants the wiring must
 // hold, driven through the REAL `handlePrReviewEnsemble` (mocked GitHub + model
@@ -11,17 +11,11 @@
 //      `multibatch-decision` / `multibatch-summary` telemetry. (Codex sign-off:
 //      schedule shadow only after the stale-head guard passes; this is the
 //      regression guard for that placement.)
-//   2. OFF (default) → the scheduler is never reached: zero multibatch telemetry,
-//      byte-identical to today.
-//   3. ON in PR 2 → inert + the `multibatch-mode-unsupported` log (enforce ships
-//      in PR 3); still no `multibatch-summary`.
-//
-// Reaching the POST-synth path (guard #2) at the orchestrator boundary needs the
-// full specialist+synth pipeline mocked, which the repo deliberately avoids
-// (see the documented `it.skip` in -merge-shortcut.test.ts). The stale-head
-// guard #1 path proves the identical "don't run the shadow on a stale head"
-// safety property cheaply + honestly; the unit/scheduler tests cover the loop,
-// the budget halt, the telemetry-only contract, and off|on|shadow gating.
+//   2. OFF (default or explicit) → output stays byte-identical.
+//   3. ON → spillover specialists run before synth; source-floor-restored P1s
+//      from batch 1 publish against the batch-1 inline anchor.
+//   4. ON + deadline halt → synth and the published body disclose partial
+//      coverage honestly, including incremental-coverage pending paths.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -34,6 +28,7 @@ const {
   mockGetFileContent,
   mockSubmitReview,
   mockListPullRequestReviews,
+  mockListPullRequestFiles,
   mockCreateIssueComment,
   mockRunSarifEvidence,
 } = vi.hoisted(() => ({
@@ -45,6 +40,7 @@ const {
   mockGetFileContent: vi.fn(),
   mockSubmitReview: vi.fn(),
   mockListPullRequestReviews: vi.fn(),
+  mockListPullRequestFiles: vi.fn(),
   mockCreateIssueComment: vi.fn(),
   mockRunSarifEvidence: vi.fn(),
 }))
@@ -53,10 +49,8 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("@/src/shared/adapters/model/ollama-chat", async () => {
-  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model/ollama-chat")>(
-    "@/src/shared/adapters/model/ollama-chat",
-  )
+vi.mock("@/src/shared/adapters/model", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
   return { ...actual, chat: (...args: unknown[]) => mockChat(...args) }
 })
 
@@ -81,6 +75,9 @@ vi.mock("@/src/shared/adapters/github", async () => {
     async listPullRequestReviews(...args: unknown[]): Promise<unknown> {
       return mockListPullRequestReviews(...args)
     }
+    async listPullRequestFiles(...args: unknown[]): Promise<unknown> {
+      return mockListPullRequestFiles(...args)
+    }
     async createIssueComment(...args: unknown[]): Promise<unknown> {
       return mockCreateIssueComment(...args)
     }
@@ -94,10 +91,11 @@ vi.mock("@/src/features/sarif-evidence", async () => {
 })
 
 import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
+import type { PrReviewFinding, PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import type { Env } from "@/src/shared/types/env"
 
-function makeKvStub(): Env["OPENCLAW_STATE"] {
-  const store = new Map<string, string>()
+function makeKvStub(seed: Record<string, string> = {}): Env["OPENCLAW_STATE"] {
+  const store = new Map<string, string>(Object.entries(seed))
   return {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
@@ -112,10 +110,15 @@ function makeKvStub(): Env["OPENCLAW_STATE"] {
 }
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
+  const seededKv = overrides.OPENCLAW_STATE ?? makeKvStub()
   return {
-    OPENCLAW_STATE: makeKvStub(),
+    OPENCLAW_STATE: seededKv,
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
+    OLLAMA_API_KEY: "fake-ollama-key",
+    OPENROUTER_API_KEY: "fake-openrouter-key",
+    OLLAMA_CHAT_ENABLE: "on",
+    OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "0",
     ...overrides,
   } as unknown as Env
 }
@@ -137,8 +140,183 @@ index abc1234..def5678 100644
 
 +New paragraph about the project — prose only, no code fences.
 +
- ## Overview
+## Overview
 `
+
+function sourceFileDiff(path: string, exportName: string, approxChars = 30_000): string {
+  const filler = "x".repeat(approxChars)
+  return `diff --git a/${path} b/${path}
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/${path}
+@@ -0,0 +1 @@
++export const ${exportName} = "${filler}"
+`
+}
+
+const BATCH_ZERO_DIFF = sourceFileDiff("src/batch-zero.ts", "batchZeroValue")
+const BATCH_ONE_DIFF = sourceFileDiff("src/batch-one.ts", "batchOneValue")
+const BATCH_TWO_DIFF = sourceFileDiff("src/batch-two.ts", "batchTwoValue")
+const MULTIBATCH_DIFF = [BATCH_ZERO_DIFF, BATCH_ONE_DIFF].join("\n")
+const MULTIBATCH_INCREMENTAL_DIFF = [BATCH_ZERO_DIFF, BATCH_ONE_DIFF, BATCH_TWO_DIFF].join("\n")
+
+function noFindingVerdict(summary = "No issues found."): PrReviewVerdict {
+  return {
+    summary,
+    confidence: 5,
+    confidenceReason: "test fixture",
+    findings: [],
+  }
+}
+
+function batchOneFinding(): PrReviewFinding {
+  return {
+    path: "src/batch-one.ts",
+    line: 1,
+    score: 4,
+    category: "logic",
+    headline: "`batchOneValue` is accepted without validation",
+    body:
+      "The new `batchOneValue` export is introduced on the added line without any validation guard, " +
+      "so callers can consume unchecked data from this path.",
+  }
+}
+
+function batchZeroFinding(): PrReviewFinding {
+  return {
+    path: "src/batch-zero.ts",
+    line: 1,
+    score: 4,
+    category: "logic",
+    headline: "`batchZeroValue` is accepted without validation",
+    body:
+      "The new `batchZeroValue` export is introduced on the added line without any validation guard, " +
+      "so the reviewed batch publishes a concrete issue alongside the partial-coverage disclosure.",
+  }
+}
+
+function chatResult(payload: unknown): {
+  message: { role: "assistant"; content: string }
+  usage: { inputTokens: number; outputTokens: number }
+} {
+  return {
+    message: { role: "assistant", content: JSON.stringify(payload) },
+    usage: { inputTokens: 10, outputTokens: 5 },
+  }
+}
+
+function synthResult(verdict: PrReviewVerdict) {
+  return chatResult({ verdict, provenance: { findings: [], dropped: [] } })
+}
+
+function callRole(arg: unknown): "logic" | "security" | "tests" | "performance" | null {
+  if (!arg || typeof arg !== "object") return null
+  const messages = (arg as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return null
+  const text = messages
+    .map((m) => (m && typeof m === "object" ? String((m as { content?: unknown }).content ?? "") : ""))
+    .join("\n")
+  if (/\*\*SECURITY specialist\*\*/.test(text)) return "security"
+  if (/\*\*LOGIC specialist\*\*/.test(text)) return "logic"
+  if (/\*\*TESTS specialist\*\*/.test(text)) return "tests"
+  if (/\*\*PERFORMANCE specialist\*\*/.test(text)) return "performance"
+  return null
+}
+
+function userMessageText(arg: unknown): string {
+  if (!arg || typeof arg !== "object") return ""
+  const messages = (arg as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return ""
+  return messages
+    .filter((m) => m && typeof m === "object" && (m as { role?: unknown }).role === "user")
+    .map((m) => String((m as { content?: unknown }).content ?? ""))
+    .join("\n")
+}
+
+function configureFullReviewChat(
+  options: {
+    batchOneFinding?: boolean
+    batchZeroFinding?: boolean
+    synthFindings?: PrReviewFinding[]
+    onAfterInitialSpecialists?: () => void
+    captureSynthMessage?: (message: string) => void
+  } = {},
+): void {
+  let initialSpecialistCalls = 0
+  mockChat.mockImplementation(async (arg: unknown) => {
+    const role = callRole(arg)
+    const userMessage = userMessageText(arg)
+    if (role !== null) {
+      const isSpilloverBatch =
+        userMessage.includes("diff --git a/src/batch-one.ts b/src/batch-one.ts") ||
+        userMessage.includes("diff --git a/src/batch-two.ts b/src/batch-two.ts")
+      if (!isSpilloverBatch) {
+        initialSpecialistCalls += 1
+        if (initialSpecialistCalls === 4) options.onAfterInitialSpecialists?.()
+      }
+      if (role === "logic" && !isSpilloverBatch && options.batchZeroFinding === true) {
+        return chatResult(verdictWithFindings([batchZeroFinding()]))
+      }
+      if (role === "logic" && userMessage.includes("src/batch-one.ts") && options.batchOneFinding !== false) {
+        return chatResult(verdictWithFindings([batchOneFinding()]))
+      }
+      return chatResult(noFindingVerdict())
+    }
+    options.captureSynthMessage?.(userMessage)
+    return synthResult(verdictWithFindings(options.synthFindings ?? []))
+  })
+}
+
+function verdictWithFindings(findings: PrReviewFinding[]): PrReviewVerdict {
+  return {
+    summary: findings.length > 0 ? "Found issues." : "No issues found.",
+    confidence: 5,
+    confidenceReason: "test fixture",
+    findings,
+  }
+}
+
+function configureReviewFixture(args: { prNumber: number; diff: string; files: Record<string, string> }): void {
+  mockGetPullRequest.mockResolvedValue({
+    head: { sha: HEAD_SHA, ref: "sig-418-enforce" },
+    base: { sha: BASE_SHA, ref: "main" },
+    merged_at: null,
+    labels: [],
+    title: "SIG-418 enforce path",
+    body: "Exercise multi-batch enforcement.",
+    user: { login: "review-author" },
+  })
+  mockGetPullRequestDiff.mockResolvedValue(args.diff)
+  mockListOpenPullRequests.mockResolvedValue([])
+  mockGetFileContent.mockImplementation(async (...callArgs: unknown[]) => {
+    const path = String(callArgs[2] ?? "")
+    if (path === "sigilix.json") return null
+    return `export const fixture = "${path}"`
+  })
+  mockSubmitReview.mockResolvedValue({ id: args.prNumber, state: "COMMENTED" })
+  mockListPullRequestReviews.mockResolvedValue([{ id: args.prNumber, state: "COMMENTED", commitId: HEAD_SHA }])
+  mockListPullRequestFiles.mockResolvedValue(
+    Object.entries(args.files).map(([filename, sha]) => ({
+      filename,
+      sha,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+    })),
+  )
+}
+
+function submittedReviewBody(): string {
+  const review = mockSubmitReview.mock.calls.at(-1)?.[3] as { body?: unknown } | undefined
+  return String(review?.body ?? "")
+}
+
+function submittedReviewComments(): Array<{ path?: string; line?: number; body?: string }> {
+  const review = mockSubmitReview.mock.calls.at(-1)?.[3] as { comments?: unknown } | undefined
+  const comments = review?.comments
+  return Array.isArray(comments) ? (comments as Array<{ path?: string; line?: number; body?: string }>) : []
+}
 
 let logSpy: ReturnType<typeof vi.spyOn>
 
@@ -167,6 +345,7 @@ beforeEach(() => {
   mockGetFileContent.mockReset()
   mockSubmitReview.mockReset()
   mockListPullRequestReviews.mockReset()
+  mockListPullRequestFiles.mockReset()
   mockCreateIssueComment.mockReset()
   mockRunSarifEvidence.mockReset().mockResolvedValue({ skipped: true, reason: "disabled-config" })
   logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -234,39 +413,137 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     expect(multibatchEvents()).toEqual([])
   })
 
-  it("ON in PR 2: inert — logs multibatch-mode-unsupported is NOT emitted on a pre-fanout skip (no summary either)", async () => {
-    // `on` only reaches the unsupported-log branch AFTER the post-synth stale
-    // guard — on a pre-fanout skip it exits earlier, so neither the unsupported
-    // log NOR a summary fires. The invariant we pin here is the safety one: a
-    // pre-fanout skip with `on` set still produces ZERO multibatch telemetry
-    // (no run, no summary), exactly like off.
-    mockGetPullRequest.mockResolvedValueOnce({
-      head: { sha: HEAD_SHA },
-      base: { sha: BASE_SHA },
-      merged_at: null,
-      labels: [],
+  it("OFF and SHADOW explicit modes are byte-identical to mode unset on the posted review output", async () => {
+    const runOffPath = async (prNumber: number, mode?: string) => {
+      mockChat.mockReset()
+      mockGetPullRequest.mockReset()
+      mockGetPullRequestDiff.mockReset()
+      mockListOpenPullRequests.mockReset()
+      mockGetFileContent.mockReset()
+      mockSubmitReview.mockReset()
+      mockListPullRequestReviews.mockReset()
+      mockListPullRequestFiles.mockReset()
+      configureReviewFixture({
+        prNumber,
+        diff: MULTIBATCH_DIFF,
+        files: {
+          "src/batch-zero.ts": "batch-zero-sha",
+          "src/batch-one.ts": "batch-one-sha",
+        },
+      })
+      configureFullReviewChat({ batchOneFinding: false })
+      const backgroundWork: Promise<void>[] = []
+      const result = await handlePrReviewEnsemble({
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber,
+        headSha: HEAD_SHA,
+        installationId: 1,
+        env: makeEnv({
+          ...(mode !== undefined ? { OPENCLAW_REVIEW_MULTIBATCH_MODE: mode } : {}),
+        } as unknown as Env),
+        backgroundWaitUntil: (promise) => backgroundWork.push(promise),
+      })
+      expect(result.status).toBe("posted")
+      const output = { body: submittedReviewBody(), comments: submittedReviewComments() }
+      await Promise.all(backgroundWork)
+      return output
+    }
+
+    const unset = await runOffPath(9102)
+    const explicitOff = await runOffPath(9103, "off")
+    const explicitShadow = await runOffPath(9106, "shadow")
+
+    expect(explicitOff).toEqual(unset)
+    expect(explicitShadow).toEqual(unset)
+  })
+
+  it("ON posts a source-floor-restored batch-1 P1 as an inline comment on the batch-1 file", async () => {
+    configureReviewFixture({
+      prNumber: 9104,
+      diff: MULTIBATCH_DIFF,
+      files: {
+        "src/batch-zero.ts": "batch-zero-sha",
+        "src/batch-one.ts": "batch-one-sha",
+      },
     })
-    mockGetPullRequestDiff.mockResolvedValueOnce(DOCS_ONLY_DIFF)
-    mockListOpenPullRequests.mockResolvedValueOnce([])
-    mockGetFileContent.mockResolvedValueOnce(null)
+    configureFullReviewChat({ synthFindings: [] })
 
     const result = await handlePrReviewEnsemble({
       owner: "Sigilix",
       repo: "sigilix",
-      prNumber: 9102,
+      prNumber: 9104,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({ OPENCLAW_REVIEW_MULTIBATCH_MODE: "on" } as unknown as Env),
+    })
+
+    expect(result.status).toBe("posted")
+    const comments = submittedReviewComments()
+    expect(comments).toHaveLength(1)
+    expect(comments[0]).toMatchObject({
+      path: "src/batch-one.ts",
+      line: 1,
+    })
+    expect(comments[0]?.body).toContain("`batchOneValue` is accepted without validation")
+    expect(mockChat.mock.calls.map((call) => callRole(call[0])).filter(Boolean)).toContain("logic")
+  })
+
+  it("ON deadline halt posts incremental partial coverage and sends the SIG-443 scope block to synth", async () => {
+    const priorCoverage = {
+      schemaVersion: 1,
+      files: {
+        "src/batch-two.ts": {
+          reviewedAtBlobSha: "same-batch-two-sha",
+          reviewedAtHeadSha: "older-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+      },
+    }
+    configureReviewFixture({
+      prNumber: 9105,
+      diff: MULTIBATCH_INCREMENTAL_DIFF,
+      files: {
+        "src/batch-zero.ts": "batch-zero-sha",
+        "src/batch-one.ts": "batch-one-sha",
+        "src/batch-two.ts": "same-batch-two-sha",
+      },
+    })
+
+    const synthMessages: string[] = []
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => now)
+    configureFullReviewChat({
+      batchOneFinding: false,
+      batchZeroFinding: true,
+      onAfterInitialSpecialists: () => {
+        now += 900_000
+      },
+      captureSynthMessage: (message) => synthMessages.push(message),
+    })
+
+    const result = await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9105,
       headSha: HEAD_SHA,
       installationId: 1,
       env: makeEnv({
-        OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "on",
         OPENCLAW_REVIEW_MULTIBATCH_MODE: "on",
+        OPENCLAW_INCREMENTAL_REVIEW_MODE: "on",
+        OPENCLAW_STATE: makeKvStub({
+          "pr-review-coverage:Sigilix/sigilix#9105": JSON.stringify(priorCoverage),
+        }),
       } as unknown as Env),
     })
+    dateNowSpy.mockRestore()
 
-    expect(result.status).toBe("skipped")
-    expect(mockChat).not.toHaveBeenCalled()
-    // No shadow run + no summary on this path (the unsupported-mode log lives on
-    // the post-synth path; the safety guarantee is "no shadow telemetry/run").
-    expect(multibatchEvents().filter((e) => e["event"] === "multibatch-summary")).toEqual([])
-    expect(multibatchEvents().filter((e) => e["event"] === "multibatch-decision")).toEqual([])
+    expect(result.status).toBe("posted")
+    const body = submittedReviewBody()
+    expect(body).toContain("Reviewed 2 of 3 changed files across this PR so far")
+    expect(body).toContain("the remaining 1 was below the priority cutoff")
+    expect(synthMessages.at(-1)).toContain("[REVIEW COVERAGE SCOPE]")
+    expect(synthMessages.at(-1)).toContain("Deadline/budget halted")
+    expect(synthMessages.at(-1)).toContain("Skipped or not launched files (1/2): src/batch-one.ts")
   })
 })

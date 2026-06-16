@@ -450,6 +450,73 @@ describe("SIG-287 parseEnsembleConfig — reasoningByRole (reasoning-on harness)
     }).flags
     expect(c.reasoningByRole).toEqual(new Map())
   })
+
+  // SIG-450: a token may carry a per-role override `role:level`; a bare role uses
+  // the global default. This is the shipping shape (logic at high while tests stays
+  // medium) for the Kimi logic flip.
+  it("pins a per-role level via role:level while a bare role uses the global default (the SIG-450 logic-flip shape)", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "logic:high,tests",
+      OPENCLAW_REASONING_LEVEL: "medium",
+    }).flags
+    expect(c.reasoningByRole).toEqual(
+      new Map([
+        ["logic", "high"],
+        ["tests", "medium"],
+      ]),
+    )
+  })
+
+  it("honors distinct per-role levels for multiple roles", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "logic:high,security:low,tests:medium",
+    }).flags
+    expect(c.reasoningByRole).toEqual(
+      new Map([
+        ["logic", "high"],
+        ["security", "low"],
+        ["tests", "medium"],
+      ]),
+    )
+  })
+
+  it("DROPS only the token whose per-role level is invalid (no silent downgrade), keeping the rest", () => {
+    // A per-role typo must not fall back to the default level — it drops that role
+    // so a misconfig surfaces as missing reasoning, not quietly-wrong effort.
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "logic:ultra,tests",
+      OPENCLAW_REASONING_LEVEL: "medium",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map([["tests", "medium"]]))
+  })
+
+  it("trims + lowercases role:level tokens and ignores an unknown role with a level", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: " Logic : HIGH , bogus:low , Tests ",
+      OPENCLAW_REASONING_LEVEL: "medium",
+    }).flags
+    expect(c.reasoningByRole).toEqual(
+      new Map([
+        ["logic", "high"],
+        ["tests", "medium"],
+      ]),
+    )
+  })
+
+  it("an invalid GLOBAL level still disables everything (empty map) even with a valid per-role token", () => {
+    // The global guard is unchanged: a bad OPENCLAW_REASONING_LEVEL fails the whole
+    // map closed, so a stale/garbage default can't leave a partial enablement.
+    const c = parseEnsembleConfig({
+      OPENCLAW_REASONING_MODE: "on",
+      OPENCLAW_REASONING_ROLES: "logic:high",
+      OPENCLAW_REASONING_LEVEL: "ultra",
+    }).flags
+    expect(c.reasoningByRole).toEqual(new Map())
+  })
 })
 
 describe("SIG-399 parseEnsembleConfig — reasoningPromptRoles (logic reasoning directive flag)", () => {

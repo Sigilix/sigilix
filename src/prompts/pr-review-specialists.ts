@@ -81,6 +81,30 @@ REAL, demonstrable instance:
 - a value read or computed but never USED to constrain the operation
 - a handler that acts without checking an event/message "type" discriminator
 - a signature/HMAC computed over RE-SERIALIZED data instead of the raw bytes
+- a method call used in a boolean GUARD/condition WITHOUT \`await\` whose name implies an async
+  check (\`is*\`, \`has*\`, \`can*\`, \`check*\`, \`verify*\`, \`authorize*\`, \`assert*\`, \`validate*\`) — an
+  un-awaited Promise is ALWAYS truthy, so \`if (!isAdmin(user))\` never fires and the guard is
+  BYPASSED for everyone. Treat an auth/permission guard that CALLS a method (not reads a property)
+  without \`await\` as this defect EVEN IF the method's definition is not in the diff — the parens
+  + the check-y name are enough; a real sync boolean would be a property access, not a call.
+- a state/status transition that proceeds WITHOUT verifying the current state is a legal
+  predecessor (a required intermediate state is skipped)
+- a regex built from USER-controlled input, or a catastrophic-backtracking pattern applied to
+  user input (ReDoS)
+SAFE PATTERNS — these are CORRECT (no wrong runtime behavior); do NOT flag them. Flag ONLY the
+broken variant named in parentheses:
+- idempotency that IS enforced: a dedup/idempotency key looked up and the operation SKIPPED when
+  already seen, BEFORE the side effect runs. (Flag only MISSING idempotency, or a key that does
+  not cover the side effect.)
+- a check-then-act that is ATOMIC: inside ONE transaction, a SELECT … FOR UPDATE, an atomic
+  compare-and-set / conditional UPDATE … WHERE, or guarded by a DB unique constraint. (Flag only a
+  NON-atomic read-then-write across SEPARATE statements.)
+- an async auth/IO call that IS awaited and whose result is checked — being awaited is correct,
+  not a defect. (Flag only a MISSING await, or an awaited result that is then ignored.)
+- money held in INTEGER minor units (cents) — integer-cent arithmetic is exact. (Flag only FLOAT
+  accumulation of money.)
+- an error that is caught and RE-THROWN or genuinely handled. (Flag only a SWALLOWED error —
+  caught and ignored.)
 ─────────────────────────────────────────────────────────────────────`
 
 // SIG-392 (security lane): recall-eliciting directive appended to the SECURITY

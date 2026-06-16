@@ -72,22 +72,39 @@ const REASONING_ROLE_NAMES: ReadonlySet<string> = new Set<SpecialistRole>(["logi
 /** SIG-287 (reasoning-on harness): the per-role bounded-reasoning map. EMPTY
  *  (→ every call stays `think:false`, byte-identical to today) unless
  *  `OPENCLAW_REASONING_MODE === "on"`. When on, the enabled roles are the
- *  validated tokens of `OPENCLAW_REASONING_ROLES` (comma list) and the level is
- *  the validated `OPENCLAW_REASONING_LEVEL` (default "high"). Per Codex sign-off
- *  the inputs are validated STRICTLY: an unknown role token is ignored, and an
- *  explicitly-set-but-invalid level disables reasoning entirely (returns empty)
- *  rather than letting an arbitrary string reach the adapter's `think`. Mirrors
- *  `buildRecallRoles`' per-role rollout shape. */
+ *  validated tokens of `OPENCLAW_REASONING_ROLES` (comma list) and the default
+ *  level is the validated `OPENCLAW_REASONING_LEVEL` (default "high"). Per Codex
+ *  sign-off the inputs are validated STRICTLY: an unknown role token is ignored,
+ *  and an explicitly-set-but-invalid GLOBAL level disables reasoning entirely
+ *  (returns empty) rather than letting an arbitrary string reach the adapter's
+ *  `think`. Mirrors `buildRecallRoles`' per-role rollout shape.
+ *
+ *  SIG-450 (per-role level): a token may carry an optional per-role override
+ *  `role:level` (e.g. `"logic:high,tests"`) so ONE role can run at a different
+ *  effort than the shared default — needed when logic (Kimi, screened at high)
+ *  and tests (v4-pro, validated at medium) coexist. A bare `role` uses the global
+ *  default level; `role:level` pins that role. An invalid per-role level DROPS
+ *  that token (strict, mirrors the global guard) rather than falling back, so a
+ *  typo can't silently downgrade effort. Backward-compatible: a list with no
+ *  colons behaves exactly as before. */
 function buildReasoningByRole(env: EnsembleConfigEnv): ReadonlyMap<SpecialistRole, ReasoningLevel> {
   const byRole = new Map<SpecialistRole, ReasoningLevel>()
   if ((env.OPENCLAW_REASONING_MODE ?? "").trim().toLowerCase() !== "on") return byRole
   const rawLevel = (env.OPENCLAW_REASONING_LEVEL ?? "").trim().toLowerCase()
-  // Default "high" when unset; an explicit-but-invalid level → off (empty map).
+  // Default "high" when unset; an explicit-but-invalid GLOBAL level → off (empty map).
   if (rawLevel !== "" && !REASONING_LEVELS.has(rawLevel)) return byRole
-  const level: ReasoningLevel = rawLevel === "" ? "high" : (rawLevel as ReasoningLevel)
+  const defaultLevel: ReasoningLevel = rawLevel === "" ? "high" : (rawLevel as ReasoningLevel)
   for (const token of (env.OPENCLAW_REASONING_ROLES ?? "").split(",")) {
-    const role = token.trim().toLowerCase()
-    if (REASONING_ROLE_NAMES.has(role)) byRole.set(role as SpecialistRole, level)
+    const trimmed = token.trim().toLowerCase()
+    if (trimmed === "") continue
+    const colon = trimmed.indexOf(":")
+    // Trim BOTH sides of the colon so `logic : high` parses like `logic:high`.
+    const role = (colon === -1 ? trimmed : trimmed.slice(0, colon)).trim()
+    const levelTok = colon === -1 ? "" : trimmed.slice(colon + 1).trim()
+    if (!REASONING_ROLE_NAMES.has(role)) continue
+    // A per-role level that's present-but-invalid drops the token (no silent downgrade).
+    if (levelTok !== "" && !REASONING_LEVELS.has(levelTok)) continue
+    byRole.set(role as SpecialistRole, levelTok === "" ? defaultLevel : (levelTok as ReasoningLevel))
   }
   return byRole
 }

@@ -98,11 +98,11 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it("logic → chat gets model openai/o3 + the OpenRouter key", async () => {
+  it("logic → chat gets model moonshotai/kimi-k2.7-code + the OpenRouter key", async () => {
     await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
     expect(mockChat).toHaveBeenCalledTimes(1)
     const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
-    expect(call.model).toBe("openai/o3")
+    expect(call.model).toBe("moonshotai/kimi-k2.7-code")
     expect(call.apiKey).toBe("openrouter-key")
   })
 
@@ -113,7 +113,7 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
       ...baseArgs,
     })
     expect(res.failureReason).toBe("missing_api_key")
-    expect(res.modelUsed).toBe("openai/o3")
+    expect(res.modelUsed).toBe("moonshotai/kimi-k2.7-code")
     expect(mockChat).not.toHaveBeenCalled()
   })
 
@@ -129,10 +129,10 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
     expect(res.modelUsed).toBe("deepseek/deepseek-v4-pro")
   })
 
-  it("modelOverride absent → byte-identical to the role default (openai/o3)", async () => {
+  it("modelOverride absent → byte-identical to the role default (moonshotai/kimi-k2.7-code)", async () => {
     const res = await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
     const call = mockChat.mock.calls[0]![0] as { model: string }
-    expect(call.model).toBe("openai/o3")
-    expect(res.modelUsed).toBe("openai/o3")
+    expect(call.model).toBe("moonshotai/kimi-k2.7-code")
+    expect(res.modelUsed).toBe("moonshotai/kimi-k2.7-code")
   })
 })

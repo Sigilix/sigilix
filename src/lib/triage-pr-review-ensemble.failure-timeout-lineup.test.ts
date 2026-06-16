@@ -194,8 +194,8 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // re-roll recovers (the CSV showed both finishing < 55s, zero provider cancels);
   // logic/tests/synth stay `retries: 1`. Per-attempt caps preserved where the role
   // set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs openai/o3 (retries:1, no fallback, 120s attempt cap)", () => {
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("openai/o3")
+  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450, retries:1, no fallback, 120s attempt cap)", () => {
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("moonshotai/kimi-k2.7-code")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)

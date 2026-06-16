@@ -424,10 +424,14 @@ export interface Env {
   /** SIG-287: comma-separated specialist roles to enable bounded reasoning on
    *  when `OPENCLAW_REASONING_MODE === "on"` (e.g. "security" then "security,tests").
    *  Empty/unset with mode on → no roles (still default-off in effect). Unknown
-   *  tokens are ignored. */
+   *  tokens are ignored. SIG-450: a token may carry a per-role level override
+   *  `role:level` (e.g. "logic:high,tests") so one role runs at a different effort
+   *  than the shared default; a bare role uses `OPENCLAW_REASONING_LEVEL`. An
+   *  invalid per-role level drops that token (no silent downgrade). */
   OPENCLAW_REASONING_ROLES?: string
-  /** SIG-287: bounded reasoning level applied to every enabled role —
-   *  "high" (default) | "medium" | "low". Never `think:true` (unbounded). */
+  /** SIG-287: DEFAULT bounded reasoning level for roles listed WITHOUT a per-role
+   *  `role:level` override — "high" (default) | "medium" | "low". Never `think:true`
+   *  (unbounded). An explicit-but-invalid value disables reasoning entirely (off). */
   OPENCLAW_REASONING_LEVEL?: string
   /** SIG-393: region re-sweep mode — "off" (default) | "shadow" | "on". */
   OPENCLAW_RESWEEP_MODE?: string
@@ -435,8 +439,9 @@ export interface Env {
   OPENCLAW_RESWEEP_MAX_REGIONS?: string
   /** SIG-369(b): route the SECOND-PASS recall phases' LOGIC re-runs
    *  (SIG-395 invariant-lens, SIG-393 resweep) to a cheaper strong reasoner
-   *  (`deepseek/deepseek-v4-pro`) instead of `openai/o3` — "off" (default) |
-   *  "on". Cost lever only; the primary logic specialist is never affected.
+   *  (`deepseek/deepseek-v4-pro`) instead of the primary logic model — "off"
+   *  (default) | "on". Cost lever only; the primary logic specialist is never
+   *  affected. (Still a win post-SIG-450: v4-pro is cheaper than Kimi K2.7 too.)
    *  Default off is byte-identical (those passes stay on o3). A live recall
    *  gauge gates the flip; never enable here without it. */
   OPENCLAW_SECONDPASS_REASONER_MODE?: string

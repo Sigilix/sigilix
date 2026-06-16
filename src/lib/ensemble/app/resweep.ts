@@ -117,9 +117,9 @@ export async function runResweepPhase(a: ResweepArgs): Promise<ResweepResult> {
   const roles = a.succeeded.map((v) => v.role)
   const chatEnabled = a.env.OLLAMA_CHAT_ENABLE === "on" ? ("on" as const) : ("off" as const)
   // SIG-369(b): default-off second-pass model override, applied ONLY to the
-  // LOGIC role's re-sweep calls — logic runs on openai/o3 (the expensive model
+  // LOGIC role's re-sweep calls — logic runs on the primary logic model (the cost
   // this lever targets); security/perf/tests keep their own cheaper configs
-  // untouched. Off → undefined → byte-identical o3 path for logic.
+  // untouched. Off → undefined → byte-identical primary path for logic.
   const logicResweepOverride = secondPassReasonerOverride({
     mode: parseSecondPassReasonerMode(a.env.OPENCLAW_SECONDPASS_REASONER_MODE),
     baseConfig: SPECIALIST_CONFIGS.logic,

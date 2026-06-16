@@ -1,11 +1,12 @@
 // SIG-369(b) PR-1 — logic-specialist INPUT-composition telemetry (shadow-only).
 //
 // On a real PR (#568) the packed diff was ~13K tokens but the logic specialist's
-// `openai/o3` call consumed ~140K INPUT tokens (`tokenUsageByModel["openai/o3"].
-// inputTokens` in the per-PR `ensemble-review-telemetry` KV record). That ~10×
-// gap is unexplained, and the logic model is the dominant review cost ($2/$8 per
-// Mtok), so a follow-up MUST be able to cut the biggest low-recall-value input
-// block — but only after we MEASURE where the tokens go. This module is the
+// call consumed ~140K INPUT tokens (`tokenUsageByModel[logic model].inputTokens`
+// in the per-PR `ensemble-review-telemetry` KV record; logic was `openai/o3` for
+// that measurement — it's `moonshotai/kimi-k2.7-code` now, SIG-450). That ~10×
+// gap is unexplained, and the logic model is a dominant review cost, so a follow-up
+// MUST be able to cut the biggest low-recall-value input block — but only after we
+// MEASURE where the tokens go. This module is the
 // measurement: it decomposes the logic attempt's input into the system prompt,
 // the per-section initial message (REUSING `measureLogicPrompt`), the tool-loop
 // (when MCP tools are on, the two-call tool conversation re-sends everything),

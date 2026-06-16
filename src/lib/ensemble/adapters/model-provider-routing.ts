@@ -23,12 +23,12 @@ export function modelApiKeys(env: { OLLAMA_API_KEY: string; OPENROUTER_API_KEY?:
 }
 
 /**
- * Logic on OpenRouter (`openai/o3`). `retries: 1` covers 429/502/503/network on
- * the new route (Codex #8); `fallback: null` because OpenRouter routes across
- * upstreams itself (and one key then serves the whole config — see
- * `selectConfigApiKey`); keeps logic's 120s per-attempt budget. Reasoning is
- * orthogonal (the SIG-287 harness): set `OPENCLAW_REASONING_*` to pin o3 at the
- * locked-lineup medium effort.
+ * Logic on OpenRouter (`moonshotai/kimi-k2.7-code`, SIG-450 — was `openai/o3`).
+ * `retries: 1` covers 429/502/503/network on the route (Codex #8); `fallback: null`
+ * because OpenRouter routes across upstreams itself (and one key then serves the
+ * whole config — see `selectConfigApiKey`); keeps logic's 120s per-attempt budget.
+ * Reasoning is orthogonal (the SIG-287 harness): set `OPENCLAW_REASONING_*` to pin
+ * logic at the screened HIGH effort (per-role `logic:high` token).
  */
 /**
  * The single API key that serves an entire `ModelConfig` (primary + any

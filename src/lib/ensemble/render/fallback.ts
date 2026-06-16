@@ -173,8 +173,9 @@ export function buildFallbackBody(
   if (event === "APPROVE") {
     // Pour ALL findings into the bucket (not `unanchored: []`) so an out-of-PR-
     // scope note that lives only in `unanchored` still surfaces in the approve
-    // body's "Outside your changes" section — anchorless-fallback must not drop
-    // it (Codex #2). renderApproveBody renders only the outOfPrScope subset.
+    // body's non-inline findings dropdown (out-of-PR-scope group) — anchorless-
+    // fallback must not drop it (Codex #2). renderApproveBody renders only the
+    // outOfPrScope subset.
     const args: RenderBodyArgs = { verdict: { ...verdict, findings: [] }, unanchored: all }
     if (trustLedger) args.trustLedger = true
     if (showEvidence) args.showEvidence = true

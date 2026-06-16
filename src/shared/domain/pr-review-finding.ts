@@ -134,7 +134,8 @@ export interface PrReviewFinding {
    * trust-ledger flag (Codex #333: the old `demoteReason: "outside-diff"` signal
    * was flag-dependent AND conflated "anchor failed on a CHANGED file" with
    * "genuinely not in the PR"). An out-of-PR-scope finding renders in the
-   * "Outside your changes" section and NEVER blocks the merge; a finding on a
+   * non-inline findings dropdown (the out-of-PR-scope group) and NEVER blocks
+   * the merge; a finding on a
    * changed file that merely failed to anchor is NOT out-of-PR-scope and still
    * blocks per severity. Never parsed from model output.
    */

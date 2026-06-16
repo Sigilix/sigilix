@@ -106,33 +106,7 @@ export function renderTrustSummary(args: {
   return seg.join(" · ")
 }
 
-/**
- * The collapsed `<details>` for findings that are ABOUT this PR's changed code
- * but couldn't be anchored to a specific diff line (the model cited a line/range
- * with no reviewable position). These are IN the PR — only the genuinely-out-of-
- * PR findings (path not a changed file = `outOfPrScope`) route to the separate
- * "Outside your changes" section. So the label must NOT say "outside this PR's
- * diff" (PR #334 follow-up — the literal #333 confusion): it says they just lack
- * a precise inline anchor. Uses the caller's `renderRow` so the body-row format +
- * trust sub-tag stay one source of truth. Null if empty.
- */
-export function renderOutsideDiffDropdown<T>(
-  unanchorableFindings: ReadonlyArray<T>,
-  renderRow: (f: T) => string,
-): string | null {
-  if (unanchorableFindings.length === 0) return null
-  const n = unanchorableFindings.length
-  // Blank-line-separate rows: each row ends with a multi-line body (which can itself
-  // contain blank lines + a nested <details>), so a single \n would make the next
-  // bullet render as loose continuation of the previous list item (GFM), not a sibling.
-  const rows = unanchorableFindings.map(renderRow).join("\n\n")
-  return `<details>\n<summary><b>${n} finding${n === 1 ? "" : "s"}</b> in your changes that couldn't be anchored to a specific line</summary>\n\n${rows}\n\n</details>`
-}
-
-/** The non-collapsed **PR-level** mini-section (no-test / architectural). Null if empty. */
-export function renderPrLevelSection<T>(prLevelFindings: ReadonlyArray<T>, renderRow: (f: T) => string): string | null {
-  if (prLevelFindings.length === 0) return null
-  // Blank-line-separate rows (see renderOutsideDiffDropdown) so multi-line body rows
-  // render as sibling list items, not loose continuations.
-  return `**PR-level**\n\n${prLevelFindings.map(renderRow).join("\n\n")}`
-}
+// SIG-440 removed `renderOutsideDiffDropdown` + `renderPrLevelSection`: the
+// "everything inline" render rewrite folded all non-inline findings into the
+// single `renderNonInlineFindingsDropdown` in `review-body.ts`, so these standalone
+// section emitters had no remaining caller.

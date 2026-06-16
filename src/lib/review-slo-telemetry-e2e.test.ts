@@ -391,7 +391,7 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
 
   it("records nothing when chat() throws (HTTP/timeout) — no usage, no phantom cost", async () => {
     // SIG-212: usage is absent on the exception path (no tokens exchanged). SIG-406:
-    // logic = retries:1 + no fallback; reject EVERY attempt so the whole ladder
+    // logic = retries:2 (SIG-450) + no fallback; reject EVERY attempt so the whole ladder
     // exhausts with zero recorded spend.
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }

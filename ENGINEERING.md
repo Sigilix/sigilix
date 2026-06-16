@@ -258,11 +258,14 @@ specialists.
 - **Specialist-unavailable resilience (SIG-449).** The two FAST review roles (security, performance) run
   `retries: 2 @ 90s/attempt` — a re-roll recovers a transient **our-side** parse/stream failure (the
   dominant "specialist unavailable" cause, per the OpenRouter activity log: zero provider cancels/errors —
-  NOT slow routes), and 90s clears their observed max (~55s) with margin. `logic`/`tests` stay `retries: 1`
-  (slower models, fit 2 attempts in the 370s role wall). The OpenRouter SSE adapter **salvages** a body
+  NOT slow routes), and 90s clears their observed max (~55s) with margin. `tests` stays `retries: 1`
+  (slower model, fits 2 attempts in the 370s role wall); `logic` was raised to `retries: 2` (SIG-450 — the
+  heaviest role at reasoning=high, it blanked first under concurrent-PR burst, so it gets the same
+  MORE-ATTEMPTS lever as the fast roles: 3 attempts = 3×120s + backoff = 363.3s, still inside the wall).
+  The OpenRouter SSE adapter **salvages** a body
   whose only defect is a lost `[DONE]` sentinel **only when `finish_reason:"stop"`** proves the generation
   completed — a mid-generation cut throws and re-runs, so a truncated review can never be surfaced as a
-  silent "clean" sign-off. Worst-case model calls per run = 14 (`MAX_CALLS_PER_ENSEMBLE_RUN`).
+  silent "clean" sign-off. Worst-case model calls per run = 15 (`MAX_CALLS_PER_ENSEMBLE_RUN`).
 - **`logic` is migrating `openai/o3` → Kimi K2.7 (SIG-450).** o3 is removed from the API **2026-08-26**.
   Kimi (run with reasoning) screens **93% recall / 24% FP** on the Ollama K=12 ruler — it ties the best
   alternative on recall and has the lowest FP of any candidate. The logic recall-suffix is being tuned to

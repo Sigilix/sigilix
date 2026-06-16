@@ -69,10 +69,20 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // reasoning=high): 93% recall / 24% FP — recall tied with v4-pro, LOWEST FP of every
   // candidate (o3 ~100/31, v4-pro 93/29). ~2.5× cheaper than o3 ($0.74/$3.50 vs $2/$8).
   // Runs with the recall-suffix + reasoning-prompt suffix at effort HIGH (the screened
-  // setting — per-role via [vars]; tests stays medium). retry/timeout unchanged from o3.
+  // setting — per-role via [vars]; tests stays medium).
+  //
+  // SIG-450 (2026-06-16): retries 1→2. Logic is the HEAVIEST role (reasoning=high) yet was the
+  // only specialist still at retries:1 after SIG-449 raised the fast roles — so under a
+  // concurrent-PR burst (shared OpenRouter account, no global limiter) it blanked FIRST,
+  // posting "logic specialist unavailable" (the #29 re-probe lost logic on 3/5 concurrent
+  // reviews). Same lever as the SIG-449 fast roles: MORE ATTEMPTS, not a longer cap — 3 tries
+  // recover a transient 429 / parse / stream failure. The 120s cap is UNCHANGED (reasoning=high
+  // needs the headroom); the 3-attempt chain 3×120 + (0.8+2.5) = 363.3s still fits the 370s role
+  // wall (6.7s slack — pinned in logic-per-attempt-timeout.test.ts). fallback stays null
+  // (OpenRouter self-routes; a dedicated logic fallback model is a separate decision, deferred).
   logic: {
     primary: "moonshotai/kimi-k2.7-code",
-    retries: 1,
+    retries: 2,
     fallback: null,
     perAttemptTimeoutMs: 120_000,
   },
@@ -182,10 +192,12 @@ export function buildCostProjectionLineup(): CostProjectionLineup {
 }
 
 // SIG-406: baseline fanout + synth reservation ONLY. SIG-449 raised security +
-// performance to retries:2 (maxAttempts 3 each), so the worst case is now
-// logic(2) + security(3) + performance(3) + tests(2) + 2×synth(2) = 14. The SIG-393
-// re-sweep + SIG-395 invariant-lens add-on phases make extra `runSpecialist` calls NOT
-// counted here (unchanged from pre-alpha accounting; full add-on budgeting is SIG-369).
+// performance to retries:2 (maxAttempts 3 each); SIG-450 raised logic to retries:2 too
+// (burst resilience), so the worst case is now logic(3) + security(3) + performance(3) +
+// tests(2) + 2×synth(2) = 15. The SIG-393 re-sweep + SIG-395 invariant-lens add-on phases
+// make extra `runSpecialist` calls NOT counted here (unchanged from pre-alpha accounting;
+// full add-on budgeting is SIG-369). NOTE: this constant is DERIVED from the configs, so it
+// tracks a retries bump automatically — the literal lives only in the lineup test.
 export const MAX_CALLS_PER_ENSEMBLE_RUN =
   maxAttempts(SPECIALIST_CONFIGS.logic) +
   maxAttempts(SPECIALIST_CONFIGS.security) +

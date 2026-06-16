@@ -329,6 +329,14 @@ OPENCLAW_CI_TRIAGE_ANCHOR_REMAP = "on"
 # targeted version. Rollback: set "shadow" (inject stops; telemetry continues).
 OPENCLAW_GRAPH_EXPANSION = "post"
 
+# SIG-407: symbol-aware @sigilix Q&A retrieval. "on" expands each retrieval hit →
+# enclosing symbol + callers via the SIG-138 graph and injects a [SYMBOL CONTEXT]
+# block (single-shot mention + the agentic retrieve_codebase tool both honor it).
+# Flipped ON 2026-06-15: deterministic eval cleared the gate (symbol recall@6
+# OFF 20% → ON 80%, +60pp); low-stakes Q&A surface; off was byte-identical.
+# Rollback: "shadow" (build+measure, no inject) or "off" (inert).
+OPENCLAW_MENTION_SYMBOL_EXPANSION = "on"
+
 # SIG-314 (2026-06-02): deterministic IDOR/BOLA floor (no-unauthorized-object-
 # lookup AST rule). Run-invariant insurance so the obvious in-diff IDOR the
 # security specialist catches only nondeterministically (pr/08: caught keys.ts,

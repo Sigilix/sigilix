@@ -67,6 +67,12 @@ import {
 } from "@/src/lib/testing-evidence-pack"
 import { detectHelperCoverage } from "@/src/lib/helper-coverage"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
+import {
+  loadLearnings,
+  renderLearningsForPrompt,
+  resolveLearningsMode,
+  selectRelevantForPaths,
+} from "@/src/features/learnings"
 import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
 import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
 import type { GraphContextNode } from "@/src/do/repo-graph"
@@ -85,6 +91,8 @@ export interface AssemblePromptsArgs {
   owner: string
   repo: string
   prNumber: number
+  /** SIG-104: immutable GitHub repo id — the learnings store subject key. */
+  repoId?: number
   headSha: string
   /** Pinned to "post" by the handler — gates the auto-inline poster. */
   mode: "post"
@@ -153,6 +161,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     owner,
     repo,
     prNumber,
+    repoId,
     headSha,
     mode,
     meta,
@@ -693,6 +702,30 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     callerPaths: graphBlastCallerPaths,
     dependentPaths: graphBlastDependentPaths,
   })
+  // SIG-104: load + render the per-repo Learnings block ONCE here — before the
+  // per-role message cache, so every role AND spillover batch sees the same
+  // block (repo guidance, not role-split). `off` → no load; `shadow` → load +
+  // telemeter the would-inject count but emit NOTHING to the prompt (bake the
+  // store, output byte-unchanged); `on` → inject. Best-effort (loader no-throws).
+  const learningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
+  let learningsBlock = ""
+  if (learningsMode !== "off" && repoId !== undefined) {
+    const learningsStore = await loadLearnings(env, "repo", String(repoId))
+    const candidateLearnings = learningsStore?.entries ?? []
+    const relevantLearnings = selectRelevantForPaths(candidateLearnings, filePaths)
+    console.log(
+      JSON.stringify({
+        event: "learnings-prompt-inject",
+        owner,
+        repo,
+        prNumber,
+        mode: learningsMode,
+        candidates: candidateLearnings.length,
+        selected: relevantLearnings.length,
+      }),
+    )
+    if (learningsMode === "on") learningsBlock = renderLearningsForPrompt(relevantLearnings)
+  }
   const messageForRole = (role: SpecialistRole): string => {
     const cached = specialistMessageCache.get(role)
     if (cached !== undefined) return cached
@@ -736,6 +769,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         ? { graphContext: graphCtxForPrompt }
         : {}),
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
+      ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
     })
     specialistMessageCache.set(role, message)
     return message
@@ -754,6 +788,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
         ? { graphContext: graphCtxForPrompt }
         : {}),
+      ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
     })
 
   return {

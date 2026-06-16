@@ -159,6 +159,14 @@ export interface Env {
   // never-reviewed files only.
   OPENCLAW_INCREMENTAL_REVIEW_MODE?: string
 
+  // SIG-104 conversational Learnings. "off" (default) keeps the feature
+  // dark: commands inert, no injection. "shadow" activates the
+  // @sigilix remember/forget/list commands + capture and telemeters
+  // would-inject counts WITHOUT changing review prompts (bake the store).
+  // "on" injects the learned per-repo guidance into specialist + synth
+  // prompts. Parsed by resolveLearningsMode (@/features/learnings).
+  OPENCLAW_LEARNINGS_MODE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

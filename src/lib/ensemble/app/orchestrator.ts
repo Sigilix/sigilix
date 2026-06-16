@@ -368,7 +368,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       incrementalCoverage,
     } = packed
 
-    const disclosure = buildReviewDisclosure({
+    let disclosure = buildReviewDisclosure({
       policySkipped: filesDroppedByFilter,
       oversized: droppedTooLarge,
       spillover:
@@ -506,6 +506,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       fullDiff,
       fullPrDiff,
       filePaths,
+      filesNotReviewed,
       splitFiles,
       filesAfterFilter,
       reviewedFiles,
@@ -546,6 +547,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       testingEvidencePackWithCoverage,
       dynamicEvidenceBlockForPrompt,
       messageForRole,
+      messageForBatchRole,
     } = prompts
 
     args.statusReporter?.report(
@@ -583,6 +585,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       messageForRole,
       securityManifest,
       diff,
+      reviewedFiles,
+      graphBlastCallerPaths,
+      graphBlastDependentPaths,
       matchedPathInstructions,
       stackBlock,
       graphCtxForPrompt,
@@ -592,6 +597,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       sarifFindings,
       sarifResult,
       filePaths,
+      startMs,
+      spilloverBatches,
+      messageForBatchRole,
       ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     })
     if (specialistsPhase.kind === "exit") return specialistsPhase.result
@@ -603,8 +611,23 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       shadowMemoriesForPhase3,
       effectiveSynthVerdict,
       effectiveSynthProvenance,
+      securityManifest: securityManifestForValidation,
       invariantLensAmendmentWork,
+      multiBatchReviewUnion,
     } = specialistsPhase
+    const reviewableForSubmission = multiBatchReviewUnion?.reviewable ?? reviewable
+    const filePathsForSubmission = multiBatchReviewUnion?.filePaths ?? filePaths
+    const filesNotReviewedForSubmission = multiBatchReviewUnion?.filesNotReviewed ?? filesNotReviewed
+    if (multiBatchReviewUnion !== undefined) {
+      disclosure = buildReviewDisclosure({
+        policySkipped: filesDroppedByFilter,
+        oversized: droppedTooLarge,
+        spillover: filesNotReviewedForSubmission,
+        reviewedCount: multiBatchReviewUnion.reviewedFiles.length,
+        costTrimmed: costTrimmedPaths,
+        ...(incrementalCoverage !== undefined ? { scope: "cumulative" } : {}),
+      })
+    }
     args.statusReporter?.report(
       synthStatusUpdate({
         dispatched: router.specialists,
@@ -612,7 +635,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         missing: degradedCoverage?.rolesMissing ?? [],
         droppedFiles: droppedTooLarge,
         graphNodes: graphContextNodesForEvidence,
-        totalFiles: filePaths.length,
+        totalFiles: filePathsForSubmission.length,
         graphMode: graphCtxForPrompt.length > 0 ? "available" : "none",
       }),
     )
@@ -633,12 +656,12 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         fullPrDiff,
         wasTruncated,
         droppedTooLarge,
-        reviewable,
+        reviewable: reviewableForSubmission,
         astFilesByPath,
         astCache,
         astResult,
         coverageGapSet,
-        securityManifest,
+        securityManifest: securityManifestForValidation,
         changedLineTextByPath,
         testingEvidencePackWithCoverage,
         synthInputVerdicts,
@@ -685,7 +708,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       return finalize(telemetry, env, "stale_head", cache)
     }
 
-    // SIG-418 Phase 2 (Design B′): DARK multi-batch SHADOW — after guard #2, detached, output-unchanged (helper header).
     maybeScheduleMultiBatchShadow({
       mode: ensembleConfig.flags.multiBatchMode,
       identity: args,
@@ -695,8 +717,8 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       spilloverBatches,
       roles: router.specialists,
       synthInputVerdicts,
-      filePaths,
-      filesNotReviewed,
+      filePaths: filePathsForSubmission,
+      filesNotReviewed: filesNotReviewedForSubmission,
       graphBlastCallerPaths,
       graphBlastDependentPaths,
       meta,
@@ -707,15 +729,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       client,
     })
 
-    // ─── Submit ────────────────────────────────────────────────
-    // SIG-318 (PR 12d): the render-prep phase — review-memory soften, the SIG-280 warm
-    // veto, the renderable-set assembly (fingerprints, consensus annotation, withdrawal
-    // filtering, repeat-FP metrics, precision profile, the `keepIndex` parallel arrays,
-    // approval-readiness, review-event resolution, `submissionVerdict`), the cross-push
-    // delta-badge snapshot, the coverage roster, and the verification/marker pre-compute
-    // — lives in ensemble/app/render-prep. It mutates `submissionVerdict`'s findings by
-    // reference only on the default-off re-anchor path; every returned value flows
-    // downstream unchanged (the fragile parallel arrays moved byte-identical).
     const {
       submissionVerdict,
       renderableUnanchoredForSubmission,
@@ -745,8 +758,8 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       validationSink: args.validationSink,
       router,
       fullPrDiff,
-      reviewable,
-      filesNotReviewed,
+      reviewable: reviewableForSubmission,
+      filesNotReviewed: filesNotReviewedForSubmission,
       droppedTooLarge,
       succeeded,
       degradedCoverage,
@@ -763,17 +776,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // marker<->finding index alignment the builder relies on (SIG-127).
     let findingMarkers: Array<string | null> = findingMarkersFromPrep
 
-    // ARC-286 / SIG-88 — merge-guard runs BEFORE we bump the
-    // SIG-101 counter or render the body so a PR that merged mid-
-    // review takes the marker-only APPROVE path without ghost-
-    // advancing the per-PR review counter. CodeRabbit catch on
-    // PR #110: pre-fix the bump ran before the guard, so a
-    // `merged-during-review` short-circuit incremented the counter
-    // even though nothing user-visible rendered. The reorder
-    // doesn't change any other behavior — `checkIsPrMerged` is a
-    // pure read against the GitHub API and only needs (client,
-    // owner, repo, prNumber, headSha), all available here.
-    //
     // SIG-88 (2026-05-18): on the merged branch, we now submit a
     // marker-only APPROVE instead of bailing to a skip-notice. Posting
     // REQUEST_CHANGES on already-merged code is noise (and was the
@@ -817,14 +819,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
-    // SIG-318 (PR 12e): the VERIFY-AND-BUILD phase (gate-shadow telemetry, SIG-285
-    // verification + refuted-demote, v2 receipt-join, Trust Ledger v0 baseline, then
-    // the submission build) lives in ensemble/app/verify-and-build. It mutates
-    // `submissionVerdict.findings` + `renderableUnanchoredForSubmission` by reference
-    // on the refuted-demote path; the reassigned `findingMarkers` is re-bound here.
-    // SIG-374: `post_validation` was in the phase enum but never emitted —
-    // this span (gate shadow + verification + receipt-join + trust ledger +
-    // submission build) is part of the dark middle being decomposed.
     const postValidationStartedAtMs = Date.now()
     const {
       primaryEvent,
@@ -846,7 +840,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       ensembleConfig,
       validationSink: args.validationSink,
       meta,
-      reviewable,
+      reviewable: reviewableForSubmission,
       addedLineTextByLine,
       stack,
       coverage,
@@ -928,7 +922,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         prNumber,
         headSha,
         lensWork: invariantLensAmendmentWork,
-        reviewable,
+        reviewable: reviewableForSubmission,
         addedLineTextByLine,
       },
     )

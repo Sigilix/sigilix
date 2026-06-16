@@ -466,6 +466,8 @@ export interface SynthesizerInitialMessageCtx {
     rolesReturned: readonly SpecialistRole[]
     rolesMissing: readonly SpecialistRole[]
   }
+  /** SIG-443: reviewed-vs-skipped file scope for deadline/cap-halted multibatch enforce. */
+  coverageScopeBlock?: string
   /**
    * SIG-138 Phase 2: same dependency-graph neighbors the specialists
    * saw. Synth sees this block so it can weigh findings on graph-
@@ -543,6 +545,9 @@ export function buildSynthesizerInitialMessage(ctx: SynthesizerInitialMessageCtx
       `- Set \`confidence\` no higher than 3/5 when at least one role is missing — partial coverage means lower certainty.`,
       "",
     )
+  }
+  if (ctx.coverageScopeBlock && ctx.coverageScopeBlock.trim().length > 0) {
+    lines.push(ctx.coverageScopeBlock.trim(), "")
   }
   lines.push(`[PR] #${ctx.prNumber}`, "", "[DIFF]", ctx.diff)
   // SIG-138 Phase 2: graph-context neighbors, placed after [DIFF] and

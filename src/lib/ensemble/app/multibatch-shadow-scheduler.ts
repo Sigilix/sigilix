@@ -9,8 +9,7 @@
 // continues to render→publish→finalize unblocked; the posted output + latency are
 // byte-identical to today.
 //
-//   off / on — no-op (the orchestrator only ever calls this with mode "shadow";
-//              `on` is DEFERRED to PR 3 and handled inert at the call site).
+//   off / on — no-op (`on` is handled by the pre-synth enforce path, not shadow).
 //   shadow   — detached, never-reject background run.
 
 import type { Env } from "@/src/shared/types/env"
@@ -52,8 +51,8 @@ export type MultiBatchShadowSchedule = { kind: "noop" } | { kind: "shadow-schedu
  * so tests can await the background work; production callers ignore it.
  */
 export function scheduleMultiBatchShadow(args: ScheduleMultiBatchShadowArgs): MultiBatchShadowSchedule {
-  // Only "shadow" runs in PR 2. "on" (enforce/output-union) is PR 3 — the
-  // orchestrator handles it inert before reaching here; guard again defensively.
+  // Only "shadow" schedules this telemetry-only pass. The enforce/output-union
+  // path handles `on` before synth and must not also schedule shadow work here.
   if (args.mode !== "shadow") return { kind: "noop" }
 
   const startedAtMs = Date.now()
@@ -169,8 +168,7 @@ export interface MaybeScheduleMultiBatchShadowArgs {
  * thin coordinator. Synchronous; returns the schedule handle (ignored in prod,
  * awaited in tests).
  *   off    — no-op.
- *   on     — INERT in PR 2 (enforce/output-union is PR 3) + a `multibatch-mode-unsupported`
- *            log so the operator semantics aren't a silent run-but-not-enforce.
+ *   on     — no-op here; handled by the pre-synth enforce/output-union path.
  *   shadow — schedule the detached spillover pass (only when there IS spillover).
  *
  * MUST be called only AFTER the post-synth stale-head guard (so it never spends
@@ -178,20 +176,6 @@ export interface MaybeScheduleMultiBatchShadowArgs {
  */
 export function maybeScheduleMultiBatchShadow(a: MaybeScheduleMultiBatchShadowArgs): MultiBatchShadowSchedule {
   const { owner, repo, prNumber, headSha } = a.identity
-  const correlation = { owner, repo, prNumber, headSha: headSha.slice(0, 7) }
-  if (a.mode === "on") {
-    console.log(
-      JSON.stringify({
-        event: "multibatch-mode-unsupported",
-        ...correlation,
-        requestedMode: "on",
-        effectiveMode: "off",
-        outputUnion: false,
-        note: "enforce/output-union ships in PR 3; PR 2 supports off|shadow",
-      }),
-    )
-    return { kind: "noop" }
-  }
   if (a.mode !== "shadow" || a.spilloverBatches.length === 0) return { kind: "noop" }
 
   // The whole-PR summary injected into every spillover batch's specialist context

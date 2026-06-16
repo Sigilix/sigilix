@@ -1,21 +1,6 @@
-// SIG-318 (PR 12c) — the SPECIALISTS+SYNTH seam of the PR-review orchestrator
-// (app layer). This is the believability heart of `handlePrReviewEnsemble`,
-// carved verbatim: the ARC-283 shadow specialist fan-out, the prod specialist
-// fan-out + the SIG-235 quorum collector (a CR-hardened custom `Promise.race`
-// drain whose microtask semantics are load-bearing), `collectSpecialistVerdicts`,
-// the SIG-282/SIG-308 dismissal/cleared telemetry, the prod-snapshot writes for
-// the shadow comparison, the ARC-284 fanout summary, and the ARC-277 coverage
-// gate. It then delegates the synthesize phase to `./synthesize` and the recall
-// floors to `./recall-floors`, returning either a skip-notice `exit` arm or the
-// `ok` arm the adjudicate + render phases downstream consume.
-//
-// EXTRACT-METHOD discipline: the moved statements are byte-identical apart from
-// the plumbing — the one coverage-gate bail wraps `bailWithSkipNotice` in the
-// `{ kind: "exit" }` arm, and `shadowState.` container prefixes were already in
-// place from PR 12b. `appendRoleRule` stays private here; `collectSpecialistVerdicts`
-// was later lifted to `./specialists-collect-verdicts` (SIG-369(b), to hold the 1k
-// size budget — it reads the model-provider adapter, which only the app layer may
-// import). ZERO behavior change.
+// SIG-318 (PR 12c) — SPECIALISTS+SYNTH seam of the PR-review orchestrator
+// (app layer): shadow/prod specialist fan-out, quorum collection, coverage
+// gates, synth delegation, and recall floors.
 //
 // Dependency rule: every dependency imports from its canonical NON-god-file home.
 // It never imports the orchestrator god-file.
@@ -74,7 +59,15 @@ import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-schedu
 import { startInvariantLens, type InvariantLensApplyResult } from "./invariant-lens"
 import { invariantLensResultForSynth, scheduleInvariantLensForSynth } from "./invariant-lens-scheduler"
 import { applyRecallFloors } from "./recall-floors"
+import {
+  buildEnforcedReviewUnion,
+  mergeSecurityManifestWithUnionSecrets,
+  renderSynthCoverageScopeBlock,
+  runMultiBatchEnforceForSpecialists,
+  type EnforcedReviewUnion,
+} from "./multibatch-enforce"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
+import type { DiffFileBlock } from "@/src/lib/diff-packing"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
@@ -121,6 +114,12 @@ export interface SpecialistsArgs<R> {
   router: RouterDecision
   /** Per-role initial specialist message (cached by the orchestrator). */
   messageForRole: (role: SpecialistRole) => string
+  reviewedFiles: readonly DiffFileBlock[]
+  spilloverBatches: readonly (readonly DiffFileBlock[])[]
+  graphBlastCallerPaths: readonly string[]
+  graphBlastDependentPaths: readonly string[]
+  startMs: number
+  messageForBatchRole: (role: SpecialistRole, batchDiff: string, batchFactsBlock: string) => string
   securityManifest: SecurityManifest
   diff: string
   matchedPathInstructions: MatchedPathInstructions
@@ -147,7 +146,9 @@ export type SpecialistsPhaseResult<R> =
       shadowMemoriesForPhase3: ReviewMemoryFinding[]
       effectiveSynthVerdict: PrReviewVerdict
       effectiveSynthProvenance: SynthesizerProvenance
+      securityManifest: SecurityManifest
       invariantLensAmendmentWork?: Promise<InvariantLensApplyResult>
+      multiBatchReviewUnion?: EnforcedReviewUnion
     }
 
 export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Promise<SpecialistsPhaseResult<R>> {
@@ -167,6 +168,12 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     sigilixConfig,
     router,
     messageForRole,
+    reviewedFiles,
+    spilloverBatches,
+    graphBlastCallerPaths,
+    graphBlastDependentPaths,
+    startMs,
+    messageForBatchRole,
     securityManifest,
     diff,
     matchedPathInstructions,
@@ -802,6 +809,57 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
       }),
     )
   }
+  const multiBatchEnforce = await runMultiBatchEnforceForSpecialists({
+    enabled: ensembleConfig.flags.multiBatchMode === "on",
+    env,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    perfCtx,
+    orchCtrl,
+    startMs,
+    spilloverBatches,
+    reviewedFiles,
+    graphBlastCallerPaths,
+    graphBlastDependentPaths,
+    roles: router.specialists,
+    currentSourceJsonChars: JSON.stringify(succeeded.map((v) => v.verdict)).length,
+    sigilixConfig,
+    logicPromptBudgetMode,
+    recallRoles: ensembleConfig.flags.recallRoles,
+    reasoningPromptRoles: ensembleConfig.flags.reasoningPromptRoles,
+    reasoningByRole: ensembleConfig.flags.reasoningByRole,
+    messageForBatchRole,
+    appendRoleRule,
+  })
+  const multiBatchReviewUnion =
+    multiBatchEnforce !== null
+      ? buildEnforcedReviewUnion({
+          reviewedFiles,
+          launchedBatches: multiBatchEnforce.launchedBatches,
+          unlaunchedBatches: multiBatchEnforce.unlaunchedBatches,
+          droppedTooLarge: [],
+        })
+      : undefined
+  const sourceVerdicts =
+    multiBatchEnforce === null
+      ? succeeded
+      : [...succeeded, ...multiBatchEnforce.collected.filter((v) => v.verdict !== null)]
+  const synthDiff = multiBatchReviewUnion?.diff ?? diff
+  const synthFilePaths = multiBatchReviewUnion?.filePaths ?? filePaths
+  const securityManifestForValidation =
+    multiBatchReviewUnion !== undefined
+      ? await mergeSecurityManifestWithUnionSecrets(securityManifest, synthDiff)
+      : securityManifest
+  const coverageScopeBlock =
+    multiBatchReviewUnion !== undefined && multiBatchReviewUnion.filesNotReviewed.length > 0
+      ? renderSynthCoverageScopeBlock({
+          reviewedFiles: multiBatchReviewUnion.reviewedFiles.map((file) => file.path),
+          skippedFiles: multiBatchReviewUnion.filesNotReviewed,
+          haltReason: multiBatchEnforce?.haltReason ?? null,
+        })
+      : ""
 
   // ─── SIG-228 Phase 3c: synth-bypass single-specialist hot path ─
   //
@@ -841,8 +899,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     maxRegions: ensembleConfig.tunables.resweepMaxRegions,
     perfCtx,
     orchCtrl,
-    diff,
-    succeeded,
+    diff: synthDiff,
+    succeeded: sourceVerdicts,
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
   const scheduledLens = await scheduleInvariantLensForSynth({
@@ -853,7 +911,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     repo,
     prNumber,
     headSha,
-    diff,
+    diff: synthDiff,
     pendingCheckAmendmentAvailable: true,
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
@@ -861,7 +919,10 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   const invariantLensAmendmentWork =
     scheduledLens.kind === "amendment-scheduled" ? scheduledLens.amendmentWork : undefined
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
-  const synthInputVerdicts = buildSynthInputVerdicts(verdictsForSynth)
+  const synthInputVerdicts = buildSynthInputVerdicts(
+    verdictsForSynth,
+    multiBatchEnforce !== null ? Number.POSITIVE_INFINITY : undefined,
+  )
   const synthPhase = await runSynthPhase({
     env,
     owner,
@@ -874,7 +935,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     shadowState,
     bailWithSkipNotice,
     sigilixConfig,
-    diff,
+    diff: synthDiff,
     matchedPathInstructions,
     stackBlock,
     graphCtxForPrompt,
@@ -883,12 +944,13 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     astRulesConfig,
     sarifFindings,
     sarifResult,
-    filePaths,
+    filePaths: synthFilePaths,
     shadowEnabledRoles,
     router,
     succeeded: verdictsForSynth,
     degradedCoverage,
     synthInputVerdicts,
+    coverageScopeBlock,
     leverOrigins: buildLeverOrigins(resweepResultForSynth(resweep).resweepFindingIds, lensApplied.lensFindingIds),
     synthBypassEnabled: ensembleConfig.flags.synthBypassEnabled,
   })
@@ -920,6 +982,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     shadowMemoriesForPhase3: synthPhase.shadowMemoriesForPhase3,
     effectiveSynthVerdict,
     effectiveSynthProvenance,
+    securityManifest: securityManifestForValidation,
+    ...(multiBatchReviewUnion !== undefined ? { multiBatchReviewUnion } : {}),
     ...(invariantLensAmendmentWork !== undefined ? { invariantLensAmendmentWork } : {}),
   }
 }

@@ -764,6 +764,19 @@ OPENCLAW_LEARNINGS_MODE = "off"
 # filtering.
 OPENCLAW_INCREMENTAL_REVIEW_MODE = "on"
 
+# SIG-452: adversarial-framing hardening. "off" (default, DARK) = the "removed
+# guarding test for a CHANGED symbol" signal is not computed, no prompt block,
+# no extra IO → byte-identical to today. "shadow" = compute the signal + log
+# counts by correlation strength ONLY (output byte-identical; no would-flag —
+# that needs an extra model call, out of v1 scope). "enforce" = also fetch GitHub
+# file metadata (rename exclusion), build the SYMBOL-grade signal, and inject the
+# inverted-inference blocks into the logic specialist + synth user messages so a
+# behavioral change whose guarding test was removed in the same PR RAISES
+# suspicion (benchmark #29 A2/A4) instead of being waved through as intentional.
+# Ships dark; flip to shadow → measure → enforce after the K>=12 eval + FP ruler.
+# Parsed by parseAdversarialFramingMode (@/lib/removed-guarding-tests).
+OPENCLAW_ADVERSARIAL_FRAMING_MODE = "off"
+
 # SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
 # finding off a comment/blank/structural/header line onto the substantive code
 # line it describes within the diff (lands the comment ON the bug, not the `//`

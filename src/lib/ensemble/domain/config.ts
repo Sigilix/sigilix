@@ -36,6 +36,7 @@ import type { InvariantLensMode, InvariantLensRecallContract } from "./invariant
 import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 import type { IncrementalReviewMode } from "./incremental-coverage"
+import type { AdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
 
 /** Normalized `off | shadow | post` mode for an AST security scanner. Kept as a
  *  string to preserve the call sites' exact contract (`mode !== "post"`,
@@ -178,6 +179,12 @@ export interface EnsembleFeatureFlags {
   /** SIG-439: incremental PR re-review coverage mode. Default "off" preserves
    *  current file selection and performs no coverage-memory IO. */
   incrementalReviewMode: IncrementalReviewMode
+  /** SIG-452: adversarial-framing hardening mode — "off" (default) | "shadow" |
+   *  "enforce". off/shadow are byte-identical to today's OUTPUT (shadow only logs
+   *  the "removed guarding test" signal counts); enforce computes the symbol-grade
+   *  signal (incl. a GitHub file-metadata fetch for rename exclusion) and injects
+   *  the enforce-gated logic + synth prompt blocks. */
+  adversarialFramingMode: AdversarialFramingMode
 }
 
 /**

@@ -499,6 +499,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       prNumber,
       headSha,
       mode,
+      adversarialFramingMode: ensembleConfig.flags.adversarialFramingMode,
       orchCtrlSignal: orchCtrl.signal,
       ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       meta,
@@ -549,6 +550,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       dynamicEvidenceBlockForPrompt,
       messageForRole,
       messageForBatchRole,
+      adversarialFramingSynthBlock,
     } = prompts
 
     args.statusReporter?.report(
@@ -601,6 +603,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       startMs,
       spilloverBatches,
       messageForBatchRole,
+      adversarialFramingSynthBlock,
       ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     })
     if (specialistsPhase.kind === "exit") return specialistsPhase.result

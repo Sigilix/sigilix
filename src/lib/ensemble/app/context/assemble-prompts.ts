@@ -66,6 +66,8 @@ import {
   type InspectedTestFileFetchResult,
 } from "@/src/lib/testing-evidence-pack"
 import { detectHelperCoverage } from "@/src/lib/helper-coverage"
+import type { AdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
+import { computeAdversarialFramingBlocks } from "./adversarial-framing-context"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import {
   loadLearnings,
@@ -99,6 +101,10 @@ export interface AssemblePromptsArgs {
   headSha: string
   /** Pinned to "post" by the handler — gates the auto-inline poster. */
   mode: "post"
+  /** SIG-452: the parsed adversarial-framing mode (threaded from the orchestrator's
+   *  EnsembleConfig — the single source of truth — NOT reparsed from env here, so a
+   *  config-injected off/shadow can't be diverged by a differing env var). */
+  adversarialFramingMode: AdversarialFramingMode
   /** The orchestrator's abort signal — the SIG-113 repo-tree fallback fetch honors it. */
   orchCtrlSignal: AbortSignal
   meta: PullRequestMeta
@@ -155,6 +161,11 @@ export interface AssemblePromptsResult {
   messageForRole: (role: SpecialistRole) => string
   /** RETURNED closure for SIG-418 enforce/shadow spillover batch messages. */
   messageForBatchRole: (role: SpecialistRole, batchDiff: string, batchFactsBlock: string) => string
+  /** SIG-452: the SYNTH locus — the enforce-gated removed-guarding-tests keep-rule
+   *  block for the synth's user message. Empty unless enforce + a symbol-grade
+   *  signal exists (off/shadow → "" → byte-identical synth message). Threaded to
+   *  the synth phase by the orchestrator. */
+  adversarialFramingSynthBlock: string
 }
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
@@ -692,6 +703,29 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     )
   }
 
+  // SIG-452: adversarial-framing hardening — the "removed guarding test for a
+  // CHANGED symbol" signal (benchmark #29). off → not computed (byte-identical);
+  // shadow → compute + log counts ONLY (returns EMPTY blocks → no prompt change,
+  // output byte-identical); enforce → also returns the symbol-grade logic + synth
+  // blocks. The metadata fetch + symbol derivation run in BOTH shadow and enforce
+  // so shadow telemetry PREDICTS enforce (Codex sign-off #2); they touch no prompt.
+  // The two inject points (logic message below, synth block returned) are the two
+  // independent loci. Extracted to adversarial-framing-context.ts for the size budget.
+  const { logicBlock: adversarialFramingLogicBlock, synthBlock: adversarialFramingSynthBlock } =
+    await computeAdversarialFramingBlocks({
+      mode: a.adversarialFramingMode,
+      client,
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      fullPrDiff,
+      sourceFilesChanged: testingEvidencePackWithCoverage.sourceFilesChanged,
+      siblingMappings: testingEvidencePackWithCoverage.siblingMappings,
+      headContentByPath: astFilesByPath,
+      astCache,
+    })
+
   // SIG-108: build one message per role, injecting only that role's
   // scoped facts block (no cross-domain leak). The tests specialist
   // additionally gets the SIG-113 testing-evidence block (which
@@ -823,11 +857,19 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
     })
-    specialistMessageCache.set(role, message)
-    return message
+    // SIG-452: the LOGIC locus. Append the enforce-gated removed-guarding-tests
+    // block to the LOGIC specialist's message only. Empty unless enforce + a
+    // symbol-grade signal exists → byte-identical for off/shadow and every other
+    // role. (Appended after the built message so logic.ts stays untouched.)
+    const withAdversarialFraming =
+      role === "logic" && adversarialFramingLogicBlock.length > 0
+        ? `${message}\n\n${adversarialFramingLogicBlock}`
+        : message
+    specialistMessageCache.set(role, withAdversarialFraming)
+    return withAdversarialFraming
   }
-  const messageForBatchRole = (role: SpecialistRole, batchDiff: string, batchFactsBlock: string): string =>
-    buildSpecialistInitialMessage({
+  const messageForBatchRole = (role: SpecialistRole, batchDiff: string, batchFactsBlock: string): string => {
+    const message = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
@@ -842,6 +884,14 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
     })
+    // SIG-452 (Codex sign-off #5): the LOGIC locus must also fire on the SIG-418
+    // multibatch spillover re-runs — the signal is computed over the full PR diff,
+    // so a removed guard whose covered source landed in a spillover batch still
+    // needs the rule. Empty unless enforce + symbol-grade → byte-identical otherwise.
+    return role === "logic" && adversarialFramingLogicBlock.length > 0
+      ? `${message}\n\n${adversarialFramingLogicBlock}`
+      : message
+  }
 
   return {
     securityManifest,
@@ -853,5 +903,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     dynamicEvidenceBlockForPrompt,
     messageForRole,
     messageForBatchRole,
+    adversarialFramingSynthBlock,
   }
 }

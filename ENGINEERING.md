@@ -234,6 +234,41 @@ Cross-cutting rules every model-touching change MUST respect:
   OpenRouter spend: a `:cloud` model override (`FIXTURE_EVAL_MODEL_<role>`, `LOGIC_RECALL_MODEL`,
   `SYNTH_RETENTION_MODEL`, …) routes to Ollama and the key is selected by shape.
 
+#### Auxiliary (non-review) model calls
+
+The table above is the **review ensemble**. Sigilix makes several other model calls; each has its own
+config (source of truth: `model-provider.ts` for the OpenRouter extractors; the per-feature runner for
+the Ollama agentic ones):
+
+| call | model | provider | why |
+| --- | --- | --- | --- |
+| **claim extractor** (`CLAIM_EXTRACTOR_CONFIG`, SIG-276) | `deepseek-v4-flash` | OpenRouter | Write-time single-shot classifier over the final findings — extracts the claims the trust ledger then verifies. `retries: 0`, **fail-open**: a capacity blip yields no claims, never blocks the merge or burns latency. |
+| **learning extractor** (`LEARNING_EXTRACTOR_CONFIG`, SIG-104) | `deepseek-v4-flash` | OpenRouter | Conservative classifier that turns a conversational reply into a stored Learning. `retries: 0`, fail-open — extraction noise must never corrupt a review. |
+| **CI-failure triage** (`triage-ci.ts`, SIG-424) | **synth** — `nemotron-3-ultra` | OpenRouter | `OPENCLAW_CI_TRIAGE_SYNTH_MODE=enforce` (wrangler.toml) routes red-CI root-cause through `runSynthesizer` → posts **grounded inline**. The legacy `glm-5.1:cloud` standalone sticky (`DEFAULT_MODEL`) is **suppressed** in enforce — it only runs in off/shadow/sensitive. |
+| **PR-describe / `@sigilix` chat** (`github-mention.ts`, SIG-437) | `glm-5.1:cloud` → **synth** (SIG-453, in flight) | Ollama → OpenRouter | Conversational/agentic surfaces (PR summaries, Q&A, the mention tool-loop) — multi-step tool use, not the precision-graded review path. **SIG-453 migrates these onto the synth model** (nemotron) to unify the generative calls; until then `glm-5.1:cloud`. Honors the `chatEnabled` kill-switch (a hard model-off, not just "no tool-loop"). |
+
+**Provider split.** The review ensemble + the synth-routed auxiliary calls (CI-triage; SIG-453 adds
+describe/chat) run on **OpenRouter** (frontier generalist, cross-upstream failover). Remaining
+non-customer-path agentic calls use **Ollama Turbo** (`glm-5.1:cloud`) for cost. Direction of travel:
+consolidate the generative calls onto the synth model; keep the precision-graded review on its per-role
+specialists.
+
+#### Reliability & in-flight model changes
+
+- **Specialist-unavailable resilience (SIG-449).** The two FAST review roles (security, performance) run
+  `retries: 2 @ 90s/attempt` — a re-roll recovers a transient **our-side** parse/stream failure (the
+  dominant "specialist unavailable" cause, per the OpenRouter activity log: zero provider cancels/errors —
+  NOT slow routes), and 90s clears their observed max (~55s) with margin. `logic`/`tests` stay `retries: 1`
+  (slower models, fit 2 attempts in the 370s role wall). The OpenRouter SSE adapter **salvages** a body
+  whose only defect is a lost `[DONE]` sentinel **only when `finish_reason:"stop"`** proves the generation
+  completed — a mid-generation cut throws and re-runs, so a truncated review can never be surfaced as a
+  silent "clean" sign-off. Worst-case model calls per run = 14 (`MAX_CALLS_PER_ENSEMBLE_RUN`).
+- **`logic` is migrating `openai/o3` → Kimi K2.7 (SIG-450).** o3 is removed from the API **2026-08-26**.
+  Kimi (run with reasoning) screens **93% recall / 24% FP** on the Ollama K=12 ruler — it ties the best
+  alternative on recall and has the lowest FP of any candidate. The logic recall-suffix is being tuned to
+  close the recall gap to o3 before the flip; until then o3 stays live. (The o3-mini-high flip — config +
+  pricing + this doc — is the template.)
+
 ---
 
 ## 5. Durable Objects — stateful work

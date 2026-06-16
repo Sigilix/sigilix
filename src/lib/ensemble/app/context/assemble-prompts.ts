@@ -68,6 +68,7 @@ import {
 import { detectHelperCoverage } from "@/src/lib/helper-coverage"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
+import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
 import type { GraphContextNode } from "@/src/do/repo-graph"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
@@ -95,6 +96,7 @@ export interface AssemblePromptsArgs {
   fullDiff: string
   fullPrDiff: string
   filePaths: string[]
+  filesNotReviewed: string[]
   splitFiles: SplitFile[]
   filesAfterFilter: SplitFile[]
   reviewedFiles: SplitFile[]
@@ -140,6 +142,8 @@ export interface AssemblePromptsResult {
   dynamicEvidenceBlockForPrompt: string
   /** RETURNED closure (hides ~16 captures so the specialists call stays a thin map). */
   messageForRole: (role: SpecialistRole) => string
+  /** RETURNED closure for SIG-418 enforce/shadow spillover batch messages. */
+  messageForBatchRole: (role: SpecialistRole, batchDiff: string, batchFactsBlock: string) => string
 }
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
@@ -157,6 +161,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     fullDiff,
     fullPrDiff,
     filePaths,
+    filesNotReviewed,
     splitFiles,
     filesAfterFilter,
     reviewedFiles,
@@ -683,6 +688,11 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   // remain shared. Messages are cached per role since each fan-out
   // path may request the same role's message more than once.
   const specialistMessageCache = new Map<SpecialistRole, string>()
+  const prGlobalSummary = buildMultiBatchPrSummary({
+    changedFiles: [...filePaths, ...filesNotReviewed],
+    callerPaths: graphBlastCallerPaths,
+    dependentPaths: graphBlastDependentPaths,
+  })
   const messageForRole = (role: SpecialistRole): string => {
     const cached = specialistMessageCache.get(role)
     if (cached !== undefined) return cached
@@ -730,6 +740,21 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     specialistMessageCache.set(role, message)
     return message
   }
+  const messageForBatchRole = (role: SpecialistRole, batchDiff: string, batchFactsBlock: string): string =>
+    buildSpecialistInitialMessage({
+      prNumber,
+      title: meta.title,
+      body: meta.body ?? "",
+      diff: batchDiff,
+      retrievalSnapshot: "",
+      namespace,
+      guidance: sigilixConfig.guidance ? `${sigilixConfig.guidance}\n\n${prGlobalSummary}` : prGlobalSummary,
+      ...(batchFactsBlock.length > 0 ? { deterministicChecksBlock: batchFactsBlock } : {}),
+      ...(stackBlock.length > 0 ? { stackBlock } : {}),
+      ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
+        ? { graphContext: graphCtxForPrompt }
+        : {}),
+    })
 
   return {
     securityManifest,
@@ -740,5 +765,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     testingEvidencePackWithCoverage,
     dynamicEvidenceBlockForPrompt,
     messageForRole,
+    messageForBatchRole,
   }
 }

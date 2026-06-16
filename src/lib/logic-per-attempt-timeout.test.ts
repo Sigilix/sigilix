@@ -50,16 +50,18 @@ describe("specialist per-attempt timeout overrides", () => {
     }
   })
 
-  it("gives logic retries:1 + no fallback (SIG-406: OpenRouter self-routes) whose attempt chain fits the wall", () => {
-    // SIG-406: on OpenRouter the resilience is a single same-model RETRY (retries:1);
-    // there is NO per-role cross-provider fallback (OpenRouter routes across upstreams).
-    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
+  it("gives logic retries:2 + no fallback (SIG-450 burst resilience) whose 3-attempt chain still fits the wall", () => {
+    // SIG-450 (2026-06-16): logic raised retries:1→2 — under concurrent-PR burst it was the
+    // heaviest role (reasoning=high) and blanked first ("logic unavailable", #29 re-probe 3/5).
+    // Same lever as the SIG-449 fast roles: an extra same-model attempt recovers a transient
+    // 429/parse/stream failure. Still NO cross-provider fallback (OpenRouter self-routes).
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
-    // The full chain — primary (120s) + backoff (800ms) + 1 retry (120s) — must fit
-    // inside SPECIALIST_TIMEOUT_MS so a stalled primary can still be rescued in the wall.
-    const chainMs =
-      (SPECIALIST_CONFIGS.logic.retries + 1) * SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs! +
-      SPECIALIST_CONFIGS.logic.retries * RETRY_BACKOFF_MS[0]!
+    // The full 3-attempt chain — 3×120s + both backoffs (0.8s + 2.5s) = 363.3s — must fit
+    // inside the 370s role wall so a stalled primary can still be rescued (6.7s slack). Uses
+    // the accurate per-retry backoff sum (matching the security/performance guard above).
+    const backoffMs = RETRY_BACKOFF_MS.slice(0, SPECIALIST_CONFIGS.logic.retries).reduce((a, b) => a + b, 0)
+    const chainMs = (SPECIALIST_CONFIGS.logic.retries + 1) * SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs! + backoffMs
     expect(chainMs).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
   })
 

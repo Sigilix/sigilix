@@ -192,11 +192,12 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // then raised the two FAST roles (security/performance) to `retries: 2 @ 90s`
   // because their "unavailable" partials were our-side parse/stream failures that a
   // re-roll recovers (the CSV showed both finishing < 55s, zero provider cancels);
-  // logic/tests/synth stay `retries: 1`. Per-attempt caps preserved where the role
-  // set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450, retries:1, no fallback, 120s attempt cap)", () => {
+  // SIG-450 then raised logic to `retries: 2` for the same reason — it blanked first under
+  // concurrent-PR burst; tests/synth stay `retries: 1`. Per-attempt caps preserved where the
+  // role set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
+  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450, retries:2, no fallback, 120s attempt cap)", () => {
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("moonshotai/kimi-k2.7-code")
-    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)
   })
@@ -247,23 +248,23 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (14)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (15)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves before
     // admitting a PR, so the regression asserts against it directly — not a
     // hand-calc that would silently drift. Pre-flight retrieve is a Vectorize
     // call, not a model call, so it is intentionally NOT counted here.
     //
-    // Worst-case model calls per ensemble run (SIG-449: security/perf retries:2):
-    //   logic:       primary + 1 retry                        = 2
+    // Worst-case model calls per ensemble run (SIG-449: security/perf retries:2; SIG-450: logic retries:2):
+    //   logic:       primary + 2 retries (SIG-450)            = 3
     //   security:    primary + 2 retries (SIG-449)            = 3
     //   performance: primary + 2 retries (SIG-449)            = 3
     //   tests:       primary + 1 retry                        = 2
     //   synth:       primary + 1 retry                        = 2
     //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 14.  OpenRouter routes each call across upstreams, so no
+    //   total: 15.  OpenRouter routes each call across upstreams, so no
     //   per-role cross-provider fallback adds to the count.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(14)
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(15)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

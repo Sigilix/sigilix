@@ -39,6 +39,7 @@ import {
   formatFindingStructuredDetailsMarkdown,
   formatBodyFindingSuggestedChange,
   formatProposedChangeBlock,
+  formatLearningAttribution,
   renderFindingEvidenceBlock,
   collectCitedLineText,
   extensionToFenceLang,
@@ -99,6 +100,9 @@ export function renderBodyOnlyFindings(
     lines.push(
       `- ${badge} ${categoryBadge}${pill} **${anchor}**: **${stripAstMarkers(f.headline)}** <sub>score ${f.score}${subTag}${anchorNote}</sub>`,
     )
+    // SIG-104 PR-3: the "applied learning" attribution line on a body-only
+    // finding too (trust-ledger-gated, like the inline pill above).
+    const learningAttribution = trustLedger ? formatLearningAttribution(f) : ""
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -106,6 +110,7 @@ export function renderBodyOnlyFindings(
       showEvidence ? renderFindingEvidenceBlock(f) : "",
       formatFindingStructuredDetailsMarkdown(f),
       formatBodyFindingSuggestedChange(f),
+      learningAttribution,
     ].filter((s) => s !== "")
     const bodyLines = detailLines
       .join("\n\n")
@@ -289,6 +294,11 @@ export function formatFindingComment(
   if (finding.contentFingerprint) {
     lines.push(`<!-- sigilix:fingerprint:${finding.contentFingerprint} -->`)
   }
+  // SIG-104 PR-3: the inline "applied learning" attribution — a muted provenance
+  // line under the headline when a learned rule shaped this finding's handling
+  // (the carve-out kept it). Gated behind the trust-ledger flag like the pills.
+  const learningAttribution = trustLedger ? formatLearningAttribution(finding) : ""
+  if (learningAttribution) lines.push(learningAttribution)
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   const moreInfo = formatFindingMoreInfoMarkdown(finding)

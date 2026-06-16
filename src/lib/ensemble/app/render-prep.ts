@@ -53,6 +53,7 @@ import { shadowMatchReviewMemoryClaims, type ShadowMatchFinding } from "@/src/li
 import type { ReviewMemoryClaimMarkerData, ReviewMemoryClaimType } from "@/src/lib/review-memory/types"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/src/features/precision-profile"
+import { applyLearningSuppressions } from "./learnings-suppress-prep"
 import { readReviewManifest, type ReviewManifestFinding } from "@/src/lib/review-manifest"
 import { type RouterDecision } from "@/src/lib/ensemble-router"
 import {
@@ -93,6 +94,7 @@ export interface RenderPrepArgs {
   owner: string
   repo: string
   prNumber: number
+  repoId?: number // SIG-104 PR-3: learnings store key for the suppress gate.
   headSha: string
   ensembleConfig: EnsembleConfig
   sigilixConfig: SigilixConfig
@@ -631,6 +633,18 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
       }
     }
   }
+  // SIG-104 PR-3: the learnings SUPPRESS gate — carve-outs + mode in `learnings-suppress-prep`.
+  precisionKept = await applyLearningSuppressions({
+    env,
+    owner,
+    repo,
+    prNumber,
+    repoId: a.repoId,
+    kept: precisionKept,
+    renderableFindings,
+    consensusProvenance,
+    changedPaths: [...reviewable.keys(), ...filesNotReviewed],
+  })
   // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
   // body-only set. PR C's enforce mode can demote a LINE-scoped finding
   // (which carries a real path+line) to the body; without this it would

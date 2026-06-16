@@ -1,3 +1,4 @@
+import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import type { LearningEntry } from "./types"
 
 /**
@@ -24,6 +25,21 @@ export function renderLearningsForPrompt(entries: ReadonlyArray<LearningEntry>):
     "## Repository-specific guidance (learned from past reviews)",
     ...entries.map((entry) => `- ${promptTag(entry)} ${promptRule(entry)}`),
   ].join("\n")
+}
+
+/**
+ * SIG-104 PR-3: render the precision-profile BOOST as a single prompt line —
+ * the categories this repo has repeatedly ACCEPTED, so the specialists give them
+ * priority. This is the "computed-but-unused boost finally applied at the
+ * learnings prompt gate" the precision-profile README + spec §5 call for. It is
+ * deliberately a low-risk PROMPT nudge (never a score mutation), and it stays
+ * subordinate to the non-negotiable recall constraints — it raises attention, it
+ * never suppresses. Returns "" when no category is boosted. Pure.
+ */
+export function renderBoostedCategoriesForPrompt(categories: ReadonlyArray<FindingCategory>): string {
+  if (categories.length === 0) return ""
+  const unique = [...new Set(categories)]
+  return `Prioritize findings in these repeatedly-valued categories (do not lower the bar elsewhere): ${unique.join(", ")}.`
 }
 
 export function renderOverviewFooter(entries: ReadonlyArray<LearningEntry>): string {

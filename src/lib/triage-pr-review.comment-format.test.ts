@@ -533,6 +533,45 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
   })
 })
 
+describe("formatFindingComment — SIG-104 PR-3 learning attribution pill", () => {
+  const shaped: PrReviewFinding = {
+    path: "src/a.ts",
+    line: 12,
+    score: 5,
+    category: "logic",
+    headline: "guard against undefined",
+    body: "x can be undefined here.",
+    shapedByLearning: { ruleText: "Treat generated SDK files as context only." },
+  }
+
+  it("renders the inline attribution line when the trust-ledger flag is on", () => {
+    const out = formatFindingComment(shaped, 5, undefined, undefined, true)
+    expect(out).toContain('<sub>shaped by learned rule: "Treat generated SDK files as context only."</sub>')
+  })
+
+  it("is GATED on the trust-ledger flag — no attribution when the flag is off", () => {
+    const out = formatFindingComment(shaped, 5, undefined, undefined, false)
+    expect(out).not.toContain("shaped by learned rule")
+  })
+
+  it("renders no attribution line on a finding with no learning provenance", () => {
+    const plain: PrReviewFinding = { ...shaped }
+    delete plain.shapedByLearning
+    const out = formatFindingComment(plain, 5, undefined, undefined, true)
+    expect(out).not.toContain("shaped by learned rule")
+  })
+
+  it("HTML-escapes a crafted rule so it cannot break out of the <sub> container", () => {
+    const crafted: PrReviewFinding = {
+      ...shaped,
+      shapedByLearning: { ruleText: "</sub><script>x</script> & `code`" },
+    }
+    const out = formatFindingComment(crafted, 5, undefined, undefined, true)
+    expect(out).not.toContain("<script>")
+    expect(out).toContain("&lt;script&gt;")
+  })
+})
+
 describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
   const reviewable: ReviewableMap = new Map([
     [

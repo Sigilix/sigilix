@@ -70,6 +70,27 @@ export function wrapInlineHtmlTags(s: string): string {
 const MARKDOWN_HEADING_LINE_RE = /^(\s{0,3})(#{1,6})(\s+)/gm
 const MARKDOWN_TASK_LIST_LINE_RE = /^(\s{0,3})([-+*]\s+\[[ xX]\])(\s+)/gm
 
+/** SIG-104 PR-3: cap the learned-rule text in the inline attribution `<sub>` line. */
+const LEARNING_ATTRIBUTION_RULE_LIMIT = 160
+
+/**
+ * SIG-104 PR-3: the inline "applied learning" attribution line — a small muted
+ * `<sub>` provenance note rendered under a finding whose suppression was shaped
+ * by a learned rule (the carve-out kept it). Returns "" when the finding carries
+ * no attribution. The rule text is user/LLM-derived (already secret-redacted at
+ * capture) so it is HTML-escaped + length-capped before embedding, mirroring the
+ * learnings render leaf's `escapeInlineMarkdown`. Pure — exported for tests.
+ */
+export function formatLearningAttribution(finding: PrReviewFinding): string {
+  const ruleText = finding.shapedByLearning?.ruleText?.trim()
+  if (!ruleText) return ""
+  const capped =
+    ruleText.length > LEARNING_ATTRIBUTION_RULE_LIMIT
+      ? `${ruleText.slice(0, LEARNING_ATTRIBUTION_RULE_LIMIT - 1)}…`
+      : ruleText
+  return `<sub>shaped by learned rule: "${escapeInlineEvidenceValue(capped)}"</sub>`
+}
+
 export function sanitizeMoreInfoMarkdownText(s: string): string {
   const htmlSafe = wrapInlineHtmlTags(s)
   return htmlSafe.replace(MARKDOWN_HEADING_LINE_RE, "$1\\$2$3").replace(MARKDOWN_TASK_LIST_LINE_RE, "$1\\$2$3")

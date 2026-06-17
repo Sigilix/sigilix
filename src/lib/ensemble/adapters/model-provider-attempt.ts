@@ -11,7 +11,7 @@
 // the caller can both charge cost and decompose the logic input.
 
 import { chat } from "@/src/shared/adapters/model"
-import type { ChatMessage, ChatResult } from "@/src/shared/ports/model"
+import type { ChatArgs, ChatMessage, ChatResult } from "@/src/shared/ports/model"
 import {
   runSpecialistToolConversation,
   type SpecialistRuntimeTool,
@@ -30,6 +30,13 @@ export interface AttemptChatArgs<T> {
   /** SIG-287: bounded reasoning level for THIS attempt. Only the primary loop
    *  passes it; the fallback attempt omits it (stays `think:false`). */
   reasoning?: "high" | "medium" | "low"
+  /** SIG-460: OpenRouter provider-routing for THIS attempt — `runWithRetryAndFallback`
+   *  passes `{ ignore: [<slug>] }` to steer a retry off a provider that failed mid-
+   *  stream on a prior attempt. Threaded to BOTH the single-shot and tool-conversation
+   *  `chat` calls. (In practice only the single-shot stream path produces the
+   *  `Upstream error from <provider>` failures that populate the exclusion — the tool
+   *  path is non-streaming — but threading both keeps the routing consistent.) */
+  provider?: ChatArgs["provider"]
   specialistTools?: SpecialistRuntimeTool[]
 }
 
@@ -74,6 +81,7 @@ export async function attemptChat<T>(args: AttemptChatArgs<T>): Promise<AttemptC
         tools: args.specialistTools!,
         format: args.format!,
         ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+        ...(args.provider !== undefined ? { provider: args.provider } : {}), // SIG-460
         temperature: 0,
       })
       toolConversation = toolResult.toolConversation
@@ -88,6 +96,9 @@ export async function attemptChat<T>(args: AttemptChatArgs<T>): Promise<AttemptC
         ...(args.format ? { format: args.format } : {}),
         // SIG-287: byte-identical when undefined (default-off → think:false).
         ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+        // SIG-460: byte-identical when undefined (first attempt); set on a retry that
+        // is steering off a provider which failed mid-stream on a prior attempt.
+        ...(args.provider !== undefined ? { provider: args.provider } : {}),
         temperature: 0,
       })
     }

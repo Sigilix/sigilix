@@ -136,6 +136,17 @@ export interface ChatArgs {
    *  — undefined → `think:false` (byte-identical current behavior); set →
    *  `think:"<level>"`. Ignored on format-less / tool-call turns. */
   reasoning?: "high" | "medium" | "low"
+  /** SIG-460: OpenRouter provider-routing controls, passed straight through to the
+   *  request body as `provider`. `runWithRetryAndFallback` uses it to EXCLUDE a
+   *  provider that just failed MID-STREAM on a prior attempt (`{ ignore: [<slug>] }`)
+   *  — OpenRouter's automatic failover only covers REQUEST-time errors, not mid-stream
+   *  ones, so a plain same-model retry can re-pick the dead provider. Absent → no
+   *  `provider` field (today's behavior). Ignored by the Ollama adapter (no provider
+   *  concept). A mis-normalized slug is a documented OpenRouter no-op (never errors).
+   *  Excluding a real provider narrows the pool — safe for our multi-provider models
+   *  (Kimi/v4-pro route across 11/16 providers); on a hypothetical single-provider
+   *  model it could exhaust the pool (an availability tradeoff, not a concern here). */
+  provider?: { ignore?: string[]; order?: string[]; allow_fallbacks?: boolean }
 }
 
 export interface ChatResult {

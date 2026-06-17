@@ -39,6 +39,10 @@ export interface SpecialistToolConversationArgs {
   tools: SpecialistRuntimeTool[]
   format: Record<string, unknown>
   reasoning?: "high" | "medium" | "low"
+  /** SIG-460: OpenRouter provider-routing (e.g. `{ ignore: [<slug>] }`), forwarded to
+   *  BOTH the tool-turn and final `chat` calls so the tool path honors a retry's
+   *  provider exclusion identically to the single-shot path. */
+  provider?: ChatArgs["provider"]
   /** Provider passes 0 explicitly; direct callers also default to deterministic tool turns. */
   temperature?: number
   toolTimeoutMs?: number
@@ -71,6 +75,7 @@ export async function runSpecialistToolConversation(
     chatEnabled: args.chatEnabled,
     signal: args.signal,
     tools: args.tools.map(toChatToolDef),
+    ...(args.provider !== undefined ? { provider: args.provider } : {}), // SIG-460
     temperature: args.temperature ?? 0,
   })
   const usage = addUsage({}, toolTurn.usage)
@@ -116,6 +121,7 @@ export async function runSpecialistToolConversation(
     signal: args.signal,
     format: args.format,
     ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}),
+    ...(args.provider !== undefined ? { provider: args.provider } : {}), // SIG-460
     temperature: args.temperature ?? 0,
   })
   return {

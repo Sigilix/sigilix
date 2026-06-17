@@ -107,6 +107,33 @@ export function breaksSameModelRetry(failureReason: string | undefined, parseFai
   return isPermanentFailure(failureReason, parseFailureLabel)
 }
 
+/**
+ * SIG-460: extract the upstream PROVIDER SLUG named in a failure reason, so
+ * `runWithRetryAndFallback` can EXCLUDE it from the next attempt of the same run
+ * (`provider: { ignore: [slug] }`). OpenRouter's automatic failover only covers
+ * REQUEST-time errors; a MID-STREAM provider 500 (`OpenRouter stream error: Upstream
+ * error from WandB: Internal server error`) kills the attempt, and a plain same-model
+ * retry can re-pick the same dead provider.
+ *
+ * Matches the `Upstream error from <Provider>` form (the observed mid-stream shape),
+ * then normalizes the DISPLAY name to OpenRouter's slug convention (lowercase, strip
+ * non-alphanumerics): `"WandB" → "wandb"`, `"DeepInfra" → "deepinfra"`. Returns null
+ * when no provider is named (HTTP-status errors, timeouts, parse failures, aborts) —
+ * those add no exclusion (current behavior). A mis-normalized slug is a documented
+ * OpenRouter no-op in `ignore`, so a wrong guess never breaks a call. Pure; exported
+ * for tests.
+ */
+export function parseFailedProvider(failureReason: string | undefined): string | null {
+  if (!failureReason) return null
+  const match = failureReason.match(/upstream error from\s+([^:,\n]+)/i)
+  if (!match || !match[1]) return null
+  const slug = match[1]
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+  return slug.length > 0 ? slug : null
+}
+
 // SIG-392: relocated from model-provider.ts to keep that adapter <=1k lines
 // (the SIG-386 pattern). Pure wire-shape validator; body byte-identical.
 export function isValidProvenance(value: unknown): value is SynthesizerProvenance {

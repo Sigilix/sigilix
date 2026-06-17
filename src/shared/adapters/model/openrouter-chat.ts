@@ -106,6 +106,10 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     // Mirror ollama-chat: reasoning level applies only on schema-constrained calls.
     if (args.reasoning !== undefined) body.reasoning = { effort: args.reasoning }
   }
+  // SIG-460: provider-routing pass-through (e.g. `{ ignore: [<slug>] }` to steer a
+  // retry off a provider that just failed mid-stream). Absent on the first attempt →
+  // byte-identical request to today. Applies to ALL turns (tool + schema + plain).
+  if (args.provider !== undefined) body.provider = args.provider
 
   try {
     const res = await fetch(OPENROUTER_URL, {

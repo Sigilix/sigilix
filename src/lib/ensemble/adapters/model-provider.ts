@@ -30,7 +30,7 @@ import {
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
 // SIG-287: `wrapFailure` joined the leaf for the same budget reason (private —
 // not re-exported, only `runWithRetryAndFallback` calls it).
-import { breaksSameModelRetry, isValidProvenance, wrapFailure } from "./model-provider-internals"
+import { breaksSameModelRetry, isValidProvenance, parseFailedProvider, wrapFailure } from "./model-provider-internals"
 export { breaksSameModelRetry, isPermanentFailure, isValidProvenance } from "./model-provider-internals"
 // SIG-405/406: per-model API-key selection (key-by-id-shape) — OpenRouter id →
 // OPENROUTER_API_KEY, `:cloud` tag → OLLAMA_API_KEY. The latter lets local eval runs
@@ -527,6 +527,12 @@ export async function runWithRetryAndFallback<T>(args: {
   let attemptsUsed = 0
   let lastFailureReason: string | undefined
   let lastFailureRaw: string | undefined
+  // SIG-460: providers that failed mid-stream on a prior attempt OF THIS RUN. Spread as
+  // `provider: { ignore: [...] }` into subsequent attempts so a retry steers off the
+  // dead provider (OpenRouter auto-failover only covers request-time errors). Local to
+  // this call — never leaks across roles/runs. Empty until the first provider-named
+  // failure, so the first attempt's request is byte-identical to today.
+  const excludedProviders = new Set<string>()
 
   // Try primary with retries
   for (let attempt = 0; attempt <= config.retries; attempt++) {
@@ -565,6 +571,8 @@ export async function runWithRetryAndFallback<T>(args: {
           parseFailureLabel,
           ...(args.specialistTools !== undefined ? { specialistTools: args.specialistTools } : {}),
           ...(args.reasoning !== undefined ? { reasoning: args.reasoning } : {}), // SIG-287: PRIMARY only (fallback omits)
+          // SIG-460: steer this attempt off any provider that died mid-stream earlier.
+          ...(excludedProviders.size > 0 ? { provider: { ignore: [...excludedProviders] } } : {}),
         }),
       perAttemptCap,
       signal,
@@ -599,6 +607,10 @@ export async function runWithRetryAndFallback<T>(args: {
     }
     lastFailureReason = outcome.failureReason
     lastFailureRaw = outcome.failureRawAnswer
+    // SIG-460: if the failure named an upstream provider (mid-stream 500), exclude it
+    // from the remaining attempts so the retry can't re-pick the same dead provider.
+    const failedProvider = parseFailedProvider(outcome.failureReason)
+    if (failedProvider) excludedProviders.add(failedProvider)
     // Failure classification (SIG-438):
     //
     //   Break-early (404 missing-model, 401/403 auth, 400 validation,
@@ -645,6 +657,9 @@ export async function runWithRetryAndFallback<T>(args: {
           parseAnswer,
           parseFailureLabel,
           ...(args.specialistTools !== undefined ? { specialistTools: args.specialistTools } : {}),
+          // SIG-460: carry the primary's mid-stream provider exclusions onto the
+          // fallback too (no-op if the failed provider doesn't serve the fallback model).
+          ...(excludedProviders.size > 0 ? { provider: { ignore: [...excludedProviders] } } : {}),
         }),
       perAttemptCap,
       signal,

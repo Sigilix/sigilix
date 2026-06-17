@@ -183,7 +183,7 @@ export function verifyFinding(
  *  plus the eligibility fields). `startLine` gates the range fail-open below. */
 type DemotableFinding = Pick<
   PrReviewFinding,
-  "path" | "line" | "headline" | "body" | "score" | "category" | "startLine"
+  "path" | "line" | "headline" | "body" | "score" | "category" | "startLine" | "anchorSide"
 >
 
 /**
@@ -209,6 +209,11 @@ export function selectRefutedInlineDemotions<T extends DemotableFinding>(
       f.score >= 4 &&
       (f.category === "logic" || f.category === "security") &&
       (f.startLine === undefined || f.startLine === f.line) && // single-line only
+      // SIG-463: a LEFT (deleted-line) anchor points at REMOVED code; `verifyFinding`
+      // checks the ADDED-line index and would FALSE-refute it (the colliding new-line
+      // content lacks the deleted token) → wrong body-demote. Exempt it (FN-safe; the
+      // anchor was already content-matched to the unique deleted line).
+      f.anchorSide !== "LEFT" &&
       verifyFinding(f, addedLineIndex).verdict === "refuted",
   )
 }
@@ -334,6 +339,10 @@ export function applyReanchors<T extends DemotableFinding>(
   for (let i = 0; i < inlineFindings.length; i++) {
     const f = inlineFindings[i]
     if (f === undefined) continue
+    // SIG-463: never re-anchor a LEFT (deleted-line) anchor onto a RIGHT added line
+    // — it intentionally points at REMOVED code (same exemption as the refute-demote
+    // selector; verifyFinding would FALSE-refute it against the added-line index).
+    if (f.anchorSide === "LEFT") continue
     // Eligibility = the selectRefutedInlineDemotions contract (refuted subset).
     if (f.score < 4) continue
     if (f.category !== "logic" && f.category !== "security") continue

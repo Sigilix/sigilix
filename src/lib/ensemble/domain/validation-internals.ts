@@ -15,7 +15,12 @@
 
 import type { PrReviewFinding, EvidenceRecord } from "@/src/shared/domain/pr-review-finding"
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
-import { deriveSide, isContiguousRightRange, type ReviewableMap } from "@/src/shared/util/diff-positions"
+import {
+  deriveSide,
+  isContiguousRightRange,
+  isPositionReviewable,
+  type ReviewableMap,
+} from "@/src/shared/util/diff-positions"
 import { isSubstantiveAnchorLine, isSubstantiveCodeAnchorLine } from "@/src/shared/util/anchor-lines"
 import { deriveTokens, tokenPresentAtLine } from "@/src/lib/verification/verify-finding"
 import type { CollectedVerdict, SynthesizerProvenance } from "./validation"
@@ -601,6 +606,86 @@ export function snapFindingLineToQuotedCode(
     const { startLine: _staleStartLine, ...rest } = finding
     void _staleStartLine
     return { ...rest, line: matched[0]!, scope: "line" as const }
+  }
+  return finding
+}
+
+/**
+ * SIG-463: a finding about REMOVED code (e.g. "you deleted the expiry guard") has
+ * no surviving RIGHT line that IS the bug; the model anchors it to an adjacent
+ * surviving structural line (a `} catch {` — "a blank area", founder Image #3).
+ * The removed code lives on a LEFT/red diff line, but a mid-function deletion's
+ * old line-number COLLIDES with the context line that shifted into it, so
+ * `deriveSide` prefers RIGHT and SIG-456's LEFT path (which gates on
+ * `deriveSide==="LEFT"`) can't reach it. This helper re-points such a finding to
+ * the deleted line and sets `anchorSide:"LEFT"` — an explicit side the renderer
+ * honors via `isPositionReviewable(...,"LEFT")`, overriding `deriveSide`'s
+ * collision preference — so the comment posts on the line you actually removed.
+ *
+ * The LEFT analog of `snapFindingLineToQuotedCode`; runs RIGHT AFTER it (the
+ * RIGHT/added snap wins first, so present-code findings never reach here).
+ * Matching reuses the verification gate's primitives (`tokenPresentAtLine`).
+ *
+ * The can't-mis-anchor contract (do NOT weaken any clause):
+ *   - `!scopeLocked`, `scope:"line"`, non-empty path, finite `line`, `anchorSide`
+ *     not already set.
+ *   - PROTECT present-code (DeepSeek blocker): if the finding's current line is in
+ *     the ADDED-line map (a real added/modified RIGHT line — SIG-462's domain) or
+ *     is already a LEFT anchor, return UNCHANGED. Only a finding on a CONTEXT line
+ *     (RIGHT-but-not-added) or an out-of-diff line — i.e. NOT anchored to present
+ *     added code — is eligible to move to the deleted code. (Never LEFT-pull a
+ *     finding off a real added/modified RIGHT line.)
+ *   - the deleted TARGET must be a UNIQUE line where a backticked span is
+ *     whole-present (`tokenPresentAtLine`), is `isSubstantiveCodeAnchorLine`, AND
+ *     is LEFT-reviewable (`isPositionReviewable(...,"LEFT")`). Longest span yielding
+ *     any candidate decides; `>1` candidate → UNCHANGED (never guess).
+ *   - on a snap: `{ ...rest (strip startLine), line: oldLine, scope:"line",
+ *     anchorSide:"LEFT" }`.
+ *   - recall-safe: every non-confident path returns UNCHANGED (never dropped,
+ *     never moved to a wrong line). A LEFT anchor is exempt from the SIG-285
+ *     added-line refute (it points at a deleted line the added index can't check).
+ *
+ * Pure — exported for tests.
+ */
+export function snapFindingLineToDeletedCode(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap,
+  deletedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): PrReviewFinding {
+  if (finding.scopeLocked) return finding
+  if (finding.scope !== "line") return finding
+  if (finding.anchorSide !== undefined) return finding
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return finding
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return finding
+  // PROTECT present-code: never LEFT-pull a finding anchored to a real
+  // added/modified RIGHT line (SIG-462's domain) or one already on a LEFT anchor.
+  // Only a finding on a CONTEXT line (RIGHT-but-not-added) or out-of-diff is eligible.
+  if (addedLineTextByPath.get(path)?.get(finding.line) !== undefined) return finding
+  if (deriveSide(reviewable, path, finding.line) === "LEFT") return finding
+  const deleted = deletedLineTextByPath.get(path)
+  if (!deleted || deleted.size === 0) return finding
+
+  const spans = extractBacktickedCodeSpans(`${finding.headline}\n${finding.body}`)
+  if (spans.length === 0) return finding
+
+  // The longest span that maps to exactly ONE substantive, LEFT-reviewable deleted
+  // line wins; >1 → UNCHANGED (never guess, mirrors anchorNoLineDeletionFinding).
+  for (const span of spans) {
+    const matched: number[] = []
+    for (const [oldLine, text] of deleted) {
+      if (!tokenPresentAtLine(text, span)) continue
+      if (!isSubstantiveCodeAnchorLine(text)) continue
+      if (!isPositionReviewable(reviewable, path, oldLine, "LEFT")) continue
+      matched.push(oldLine)
+    }
+    if (matched.length === 0) continue
+    if (matched.length > 1) return finding
+    // Strip any stale `startLine`; a deleted-line anchor is single-line by construction.
+    const { startLine: _staleStartLine, ...rest } = finding
+    void _staleStartLine
+    return { ...rest, line: matched[0]!, scope: "line" as const, anchorSide: "LEFT" as const }
   }
   return finding
 }

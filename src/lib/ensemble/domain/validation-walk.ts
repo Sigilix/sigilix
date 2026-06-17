@@ -19,6 +19,7 @@ import {
   normalizeFindingScopeForAnchorability,
   anchorNoLineDeletionFinding,
   snapFindingLineToQuotedCode,
+  snapFindingLineToDeletedCode,
   resolveLensRationale,
   findRangeAwareAnchor,
   findRepairableInlineAnchor,
@@ -177,17 +178,10 @@ function applyHardDropGates(
     }
   }
 
-  // SIG-462: the specialist often miscounts line numbers (it counts `+` lines in a
-  // raw git diff) but quotes the buggy code verbatim, so an inline-capable finding
-  // anchors at a wrong line; the SIG-285 verification gate then refutes the
-  // mis-anchored citation and body-demotes a real P0/P1 (probe #39: 5 P0/P1s, 0
-  // inline). Re-point the finding's `line` to the unique substantive added line
-  // that contains a code span it quotes — trusting the quoted code over the model's
-  // count — so the citation is correct BEFORE verification (it then CONFIRMS, no
-  // body-demote). Runs AFTER normalize (only touches scope:"line" findings) and is
-  // RIGHT-only (never disturbs the LEFT deletion anchor above). Recall-safe: a
-  // non-confident match returns the finding unchanged (stays where the model put
-  // it, never moved to a wrong line).
+  // SIG-462: the specialist often miscounts line numbers but quotes the buggy code
+  // verbatim — re-point the finding to the unique substantive ADDED line that holds
+  // a code span it quotes, so the citation is correct BEFORE verification (full
+  // contract + recall-safety in `snapFindingLineToQuotedCode`'s docstring).
   {
     const snapped = snapFindingLineToQuotedCode(f, args.reviewable, args.addedLineTextByLine ?? new Map())
     if (snapped !== f) {
@@ -201,6 +195,31 @@ function applyHardDropGates(
         }),
       )
       f = snapped
+    }
+  }
+
+  // SIG-463: a finding about REMOVED code anchors to an adjacent structural line
+  // (`} catch {`, "a blank area"); the RIGHT snap can't help (the code is in the
+  // DELETED lines). Re-point it onto the deleted line + `anchorSide:"LEFT"` so the
+  // comment posts on the removed line (full contract in the helper's docstring).
+  {
+    const leftAnchored = snapFindingLineToDeletedCode(
+      f,
+      args.reviewable,
+      args.deletedLineTextByLine ?? new Map(),
+      args.addedLineTextByLine ?? new Map(),
+    )
+    if (leftAnchored !== f) {
+      console.log(
+        JSON.stringify({
+          event: "pr-review-finding-anchored-deleted-left",
+          path: leftAnchored.path,
+          fromLine: f.line,
+          toLine: leftAnchored.line,
+          category: leftAnchored.category,
+        }),
+      )
+      f = leftAnchored
     }
   }
 

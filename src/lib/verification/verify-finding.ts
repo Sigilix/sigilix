@@ -127,7 +127,7 @@ export function deriveTokens(finding: Pick<PrReviewFinding, "headline" | "body">
  * token (e.g. `db.query`), the punctuation already makes a substring specific
  * (and `\b` is ill-defined around dots/parens), so an exact substring is right.
  */
-function tokenPresentAtLine(line: string, token: string): boolean {
+export function tokenPresentAtLine(line: string, token: string): boolean {
   if (/^[A-Za-z_$][\w$]*$/.test(token)) {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(line)

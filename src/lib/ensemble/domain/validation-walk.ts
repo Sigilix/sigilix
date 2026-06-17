@@ -18,6 +18,7 @@ import {
   buildFindingEvidenceRecord,
   normalizeFindingScopeForAnchorability,
   anchorNoLineDeletionFinding,
+  snapFindingLineToQuotedCode,
   resolveLensRationale,
   findRangeAwareAnchor,
   findRepairableInlineAnchor,
@@ -173,6 +174,33 @@ function applyHardDropGates(
         }),
       )
       f = anchored
+    }
+  }
+
+  // SIG-462: the specialist often miscounts line numbers (it counts `+` lines in a
+  // raw git diff) but quotes the buggy code verbatim, so an inline-capable finding
+  // anchors at a wrong line; the SIG-285 verification gate then refutes the
+  // mis-anchored citation and body-demotes a real P0/P1 (probe #39: 5 P0/P1s, 0
+  // inline). Re-point the finding's `line` to the unique substantive added line
+  // that contains a code span it quotes — trusting the quoted code over the model's
+  // count — so the citation is correct BEFORE verification (it then CONFIRMS, no
+  // body-demote). Runs AFTER normalize (only touches scope:"line" findings) and is
+  // RIGHT-only (never disturbs the LEFT deletion anchor above). Recall-safe: a
+  // non-confident match returns the finding unchanged (stays where the model put
+  // it, never moved to a wrong line).
+  {
+    const snapped = snapFindingLineToQuotedCode(f, args.reviewable, args.addedLineTextByLine ?? new Map())
+    if (snapped !== f) {
+      console.log(
+        JSON.stringify({
+          event: "pr-review-finding-line-snapped",
+          path: snapped.path,
+          fromLine: f.line,
+          toLine: snapped.line,
+          category: snapped.category,
+        }),
+      )
+      f = snapped
     }
   }
 

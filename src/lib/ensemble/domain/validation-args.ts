@@ -485,6 +485,15 @@ export type ValidateForSubmissionArgs = {
    */
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
   /**
+   * SIG-458: per-file old-side DELETED-line text (`buildDeletedLineTextByLine`).
+   * Used by `anchorNoLineDeletionFinding` to anchor a no-line file/pr-scope
+   * `category:"testing"` finding about a DELETED test onto the deleted `it(...)`
+   * line (a LEFT diff position) on a unique guarded content match, so submission's
+   * SIG-456 LEFT path inlines it instead of body-routing. Absent → the helper
+   * no-ops (back-compat for callers not threading the map).
+   */
+  deletedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /**
    * SIG-110: telemetry callback fired once per perf finding the gate
    * flagged (reuses the `pr-review-finding-rejected-validation` event with
    * a `gate: "perf"` discriminator).
@@ -720,6 +729,7 @@ export interface ResolvedValidationArgs {
   perfEvidence: PerfEvidence | undefined
   perfValidatorMode: PerfValidatorMode
   addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined
+  deletedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined
   onPerfFindingDropped: ValidateForSubmissionArgs["onPerfFindingDropped"]
   inlineGroundingValidatorMode: InlineGroundingValidatorMode
   onInlineGroundingFindingDropped: ValidateForSubmissionArgs["onInlineGroundingFindingDropped"]

@@ -491,14 +491,17 @@ export function prepareReviewSubmissionFindings(args: {
     // fail it and demote to the body. Validate the LEFT endpoint directly with
     // isPositionReviewable (deriveSide prefers RIGHT on an ambiguous same-numbered line).
     // Opt-in via `allowDeletedLineAnchor` so the CI-synth consumer stays RIGHT-only.
-    // A line that exists on BOTH sides (a replaced/collision line) deliberately stays RIGHT
-    // (deriveSide prefers RIGHT): such findings already post inline on RIGHT — they were never
-    // bodied — so they're out of scope here (that's anchor-exactness, SIG-436 lineage, not a
-    // body-leak). Only a LEFT-exclusive deleted line (deriveSide === "LEFT") was being bodied.
+    // A line that exists on BOTH sides (a replaced/collision line) defaults to RIGHT
+    // (deriveSide prefers RIGHT). SIG-463: a finding `snapFindingLineToDeletedCode`
+    // re-pointed to a deleted line carries an explicit `anchorSide:"LEFT"` — honor it
+    // even on such a collision (the removed code is what it's about), gated on the
+    // LEFT position actually being reviewable. Without the explicit signal, only a
+    // LEFT-exclusive deleted line (deriveSide === "LEFT") takes the LEFT path.
     if (
       allowDeletedLineAnchor &&
       reviewable !== undefined &&
-      deriveSide(reviewable, findingForInline.path, findingForInline.line) === "LEFT" &&
+      (deriveSide(reviewable, findingForInline.path, findingForInline.line) === "LEFT" ||
+        findingForInline.anchorSide === "LEFT") &&
       isPositionReviewable(reviewable, findingForInline.path, findingForInline.line, "LEFT")
     ) {
       inlineCandidates.push({ finding: findingForInline, originalIndex: i, confidence, side: "LEFT" })

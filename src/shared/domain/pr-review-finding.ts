@@ -93,6 +93,17 @@ export interface PrReviewFinding {
    * aggregate to a single line. Never set from model output; never rendered.
    */
   scopeLocked?: boolean
+  /**
+   * SIG-463: explicit GitHub review SIDE for the inline anchor, overriding the
+   * `deriveSide` default. Set ONLY to "LEFT" by `snapFindingLineToDeletedCode`
+   * when a finding about REMOVED code is anchored to the deleted line — whose
+   * old-file number can collide with the context line that shifted into it, so
+   * `deriveSide` would (wrongly) prefer RIGHT. The renderer posts `side:"LEFT"`
+   * (gated on `isPositionReviewable(...,"LEFT")`); a LEFT anchor is also exempt
+   * from the SIG-285 added-line verification refute (it points at a deleted line,
+   * which the added-line index can't check). Absent → side derived as before.
+   */
+  anchorSide?: "LEFT"
   score: number
   category: FindingCategory
   headline: string

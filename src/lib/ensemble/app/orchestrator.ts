@@ -1,12 +1,10 @@
 // SIG-318 (PR 12h) — the residual ORCHESTRATOR of the PR-review ensemble (app
 // layer): the thin coordinator `handlePrReviewEnsemble` that PRs 12a–12g carved the
 // phase seams out of. It owns the run setup (config resolve, abort timer, telemetry
-// skeleton, the shadow-bakeoff holder), the orchestral gates that stayed god-file-
-// side (the two stale-head guards, the pre-fanout / pre-submit merged-on-approve
-// short-circuits, the label gate, the router-empty skip), the `bailWithSkipNotice`
-// closure, the seam calls into the carved phases (fetch-and-pack → gather-evidence →
-// gather-graph → assemble-prompts → specialists → adjudicate → render-prep →
-// verify-and-build → publish), and the catch / finally. ZERO behavior change.
+// skeleton, the shadow-bakeoff holder), the orchestral gates that stayed god-file-side
+// (the two stale-head guards, the pre-fanout / pre-submit merged-on-approve short-
+// circuits, the label gate, the incremental empty-delta skip, the router-empty skip),
+// the `bailWithSkipNotice` closure, the carved-phase seam calls, and the catch / finally.
 //
 // Re-exported through the `triage-pr-review-ensemble` shim (the module path the 72
 // external importers + the dispatch-job `vi.mock` still use). The public type
@@ -34,6 +32,7 @@ import {
   buildDeterministicCheckAnnotationMeta,
   buildDeterministicErroredReviewMeta,
   runBailWithSkipNotice,
+  maybeEmptyDeltaSkip,
 } from "./orchestrator-helpers"
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
@@ -368,6 +367,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       incrementalCoverage,
     } = packed
 
+    // Empty incremental delta → skip (false-APPROVE guard, sigilix-monitor#36; see maybeEmptyDeltaSkip).
+    const emptyDeltaSkip = await maybeEmptyDeltaSkip(incrementalCoverage, telemetry, env, cache, args.statusReporter)
+    if (emptyDeltaSkip) return emptyDeltaSkip
     let disclosure = buildReviewDisclosure({
       policySkipped: filesDroppedByFilter,
       oversized: droppedTooLarge,
@@ -380,11 +382,10 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     })
 
     if (router.specialists.length === 0) {
-      // Router found no applicable specialists.
-      telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; this flag is now always false on every path
+      // Router found no applicable specialists → silent skip (clean APPROVE check, no review).
+      telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; always false on every path
       telemetry.fellBackReason = "router_no_specialists"
-      // SIG-417 (Codex #5): a dark-governor trim that empties routing posts a
-      // skip-notice COMMENT (never the silent skip) so trimmed files aren't hidden.
+      // SIG-417 (Codex #5): a dark-governor trim that empties routing posts a skip-notice COMMENT (not a silent skip).
       if (costTrimmedPaths.length > 0) {
         return bailWithSkipNotice("cost_governor_trimmed_all_routable")
       }

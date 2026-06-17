@@ -48,7 +48,16 @@
 // 370s fits logic's 360s per-attempt within the invariant (370+325+195 = 890 ≤
 // 895; synth trimmed 420→325 to make room — it was wildly over-provisioned).
 // Other roles finish fast, so the higher wall is pure headroom for them.
-export const SPECIALIST_TIMEOUT_MS = 370_000
+//
+// SIG-369 (2026-06-16): 370s → 480s. The all-roles uncap sets every specialist's
+// `perAttemptTimeoutMs` to THIS wall (so the role-wall AbortSignal is the sole
+// limiter — see SPECIALIST_CONFIGS). The deep roles need the wider wall: Kimi
+// logic at reasoning=high hit 203s deep passes on tiny corpus diffs (97% recall
+// uncapped), and the old 120s per-attempt cap — a SIG-449 regression — killed
+// those passes mid-generation, dropping P0s like `missing-await-auth`. The extra
+// 110s is reclaimed from synth (325→215, still > its 180s worst case); invariant
+// holds (480+215+195 = 890 ≤ 895). Codex + DeepSeek signed off the math + timing.
+export const SPECIALIST_TIMEOUT_MS = 480_000
 // ARC-283: synth budget bumped from 180s → 420s after PR #93's own
 // review timed out at 180s on a 900-line diff + 27 new tests.
 // Sigilix's product positioning is "yes cost more time for BETTER,
@@ -62,7 +71,13 @@ export const SPECIALIST_TIMEOUT_MS = 370_000
 // SIG-287 (2026-05-30): trimmed 420s → 325s to free budget for logic's 360s
 // per-attempt. Synth was over-provisioned — telemetry shows it at 22-100s, so
 // the 325s primary + the 160s in-headroom retry is still 3-5× the observed p95.
-export const SYNTHESIZER_TIMEOUT_MS = 325_000
+//
+// SIG-369 (2026-06-16): 325s → 215s to widen the specialist wall (→480s) for the
+// all-roles uncap. 215s still covers synth's 180s worst-observed (ARC-283) with
+// margin; DeepSeek flagged 205s as too tight (a >205s first pass falls to the
+// 160s in-headroom retry, < 180s), so 215s is the safe floor. p95 is ~100s, so
+// this stays ~2× the typical pass.
+export const SYNTHESIZER_TIMEOUT_MS = 215_000
 // ARC-278 + ARC-283: cap for the one-shot synth RETRY budget. Lives
 // INSIDE the reserved headroom — the retry is "use what's left in
 // the headroom envelope, don't extend the orchestrator wall."
@@ -79,8 +94,8 @@ export const SYNTHESIZER_TIMEOUT_MS = 325_000
 // PR #94 review catch to make room for pre-flight retrieval in
 // the headroom envelope (see invariant block below).
 //
-// Budget math (current — post-SIG-287):
-//   SPECIALIST (370) + SYNTHESIZER (325) + RESERVED_HEADROOM (195) = 890
+// Budget math (current — post-SIG-369):
+//   SPECIALIST (480) + SYNTHESIZER (215) + RESERVED_HEADROOM (195) = 890
 //   Inside the 195s headroom: pre-flight (15) + retry (160) + finalize (20).
 //   So `RESERVED_HEADROOM_MS` is NOT spent in addition to retry —
 //   pre-flight, retry, AND finalize all carve out of it. The second
@@ -100,7 +115,7 @@ export const SYNTHESIZER_RETRY_TIMEOUT_MS = 160_000
 // and abort the run during finalize (reintroducing the very failure
 // mode ARC-283 was meant to eliminate).
 export const RESERVED_HEADROOM_MS = 195_000
-// Current (post-SIG-287): 370 + 325 + 195 = 890, with 5s slack inside
+// Current (post-SIG-369): 480 + 215 + 195 = 890, with 5s slack inside
 // the orchestrator. Cloudflare queue consumer ceiling is 900s, so the
 // 895s budget stays just inside the platform limit while
 // extending the per-review wall-clock from 8.2 min → 14.9 min.

@@ -129,10 +129,13 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // SIG-287 (2026-05-30): 185 → 250 → 370. Logic stayed INTERMITTENT at 110s
     // then 240s (aborted mid-generation on big graph-context prompts), so its
     // per-attempt cap went to 360s and the wall must fit it; synth trimmed
-    // 420 → 325 (over-provisioned) to free budget. Invariant: 370 + 325 + 195 =
-    // 890 ≤ 895.
-    expect(SPECIALIST_TIMEOUT_MS).toBe(370_000)
-    expect(SYNTHESIZER_TIMEOUT_MS).toBe(325_000)
+    // 420 → 325 (over-provisioned) to free budget.
+    // SIG-369 (2026-06-16): 370 → 480 specialist, 325 → 215 synth — the all-roles
+    // uncap sets every per-attempt cap = SPECIALIST_TIMEOUT_MS, so the wall must be
+    // wide enough for a deep pass (Kimi logic hit 203s uncapped). Invariant: 480 +
+    // 215 + 195 = 890 ≤ 895.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(480_000)
+    expect(SYNTHESIZER_TIMEOUT_MS).toBe(215_000)
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
     expect(RESERVED_HEADROOM_MS).toBe(195_000)
     expect(ORCHESTRATOR_TIMEOUT_MS).toBe(895_000)
@@ -193,34 +196,36 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // because their "unavailable" partials were our-side parse/stream failures that a
   // re-roll recovers (the CSV showed both finishing < 55s, zero provider cancels);
   // SIG-450 then raised logic to `retries: 2` for the same reason — it blanked first under
-  // concurrent-PR burst; tests/synth stay `retries: 1`. Per-attempt caps preserved where the
-  // role set one. Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450, retries:2, no fallback, 120s attempt cap)", () => {
+  // concurrent-PR burst; tests/synth stay `retries: 1`. SIG-369 (2026-06-16) then set every
+  // per-attempt cap = the role wall (all-roles uncap; the role-wall signal is the sole limiter).
+  // Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
+  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450 retries:2, no fallback; SIG-369 cap = role wall)", () => {
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("moonshotai/kimi-k2.7-code")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
-    expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)
+    // SIG-369: per-attempt cap = the role wall → the absolute role-wall signal is the sole limiter.
+    expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("performance specialist runs z-ai/glm-5.1 (SIG-449: retries:2 @ 90s, no fallback)", () => {
+  it("performance specialist runs z-ai/glm-5.1 (retries:2, no fallback; SIG-369 cap = role wall)", () => {
     expect(SPECIALIST_CONFIGS.performance.primary).toBe("z-ai/glm-5.1")
     expect(SPECIALIST_CONFIGS.performance.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(2)
-    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(90_000)
+    expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("security specialist runs deepseek/deepseek-v4-flash (SIG-449: retries:2 @ 90s, no fallback)", () => {
+  it("security specialist runs deepseek/deepseek-v4-flash (retries:2, no fallback; SIG-369 cap = role wall)", () => {
     expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek/deepseek-v4-flash")
     expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.security.retries).toBe(2)
-    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(90_000)
+    expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("tests specialist runs deepseek/deepseek-v4-pro (retries:1, no fallback, 160s attempt cap)", () => {
+  it("tests specialist runs deepseek/deepseek-v4-pro (retries:1, no fallback; SIG-369 cap = role wall)", () => {
     expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek/deepseek-v4-pro")
     expect(SPECIALIST_CONFIGS.tests.fallback).toBeNull()
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
-    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
   it("security and tests are now DISTINCT DeepSeek models (flash vs pro); 4 unique specialist primaries", () => {

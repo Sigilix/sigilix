@@ -18,7 +18,7 @@
 import type { ChatMessage } from "@/src/shared/ports/model"
 import { type ModelConfig, RETRY_BACKOFF_MS, maxAttempts } from "@/src/lib/ensemble/domain/model-policy"
 import type { CostProjectionLineup } from "@/src/lib/ensemble/domain/cost-projection"
-import { PER_ATTEMPT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
+import { PER_ATTEMPT_TIMEOUT_MS, SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import {
   reconstructSynthProvenance,
@@ -71,20 +71,22 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // Runs with the recall-suffix + reasoning-prompt suffix at effort HIGH (the screened
   // setting — per-role via [vars]; tests stays medium).
   //
-  // SIG-450 (2026-06-16): retries 1→2. Logic is the HEAVIEST role (reasoning=high) yet was the
-  // only specialist still at retries:1 after SIG-449 raised the fast roles — so under a
-  // concurrent-PR burst (shared OpenRouter account, no global limiter) it blanked FIRST,
-  // posting "logic specialist unavailable" (the #29 re-probe lost logic on 3/5 concurrent
-  // reviews). Same lever as the SIG-449 fast roles: MORE ATTEMPTS, not a longer cap — 3 tries
-  // recover a transient 429 / parse / stream failure. The 120s cap is UNCHANGED (reasoning=high
-  // needs the headroom); the 3-attempt chain 3×120 + (0.8+2.5) = 363.3s still fits the 370s role
-  // wall (6.7s slack — pinned in logic-per-attempt-timeout.test.ts). fallback stays null
-  // (OpenRouter self-routes; a dedicated logic fallback model is a separate decision, deferred).
+  // SIG-450 (2026-06-16): retries 1→2 (logic is the heaviest role and was blanking first under burst).
+  //
+  // SIG-369 (2026-06-16): per-attempt cap 120s → SPECIALIST_TIMEOUT_MS (the role wall). The 120s cap
+  // (a SIG-449 regression) killed Kimi's deep reasoning pass mid-generation: uncapped, Kimi hit 203s
+  // deep passes at 97% recall — the cap was dropping P0s like `missing-await-auth` (caught ONLY on a
+  // 203s pass; the 41s shallow pass missed). Setting the cap = the wall makes the absolute role-wall
+  // AbortSignal the sole limiter: one deep pass can use the FULL wall, and a fast-fail (429/parse)
+  // retry uses the REMAINING wall time (not a fresh wall). retries:2 stays — it only fires on a
+  // fast-fail (a wall-length pass leaves no time for it), so total wall-clock is still bounded at
+  // SPECIALIST_TIMEOUT_MS. fallback null (OpenRouter self-routes). Codex + DeepSeek signed off the
+  // timing + budget math (480+215+195 = 890 ≤ 895).
   logic: {
     primary: "moonshotai/kimi-k2.7-code",
     retries: 2,
     fallback: null,
-    perAttemptTimeoutMs: 120_000,
+    perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // security — deepseek/deepseek-v4-flash: fast reasoner; reasoning stays OFF (it
   // regresses flash), recall-suffix + authz-resolution addendum carry recall.
@@ -92,25 +94,25 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     primary: "deepseek/deepseek-v4-flash",
     retries: 2,
     fallback: null,
-    // SIG-449 (rework): the "security unavailable" partials are OUR-SIDE parse/stream
-    // failures, NOT slow routes. The OpenRouter activity log shows flash p99 51.6s /
-    // max 51.6s (zero generations over 90s) and zero provider cancels/errors/truncations.
-    // So the lever is MORE ATTEMPTS, not a longer cap: retries:2 (3 tries) lets a re-roll
-    // recover a transient parse failure (see the runWithRetry rationale below), and the
-    // tighter 90s cap still clears the observed max by ~35s. Chain 3×90 + (0.8+2.5) =
-    // 273.3s, 96.7s slack under the 370s role wall (SPECIALIST_TIMEOUT_MS).
-    perAttemptTimeoutMs: 90_000,
+    // SIG-369 (2026-06-16): per-attempt cap 90s → SPECIALIST_TIMEOUT_MS (the role wall), part of the
+    // all-roles uncap — no specialist is artificially clipped. flash is fast (activity-log p99 ~52s,
+    // none over 90s) so the cap rarely binds; the role-wall signal is the real bound. retries:2 stays
+    // for fast-fail (parse/stream) recovery — it only fires when an attempt fails fast, so total
+    // wall-clock stays ≤ SPECIALIST_TIMEOUT_MS.
+    perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // performance — z-ai/glm-5.1: perf bugs are universal structural patterns; no
-  // reasoning (off), fast + cheap on the highest-volume role.
+  // reasoning (off), fast + cheap on the highest-volume role. (glm-5.2 was evaluated as a
+  // swap and REJECTED 2026-06-16: 5.1 wins recall 96% vs 84% + availability 0% vs 45% 429;
+  // revisit 5.2 once its OpenRouter capacity matures.)
   performance: {
     primary: "z-ai/glm-5.1",
     retries: 2,
     fallback: null,
-    // SIG-449 (rework): same as security. glm-5.1 p99 54.9s / max 54.9s in the activity
-    // log (none over 90s), so retries:2 (more parse re-rolls) is the lever, not a longer
-    // cap. Chain 3×90 + (0.8+2.5) = 273.3s, 96.7s slack under the 370s role wall.
-    perAttemptTimeoutMs: 90_000,
+    // SIG-369 (2026-06-16): per-attempt cap 90s → SPECIALIST_TIMEOUT_MS (the role wall), part of the
+    // all-roles uncap. glm-5.1 is fast (activity-log p99 ~55s, none over 90s) so the cap rarely binds;
+    // the role-wall signal is the real bound. retries:2 stays for fast-fail recovery.
+    perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // tests — deepseek/deepseek-v4-pro: edges flash on subtle test-quality cases;
   // reasoning medium (via [vars]).
@@ -118,7 +120,10 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     primary: "deepseek/deepseek-v4-pro",
     retries: 1,
     fallback: null,
-    perAttemptTimeoutMs: 160_000,
+    // SIG-369 (2026-06-16): per-attempt cap 160s → SPECIALIST_TIMEOUT_MS (the role wall), part of the
+    // all-roles uncap — v4-pro (reasoning=medium) is the 2nd-heaviest role and shouldn't be clipped on
+    // a deep test-quality pass. The role-wall signal bounds total; retries:1 for fast-fail recovery.
+    perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
 }
 

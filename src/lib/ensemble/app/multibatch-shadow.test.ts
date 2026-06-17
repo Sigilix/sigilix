@@ -159,7 +159,7 @@ describe("runMultiBatchShadow — PR 2 shadow contract", () => {
 
   it("budget guard LAUNCHES at a REALISTIC post-synth elapsed (the synth budget is not double-reserved)", async () => {
     // The bug the post-synth variant fixes: the pre-synth guard reserves
-    // SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS = 520s, so a post-synth call
+    // SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS = 410s (SIG-369), so a post-synth call
     // (elapsed ~600s after specialists+synth ran) ALWAYS halts → measures nothing.
     // With synth already spent, a review that finished in ~600s still has window:
     // deadline = startMs + ORCH(895s) - RESERVED_HEADROOM(195s) = startMs + 700s,

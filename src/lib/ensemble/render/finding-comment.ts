@@ -35,6 +35,7 @@ import {
   formatBodyFindingLocation,
   formatBodyFindingAnchor,
   formatFindingBodyMarkdown,
+  splitFindingBodyMarkdown,
   formatFindingMoreInfoMarkdown,
   formatFindingStructuredDetailsMarkdown,
   formatBodyFindingSuggestedChange,
@@ -104,12 +105,16 @@ export function renderBodyOnlyFindings(
     // finding too (trust-ledger-gated, like the inline pill above).
     const learningAttribution = trustLedger ? formatLearningAttribution(f) : ""
     // Indent the body so it nests under the bullet visually.
+    // SIG-465 (founder Image #2): issue prose + code blocks lead; the verbose
+    // collapsibles (Detailed reasoning, More Info) render BELOW the code blocks.
+    const { main: bodyMain, detailedReasoning } = splitFindingBodyMarkdown(f.body)
     const detailLines = [
-      formatFindingBodyMarkdown(f.body),
-      formatFindingMoreInfoMarkdown(f),
+      bodyMain,
       showEvidence ? renderFindingEvidenceBlock(f) : "",
       formatFindingStructuredDetailsMarkdown(f),
       formatBodyFindingSuggestedChange(f),
+      detailedReasoning,
+      formatFindingMoreInfoMarkdown(f),
       learningAttribution,
     ].filter((s) => s !== "")
     const bodyLines = detailLines
@@ -284,7 +289,7 @@ export function formatFindingComment(
   // the category glyph (zero-width concat — the glyph carries its own spacing).
   const pill = trustLedger ? trustPill(finding.trust, badgeImg) : ""
   const headline = stripAstMarkers(finding.headline)
-  const body = formatFindingBodyMarkdown(finding.body)
+  const { main: bodyMain, detailedReasoning } = splitFindingBodyMarkdown(finding.body)
   lines.push(`${badge} ${categoryBadge}${pill} **${headline}**`)
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
@@ -313,7 +318,11 @@ export function formatFindingComment(
     lines.push("<details>")
     lines.push("<summary>Low-confidence finding — expand to read</summary>")
     lines.push("")
-    lines.push(body)
+    lines.push(bodyMain)
+    if (detailedReasoning) {
+      lines.push("")
+      lines.push(detailedReasoning)
+    }
     if (moreInfo) {
       lines.push("")
       lines.push(moreInfo)
@@ -325,11 +334,11 @@ export function formatFindingComment(
     lines.push("")
     lines.push("</details>")
   } else {
-    lines.push(body)
-    if (moreInfo) {
-      lines.push("")
-      lines.push(moreInfo)
-    }
+    // SIG-465 (founder Image #2): the issue prose leads, then the code blocks; the
+    // verbose collapsibles (Detailed reasoning, More Info) are DEFERRED to below the
+    // code blocks (appended after the suggestion block, before the AI prompt) so the
+    // actionable Example/Suggested-fix isn't pushed down by them.
+    lines.push(bodyMain)
     if (structuredDetails) {
       lines.push("")
       lines.push(structuredDetails)
@@ -406,6 +415,19 @@ export function formatFindingComment(
     const fence = fenceForContent(repl)
     lines.push("")
     lines.push("**Proposed change:**", fence + lang, repl.replace(/\n$/, ""), fence)
+  }
+  // SIG-465 (founder Image #2): the DEFERRED verbose collapsibles render here —
+  // below all the code blocks (Example / Suggested fix / suggestion). Low-confidence
+  // findings already nested these inside their <details> above, so skip them here.
+  if (!(confidence <= 2 && finding.score < 4)) {
+    if (detailedReasoning) {
+      lines.push("")
+      lines.push(detailedReasoning)
+    }
+    if (moreInfo) {
+      lines.push("")
+      lines.push(moreInfo)
+    }
   }
   // SIG-164 PR 5: copy-pastable AI-agent prompt block at the very
   // bottom. Collapsed by default. Never displaces prose; reader can

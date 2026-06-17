@@ -119,7 +119,7 @@ const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
 // thread), so a reviewer isn't confused by table rows that have no
 // corresponding inline comment.
 const FIX_PLAN_BODY_ONLY_CAPTION =
-  "_Severity ≥ 4 only. Rows without a line number are file-level or PR-level findings that cannot be posted as inline review comments._"
+  "_Severity ≥ 4 only. Entries without a line number are file-level or PR-level findings that cannot be posted as inline review comments._"
 
 /**
  * ARC-281: shared args for both `renderApproveBody` and
@@ -876,14 +876,18 @@ export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
     })
   if (eligible.length === 0) return null
 
-  const lines: string[] = ["| Severity | Location | Issue |", "|:---|:---|:---|"]
+  // SIG-465 (founder Image #1): a compact LIST, not a 3-column table — the table's
+  // fixed Severity|Location|Issue columns overflowed GitHub's narrow PR pane and
+  // clipped the Issue text. A list is full-pane-width and wraps freely (no
+  // horizontal scroll). Kimi UI sign-off: drop the Severity column (kept as a bold
+  // prefix), inline the category; the list removes the width pressure so the FULL
+  // path:line is kept (no basename ambiguity across files).
+  const lines: string[] = []
   for (const f of eligible) {
-    // SIG-281 PR B (Rec 6 / Kimi Q3): the table can now contain body-only
-    // blockers (file-level / PR-level scope) that have no specific diff
-    // line. For those, show the path with NO `:line` suffix (the absence
-    // of a line is the visual signal that the row isn't diff-anchored);
-    // an empty path (pure PR-level) renders as "PR-level". Line- and
-    // comment-scoped findings keep the `path:line` (or range) form.
+    // SIG-281 PR B (Rec 6 / Kimi Q3): body-only blockers (file-level / PR-level
+    // scope) have no specific diff line — show the path with NO `:line` suffix (the
+    // absence is the signal it isn't diff-anchored); an empty path (pure PR-level)
+    // renders as "PR-level". Line- and comment-scoped findings keep `path:line`.
     const scope = findingScope(f)
     const range =
       scope === "pr" || scope === "file"
@@ -894,14 +898,11 @@ export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
           ? `${f.path}:${f.startLine}-${f.line}`
           : `${f.path}:${f.line}`
     const cleanHeadline = stripAstMarkers(f.headline)
-    // Escape the pipe in headlines so a finding that says "use a | b"
-    // doesn't collapse the table. Hand the reader a safer message and
-    // a slightly longer truncation budget since each row is only one
-    // line tall (vs prior bullet that could wrap visually).
-    const safeHeadline = cleanHeadline.replace(/\|/g, "\\|")
-    const headline = safeHeadline.length > 160 ? `${safeHeadline.slice(0, 157)}…` : safeHeadline
+    // A list item wraps freely (no table cell to overflow), so allow a longer
+    // headline before truncating; no pipe-escaping needed outside a table.
+    const headline = cleanHeadline.length > 200 ? `${cleanHeadline.slice(0, 197)}…` : cleanHeadline
     const severityLabel = f.score >= 5 ? "**Critical (5)**" : "**High (4)**"
-    lines.push(`| ${severityLabel} | \`${range}\` | \`${formatFindingCategory(f)}\`: ${headline} |`)
+    lines.push(`- ${severityLabel} · \`${range}\` · \`${formatFindingCategory(f)}\` — ${headline}`)
   }
   return lines.join("\n")
 }

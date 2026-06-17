@@ -446,25 +446,35 @@ function stripAstMarkers(text: string): string {
   return text.replace(/<!--\s*ast\/[\s\S]*?-->/g, "").trim()
 }
 
-export function formatFindingBodyMarkdown(body: string): string {
-  // Split the body STRUCTURALLY, not by length (founder 2026-05-31): the COMPLETE
-  // issue stays in the main comment — readable on its own, never a mid-sentence
-  // "..." — and only the deeper "why/how the model concluded this" reasoning goes
-  // in a collapsed dropdown. The synthesizer is nudged to write the body as
-  // "{complete issue}\n\n{deeper reasoning}", so we split on the FIRST blank-line
-  // break: everything before it is the issue (main), everything after is the
-  // reasoning (dropdown). No blank-line break → the body is a single self-contained
-  // thought; show it whole inline. No character cap, no truncation marker — the
-  // prompt is the brevity guardrail, the renderer's job is completeness.
+/**
+ * SIG-465: split the body STRUCTURALLY into the COMPLETE issue (`main`, always
+ * shown inline, never truncated) and the deeper "why/how" reasoning, which is
+ * wrapped in a collapsed `Detailed reasoning` dropdown. The synthesizer is nudged
+ * to write the body as "{complete issue}\n\n{deeper reasoning}", so we split on
+ * the FIRST blank-line break. No break / degenerate split / non-reasoning tail →
+ * the whole body is the issue and `detailedReasoning` is "". Exposing the parts
+ * (rather than the joined string) lets the renderer place the `Detailed reasoning`
+ * dropdown BELOW the code blocks (founder Image #2). Pure.
+ */
+export function splitFindingBodyMarkdown(body: string): { main: string; detailedReasoning: string } {
   const clean = stripAstMarkers(body).replace(/\r\n/g, "\n")
   const breakIdx = clean.indexOf("\n\n")
-  if (breakIdx === -1) return clean.trimEnd()
+  if (breakIdx === -1) return { main: clean.trimEnd(), detailedReasoning: "" }
   const main = clean.slice(0, breakIdx).trimEnd()
   const reasoning = clean.slice(breakIdx + 2).trimStart()
-  // Degenerate split (empty issue or empty reasoning) → just show the whole body.
-  if (main.length === 0 || reasoning.length === 0) return clean.trimEnd()
-  if (!isDetailedReasoningBlock(reasoning)) return clean.trimEnd()
-  return [main, "", "<details><summary>Detailed reasoning</summary>", "", reasoning, "", "</details>"].join("\n")
+  if (main.length === 0 || reasoning.length === 0) return { main: clean.trimEnd(), detailedReasoning: "" }
+  if (!isDetailedReasoningBlock(reasoning)) return { main: clean.trimEnd(), detailedReasoning: "" }
+  return {
+    main,
+    detailedReasoning: ["<details><summary>Detailed reasoning</summary>", "", reasoning, "", "</details>"].join("\n"),
+  }
+}
+
+export function formatFindingBodyMarkdown(body: string): string {
+  // Back-compat joined form (issue + the Detailed-reasoning dropdown right after).
+  // Callers that need to REORDER the dropdown use `splitFindingBodyMarkdown`.
+  const { main, detailedReasoning } = splitFindingBodyMarkdown(body)
+  return detailedReasoning ? [main, "", detailedReasoning].join("\n") : main
 }
 
 function isDetailedReasoningBlock(reasoning: string): boolean {

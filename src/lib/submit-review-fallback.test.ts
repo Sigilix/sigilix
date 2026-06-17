@@ -85,10 +85,10 @@ describe("buildFallbackBody", () => {
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
     // SIG-440: baseFinding is score 4, so these body-only findings are
-    // blockers — they render in the Fix Plan table + the single non-inline
+    // blockers — they render in the Fix Plan list + the single non-inline
     // dropdown, not the deleted "Review Body Findings" section.
     expect(body).toContain("couldn't be anchored to a line")
-    expect(body).toContain("| Severity | Location | Issue |")
+    expect(body).toContain("- **High (4)** · `src/a.ts:20` · `logic` — a-issue")
     expect(body).toContain("`src/a.ts:20`")
     expect(body).toContain("`src/m.ts:30`")
     expect(body).toContain("`src/z.ts:10`")
@@ -123,7 +123,7 @@ describe("buildFallbackBody", () => {
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
     // SIG-440: both findings are score 4 (P1) blockers, so the
-    // anchorless-fallback pours them into the Fix Plan table + the single
+    // anchorless-fallback pours them into the Fix Plan list + the single
     // non-inline dropdown, not the deleted body section.
     expect(body).toContain("couldn't be anchored to a line")
     expect(body).not.toContain("### Review Body Findings")
@@ -189,7 +189,7 @@ describe("buildFallbackBody", () => {
     expect(populated).not.toContain("Clear off-by-one.")
     const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
     // Summary still renders; the single score-4 (P1) finding flows into
-    // the Fix Plan table + single non-inline dropdown.
+    // the Fix Plan list + single non-inline dropdown.
     expect(blank).toContain("One real bug.")
     expect(blank).toContain("couldn't be anchored to a line")
   })
@@ -352,7 +352,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
     // SIG-440: the unanchored finding is score 4 (P1), so it is rolled into
-    // the Fix Plan table + the single non-inline dropdown (not lost).
+    // the Fix Plan list + the single non-inline dropdown (not lost).
     expect(submission.body).toContain("couldn't be anchored to a line")
   })
 

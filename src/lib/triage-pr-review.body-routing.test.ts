@@ -301,9 +301,11 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-440: a body-only BLOCKER (score >= 4) is a Fix Plan table row and
+    // SIG-440: a body-only BLOCKER (score >= 4) is a Fix Plan list entry and
     // its detail appears in the single non-inline dropdown.
-    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain(
+      "- **High (4)** · `src/lib/github-mention.ts:436` · `security` — dismiss command trusts the issue-comment author",
+    )
     expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).not.toContain("### Review Body Findings")
     // Kimi prominence: the location leads the row in BOLD; the score
@@ -343,11 +345,13 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-440: file-scoped score-5 blocker → Fix Plan table row +
+    // SIG-440: file-scoped score-5 blocker → Fix Plan list entry +
     // single non-inline dropdown, not the "Review Body Findings"
-    // section. Per Kimi Q3 the table Location cell for a file-level
+    // section. Per Kimi Q3 the list location for a file-level
     // finding is the bare path (no `:line`).
-    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain(
+      "- **Critical (5)** · `src/lib/github-mention.ts` · `security` — module-level lifecycle ordering is unsafe",
+    )
     expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).not.toContain("### Review Body Findings")
     // SIG-216: file-scope anchor is the bare path (no `:line`) and
@@ -388,9 +392,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
-    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("- **High (4)** ·")
     expect(out.body).toContain(
-      "| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should stay localized |",
+      "- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl constant should stay localized",
     )
     expect(out.body).not.toContain("### Review Body Findings")
   })
@@ -422,9 +426,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
-    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("- **High (4)** ·")
     expect(out.body).toContain(
-      "| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should be removed |",
+      "- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl constant should be removed",
     )
     expect(out.body).not.toContain("### Review Body Findings")
   })
@@ -451,13 +455,15 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     })
 
     expect(out.comments).toHaveLength(1)
-    expect(out.body).toContain("| Severity |")
-    // Inline blocker → Fix Plan row (unchanged).
-    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl is too short |")
+    expect(out.body).toContain("- **High (4)** ·")
+    // Inline blocker → Fix Plan entry (unchanged).
+    expect(out.body).toContain("- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl is too short")
     // SIG-281 PR B (Rec 6): the body-only blocker now ALSO appears as a
-    // Fix Plan row — surfacing it is the whole point. Previously it was
+    // Fix Plan entry — surfacing it is the whole point. Previously it was
     // suppressed from the table, leaving a real blocker buried below.
-    expect(out.body).toContain("`security`: dismiss command trusts")
+    expect(out.body).toContain(
+      "- **High (4)** · `src/lib/github-mention.ts:436` · `security` — dismiss command trusts the issue-comment author",
+    )
     // ...and its full evidence lives in the single non-inline dropdown,
     // with the tightened `<anchor> · score N` meta (no "Comment-level" prefix).
     expect(out.body).toContain("couldn't be anchored to a line")
@@ -477,7 +483,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 // "demote all sub-4" rule). Rec 3 caps inline comments at 15, demoting the
 // lowest-priority overflow to the body (never dropped) while preserving the
 // SIG-247 marker invariant. Rec 6 (Kimi K2.6 layout) surfaces body-only
-// blockers in the Fix Plan table + a collapsed evidence block.
+// blockers in the Fix Plan list + a collapsed evidence block.
 
 describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)", () => {
   const lf = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
@@ -637,9 +643,9 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
   const submit = (findings: PrReviewFinding[]) =>
     buildReviewSubmission({ verdict: mkVerdict(findings), prAuthor: "a", headSha: "abc" })
 
-  it("a body-only blocker renders in the Fix Plan table + single dropdown detail, NOT Review Body Findings", () => {
+  it("a body-only blocker renders in the Fix Plan list + single dropdown detail, NOT Review Body Findings", () => {
     const out = submit([lf({ scope: "file", score: 5, headline: "file blocker" })])
-    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain("- **Critical (5)** · `src/lib/foo.ts` · `logic` — file blocker")
     expect(out.body).toContain("couldn't be anchored to a line")
     expect(out.body).toContain("file blocker")
     expect(out.body).not.toContain("### Review Body Findings")
@@ -653,18 +659,20 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
     expect(out.body).not.toContain("Evidence &amp; suggested changes for body-only blockers")
   })
 
-  it("Kimi Q3: a file-level blocker's Fix Plan Location cell is the bare path (no `:line`)", () => {
+  it("Kimi Q3: a file-level blocker's Fix Plan location is the bare path (no `:line`)", () => {
     const out = submit([lf({ scope: "file", score: 5, path: "src/lib/foo.ts", line: 42, headline: "x" })])
-    expect(out.body).toMatch(/\|\s*\*\*Critical \(5\)\*\*\s*\|\s*`src\/lib\/foo\.ts`\s*\|/)
+    expect(out.body).toMatch(/- \*\*Critical \(5\)\*\* · `src\/lib\/foo\.ts` · `logic` — x/)
     expect(out.body).not.toContain("`src/lib/foo.ts:42`")
   })
 
-  it("the Fix Plan caption appears only when the table contains body-only (non-inline) blockers", () => {
+  it("the Fix Plan caption appears only when the list contains body-only (non-inline) blockers", () => {
     const withBodyOnlyBlocker = submit([lf({ scope: "file", score: 5 })])
-    expect(withBodyOnlyBlocker.body).toContain("Rows without a line number are file-level or PR-level")
+    expect(withBodyOnlyBlocker.body).toContain("Entries without a line number are file-level or PR-level")
     const inlineOnly = submit([lf({ score: 5, line: 42 })])
-    expect(inlineOnly.body).toContain("| Severity | Location | Issue |")
-    expect(inlineOnly.body).not.toContain("Rows without a line number are file-level or PR-level")
+    expect(inlineOnly.body).toContain(
+      "- **Critical (5)** · `src/lib/foo.ts:42` · `logic` — missing null guard on `user.profile`",
+    )
+    expect(inlineOnly.body).not.toContain("Entries without a line number are file-level or PR-level")
   })
 
   it("mixed: inline blocker + body-only blocker + body-only nit land in their three distinct surfaces", () => {
@@ -703,8 +711,8 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     scope: "comment", // routes to body-only without needing an addedLineTextByLine miss
     // SIG-281 PR B (Rec 6): score 3 keeps this in the "Review Body
     // Findings" section so these body-only link/meta assertions aren't
-    // confounded by a Fix Plan table row (score>=4 body-only blockers now
-    // also render in the table, which uses the compact `path:line` form).
+    // confounded by a Fix Plan list entry (score>=4 body-only blockers now
+    // also render in the list, which uses the compact `path:line` form).
     // The body-only renderer is severity-independent, so coverage is
     // unchanged.
     score: 3,

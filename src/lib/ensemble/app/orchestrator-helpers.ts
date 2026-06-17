@@ -24,6 +24,8 @@ import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
 import { postReviewSkipNotice, type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
+import { skippedStatusUpdate } from "@/src/lib/pr-review-status-phases"
+import type { IncrementalReviewPathSelection } from "@/src/lib/ensemble/domain/incremental-coverage"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import {
   validateForSubmission as validateForSubmissionDomain,
@@ -238,4 +240,48 @@ export async function runBailWithSkipNotice(args: {
     cache,
     buildDeterministicErroredReviewMeta(args.deterministicCheckAnnotations),
   )
+}
+
+/**
+ * Incremental empty-delta no-op (false-APPROVE guard). Under incremental review mode
+ * "on", when EVERY changed file in the PR has already been reviewed at its current
+ * blobSha (`selection.pathsToReview` is empty), there is nothing new to review. A fresh
+ * ensemble run on the empty delta empties `reviewable`, so `tagOutOfPrScopeFindings`
+ * tags every surviving finding out-of-PR-scope and the verdict gate returns APPROVE;
+ * because GitHub uses a reviewer's LATEST review for branch protection, that same-SHA
+ * APPROVE SUPERSEDES the prior CHANGES_REQUESTED — a false approval on unchanged code
+ * (observed live: sigilix-monitor#36, same SHA, CHANGES_REQUESTED → APPROVED). Returns
+ * a "skipped" result that posts NO review (the prior blocking review stays latest and
+ * keeps blocking; no `reviewMeta` → a neutral check title, never "Approved — no issues
+ * found"), or `null` when there IS new work to review. Gated on mode "on": in
+ * "shadow"/"off" `reviewable` is not emptied so the bug can't occur. A changed file
+ * (new blobSha) lands in `pathsToReview` → returns null (recall-safe: changed code is
+ * always re-reviewed). Owner/repo/pr/headSha are read off `telemetry` (set at skeleton
+ * build) to keep the call site small. Caller short-circuits on a non-null return.
+ */
+export async function maybeEmptyDeltaSkip(
+  incrementalCoverage: { mode: "shadow" | "on"; selection: IncrementalReviewPathSelection } | undefined,
+  telemetry: EnsembleTelemetry,
+  env: Env,
+  cache: ReturnType<typeof createRetrievalCache> | null,
+  statusReporter: EnsembleHandlerArgs["statusReporter"],
+): Promise<EnsembleResult | null> {
+  if (incrementalCoverage?.mode !== "on" || incrementalCoverage.selection.pathsToReview.length !== 0) {
+    return null
+  }
+  telemetry.fellBackToPhase3 = false // ARC-280: Phase 3 deleted; always false on every path
+  telemetry.fellBackReason = "incremental_no_new_paths"
+  console.log(
+    JSON.stringify({
+      event: "pr-review-skipped",
+      reason: "incremental-empty-delta",
+      owner: telemetry.owner,
+      repo: telemetry.repo,
+      prNumber: telemetry.prNumber,
+      headSha: telemetry.headSha.slice(0, 7),
+      skipped_unchanged_count: incrementalCoverage.selection.skippedUnchangedPaths.length,
+    }),
+  )
+  statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
+  return finalize(telemetry, env, "skipped", cache)
 }

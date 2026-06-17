@@ -45,6 +45,7 @@ const {
   mockGetFileContent,
   mockSubmitReview,
   mockListPullRequestReviews,
+  mockListPullRequestFiles,
   mockCreateIssueComment,
   mockRunSarifEvidence,
   mockGetBranch,
@@ -58,6 +59,7 @@ const {
   mockGetFileContent: vi.fn(),
   mockSubmitReview: vi.fn(),
   mockListPullRequestReviews: vi.fn(),
+  mockListPullRequestFiles: vi.fn(),
   mockCreateIssueComment: vi.fn(),
   mockRunSarifEvidence: vi.fn(),
   mockGetBranch: vi.fn(),
@@ -98,6 +100,9 @@ vi.mock("@/src/shared/adapters/github", async () => {
     }
     async listPullRequestReviews(...args: unknown[]): Promise<unknown> {
       return mockListPullRequestReviews(...args)
+    }
+    async listPullRequestFiles(...args: unknown[]): Promise<unknown> {
+      return mockListPullRequestFiles(...args)
     }
     async createIssueComment(...args: unknown[]): Promise<unknown> {
       return mockCreateIssueComment(...args)
@@ -203,6 +208,7 @@ beforeEach(() => {
   mockGetFileContent.mockReset()
   mockSubmitReview.mockReset()
   mockListPullRequestReviews.mockReset()
+  mockListPullRequestFiles.mockReset().mockResolvedValue([])
   mockCreateIssueComment.mockReset()
   mockGetBranch.mockReset()
   mockGetRepoTree.mockReset()
@@ -418,6 +424,101 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     })
 
     expect(result.telemetry.fellBackReason).not.toBe("label_gate_skip")
+  })
+})
+
+describe("handlePrReviewEnsemble — incremental empty-delta skip path (false-APPROVE guard)", () => {
+  // Invariant (sigilix-monitor#36): under OPENCLAW_INCREMENTAL_REVIEW_MODE="on", a re-trigger on an
+  // already-reviewed PR with NO new commits (every changed file unchanged at its current blobSha) must
+  // NOT run a fresh ensemble. The empty delta empties the reviewable map → tagOutOfPrScopeFindings tags
+  // every surviving finding out-of-PR-scope → verdict APPROVE; a fresh same-SHA APPROVE review object then
+  // becomes GitHub's latest verdict for the reviewer, superseding the prior CHANGES_REQUESTED under branch
+  // protection (the false-approve red flag). The orchestrator must short-circuit BEFORE publish:
+  //   1. status === "skipped", telemetry.fellBackReason === "incremental_no_new_paths".
+  //   2. NEVER dispatch specialists (no chat()).
+  //   3. NEVER submit a review (no submitReview) and emit no reviewMeta — so no fresh review is posted to
+  //      supersede the prior blocking one, and the check title stays neutral (not "Approved").
+  const OLD_HEAD = "01dHEAD00000000000000000000000000000000a"
+  const PRIOR_COVERAGE = (blobSha: string) =>
+    JSON.stringify({
+      schemaVersion: 1,
+      files: {
+        "src/lib/foo.ts": {
+          reviewedAtBlobSha: blobSha,
+          reviewedAtHeadSha: OLD_HEAD,
+          reviewedAt: "2026-06-16T00:00:00.000Z",
+        },
+      },
+    })
+
+  it("skips (posts nothing) when the incremental delta is empty — all changed files already reviewed", async () => {
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+    })
+    mockGetPullRequestDiff.mockResolvedValue(SOURCE_DIFF)
+    mockListOpenPullRequests.mockResolvedValue([])
+    mockGetFileContent.mockResolvedValue(null)
+    // The PR's only changed file is at blob "BLOB1" — the SAME blob the prior review covered → unchanged
+    // → selectIncrementalReviewPaths yields an empty pathsToReview (empty delta).
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/lib/foo.ts", status: "modified", additions: 2, deletions: 0, sha: "BLOB1" },
+    ])
+    const env = makeEnv({ OPENCLAW_INCREMENTAL_REVIEW_MODE: "on" } as unknown as Env)
+    await env.OPENCLAW_STATE.put("pr-review-coverage:Sigilix/sigilix#9100", PRIOR_COVERAGE("BLOB1"))
+
+    const result = await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9100,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env,
+    })
+
+    expect(result.status).toBe("skipped")
+    expect(result.telemetry.fellBackReason).toBe("incremental_no_new_paths")
+    // No reviewMeta → no APPROVE verdict surfaced (pins "the false-approve is gone", not just "skipped"):
+    // a regression that re-posted the empty-delta APPROVE would carry reviewMeta.event === "APPROVE".
+    expect(result.reviewMeta).toBeUndefined()
+    // Core invariants — no specialist dispatch, no submitted review (so the prior blocker is untouched).
+    expect(mockChat).not.toHaveBeenCalled()
+    expect(mockSubmitReview).not.toHaveBeenCalled()
+  })
+
+  it("does NOT skip when a changed file's blobSha differs — recall guard (still reviews the new code)", async () => {
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+    })
+    mockGetPullRequestDiff.mockResolvedValue(SOURCE_DIFF)
+    mockListOpenPullRequests.mockResolvedValue([])
+    mockGetFileContent.mockResolvedValue(null)
+    // The PR's changed file now reports blob "BLOB2" but the prior review covered "BLOB1" → CHANGED →
+    // pathsToReview is non-empty → the empty-delta guard must NOT fire (the new code is still reviewed).
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/lib/foo.ts", status: "modified", additions: 2, deletions: 0, sha: "BLOB2" },
+    ])
+    // Boundary: specialists aren't mocked — the run may bail downstream for other reasons, which we do
+    // NOT pin here; we only assert the empty-delta branch did not fire.
+    mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
+    const env = makeEnv({ OPENCLAW_INCREMENTAL_REVIEW_MODE: "on" } as unknown as Env)
+    await env.OPENCLAW_STATE.put("pr-review-coverage:Sigilix/sigilix#9101", PRIOR_COVERAGE("BLOB1"))
+
+    const result = await handlePrReviewEnsemble({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9101,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env,
+    })
+
+    expect(result.telemetry.fellBackReason).not.toBe("incremental_no_new_paths")
   })
 })
 

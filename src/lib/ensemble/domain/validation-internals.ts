@@ -16,7 +16,8 @@
 import type { PrReviewFinding, EvidenceRecord } from "@/src/shared/domain/pr-review-finding"
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { deriveSide, isContiguousRightRange, type ReviewableMap } from "@/src/shared/util/diff-positions"
-import { isSubstantiveAnchorLine } from "@/src/shared/util/anchor-lines"
+import { isSubstantiveAnchorLine, isSubstantiveCodeAnchorLine } from "@/src/shared/util/anchor-lines"
+import { deriveTokens, tokenPresentAtLine } from "@/src/lib/verification/verify-finding"
 import type { CollectedVerdict, SynthesizerProvenance } from "./validation"
 
 export interface SourceFindingSecurityEvidence {
@@ -452,6 +453,154 @@ export function anchorNoLineDeletionFinding(
     const { startLine: _staleStartLine, ...rest } = finding
     void _staleStartLine
     return { ...rest, line: matchedLines[0]!, scope: "line" as const }
+  }
+  return finding
+}
+
+/**
+ * SIG-462: extract BACKTICKED code spans from a finding's text (`headline` +
+ * `body`), len ≥ {@link MIN_CODE_SPAN_LEN}, de-duped, LONGEST-first. Backticks
+ * ONLY — NOT the single/double/curly quotes `extractQuotedRunsForDeletionAnchor`
+ * also accepts: the model wraps the CODE it cites in backticks, while single- and
+ * double-quoted spans carry English prose or UI strings that could uniquely match
+ * a substantive code line and mis-anchor a finding (Codex review). Newlines are
+ * excluded so a fenced code BLOCK (```` ``` ````) yields no span — only inline
+ * `code` citations drive a snap. Pure.
+ */
+export const MIN_CODE_SPAN_LEN = 10
+const BACKTICK_SPAN_RE = /`([^`\n]*)`/g
+
+export function extractBacktickedCodeSpans(text: string): string[] {
+  const seen = new Set<string>()
+  for (const match of text.matchAll(BACKTICK_SPAN_RE)) {
+    const run = (match[1] ?? "").trim()
+    if (run.length >= MIN_CODE_SPAN_LEN) seen.add(run)
+  }
+  // Longest-first so the most specific span decides; localeCompare tiebreak keeps
+  // equal-length spans deterministic.
+  return [...seen].sort((a, b) => b.length - a.length || a.localeCompare(b))
+}
+
+/**
+ * SIG-462: the specialist frequently MISCOUNTS line numbers — it reads a raw git
+ * diff and counts `+` lines — but reproduces the buggy code VERBATIM in its
+ * headline/body. The finding then anchors inline at a wrong line; the SIG-285
+ * verification gate refutes the mis-anchored citation and body-demotes a real
+ * P0/P1 (probe sigilix-monitor#39: 5 P0/P1 findings, 0 inline — each QUOTED its
+ * bug's exact code but cited a blank/declaration/comment line nearby). This helper
+ * RE-POINTS such a finding's `line` to the unique substantive added line that
+ * CONTAINS a code span the finding quotes — trusting the quoted code over the
+ * model's line count.
+ *
+ * MUST run AFTER `normalizeFindingScopeForAnchorability` in the same validation
+ * pass; only inline-capable (`scope:"line"`) findings are touched (Codex review:
+ * promoting file/pr findings would widen the mis-anchor surface — they have other
+ * handling). RIGHT-only — never disturbs a SIG-456/458 LEFT (deletion) anchor.
+ *
+ * The can't-mis-anchor contract (do NOT weaken any clause):
+ *   - `!scopeLocked`, `scope:"line"`, non-empty path, a numeric `line` that is not
+ *     a LEFT anchor, and the path has added lines.
+ *   - BACKTICKED code spans only (`extractBacktickedCodeSpans`) — prose in
+ *     single/double quotes never drives a snap.
+ *   - matching uses the SAME primitives as the SIG-285 verification gate
+ *     (`deriveTokens` + whole-token `tokenPresentAtLine`), so a snap can never
+ *     disagree with the gate: a substring match would anchor `authorizeRequest`
+ *     onto `authorizeRequestStrict` — a wrong line the gate then refutes
+ *     (code-reviewer BLOCKER).
+ *   - PROTECT correct citations across the WHOLE cited `[startLine, line]` range:
+ *     if a finding token is whole-present there (the gate's CONFIRMED rule, keyed
+ *     on ≥2-char tokens — NOT the ≥10-char span floor, else a citation grounded
+ *     only by a short token like `userId` would be unprotected, code-reviewer
+ *     MAJOR), or any range line is a RIGHT CONTEXT line whose content we can't see
+ *     (SIG-451 keeps such anchors inline — unverifiable, never override), return
+ *     UNCHANGED (DeepSeek/Codex: a correct range whose match sits on its
+ *     start/middle line must not be moved + collapsed).
+ *   - the snap TARGET must be a UNIQUE `isSubstantiveCodeAnchorLine` added line
+ *     (rejects whole-line comments/blanks/braces) where the span is whole-present
+ *     AND a finding token confirms (so the gate CONFIRMS at the new line). The
+ *     longest span yielding any candidate decides; `>1` candidate → UNCHANGED
+ *     (never guess, mirrors `anchorNoLineDeletionFinding`).
+ *   - on a snap, `startLine` is STRIPPED (a single substantive line is the only
+ *     endpoint-safe target; a stale startLine would forge a range that
+ *     `findRangeAwareAnchor` could rewrite onto a wrong RIGHT line).
+ *   - recall-safe: every non-confident path returns the finding UNCHANGED (stays
+ *     where the model put it, visible — never dropped, never moved to a wrong line).
+ *
+ * Runs BEFORE the SIG-285 verification re-anchor: correcting the line up front
+ * means `verifyFinding` CONFIRMS at the snapped line, so the refute→body-demote
+ * never fires for these. The token-based re-anchor stays a backstop for findings
+ * with no quoted code span. Pure — exported for tests.
+ */
+export function snapFindingLineToQuotedCode(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap,
+  addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): PrReviewFinding {
+  if (finding.scopeLocked) return finding
+  // Only inline-capable findings (normalize already settled the scope). file/pr/
+  // comment scopes are out of scope for the snap (Codex review).
+  if (finding.scope !== "line") return finding
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return finding
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return finding
+  // RIGHT-only: never move a LEFT (deletion) anchor onto a RIGHT line.
+  if (deriveSide(reviewable, path, finding.line) === "LEFT") return finding
+  const added = addedLineTextByPath.get(path)
+  if (!added || added.size === 0) return finding
+
+  const spans = extractBacktickedCodeSpans(`${finding.headline}\n${finding.body}`)
+  if (spans.length === 0) return finding
+
+  // Match by the SAME primitives the SIG-285 verification gate uses (deriveTokens +
+  // whole-token tokenPresentAtLine), so the snap and the gate can never disagree. A
+  // line "confirms" iff any of the finding's checkable tokens is whole-present on it
+  // — verifyFinding's CONFIRMED rule (≥2-char tokens, NOT the ≥10-char span floor).
+  const tokens = deriveTokens(finding)
+  const lineConfirms = (text: string): boolean => tokens.some((t) => tokenPresentAtLine(text, t))
+
+  // PROTECT correct citations across the WHOLE cited [startLine, line] range
+  // (DeepSeek/Codex blocker). A range line absent from the added map but still a
+  // RIGHT anchor is a CONTEXT line whose content this map does not carry (SIG-451
+  // keeps such anchors inline) — unverifiable, so never override it; an out-of-diff
+  // line (deriveSide undefined) is genuinely unanchorable, so fall through.
+  const endLine = finding.line
+  const startLine =
+    typeof finding.startLine === "number" && Number.isFinite(finding.startLine) ? finding.startLine : endLine
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+  // Scan the SMALL anchor sets, NOT the numeric [lo,hi] interval — a malformed
+  // finding can carry `startLine:1`/`line:999999` (the schema bounds neither), and
+  // walking the interval would burn CPU per-finding (Codex review; same single-pass
+  // fix as the `isAnyLineInRightHunk` scan earlier in this file).
+  for (const [line, text] of added) {
+    if (line >= lo && line <= hi && lineConfirms(text)) return finding
+  }
+  const anchors = reviewable.get(path)
+  if (anchors) {
+    for (const a of anchors) {
+      // A RIGHT anchor in range that is NOT an added line is a CONTEXT line whose
+      // content the added-line map does not carry → unverifiable, never override.
+      if (a.side === "RIGHT" && a.line >= lo && a.line <= hi && !added.has(a.line)) return finding
+    }
+  }
+
+  // SNAP: the longest span that maps to exactly ONE substantive added line where
+  // the span is whole-present AND a finding token confirms — so the gate will
+  // CONFIRM at the new line, never refute it. >1 candidate → UNCHANGED (never guess).
+  for (const span of spans) {
+    const matched: number[] = []
+    for (const [line, text] of added) {
+      if (!tokenPresentAtLine(text, span)) continue
+      if (!isSubstantiveCodeAnchorLine(text)) continue
+      if (!lineConfirms(text)) continue
+      matched.push(line)
+    }
+    if (matched.length === 0) continue
+    if (matched.length > 1) return finding // ambiguous → never guess
+    // Strip any stale `startLine` (a single substantive line is endpoint-safe).
+    const { startLine: _staleStartLine, ...rest } = finding
+    void _staleStartLine
+    return { ...rest, line: matched[0]!, scope: "line" as const }
   }
   return finding
 }

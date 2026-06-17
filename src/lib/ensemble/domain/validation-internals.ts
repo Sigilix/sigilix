@@ -487,6 +487,27 @@ export function extractBacktickedCodeSpans(text: string): string[] {
 }
 
 /**
+ * SIG-464: is a quoted code `span` present on `lineText`? The model paraphrases the
+ * code it quotes — it normalizes quote style (`"number"` → `'number'`) and reflows
+ * whitespace — so an EXACT substring match (the old `tokenPresentAtLine` fallback)
+ * MISSES the line (live miss: probe sigilix-monitor#41, a deleted `… !== "number" …`
+ * guard quoted with single quotes, so the deletion finding fell back to `} catch {`).
+ * For a punctuated/multi-token span, compare with quotes unified (`'` `"` `` ` `` → `"`)
+ * and whitespace collapsed. An IDENTIFIER-shape span keeps the whole-token rule
+ * (`tokenPresentAtLine`) so `authorizeRequest` still never matches
+ * `authorizeRequestStrict`. Recall-safe: a looser match can only ADD candidates →
+ * the uniqueness gate (`>1` → unchanged) still refuses to guess. Pure.
+ */
+function normalizeCodeForMatch(s: string): string {
+  return s.replace(/['"`]/g, '"').replace(/\s+/g, " ").trim()
+}
+
+export function codeSpanPresentInLine(lineText: string, span: string): boolean {
+  if (/^[A-Za-z_$][\w$]*$/.test(span)) return tokenPresentAtLine(lineText, span)
+  return normalizeCodeForMatch(lineText).includes(normalizeCodeForMatch(span))
+}
+
+/**
  * SIG-462: the specialist frequently MISCOUNTS line numbers — it reads a raw git
  * diff and counts `+` lines — but reproduces the buggy code VERBATIM in its
  * headline/body. The finding then anchors inline at a wrong line; the SIG-285
@@ -595,7 +616,7 @@ export function snapFindingLineToQuotedCode(
   for (const span of spans) {
     const matched: number[] = []
     for (const [line, text] of added) {
-      if (!tokenPresentAtLine(text, span)) continue
+      if (!codeSpanPresentInLine(text, span)) continue
       if (!isSubstantiveCodeAnchorLine(text)) continue
       if (!lineConfirms(text)) continue
       matched.push(line)
@@ -675,7 +696,7 @@ export function snapFindingLineToDeletedCode(
   for (const span of spans) {
     const matched: number[] = []
     for (const [oldLine, text] of deleted) {
-      if (!tokenPresentAtLine(text, span)) continue
+      if (!codeSpanPresentInLine(text, span)) continue
       if (!isSubstantiveCodeAnchorLine(text)) continue
       if (!isPositionReviewable(reviewable, path, oldLine, "LEFT")) continue
       matched.push(oldLine)

@@ -17,6 +17,7 @@ import {
   backfillIndependentAssessmentFromSources,
   buildFindingEvidenceRecord,
   normalizeFindingScopeForAnchorability,
+  anchorNoLineDeletionFinding,
   resolveLensRationale,
   findRangeAwareAnchor,
   findRepairableInlineAnchor,
@@ -146,6 +147,32 @@ function applyHardDropGates(
         }),
       )
       f = normalized
+    }
+  }
+
+  // SIG-458: a no-line file/pr-scope `category:"testing"` finding about a DELETED
+  // test currently body-routes at submission.ts:482 (`scope!=="line"`) before any
+  // anchor step. Its deleted `it(...)` line is in the diff as a LEFT/deleted
+  // position; on a UNIQUE, guarded content match anchor the finding to that line
+  // + scope:"line" so submission's SIG-456 LEFT path inlines it on side:"LEFT"
+  // instead of burying it in the "couldn't be anchored" body dropdown. Runs AFTER
+  // normalize, so it only sees findings normalize left with NO RIGHT anchor, and
+  // never touches a RIGHT-anchorable one. Recall-safe: a non-confident match
+  // returns the finding unchanged (stays in the body, never moved to a wrong
+  // line). NOTE: covers the VERDICT findings walked here; `rawUnanchored` passed
+  // straight to render is not covered by this pass (Codex OQ#4 — fine for v1).
+  {
+    const anchored = anchorNoLineDeletionFinding(f, args.reviewable, args.deletedLineTextByLine ?? new Map())
+    if (anchored !== f) {
+      console.log(
+        JSON.stringify({
+          event: "pr-review-deletion-finding-anchored-left",
+          path: anchored.path,
+          line: anchored.line,
+          category: anchored.category,
+        }),
+      )
+      f = anchored
     }
   }
 

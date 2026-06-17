@@ -336,6 +336,126 @@ export function normalizeFindingScopeForAnchorability(
   return { ...finding, scope: "line" as const }
 }
 
+/**
+ * SIG-458: a test-declaration line shape — `it(...)`, `test(...)`, `describe(...)`,
+ * `context(...)`, including the `.each` / `.only` / `.skip` / `.concurrent`
+ * variants (`it.skip(`, `test.each(`). Matched against a DELETED line's text to
+ * confirm the quoted run lives on an ACTUAL test declaration, not a comment, a
+ * helper/visit call, or a string that merely repeats the title.
+ *
+ * ANCHORED to the line start (`^\s*`, allowing only leading indentation) — a real
+ * test line BEGINS with `it(`/`test(`/…, whereas a commented (`// it('…')`) or
+ * string-embedded (`const x = "it('…')"`) occurrence has a non-whitespace prefix
+ * and is rejected (Codex review: an unanchored `\bit\b\s*\(` would false-match
+ * those, a wrong-line path). `\b` after the keyword still blocks `fit(`/`xit(`.
+ */
+const TEST_DECLARATION_RE = /^\s*(?:it|test|describe|context)\b\s*\.?\s*(?:each|only|skip|concurrent)?\s*\(/
+
+/**
+ * SIG-458: extract candidate quoted runs from a finding's text (`headline` +
+ * `body`). A "run" is the inner content of a single-quoted, double-quoted,
+ * backtick, or curly-quoted (`‘…’` / `“…”`) span. Runs shorter than
+ * {@link MIN_DELETION_QUOTE_LEN} are dropped (a short token like `'id'` would
+ * match many lines and is not a reliable signal). De-duped, then sorted
+ * LONGEST-first so the most specific quote is tried before a shorter substring.
+ * Pure.
+ */
+export const MIN_DELETION_QUOTE_LEN = 10
+const QUOTED_RUN_RE = /'([^']*)'|"([^"]*)"|`([^`]*)`|‘([^’]*)’|“([^”]*)”/g
+
+export function extractQuotedRunsForDeletionAnchor(text: string): string[] {
+  const seen = new Set<string>()
+  for (const match of text.matchAll(QUOTED_RUN_RE)) {
+    const run = match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? ""
+    if (run.length >= MIN_DELETION_QUOTE_LEN) seen.add(run)
+  }
+  // Longest-first so the most specific quote decides; localeCompare tiebreak
+  // keeps the order deterministic for equal-length runs.
+  return [...seen].sort((a, b) => b.length - a.length || a.localeCompare(b))
+}
+
+/**
+ * SIG-458: anchor a no-line, file/pr-scope `category:"testing"` finding about a
+ * DELETED test onto the deleted test's `it(...)` line (a LEFT/deleted diff
+ * position), so submission's SIG-456 LEFT-anchor path inlines it on
+ * `side:"LEFT"` instead of body-routing it at `submission.ts:482`
+ * (`scope!=="line" → bodyFindings`).
+ *
+ * MUST run AFTER `normalizeFindingScopeForAnchorability` in the same validation
+ * pass: that helper already promoted every RIGHT-anchorable finding to
+ * `scope:"line"`, so a finding still scoped `file`/`pr`/omitted here genuinely
+ * has NO RIGHT anchor. This helper only ADDS a LEFT anchor — it never touches a
+ * RIGHT-anchorable or already-line-scoped finding.
+ *
+ * The can't-mis-anchor contract (do NOT weaken any clause):
+ *   - `category:"testing"` only — the entire observed leak class (probe #35).
+ *   - `!scopeLocked` — engine-manufactured scope is never re-derived.
+ *   - a quoted run of length ≥ {@link MIN_DELETION_QUOTE_LEN} from headline+body.
+ *   - the matched deleted line MUST be a test declaration ({@link TEST_DECLARATION_RE}).
+ *   - LEFT-EXCLUSIVE: `deriveSide(...) === "LEFT"` — a line that also exists on
+ *     RIGHT (a replace/collision line) resolves RIGHT and is rejected (such
+ *     findings already inline on RIGHT; they were never bodied).
+ *   - UNIQUE match only: the first quoted run that yields ANY candidate decides;
+ *     if it yields >1 candidate → BODY (no guess). NO sole-deletion fallback (a
+ *     deleted region can hold multiple test blocks).
+ *   - recall-safe: any non-confident path returns the finding UNCHANGED, so it
+ *     stays in the body (surfaced, never dropped, never moved to a wrong line).
+ *
+ * Coverage note (Codex OQ#4): this runs on the VERDICT findings walked by
+ * `processFindings` (where probe #35's findings live). The `rawUnanchored` set
+ * passed straight to render is NOT covered by this pass — acceptable for v1.
+ *
+ * Pure — exported for tests.
+ */
+export function anchorNoLineDeletionFinding(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap,
+  deletedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): PrReviewFinding {
+  // Engine-manufactured scope (the coverage-stamp-collapse survivor) is never
+  // re-derived — same exemption normalize honors.
+  if (finding.scopeLocked) return finding
+  // Conservative scope gate: testing-only (the whole observed body-leak class).
+  if (finding.category !== "testing") return finding
+  // Already inline-anchorable (normalize promoted it) or a non-code comment
+  // scope — leave alone. Only file/pr/omitted (no RIGHT anchor) reach below.
+  if (finding.scope === "line" || finding.scope === "comment") return finding
+
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return finding
+  const deleted = deletedLineTextByPath.get(path)
+  if (!deleted || deleted.size === 0) return finding
+
+  const runs = extractQuotedRunsForDeletionAnchor(`${finding.headline}\n${finding.body}`)
+  if (runs.length === 0) return finding
+
+  // The FIRST (longest) run that yields ANY candidate decides — a UNIQUE
+  // candidate anchors; an ambiguous one (>1) bodies; no candidate falls through
+  // to the next-longest run.
+  for (const run of runs) {
+    const matchedLines: number[] = []
+    for (const [oldLine, text] of deleted) {
+      if (!text.includes(run)) continue
+      if (!TEST_DECLARATION_RE.test(text)) continue
+      // LEFT-EXCLUSIVE: deriveSide prefers RIGHT on a same-numbered collision, so
+      // a line that survived as RIGHT (added/context) is rejected here.
+      if (deriveSide(reviewable, path, oldLine) !== "LEFT") continue
+      matchedLines.push(oldLine)
+    }
+    if (matchedLines.length === 0) continue
+    if (matchedLines.length > 1) return finding // ambiguous → body, never guess
+    // Promote to a SINGLE-LINE line-scoped finding on the deleted `it(` line.
+    // Strip any stale `startLine` (Codex blocker): keeping a model-emitted
+    // `startLine` would forge an accidental [startLine..oldLine] range that the
+    // downstream `findRangeAwareAnchor` could rewrite onto a RIGHT line inside
+    // it — a wrong-line path. A LEFT anchor is single-line by construction.
+    const { startLine: _staleStartLine, ...rest } = finding
+    void _staleStartLine
+    return { ...rest, line: matchedLines[0]!, scope: "line" as const }
+  }
+  return finding
+}
+
 export function selectSourceEvidenceForBackfill(
   finding: PrReviewFinding,
   sourceIds: readonly string[],

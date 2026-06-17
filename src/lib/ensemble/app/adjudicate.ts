@@ -10,7 +10,12 @@
 // `../../triage-pr-review-ensemble`. The block has no `await`, so the function
 // is synchronous.
 
-import { durableObjectClassSpans, buildAddedLineTextByLine, type AstCache } from "@/src/features/ast-rules"
+import {
+  durableObjectClassSpans,
+  buildAddedLineTextByLine,
+  buildDeletedLineTextByLine,
+  type AstCache,
+} from "@/src/features/ast-rules"
 import { runAstRules } from "@/src/features/ast-rules"
 import type { Env } from "@/src/shared/types/env"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
@@ -170,6 +175,11 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
   // so the map is built once). The gate damps kept testing findings when
   // the ratio is positive (> THRESHOLD).
   const fullPrAddedLineText = buildAddedLineTextByLine(fullPrDiff)
+  // SIG-458: per-file old-side deleted-line text — used by the validation pass to
+  // anchor a no-line file/pr-scope testing finding about a DELETED test onto the
+  // deleted `it(...)` line (a LEFT diff position) on a unique guarded content
+  // match, so submission's SIG-456 LEFT path inlines it instead of body-routing.
+  const fullPrDeletedLineText = buildDeletedLineTextByLine(fullPrDiff)
   const testToSourceRatio = computeTestToSourceAddedRatio(fullPrAddedLineText)
   // SIG-318 (PR 0b): bind the validate args so the golden-capture hook below
   // records the EXACT object passed to validateForSubmission (no behavior
@@ -256,6 +266,8 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     // SIG-347 (AC #3): diff-wide test-to-source ratio drives the damper.
     testToSourceRatio,
     addedLineTextByLine: fullPrAddedLineText,
+    // SIG-458: deleted-line text for the no-line testing-deletion LEFT anchor.
+    deletedLineTextByLine: fullPrDeletedLineText,
     onTestFindingDropped: (finding, info) => {
       console.log(
         JSON.stringify({

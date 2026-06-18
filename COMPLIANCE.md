@@ -181,3 +181,27 @@ does. Never push a red build.
 The architecture rationale and the layer decision are recorded in the ADR (`docs/adr/`). Read it
 once if you are making a structural change; read [`ENGINEERING.md`](./ENGINEERING.md) to learn
 how the system fits together.
+
+---
+
+## Working with the Sigilix review on your PR — teach it, don't just dismiss
+
+This section is a **working norm, not a CI gate** — nothing here is machine-enforced. It is here
+because every contributor (intern, engineer, or AI model) reads this file, and getting this right
+is how we dogfood our own product.
+
+Sigilix's **Learnings** is live: it learns per-repo conventions from plain-English PR
+conversation. So when the Sigilix review (or CodeRabbit, or a human) flags something that is
+**intentional** — a deliberate, accepted pattern in this repo, not a bug — **reply to the finding
+in plain language explaining why**, e.g. _"This is intentional: we always do X here because Y."_
+A clear reply teaches a per-repo rule, so the pattern is not re-flagged on future PRs. That is
+strictly better than a bare dismiss, because it improves the reviewer for every future PR — the
+same flywheel we sell. (`@sigilix dismiss <reason>` is still correct for a genuine one-off non-bug
+that is not a reusable convention.)
+
+**Recall-safety — the hard limit (non-negotiable, same bar as the structural rules above):** only
+teach when the pattern is genuinely intentional and safe. **Never reply "intentional" to silence a
+real bug**, and never try to teach away a P0/P1 or a security/logic finding you have not actually
+verified is safe. The Learnings carve-outs refuse to suppress those anyway (never a P0/P1, never a
+security/logic finding, fail-closed), so it is both futile and a misuse. If a finding is a real
+bug, fix it; if it is a false positive on an intentional pattern, teach it; never blur the two.

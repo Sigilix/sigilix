@@ -224,4 +224,35 @@ describe("SIG-463: deletion anchor through the real validateForSubmission walk",
       toLine: GUARD_OLD_LINE,
     })
   })
+
+  it("does NOT run the added-line inline-grounding gate on a LEFT (deleted-line) anchor (SIG-466)", () => {
+    // A sub-P1 (score 3) deletion finding snaps to the deleted line (anchorSide:"LEFT").
+    // The inline-grounding gate checks the ADDED-line map, where a deleted-line anchor's
+    // code never appears — so in `enforce` it would judge it "ungrounded" and demote a
+    // real deletion finding to the body. The SIG-466 exemption must SKIP the gate for a
+    // LEFT anchor (added-line grounding is structurally N/A here).
+    const finding = delFinding({ score: 3 })
+    const groundingDrops: Array<{ reason: string }> = []
+    const validated = validateForSubmission({
+      synthOutput: packSynth(finding),
+      reviewable: REVIEWABLE,
+      specialistVerdicts: [
+        { role: "logic", verdict: { ...baseVerdict, findings: [{ ...finding, id: "logic-0" }] }, elapsedMs: 1 },
+      ],
+      addedLineTextByLine: ADDED,
+      deletedLineTextByLine: DELETED,
+      logicValidatorMode: "shadow",
+      logicRefutationMode: "off",
+      logicClaimRefutationMode: "off",
+      inlineGroundingValidatorMode: "enforce", // would demote an ungrounded finding
+      absenceClaimValidatorMode: "off",
+      windowBlindnessValidatorMode: "off",
+      onInlineGroundingFindingDropped: (_f, info) => groundingDrops.push({ reason: info.reason }),
+    })
+    const out = validated.verdict.findings[0] ?? validated.unanchoredFindings[0]
+    expect(out?.anchorSide).toBe("LEFT")
+    expect(out?.line).toBe(GUARD_OLD_LINE)
+    // The gate was skipped — it never fired its drop callback on the LEFT anchor.
+    expect(groundingDrops).toHaveLength(0)
+  })
 })

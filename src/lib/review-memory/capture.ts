@@ -47,7 +47,7 @@ import {
   extractLearning,
   hasRepoWriteAccess,
   normalizeRule,
-  recordConfirmationMap,
+  recordConfirmationMapForThread,
   renderConfirmReply,
   resolveLearningsMode,
 } from "@/src/features/learnings"
@@ -223,6 +223,10 @@ async function captureConversationalLearning(args: {
   prNumber: number
   repoId?: number
   commentId: number
+  /** Thread-root comment id (the original finding). GitHub flattens review-comment threads,
+   *  so a later `@sigilix forget` reply's in_reply_to is this root — dual-key the map on it so
+   *  forget resolves (SIG-464). Undefined for surfaces with no review-comment thread (top-level). */
+  threadRootId?: number
   authorLogin?: string
   surface: ReviewMemoryLearningSurface
   sourceKind: LearningSourceKind
@@ -309,7 +313,11 @@ async function captureConversationalLearning(args: {
       args.surface === "inline-reply"
         ? await args.client.replyToReviewComment(args.owner, args.repo, args.prNumber, args.commentId, confirmBody)
         : await args.client.createIssueComment(args.owner, args.repo, args.prNumber, confirmBody)
-    await recordConfirmationMap(args.env, confirm.id, { scope: "repo", subjectId, learningId })
+    await recordConfirmationMapForThread(args.env, confirm.id, args.threadRootId, {
+      scope: "repo",
+      subjectId,
+      learningId,
+    })
     emitLearningAudit({
       actor: args.authorLogin ?? "",
       scope: "repo",
@@ -673,6 +681,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     repo,
     prNumber,
     commentId: replyCommentId,
+    threadRootId: parentCommentId,
     surface: "inline-reply",
     sourceKind: "inline-reply",
     replyText: replyComment.body,

@@ -14,7 +14,7 @@ import {
   hasRepoWriteAccess,
   loadLearnings,
   normalizeRule,
-  recordConfirmationMap,
+  recordConfirmationMapForThread,
   renderConfirmReply,
   renderForgetConfirm,
   renderOverviewFooter,
@@ -130,7 +130,11 @@ async function handleRememberLearningCommand(
     threadRootId: threadRootId ?? commentId,
     body: renderConfirmReply(rule),
   })
-  await recordConfirmationMap(env, replyCommentId, { scope: "repo", subjectId, learningId })
+  await recordConfirmationMapForThread(env, replyCommentId, threadRootId ?? commentId, {
+    scope: "repo",
+    subjectId,
+    learningId,
+  })
   emitLearningAudit({
     actor: sourceComment.author,
     scope: "repo",

@@ -51,8 +51,12 @@ the system is built and where code goes; read it before working in an unfamiliar
    If a check is missing or stuck, investigate — don't treat a silent gate as a pass.
 
 8. **Respond to every bot comment.** For each Sigilix and CodeRabbit finding:
-   - if the change is **applicable**, apply the fix and reply that you did, or
-   - if it's a **false positive / not applicable**, reply explaining why. For Sigilix,
+   - if the change is **applicable**, apply the fix and reply that you did,
+   - if it's a **false positive on an *intentional* pattern**, reply in plain language explaining
+     why it's deliberate — Sigilix's Learnings is live, so that reply is captured as a per-repo
+     rule and the pattern won't be re-flagged (better than a bare dismiss). **Never teach away a
+     real bug, a P0/P1, or an unverified security/logic finding — the carve-outs refuse it anyway.** or
+   - if it's a **false positive / not applicable** otherwise, reply explaining why. For Sigilix,
      dismiss in-thread: `@sigilix dismiss <not-a-bug|bad-anchor|already-covered|too-minor|wrong-context>`.
 
    Never leave a bot comment unanswered. Never merge over an open one.

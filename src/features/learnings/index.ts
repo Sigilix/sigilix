@@ -1,6 +1,10 @@
 export { emitLearningAudit } from "./adapters/audit"
 export { hasRepoWriteAccess } from "./adapters/authz"
-export { recordConfirmationMap, resolveConfirmationMap } from "./adapters/confirmation-map"
+export {
+  recordConfirmationMap,
+  recordConfirmationMapForThread,
+  resolveConfirmationMap,
+} from "./adapters/confirmation-map"
 export { extractLearning } from "./adapters/extractor-model"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
 export { parseLearningsCommand } from "./domain/command"

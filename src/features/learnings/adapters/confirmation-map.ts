@@ -41,6 +41,27 @@ export async function recordConfirmationMap(
   }
 }
 
+/**
+ * Record the confirmation→learning map under BOTH the confirmation comment id and the
+ * thread-root (original finding) comment id. GitHub flattens review-comment threads, so a user's
+ * `@sigilix forget` reply carries `in_reply_to` = the thread root, not the confirmation comment.
+ * Keying both lets the forget handler — which resolves `inReplyToId ?? threadRootId` — find the
+ * learning either way. (SIG-464)
+ */
+export async function recordConfirmationMapForThread(
+  env: Env,
+  confirmationCommentId: number | string,
+  threadRootId: number | string | undefined,
+  value: LearningConfirmationMapValue,
+): Promise<boolean> {
+  const recorded = await recordConfirmationMap(env, confirmationCommentId, value)
+  if (threadRootId === undefined || String(threadRootId) === String(confirmationCommentId)) {
+    return recorded
+  }
+  const rootRecorded = await recordConfirmationMap(env, threadRootId, value)
+  return recorded && rootRecorded
+}
+
 export async function resolveConfirmationMap(
   env: Env,
   confirmationCommentId: number | string,

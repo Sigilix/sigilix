@@ -6,7 +6,7 @@ import {
   extractLearning,
   hasRepoWriteAccess,
   normalizeRule,
-  recordConfirmationMap,
+  recordConfirmationMapForThread,
   renderConfirmReply,
   resolveLearningsMode,
 } from "@/src/features/learnings"
@@ -114,7 +114,11 @@ export async function captureGithubMentionQaLearning(args: {
       threadRootId: args.threadRootId ?? args.commentId,
       body: renderConfirmReply(rule),
     })
-    await recordConfirmationMap(args.env, replyCommentId, { scope: "repo", subjectId, learningId })
+    await recordConfirmationMapForThread(args.env, replyCommentId, args.threadRootId ?? args.commentId, {
+      scope: "repo",
+      subjectId,
+      learningId,
+    })
     emitLearningAudit({
       actor: args.sourceComment.author,
       scope: "repo",

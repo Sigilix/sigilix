@@ -752,7 +752,7 @@ OPENCLAW_PR_SUMMARY_MODE = "on"
 # active + would-inject telemetry, but the posted review/prompts are UNCHANGED
 # (bake the store). "on" = inject learned per-repo guidance into specialist + synth
 # prompts. Parsed by resolveLearningsMode (@/features/learnings).
-OPENCLAW_LEARNINGS_MODE = "shadow"
+OPENCLAW_LEARNINGS_MODE = "on"
 
 # SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
 # CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at

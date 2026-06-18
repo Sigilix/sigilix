@@ -121,6 +121,14 @@ describe("evaluateWindowBlindness — DEMOTE only on a provable out-of-window gu
     }
   })
 
+  it("KEEPS a LEFT (deleted-line) anchor even when the same fixture DEMOTES on RIGHT (SIG-463 follow-up)", () => {
+    // Identical to the DEMOTE case above, but anchorSide:"LEFT" makes finding.line
+    // an OLD-side number while fullFileByPath holds the NEW file — reading
+    // lines[line-1] is a coordinate mismatch, so this full-file gate must KEEP.
+    const d = evaluateWindowBlindness(finding({ anchorSide: "LEFT" }), ctx())
+    expect(d.keep).toBe(true)
+  })
+
   it("KEEPS when the subject is REASSIGNED between the guard and the flagged use (guard may be undone)", () => {
     const full = [
       "export function fee(amount: number): number {", // 1

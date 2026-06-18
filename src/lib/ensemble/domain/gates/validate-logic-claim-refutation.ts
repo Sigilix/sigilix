@@ -854,6 +854,12 @@ export function evaluateLogicClaimRefutation(
   finding: PrReviewFinding,
   context: LogicClaimRefutationContext,
 ): LogicClaimRefutationDecision {
+  // SIG-463 follow-up (mirrors SIG-466 + the window-blindness guard): a LEFT
+  // (deleted-line) anchor's `finding.line` is an OLD-side number, but this gate
+  // resolves the enclosing function in the NEW-file AST at `finding.line` and can
+  // HARD-DROP in enforce — a coordinate mismatch that could delete a real
+  // deletion finding. Refuse LEFT anchors. Recall-safe: only ever keeps.
+  if (finding.anchorSide === "LEFT") return { keep: true }
   if (finding.category !== "logic") return { keep: true }
   if (finding.score < LOGIC_CLAIM_REFUTATION_MIN_SEVERITY) return { keep: true }
 

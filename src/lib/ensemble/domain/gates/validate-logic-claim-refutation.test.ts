@@ -44,6 +44,20 @@ describe("control-flow refutation (REFUTE: the early-return guard makes the tail
     expect(d).toEqual({ keep: false, reason: "control-flow-claim-refuted-by-guard" })
   })
 
+  it("KEEPS a LEFT (deleted-line) anchor even when the same claim REFUTES on RIGHT (SIG-463 follow-up)", () => {
+    // Same refuting fixture as above, but anchorSide:"LEFT" makes finding.line an
+    // OLD-side number while the gate resolves the enclosing function in the NEW-file
+    // AST — a coordinate mismatch. This gate HARD-DROPS in enforce, so it must KEEP.
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 6,
+      headline: "`next()` runs unconditionally after the 403 response, causing a double-response",
+      body: "When isAdmin returns false the middleware returns; next() is not inside an else block.",
+      anchorSide: "LEFT",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
+  })
+
   it("refutes a generic 'runs unconditionally' when the immediate guard returns", () => {
     const SRC = `export function f(rateLimited) {
   if (rateLimited) return

@@ -304,6 +304,13 @@ export function evaluateWindowBlindness(
   finding: PrReviewFinding,
   context: WindowBlindnessContext,
 ): WindowBlindnessDecision {
+  // SIG-463 follow-up (mirrors SIG-466): a LEFT (deleted-line) anchor's
+  // `finding.line` is an OLD-side number, but `fullFileByPath` holds the NEW
+  // file — so `lines[finding.line - 1]` below would read an unrelated line (a
+  // coordinate mismatch). This full-file gate cannot ground a deleted-line
+  // anchor, so it KEEPS it, exactly as the added-line demote gates exempt LEFT.
+  // Recall-safe: only ever prevents a demotion, never causes one.
+  if (finding.anchorSide === "LEFT") return { keep: true }
   if (finding.category !== "logic") return { keep: true }
   if (finding.score < WINDOW_BLINDNESS_MIN_SEVERITY) return { keep: true }
   if (!isPositiveMisread(finding)) return { keep: true }

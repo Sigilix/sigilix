@@ -742,7 +742,8 @@ function applyDemoteGates(
   // withdrawal matching use the REPAIRED anchor, not the raw line).
   // Shadow-first: only `enforce` demotes; `shadow` counts + telemeters
   // and keeps the finding inline.
-  {
+  const notLeftAnchor = workingFinding.anchorSide !== "LEFT" // SIG-466: LEFT anchors cite deleted, not added, code
+  if (notLeftAnchor) {
     const groundingDecision = evaluateInlineGrounding(workingFinding, {
       addedLineTextByLine: args.addedLineTextByLine,
     })
@@ -860,7 +861,7 @@ function applyDemoteGates(
   // with the repaired anchor). `off` skips the gate; `shadow` counts +
   // telemeters and keeps inline; only `enforce` trust-demotes. No score floor —
   // a P0/P1 ungrounded secrets claim is the worst case and is trust-demoted too.
-  if (args.securityGroundingValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
+  if (notLeftAnchor && args.securityGroundingValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
     const sgDecision = evaluateSecurityGrounding(workingFinding, {
       addedLineTextByLine: args.addedLineTextByLine,
       manifest: args.securityManifest,
@@ -889,7 +890,7 @@ function applyDemoteGates(
   // off/shadow/enforce placement as the grounding gate above; trust-demote
   // but never drop, keep on any uncertainty (the gate fails closed inside
   // evaluateSecurityUsage).
-  if (args.securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
+  if (notLeftAnchor && args.securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
     const suDecision = evaluateSecurityUsage(workingFinding, {
       addedLineTextByLine: args.addedLineTextByLine,
     })

@@ -754,6 +754,14 @@ OPENCLAW_PR_SUMMARY_MODE = "on"
 # prompts. Parsed by resolveLearningsMode (@/features/learnings).
 OPENCLAW_LEARNINGS_MODE = "on"
 
+# Capture master switch (write-side). "on" lets capture run for repos that ALSO opt in
+# via their sigilix.json (reviewMemory.enabled | captureOnly) — per-repo opt-in is the SOC2
+# control. Enables the SIG-104 inline-reply Learnings auto-capture (the no-command
+# "natural conversation" core; the learning is gated additionally by OPENCLAW_LEARNINGS_MODE)
+# AND the review-memory dismissal-signal corpus. Behaviorally write-only: retrieval/soften is
+# SEPARATELY gated by OPENCLAW_REVIEW_MEMORY_ENABLED (unset = off), so nothing softens yet.
+OPENCLAW_REVIEW_MEMORY_CAPTURE = "on"
+
 # SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
 # CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at
 # an unchanged blob-sha are skipped. Kills the per-commit finding "dribble" (the

@@ -17,7 +17,9 @@ The gate for any change, in one line:
 > validate (`npm run build` green) → an end-to-end test covering the new behavior →
 > independent code-review pass → focused PR → all bots + CI pass (**Sigilix**,
 > **CodeRabbit**, `lint`, `evidence / scan`, `Workers Builds`) → **respond to every bot
-> comment** (apply the fix, or explain the false positive) → the repo owner merges.
+> comment** (apply the fix; for a false positive on an *intentional* pattern, reply explaining
+> why — Sigilix's Learnings will remember it; otherwise dismiss — but never teach away a real
+> bug) → the repo owner merges.
 
 No self-merging. No pushing to `main` or force-pushing. No `Co-Authored-By` trailers.
 Never hide a real high-severity (P0/P1) finding to make a check go green.

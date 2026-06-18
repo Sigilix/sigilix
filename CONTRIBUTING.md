@@ -55,7 +55,16 @@ and tell your point of contact you have read it.**
    A red bot is a real signal. Investigate it; don't route around it.
 
 8. **Respond to every bot comment.** For each finding, either:
-   - **apply the fix** if it's valid, or
+   - **apply the fix** if it's valid,
+   - **teach the rule** if it's a false positive on an *intentional* pattern: reply in plain
+     language explaining why it's deliberate (e.g. "this is intentional — we always do X here
+     because Y"). Sigilix's Learnings is live, so a clear reply is captured as a per-repo rule and
+     the pattern is not re-flagged on future PRs — strictly better than a bare dismiss, because it
+     improves the reviewer for everyone (the flywheel we sell). **Recall-safety: only ever teach a
+     genuinely intentional, safe pattern. Never reply "intentional" to silence a real bug, and
+     never try to teach away a P0/P1 or an unverified security/logic finding — the Learnings
+     carve-outs refuse those anyway. Real bug → fix it; false positive on an intentional pattern →
+     teach it; never blur the two.** Otherwise,
    - **reply with why it doesn't apply** — false positive, already covered, wrong context.
      For Sigilix, dismiss in-thread: `@sigilix dismiss <not-a-bug|bad-anchor|already-covered|too-minor|wrong-context>`.
 

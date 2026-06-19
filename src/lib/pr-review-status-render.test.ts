@@ -4,8 +4,12 @@ import {
   REVIEW_STATUS_BLOCK_START,
   buildReviewStatusBlock,
   upsertReviewStatusBlock,
+  extractReviewStatusBlock,
+  graftReviewStatusBlock,
   formatManageLine,
 } from "@/src/lib/pr-review-status-render"
+import { formatOverviewComment } from "@/src/lib/triage-pr-overview-format"
+import type { PrOverviewVerdict } from "@/src/lib/triage-pr-overview"
 import { PR_OVERVIEW_WAITING_ARTS, renderPrOverviewWaitingArt } from "@/src/lib/pr-overview-waiting-art"
 import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
 
@@ -343,5 +347,117 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
     })
     expect(second.match(/\*\*Manage:\*\*/g) ?? []).toHaveLength(0)
     expect(second).toContain("plain comment")
+  })
+})
+
+// ─── SIG-472: the overview-write clobber regression ───────────────────
+//
+// The two writers to the SAME overview comment are asymmetric: the status
+// writer (`upsertReviewStatusBlock`) preserves the surrounding overview, but the
+// overview writer builds its body from scratch (`formatOverviewComment`) and used
+// to DROP any existing status block. A re-run / latest-push overview write then
+// clobbered the status block — leaving the comment overview-only (and, in the
+// reverse interleaving, status-only). The fix makes the writers symmetric via
+// `graftReviewStatusBlock`.
+
+describe("SIG-472 overview-write status-block preservation", () => {
+  const VERDICT: PrOverviewVerdict = {
+    summary: "Refactors the payments refund path.",
+    files: [{ path: "src/payments.ts", score: 3, overview: "Refund handler", nextStep: "Add a test" }],
+    confidence: 4,
+    confidenceReason: "Diff is small and well-scoped.",
+    bullets: [],
+    reviewEffort: 3,
+  }
+
+  function manage(): string {
+    return formatManageLine({ reviewNumber: 2, shortSha: "abcdef1" })
+  }
+
+  it("overview-then-status-then-overview keeps BOTH the overview and the status block (clobber repro)", () => {
+    // (a) first overview write
+    const overview1 = formatOverviewComment({ verdict: VERDICT, isFirstRun: true })
+
+    // (b) a status write upserts the terminal block — overview + status survive
+    const withStatus = upsertReviewStatusBlock(overview1, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 5,
+      final: { status: "posted", findingsCount: 1, reviewUrl: "https://github.com/Sigilix/sigilix/pull/7" },
+      proof: { verified: 0, grounded: 1, model: 0 },
+      manage: manage(),
+    })
+    expect(withStatus).toContain("## Sigilix Overview")
+    expect(withStatus).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(withStatus).toContain("**Proof:**")
+    expect(withStatus).toContain("**Manage:**")
+
+    // (c) a SECOND overview write (re-run / latest push). The raw
+    // formatOverviewComment output carries NO status block — this is the
+    // clobber. The fix grafts the existing block back on.
+    const overview2Raw = formatOverviewComment({ verdict: VERDICT, isFirstRun: false })
+    expect(overview2Raw).not.toContain(REVIEW_STATUS_BLOCK_START) // proves the clobber source
+
+    const overview2 = graftReviewStatusBlock(overview2Raw, withStatus)
+
+    // Both the rich overview AND the status block (+ Proof/Manage) coexist.
+    expect(overview2).toContain("## Sigilix Overview")
+    expect(overview2).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(overview2).toContain(REVIEW_STATUS_BLOCK_END)
+    expect(overview2).toContain("**Proof:** 1 grounded")
+    expect(overview2).toContain("**Manage:**")
+    // Exactly one status block (no duplication).
+    expect(overview2.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    // Overview content stays ABOVE the status block.
+    expect(overview2.indexOf("## Sigilix Overview")).toBeLessThan(overview2.indexOf(REVIEW_STATUS_BLOCK_START))
+  })
+
+  it("status-first-then-overview (reverse interleaving) also keeps both", () => {
+    // (a) status write before any overview content (e.g. queued phase on a
+    // stub-less comment) produces a status-only-ish body
+    const statusOnly = upsertReviewStatusBlock("", {
+      phase: "specialists",
+      headSha: HEAD_SHA,
+      sequence: 2,
+    })
+    expect(statusOnly).toContain(REVIEW_STATUS_BLOCK_START)
+
+    // (b) the overview write grafts that block onto the fresh overview
+    const overviewRaw = formatOverviewComment({ verdict: VERDICT, isFirstRun: true })
+    const grafted = graftReviewStatusBlock(overviewRaw, statusOnly)
+
+    expect(grafted).toContain("## Sigilix Overview")
+    expect(grafted).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(grafted.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+  })
+
+  it("graft is a no-op when the source body has no status block", () => {
+    const overviewRaw = formatOverviewComment({ verdict: VERDICT, isFirstRun: true })
+    expect(graftReviewStatusBlock(overviewRaw, overviewRaw)).toBe(overviewRaw)
+    expect(graftReviewStatusBlock(overviewRaw, "")).toBe(overviewRaw)
+  })
+
+  it("collapses MULTIPLE pre-existing status blocks in the target to exactly one (SIG-472 P3)", () => {
+    const blockA = buildReviewStatusBlock({ phase: "queued", headSha: HEAD_SHA, sequence: 1 })
+    const blockB = buildReviewStatusBlock({ phase: "posted", headSha: HEAD_SHA, sequence: 2 })
+    // A malformed target carrying two blocks (defends the exported helper's
+    // "exactly one block" contract even though formatOverviewComment emits none).
+    const doubled = `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n${blockA}\n\n${blockB}`
+    const source = buildReviewStatusBlock({ phase: "posted", headSha: HEAD_SHA, sequence: 3 })
+    const grafted = graftReviewStatusBlock(doubled, source)
+    expect(grafted.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    expect(grafted).toContain("## Sigilix Overview")
+  })
+
+  it("extractReviewStatusBlock returns the full block, or null when absent/malformed", () => {
+    const block = buildReviewStatusBlock({ phase: "posted", headSha: HEAD_SHA, sequence: 1 })
+    const body = `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n${block}`
+    const extracted = extractReviewStatusBlock(body)
+    expect(extracted).not.toBeNull()
+    expect(extracted!.startsWith(REVIEW_STATUS_BLOCK_START)).toBe(true)
+    expect(extracted!.endsWith(REVIEW_STATUS_BLOCK_END)).toBe(true)
+    expect(extractReviewStatusBlock("no block here")).toBeNull()
+    // malformed: START present, END missing → null (not a partial graft)
+    expect(extractReviewStatusBlock(`x\n${REVIEW_STATUS_BLOCK_START}\nhalf`)).toBeNull()
   })
 })

@@ -20,6 +20,7 @@ const mockGetPullRequestCommits = vi.fn()
 const mockListIssueComments = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
+const mockGetIssueComment = vi.fn(async (..._args: unknown[]): Promise<{ body: string } | null> => null)
 const mockGenerate = vi.fn()
 const mockListPullRequestFiles = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => [])
 // SIG-216 CR fix-up: the read-after-write idempotency rescan
@@ -44,6 +45,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
       listIssueCommentsPage: (...args: unknown[]) => mockListIssueCommentsPage(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
+      getIssueComment: (...args: unknown[]) => mockGetIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
     })),
   }
@@ -60,6 +62,12 @@ vi.mock("@/src/shared/adapters/model/ollama", () => ({
 }))
 
 import { handlePrOverview } from "@/src/lib/triage-pr-overview"
+import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
+import {
+  REVIEW_STATUS_BLOCK_START,
+  REVIEW_STATUS_BLOCK_END,
+  buildReviewStatusBlock,
+} from "@/src/lib/pr-review-status-render"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
@@ -117,6 +125,8 @@ beforeEach(() => {
   mockListIssueCommentsPage.mockImplementation(async () => [])
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
+  mockGetIssueComment.mockClear()
+  mockGetIssueComment.mockResolvedValue(null)
   mockGenerate.mockClear()
   mockGetPullRequestDiff.mockResolvedValue("diff --git a/foo.ts ...\n+const x = 1")
   mockGetPullRequestCommits.mockResolvedValue([])
@@ -272,5 +282,73 @@ describe("handlePrOverview — stale-head guard #2 (pre-write, SIG-84)", () => {
       .find((s) => s.includes("pr-overview-stale-recheck-failed-aborted"))
     expect(matched).toBeDefined()
     warnSpy.mockRestore()
+  })
+})
+
+// ─── SIG-472: the overview re-write preserves an existing status block ──
+//
+// Reproduces the live regression end-to-end through `handlePrOverview`: an
+// overview comment already carries a terminal review-run-status block (written
+// by the status reporter). A re-run / latest-push overview write PATCHes the
+// SAME comment and must NOT clobber that block — the written body must hold both
+// the `## Sigilix Overview` and the `review-run-status` block.
+describe("handlePrOverview — SIG-472 status-block preservation on re-write", () => {
+  const EXISTING_COMMENT_ID = 9001
+
+  function existingOverviewWithStatus(): string {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: QUEUED_HEAD,
+      sequence: 7,
+      final: { status: "posted", findingsCount: 2, reviewUrl: "https://github.com/acme/site/pull/73" },
+      proof: { verified: 0, grounded: 2, model: 0 },
+      manage: "**Manage:** Re-run `/sigilix review`",
+    })
+    return `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n### Summary\n\nPrior overview body.\n\n${block}`
+  }
+
+  it("grafts the existing status block onto the freshly-rendered overview (no clobber)", async () => {
+    // Head matches → full pipeline runs to the write. The pre-Ollama scan
+    // finds the existing overview comment; the write path PATCHes it.
+    mockGetPullRequest.mockResolvedValue({ head: { sha: QUEUED_HEAD }, title: "T", body: "B" })
+    const existingBody = existingOverviewWithStatus()
+    // The initial scan (`listIssueComments`) surfaces the existing overview id.
+    mockListIssueComments.mockResolvedValue([{ id: EXISTING_COMMENT_ID, body: existingBody }])
+    // SIG-472: the PATCH path re-fetches the current body to graft its block.
+    mockGetIssueComment.mockResolvedValue({ body: existingBody })
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...baseArgs, env: makeEnv(kv) })
+
+    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+    const written = String(mockUpdateIssueComment.mock.calls[0]![3])
+    // Both the freshly-rendered overview AND the preserved status block survive.
+    expect(written).toContain("## Sigilix Overview")
+    expect(written).toContain("Adds a regex guard around path normalization.") // fresh model summary
+    expect(written).toContain(REVIEW_STATUS_BLOCK_START)
+    expect(written).toContain(REVIEW_STATUS_BLOCK_END)
+    expect(written).toContain("**Proof:** 2 grounded")
+    expect(written).toContain("**Manage:**")
+    // Exactly one status block.
+    expect(written.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+  })
+
+  it("fails CLOSED: SKIPS the PATCH when the existing-body fetch fails (never writes a known-statusless body)", async () => {
+    // SIG-472 P2: a transient GET failure must NOT degrade to writing the plain
+    // overview — that would reproduce the clobber. Skip the write instead and
+    // leave the last-good comment intact (the next push / re-run re-renders).
+    mockGetPullRequest.mockResolvedValue({ head: { sha: QUEUED_HEAD }, title: "T", body: "B" })
+    mockListIssueComments.mockResolvedValue([
+      { id: EXISTING_COMMENT_ID, body: `${OVERVIEW_MARKER}\n\n## Sigilix Overview` },
+    ])
+    mockGetIssueComment.mockRejectedValue(new Error("503"))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...baseArgs, env: makeEnv(kv) })
+
+    // No write at all — the existing comment is preserved untouched.
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
   })
 })

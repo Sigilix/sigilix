@@ -166,6 +166,47 @@ export function upsertReviewStatusBlock(body: string, snapshot: ReviewStatusSnap
 }
 
 /**
+ * SIG-472: extract the well-formed `review-run-status` block (START…END,
+ * inclusive of both delimiters) from a comment body, or null when the body has
+ * no such block (or only a malformed half-block missing its END marker). Pure —
+ * the symmetric read counterpart to `insertReviewStatusBlock`.
+ */
+export function extractReviewStatusBlock(body: string): string | null {
+  const start = body.indexOf(REVIEW_STATUS_BLOCK_START)
+  if (start < 0) return null
+  const end = body.indexOf(REVIEW_STATUS_BLOCK_END, start + REVIEW_STATUS_BLOCK_START.length)
+  if (end <= start) return null
+  return body.slice(start, end + REVIEW_STATUS_BLOCK_END.length)
+}
+
+/**
+ * SIG-472: graft the status block carried by `sourceBody` onto a freshly-rendered
+ * overview body, so an overview re-write PRESERVES the existing review-run-status
+ * block (Phase/Commit/Specialists/Result/Proof/Manage) instead of clobbering it.
+ *
+ * This is the missing symmetric half of the two overview writers: the status
+ * writer already preserves the overview (`upsertReviewStatusBlock` =
+ * remove-then-insert around the surrounding content), but the overview writer
+ * builds its body from scratch via `formatOverviewComment` and used to drop the
+ * status block entirely. Grafting here makes both writers symmetric, so the
+ * overview + status block coexist regardless of write order.
+ *
+ * Strips EVERY status block already present in `overviewBody` first (defensive —
+ * `formatOverviewComment` output carries none today) so the result holds exactly
+ * one block regardless of the input. When `sourceBody` carries no block, returns
+ * `overviewBody` unchanged.
+ */
+export function graftReviewStatusBlock(overviewBody: string, sourceBody: string): string {
+  const block = extractReviewStatusBlock(sourceBody)
+  if (block === null) return overviewBody
+  let stripped = overviewBody
+  while (extractReviewStatusBlock(stripped) !== null) {
+    stripped = removeReviewStatusBlock(stripped)
+  }
+  return insertReviewStatusBlock(stripped, block)
+}
+
+/**
  * SIG-471: patch ONLY the Proof line inside an existing status block, preserving
  * every other line (Phase/Commit/Specialists/Result/…). The runner-receipt
  * proof-update job uses this — it does NOT hold the full terminal snapshot, so it

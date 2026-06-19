@@ -18,6 +18,7 @@ const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn()
 const mockGetPullRequestCommits = vi.fn()
 const mockListIssueComments = vi.fn()
+const mockGetIssueComment = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
@@ -49,6 +50,7 @@ vi.mock("@/src/shared/adapters/github", async () => {
       getPullRequestCommits: (...args: unknown[]) => mockGetPullRequestCommits(...args),
       listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
       listIssueCommentsPage: (...args: unknown[]) => mockListIssueCommentsPage(...args),
+      getIssueComment: (...args: unknown[]) => mockGetIssueComment(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
@@ -117,6 +119,10 @@ beforeEach(() => {
   mockGetPullRequestDiff.mockClear()
   mockGetPullRequestCommits.mockClear()
   mockListIssueComments.mockClear()
+  mockGetIssueComment.mockClear()
+  // SIG-472: the PATCH path re-fetches the existing body to graft its status
+  // block; default to an empty body (no block → graft is a no-op, write proceeds).
+  mockGetIssueComment.mockResolvedValue({ body: "" })
   mockListIssueCommentsPage.mockClear()
   mockListIssueCommentsPage.mockImplementation(async () => [])
   mockCreateIssueComment.mockClear()

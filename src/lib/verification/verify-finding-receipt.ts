@@ -88,21 +88,60 @@ const CWE_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
  * present, use it (AST preferred).
  */
 export function canonicalClassForFinding(
-  finding: Pick<PrReviewFinding, "evidenceId" | "cweId">,
+  finding: Pick<PrReviewFinding, "evidenceId" | "cweId" | "evidence">,
 ): CanonicalVulnClass | null {
-  let astClass: CanonicalVulnClass | null = null
+  // Collect candidate classes from ALL deterministic signals on the finding.
+  const candidates = new Set<CanonicalVulnClass>()
+
+  // (a) AST rule-id from an `ast:`-prefixed evidenceId (the finding's OWN id).
   const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
   if (eid.startsWith("ast:")) {
     const ruleId = ruleIdFromEvidenceId(eid)
-    astClass = (ruleId && AST_RULE_ID_TO_CLASS.get(ruleId)) || null
+    const cls = ruleId ? AST_RULE_ID_TO_CLASS.get(ruleId) : undefined
+    if (cls) candidates.add(cls)
   }
-  let cweClass: CanonicalVulnClass | null = null
+
+  // (b) SIG-184 Phase 3b: co-located deterministic AST facts. Even when the
+  // submitted finding grounded itself via a worker-token (so its own evidenceId
+  // is NOT an `ast:` id), the validation layer records the deterministic facts
+  // associated with the finding (the AST source findings merged into it) in
+  // `evidence.deterministicFactIds` — e.g. `ast/no-exec-shell-interpolation/<h>/<line>`.
+  // The class still comes from OUR deterministic detector at the finding's site.
+  for (const factId of finding.evidence?.deterministicFactIds ?? []) {
+    const ruleId = astRuleIdFromFactId(typeof factId === "string" ? factId.trim() : "")
+    const cls = ruleId ? AST_RULE_ID_TO_CLASS.get(ruleId) : undefined
+    if (cls) candidates.add(cls)
+  }
+
+  // (c) CWE id.
   const cwe = typeof finding.cweId === "string" ? finding.cweId.trim().toUpperCase() : ""
   const m = /^CWE-(\d+)$/.exec(cwe)
-  if (m) cweClass = CWE_TO_CLASS.get(`CWE-${m[1]}`) ?? null
-  // Conflict → fail closed (no VERIFIED on a contradictory self-classification).
-  if (astClass && cweClass && astClass !== cweClass) return null
-  return astClass ?? cweClass
+  if (m) {
+    const cls = CWE_TO_CLASS.get(`CWE-${m[1]}`)
+    if (cls) candidates.add(cls)
+  }
+
+  // Exactly one distinct class → use it. Zero → null. Conflict (>1) → null
+  // (fail closed: contradictory deterministic signals must not earn VERIFIED).
+  return candidates.size === 1 ? [...candidates][0]! : null
+}
+
+/**
+ * Extract the AST rule-id from a deterministic fact id. Handles both the
+ * `ast:<ruleId>:<astFindingId>` evidenceId shape and the `ast/<ruleId>/<hash>/<line>`
+ * source-fact-id shape. Returns null for any non-AST id (so a secret/sarif fact
+ * id can't be mistaken for an AST rule).
+ */
+function astRuleIdFromFactId(id: string): string | null {
+  if (id.startsWith("ast/")) {
+    const ruleId = id.split("/")[1]?.trim()
+    return ruleId && ruleId.length > 0 ? ruleId : null
+  }
+  if (id.startsWith("ast:")) {
+    const ruleId = id.split(":")[1]?.trim()
+    return ruleId && ruleId.length > 0 ? ruleId : null
+  }
+  return null
 }
 
 /**
@@ -264,7 +303,7 @@ function ruleClassMatches(findingRuleId: string, sarifRuleId: string): boolean {
  * question. Everything else (logic / authz-NONE / no evidence) → NO-CHECK.
  */
 export function isReceiptJoinEligible(
-  finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId" | "cweId">,
+  finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId" | "cweId" | "evidence">,
 ): boolean {
   if (typeof finding.score !== "number" || finding.score < 4) return false
   if (finding.category !== "security") return false
@@ -283,7 +322,10 @@ export function isReceiptJoinEligible(
  * the whole thing behind OPENCLAW_RECEIPTJOIN_MODE and only telemeters in PR1.
  */
 export function verifyFindingAgainstReceipt(
-  finding: Pick<PrReviewFinding, "path" | "line" | "headline" | "score" | "category" | "evidenceId" | "cweId">,
+  finding: Pick<
+    PrReviewFinding,
+    "path" | "line" | "headline" | "score" | "category" | "evidenceId" | "cweId" | "evidence"
+  >,
   receiptIndex: Map<string, ReceiptScanResult[]>,
 ): VerificationResult {
   if (!isReceiptJoinEligible(finding)) {

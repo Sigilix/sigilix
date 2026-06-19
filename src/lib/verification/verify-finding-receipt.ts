@@ -37,8 +37,73 @@
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 import type { SarifRun } from "@/src/features/sarif-evidence"
 import { findingKey, type VerificationCheck, type VerificationResult } from "./verify-finding"
+import { asCanonicalVulnClass, type CanonicalVulnClass } from "@/src/shared/domain/vuln-class"
 
 export { findingKey }
+
+// SIG-184 Phase 3 — DETERMINISTIC sources of a finding's canonical vuln-class.
+// The class is NEVER derived from the model's headline/category/free-text; only
+// from (1) an engine AST rule-id (carried verbatim in `evidenceId` as
+// `ast:<ruleId>:...`, minted by security-evidence-manifest.ts) or (2) a CWE id.
+// Both maps are 1:1 (no ambiguous source maps to two classes).
+const AST_RULE_ID_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
+  ["no-exec-shell-interpolation", "command-injection"],
+  ["no-sql-injection", "sql-injection"],
+  ["no-nosql-injection", "nosql-injection"],
+  ["no-path-traversal", "path-traversal"],
+  ["no-ssrf", "ssrf"],
+  ["no-xxe", "xxe"],
+  ["no-ssti", "ssti"],
+  ["no-prototype-pollution", "proto-pollution"],
+  ["no-open-redirect", "open-redirect"],
+  ["no-insecure-random-token", "weak-random"],
+  ["no-hardcoded-secret-fallback", "hardcoded-secret"],
+])
+
+const CWE_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
+  ["CWE-78", "command-injection"],
+  ["CWE-77", "command-injection"],
+  ["CWE-89", "sql-injection"],
+  ["CWE-943", "nosql-injection"],
+  ["CWE-22", "path-traversal"],
+  ["CWE-918", "ssrf"],
+  ["CWE-611", "xxe"],
+  ["CWE-1336", "ssti"],
+  ["CWE-1321", "proto-pollution"],
+  ["CWE-601", "open-redirect"],
+  ["CWE-798", "hardcoded-secret"],
+  ["CWE-338", "weak-random"],
+])
+
+/**
+ * SIG-184 Phase 3: derive a finding's canonical vuln-class for the receipt-join.
+ * Two sources: (1) an engine AST rule-id (our OWN deterministic detector fired —
+ * the strongest signal), parsed only from an `ast:`-prefixed `evidenceId`; (2) a
+ * CWE id (model-classified, but it's only the JOIN KEY — the actual corroboration
+ * strength comes from the independent forge-proof-signed runner hit of the same
+ * class). Returns null (→ ineligible → GROUNDED, never VERIFIED) when neither
+ * yields a known class. CREDIBILITY (Codex sign-off): if BOTH an AST class and a
+ * CWE class are present and DISAGREE, fail closed to null — a contradictory
+ * self-classification must not earn VERIFIED. When they agree, or only one is
+ * present, use it (AST preferred).
+ */
+export function canonicalClassForFinding(
+  finding: Pick<PrReviewFinding, "evidenceId" | "cweId">,
+): CanonicalVulnClass | null {
+  let astClass: CanonicalVulnClass | null = null
+  const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
+  if (eid.startsWith("ast:")) {
+    const ruleId = ruleIdFromEvidenceId(eid)
+    astClass = (ruleId && AST_RULE_ID_TO_CLASS.get(ruleId)) || null
+  }
+  let cweClass: CanonicalVulnClass | null = null
+  const cwe = typeof finding.cweId === "string" ? finding.cweId.trim().toUpperCase() : ""
+  const m = /^CWE-(\d+)$/.exec(cwe)
+  if (m) cweClass = CWE_TO_CLASS.get(`CWE-${m[1]}`) ?? null
+  // Conflict → fail closed (no VERIFIED on a contradictory self-classification).
+  if (astClass && cweClass && astClass !== cweClass) return null
+  return astClass ?? cweClass
+}
 
 /**
  * Receipt-join gate mode. `off` (default): the gate doesn't run. `shadow`:
@@ -70,6 +135,10 @@ export interface ReceiptScanResult {
   ruleId: string
   /** 1-based line, or undefined for path-only (IaC/dep) results. */
   line?: number
+  /** SIG-184 Phase 3: the runner-stamped canonical vuln-class
+   *  (`properties.sigilixRuleClass`), validated against the allowlist at
+   *  extraction (unknown → undefined). The join key for the class-match branch. */
+  sigilixRuleClass?: CanonicalVulnClass
 }
 
 /** Line drift absorbed around a result before a same-line match fails. The
@@ -80,6 +149,13 @@ export interface ReceiptScanResult {
  *  (no demotion happens here); a false CONFIRMED is just a slightly-too-eager
  *  trust pill, which the rule-class match below still bounds. */
 const LINE_WINDOW = 10
+
+/** SIG-184 Phase 3: tighter window for the canonical-class match. The class
+ *  branch matches on vuln-CLASS (coarser than an exact rule-id), so a smaller
+ *  window bounds cross-finding collisions (two same-class findings near each
+ *  other). A false INCONCLUSIVE here is FN-safe (no demotion); a false CONFIRMED
+ *  would mis-place a trust pill, so keep it tight (DeepSeek sign-off). */
+const CLASS_LINE_WINDOW = 3
 
 /**
  * The subset of `normalizeSarifPath` the extractor needs — injected so this
@@ -115,6 +191,10 @@ export function extractReceiptScanResults(
     for (const res of run.results ?? []) {
       const ruleId = typeof res.ruleId === "string" ? res.ruleId.trim() : ""
       if (ruleId.length === 0) continue
+      // SIG-184 Phase 3: the runner-stamped canonical class, allowlist-validated
+      // (unknown/garbage → undefined; never trusted as-is — the credibility gate).
+      const rawClass = (res.properties as { sigilixRuleClass?: unknown } | undefined)?.sigilixRuleClass
+      const sigilixRuleClass = asCanonicalVulnClass(typeof rawClass === "string" ? rawClass : undefined)
       for (const loc of res.locations ?? []) {
         const artLoc = loc.physicalLocation?.artifactLocation
         const norm = normalizePath(artLoc?.uri, {
@@ -124,9 +204,12 @@ export function extractReceiptScanResults(
         })
         if (!norm.ok) continue
         const startLine = loc.physicalLocation?.region?.startLine
-        out.push(
-          typeof startLine === "number" ? { path: norm.path, ruleId, line: startLine } : { path: norm.path, ruleId },
-        )
+        out.push({
+          path: norm.path,
+          ruleId,
+          ...(typeof startLine === "number" ? { line: startLine } : {}),
+          ...(sigilixRuleClass ? { sigilixRuleClass } : {}),
+        })
       }
     }
   }
@@ -180,11 +263,17 @@ function ruleClassMatches(findingRuleId: string, sarifRuleId: string): boolean {
  * output, the only population where "the same rule re-runs on HEAD" is a sound
  * question. Everything else (logic / authz-NONE / no evidence) → NO-CHECK.
  */
-export function isReceiptJoinEligible(finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId">): boolean {
+export function isReceiptJoinEligible(
+  finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId" | "cweId">,
+): boolean {
   if (typeof finding.score !== "number" || finding.score < 4) return false
   if (finding.category !== "security") return false
   const id = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
-  return id.length > 0 && id !== "NONE"
+  // Legacy path: a SIG-108 scanner-corroborated finding (resolvable evidenceId).
+  if (id.length > 0 && id !== "NONE") return true
+  // SIG-184 Phase 3: OR a finding with a derivable canonical vuln-class (AST/CWE)
+  // — corroborated by the runner's independent class-stamped scan.
+  return canonicalClassForFinding(finding) !== null
 }
 
 /**
@@ -194,25 +283,49 @@ export function isReceiptJoinEligible(finding: Pick<PrReviewFinding, "score" | "
  * the whole thing behind OPENCLAW_RECEIPTJOIN_MODE and only telemeters in PR1.
  */
 export function verifyFindingAgainstReceipt(
-  finding: Pick<PrReviewFinding, "path" | "line" | "headline" | "score" | "category" | "evidenceId">,
+  finding: Pick<PrReviewFinding, "path" | "line" | "headline" | "score" | "category" | "evidenceId" | "cweId">,
   receiptIndex: Map<string, ReceiptScanResult[]>,
 ): VerificationResult {
   if (!isReceiptJoinEligible(finding)) {
     return { verdict: "no-check", tokens: [] }
   }
-  const findingRuleId = ruleIdFromEvidenceId(finding.evidenceId as string)
-  if (findingRuleId === null) {
-    // Eligible but the rule-id isn't extractable — can't ask the sound question.
+  const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
+  const findingRuleId = eid.length > 0 && eid !== "NONE" ? ruleIdFromEvidenceId(eid) : null
+  // SIG-184 Phase 3: the finding's canonical vuln-class for the class-match branch.
+  const findingClass = canonicalClassForFinding(finding)
+  if (findingRuleId === null && findingClass === null) {
+    // Eligible but neither a scanner rule-id nor a canonical class is extractable.
     return {
       verdict: "inconclusive",
       tokens: [],
-      check: receiptCheck("skipped", "evidenceId rule-id unparsable", ""),
+      check: receiptCheck("skipped", "no rule-id or canonical class on finding", ""),
     }
   }
 
   const candidates = receiptIndex.get(finding.path) ?? []
   for (const r of candidates) {
-    if (!ruleClassMatches(findingRuleId, r.ruleId)) continue
+    // SIG-184 Phase 3 — canonical-class branch: EXACT enum equality (not
+    // substring), tighter line window (CLASS_LINE_WINDOW) to bound cross-finding
+    // collisions. Two INDEPENDENT detectors (our AST/CWE class + the runner's
+    // class-stamped scan) agreeing on the same class+location → CONFIRMED.
+    if (findingClass !== null && r.sigilixRuleClass === findingClass) {
+      const classLineOk =
+        r.line === undefined ||
+        (typeof finding.line === "number" && Math.abs(r.line - finding.line) <= CLASS_LINE_WINDOW)
+      if (classLineOk) {
+        return {
+          verdict: "confirmed",
+          tokens: [findingClass],
+          check: receiptCheck(
+            "pass",
+            `receipt-join --class ${findingClass} --path ${finding.path} --line ${finding.line}`,
+            `class ${r.sigilixRuleClass} via ${r.ruleId}${r.line !== undefined ? ` @${r.line}` : " (path-only)"}`,
+          ),
+        }
+      }
+    }
+    // Legacy rule-id branch (true SIG-108 scanner findings).
+    if (findingRuleId === null || !ruleClassMatches(findingRuleId, r.ruleId)) continue
     // Path-only result (no line) → path+rule match confirms. Line-bearing →
     // require the finding's line within the window (merge/head drift absorbed).
     const lineOk =
@@ -230,15 +343,17 @@ export function verifyFindingAgainstReceipt(
     }
   }
 
-  // No same-rule result at this path/line on HEAD. Absence is OVER-DETERMINED →
-  // INCONCLUSIVE, NEVER refuted (the candidate-refutable population PR2 counts).
+  // No same-rule/same-class result at this path/line on HEAD. Absence is
+  // OVER-DETERMINED → INCONCLUSIVE, NEVER refuted (the candidate-refutable
+  // population PR2 counts).
+  const probe = findingRuleId ?? (findingClass !== null ? `class:${findingClass}` : "?")
   return {
     verdict: "inconclusive",
-    tokens: [findingRuleId],
+    tokens: findingRuleId !== null ? [findingRuleId] : findingClass !== null ? [findingClass] : [],
     check: receiptCheck(
       "fail",
-      `receipt-join --rule ${findingRuleId} --path ${finding.path} --line ${finding.line}`,
-      "no same-rule result at path/line on HEAD",
+      `receipt-join --probe ${probe} --path ${finding.path} --line ${finding.line}`,
+      "no same-rule/class result at path/line on HEAD",
     ),
   }
 }

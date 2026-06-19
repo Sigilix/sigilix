@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildReceiptIndex,
+  canonicalClassForFinding,
   extractReceiptScanResults,
   isReceiptJoinEligible,
   ruleIdFromEvidenceId,
@@ -291,5 +292,90 @@ describe("buildReceiptIndex", () => {
     ])
     expect(idx.get("a.ts")).toHaveLength(2)
     expect(idx.has("")).toBe(false)
+  })
+})
+
+// SIG-184 Phase 3 — canonical vuln-class corroboration bridge (credibility core).
+describe("canonicalClassForFinding (deterministic class derivation)", () => {
+  it("derives from an ast: evidenceId rule-id", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "ast:no-exec-shell-interpolation:x" }))).toBe(
+      "command-injection",
+    )
+  })
+  it("derives from cweId when no ast evidenceId", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-89" }))).toBe("sql-injection")
+  })
+  it("AST and CWE agree → that class", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "ast:no-ssrf:x", cweId: "CWE-918" }))).toBe("ssrf")
+  })
+  it("CREDIBILITY: AST and CWE CONFLICT → null (no VERIFIED on contradictory self-classification)", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "ast:no-ssrf:x", cweId: "CWE-89" }))).toBeNull()
+  })
+  it("non-ast scanner evidenceId is NOT read as an AST class (falls to CWE/null)", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "secret:no-ssrf:h:1", cweId: undefined }))).toBeNull()
+  })
+  it("unknown CWE / no signal → null", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-99999" }))).toBeNull()
+    expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: undefined }))).toBeNull()
+  })
+})
+
+describe("receipt-join — canonical-class branch", () => {
+  const cmdInjFinding = finding({ evidenceId: "NONE", cweId: "CWE-78", path: "src/x.ts", line: 10 })
+
+  it("eligible via canonical class even with NO scanner evidenceId", () => {
+    expect(isReceiptJoinEligible(cmdInjFinding)).toBe(true)
+  })
+
+  it("extractReceiptScanResults reads + allowlist-validates properties.sigilixRuleClass", () => {
+    const results = extractReceiptScanResults(
+      [
+        run([
+          {
+            ruleId: "javascript.lang.security.audit.dangerous-exec",
+            properties: { sigilixRuleClass: "command-injection" },
+            locations: [{ physicalLocation: { artifactLocation: { uri: "src/x.ts" }, region: { startLine: 10 } } }],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
+    expect(results[0]?.sigilixRuleClass).toBe("command-injection")
+  })
+
+  it("CREDIBILITY: a malicious/unknown sigilixRuleClass is DROPPED (never trusted)", () => {
+    const results = extractReceiptScanResults(
+      [
+        run([
+          {
+            ruleId: "r",
+            properties: { sigilixRuleClass: "totally-made-up-class" },
+            locations: [{ physicalLocation: { artifactLocation: { uri: "src/x.ts" }, region: { startLine: 10 } } }],
+          },
+        ]),
+      ],
+      stubNormalize,
+    )
+    expect(results[0]?.sigilixRuleClass).toBeUndefined()
+  })
+
+  it("CONFIRMED: exact class match at same path within CLASS_LINE_WINDOW", () => {
+    const idx = index([{ path: "src/x.ts", ruleId: "semgrep.exec", line: 11, sigilixRuleClass: "command-injection" }])
+    expect(verifyFindingAgainstReceipt(cmdInjFinding, idx).verdict).toBe("confirmed")
+  })
+
+  it("CREDIBILITY: WRONG class at the same line does NOT confirm (no false VERIFIED)", () => {
+    const idx = index([{ path: "src/x.ts", ruleId: "semgrep.sqli", line: 10, sigilixRuleClass: "sql-injection" }])
+    expect(verifyFindingAgainstReceipt(cmdInjFinding, idx).verdict).toBe("inconclusive")
+  })
+
+  it("CREDIBILITY: right class but OUTSIDE the tight class window → inconclusive", () => {
+    const idx = index([{ path: "src/x.ts", ruleId: "semgrep.exec", line: 99, sigilixRuleClass: "command-injection" }])
+    expect(verifyFindingAgainstReceipt(cmdInjFinding, idx).verdict).toBe("inconclusive")
+  })
+
+  it("CREDIBILITY: an UN-stamped runner result (no sigilixRuleClass) does NOT confirm", () => {
+    const idx = index([{ path: "src/x.ts", ruleId: "semgrep.exec", line: 10 }])
+    expect(verifyFindingAgainstReceipt(cmdInjFinding, idx).verdict).toBe("inconclusive")
   })
 })

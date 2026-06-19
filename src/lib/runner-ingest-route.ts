@@ -248,17 +248,18 @@ function scheduleRunnerToolMetrics(args: {
 }
 
 /**
- * VERIFIED unlock Phase 2: on a NEWLY-ACCEPTED PR receipt, enqueue a full
- * re-review so the receipt-join (lookup.ts / gather-graph.ts) runs against the
- * now-present receipt. Without this the review races ahead of the runner and
- * the join finds a stale (or no) receipt → `head-sha-mismatch` →
- * `evidence-pending`, and nothing ever re-evaluates once the receipt lands.
+ * SIG-471 (quiet-VERIFIED): on a NEWLY-ACCEPTED PR receipt, enqueue a QUIET
+ * `overview-proof-update` job (NOT a full re-review). The job re-runs ONLY the
+ * receipt-join over the prior review's findings and patches the Proof line on
+ * the editable overview comment in place — no specialist run, no second posted
+ * review. This replaces the old noisy full re-review (which re-fired the whole
+ * ensemble + posted a second review just to run the join).
  *
  * Best-effort: ANY failure (no App config, no installation, merge-sha not yet
  * computed, 2-parent guard, queue send) is swallowed + logged — the ingest
- * response must never fail because the re-review couldn't be queued. The CI
- * retry path will resubmit the receipt (→ `duplicate`, not `accepted`), so the
- * caller gates on `accepted` to avoid spamming reviews.
+ * response must never fail because the job couldn't be queued. The CI retry
+ * path resubmits the receipt (→ `duplicate`, not `accepted`), so the caller
+ * gates on `accepted` to avoid spamming jobs.
  *
  * FORGE-PROOF: the head sha is derived from the SIGNED merge sha
  * (`getCommit(claims.sha).parents[1]` of the 2-parent `refs/pull/N/merge`
@@ -266,7 +267,7 @@ function scheduleRunnerToolMetrics(args: {
  * uses in `gather-graph.ts`. If that derivation fails we SKIP the enqueue (do
  * not guess a head sha).
  */
-async function enqueueRunnerReceiptReReview(args: {
+async function enqueueOverviewProofUpdate(args: {
   env: Env
   repository: string
   sha: string
@@ -297,7 +298,7 @@ async function enqueueRunnerReceiptReReview(args: {
     if (!commit || commit.parents.length !== 2) {
       console.warn(
         JSON.stringify({
-          event: "runner-receipt-rereview-skipped",
+          event: "overview-proof-update-enqueue-skipped",
           reason: commit === null ? "merge-commit-unavailable" : "not-two-parent-merge",
           owner,
           repo,
@@ -309,31 +310,24 @@ async function enqueueRunnerReceiptReReview(args: {
     const headSha = commit.parents[1]
     if (typeof headSha !== "string" || headSha.length === 0) return
 
-    // Raw-send a pr-review JobMessage (NOT the DO `enqueuePrReviewJob` path):
-    // the DO dedupes by (PR, headSha) and the webhook review already ran on
-    // this head, so the DO would return `dedupe-terminal` and never re-run.
-    // A raw send is the same mechanism the explicit `/sigilix review` rerun
-    // uses to force a fresh review on an already-reviewed head. `forceFullCoverage`
-    // forces non-incremental so the same-headSha re-review re-fires findings (the
-    // receipt-join can run) instead of empty-delta-skipping (SIG-459).
+    // Raw-send a QUIET overview-proof-update JobMessage (NOT a pr-review): the
+    // handler re-runs only the receipt-join over the prior review's manifest and
+    // patches the overview's Proof line in place — no specialist run, no second
+    // review. `attempt` defaults to 0; the handler re-enqueues (bounded) while
+    // the prior review's manifest / overview block is still in flight.
     const message: JobMessage = {
-      type: "pr-review",
+      type: "overview-proof-update",
       owner,
       repo,
       prNumber: pullNumber,
       headSha,
       installationId,
-      triggerReason: "runner-receipt",
-      forceFullCoverage: true,
-      // A receipt can land just after merge; still run the join so a legitimately
-      // earned VERIFIED isn't lost to a merge-race.
-      bypassClosedSkip: true,
       ...(Number.isInteger(Number(repositoryId)) && Number(repositoryId) > 0 ? { repoId: Number(repositoryId) } : {}),
     }
     await env.OPENCLAW_JOBS.send(message)
     console.log(
       JSON.stringify({
-        event: "runner-receipt-rereview-enqueued",
+        event: "overview-proof-update-enqueued",
         owner,
         repo,
         prNumber: pullNumber,
@@ -343,7 +337,7 @@ async function enqueueRunnerReceiptReReview(args: {
   } catch (err) {
     console.warn(
       JSON.stringify({
-        event: "runner-receipt-rereview-error",
+        event: "overview-proof-update-enqueue-error",
         repositoryId,
         sha,
         prNumber: pullNumber,
@@ -687,15 +681,16 @@ export async function handleRunnerIngestRoute(request: Request, env: Env, ctx?: 
     }
   }
 
-  // VERIFIED unlock Phase 2: on a NEWLY-ACCEPTED PR receipt, enqueue a full
-  // re-review so the receipt-join runs against the now-present receipt. ONLY on
-  // `accepted` (a `duplicate` is a CI retry — the review was already enqueued on
-  // the first accept) AND only for a PR receipt (`pullNumber > 0`; a branch-push
-  // audit receipt has no PR to review). Best-effort: the task is detached via
-  // `ctx.waitUntil` and self-swallows every error so it can never fail the
-  // ingest response. Loop-safe: reviews don't trigger the runner/ingest.
+  // SIG-471 (quiet-VERIFIED): on a NEWLY-ACCEPTED PR receipt, enqueue a QUIET
+  // overview-proof-update job (NOT a full re-review) so the receipt-join runs
+  // against the now-present receipt and the overview's Proof line is patched in
+  // place. ONLY on `accepted` (a `duplicate` is a CI retry — the job was already
+  // enqueued on the first accept) AND only for a PR receipt (`pullNumber > 0`; a
+  // branch-push audit receipt has no PR overview to patch). Best-effort: the task
+  // is detached via `ctx.waitUntil` and self-swallows every error so it can never
+  // fail the ingest response. Loop-safe: the quiet job triggers no review.
   if (claim.outcome === "accepted" && pullNumber > 0) {
-    const reReview = enqueueRunnerReceiptReReview({
+    const proofUpdate = enqueueOverviewProofUpdate({
       env,
       repository: tokenRepository,
       sha: tokenSha,
@@ -705,9 +700,9 @@ export async function handleRunnerIngestRoute(request: Request, env: Env, ctx?: 
     if (ctx === undefined) {
       // No execution context (non-edge callers / tests that omit it): run inline
       // but never let it reject the response.
-      await reReview.catch(() => {})
+      await proofUpdate.catch(() => {})
     } else {
-      ctx.waitUntil(reReview)
+      ctx.waitUntil(proofUpdate)
     }
   }
 

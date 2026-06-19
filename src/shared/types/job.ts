@@ -303,6 +303,33 @@ export type JobMessage =
       // enqueue and consume doesn't change drift detection.
       currentPromptVersion: string
     }
+  // SIG-471 (quiet-VERIFIED): when the forge-proof runner receipt lands, this
+  // job re-runs ONLY the receipt-join over the PRIOR review's manifest findings
+  // and patches the Proof line on the editable overview comment in place — NO
+  // specialist re-run, NO second posted review. Replaces the old noisy full
+  // re-review (`pr-review` + `triggerReason: "runner-receipt"`). Raw-sent from
+  // `runner-ingest-route.ts` on a newly-ACCEPTED PR receipt; `headSha` is the
+  // PR head derived (forge-proof) from the SIGNED 2-parent merge commit.
+  | {
+      type: "overview-proof-update"
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      installationId: number
+      /** SIG-247: GitHub's immutable `repo.id` for the receipt lookup join key.
+       *  Absent on ingest paths that couldn't resolve it; the handler falls back
+       *  to a `getRepository` lookup before the receipt join. */
+      repoId?: number
+      /**
+       * RACE retry counter. The receipt can land BEFORE the first review writes
+       * the manifest / overview comment. When the manifest or the overview's
+       * terminal status block isn't present yet, the handler re-enqueues the
+       * SAME job with `attempt + 1`, capped at `MAX_PROOF_UPDATE_ATTEMPTS`, so a
+       * legitimately-earned VERIFIED isn't lost to the merge-race. Absent → 0.
+       */
+      attempt?: number
+    }
   | {
       type: "ci-triage"
       owner: string

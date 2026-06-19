@@ -305,6 +305,10 @@ describe("canonicalClassForFinding (deterministic class derivation)", () => {
   it("derives from cweId when no ast evidenceId", () => {
     expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-89" }))).toBe("sql-injection")
   })
+  it("eval → code-injection (no-eval-call AST rule + CWE-94)", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "ast:no-eval-call:x" }))).toBe("code-injection")
+    expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-94" }))).toBe("code-injection")
+  })
   it("AST and CWE agree → that class", () => {
     expect(canonicalClassForFinding(finding({ evidenceId: "ast:no-ssrf:x", cweId: "CWE-918" }))).toBe("ssrf")
   })

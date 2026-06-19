@@ -48,6 +48,7 @@ export { findingKey }
 // Both maps are 1:1 (no ambiguous source maps to two classes).
 const AST_RULE_ID_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
   ["no-exec-shell-interpolation", "command-injection"],
+  ["no-eval-call", "code-injection"],
   ["no-sql-injection", "sql-injection"],
   ["no-nosql-injection", "nosql-injection"],
   ["no-path-traversal", "path-traversal"],
@@ -63,6 +64,8 @@ const AST_RULE_ID_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
 const CWE_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
   ["CWE-78", "command-injection"],
   ["CWE-77", "command-injection"],
+  ["CWE-94", "code-injection"],
+  ["CWE-95", "code-injection"],
   ["CWE-89", "sql-injection"],
   ["CWE-943", "nosql-injection"],
   ["CWE-22", "path-traversal"],

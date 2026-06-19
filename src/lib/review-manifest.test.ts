@@ -12,6 +12,7 @@ import {
   computeFileListHash,
   renderStaleBlock,
   applyStaleBlock,
+  toManifestFinding,
   type ReviewManifestV1,
 } from "@/src/lib/review-manifest"
 import type { Env } from "@/src/shared/types/env"
@@ -120,6 +121,106 @@ describe("readReviewManifest", () => {
     }
     const result = await readReviewManifest(fakeEnv(stub), "o", "r", 1)
     expect(result).toEqual({ kind: "missing" })
+  })
+
+  // SIG-471 (quiet-VERIFIED): the enriched per-finding fields the overview-proof-update job reads.
+  it("round-trips a finding carrying the SIG-471 receipt-join fields", async () => {
+    const m: ReviewManifestV1 = {
+      ...validManifest(),
+      findings: [
+        {
+          key: "k1",
+          path: "src/x.ts",
+          headline: "eval of untrusted input",
+          score: 5,
+          consensus: 2,
+          line: 20,
+          category: "security",
+          evidenceId: "NONE",
+          cweId: "CWE-94",
+          trustTier: "grounded-model",
+          deterministicFactIds: ["ast/no-eval-call/h/20"],
+        },
+      ],
+    }
+    const { stub } = fakeKV({ "pr-review-manifest:owner/repo#42": JSON.stringify(m) })
+    const result = await readReviewManifest(fakeEnv(stub), "owner", "repo", 42)
+    expect(result).toEqual({ kind: "ok", manifest: m })
+  })
+
+  it("stays valid for a pre-SIG-471 finding that OMITS the new fields (back-compat)", async () => {
+    const m: ReviewManifestV1 = {
+      ...validManifest(),
+      findings: [{ key: "k1", path: "src/x.ts", headline: "h", score: 4, consensus: 1 }],
+    }
+    const { stub } = fakeKV({ "pr-review-manifest:owner/repo#42": JSON.stringify(m) })
+    const result = await readReviewManifest(fakeEnv(stub), "owner", "repo", 42)
+    expect(result).toEqual({ kind: "ok", manifest: m })
+  })
+
+  it("rejects a finding whose new field is the WRONG type (malformed → invalid shape)", async () => {
+    const { stub } = fakeKV({
+      "pr-review-manifest:o/r#1": JSON.stringify({
+        ...validManifest(),
+        findings: [{ key: "k1", path: "src/x.ts", headline: "h", score: 4, consensus: 1, line: "20" }],
+      }),
+    })
+    const result = await readReviewManifest(fakeEnv(stub), "o", "r", 1)
+    expect(result).toEqual({ kind: "invalid", reason: "shape" })
+  })
+
+  it("rejects a finding whose deterministicFactIds is not a string[] (malformed → invalid shape)", async () => {
+    const { stub } = fakeKV({
+      "pr-review-manifest:o/r#1": JSON.stringify({
+        ...validManifest(),
+        findings: [{ key: "k1", path: "src/x.ts", headline: "h", score: 4, consensus: 1, deterministicFactIds: [7] }],
+      }),
+    })
+    const result = await readReviewManifest(fakeEnv(stub), "o", "r", 1)
+    expect(result).toEqual({ kind: "invalid", reason: "shape" })
+  })
+})
+
+describe("toManifestFinding (SIG-471 — the omission contract PR-2/3 depend on)", () => {
+  it("includes ALL receipt-join fields when the finding carries them", () => {
+    const out = toManifestFinding("k1", 3, {
+      path: "src/x.ts",
+      headline: "eval of untrusted input",
+      score: 5,
+      line: 20,
+      category: "security",
+      evidenceId: "NONE",
+      cweId: "CWE-94",
+      trust: { tier: "grounded-model" },
+      evidence: { deterministicFactIds: ["ast/no-eval-call/h/20"] },
+    })
+    expect(out).toEqual({
+      key: "k1",
+      path: "src/x.ts",
+      headline: "eval of untrusted input",
+      score: 5,
+      consensus: 3,
+      line: 20,
+      category: "security",
+      evidenceId: "NONE",
+      cweId: "CWE-94",
+      trustTier: "grounded-model",
+      deterministicFactIds: ["ast/no-eval-call/h/20"],
+    })
+  })
+
+  it("OMITS line:0, absent category/ids, and an empty deterministicFactIds (lean record)", () => {
+    const out = toManifestFinding("k2", 1, {
+      path: "src/y.ts",
+      headline: "file-scope finding",
+      score: 4,
+      line: 0, // file/PR-scope → no line → omitted
+      evidence: { deterministicFactIds: [] }, // empty → omitted
+    })
+    expect(out).toEqual({ key: "k2", path: "src/y.ts", headline: "file-scope finding", score: 4, consensus: 1 })
+    expect("line" in out).toBe(false)
+    expect("deterministicFactIds" in out).toBe(false)
+    expect("trustTier" in out).toBe(false)
   })
 })
 

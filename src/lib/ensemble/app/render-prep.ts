@@ -54,7 +54,7 @@ import type { ReviewMemoryClaimMarkerData, ReviewMemoryClaimType } from "@/src/l
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/src/features/precision-profile"
 import { applyLearningSuppressions } from "./learnings-suppress-prep"
-import { readReviewManifest, type ReviewManifestFinding } from "@/src/lib/review-manifest"
+import { readReviewManifest, toManifestFinding, type ReviewManifestFinding } from "@/src/lib/review-manifest"
 import { type RouterDecision } from "@/src/lib/ensemble-router"
 import {
   chooseReviewEvent,
@@ -872,14 +872,13 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     })),
     ...renderableUnanchoredForSubmission.map((f) => ({ f, consensus: 1 })),
   ]
+  // SIG-471 (quiet-VERIFIED): `toManifestFinding` persists the receipt-join fields
+  // (line/category/evidenceId/cweId/trustTier/deterministicFactIds) so the
+  // overview-proof-update job can re-verify without a full re-review.
   const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
-    snapshotInputs.map(async ({ f, consensus }) => ({
-      key: await computeFindingKey(f.path, f.headline),
-      path: f.path,
-      headline: f.headline,
-      score: f.score,
-      consensus,
-    })),
+    snapshotInputs.map(async ({ f, consensus }) =>
+      toManifestFinding(await computeFindingKey(f.path, f.headline), consensus, f),
+    ),
   )
   const currentKeySet = new Set(currentFindingsForManifest.map((f) => f.key))
   // ARC-281: pass the delta counts straight into the renderer

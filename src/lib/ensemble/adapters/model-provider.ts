@@ -93,12 +93,24 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   security: {
     primary: "deepseek/deepseek-v4-flash",
     retries: 2,
-    fallback: null,
+    // SIG-468 (2026-06-19): restore the fallback-model recovery that SIG-406 dropped to
+    // `null`. flash intermittently emits malformed structured output (`specialist_did_not_parse`,
+    // tiny 145–621-token answers) and, on a bad pass, fails ALL 3 same-model retries — the role is
+    // then dropped fail-open and the review posts "_security specialist unavailable_" (live: #636
+    // pass @17:24 = 0 findings / no VERIFIED pill; the very next pass parsed and rendered
+    // "Proof: 1 runner-verified"). v4-pro is the sturdier formatter (it's the `tests` primary and
+    // parses on attempt 1 in prod) and the SAME provider (OpenRouter — one key serves both, so the
+    // single-key invariant holds). `runWithRetryAndFallback` already treats a parse failure as
+    // non-fatal (`breaksSameModelRetry`=false) and falls through to the fallback after the same-model
+    // retries exhaust — exactly the recovery this restores. Recall-safe: only ADDS a recovery model;
+    // never suppresses or downgrades a finding.
+    fallback: "deepseek/deepseek-v4-pro",
     // SIG-369 (2026-06-16): per-attempt cap 90s → SPECIALIST_TIMEOUT_MS (the role wall), part of the
     // all-roles uncap — no specialist is artificially clipped. flash is fast (activity-log p99 ~52s,
     // none over 90s) so the cap rarely binds; the role-wall signal is the real bound. retries:2 stays
     // for fast-fail (parse/stream) recovery — it only fires when an attempt fails fast, so total
-    // wall-clock stays ≤ SPECIALIST_TIMEOUT_MS.
+    // wall-clock stays ≤ SPECIALIST_TIMEOUT_MS. The fallback shares that same role wall (it runs only
+    // after the fast parse-failures consume a few seconds each), so worst-case wall-clock is unchanged.
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // performance — z-ai/glm-5.1: perf bugs are universal structural patterns; no
@@ -198,8 +210,9 @@ export function buildCostProjectionLineup(): CostProjectionLineup {
 
 // SIG-406: baseline fanout + synth reservation ONLY. SIG-449 raised security +
 // performance to retries:2 (maxAttempts 3 each); SIG-450 raised logic to retries:2 too
-// (burst resilience), so the worst case is now logic(3) + security(3) + performance(3) +
-// tests(2) + 2×synth(2) = 15. The SIG-393 re-sweep + SIG-395 invariant-lens add-on phases
+// (burst resilience); SIG-468 gave security a v4-pro fallback (+1 attempt → maxAttempts 4),
+// so the worst case is now logic(3) + security(4) + performance(3) +
+// tests(2) + 2×synth(2) = 16. The SIG-393 re-sweep + SIG-395 invariant-lens add-on phases
 // make extra `runSpecialist` calls NOT counted here (unchanged from pre-alpha accounting;
 // full add-on budgeting is SIG-369). NOTE: this constant is DERIVED from the configs, so it
 // tracks a retries bump automatically — the literal lives only in the lineup test.

@@ -340,20 +340,22 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
 
   it("charges EACH parse-FAILED attempt's tokens even when the run then fails (SIG-212 + SIG-438)", async () => {
     // SIG-438: a parse-fail RETRIES the same model (it's non-deterministic, a re-roll
-    // often parses). SIG-449: security = { primary: "deepseek/deepseek-v4-flash",
-    // retries: 2, fallback: null } → 3 attempts. Here ALL parse-fail and there is no
-    // fallback → the run fails. Each attempt still BURNED tokens producing the
-    // unparseable output, so ALL must be charged (the SIG-212 invariant: settled
-    // attempts cost money even when the verdict fails).
+    // often parses). SIG-449/SIG-468: security = { primary: "deepseek/deepseek-v4-flash",
+    // retries: 2, fallback: "deepseek/deepseek-v4-pro" } → 3 primary attempts + 1 fallback.
+    // Here ALL FOUR parse-fail → the run still fails. Each attempt BURNED tokens producing
+    // the unparseable output, so ALL must be charged (the SIG-212 invariant: settled attempts
+    // cost money even when the verdict fails), keyed by the model that ran them.
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }
 
     const primaryModel = SPECIALIST_CONFIGS.security.primary
+    const fallbackModel = SPECIALIST_CONFIGS.security.fallback!
 
     mockChat
       .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 1 (primary):  parse-fail
       .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 2 (retry 1):  parse-fail
       .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 3 (retry 2):  parse-fail
+      .mockResolvedValueOnce(badParseWithUsage(2000, 50)) // attempt 4 (fallback): parse-fail
 
     const res = await runSpecialist({
       role: "security",
@@ -364,28 +366,37 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
       signal: new AbortController().signal,
       perfCtx,
     })
-    // All attempts parse-failed and there's no fallback → the run fails.
+    // All four attempts (primary ×3 + fallback) parse-failed → the run fails.
     expect(res.verdict).toBeNull()
-    expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
-    // Three chat calls: a parse-fail retries the same model (SIG-438), and security now
-    // allows two retries (SIG-449), so primary + 2 retries = 3 attempts.
-    expect(mockChat).toHaveBeenCalledTimes(3)
+    expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek/deepseek-v4-pro")
+    // Four chat calls: a parse-fail retries the same model (SIG-438), security allows two
+    // retries (SIG-449) = 3 primary attempts, then the SIG-468 fallback adds one more.
+    expect(mockChat).toHaveBeenCalledTimes(4)
 
-    // ALL THREE failed attempts' tokens are charged (accumulated), keyed by the primary
-    // model. SIG-417: this mock reports no `usage.cost`, so the tokens land in the
-    // `unpriced*` buckets too (priced via MODEL_PRICING, not dropped).
+    // The THREE primary failed attempts' tokens are charged, keyed by the primary model.
+    // SIG-417: this mock reports no `usage.cost`, so the tokens land in the `unpriced*`
+    // buckets too (priced via MODEL_PRICING, not dropped).
     expect(sink[primaryModel]).toEqual({
       inputTokens: 6000,
       outputTokens: 150,
       unpricedInputTokens: 6000,
       unpricedOutputTokens: 150,
     })
+    // The fallback attempt's tokens are charged separately, keyed by the fallback model.
+    expect(sink[fallbackModel]).toEqual({
+      inputTokens: 2000,
+      outputTokens: 50,
+      unpricedInputTokens: 2000,
+      unpricedOutputTokens: 50,
+    })
 
-    // Cost = all failed attempts' spend, priced for the primary model (no silent drop).
+    // Cost = every failed attempt's spend, priced per the model that ran it (no silent drop).
     const cost = computeReviewCost(sink)
     const expectedUsd =
       (6000 / 1_000_000) * pricingForModel(primaryModel).inputPerMTokUsd +
-      (150 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd
+      (150 / 1_000_000) * pricingForModel(primaryModel).outputPerMTokUsd +
+      (2000 / 1_000_000) * pricingForModel(fallbackModel).inputPerMTokUsd +
+      (50 / 1_000_000) * pricingForModel(fallbackModel).outputPerMTokUsd
     expect(cost.totalUsd).toBeCloseTo(expectedUsd, 9)
   })
 

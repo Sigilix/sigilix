@@ -57,18 +57,6 @@ export interface Env {
   // Public origin for OAuth callbacks (must match the GitHub App's
   // configured callback URL). Defaults to https://app.sigilix.ai.
   OPENCLAW_BASE_URL?: string
-  // Private-beta signup form on app.sigilix.ai. RESEND_API_KEY is a Resend
-  // API key (https://resend.com/api-keys); the sending domain (sigilix.ai)
-  // must be verified in Resend for BETA_NOTIFY_FROM to deliver. Set it as a
-  // Worker secret in prod (`wrangler secret put RESEND_API_KEY`) and in the
-  // gitignored `.dev.vars` for local dev. Without it, the form degrades
-  // gracefully (asks the visitor to email support directly). The notify
-  // addresses are plain vars with sensible defaults.
-  RESEND_API_KEY?: string
-  // Where beta signups are emailed. Defaults to support@sigilix.ai.
-  BETA_NOTIFY_TO?: string
-  // The verified Resend sender. Defaults to "Sigilix <beta@sigilix.ai>".
-  BETA_NOTIFY_FROM?: string
   // SIG-132: VALUES are `<owner>/<repo>` lowercased (the Vectorize
   // namespace), e.g. {"ARC":"sigilix/rubberfit"}.
   OPENCLAW_TEAM_REPO_MAP?: string

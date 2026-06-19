@@ -54,8 +54,6 @@ import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { requireSession } from "@/src/lib/auth-middleware"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
-import { renderBetaLandingPage } from "@/src/lib/beta-landing"
-import { handleBetaSignupRoute } from "@/src/lib/beta-signup-route"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
@@ -137,21 +135,9 @@ export default {
     const url = new URL(request.url)
 
     if (request.method === "GET" && url.pathname === "/") {
-      // On app.sigilix.ai the root is the private-beta signup page; everywhere
-      // else (API host / workers.dev) it stays a plain-text liveness probe.
-      if (url.hostname === "app.sigilix.ai") {
-        return renderBetaLandingPage()
-      }
       return new Response("Sigilix — alive\n", {
         headers: { "content-type": "text/plain" },
       })
-    }
-    // Beta signup page (always reachable for preview/testing) + its form post.
-    if (request.method === "GET" && url.pathname === "/beta") {
-      return renderBetaLandingPage()
-    }
-    if (request.method === "POST" && url.pathname === "/beta/signup") {
-      return handleBetaSignupRoute(request, env)
     }
 
     // SIG-119: authenticated read of rolling validator shadow telemetry.

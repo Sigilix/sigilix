@@ -433,11 +433,14 @@ describe("SIG-451: context-line findings stay INLINE (the found-but-bodied recal
     expect(out.body).toContain("percentile index off-by-one")
   })
 
-  it("does NOT inline a non-substantive ADDED line (brace) — keeps SIG-436 body-demotion (Codex P2 guard)", () => {
-    // The own line is an ADDED brace with no substantive added code after it. It IS RIGHT-reviewable, but
-    // it's a BAD anchor — SIG-127/SIG-436 body-demote it. The SIG-451 context-line fallback must NOT
-    // override that: it only upgrades true CONTEXT (unchanged) lines, not non-substantive ADDED lines.
-    // Without the `!addedLinesForPath.has(line)` guard this would (wrongly) inline a comment on the brace.
+  it("SIG-469: keeps a non-substantive ADDED line (brace) INLINE — any reviewable line references code (widened past the SIG-436 P2 guard)", () => {
+    // The own line is an ADDED brace with no substantive added code after it. SIG-436/SIG-451 USED to
+    // body-demote this (the inline upgrade was context-lines-only via `!addedLinesForPath.has(line)`).
+    // SIG-469 (founder policy: "anything that references a line of code → inline") WIDENS the upgrade to
+    // ANY RIGHT-reviewable line: the brace still references a real diff line, so the finding stays inline
+    // on its own line instead of burying in the body. Safe because this is a plain COMMENT (no structured
+    // fix) — the forward walk still PREFERS a substantive added line when one exists; this only changes
+    // the FALLBACK from body-demote to inline-on-own-line. Reverting SIG-469 makes this assert 0 inline.
     const bracePath = "src/parse/brace.ts"
     const braceAdded = new Map<string, Map<number, string>>([
       [bracePath, new Map<number, string>([[52, "  }"]])], // own line IS an added brace (non-substantive)
@@ -451,8 +454,8 @@ describe("SIG-451: context-line findings stay INLINE (the found-but-bodied recal
       addedLineTextByLine: braceAdded,
       anchorPrecision: true,
     })
-    // Body-demoted (SIG-436 preserved), NOT inline on the brace.
-    expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("percentile index off-by-one")
+    // SIG-469: inline on its own reviewable line (52), NOT body-demoted.
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(52)
   })
 })

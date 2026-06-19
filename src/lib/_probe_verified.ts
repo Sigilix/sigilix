@@ -9,3 +9,8 @@ export function probeRunUserCommand(userInput: string): void {
   // eslint-disable-next-line
   exec(`echo ${userInput}`)
 }
+
+export function probeRunUserCommand2(userInput: string): void {
+  // eslint-disable-next-line
+  exec(`cat ${userInput}`)
+}

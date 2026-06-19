@@ -49,19 +49,22 @@ const RUNNER_BADGE_STYLES = {
 } as const
 
 // SIG Trust Ledger v0: per-finding trust pills (Kimi spec, 2026-05-31). Same
-// SVG-text-pill treatment as the runner pills, with honesty-by-colour: slate
-// "GROUNDED" signals evidence-exists (NOT "bug proven"), muted-gray "MODEL"
-// refuses to invent authority. The cyan "VERIFIED" runner pill is reserved for
-// an actual runner receipt and is NOT duplicated here.
+// SVG-text-pill treatment as the runner pills. 2026-06-18 recolour: the
+// original slate/gray honesty palette read as "boring/disabled" in prod, so
+// the two model-side tiers now carry distinct hues while VERIFIED's saturated
+// cyan stays the rare/premium top tier. Hierarchy by hue, not by greyness:
+// emerald "GROUNDED" = evidence-exists, violet "MODEL" = model-only. The cyan
+// "VERIFIED" runner pill is reserved for an actual runner receipt and is NOT
+// duplicated here.
 const TRUST_BADGE_STYLES = {
   "trust-grounded": {
     label: "GROUNDED",
-    accent: "#64748B", // slate — evidence exists, not a proof claim
+    accent: "#34D399", // emerald — evidence exists (not a proof of exploitability)
     ariaLabel: "Grounded: cites real evidence (not a proof of exploitability)",
   },
   "trust-model": {
     label: "MODEL",
-    accent: "#9CA3AF", // muted gray — model-only, no stronger proof; claims no authority
+    accent: "#A78BFA", // violet — model-only, no stronger proof; claims no authority
     ariaLabel: "Model-only: no deterministic or runner evidence backs this",
   },
 } as const
@@ -179,7 +182,12 @@ export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.w
 // SIG Trust Ledger v0 (2026-05-31): v20260530-1 → v20260531-1 adds the 2 Trust
 // Ledger pills (trust-grounded / trust-model). 17 glyphs total; pushed + tagged
 // at Sigilix/sigilix-glyphs@v20260531-1.
-export const BADGE_ASSET_VERSION = "v20260531-1"
+// Recolour (2026-06-18): v20260531-1 → v20260618-1 recolours trust-grounded
+// (slate→emerald #34D399) and trust-model (gray→violet #A78BFA). Glyph PATHS are
+// unchanged (labels identical) — only the rect fill differs, so no
+// regenerate-badge-paths needed; re-run generate-static-badges + mirror/tag the
+// new SVGs at Sigilix/sigilix-glyphs@v20260618-1 (same 17 glyphs).
+export const BADGE_ASSET_VERSION = "v20260618-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,

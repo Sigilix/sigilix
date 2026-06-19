@@ -23,6 +23,9 @@ import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
 import { recordRunnerToolManifestMetric } from "./runner-tool-metrics-client"
 import { isSafeRunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
+import { GitHubClient } from "@/src/shared/adapters/github"
+import { getInstallationToken, resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
+import type { JobMessage } from "@/src/shared/types/job"
 
 // SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES
 // (8 MiB): a receipt the ingest accepts but consumption later rejects as
@@ -242,6 +245,112 @@ function scheduleRunnerToolMetrics(args: {
     )
   })
   args.ctx.waitUntil(task)
+}
+
+/**
+ * VERIFIED unlock Phase 2: on a NEWLY-ACCEPTED PR receipt, enqueue a full
+ * re-review so the receipt-join (lookup.ts / gather-graph.ts) runs against the
+ * now-present receipt. Without this the review races ahead of the runner and
+ * the join finds a stale (or no) receipt → `head-sha-mismatch` →
+ * `evidence-pending`, and nothing ever re-evaluates once the receipt lands.
+ *
+ * Best-effort: ANY failure (no App config, no installation, merge-sha not yet
+ * computed, 2-parent guard, queue send) is swallowed + logged — the ingest
+ * response must never fail because the re-review couldn't be queued. The CI
+ * retry path will resubmit the receipt (→ `duplicate`, not `accepted`), so the
+ * caller gates on `accepted` to avoid spamming reviews.
+ *
+ * FORGE-PROOF: the head sha is derived from the SIGNED merge sha
+ * (`getCommit(claims.sha).parents[1]` of the 2-parent `refs/pull/N/merge`
+ * test-merge), never a caller-supplied value — the same derivation Phase 1
+ * uses in `gather-graph.ts`. If that derivation fails we SKIP the enqueue (do
+ * not guess a head sha).
+ */
+async function enqueueRunnerReceiptReReview(args: {
+  env: Env
+  repository: string
+  sha: string
+  pullNumber: number
+  repositoryId: string
+}): Promise<void> {
+  const { env, repository, sha, pullNumber, repositoryId } = args
+  try {
+    const { owner, repo } = splitRepository(repository)
+    if (owner === "" || repo === "") return
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+
+    const installationId = await resolveRepoInstallationId(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY, owner, repo)
+    if (installationId === null) return
+
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+
+    // Derive the head sha from the SIGNED merge sha — parents[1] of a 2-parent
+    // `refs/pull/N/merge` test-merge is the PR head (same as Phase 1). Anything
+    // unexpected (commit missing, parents !== 2) → skip; never guess.
+    const commit = await client.getCommit(owner, repo, sha)
+    if (!commit || commit.parents.length !== 2) {
+      console.warn(
+        JSON.stringify({
+          event: "runner-receipt-rereview-skipped",
+          reason: commit === null ? "merge-commit-unavailable" : "not-two-parent-merge",
+          owner,
+          repo,
+          prNumber: pullNumber,
+        }),
+      )
+      return
+    }
+    const headSha = commit.parents[1]
+    if (typeof headSha !== "string" || headSha.length === 0) return
+
+    // Raw-send a pr-review JobMessage (NOT the DO `enqueuePrReviewJob` path):
+    // the DO dedupes by (PR, headSha) and the webhook review already ran on
+    // this head, so the DO would return `dedupe-terminal` and never re-run.
+    // A raw send is the same mechanism the explicit `/sigilix review` rerun
+    // uses to force a fresh review on an already-reviewed head. `forceFullCoverage`
+    // forces non-incremental so the same-headSha re-review re-fires findings (the
+    // receipt-join can run) instead of empty-delta-skipping (SIG-459).
+    const message: JobMessage = {
+      type: "pr-review",
+      owner,
+      repo,
+      prNumber: pullNumber,
+      headSha,
+      installationId,
+      triggerReason: "runner-receipt",
+      forceFullCoverage: true,
+      // A receipt can land just after merge; still run the join so a legitimately
+      // earned VERIFIED isn't lost to a merge-race.
+      bypassClosedSkip: true,
+      ...(Number.isInteger(Number(repositoryId)) && Number(repositoryId) > 0 ? { repoId: Number(repositoryId) } : {}),
+    }
+    await env.OPENCLAW_JOBS.send(message)
+    console.log(
+      JSON.stringify({
+        event: "runner-receipt-rereview-enqueued",
+        owner,
+        repo,
+        prNumber: pullNumber,
+        headSha: headSha.slice(0, 7),
+      }),
+    )
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "runner-receipt-rereview-error",
+        repositoryId,
+        sha,
+        prNumber: pullNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
 }
 
 /**
@@ -575,6 +684,30 @@ export async function handleRunnerIngestRoute(request: Request, env: Env, ctx?: 
         sha: tokenSha,
         scanManifest: envelope.scanManifest,
       })
+    }
+  }
+
+  // VERIFIED unlock Phase 2: on a NEWLY-ACCEPTED PR receipt, enqueue a full
+  // re-review so the receipt-join runs against the now-present receipt. ONLY on
+  // `accepted` (a `duplicate` is a CI retry — the review was already enqueued on
+  // the first accept) AND only for a PR receipt (`pullNumber > 0`; a branch-push
+  // audit receipt has no PR to review). Best-effort: the task is detached via
+  // `ctx.waitUntil` and self-swallows every error so it can never fail the
+  // ingest response. Loop-safe: reviews don't trigger the runner/ingest.
+  if (claim.outcome === "accepted" && pullNumber > 0) {
+    const reReview = enqueueRunnerReceiptReReview({
+      env,
+      repository: tokenRepository,
+      sha: tokenSha,
+      pullNumber,
+      repositoryId,
+    })
+    if (ctx === undefined) {
+      // No execution context (non-edge callers / tests that omit it): run inline
+      // but never let it reject the response.
+      await reReview.catch(() => {})
+    } else {
+      ctx.waitUntil(reReview)
     }
   }
 

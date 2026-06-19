@@ -343,6 +343,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       shouldLoadAiInstructions,
       costControls,
       costProjectionLineup: buildCostProjectionLineup(), // SIG-417 (see PackAndRouteArgs doc)
+      ...(args.forceFullCoverage ? { forceFullCoverage: true } : {}), // VERIFIED unlock Phase 2: non-incremental
       telemetry,
     })
     sigilixConfig = packed.sigilixConfig

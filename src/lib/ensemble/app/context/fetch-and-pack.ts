@@ -269,12 +269,11 @@ export interface PackAndRouteArgs {
   sigilixConfig: SigilixConfig
   shouldLoadAiInstructions: boolean
   costControls: CostControlsConfig
-  /** SIG-417: the model lineup the cost projection prices, passed IN as typed
-   *  data so the packing layer never imports model-provider state. The
-   *  orchestrator builds it from `SPECIALIST_CONFIGS`/`SYNTHESIZER_CONFIG`. The
-   *  projection (telemetry, always) + the dark governor trim (default-off) use
-   *  it. Optional so non-edge / test callers can omit it (projection skipped). */
+  /** SIG-417: the model lineup the cost projection prices, passed IN as typed data
+   *  so the packing layer never imports model-provider state (orchestrator builds it
+   *  from `SPECIALIST_CONFIGS`/`SYNTHESIZER_CONFIG`). Optional (non-edge/tests skip it). */
   costProjectionLineup?: CostProjectionLineup
+  forceFullCoverage?: boolean // VERIFIED unlock Phase 2: force NON-INCREMENTAL — see EnsembleHandlerArgs.forceFullCoverage
   /** Mutated by reference: diffPacking / deterministicChecks / secretScan / router writes. */
   telemetry: PackAndRouteTelemetry
 }
@@ -339,6 +338,7 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     shouldLoadAiInstructions,
     costControls,
     costProjectionLineup,
+    forceFullCoverage,
     telemetry,
   } = a
   let sigilixConfig = a.sigilixConfig
@@ -405,7 +405,9 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     prNumber,
     ...(repoId !== undefined ? { repoId } : {}),
     meta,
-    mode: ensembleConfig.flags.incrementalReviewMode,
+    // VERIFIED unlock Phase 2: forceFullCoverage → "off" (non-incremental) so the
+    // receipt re-review re-fires findings + the join runs. See EnsembleHandlerArgs doc.
+    mode: forceFullCoverage ? "off" : ensembleConfig.flags.incrementalReviewMode,
     filesAfterFilter,
     signal: orchCtrl.signal,
   })

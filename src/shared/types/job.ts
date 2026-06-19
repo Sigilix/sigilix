@@ -109,6 +109,26 @@ export type JobMessage =
        */
       bypassClosedSkip?: boolean
       /**
+       * VERIFIED unlock Phase 2: why this pr-review was enqueued. Only set
+       * on the runner-receipt-ingest re-review (raw-sent from
+       * `runner-ingest-route.ts` after a fresh PR receipt is accepted) so the
+       * receipt-join runs against the now-present receipt. Webhook /
+       * slash-command / stale-head enqueues omit it.
+       */
+      triggerReason?: "runner-receipt"
+      /**
+       * VERIFIED unlock Phase 2: forces the review NON-INCREMENTAL (full
+       * coverage of all changed files) regardless of
+       * `OPENCLAW_INCREMENTAL_REVIEW_MODE`. The runner-receipt re-review runs
+       * on the SAME headSha the webhook review already covered, so an
+       * incremental pass would have an empty delta and either skip (no
+       * upgrade) or — if bypassed — empty `reviewable` and let an APPROVE
+       * supersede the prior blocker (the SIG-459 false-APPROVE regression).
+       * Forcing full coverage re-fires the findings so the receipt-join runs
+       * and the verdict is real. Only the receipt-triggered re-review sets it.
+       */
+      forceFullCoverage?: boolean
+      /**
        * SIG-247 Phase 1: GitHub's immutable `repo.id`. Threaded from
        * webhook payload → enqueuePrReviewJob → DO RunState → queue
        * sends so the consumer can pass it to the review-memory lookup

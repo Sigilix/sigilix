@@ -108,6 +108,17 @@ export interface EnsembleHandlerArgs {
    * the lookup falls back to legacy-only reads.
    */
   repoId?: number
+  /**
+   * VERIFIED unlock Phase 2: when true, force the review NON-INCREMENTAL
+   * (full coverage of every changed file) regardless of
+   * `OPENCLAW_INCREMENTAL_REVIEW_MODE`. Set only on the runner-receipt-ingest
+   * re-review, which runs on the SAME headSha the webhook review already
+   * covered — an incremental pass would have an empty delta and risk the
+   * SIG-459 false-APPROVE regression. Threaded JobMessage → baseArgs → here →
+   * `packAndRoute` (where it overrides the incremental coverage mode to
+   * "off"). Absent on all other enqueue paths.
+   */
+  forceFullCoverage?: boolean
 }
 
 export interface EnsembleTelemetry {

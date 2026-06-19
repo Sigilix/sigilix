@@ -245,6 +245,103 @@ describe("packAndRoute — SIG-439 incremental coverage selection", () => {
       unreviewedPaths: [],
     })
   })
+
+  it("VERIFIED unlock Phase 2: forceFullCoverage forces NON-INCREMENTAL even when the incremental delta is EMPTY (SIG-459 non-regression)", async () => {
+    // Both files were already reviewed at their CURRENT blob shas, so an
+    // incremental pass (mode "on") would select ZERO files — an empty delta that
+    // would empty-delta-skip and let an APPROVE supersede a prior blocker (the
+    // SIG-459 bug). The runner-receipt re-review passes forceFullCoverage: true,
+    // which forces mode "off" → ALL changed files are reviewed and the join runs.
+    const a = fileBlock("src/a.ts", "export const a = 1")
+    const b = fileBlock("src/b.ts", "export const b = 2")
+    const fullDiff = `${a}\n${b}`
+    const priorCoverage = {
+      schemaVersion: 1,
+      files: {
+        "src/a.ts": {
+          reviewedAtBlobSha: "blob-a",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+        "src/b.ts": {
+          reviewedAtBlobSha: "blob-b",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+      },
+    }
+    // listPullRequestFiles MUST NOT be called when forceFullCoverage forces "off"
+    // (mode "off" short-circuits `buildIncrementalCoveragePlan` before any fetch).
+    const listPullRequestFiles = vi.fn(async () => {
+      throw new Error("should not be called when forceFullCoverage forces mode off")
+    })
+
+    const result = await packAndRoute(
+      makeArgs({
+        env: makeEnv({
+          "pr-review-coverage:Sigilix/sigilix#1": JSON.stringify(priorCoverage),
+        }),
+        client: { listPullRequestFiles } as unknown as PackAndRouteArgs["client"],
+        ensembleConfig: parseEnsembleConfig({ OPENCLAW_INCREMENTAL_REVIEW_MODE: "on" }),
+        forceFullCoverage: true,
+        fullDiff,
+      }),
+    )
+
+    expect(listPullRequestFiles).not.toHaveBeenCalled()
+    // Full coverage: both files reviewed, the whole diff present, NO incremental
+    // selection (so `maybeEmptyDeltaSkip` can never fire → no false APPROVE).
+    expect(result.reviewedFiles.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"])
+    expect(result.filesNotReviewed).toEqual([])
+    expect(result.diff).toBe(fullDiff)
+    expect(result.incrementalCoverage).toBeUndefined()
+  })
+
+  it("VERIFIED unlock Phase 2: WITHOUT forceFullCoverage, the same empty delta DOES select zero files (proves the flag is load-bearing)", async () => {
+    // Same fixture, but forceFullCoverage unset → incremental mode "on" applies:
+    // both blobs unchanged → an empty selection (the state forceFullCoverage
+    // exists to avoid on a same-headSha receipt re-review).
+    const a = fileBlock("src/a.ts", "export const a = 1")
+    const b = fileBlock("src/b.ts", "export const b = 2")
+    const fullDiff = `${a}\n${b}`
+    const priorCoverage = {
+      schemaVersion: 1,
+      files: {
+        "src/a.ts": {
+          reviewedAtBlobSha: "blob-a",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+        "src/b.ts": {
+          reviewedAtBlobSha: "blob-b",
+          reviewedAtHeadSha: "old-head",
+          reviewedAt: "2026-06-15T00:00:00.000Z",
+        },
+      },
+    }
+    const listPullRequestFiles = vi.fn(async () => [
+      { filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, sha: "blob-a" },
+      { filename: "src/b.ts", status: "modified", additions: 1, deletions: 0, sha: "blob-b" },
+    ])
+
+    const result = await packAndRoute(
+      makeArgs({
+        env: makeEnv({ "pr-review-coverage:Sigilix/sigilix#1": JSON.stringify(priorCoverage) }),
+        client: { listPullRequestFiles } as unknown as PackAndRouteArgs["client"],
+        ensembleConfig: parseEnsembleConfig({ OPENCLAW_INCREMENTAL_REVIEW_MODE: "on" }),
+        fullDiff,
+      }),
+    )
+
+    expect(listPullRequestFiles).toHaveBeenCalledOnce()
+    // Empty delta: nothing selected for review (the SIG-459-prone state).
+    expect(result.reviewedFiles).toEqual([])
+    expect(result.incrementalCoverage?.selection).toMatchObject({
+      changedPaths: [],
+      neverReviewedPaths: [],
+      skippedUnchangedPaths: ["src/a.ts", "src/b.ts"],
+    })
+  })
 })
 
 describe("packAndRoute — SIG-418 spilloverBatches (effective post-governor boundary)", () => {

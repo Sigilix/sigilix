@@ -296,10 +296,8 @@ export async function dispatchJob(
         graphMetricsSink,
         graphExpansionMetricsSink,
         ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
-        // ARC-251: thread the requeue depth from the job message into
-        // both review pipelines. Webhook-driven messages omit the
-        // field (treated as 0); stale-head-driven requeues carry the
-        // incremented depth so the helper can cap further retries.
+        // ARC-251: thread the stale-head requeue depth into both review
+        // pipelines (webhook omits → 0; requeues carry it so the cap holds).
         ...(job.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth } : {}),
         // SIG-247 Phase 1: thread the immutable repo.id into the
         // review pipeline so the review-memory lookup hits BOTH the
@@ -309,6 +307,8 @@ export async function dispatchJob(
         // which case the ensemble falls back to a getRepository
         // lookup at the lookup call site.
         ...(job.repoId !== undefined ? { repoId: job.repoId } : {}),
+        // VERIFIED unlock Phase 2: runner-receipt re-review → non-incremental (avoids SIG-459 empty-delta).
+        ...(job.forceFullCoverage ? { forceFullCoverage: true } : {}),
       }
       return runPrReviewWithDoCallback(
         job,

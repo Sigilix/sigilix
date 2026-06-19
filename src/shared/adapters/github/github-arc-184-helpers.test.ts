@@ -256,7 +256,22 @@ describe("getCommit (SIG-422)", () => {
     )
     const c = newClient()
     const out = await c.getCommit("o", "r", "c".repeat(40))
-    expect(out).toEqual({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
+    expect(out).toEqual({ headSha: "c".repeat(40), treeSha: "d".repeat(40), parents: [] })
+  })
+
+  it("extracts ordered parent SHAs (SIG-184: parents[1] = PR head for a merge commit)", async () => {
+    const base = "a".repeat(40)
+    const head = "b".repeat(40)
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResp({
+        sha: "c".repeat(40),
+        tree: { sha: "d".repeat(40) },
+        parents: [{ sha: base }, { sha: head }],
+      }),
+    )
+    const c = newClient()
+    const out = await c.getCommit("o", "r", "c".repeat(40))
+    expect(out).toEqual({ headSha: "c".repeat(40), treeSha: "d".repeat(40), parents: [base, head] })
   })
 
   it("hits the git/commits endpoint with the url-encoded sha", async () => {

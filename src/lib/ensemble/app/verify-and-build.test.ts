@@ -7,7 +7,11 @@
 // `src/do/verification-metrics-do.test.ts`.
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { verifyAndBuildSubmission, type VerifyAndBuildArgs } from "@/src/lib/ensemble/app/verify-and-build"
+import {
+  verifyAndBuildSubmission,
+  securityAstFactsForReceiptJoin,
+  type VerifyAndBuildArgs,
+} from "@/src/lib/ensemble/app/verify-and-build"
 import { baseFinding } from "@/src/lib/triage-pr-review-ensemble.test-helpers"
 import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { RecordVerificationArgs } from "@/src/do/verification-metrics"
@@ -228,5 +232,31 @@ describe("verifyAndBuildSubmission — SIG-423 verification metric coalescing", 
     expect(items.length).toBeGreaterThanOrEqual(1)
     expect(items.map((i) => i.category)).toContain("logic")
     expect(items.every((i) => i.category !== "trustledger")).toBe(true)
+  })
+})
+
+describe("securityAstFactsForReceiptJoin (SIG-470 projection)", () => {
+  const fact = (over: Partial<{ path: string; line: number; astFindingId: string; roleHint: string }> = {}) => ({
+    path: "src/x.ts",
+    line: 10,
+    astFindingId: "ast/no-eval-call/h/10",
+    roleHint: "security",
+    ...over,
+  })
+
+  it("projects ONLY security-roled facts to {path, line, astFindingId}", () => {
+    const out = securityAstFactsForReceiptJoin({
+      findings: [fact(), fact({ roleHint: "logic", astFindingId: "ast/x/h/2" }), fact({ path: "src/y.ts", line: 5 })],
+    })
+    expect(out).toEqual([
+      { path: "src/x.ts", line: 10, astFindingId: "ast/no-eval-call/h/10" },
+      { path: "src/y.ts", line: 5, astFindingId: "ast/no-eval-call/h/10" },
+    ])
+  })
+
+  it("returns [] for null/undefined astResult (receipt-join no-op)", () => {
+    expect(securityAstFactsForReceiptJoin(null)).toEqual([])
+    expect(securityAstFactsForReceiptJoin(undefined)).toEqual([])
+    expect(securityAstFactsForReceiptJoin({ findings: [] })).toEqual([])
   })
 })

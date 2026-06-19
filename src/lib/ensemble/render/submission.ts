@@ -468,8 +468,31 @@ export function prepareReviewSubmissionFindings(args: {
     // for the severity/confidence routing gate below. `verdict.confidence`
     // is parse-guaranteed 1-5.
     const confidence = resolveFindingConfidence(validatedFinding, verdict.confidence)
+    // SIG-451/SIG-469: is the finding's cited line a RIGHT-reviewable in-diff line
+    // (added OR unchanged-context within a hunk)? Used both by the comment→inline
+    // promotion here and the substantive-anchor fallback below. (Hoisted from its
+    // earlier SIG-451 location so the Branch-A promotion can reuse it.)
+    const lineIsReviewable =
+      reviewable !== undefined && deriveSide(reviewable, validatedFinding.path, validatedFinding.line) === "RIGHT"
+    // SIG-469 (founder policy: "anything that references a line of code → inline; file
+    // entities or outside the diff → body"): a `scope:"comment"` finding that cites a
+    // RIGHT-reviewable in-diff line IS a line reference, so promote it to an inline
+    // thread instead of burying it in the body. EXACT guard (Codex sign-off):
+    //   - `scope === "comment"` only — NOT generic `scope !== "line"`, so genuine
+    //     `file`/`pr` scope (true file entities) still body-route.
+    //   - `lineIsReviewable` — an off-diff comment line still body-routes (outside the diff).
+    //   - `!outOfPrScope` — out-of-PR findings stay in their informational body section.
+    //   - `category !== "testing"` — preserves SIG-222's testing lane (missing-sibling
+    //     DROP / removed-coverage body-route); the testing-drop check below still runs.
+    const promoteCommentToInline =
+      scope === "comment" &&
+      lineIsReviewable &&
+      !validatedFinding.outOfPrScope &&
+      validatedFinding.category !== "testing"
     const findingForInline =
-      hasSuggestion && scope !== "line" ? { ...validatedFinding, scope: "line" as const } : validatedFinding
+      (hasSuggestion && scope !== "line") || promoteCommentToInline
+        ? { ...validatedFinding, scope: "line" as const }
+        : validatedFinding
 
     // SIG-127 wins over broad scope: a localized suggestedReplacement
     // or empty deletion suggestion needs an inline review thread or the
@@ -477,9 +500,11 @@ export function prepareReviewSubmissionFindings(args: {
     // Treat that shape as line-scoped even if the model supplied a
     // broader scope.
     // SIG-202: GitHub inline review comments are for exact line
-    // anchors. Review-level, file-level, and comment-event findings stay
-    // in the body even if they carry a nearby line for context.
-    if (scope !== "line" && !hasSuggestion) {
+    // anchors. Review-level and file-level findings stay in the body. A
+    // `comment`-scope finding that cites a reviewable diff line is promoted to
+    // inline above (SIG-469); the remaining non-line scopes (file/pr) and any
+    // off-diff comment finding fall through to the body here.
+    if (scope !== "line" && !hasSuggestion && !promoteCommentToInline) {
       if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
       bodyFindings.push(validatedFinding)
       return
@@ -510,8 +535,6 @@ export function prepareReviewSubmissionFindings(args: {
 
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
     let effective: PrReviewFinding = findingForInline
-    const lineIsReviewable =
-      reviewable !== undefined && deriveSide(reviewable, findingForInline.path, findingForInline.line) === "RIGHT"
     const needsSubstantiveAnchorValidation =
       addedLineTextByLine !== undefined && !hasSuggestion && (!structuredFixWasStripped || !lineIsReviewable)
     if (needsSubstantiveAnchorValidation) {
@@ -543,27 +566,27 @@ export function prepareReviewSubmissionFindings(args: {
           const { startLine: _drop, ...rest } = findingForInline
           effective = { ...rest, line: resolved }
         }
-      } else if (
-        lineIsReviewable &&
-        validatedFinding.category !== "testing" &&
-        !(addedLinesForPath?.has(findingForInline.line) ?? false)
-      ) {
-        // SIG-451 (benchmark #29): the added-line walk found no usable substantive ADDED line, but the
-        // finding's OWN line is RIGHT-reviewable — a context/unchanged line inside the diff hunk, which
-        // GitHub DOES accept as an inline-comment anchor. Keep it INLINE on its own line instead of
-        // burying it in a collapsed body dropdown (the dominant "found-but-bodied" recall leak: subtle
-        // logic bugs anchor to a context line with no nearby `+` line). `effective` already ===
-        // findingForInline, so no reassignment — we just fall through to the inline path. This never
-        // demotes a real finding; it only UPGRADES a would-be-bodied one to inline.
+      } else if (lineIsReviewable && validatedFinding.category !== "testing") {
+        // SIG-451 (benchmark #29) → SIG-469 (founder policy): the added-line walk found no usable
+        // substantive ADDED line, but the finding's OWN line is RIGHT-reviewable — a line inside the diff
+        // hunk, which GitHub DOES accept as an inline-comment anchor. Keep it INLINE on its own line
+        // instead of burying it in a collapsed body dropdown (the dominant "found-but-bodied" recall
+        // leak: subtle logic bugs anchored to a line with no nearby substantive `+` line). `effective`
+        // already === findingForInline, so no reassignment — we fall through to the inline path. This
+        // NEVER demotes a real finding; it only UPGRADES a would-be-bodied one to inline.
         //
-        // CONTEXT-LINE ONLY (`!addedLinesForPath.has(line)`): if the own line is an ADDED line that the
-        // walk already rejected as non-substantive (a bare brace/blank/comment with no substantive code
-        // after it), keep SIG-127/SIG-436's body-demotion — do NOT re-anchor an inline comment onto a
-        // bad added line. Only a true context (unchanged) line gets the inline upgrade. (Codex review.)
+        // SIG-469 widened this from CONTEXT-LINE-ONLY to ANY RIGHT-reviewable line: per the founder's
+        // "anything that references a line of code → inline" policy, an ADDED line the walk rejected as
+        // non-substantive (a bare brace/blank with no substantive code after it) STILL references a real
+        // diff line, so it stays inline on its own line rather than demoting to the body. Safe because
+        // this block is `!hasSuggestion` (plain inline COMMENT, not a structured fix) — we never apply a
+        // proposed FIX to a brace; suggestions are re-homed precisely by `rehomeSuggestionAnchorForward`
+        // and skip this walk entirely. The forward/range walk above still PREFERS a substantive added
+        // anchor when one exists; this only changes the FALLBACK from body-demotion to inline-on-own-line.
         //
-        // EXCLUDES `category:"testing"` findings: SIG-222 keeps tests-lane findings inline-ONLY when they
-        // substantively anchor (else drop a missing-sibling, body-route coverage evidence). A context
-        // line is not a valid testing anchor, so testing findings fall through to the drop/body path below.
+        // EXCLUDES `category:"testing"`: SIG-222 keeps tests-lane findings inline-ONLY when they
+        // substantively anchor (else drop a missing-sibling / body-route removed-coverage evidence), so
+        // testing findings fall through to the drop/body path below — unchanged.
       } else {
         // No usable substantive added anchor AND the own line isn't a valid inline target (off-diff /
         // LEFT-only) → body, as before.

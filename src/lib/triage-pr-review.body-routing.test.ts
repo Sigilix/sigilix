@@ -318,6 +318,52 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
   })
 
+  it("SIG-469: promotes a comment-scoped finding to INLINE when its line is RIGHT-reviewable (references a diff line)", () => {
+    // Founder policy: "anything that references a line of code → inline; file entities / off-diff → body."
+    // The SAME comment-scope finding as above, but now with a `reviewable` map proving line 436 is a
+    // RIGHT-side diff line → it's a line reference, so it posts INLINE instead of body-routing. (The
+    // test above omits `reviewable`, so the line can't be confirmed in-diff → stays body, also correct.)
+    const reviewable: ReviewableMap = new Map([["src/lib/github-mention.ts", [{ line: 436, side: "RIGHT" }]]])
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "Comment-surface auth issue.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(436)
+    expect(out.comments?.[0]?.body).toContain("dismiss command trusts the issue-comment author")
+  })
+
+  it("SIG-469: a comment-scoped finding whose line is OFF-DIFF still body-routes (outside the diff → body)", () => {
+    // `reviewable` exists but does NOT contain line 436 → the cited line is outside the diff → body.
+    const offDiffReviewable: ReviewableMap = new Map([["src/lib/github-mention.ts", [{ line: 999, side: "RIGHT" }]]])
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "Off-diff comment finding.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      reviewable: offDiffReviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("dismiss command trusts the issue-comment author")
+  })
+
   it("routes file-scoped findings to the review body with a file-level label", () => {
     const fileFinding: PrReviewFinding = {
       ...commentFinding,

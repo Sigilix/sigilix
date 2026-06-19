@@ -52,7 +52,11 @@ import {
   applyRefutedDemotion,
   planReanchor,
 } from "@/src/lib/verification/verify-finding"
-import { verifyFindingAgainstReceipt, type ReceiptScanResult } from "@/src/lib/verification/verify-finding-receipt"
+import {
+  verifyFindingAgainstReceipt,
+  coLocatedAstFactIds,
+  type ReceiptScanResult,
+} from "@/src/lib/verification/verify-finding-receipt"
 import { recordVerificationMetricsBounded } from "@/src/lib/verification-metrics-client"
 import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "@/src/do/verification-metrics"
 import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
@@ -122,6 +126,14 @@ export interface VerifyAndBuildArgs {
   submissionVerdict: PrReviewVerdict
   renderableUnanchoredForSubmission: PrReviewFinding[]
   findingMarkers: Array<string | null>
+  /**
+   * SIG-470 (Phase 3b): security-roled AST facts from this PR's scan ({path, line,
+   * astFindingId}), used by the receipt-join loop to derive a co-located canonical
+   * class for a worker-token-grounded finding so VERIFIED fires whenever the runner
+   * corroborates — not only when the model set a CWE. Optional + read-only; omitted →
+   * receipt-join behaves exactly as before (no co-located facts considered).
+   */
+  astSecurityFindings?: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
 }
 
 export interface VerifyAndBuildResult {
@@ -139,6 +151,23 @@ export interface VerifyAndBuildResult {
     annotations: CheckRunAnnotation[],
   ) => { checkAnnotations: CheckRunAnnotation[] } | Record<string, never>
   reviewOutputSurface: EnsembleConfig["flags"]["reviewOutputSurface"]
+}
+
+/**
+ * SIG-470 (Phase 3b): project this PR's AST scan to the security-roled facts the
+ * receipt-join uses for co-located class derivation ({path, line, astFindingId}).
+ * Structurally typed so the orchestrator can pass `astResult` directly without
+ * importing the ast-rules return type here. `null`/absent → [] (receipt-join no-op).
+ */
+export function securityAstFactsForReceiptJoin(
+  astResult:
+    | { findings: ReadonlyArray<{ path: string; line: number; astFindingId: string; roleHint?: string }> }
+    | null
+    | undefined,
+): Array<{ path: string; line: number; astFindingId: string }> {
+  return (astResult?.findings ?? [])
+    .filter((f) => f.roleHint === "security")
+    .map((f) => ({ path: f.path, line: f.line, astFindingId: f.astFindingId }))
 }
 
 export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<VerifyAndBuildResult> {
@@ -174,6 +203,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     tokenUsageByModel,
     submissionVerdict,
     renderableUnanchoredForSubmission,
+    astSecurityFindings,
   } = a
   // `findingMarkers` is reassigned by the refuted-demote, so it is a local `let`
   // (mirrors the orchestrator's `let findingMarkers` at the merge-guard boundary)
@@ -460,7 +490,11 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     // the load-bearing measurement, not just live `wrangler tail`.
     for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
       if (finding.score < 4 || finding.category !== "security") continue
-      const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)
+      // SIG-470 (Phase 3b): supply the co-located AST facts so a worker-token-grounded
+      // finding can derive a canonical class (→ VERIFIED when the runner corroborates),
+      // without mutating the finding. Empty when astSecurityFindings is absent → no-op.
+      const extraFactIds = coLocatedAstFactIds(finding, astSecurityFindings ?? [])
+      const result = verifyFindingAgainstReceipt(finding, receiptScanIndex, extraFactIds)
       if (result.verdict === "no-check") continue
       console.log(
         JSON.stringify({

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildReceiptIndex,
   canonicalClassForFinding,
+  coLocatedAstFactIds,
   extractReceiptScanResults,
   isReceiptJoinEligible,
   ruleIdFromEvidenceId,
@@ -358,6 +359,75 @@ describe("canonicalClassForFinding (deterministic class derivation)", () => {
     expect(
       canonicalClassForFinding(finding({ evidenceId: "NONE", evidence: evidence(["secret:aws/h/1", "sarif:x/h/2"]) })),
     ).toBeNull()
+  })
+
+  // SIG-470 Phase 3b — co-located AST facts passed in (NOT mutated onto the finding).
+  it("SIG-470: derives class from an EXTRA (caller-supplied) co-located ast fact-id", () => {
+    expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: undefined }), ["ast/no-eval-call/h/41"])).toBe(
+      "code-injection",
+    )
+  })
+  it("SIG-470: extraFactIds fold into the SAME single-class guard — own CWE + conflicting extra → null", () => {
+    expect(
+      canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-918" }), ["ast/no-sql-injection/h/1"]),
+    ).toBeNull()
+  })
+})
+
+describe("coLocatedAstFactIds (SIG-470)", () => {
+  const astFact = (over: Partial<{ path: string; line: number; astFindingId: string }> = {}) => ({
+    path: "src/x.ts",
+    line: 42,
+    astFindingId: "ast/no-eval-call/h/42",
+    ...over,
+  })
+  it("returns the fact-id when path matches and line is within the window", () => {
+    expect(coLocatedAstFactIds({ path: "src/x.ts", line: 44 }, [astFact()])).toEqual(["ast/no-eval-call/h/42"])
+  })
+  it("excludes a fact on a DIFFERENT path", () => {
+    expect(coLocatedAstFactIds({ path: "src/y.ts", line: 42 }, [astFact()])).toEqual([])
+  })
+  it("excludes a fact OUTSIDE the line window (default CLASS_LINE_WINDOW=3)", () => {
+    expect(coLocatedAstFactIds({ path: "src/x.ts", line: 50 }, [astFact()])).toEqual([])
+  })
+  it("returns [] when the finding has no line", () => {
+    expect(coLocatedAstFactIds({ path: "src/x.ts" }, [astFact()])).toEqual([])
+  })
+})
+
+describe("receipt-join — SIG-470 co-located class (worker-token finding earns VERIFIED)", () => {
+  // A worker-token-grounded finding: NO scanner evidenceId, NO CWE — would be ineligible
+  // on its own, but our co-located no-eval-call AST fact supplies the class.
+  const wtFinding = finding({ evidenceId: "NONE", cweId: undefined, path: "src/x.ts", line: 41 })
+  const extra = ["ast/no-eval-call/h/41"] // code-injection
+  const receiptCodeInj: ReceiptScanResult = {
+    path: "src/x.ts",
+    ruleId: "detect-eval",
+    line: 41,
+    sigilixRuleClass: "code-injection",
+  }
+
+  it("CONFIRMED: co-located class + runner receipt of the SAME class at the SAME line", () => {
+    const r = verifyFindingAgainstReceipt(wtFinding, index([receiptCodeInj]), extra)
+    expect(r.verdict).toBe("confirmed")
+  })
+  it("CREDIBILITY: co-located class but NO matching runner receipt → INCONCLUSIVE, never confirmed (corroboration bar unchanged)", () => {
+    const r = verifyFindingAgainstReceipt(wtFinding, index([]), extra)
+    expect(r.verdict).toBe("inconclusive")
+  })
+  it("CREDIBILITY: runner receipt of a DIFFERENT class → INCONCLUSIVE (no false confirm)", () => {
+    const other: ReceiptScanResult = { path: "src/x.ts", ruleId: "x", line: 41, sigilixRuleClass: "sql-injection" }
+    const r = verifyFindingAgainstReceipt(wtFinding, index([other]), extra)
+    expect(r.verdict).toBe("inconclusive")
+  })
+  it("without extraFactIds the same worker-token finding is NO-CHECK (proves the supplement is load-bearing; fails on revert)", () => {
+    const r = verifyFindingAgainstReceipt(wtFinding, index([receiptCodeInj]))
+    expect(r.verdict).toBe("no-check")
+  })
+  it("does NOT mutate the finding's evidence (supplement, not mutate)", () => {
+    const before = JSON.stringify(wtFinding)
+    verifyFindingAgainstReceipt(wtFinding, index([receiptCodeInj]), extra)
+    expect(JSON.stringify(wtFinding)).toBe(before)
   })
 })
 

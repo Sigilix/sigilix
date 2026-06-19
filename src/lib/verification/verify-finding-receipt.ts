@@ -92,6 +92,12 @@ const CWE_TO_CLASS: ReadonlyMap<string, CanonicalVulnClass> = new Map([
  */
 export function canonicalClassForFinding(
   finding: Pick<PrReviewFinding, "evidenceId" | "cweId" | "evidence">,
+  // SIG-470 (Phase 3b): EXTRA deterministic AST fact-ids co-located with the finding,
+  // supplied by the caller (the receipt-join loop) WITHOUT mutating `finding.evidence`.
+  // Same `ast/<ruleId>/<hash>/<line>` shape as `evidence.deterministicFactIds`; folded
+  // into the SAME candidate set + single-class guard. Omitted everywhere except the
+  // co-located-fact call site, so every existing caller is byte-identical.
+  extraFactIds?: readonly string[],
 ): CanonicalVulnClass | null {
   // Collect candidate classes from ALL deterministic signals on the finding.
   const candidates = new Set<CanonicalVulnClass>()
@@ -104,13 +110,15 @@ export function canonicalClassForFinding(
     if (cls) candidates.add(cls)
   }
 
-  // (b) SIG-184 Phase 3b: co-located deterministic AST facts. Even when the
-  // submitted finding grounded itself via a worker-token (so its own evidenceId
-  // is NOT an `ast:` id), the validation layer records the deterministic facts
-  // associated with the finding (the AST source findings merged into it) in
-  // `evidence.deterministicFactIds` — e.g. `ast/no-exec-shell-interpolation/<h>/<line>`.
-  // The class still comes from OUR deterministic detector at the finding's site.
-  for (const factId of finding.evidence?.deterministicFactIds ?? []) {
+  // (b) SIG-184 Phase 3 / SIG-470 Phase 3b: deterministic AST facts co-located with
+  // the finding. Even when the submitted finding grounded itself via a worker-token
+  // (so its own evidenceId is NOT an `ast:` id), OUR deterministic detector may have
+  // fired at the finding's exact site. Two sources, both `ast/<ruleId>/<h>/<line>`:
+  //   - `evidence.deterministicFactIds` — facts the validation layer already merged in.
+  //   - `extraFactIds` — co-located facts the receipt-join caller resolves by path+line
+  //     (SIG-470), passed in rather than mutated onto the finding. The class still comes
+  //     from OUR deterministic detector at the site; corroboration is still the runner's.
+  for (const factId of [...(finding.evidence?.deterministicFactIds ?? []), ...(extraFactIds ?? [])]) {
     const ruleId = astRuleIdFromFactId(typeof factId === "string" ? factId.trim() : "")
     const cls = ruleId ? AST_RULE_ID_TO_CLASS.get(ruleId) : undefined
     if (cls) candidates.add(cls)
@@ -307,15 +315,40 @@ function ruleClassMatches(findingRuleId: string, sarifRuleId: string): boolean {
  */
 export function isReceiptJoinEligible(
   finding: Pick<PrReviewFinding, "score" | "category" | "evidenceId" | "cweId" | "evidence">,
+  extraFactIds?: readonly string[], // SIG-470: co-located AST facts (see canonicalClassForFinding)
 ): boolean {
   if (typeof finding.score !== "number" || finding.score < 4) return false
   if (finding.category !== "security") return false
   const id = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
   // Legacy path: a SIG-108 scanner-corroborated finding (resolvable evidenceId).
   if (id.length > 0 && id !== "NONE") return true
-  // SIG-184 Phase 3: OR a finding with a derivable canonical vuln-class (AST/CWE)
-  // — corroborated by the runner's independent class-stamped scan.
-  return canonicalClassForFinding(finding) !== null
+  // SIG-184 Phase 3 / SIG-470 Phase 3b: OR a finding with a derivable canonical
+  // vuln-class (its own AST/CWE OR a co-located AST fact) — corroborated by the
+  // runner's independent class-stamped scan.
+  return canonicalClassForFinding(finding, extraFactIds) !== null
+}
+
+/**
+ * SIG-470 (Phase 3b): the `ast/<ruleId>/<hash>/<line>` fact-ids of OUR deterministic
+ * AST detectors that fired on the finding's file within `CLASS_LINE_WINDOW` lines of
+ * its anchor — the co-located evidence that lets a worker-token-grounded finding earn
+ * a canonical class (and thus VERIFIED) when the runner's independent scan corroborates.
+ * Caller pre-filters `astFacts` to the security role. Pure; returns [] when no line or
+ * no co-located fact. Does NOT mutate the finding.
+ */
+export function coLocatedAstFactIds(
+  finding: { path: string; line?: number },
+  astFacts: ReadonlyArray<{ path: string; line: number; astFindingId: string }>,
+  window: number = CLASS_LINE_WINDOW,
+): string[] {
+  if (typeof finding.line !== "number") return []
+  const out: string[] = []
+  for (const f of astFacts) {
+    if (f.path !== finding.path) continue
+    if (typeof f.line !== "number" || Math.abs(f.line - finding.line) > window) continue
+    if (typeof f.astFindingId === "string" && f.astFindingId.length > 0) out.push(f.astFindingId)
+  }
+  return out
 }
 
 /**
@@ -330,14 +363,19 @@ export function verifyFindingAgainstReceipt(
     "path" | "line" | "headline" | "score" | "category" | "evidenceId" | "cweId" | "evidence"
   >,
   receiptIndex: Map<string, ReceiptScanResult[]>,
+  // SIG-470 (Phase 3b): co-located AST fact-ids (from `coLocatedAstFactIds`), folded into
+  // eligibility + class extraction WITHOUT mutating the finding. The confirmation bar is
+  // unchanged — a class only earns "confirmed" when the runner receipt independently
+  // flagged the SAME class at the SAME path/line below. Omitted → byte-identical to before.
+  extraFactIds?: readonly string[],
 ): VerificationResult {
-  if (!isReceiptJoinEligible(finding)) {
+  if (!isReceiptJoinEligible(finding, extraFactIds)) {
     return { verdict: "no-check", tokens: [] }
   }
   const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
   const findingRuleId = eid.length > 0 && eid !== "NONE" ? ruleIdFromEvidenceId(eid) : null
-  // SIG-184 Phase 3: the finding's canonical vuln-class for the class-match branch.
-  const findingClass = canonicalClassForFinding(finding)
+  // SIG-184 Phase 3 / SIG-470: the finding's canonical vuln-class for the class-match branch.
+  const findingClass = canonicalClassForFinding(finding, extraFactIds)
   if (findingRuleId === null && findingClass === null) {
     // Eligible but neither a scanner rule-id nor a canonical class is extractable.
     return {

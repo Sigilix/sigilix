@@ -44,7 +44,7 @@ import { gatherRetrievalEvidence } from "./context/gather-evidence"
 import { gatherGraphEvidence } from "./context/gather-graph"
 import { assembleSpecialistPrompts } from "./context/assemble-prompts"
 import { prepareRender } from "./render-prep"
-import { verifyAndBuildSubmission } from "./verify-and-build"
+import { verifyAndBuildSubmission, securityAstFactsForReceiptJoin } from "./verify-and-build"
 import { publishReviewSubmission } from "./publish"
 import { buildReviewDisclosure } from "@/src/lib/ensemble/render/review-body"
 import { attachInvariantLensAmendmentWork } from "./invariant-lens-amendment"
@@ -76,10 +76,9 @@ export {
 
 // ─── public types ──────────────────────────────────────────────────────
 
-// SIG-318 (PR 12h): `EnsembleHandlerArgs` (the public handler-args contract) lives
-// in `./orchestrator-types` alongside the private `EnsembleTelemetry` (split out so
-// this file stays under the 1k-line cap). Imported above for the handler signature;
-// re-exported here — and through the shim — so the public surface is byte-identical.
+// SIG-318 (PR 12h): `EnsembleHandlerArgs` (public handler-args contract) lives in
+// `./orchestrator-types` with the private `EnsembleTelemetry` (kept under the 1k cap).
+// Re-exported here + through the shim so the public surface is byte-identical.
 export type { EnsembleHandlerArgs }
 
 // ─── orchestrator ──────────────────────────────────────────────────────
@@ -874,6 +873,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       submissionVerdict,
       renderableUnanchoredForSubmission,
       findingMarkers,
+      astSecurityFindings: securityAstFactsForReceiptJoin(astResult), // SIG-470: co-located class → VERIFIED
     })
     findingMarkers = findingMarkersAfterBuild
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)

@@ -1103,6 +1103,17 @@ OPENCLAW_GATE = "shadow"
 # GitHub App callback URL (required for OAuth): set on the App settings page →
 # Identifying and authorizing users → User authorization callback URL:
 #   https://app.sigilix.ai/auth/github/callback
+#
+# Private-beta signup form (app.sigilix.ai root → /beta/signup). Emails each
+# request to BETA_NOTIFY_TO via Resend. Set the key as a secret:
+#   wrangler secret put RESEND_API_KEY      # from https://resend.com/api-keys
+# and verify the sending domain (sigilix.ai) in Resend so BETA_NOTIFY_FROM
+# delivers. For local dev put RESEND_API_KEY in the gitignored `.dev.vars`.
+# Optional plain vars (defaults shown) — uncomment to override:
+#   BETA_NOTIFY_TO = "support@sigilix.ai"
+#   BETA_NOTIFY_FROM = "Sigilix <beta@sigilix.ai>"
+# Without RESEND_API_KEY the form still renders but returns a graceful
+# "email support@" fallback instead of sending.
 
 # SIG-156 PR3: index reconciliation cron. Every 6h, walk all installations
 # + their repos and enqueue an index-repo job for any repo missing a

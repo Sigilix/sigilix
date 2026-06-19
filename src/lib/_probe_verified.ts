@@ -14,3 +14,8 @@ export function probeRunUserCommand2(userInput: string): void {
   // eslint-disable-next-line
   exec(`cat ${userInput}`)
 }
+
+export function probeRunUserCommand3(userInput: string): void {
+  // eslint-disable-next-line
+  exec(`grep ${userInput} /etc/hosts`)
+}

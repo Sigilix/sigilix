@@ -236,8 +236,8 @@ describe("badge assets (SIG-201)", () => {
   // surface so a new style group can never silently fall through again.
   describe("trust pill accessors are total (no category fall-through)", () => {
     const TRUST = [
-      { name: "trust-grounded", label: "GROUNDED", accent: "#64748B" },
-      { name: "trust-model", label: "MODEL", accent: "#9CA3AF" },
+      { name: "trust-grounded", label: "GROUNDED", accent: "#34D399" },
+      { name: "trust-model", label: "MODEL", accent: "#A78BFA" },
     ] as const
 
     it("badgeAssetLabel resolves the trust label (not undefined)", () => {

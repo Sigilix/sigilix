@@ -19,6 +19,7 @@ import { handleCiTriage } from "@/src/lib/triage-ci"
 import { handlePrImprove } from "@/src/lib/triage-pr-improve"
 import { handlePrDescribe } from "@/src/lib/triage-pr-describe"
 import { handlePrSummary } from "@/src/lib/triage-pr-summary"
+import { handleOverviewProofUpdate } from "@/src/lib/overview-proof-update"
 import {
   handlePrPause,
   handlePrResume,
@@ -51,23 +52,7 @@ import {
 } from "@/src/lib/pr-review-check-run"
 import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
-const POST_REVIEW_WORK_TIMEOUT_MS = 120_000
-type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
-
-async function waitForPostReviewWork(work: Promise<PostReviewWorkOutcome>): Promise<PostReviewWorkOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<PostReviewWorkOutcome>((resolve) => {
-    timer = setTimeout(
-      () => resolve({ status: "failed", error: `post-review-work-timeout:${POST_REVIEW_WORK_TIMEOUT_MS}` }),
-      POST_REVIEW_WORK_TIMEOUT_MS,
-    )
-  })
-  try {
-    return await Promise.race([work, timeout])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
+import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
@@ -102,36 +87,6 @@ export async function postSlashCommandAck(
  */
 export function prMetaIsClosedOrMerged(pr: { merged_at?: string | null; state?: "open" | "closed" }): boolean {
   return pr.merged_at != null || pr.state === "closed"
-}
-
-async function postReviewWorkBlocked(
-  work: Promise<{ status: "completed" } | { status: "failed"; error: string }> | undefined,
-  tag: { owner: string; repo: string; prNumber: number; headSha: string },
-): Promise<boolean> {
-  if (work === undefined) return false
-  try {
-    const outcome = await waitForPostReviewWork(work)
-    if (outcome.status !== "failed") return false
-    console.error(
-      JSON.stringify({
-        event: "pr-review-post-review-work-blocked",
-        ...tag,
-        headSha: tag.headSha.slice(0, 7),
-        error: outcome.error,
-      }),
-    )
-    return true
-  } catch (err) {
-    console.error(
-      JSON.stringify({
-        event: "pr-review-post-review-work-threw",
-        ...tag,
-        headSha: tag.headSha.slice(0, 7),
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    )
-    return true
-  }
 }
 
 /**
@@ -876,6 +831,10 @@ export async function dispatchJob(
         throw err
       }
       return
+    // SIG-471 (quiet-VERIFIED): re-run ONLY the receipt-join + patch the
+    // overview Proof line in place (no specialist run, no second review).
+    case "overview-proof-update":
+      return handleOverviewProofUpdate(job, env)
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,

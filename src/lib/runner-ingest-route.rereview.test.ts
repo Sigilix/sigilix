@@ -1,7 +1,9 @@
-// VERIFIED unlock Phase 2 — POST /runner/ingest enqueues a full (non-incremental)
-// re-review when a NEW PR receipt is accepted, so the receipt-join runs against
-// the now-present receipt (closing the timing race where the review ran before
-// the receipt landed). End-to-end through the REAL verify + provenance gate (a
+// SIG-471 (quiet-VERIFIED) — POST /runner/ingest enqueues a QUIET
+// overview-proof-update job (NOT a full re-review) when a NEW PR receipt is
+// accepted, so the receipt-join runs against the now-present receipt and the
+// overview's Proof line is patched in place (closing the timing race where the
+// review ran before the receipt landed). End-to-end through the REAL verify +
+// provenance gate (a
 // generated RSA keypair signs fixture tokens; the JWKS is served via a stubbed
 // global fetch). Mocks: the receipt DO, KV, the GitHub App auth, and the client's
 // `getCommit` (so the head-sha derivation runs without real network / a PEM key).
@@ -195,8 +197,8 @@ afterEach(() => {
   mockGetCommit.mockClear()
 })
 
-describe("handleRunnerIngestRoute — VERIFIED unlock Phase 2 receipt re-review enqueue", () => {
-  it("enqueues a non-incremental re-review on an ACCEPTED PR receipt", async () => {
+describe("handleRunnerIngestRoute — SIG-471 quiet overview-proof-update enqueue", () => {
+  it("enqueues a quiet overview-proof-update job on an ACCEPTED PR receipt", async () => {
     stubJwksFetch()
     const { ns } = makeReceiptDo()
     const kvWrap = makeKv()
@@ -211,20 +213,20 @@ describe("handleRunnerIngestRoute — VERIFIED unlock Phase 2 receipt re-review 
     expect(res.status).toBe(200)
     expect(jobs.sent).toHaveLength(1)
     expect(jobs.sent[0]).toMatchObject({
-      type: "pr-review",
+      type: "overview-proof-update",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 777,
       headSha: "pr-head-sha", // parents[1], NOT the body / merge sha
       installationId: 99,
-      triggerReason: "runner-receipt",
-      forceFullCoverage: true,
-      bypassClosedSkip: true,
       repoId: 424242, // from the SIGNED repository_id claim
     })
+    // The quiet job carries NO pr-review fields (no specialist run / second review).
+    expect(jobs.sent[0]).not.toHaveProperty("triggerReason")
+    expect(jobs.sent[0]).not.toHaveProperty("forceFullCoverage")
   })
 
-  it("does NOT enqueue on a DUPLICATE receipt (idempotent CI retry — review already enqueued)", async () => {
+  it("does NOT enqueue on a DUPLICATE receipt (idempotent CI retry — job already enqueued)", async () => {
     stubJwksFetch()
     const { ns } = makeReceiptDo()
     const kvWrap = makeKv()

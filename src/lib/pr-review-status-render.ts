@@ -38,6 +38,18 @@ export interface ReviewStatusFinal {
   reviewUrl?: string
 }
 
+/**
+ * SIG-471: per-review proof-tier counts, rendered as the overview "Proof" line.
+ * The runner-receipt proof-update job (the quiet GROUNDED→VERIFIED upgrade) patches
+ * this in place once the forge-proof receipt lands — no second review. Absent →
+ * no Proof line (pre-receipt overviews and reviews with no eligible findings).
+ */
+export interface ReviewStatusProof {
+  verified: number
+  grounded: number
+  model: number
+}
+
 export interface ReviewStatusSnapshot {
   phase: ReviewStatusPhase
   headSha: string
@@ -46,7 +58,23 @@ export interface ReviewStatusSnapshot {
   droppedFiles?: readonly string[]
   graphCoverage?: ReviewStatusGraphCoverage
   final?: ReviewStatusFinal
+  proof?: ReviewStatusProof
   footerSeed?: string
+}
+
+/**
+ * SIG-471: the overview Proof line, Kimi-specified. Only non-zero tiers render, in
+ * verified→grounded→model order, so it reads `**Proof:** 2 grounded · 1 model-only`
+ * pre-receipt and `**Proof:** 1 runner-verified · 1 grounded` after the receipt
+ * patches a finding to VERIFIED. Returns null when there's nothing to show.
+ */
+export function formatProofLine(proof: ReviewStatusProof | undefined): string | null {
+  if (!proof) return null
+  const parts: string[] = []
+  if (proof.verified > 0) parts.push(`${proof.verified} runner-verified`)
+  if (proof.grounded > 0) parts.push(`${proof.grounded} grounded`)
+  if (proof.model > 0) parts.push(`${proof.model} model-only`)
+  return parts.length > 0 ? `**Proof:** ${parts.join(" · ")}` : null
 }
 
 export function reviewStatusPhaseRank(phase: ReviewStatusPhase): number {
@@ -84,6 +112,8 @@ export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
   const graph = graphSummary(snapshot.graphCoverage)
   if (graph) lines.push(`**Graph context:** ${graph}`)
   if (snapshot.final) lines.push(`**Result:** ${finalSummary(snapshot.final)}`)
+  const proofLine = formatProofLine(snapshot.proof)
+  if (proofLine) lines.push(proofLine)
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)
   return lines.join("\n")
@@ -93,6 +123,34 @@ export function upsertReviewStatusBlock(body: string, snapshot: ReviewStatusSnap
   const block = buildReviewStatusBlock(snapshot)
   const bodyWithoutStatus = removeReviewStatusBlock(body)
   return insertReviewStatusBlock(bodyWithoutStatus, block)
+}
+
+/**
+ * SIG-471: patch ONLY the Proof line inside an existing status block, preserving
+ * every other line (Phase/Commit/Specialists/Result/…). The runner-receipt
+ * proof-update job uses this — it does NOT hold the full terminal snapshot, so it
+ * must NOT call `upsertReviewStatusBlock` (which rebuilds the whole block and would
+ * drop the status details). Removes any prior Proof line, then inserts the new one
+ * immediately before the block END marker. Returns `body` unchanged when there is
+ * no status block to patch (the caller's retry waits for the terminal block first)
+ * or when `proof` renders nothing.
+ */
+export function patchProofLineInStatusBlock(body: string, proof: ReviewStatusProof | undefined): string {
+  const proofLine = formatProofLine(proof)
+  if (proofLine === null) return body
+  const start = body.indexOf(REVIEW_STATUS_BLOCK_START)
+  if (start < 0) return body
+  const end = body.indexOf(REVIEW_STATUS_BLOCK_END, start + REVIEW_STATUS_BLOCK_START.length)
+  if (end <= start) return body
+  const block = body.slice(start, end)
+  const after = body.slice(end)
+  // Drop any existing Proof line, then re-insert before the trailing blank/END.
+  const kept = block.split("\n").filter((l) => !/^\*\*Proof:\*\*/.test(l.trim()))
+  // Trim trailing blank lines off the kept block, append the proof line + one blank,
+  // so the END marker (in `after`) stays separated by exactly one blank line.
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop()
+  kept.push(proofLine, "")
+  return kept.join("\n") + after
 }
 
 function removeReviewStatusBlock(body: string): string {
@@ -130,7 +188,7 @@ function stripMalformedStatusPreamble(tail: string): string {
 }
 
 function isStatusMetadataLine(trimmed: string): boolean {
-  return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result):\*\*/.test(
+  return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result|Proof):\*\*/.test(
     trimmed,
   )
 }

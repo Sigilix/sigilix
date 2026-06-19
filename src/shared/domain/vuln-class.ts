@@ -12,6 +12,7 @@
 
 export type CanonicalVulnClass =
   | "command-injection"
+  | "code-injection"
   | "sql-injection"
   | "nosql-injection"
   | "path-traversal"
@@ -25,6 +26,7 @@ export type CanonicalVulnClass =
 
 export const CANONICAL_VULN_CLASSES: ReadonlySet<CanonicalVulnClass> = new Set<CanonicalVulnClass>([
   "command-injection",
+  "code-injection",
   "sql-injection",
   "nosql-injection",
   "path-traversal",

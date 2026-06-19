@@ -48,6 +48,24 @@ export interface ReviewManifestFinding {
   /** ARC-270 consensus count at the time of the prior review. Carried
    *  forward for telemetry / future "consensus drift" surfaces. */
   consensus: number
+  /**
+   * SIG-471 (quiet-VERIFIED): the fields the receipt-join needs to re-verify a
+   * finding against a runner receipt WITHOUT a full re-review (the
+   * `overview-proof-update` job loads these from the manifest). ALL OPTIONAL —
+   * manifests written before SIG-471 omit them; the proof-update job skips
+   * (logs incomplete) when they're absent rather than guessing. Mirror of the
+   * `Pick` that `verifyFindingAgainstReceipt` consumes (path/score already above).
+   */
+  line?: number
+  category?: string
+  evidenceId?: string
+  cweId?: string
+  /** The finding's trust tier at post time (e.g. "grounded-model"), so the proof
+   *  line can render the pre-receipt grounded/model counts. */
+  trustTier?: string
+  /** Deterministic AST fact-ids carried on the finding's evidence (the path-(a)/(b)
+   *  class sources in `canonicalClassForFinding`). */
+  deterministicFactIds?: string[]
 }
 
 export interface ReviewManifestV1 {
@@ -82,6 +100,45 @@ export type ReadResult =
   | { kind: "missing" }
   | { kind: "invalid"; reason: "wrong-version" | "shape" | "json-parse" }
 
+/**
+ * SIG-471: build the persisted per-finding manifest record, conditionally including
+ * the optional receipt-join fields so absent values stay absent (lean record + matches
+ * the optional schema). Colocated with the type/validator; keeps the render-prep writer
+ * thin (under its 1k-line cap). `line` 0/undefined is omitted (file/PR-scope = no line).
+ */
+export function toManifestFinding(
+  key: string,
+  consensus: number,
+  f: {
+    path: string
+    headline: string
+    score: number
+    line?: number
+    category?: string
+    evidenceId?: string
+    cweId?: string
+    trust?: { tier?: string }
+    evidence?: { deterministicFactIds?: string[] }
+  },
+): ReviewManifestFinding {
+  return {
+    key,
+    path: f.path,
+    headline: f.headline,
+    score: f.score,
+    consensus,
+    // GitHub lines are 1-based; line 0/undefined = file/PR-scope = no anchor → omit.
+    ...(typeof f.line === "number" && f.line > 0 ? { line: f.line } : {}),
+    ...(typeof f.category === "string" ? { category: f.category } : {}),
+    ...(typeof f.evidenceId === "string" ? { evidenceId: f.evidenceId } : {}),
+    ...(typeof f.cweId === "string" ? { cweId: f.cweId } : {}),
+    ...(typeof f.trust?.tier === "string" ? { trustTier: f.trust.tier } : {}),
+    ...(f.evidence?.deterministicFactIds && f.evidence.deterministicFactIds.length > 0
+      ? { deterministicFactIds: f.evidence.deterministicFactIds }
+      : {}),
+  }
+}
+
 // ---------------------------------------------------------------------
 // KV serdes
 // ---------------------------------------------------------------------
@@ -114,7 +171,17 @@ function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding
     typeof o.headline === "string" &&
     o.headline.trim().length > 0 &&
     typeof o.score === "number" &&
-    typeof o.consensus === "number"
+    typeof o.consensus === "number" &&
+    // SIG-471: optional receipt-join fields — validate type ONLY when present, so
+    // pre-SIG-471 manifests (which omit them) stay valid and a malformed new field
+    // still invalidates rather than silently feeding garbage to the proof-update job.
+    (o.line === undefined || typeof o.line === "number") &&
+    (o.category === undefined || typeof o.category === "string") &&
+    (o.evidenceId === undefined || typeof o.evidenceId === "string") &&
+    (o.cweId === undefined || typeof o.cweId === "string") &&
+    (o.trustTier === undefined || typeof o.trustTier === "string") &&
+    (o.deterministicFactIds === undefined ||
+      (Array.isArray(o.deterministicFactIds) && o.deterministicFactIds.every((f) => typeof f === "string")))
   )
 }
 

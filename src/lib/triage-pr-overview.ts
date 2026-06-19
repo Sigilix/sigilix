@@ -27,6 +27,7 @@ import type { Env } from "@/src/shared/types/env"
 import { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } from "./triage-pr-overview-parse"
 import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
 import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } from "./triage-pr-overview-scan"
+import { graftReviewStatusBlock } from "./pr-review-status-render"
 
 // SIG-376: re-export every symbol relocated into the leaves so external
 // importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
@@ -672,11 +673,43 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     }
 
     if (existingForWrite != null) {
-      await client.updateIssueComment(owner, repo, existingForWrite, body)
-      since("comment-updated")
-      console.log(
-        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
-      )
+      // SIG-472: the overview write must PRESERVE an existing review-run-status
+      // block. `formatOverviewComment` builds `body` from scratch (no status
+      // block), so a re-run / latest-push write would otherwise CLOBBER the
+      // Phase/Commit/Specialists/Result/Proof/Manage block written by the
+      // status reporter — leaving the comment overview-only. This makes the
+      // overview writer symmetric with `upsertReviewStatusBlock` (which already
+      // preserves the surrounding overview). Fail-CLOSED: if the existing-body
+      // fetch fails we cannot know whether a status block is present, so we SKIP
+      // the write entirely rather than PATCH a known-statusless body (which would
+      // reproduce the very clobber this fixes). The overview re-writes on the
+      // next push / re-run, so a skipped cycle self-repairs.
+      //
+      // Residual race (SIG-472 follow-up): fetch-then-PATCH is still last-writer-
+      // wins — a status write landing in the GET→PATCH window can be overwritten
+      // by a one-cycle-stale grafted block. The window is milliseconds and a later
+      // status/proof write re-applies idempotently; a true fix (cross-invocation
+      // serialization, conditional/ETag PATCH, or splitting overview vs status
+      // into two comments) is tracked separately.
+      const bodyToWrite = await graftExistingStatusBlock(client, owner, repo, existingForWrite, body)
+      if (bodyToWrite === null) {
+        since("comment-update-skipped-graft-fetch-failed")
+        console.warn(
+          JSON.stringify({
+            event: "pr-overview-update-skipped-graft-fetch-failed",
+            owner,
+            repo,
+            prNumber,
+            commentId: existingForWrite,
+          }),
+        )
+      } else {
+        await client.updateIssueComment(owner, repo, existingForWrite, bodyToWrite)
+        since("comment-updated")
+        console.log(
+          `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
+        )
+      }
     } else {
       // SIG-216 CR fix-up: read-after-write idempotency. The
       // `runInlineOverviewWithRetry` path may retry after a transient
@@ -702,7 +735,9 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
             foundCommentId: finalRescan.id,
           }),
         )
-        await client.updateIssueComment(owner, repo, finalRescan.id, body)
+        // SIG-472: graft the existing status block (the rescan already carries
+        // the body, so no extra fetch) so the overview write doesn't clobber it.
+        await client.updateIssueComment(owner, repo, finalRescan.id, graftReviewStatusBlock(body, finalRescan.body))
         since("comment-updated")
         console.log(
           `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`,
@@ -843,6 +878,44 @@ async function resolveCodeownersSuggestedReviewers(args: {
   }
 
   return []
+}
+
+/**
+ * SIG-472: fetch the existing overview comment body and graft its
+ * review-run-status block onto the freshly-rendered overview `body`, so an
+ * overview re-write preserves the status block written by the status reporter
+ * (the writers must be symmetric). The PATCH-by-id path only has the comment id
+ * from the marker scan, so one targeted `getIssueComment` resolves the body.
+ *
+ * Returns the body to PATCH, or `null` when the fetch FAILED — in which case the
+ * caller must SKIP the write (fail-closed): writing the known-statusless `body`
+ * would reproduce the clobber this fixes, so it is safer to leave the last-good
+ * comment intact and let the next push / re-run re-render. A 404 (comment gone)
+ * returns the plain `body` — there is nothing to clobber.
+ */
+async function graftExistingStatusBlock(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  commentId: number,
+  body: string,
+): Promise<string | null> {
+  try {
+    const existing = await client.getIssueComment(owner, repo, commentId)
+    if (existing === null) return body
+    return graftReviewStatusBlock(body, existing.body)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "pr-overview-status-graft-fetch-failed",
+        owner,
+        repo,
+        commentId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return null
+  }
 }
 
 function excludePrAuthor(reviewers: readonly string[] | undefined, prAuthor: string | null): string[] | undefined {

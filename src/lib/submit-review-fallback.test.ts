@@ -47,21 +47,15 @@ describe("buildFallbackBody", () => {
     expect(body.startsWith("<!-- sigilix:pr-review -->")).toBe(true)
   })
 
-  it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
+  it("SIG-471 PR-3: minimal body — no heading/summary/confidenceReason; the finding is in the dropdown", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    // New status heading replaces "### Sigilix Summary".
-    // SIG-281 PR A: baseFinding is score 4 (P1), so a body-only blocker
-    // now escalates to REQUEST_CHANGES posture — the heading is the
-    // blocking "high-severity finding" copy, with NO "non-blocking" prefix.
-    expect(body).toMatch(/^\*\*\d+ high-severity finding/m)
-    expect(body).not.toContain("non-blocking")
-    // Summary survives — Kimi keeps it as a flat paragraph under
-    // the heading.
-    expect(body).toContain("One real bug.")
-    // confidenceReason is no longer rendered in the body per Kimi's
-    // redesign (it routinely echoes the summary).
+    // SIG-471 PR-3: the lead heading, summary, and confidenceReason are GONE from
+    // the body. The (unanchored) finding routes into the outside-the-diff dropdown.
+    expect(body).not.toMatch(/^\*\*\d+ high-severity finding/m)
+    expect(body).not.toContain("One real bug.")
     expect(body).not.toContain("Clear off-by-one.")
-    expect(body).not.toContain("### Sigilix Summary")
+    expect(body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(body).toContain("off-by-one in `clampIndex`")
   })
 
   it("ARC-293: APPROVE path is MARKER-ONLY (no findings sections, no heading, no provenance)", () => {
@@ -84,32 +78,30 @@ describe("buildFallbackBody", () => {
       { ...baseFinding, path: "src/m.ts", line: 30, headline: "m-issue" },
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
-    // SIG-440: baseFinding is score 4, so these body-only findings are
-    // blockers — they render in the Fix Plan list + the single non-inline
-    // dropdown, not the deleted "Review Body Findings" section.
-    expect(body).toContain("couldn't be anchored to a line")
-    expect(body).toContain("- **High (4)** · `src/a.ts:20` · `logic` — a-issue")
+    // SIG-471 PR-3: the body-only findings render as rows in the ONE
+    // outside-the-diff dropdown table — File cell is the path:line anchor.
+    expect(body).toContain("<summary><b>3 findings outside the diff</b></summary>")
     expect(body).toContain("`src/a.ts:20`")
     expect(body).toContain("`src/m.ts:30`")
     expect(body).toContain("`src/z.ts:10`")
-    expect(body).not.toContain("**src/a.ts**")
-    expect(body).not.toContain("**src/m.ts**")
-    expect(body).not.toContain("**src/z.ts**")
+    expect(body).toContain("a-issue")
+    expect(body).not.toContain("Fix Plan")
   })
 
-  it("sorts findings within a file by score DESC then line ASC", () => {
+  it("SIG-471 PR-3: lists every body-only finding in the dropdown (upstream order, none dropped)", () => {
+    // SIG-471 PR-3: the minimal dropdown no longer re-sorts by score — it lists the
+    // findings in the order they arrive (the prior score-DESC body-row sort was part
+    // of the removed detailed render). Recall is what matters: all three appear.
     const findings: PrReviewFinding[] = [
       { ...baseFinding, line: 100, score: 2, headline: "low-score-late" },
       { ...baseFinding, line: 50, score: 5, headline: "high-score-early" },
       { ...baseFinding, line: 10, score: 5, headline: "high-score-earlier" },
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
-    const earlierIdx = body.indexOf("high-score-earlier")
-    const earlyIdx = body.indexOf("high-score-early")
-    const lateIdx = body.indexOf("low-score-late")
-    // Score 5 (line 10) comes before score 5 (line 50) which comes before score 2.
-    expect(earlierIdx).toBeLessThan(earlyIdx)
-    expect(earlyIdx).toBeLessThan(lateIdx)
+    expect(body).toContain("<summary><b>3 findings outside the diff</b></summary>")
+    expect(body).toContain("low-score-late")
+    expect(body).toContain("high-score-early")
+    expect(body).toContain("high-score-earlier")
   })
 
   it("MERGES anchored verdict.findings with unanchored findings", () => {
@@ -120,19 +112,13 @@ describe("buildFallbackBody", () => {
       headline: "unanchored-finding",
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [anchored] }, [unanchored])
+    // SIG-471 PR-3: both findings appear in the ONE outside-the-diff dropdown —
+    // anchored + unanchored merged, neither lost. No lead heading.
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
-    // SIG-440: both findings are score 4 (P1) blockers, so the
-    // anchorless-fallback pours them into the Fix Plan list + the single
-    // non-inline dropdown, not the deleted body section.
-    expect(body).toContain("couldn't be anchored to a line")
-    expect(body).not.toContain("### Review Body Findings")
-    // SIG-281 PR A: 1 anchored + 1 unanchored, both score 4 (P1) and all
-    // body-only → 2 blockers → REQUEST_CHANGES posture, "high-severity
-    // findings" copy with no "non-blocking" prefix.
-    expect(body).toMatch(/^\*\*2 high-severity findings/m)
-    expect(body).not.toContain("non-blocking")
-    expect(body).not.toContain("### Findings (2)")
+    expect(body).toContain("<summary><b>2 findings outside the diff</b></summary>")
+    expect(body).not.toMatch(/^\*\*\d+ high-severity finding/m)
+    expect(body).not.toContain("Fix Plan")
   })
 
   it("renders a multi-line range when startLine differs from line", () => {
@@ -142,56 +128,51 @@ describe("buildFallbackBody", () => {
       line: 50,
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
-    // The ranged anchor encodes the span in the path:line label; it leads the
-    // row in BOLD with the score in a trailing <sub> (no "Lines 40-50 (high, ...)"
-    // bracketed prefix).
-    expect(body).toContain("**`src/lib/foo.ts:40-50`**:")
-    expect(body).toContain("score 4")
-    expect(body).not.toContain("(high, score 4)")
-    expect(body).not.toContain("Lines 40-50")
+    // SIG-471 PR-3: the ranged span is in the dropdown row's File cell anchor.
+    expect(body).toContain("`src/lib/foo.ts:40-50`")
+    expect(body).toContain("file-scope")
+    expect(body).not.toContain("**`src/lib/foo.ts:40-50`**:")
   })
 
   it("renders single-line target when startLine is omitted", () => {
     const single: PrReviewFinding = { ...baseFinding, line: 50 }
     const body = buildFallbackBody({ ...baseVerdict, findings: [single] }, [])
-    // SIG-216: single-line anchor is `path:line` + tightened meta.
-    expect(body).toContain("**`src/lib/foo.ts:50`**:")
-    expect(body).toContain("score 4")
-    expect(body).not.toContain("(high, score 4)")
-    expect(body).not.toContain("Line 50 (")
+    // SIG-471 PR-3: single-line anchor in the dropdown File cell.
+    expect(body).toContain("`src/lib/foo.ts:50`")
+    expect(body).not.toContain("**`src/lib/foo.ts:50`**:")
   })
 
-  it("includes category metadata next to the body-only anchor", () => {
+  it("includes the finding headline + path in the dropdown row", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    expect(body).toContain("**off-by-one in `clampIndex`**")
-    expect(body).toContain('alt="LOGIC"')
+    // SIG-471 PR-3: the minimal dropdown row is `| File | Scope | Finding |` —
+    // headline (plain, not bold) + path anchor. No category badge img.
+    expect(body).toContain("off-by-one in `clampIndex`")
     expect(body).toContain("`src/lib/foo.ts:42`")
+    expect(body).not.toContain('alt="LOGIC"')
   })
 
-  it("indents the finding body so it nests under its bullet visually", () => {
+  it("SIG-471 PR-3: the finding body prose is NOT echoed in the minimal dropdown", () => {
     const body = buildFallbackBody(
       {
         ...baseVerdict,
-        findings: [{ ...baseFinding, body: "first line\nsecond line" }],
+        findings: [{ ...baseFinding, body: "first line\nsecond line", headline: "the headline only" }],
       },
       [],
     )
-    expect(body).toContain("  first line")
-    expect(body).toContain("  second line")
+    // The dropdown shows the headline only — the body prose lives on the inline
+    // comment (when anchorable) / the check annotation, not the minimal row.
+    expect(body).toContain("the headline only")
+    expect(body).not.toContain("first line")
+    expect(body).not.toContain("second line")
   })
 
-  it("ARC-281: confidenceReason is never rendered in the body, even when populated", () => {
-    // Pre-ARC-281 the renderer emitted `verdict.confidenceReason`
-    // as a second paragraph; Kimi's redesign drops it (it
-    // routinely echoes the summary). Whether the field is empty or
-    // populated, the body must not contain it.
+  it("SIG-471 PR-3: confidenceReason is never rendered in the body, even when populated", () => {
     const populated = buildFallbackBody(baseVerdict, [])
     expect(populated).not.toContain("Clear off-by-one.")
     const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
-    // Summary still renders; the single score-4 (P1) finding flows into
-    // the Fix Plan list + single non-inline dropdown.
-    expect(blank).toContain("One real bug.")
-    expect(blank).toContain("couldn't be anchored to a line")
+    // Summary is no longer in the body either; the finding flows into the dropdown.
+    expect(blank).not.toContain("One real bug.")
+    expect(blank).toContain("<summary><b>1 finding outside the diff</b></summary>")
   })
 })
 
@@ -290,10 +271,13 @@ describe("buildFallbackSubmission", () => {
       eventOverride: "REQUEST_CHANGES",
     })
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
+    // SIG-471 PR-3: the dismiss hint moved to the overview Manage line — the body
+    // routes the finding into the outside-the-diff dropdown.
+    expect(submission.body).not.toContain("@sigilix dismiss")
+    expect(submission.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
   })
 
-  it("renders approval-pending copy when a zero-finding policy blocker forces REQUEST_CHANGES", () => {
+  it("SIG-471 PR-3: renders the policy-blocker sentence when a zero-finding blocker forces REQUEST_CHANGES", () => {
     const submission = buildFallbackSubmission({
       verdict: {
         ...baseVerdict,
@@ -307,8 +291,10 @@ describe("buildFallbackSubmission", () => {
     })
 
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toMatch(/^\*\*Approval pending\*\*/m)
-    expect(submission.body).toContain("unresolved policy-level blocker")
+    expect(submission.body).toContain(
+      "This review was submitted as **Request changes** due to a repository policy blocker. " +
+        "No automated findings were generated.",
+    )
     expect(submission.body).not.toContain("0 findings")
   })
 
@@ -351,9 +337,9 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
-    // SIG-440: the unanchored finding is score 4 (P1), so it is rolled into
-    // the Fix Plan list + the single non-inline dropdown (not lost).
-    expect(submission.body).toContain("couldn't be anchored to a line")
+    // SIG-471 PR-3: the unanchored finding is rolled into the outside-the-diff
+    // dropdown (recall-safety — never lost). The anchored finding posts inline.
+    expect(submission.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
   })
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {
@@ -406,19 +392,18 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.event).toBe("APPROVE")
   })
 
-  it("ARC-281: common path (empty unanchored) renders heading + summary + Fix Plan, no body-only findings section", () => {
-    // With no unanchored findings, the body skips the
-    // body-only findings section entirely. The inline-count
-    // pointer ("_N findings inline below._") was removed in
-    // ARC-281 — the heading already states the count.
+  it("SIG-471 PR-3: common path (empty unanchored, anchorable finding) → marker-only body", () => {
+    // With no unanchored findings and an anchorable finding, the finding posts as
+    // an inline comment and the body is marker-only — no heading, no Fix Plan, no
+    // body-only section.
     const submission = buildReviewSubmission({
       verdict: baseVerdict,
       prAuthor: null,
       headSha: "deadbeef",
     })
+    expect(submission.body).toBe("<!-- sigilix:pr-review -->\n")
     expect(submission.body).not.toContain("Review Body Findings")
     expect(submission.body).not.toMatch(/inline below/i)
-    expect(submission.body).toMatch(/^\*\*1 high-severity finding/m)
   })
 })
 

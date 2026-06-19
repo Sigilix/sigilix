@@ -88,7 +88,7 @@ export function synthStatusUpdate(args: {
 
 export function finalStatusUpdate(args: {
   status: "posted" | "shadow_recorded" | "skipped" | "errored" | "stale_head"
-  reviewMeta?: { findingsCount?: number; surface?: ReviewStatusFinal["surface"] }
+  reviewMeta?: { findingsCount?: number; surface?: ReviewStatusFinal["surface"]; manage?: string }
   owner: string
   repo: string
   prNumber: number
@@ -98,6 +98,10 @@ export function finalStatusUpdate(args: {
   const skipped = args.status === "skipped"
   return {
     phase: failed ? "failed" : skipped ? "skipped" : "posted",
+    // SIG-471 PR-3: thread the relocated review footer onto the terminal overview
+    // snapshot so `buildReviewStatusBlock` renders it as the **Manage:** line. Only
+    // present on a posted review (the affordance carries the counter there).
+    ...(args.reviewMeta?.manage !== undefined ? { manage: args.reviewMeta.manage } : {}),
     final: {
       status: failed ? "failed" : skipped ? "skipped" : "posted",
       findingsCount: args.reviewMeta?.findingsCount ?? 0,

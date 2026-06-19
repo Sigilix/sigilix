@@ -205,11 +205,14 @@ describe("PR review engine acceptance flow (SIG-205)", () => {
     expect(readiness.event).toBe("REQUEST_CHANGES")
     expect(submission.event).toBe("REQUEST_CHANGES")
     expect(submission.comments).toBeUndefined()
+    // SIG-471 PR-3: the approval-readiness SUMMARY (the "Approval withheld …" prose)
+    // moved out of the body to the overview. The recovered body-only finding still
+    // surfaces in the outside-the-diff dropdown — the merge-gate (REQUEST_CHANGES)
+    // and the finding's visibility are preserved; only the body chrome is gone.
     expect(submission.body).not.toBe("<!-- sigilix:pr-review -->\n")
-    expect(submission.body).not.toContain("No issues found.")
-    expect(submission.body).toContain("Approval withheld")
+    expect(submission.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
     expect(submission.body).toContain("Approval validation lost logic finding")
     expect(submission.body).toContain("duplicate `/sigilix improve` anchor drops preserved suggestion")
-    expect(submission.body).toContain("kept, merged, softened, or explicitly dropped")
+    expect(submission.body).not.toContain("Approval withheld")
   })
 })

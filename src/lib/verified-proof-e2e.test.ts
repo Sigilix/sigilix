@@ -58,7 +58,11 @@ describe("VERIFIED proof — full datapath: receipt → confirmed → runner-con
     expect(inline).toContain('alt="VERIFIED"')
     expect(inline).toContain("runner-verified")
 
-    // 5. The review body's Trust Summary counts it as a verified proof.
+    // 5. SIG-471 PR-3: the per-review Trust/Proof SUMMARY moved out of the body to
+    //    the overview status block's **Proof:** line. The blocker (score 5) posts
+    //    INLINE, so the review body is marker-only — the VERIFIED signal the user
+    //    sees lives on the inline pill (step 4) + the overview Proof line (covered
+    //    by pr-review-status-render's formatProofLine tests).
     const review: PrReviewVerdict = {
       summary: "One execution-corroborated security finding.",
       confidence: 4,
@@ -71,8 +75,7 @@ describe("VERIFIED proof — full datapath: receipt → confirmed → runner-con
       headSha: "abc1234",
       trustLedger: true,
     }).submission.body
-    expect(body).toContain("**Proof**")
-    expect(body!.toLowerCase()).toContain("verified")
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
   it("the SAME finding renders only MODEL when no receipt corroborates it (the prod reality)", () => {

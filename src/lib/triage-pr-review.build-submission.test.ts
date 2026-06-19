@@ -89,33 +89,27 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toContain("To dismiss this review")
   })
 
-  it("does NOT render REQUEST_CHANGES heading on an empty-findings APPROVE body", () => {
+  it("SIG-471 PR-3: an all-inline REQUEST_CHANGES body is JUST the marker (no heading)", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
-    // The REQUEST_CHANGES path on `verdict` (which has findings) MUST
-    // emit the count heading, not the marker-only APPROVE body.
-    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
+    // The single score-5 finding anchors inline, so the body is the bare marker —
+    // the inline comment carries it. No lead-count heading.
+    expect(out.body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(out.body).not.toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
-  it("ARC-281: REQUEST_CHANGES body has the new heading + dropped legacy strings", () => {
+  it("SIG-471 PR-3: the minimal REQUEST_CHANGES body drops the lead/summary/footer chrome", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- sigilix:pr-review -->")
-    // New status heading replaces "### Sigilix Summary" entirely.
-    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
-    // Summary still appears — but as its own paragraph, not under a
-    // header.
-    expect(out.body).toContain(verdict.summary)
-    // confidenceReason is intentionally dropped from the body. The
-    // field stays on the type for inline-comment rendering, but the
-    // body no longer echoes it.
+    // Summary, confidenceReason, lead count, and the dismiss footer are all gone
+    // from the body (the summary lives in the overview; the footer in the Manage line).
+    expect(out.body).not.toContain(verdict.summary)
     expect(out.body).not.toContain(verdict.confidenceReason)
     expect(out.body).not.toContain("### Sigilix Summary")
-    // Old format markers also gone.
     expect(out.body).not.toContain("[BLOCKER]")
     expect(out.body).not.toContain("**Confidence:**")
     expect(out.body).not.toContain("max score")
-    // Dismissal hint is now required on REQUEST_CHANGES.
-    expect(out.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
-    expect(out.body).toContain("@sigilix dismiss")
+    expect(out.body).not.toContain("@sigilix dismiss")
+    expect(out.body).not.toContain("<sub>")
   })
 
   it("body is prose-only — no hardcoded author dialogue", () => {
@@ -129,15 +123,11 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toMatch(/Approving\.$/m)
   })
 
-  it("ARC-281: the legacy '_N findings inline below._' pointer is removed entirely", () => {
-    // Pre-ARC-281, REQUEST_CHANGES bodies carried a redundant
-    // "_1 finding inline below._" line. Kimi's redesign drops it
-    // (the heading "## Sigilix: 1 finding" already states the
-    // count). This guards against re-adding it.
+  it("SIG-471 PR-3: the legacy '_N findings inline below._' pointer is gone (and no lead count)", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).not.toMatch(/inline below/i)
-    // The count IS in the heading though.
-    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
+    // SIG-471 PR-3: the count heading is gone too — the body is marker-only.
+    expect(out.body).not.toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
   it("omits the count + Fix Plan + dismissal hint when there are zero findings (APPROVE path)", () => {
@@ -206,15 +196,16 @@ describe("buildReviewSubmission", () => {
       unanchored: [unanchored],
     })
 
-    // SIG-440: a score>=4 body-only finding is a Fix Plan table row and
-    // its details render in the single non-inline dropdown. Its evidence
-    // (Example / "Why this wasn't caught") still renders there.
-    expect(out.submission.body).toContain("couldn't be anchored to a line")
+    // SIG-471 PR-3: a body-only finding appears as ONE row in the collapsed
+    // outside-the-diff dropdown (File | Scope | Finding). The deep evidence
+    // (Example / "Why this wasn't caught") is NO LONGER in the body — the row's
+    // headline + the check annotation carry it. The finding is NEVER dropped.
+    expect(out.submission.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.submission.body).toContain("| File | Scope | Finding |")
+    expect(out.submission.body).toContain("file-scope")
     expect(out.submission.body).toContain("missing idempotency guard")
     expect(out.submission.body).not.toContain("### Review Body Findings")
-    expect(out.submission.body).toContain("**Example:**")
-    expect(out.submission.body).toContain("opened/synchronize events")
-    expect(out.submission.body).toContain("**Why this wasn't caught:** The sibling test only covers push events.")
+    expect(out.submission.body).not.toContain("**Example:**")
     expect(out.bodyOnlyFindings).toEqual([unanchored])
     expect(out.bodyOnlyAnnotations).toEqual([
       expect.objectContaining({
@@ -271,7 +262,11 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
+    // SIG-471 PR-3: the body-only blocker renders in the outside-the-diff dropdown;
+    // the dismiss footer moved to the overview Manage line.
+    expect(out.submission.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.submission.body).toContain("approval-readiness blocker")
+    expect(out.submission.body).not.toContain("@sigilix dismiss")
   })
 
   it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
@@ -284,10 +279,11 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toHaveLength(1)
-    expect(out.submission.body).toMatch(/^\*\*1 (high-severity|finding)/m)
+    // SIG-471 PR-3: the inline finding posts as a comment; the body is marker-only.
+    expect(out.submission.body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("renders approval-pending copy for forced blockers with no rendered findings", () => {
+  it("SIG-471 PR-3: renders the policy-blocker sentence for forced blockers with no findings", () => {
     const empty: PrReviewVerdict = {
       summary: "Approval validation still has an unresolved policy blocker.",
       confidence: 4,
@@ -303,9 +299,12 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toMatch(/^\*\*Approval pending\*\*/m)
-    expect(out.submission.body).toContain("unresolved policy-level blocker")
-    expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
+    // SIG-471 PR-3 shape (iii): a REQUEST_CHANGES with zero inline AND zero body
+    // findings → marker + one explanatory sentence.
+    expect(out.submission.body).toContain(
+      "This review was submitted as **Request changes** due to a repository policy blocker. " +
+        "No automated findings were generated.",
+    )
     expect(out.submission.body).not.toContain("0 findings")
   })
 
@@ -947,8 +946,12 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       addedLineTextByLine,
     })
     expect(out.comments ?? []).toHaveLength(0)
+    // SIG-471 PR-3: the body-routed finding appears in the outside-the-diff
+    // dropdown by headline. (The "(line moved …)" anchorNote was body-only detail
+    // that the minimal dropdown no longer echoes — the row's File cell + the check
+    // annotation carry the location.)
     expect(out.body).toContain("structural concern with the file")
-    expect(out.body).toContain("(line moved — see file at `abc`)")
+    expect(out.body).toContain("file-scope")
   })
 
   it("walk-forward: a suggestion-bearing finding bypasses walk-forward (preserves the fix)", () => {

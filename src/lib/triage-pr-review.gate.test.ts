@@ -381,13 +381,14 @@ describe("renderCommentBody (SIG-161)", () => {
     expect(body).toContain("<!-- sigilix:pr-review -->")
   })
 
-  it("uses non-blocking lead copy instead of blocker framing (SIG-167)", () => {
-    // SIG Kimi r1: lead line carries "non-blocking finding(s)" tag
-    // on COMMENT posture. The default `verdict` here has 1 finding
-    // with score 3 (medium) → "lower-severity inline only" branch.
+  it("an all-inline COMMENT body is JUST the marker (SIG-471 PR-3 minimal body)", () => {
+    // SIG-471 PR-3: the lead counts line (incl. the "non-blocking finding" copy),
+    // the summary, and the footer are GONE from the body. A COMMENT with a single
+    // inline finding (score 3, anchors inline) is the bare marker — the inline
+    // comment carries the finding.
     const body = renderCommentBody({ verdict })
-    expect(body).toMatch(/^\*\*1 non-blocking finding\*\*/m)
-    expect(body).not.toMatch(/^\*\*1 finding\*\*/m)
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(body).not.toContain("non-blocking")
   })
 
   it("omits the dismissal hint because COMMENT has no verdict to dismiss (SIG-167)", () => {
@@ -420,25 +421,20 @@ describe("renderCommentBody (SIG-161)", () => {
     expect(body).not.toContain("Comment `/sigilix review`")
   })
 
-  it("forward-safe via rest-spread strip: new optional RenderBodyArgs fields flow through unchanged", () => {
-    // Belt-and-suspenders: confirm a field that exists today (delta)
-    // still reaches the body when supplied to renderCommentBody. The
-    // rest-spread denylist only omits reviewCounter + retriggerUrl;
-    // anything else delegates as-is.
+  it("forward-safe via rest-spread strip: a body-only finding still reaches the dropdown", () => {
+    // SIG-471 PR-3: the minimal body dropped the lead/delta/summary chrome, so the
+    // old "delta inlines onto the lead" signal is gone. The rest-spread denylist
+    // (reviewCounter + retriggerUrl) still must not strip the body-routing inputs —
+    // confirm a file-scope finding flows through into the outside-the-diff dropdown.
     const body = renderCommentBody({
-      verdict,
-      delta: {
-        newCount: 1,
-        stillOpenCount: 0,
-        likelyFixedCount: 0,
-        carriedOverCount: 0,
+      verdict: {
+        ...verdict,
+        findings: [{ ...baseFinding, scope: "file", score: 3, headline: "file-level COMMENT note" }],
       },
     })
-    // SIG Kimi r1: delta now inlines onto the lead line as
-    // "since last review: +1 new" (the old "**Changes:** +1 new"
-    // standalone line is gone). Evidence that `delta` flowed
-    // through is the presence of the inlined fragment.
-    expect(body).toContain("since last review: +1 new")
+    expect(body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(body).toContain("file-scope")
+    expect(body).toContain("file-level COMMENT note")
   })
 })
 

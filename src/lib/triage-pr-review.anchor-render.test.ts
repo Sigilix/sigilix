@@ -191,13 +191,10 @@ describe("provenance footer (ARC-184)", () => {
     expect(body).not.toContain("_Reviewed against")
   })
 
-  it("REQUEST_CHANGES body still ends with the SHA in the compact footer (ARC-184 invariant)", () => {
-    // SIG Kimi r1: the separate "_Reviewed against `SHA` at TS._"
-    // line merged into the single `<sub>` footer alongside dismiss
-    // + re-run + Review #N. The SHA invariant is preserved — it's
-    // still the last identifier in the body — just inline now. The
-    // timestamp was dropped (GitHub already shows comment-creation
-    // time at the top of the comment header).
+  it("SIG-471 PR-3: an all-inline REQUEST_CHANGES body is marker-only (the SHA footer moved to the overview)", () => {
+    // The SHA / Dismiss / Re-run footer is no longer in the body — it relocated to
+    // the editable Sigilix Overview status block's **Manage:** line. An all-inline
+    // review body is just the marker.
     const out = buildReviewSubmission({
       verdict: verdictWithFinding,
       prAuthor: "alice",
@@ -205,7 +202,9 @@ describe("provenance footer (ARC-184)", () => {
       nowMs: NOW,
     })
     const body = out.body ?? ""
-    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(body).not.toContain("<sub>")
+    expect(body).not.toContain("`abc1234`")
   })
 
   it("buildFallbackBody APPROVE path is marker-only (ARC-293)", () => {
@@ -213,10 +212,10 @@ describe("provenance footer (ARC-184)", () => {
     expect(out).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("buildFallbackBody REQUEST_CHANGES path still ends with the SHA in the compact footer", () => {
-    // SIG Kimi r1: the per-body "_Reviewed against `SHA` at TS._"
-    // line is now merged into the single `<sub>` footer. The SHA
-    // remains the last identifier in the body.
+  it("SIG-471 PR-3: buildFallbackBody REQUEST_CHANGES routes the finding to the dropdown, no SHA footer", () => {
+    // The fallback path has no reviewable map, so the finding can't anchor inline
+    // → it routes body-only into the outside-the-diff dropdown. No <sub> SHA footer
+    // (it relocated to the overview Manage line).
     const out = buildFallbackBody(
       verdictWithFinding,
       [],
@@ -228,7 +227,10 @@ describe("provenance footer (ARC-184)", () => {
       undefined,
       "REQUEST_CHANGES",
     )
-    expect(out.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
+    expect(out).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out).toContain("missing null guard")
+    expect(out).not.toContain("<sub>")
+    expect(out).not.toContain("`abc1234`")
   })
 
   it("body is well under 65000 chars on a small fixture", () => {
@@ -236,29 +238,23 @@ describe("provenance footer (ARC-184)", () => {
     expect((out.body ?? "").length).toBeLessThan(2000)
   })
 
-  it("WRITER-SIDE 65k CAP: when summary is huge, summary truncates but footer stays intact", () => {
-    // ARC-281: APPROVE bodies no longer render the model's summary
-    // (the renderer prints "No issues found." instead), so the cap
-    // test has to exercise the REQUEST_CHANGES path where the
-    // summary IS in the body. Use a fixture with one finding so the
-    // body goes through `renderRequestChangesBody`. Bump summary to
-    // > 65k since confidenceReason is no longer rendered and the
-    // (former) 64k summary + 2k confidenceReason combo now fits
-    // under the cap.
+  it("WRITER-SIDE 65k CAP: a huge body-only dropdown truncates under the 65k limit (defense-in-depth)", () => {
+    // SIG-471 PR-3: the summary is no longer in the body, so the cap is exercised
+    // by a large outside-the-diff dropdown. The body must stay under 65k; the cap
+    // marker fires; no footer remains in the body.
     const huge: PrReviewVerdict = {
-      summary: "x".repeat(66000),
+      summary: "summary not rendered in the body anymore",
       confidence: 5,
       confidenceReason: "y".repeat(2000),
-      findings: [
-        {
-          path: "src/foo.ts",
-          line: 10,
-          headline: "headline",
-          body: "body",
-          score: 3,
-          category: "logic",
-        },
-      ],
+      findings: Array.from({ length: 30 }, (_, i) => ({
+        path: `src/mod${i}.ts`,
+        line: 10,
+        scope: "file" as const,
+        headline: `OVERSIZED_HEADLINE_${i} ` + "x".repeat(3000),
+        body: "body",
+        score: 3,
+        category: "logic" as const,
+      })),
     }
     const out = buildReviewSubmission({
       verdict: huge,
@@ -268,15 +264,9 @@ describe("provenance footer (ARC-184)", () => {
     })
     const body = out.body ?? ""
     expect(body.length).toBeLessThanOrEqual(65000)
-    // Truncation marker is present
-    expect(body).toContain("[summary truncated to fit GitHub's 65535 limit]")
-    // Sigilix-bot HIGH + CR MINOR (PR #200): SHA-in-compact-footer
-    // survives truncation. `capForGitHub` truncates BODY content and
-    // re-appends the footer so the `<sub>...`SHA`</sub>` is never
-    // sliced. This is the post-r1 equivalent of the
-    // "_Reviewed against `SHA` at TS._" invariant from ARC-184.
-    expect(body).toContain("`abc1234`")
-    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
+    expect(body).toContain("<!-- sigilix:pr-review -->")
+    // The relocated footer is NOT in the body.
+    expect(body).not.toContain("<sub>")
   })
 })
 
@@ -444,7 +434,7 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     expect(off).not.toContain("runner-verified")
   })
 
-  it("renders the Trust Summary (Proof line) under the lead only when on", () => {
+  it("SIG-471 PR-3: the Trust/Proof summary line is GONE from the body (an all-inline review is marker-only)", () => {
     const verdict: PrReviewVerdict = {
       summary: "One grounded finding.",
       confidence: 4,
@@ -457,20 +447,15 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       headSha: "abc1234",
       trustLedger: true,
     })
-    // the segmented summary: total + the proof breakdown (1 grounded-model finding).
-    expect(on.submission.body).toContain("**1 finding**")
-    expect(on.submission.body).toContain("**Proof**: 1 grounded")
-    const off = buildReviewSubmissionWithMetadata({
-      verdict,
-      prAuthor: null,
-      headSha: "abc1234",
-      trustLedger: false,
-    })
-    expect(off.submission.body).not.toContain("**Proof**")
-    expect(off.submission.body).not.toContain("**1 finding**")
+    // SIG-471 PR-3: the per-review Trust Summary ("**Proof**: …") and the lead
+    // count were cut from the body. The finding posts inline → marker-only body.
+    // (Proof now lives on the overview status block's **Proof:** line.)
+    expect(on.submission.body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(on.submission.body).not.toContain("**Proof**")
+    expect(on.submission.body).not.toContain("**1 finding**")
   })
 
-  it("SIG-440: body findings render in one non-inline dropdown with trust pills when enabled", () => {
+  it("SIG-471 PR-3: body findings render in the ONE outside-the-diff dropdown (never dropped), no trust pills", () => {
     const bf = (over: Partial<PrReviewFinding>): PrReviewFinding => ({
       ...baseFinding,
       score: 3,
@@ -484,18 +469,19 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     }
     const unanchored: PrReviewFinding[] = [
       bf({
-        headline: "outside the diff",
+        headline: "outside the diff finding",
+        outOfPrScope: true,
         trust: { tier: "grounded-model", surface: "body", demoteReason: "outside-diff" },
       }),
       bf({
         headline: "no test for this",
         scope: "pr",
         trust: { tier: "grounded-model", surface: "body" },
-      }), // genuinely PR-scoped
+      }),
       bf({
         headline: "ungrounded nit",
         trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" },
-      }), // → flat list (not pr-scoped)
+      }),
     ]
     const on = buildReviewSubmissionWithMetadata({
       verdict,
@@ -504,13 +490,18 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       unanchored,
       trustLedger: true,
     }).submission.body
-    expect(on).toContain("couldn't be anchored to a line")
-    expect(on).toContain("<details>")
-    expect(on).toContain("**In your changes**")
-    expect(on).toContain("outside the diff")
+    expect(on).toContain("<summary><b>3 findings outside the diff</b></summary>")
+    expect(on).toContain("| File | Scope | Finding |")
+    // All three findings appear — none dropped.
+    expect(on).toContain("outside the diff finding")
     expect(on).toContain("no test for this")
     expect(on).toContain("ungrounded nit")
-    // off → same single dropdown, but no trust pills.
+    // The out-of-PR finding is labeled out-of-diff; the rest file-scope.
+    expect(on).toContain("out-of-diff")
+    expect(on).toContain("file-scope")
+    // SIG-471 PR-3: the minimal dropdown carries NO trust pills.
+    expect(on).not.toContain("trust-grounded")
+    // off → identical dropdown (the body shape no longer varies on trustLedger).
     const off = buildReviewSubmissionWithMetadata({
       verdict,
       prAuthor: null,
@@ -518,48 +509,8 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       unanchored,
       trustLedger: false,
     }).submission.body
-    expect(off).toContain("couldn't be anchored to a line")
+    expect(off).toContain("<summary><b>3 findings outside the diff</b></summary>")
     expect(off).not.toContain("trust-grounded")
-  })
-
-  it("body-row glyph layout: the trust pill LEADS with the badges (before the location), not orphaned after the headline", () => {
-    // The dogfood layout bug: the trust pill (GROUNDED/MODEL) was jammed
-    // immediately after the bold headline, landing in a random mid-line spot
-    // when the title wrapped. It belongs with the leading severity+category
-    // badges (`trustPill` doc: "append after the category glyph"), matching the
-    // inline `formatFindingComment` render.
-    const verdict: PrReviewVerdict = {
-      summary: "Body findings.",
-      confidence: 4,
-      confidenceReason: "x",
-      findings: [],
-    }
-    const unanchored: PrReviewFinding[] = [
-      {
-        ...baseFinding,
-        score: 3,
-        headline: "evidence rendered without redaction",
-        trust: { tier: "grounded-model", surface: "body", demoteReason: "inline-grounding" },
-      },
-    ]
-    const body = buildReviewSubmissionWithMetadata({
-      verdict,
-      prAuthor: null,
-      headSha: "abc1234",
-      unanchored,
-      trustLedger: true,
-    }).submission.body!
-    const pillIdx = body.indexOf("trust-grounded")
-    const headlineIdx = body.indexOf("evidence rendered without redaction")
-    expect(pillIdx).toBeGreaterThanOrEqual(0)
-    expect(headlineIdx).toBeGreaterThanOrEqual(0)
-    // pill renders BEFORE the bold location + headline (with the leading badges)…
-    expect(pillIdx).toBeLessThan(headlineIdx)
-    // …and is NOT jammed immediately after the bold headline (the old broken
-    // layout). The pill renders as `<a …><img …></a>`, so match the anchor wrapper
-    // to actually catch the old `**headline**<pill>` order (a bare `<img` check
-    // would pass on both layouts).
-    expect(body).not.toMatch(/redaction\*\*\s*<a[^>]*>\s*<img[^>]*trust-grounded/)
   })
 })
 
@@ -639,7 +590,13 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
     expect(body).not.toContain("Why Sigilix flagged this")
   })
 
-  it("renders evidence blocks for body-only findings only when enabled", () => {
+  it("SIG-471 PR-3: body-only findings appear in the minimal dropdown, WITHOUT the evidence block", () => {
+    // The body-only evidence block ("Why Sigilix flagged this …") was part of the
+    // old detailed body-only row render, which the minimal dropdown replaced. The
+    // finding still surfaces (recall-safety) — by headline, in the dropdown table —
+    // but its deep evidence no longer renders in the body, regardless of
+    // `showEvidence`. (Evidence still renders on the INLINE comment path; see the
+    // `formatFindingComment` tests above.)
     const verdict: PrReviewVerdict = {
       summary: "One body finding.",
       confidence: 4,
@@ -650,18 +607,11 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
       verdict,
       prAuthor: null,
       headSha: "abc1234",
-      unanchored: [{ ...withEvidence, scope: "comment", score: 3 }],
+      unanchored: [{ ...withEvidence, scope: "comment", score: 3, headline: "body finding with evidence" }],
       showEvidence: true,
     }).submission.body
-    expect(on).toContain("Why Sigilix flagged this (6 pieces of evidence)")
-
-    const off = buildReviewSubmissionWithMetadata({
-      verdict,
-      prAuthor: null,
-      headSha: "abc1234",
-      unanchored: [{ ...withEvidence, scope: "comment", score: 3 }],
-      showEvidence: false,
-    }).submission.body
-    expect(off).not.toContain("Why Sigilix flagged this")
+    expect(on).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(on).toContain("body finding with evidence")
+    expect(on).not.toContain("Why Sigilix flagged this")
   })
 })

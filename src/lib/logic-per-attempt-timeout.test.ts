@@ -44,11 +44,20 @@ describe("SIG-369 — per-attempt cap = the role wall (all-roles uncap)", () => 
     }
   })
 
-  it("preserves the per-role retry counts + null fallback (retries = fast-fail recovery, not extra wall-clock)", () => {
+  it("preserves the per-role retry counts (retries = fast-fail recovery, not extra wall-clock); only security carries a fallback (SIG-468)", () => {
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.security.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
-    for (const role of ROLES) expect(SPECIALIST_CONFIGS[role].fallback).toBeNull()
+    // SIG-468: security gained a v4-pro fallback to recover parse-exhaustion (it shares the role
+    // wall, so it adds no extra wall-clock); every other role stays fallback:null (OpenRouter
+    // self-routes their attempts across upstreams).
+    for (const role of ROLES) {
+      if (role === "security") {
+        expect(SPECIALIST_CONFIGS[role].fallback).toBe("deepseek/deepseek-v4-pro")
+      } else {
+        expect(SPECIALIST_CONFIGS[role].fallback).toBeNull()
+      }
+    }
   })
 })

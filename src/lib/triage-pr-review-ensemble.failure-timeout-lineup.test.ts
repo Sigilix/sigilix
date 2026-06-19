@@ -214,9 +214,12 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("security specialist runs deepseek/deepseek-v4-flash (retries:2, no fallback; SIG-369 cap = role wall)", () => {
+  it("security specialist runs deepseek/deepseek-v4-flash w/ v4-pro fallback (retries:2; SIG-369 cap = role wall; SIG-468 fallback)", () => {
     expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek/deepseek-v4-flash")
-    expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
+    // SIG-468: flash intermittently fails to parse all 3 same-model retries and drops the role
+    // ("security specialist unavailable"); v4-pro (same OpenRouter provider, sturdier formatter) is
+    // the cross-provider recovery the loop falls through to on parse-exhaustion.
+    expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek/deepseek-v4-pro")
     expect(SPECIALIST_CONFIGS.security.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
@@ -253,7 +256,7 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (15)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves before
     // admitting a PR, so the regression asserts against it directly — not a
     // hand-calc that would silently drift. Pre-flight retrieve is a Vectorize
@@ -261,15 +264,15 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     //
     // Worst-case model calls per ensemble run (SIG-449: security/perf retries:2; SIG-450: logic retries:2):
     //   logic:       primary + 2 retries (SIG-450)            = 3
-    //   security:    primary + 2 retries (SIG-449)            = 3
+    //   security:    primary + 2 retries (SIG-449) + fallback = 4 (SIG-468 v4-pro fallback)
     //   performance: primary + 2 retries (SIG-449)            = 3
     //   tests:       primary + 1 retry                        = 2
     //   synth:       primary + 1 retry                        = 2
     //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 15.  OpenRouter routes each call across upstreams, so no
-    //   per-role cross-provider fallback adds to the count.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(15)
+    //   total: 16.  Only security carries a fallback model (SIG-468);
+    //   the other roles rely on OpenRouter's per-call upstream routing.
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

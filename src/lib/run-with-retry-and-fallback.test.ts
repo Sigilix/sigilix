@@ -558,11 +558,11 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
   })
 
   it("emits primary/retry sequence on the security specialist when primary 503s then the retry succeeds", async () => {
-    // SIG-406: SPECIALIST_CONFIGS.security = { primary: "deepseek/deepseek-v4-flash",
-    // retries: 1, fallback: null } — OpenRouter routes across upstreams, so there is
-    // NO per-role cross-provider fallback. Two mocked chat calls (primary 503, retry
-    // OK) → two emits: primary/failed, retry/ok. Pins the attemptKind sequence AND
-    // that the retry stays on the SAME (primary) model.
+    // SIG-406/SIG-468: SPECIALIST_CONFIGS.security = { primary: "deepseek/deepseek-v4-flash",
+    // retries: 2, fallback: "deepseek/deepseek-v4-pro" }. This case is a transient 503 that the
+    // SAME-MODEL retry rescues, so the fallback is NEVER reached: two mocked chat calls (primary
+    // 503, retry OK) → two emits: primary/failed, retry/ok. Pins the attemptKind sequence AND
+    // that the retry stays on the SAME (primary) model. (The fallback path is exercised separately.)
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
       mockChat.mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload")).mockResolvedValueOnce(
@@ -584,9 +584,10 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         perfCtx,
       })
       expect(result.verdict).not.toBeNull()
-      // No fallback in the lineup — the retry on the primary model is what rescues it.
+      // The same-model retry rescues this 503 before the fallback is reached.
       expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.security.primary)
-      expect(SPECIALIST_CONFIGS.security.fallback).toBeNull()
+      // SIG-468: security now carries a v4-pro fallback (used only on parse-exhaustion, not here).
+      expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek/deepseek-v4-pro")
 
       const events = logSpy.mock.calls
         .map((c) => {
@@ -607,6 +608,62 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       expect(events[1]?.["attemptKind"]).toBe("retry")
       expect(events[1]?.["outcome"]).toBe("ok")
       expect(events[1]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it("SIG-468: security primary fails to PARSE all 3 attempts, then the v4-pro fallback rescues the role", async () => {
+    // The live failure (#636 @17:24): deepseek-v4-flash emitted unparseable structured output on
+    // every same-model retry → role dropped fail-open → "_security specialist unavailable_" → no
+    // VERIFIED pill. With the v4-pro fallback restored, parse-exhaustion on the primary falls
+    // through to the sturdier fallback model and the role is rescued. This test would FAIL if the
+    // fallback were reverted to null (modelUsed would be null, the role would drop).
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      const validVerdict = ok(JSON.stringify({ summary: "security verdict", confidence: 3, findings: [] }))
+      mockChat
+        .mockResolvedValueOnce(ok("not-json")) // primary attempt 1: unparseable
+        .mockResolvedValueOnce(ok("not-json")) // primary attempt 2 (retry): unparseable
+        .mockResolvedValueOnce(ok("not-json")) // primary attempt 3 (retry): unparseable
+        .mockResolvedValueOnce(validVerdict) // fallback (v4-pro): parses
+      const result = await runSpecialist({
+        role: "security",
+        apiKeys: { ollama: undefined, openrouter: "test-key" },
+        systemPrompt: "system",
+        initialMessage: "user",
+        chatEnabled: "on",
+        signal: new AbortController().signal,
+        perfCtx,
+      })
+      // Role rescued by the fallback, NOT dropped.
+      expect(result.verdict).not.toBeNull()
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.security.fallback)
+      expect(result.modelUsed).toBe("deepseek/deepseek-v4-pro")
+      // 3 primary parse-failures (1 + retries:2) + 1 fallback = 4 calls.
+      expect(mockChat).toHaveBeenCalledTimes(4)
+
+      const events = logSpy.mock.calls
+        .map((c) => {
+          try {
+            return JSON.parse(c[0] as string) as Record<string, unknown>
+          } catch {
+            return null
+          }
+        })
+        .filter(
+          (e): e is Record<string, unknown> =>
+            e !== null && e["event"] === "model-attempt-completed" && e["role"] === "security",
+        )
+      expect(events).toHaveLength(4)
+      // First three on the primary, all failed-to-parse.
+      for (let i = 0; i < 3; i++) {
+        expect(events[i]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
+        expect(events[i]?.["outcome"]).toBe("failed")
+      }
+      // The fourth is the v4-pro fallback, succeeding.
+      expect(events[3]?.["model"]).toBe("deepseek/deepseek-v4-pro")
+      expect(events[3]?.["outcome"]).toBe("ok")
     } finally {
       logSpy.mockRestore()
     }

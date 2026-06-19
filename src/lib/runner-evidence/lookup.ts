@@ -143,6 +143,20 @@ export async function lookupRunnerEvidence(
   repositoryId: string,
   prNumber: number,
   mergeCommitSha: string,
+  opts?: {
+    /** The PR's CURRENT head sha (GitHub PR API `head.sha`). Enables the
+     *  forge-proof head-sha fallback bind when the merge commit was recomputed. */
+    headSha?: string | undefined
+    /**
+     * Resolve the PR head sha the receipt was scanned against, FROM the receipt's
+     * OIDC-signed merge sha: fetch that merge commit and return `parents[1]`
+     * (PR head) ONLY when it has EXACTLY 2 parents, else null. Anchored on the
+     * signed merge sha, so no caller-supplied value enters the bind (CR-4). Wired
+     * by the caller (it owns the GitHub client); omitted callers keep the
+     * merge-sha-only bind.
+     */
+    resolveMergeHead?: ((mergeSha: string) => Promise<string | null>) | undefined
+  },
 ): Promise<RunnerEvidenceState> {
   if (!repositoryId || prNumber <= 0 || !mergeCommitSha) return { state: "runner-absent" }
 
@@ -156,11 +170,31 @@ export async function lookupRunnerEvidence(
   }
   if (!row) return { state: "runner-absent" }
 
-  // BIND (the forge-proof step): the receipt's OIDC-signed merge sha must equal
-  // the PR's current merge commit. A receipt for a different merge — an older
-  // head, or any retarget — fails here, NOT a false verified.
+  // BIND (the forge-proof step). FAST PATH: the receipt's OIDC-signed merge sha
+  // equals the PR's current merge commit → the runner scanned exactly this merge.
+  // FALLBACK (SIG-184 VERIFIED unlock): GitHub recomputes `merge_commit_sha` on
+  // nearly every PR mutation, so a perfectly-valid receipt for the SAME head often
+  // fails the merge-sha equality. When it does, derive the head the receipt was
+  // scanned against — `parents[1]` of the receipt's SIGNED merge sha (`row.sha`),
+  // resolved via `resolveMergeHead` with a strict 2-parent guard — and require it
+  // to equal the PR's CURRENT head sha. This is forge-proof-equivalent: the
+  // derivation is anchored on the signed merge sha, never a caller-supplied value.
+  // A receipt for a different/older head fails here, NOT a false verified.
   if (row.sha.toLowerCase() !== mergeCommitSha.toLowerCase()) {
-    return { state: "evidence-pending", reason: "merge-sha-mismatch" }
+    const headSha = opts?.headSha
+    const resolveMergeHead = opts?.resolveMergeHead
+    if (!headSha || !resolveMergeHead) {
+      return { state: "evidence-pending", reason: "merge-sha-mismatch" }
+    }
+    let receiptHead: string | null
+    try {
+      receiptHead = await resolveMergeHead(row.sha)
+    } catch {
+      receiptHead = null
+    }
+    if (!receiptHead || receiptHead.toLowerCase() !== headSha.toLowerCase()) {
+      return { state: "evidence-pending", reason: "head-sha-mismatch" }
+    }
   }
 
   // Fetch the bulky SARIF body by the receipt's exact (repoId, sha, run) key.

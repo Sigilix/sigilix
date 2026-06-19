@@ -727,7 +727,19 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   if ((runnerMode !== "off" || receiptJoinMode !== "off") && a.repoId !== undefined) {
     const mergeSha = meta.merge_commit_sha
     runnerEvidence = mergeSha
-      ? await lookupRunnerEvidence(env, String(a.repoId), prNumber, mergeSha)
+      ? await lookupRunnerEvidence(env, String(a.repoId), prNumber, mergeSha, {
+          // SIG-184 VERIFIED unlock: when GitHub has recomputed merge_commit_sha
+          // since the runner ran, fall back to binding on the stable head sha.
+          headSha,
+          // Derive the head the RECEIPT was scanned against from its SIGNED merge
+          // sha: parents[1] of a 2-parent `refs/pull/N/merge` test-merge = PR head.
+          // Anchored on the signed sha → no caller-supplied value enters the bind.
+          resolveMergeHead: async (receiptMergeSha) => {
+            const commit = await client.getCommit(owner, repo, receiptMergeSha)
+            if (!commit || commit.parents.length !== 2) return null
+            return commit.parents[1] ?? null
+          },
+        })
       : { state: "evidence-pending", reason: "merge-sha-unavailable" } // GitHub still computing the merge
     console.log(
       JSON.stringify({

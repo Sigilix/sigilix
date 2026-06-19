@@ -99,6 +99,71 @@ describe("lookupRunnerEvidence", () => {
     expect(r).toMatchObject({ state: "evidence-pending", reason: "merge-sha-mismatch" })
   })
 
+  // SIG-184 VERIFIED unlock — head-sha fallback bind when GitHub recomputed the
+  // merge commit. The fallback derives the head the receipt was scanned against
+  // (parents[1] of the SIGNED merge sha) via `resolveMergeHead` and binds it to
+  // the PR's current head sha.
+  it("verified via head-sha fallback: merge sha differs but resolved receipt head == current head", async () => {
+    const env = makeEnv({
+      row: baseRow(await sha256(SARIF), await sha256(SCAN_MANIFEST)),
+      body: { sarif: SARIF, scanManifest: SCAN_MANIFEST },
+    })
+    const r = await lookupRunnerEvidence(env, "424242", 7, "a-recomputed-merge", {
+      headSha: "thehead",
+      resolveMergeHead: async (mergeSha) => (mergeSha === "mergedead" ? "thehead" : null),
+    })
+    expect(r).toMatchObject({ state: "verified", sha: "mergedead", pullNumber: 7 })
+  })
+
+  it("head-sha-mismatch: merge differs and the resolved receipt head != current head (no false verified)", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } }),
+      "424242",
+      7,
+      "a-recomputed-merge",
+      { headSha: "thehead", resolveMergeHead: async () => "a-different-head" },
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "head-sha-mismatch" })
+  })
+
+  it("head-sha-mismatch: resolveMergeHead returns null (e.g. not a 2-parent merge commit)", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } }),
+      "424242",
+      7,
+      "a-recomputed-merge",
+      { headSha: "thehead", resolveMergeHead: async () => null },
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "head-sha-mismatch" })
+  })
+
+  it("head-sha-mismatch (fail-closed): resolveMergeHead THROWS → caught → demote, never verified", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } }),
+      "424242",
+      7,
+      "a-recomputed-merge",
+      {
+        headSha: "thehead",
+        resolveMergeHead: async () => {
+          throw new Error("github 500")
+        },
+      },
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "head-sha-mismatch" })
+  })
+
+  it("back-compat: merge mismatch with NO fallback opts still demotes as merge-sha-mismatch", async () => {
+    const r = await lookupRunnerEvidence(
+      makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } }),
+      "424242",
+      7,
+      "a-recomputed-merge",
+      { headSha: "thehead" }, // resolver omitted
+    )
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "merge-sha-mismatch" })
+  })
+
   it("evidence-pending (not absent) on a transient DO error", async () => {
     expect((await lookupRunnerEvidence(makeEnv({ rowThrows: true }), "424242", 7, "mergedead")).state).toBe(
       "evidence-pending",

@@ -251,17 +251,26 @@ export class GitHubClient {
     repo: string,
     sha: string,
     opts?: { signal?: AbortSignal },
-  ): Promise<{ headSha: string; treeSha: string } | null> {
+  ): Promise<{ headSha: string; treeSha: string; parents: string[] } | null> {
     try {
-      const res = await this.restGet<{ sha?: string; tree?: { sha?: string } }>(
-        `/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`,
-        opts,
-      )
+      const res = await this.restGet<{
+        sha?: string
+        tree?: { sha?: string }
+        parents?: Array<{ sha?: string }>
+      }>(`/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`, opts)
       const headSha = res.sha
       const treeSha = res.tree?.sha
       if (typeof headSha !== "string" || typeof treeSha !== "string") return null
       if (headSha.length === 0 || treeSha.length === 0) return null
-      return { headSha, treeSha }
+      // SIG-184 VERIFIED unlock: parent shas (ordered). For a GitHub
+      // `refs/pull/N/merge` test-merge commit, parents[0]=base tip,
+      // parents[1]=PR head — used (with a strict 2-parent guard) to derive the
+      // stable head sha the receipt was scanned against. Empty/malformed parents
+      // are dropped; callers must enforce their own length/shape guard.
+      const parents = Array.isArray(res.parents)
+        ? res.parents.map((p) => p?.sha).filter((s): s is string => typeof s === "string" && s.length > 0)
+        : []
+      return { headSha, treeSha, parents }
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null
       throw error

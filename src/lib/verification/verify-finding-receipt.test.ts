@@ -318,6 +318,43 @@ describe("canonicalClassForFinding (deterministic class derivation)", () => {
     expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: "CWE-99999" }))).toBeNull()
     expect(canonicalClassForFinding(finding({ evidenceId: "NONE", cweId: undefined }))).toBeNull()
   })
+
+  // SIG-184 Phase 3b — co-located deterministic AST fact (worker-token finding).
+  const evidence = (deterministicFactIds: string[]) =>
+    ({
+      specialistsThatFlagged: [],
+      specialistsThatDeclined: [],
+      deterministicFactIds,
+      retrievalChunkIds: [],
+      relatedPriorPRs: [],
+      synthDecision: "kept",
+      consensusScore: 1,
+    }) as PrReviewFinding["evidence"]
+
+  it("Phase 3b: derives class from a co-located ast/ fact-id (own evidenceId is a worker-token)", () => {
+    expect(
+      canonicalClassForFinding(
+        finding({ evidenceId: "NONE", cweId: undefined, evidence: evidence(["ast/no-exec-shell-interpolation/h/10"]) }),
+      ),
+    ).toBe("command-injection")
+  })
+  it("Phase 3b: co-located ast: evidenceId form also works", () => {
+    expect(
+      canonicalClassForFinding(finding({ evidenceId: "NONE", evidence: evidence(["ast:no-sql-injection:x"]) })),
+    ).toBe("sql-injection")
+  })
+  it("CREDIBILITY: two co-located ast facts of DIFFERENT classes → null (conflict, fail closed)", () => {
+    expect(
+      canonicalClassForFinding(
+        finding({ evidenceId: "NONE", evidence: evidence(["ast/no-ssrf/h/1", "ast/no-sql-injection/h/2"]) }),
+      ),
+    ).toBeNull()
+  })
+  it("non-ast deterministic fact-ids (secret/sarif) are NOT read as a class", () => {
+    expect(
+      canonicalClassForFinding(finding({ evidenceId: "NONE", evidence: evidence(["secret:aws/h/1", "sarif:x/h/2"]) })),
+    ).toBeNull()
+  })
 })
 
 describe("receipt-join — canonical-class branch", () => {

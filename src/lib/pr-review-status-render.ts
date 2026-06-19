@@ -1,4 +1,5 @@
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
+import { ALL_DISMISS_REASONS } from "./dismiss-reasons"
 
 export const REVIEW_STATUS_BLOCK_START = "<!-- sigilix:review-run-status:start -->"
 export const REVIEW_STATUS_BLOCK_END = "<!-- sigilix:review-run-status:end -->"
@@ -59,7 +60,44 @@ export interface ReviewStatusSnapshot {
   graphCoverage?: ReviewStatusGraphCoverage
   final?: ReviewStatusFinal
   proof?: ReviewStatusProof
+  /**
+   * SIG-471 PR-3: the editable-overview "Manage" footer. The Greptile-style
+   * minimal review BODY no longer carries the Dismiss/Re-run/Review#/SHA footer
+   * (the inline comments speak for themselves); it moves here, into the overview
+   * status block, rendered as the LAST line of the block (after Proof). Built by
+   * `formatManageLine` at the terminal status-reporter call site. Absent → no
+   * Manage line (pre-terminal phases, or when the review number isn't known).
+   */
+  manage?: string
   footerSeed?: string
+}
+
+// SIG-471 PR-3 (was SIG-306): the canonical dismiss reasons (minus the
+// `unlabeled` default), listed in the Manage line's dismiss hint so reviewers
+// SUPPLY a label — an unlabeled dismissal can't be classified hard-vs-soft on the
+// FP-rate ruler. Derived from `ALL_DISMISS_REASONS` so the nudge can never drift
+// from the parser's accepted set.
+const DISMISS_REASON_HINT = ALL_DISMISS_REASONS.filter((r) => r !== "unlabeled").join("` | `")
+
+/**
+ * SIG-471 PR-3: build the overview "Manage" footer line. ONE markdown-only line
+ * (no `<sub>`/HTML so it survives a GitHub-comment PATCH edit), carrying the
+ * dismiss hint, the re-run hint, the per-PR review counter, and the reviewed-at
+ * short SHA — the exact info the old `<sub>` body footer carried, relocated to the
+ * editable overview. Pure — exported for tests.
+ */
+export function formatManageLine(args: { reviewNumber?: number; shortSha?: string }): string {
+  const parts = [
+    `Dismiss \`@sigilix dismiss <reason>\` in thread (\`${DISMISS_REASON_HINT}\`)`,
+    "Re-run `/sigilix review`",
+  ]
+  if (typeof args.reviewNumber === "number" && args.reviewNumber > 0) {
+    parts.push(`Review #${args.reviewNumber}`)
+  }
+  if (args.shortSha) {
+    parts.push(`\`${args.shortSha}\``)
+  }
+  return `**Manage:** ${parts.join(" · ")}`
 }
 
 /**
@@ -114,6 +152,8 @@ export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
   if (snapshot.final) lines.push(`**Result:** ${finalSummary(snapshot.final)}`)
   const proofLine = formatProofLine(snapshot.proof)
   if (proofLine) lines.push(proofLine)
+  // SIG-471 PR-3: the Manage footer is the LAST line of the block, after Proof.
+  if (snapshot.manage) lines.push(snapshot.manage)
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)
   return lines.join("\n")
@@ -188,7 +228,7 @@ function stripMalformedStatusPreamble(tail: string): string {
 }
 
 function isStatusMetadataLine(trimmed: string): boolean {
-  return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result|Proof):\*\*/.test(
+  return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result|Proof|Manage):\*\*/.test(
     trimmed,
   )
 }

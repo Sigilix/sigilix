@@ -555,7 +555,7 @@ describe("parsePrReviewResponse — SIG-113 evidence citation fields", () => {
   })
 })
 
-describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () => {
+describe("renderRequestChangesBody — SIG-471 PR-3: footer relocated OUT of the body", () => {
   const verdict: PrReviewVerdict = {
     summary: "Has issues.",
     confidence: 3,
@@ -563,78 +563,26 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     findings: [{ ...baseFinding, score: 4, category: "logic" }],
   }
 
-  it("renders the re-run hint as part of the compact footer (always present, no retriggerUrl gate)", () => {
-    // SIG Kimi r1: the re-run hint moved from an optional `<sub>` line
-    // (gated on retriggerUrl) into the single `<sub>` footer that's
-    // always emitted. The Greptile-style `[🔄 Re-run review](URL)`
-    // button was dropped on founder feedback long before r1.
-    const body = renderRequestChangesBody({ verdict })
-    expect(body).toContain("Re-run: `/sigilix review`")
-    expect(body).not.toContain("[🔄 Re-run review]")
-    expect(body).not.toContain("🔄 Re-run review")
-  })
-
-  it("renders the Review #N counter in the compact footer when supplied", () => {
-    // SIG Kimi r1: the dedicated `_Sigilix · Review #N for this PR ·
-    // last rendered TS._` line collapsed into the single footer. The
-    // standalone timestamp was dropped — GitHub already shows the
-    // comment-creation timestamp at the top of the comment header.
+  it("the body no longer carries the <sub> Dismiss/Re-run footer (it moved to the overview Manage line)", () => {
+    // SIG-471 PR-3: the Dismiss/Re-run/Review#/SHA footer was removed from the
+    // (now minimal) review body and relocated to the editable Sigilix Overview
+    // status block's **Manage:** line (see pr-review-status-render.formatManageLine).
     const body = renderRequestChangesBody({
       verdict,
       reviewCounter: 3,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toContain("Review #3")
-    // Old "last rendered TIMESTAMP" line MUST be gone — dropped per
-    // founder complaint that the body had two timestamps for the
-    // same event.
+    expect(body).not.toContain("<sub>")
+    expect(body).not.toContain("@sigilix dismiss")
+    expect(body).not.toContain("Re-run")
+    expect(body).not.toContain("Review #3")
+    expect(body).not.toContain("`abc1234`")
     expect(body).not.toContain("last rendered")
-    expect(body).not.toMatch(/_Sigilix · Review #3/)
   })
 
-  it("renders dismiss + re-run + counter + SHA together in the single compact footer", () => {
-    // SIG Kimi r1: all four pieces of metadata that used to occupy
-    // separate lines now live in one `<sub>` block separated by `·`.
-    const body = renderRequestChangesBody({
-      verdict,
-      reviewCounter: 1,
-      prov: { headSha: "abc1234", nowMs: 1747547318000 },
-    })
-    expect(body).toMatch(
-      /<sub>Dismiss: `@sigilix dismiss <reason>` in thread \(not-a-bug\|bad-anchor\|already-covered\|too-minor\|wrong-context\) · Re-run: `\/sigilix review` · Review #1 · `abc1234`<\/sub>/,
-    )
-  })
-
-  it("omits the Review #N segment when reviewCounter is absent (other footer pieces still present)", () => {
-    // Re-run hint is now ALWAYS present (no retriggerUrl gate in r1)
-    // — only the Review #N counter is conditional.
-    const body = renderRequestChangesBody({ verdict })
-    expect(body).toContain("Re-run: `/sigilix review`")
-    expect(body).not.toContain("Review #")
-  })
-
-  it("orders Dismiss · Re-run · Review #N · SHA inside the compact footer (single line)", () => {
-    // The prior multi-line ordering invariant (hint above counter,
-    // counter above provenance) collapses into left-to-right order
-    // inside the single `<sub>` block.
-    const body = renderRequestChangesBody({
-      verdict,
-      reviewCounter: 7,
-      prov: { headSha: "deadbeef0000", nowMs: 1747547318000 },
-    })
-    const dismissIdx = body.indexOf("Dismiss:")
-    const rerunIdx = body.indexOf("Re-run:")
-    const counterIdx = body.indexOf("Review #7")
-    const shaIdx = body.indexOf("`deadbee`")
-    expect(dismissIdx).toBeGreaterThan(-1)
-    expect(rerunIdx).toBeGreaterThan(dismissIdx)
-    expect(counterIdx).toBeGreaterThan(rerunIdx)
-    expect(shaIdx).toBeGreaterThan(counterIdx)
-  })
-
-  it("ignores reviewCounter <= 0 (defensive — counter should always be >= 1)", () => {
-    const body = renderRequestChangesBody({ verdict, reviewCounter: 0 })
-    expect(body).not.toContain("Review #")
+  it("an all-inline REQUEST_CHANGES body is just the marker even when reviewCounter is supplied", () => {
+    const body = renderRequestChangesBody({ verdict, reviewCounter: 7 })
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 })
 

@@ -5,12 +5,7 @@
 // the paragraph in monospace.
 
 import { describe, it, expect } from "vitest"
-import {
-  wrapInlineHtmlTags,
-  buildReviewSubmission,
-  type PrReviewFinding,
-  type PrReviewVerdict,
-} from "@/src/lib/triage-pr-review"
+import { wrapInlineHtmlTags, buildReviewSubmission, type PrReviewFinding } from "@/src/lib/triage-pr-review"
 
 describe("wrapInlineHtmlTags", () => {
   it("returns the input unchanged when there are no angle brackets", () => {
@@ -71,33 +66,27 @@ describe("wrapInlineHtmlTags", () => {
 })
 
 describe("buildReviewSubmission applies wrapInlineHtmlTags to verdict prose", () => {
-  // ARC-281: APPROVE bodies no longer carry the model's summary
-  // (the renderer prints "No issues found." instead), so the
-  // body-side wrap assertion has to exercise the REQUEST_CHANGES
-  // path where the summary IS in the body. Every fixture here
-  // includes one dummy finding so the body lands in
-  // `renderRequestChangesBody` and the summary is rendered.
-  const dummyFinding: PrReviewFinding = {
+  // SIG-471 PR-3: the minimal body no longer carries the model's summary (it moved
+  // to the overview), so the body-side tag-wrap is exercised via a body-only
+  // finding's HEADLINE — the only prose the minimal dropdown renders.
+  const bodyOnlyTagFinding = (headline: string): PrReviewFinding => ({
     path: "src/dummy.ts",
     line: 1,
-    score: 2,
+    scope: "file",
+    score: 3,
     category: "style",
-    headline: "dummy",
+    headline,
     body: "dummy",
-  }
-  function makeVerdict(): PrReviewVerdict {
-    return {
-      summary:
-        "PR redesigns cmdk shortcuts with per-key <kbd> boxes plus in-input chord capture. Uses Next.js <Link> correctly.",
-      confidence: 5,
-      confidenceReason: "Clean.",
-      findings: [dummyFinding],
-    }
-  }
+  })
 
-  it("wraps un-backticked tags in the rendered body summary", () => {
+  it("wraps un-backticked tags in the rendered body-only finding row", () => {
     const submission = buildReviewSubmission({
-      verdict: makeVerdict(),
+      verdict: {
+        summary: "irrelevant — not rendered in the body anymore",
+        confidence: 5,
+        confidenceReason: "Clean.",
+        findings: [bodyOnlyTagFinding("Use per-key <kbd> boxes, not Next.js <Link>")],
+      },
       prAuthor: "daniel",
       headSha: "a".repeat(40),
     })
@@ -109,14 +98,13 @@ describe("buildReviewSubmission applies wrapInlineHtmlTags to verdict prose", ()
   })
 
   it("does not double-wrap tags the model already backticked", () => {
-    const verdict: PrReviewVerdict = {
-      summary: "PR uses `<Link>` from next/link.",
-      confidence: 5,
-      confidenceReason: "Clean.",
-      findings: [dummyFinding],
-    }
     const submission = buildReviewSubmission({
-      verdict,
+      verdict: {
+        summary: "irrelevant — not rendered in the body anymore",
+        confidence: 5,
+        confidenceReason: "Clean.",
+        findings: [bodyOnlyTagFinding("Uses `<Link>` from next/link")],
+      },
       prAuthor: "daniel",
       headSha: "a".repeat(40),
     })

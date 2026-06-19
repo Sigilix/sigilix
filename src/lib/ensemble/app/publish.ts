@@ -69,6 +69,7 @@ import { emitPhaseCompleted, type EnsembleRunCtx } from "@/src/lib/ensemble-perf
 import { withSubmissionAffordance, buildSuggestionEmissionLogEvents, type SubmissionAffordance } from "./affordances"
 import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta } from "./session"
 import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
+import { formatManageLine } from "@/src/lib/pr-review-status-render"
 
 // SIG-216: the inline-overview budget thresholds — the min remaining budget to
 // attempt the inline render, the max budget to spend on it, and the reserve held
@@ -639,9 +640,18 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     // dispatcher so the Sigilix Check Run title can render
     // "Approved — no issues found" vs "N findings posted".
     const inlineFindings = submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
+    // SIG-471 PR-3: the Dismiss/Re-run/Review#/SHA footer is no longer in the
+    // (minimal) review body — it moves to the editable overview status block. Build
+    // it here from the affordance's per-PR review counter (REQUEST_CHANGES only,
+    // undefined elsewhere) + the head SHA, and thread it onto the terminal status
+    // snapshot via `finalStatusUpdate` → `ReviewStatusSnapshot.manage`.
     return finalize(telemetry, env, "posted", cache, {
       event: submission.event,
       findingsCount: inlineFindings,
+      manage: formatManageLine({
+        ...(primaryAffordance.reviewCounter !== undefined ? { reviewNumber: primaryAffordance.reviewCounter } : {}),
+        shortSha: headSha.slice(0, 7),
+      }),
       ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
       ...deterministicCheckAnnotationMeta(),
       // SIG-144 (PR #339 review fix): in annotations-only mode inline

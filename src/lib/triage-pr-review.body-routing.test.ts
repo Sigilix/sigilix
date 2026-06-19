@@ -193,8 +193,10 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
       headSha: "abc",
     })
     expect(fallback.event).toBe("COMMENT")
+    // SIG-471 PR-3: the body-routed finding appears in the outside-the-diff
+    // dropdown by headline (the old `score 4` body-row meta is gone).
     expect(fallback.body).toContain("test coverage was removed")
-    expect(fallback.body).toContain("score 4")
+    expect(fallback.body).toContain("file-scope")
   })
 })
 
@@ -294,28 +296,20 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    // SIG-281 PR A: comment-scoped score-4 (P1) blocker → REQUEST_CHANGES
-    // (request_changes posture, so the lead reads "high-severity finding",
-    // not "non-blocking"), but still body-routed (no inline thread).
+    // SIG-281 PR A: comment-scoped score-4 (P1) blocker → REQUEST_CHANGES, but
+    // still body-routed (no inline thread).
     expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toMatch(/high-severity finding/)
-    expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-440: a body-only BLOCKER (score >= 4) is a Fix Plan list entry and
-    // its detail appears in the single non-inline dropdown.
-    expect(out.body).toContain(
-      "- **High (4)** · `src/lib/github-mention.ts:436` · `security` — dismiss command trusts the issue-comment author",
-    )
-    expect(out.body).toContain("couldn't be anchored to a line")
-    expect(out.body).not.toContain("### Review Body Findings")
-    // Kimi prominence: the location leads the row in BOLD; the score
-    // collapses into a trailing <sub>. (Was the `<anchor> · score N`
-    // meta line; the bracketed "Comment-level (high, score 4)" prefix
-    // stays gone — the P1 badge conveys severity.)
-    expect(out.body).toContain("**`src/lib/github-mention.ts:436`**:")
-    expect(out.body).toContain("score 4")
-    expect(out.body).not.toContain("Comment-level")
+    // SIG-471 PR-3: the body-only blocker appears as ONE row in the collapsed
+    // outside-the-diff dropdown — no lead count, no Fix Plan, no footer. The
+    // finding is NEVER dropped (recall-safety).
+    expect(out.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.body).toContain("| File | Scope | Finding |")
+    expect(out.body).toContain("file-scope")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
+    expect(out.body).not.toMatch(/high-severity finding/)
+    expect(out.body).not.toContain("Fix Plan")
+    expect(out.body).not.toContain("### Review Body Findings")
   })
 
   it("SIG-469: promotes a comment-scoped finding to INLINE when its line is RIGHT-reviewable (references a diff line)", () => {
@@ -384,32 +378,19 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    // SIG-281 PR A: file-scoped score-5 (P0) blocker → REQUEST_CHANGES
-    // (request_changes posture → "high-severity finding", not "non-blocking"),
-    // still body-routed (no inline thread).
+    // SIG-281 PR A: file-scoped score-5 (P0) blocker → REQUEST_CHANGES, still
+    // body-routed (no inline thread).
     expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toMatch(/high-severity finding/)
-    expect(out.body).not.toMatch(/non-blocking/)
-    // SIG-440: file-scoped score-5 blocker → Fix Plan list entry +
-    // single non-inline dropdown, not the "Review Body Findings"
-    // section. Per Kimi Q3 the list location for a file-level
-    // finding is the bare path (no `:line`).
-    expect(out.body).toContain(
-      "- **Critical (5)** · `src/lib/github-mention.ts` · `security` — module-level lifecycle ordering is unsafe",
-    )
-    expect(out.body).toContain("couldn't be anchored to a line")
-    expect(out.body).not.toContain("### Review Body Findings")
-    // SIG-216: file-scope anchor is the bare path (no `:line`) and
-    // the meta line is just `<anchor> · score N` — no "File-level
-    // (critical, ...)" bracketed prefix. Asserting on the legacy
-    // `(critical, score 5)` parenthetical specifically (the verdict
-    // summary still contains the word "File-level" for unrelated
-    // reasons).
-    expect(out.body).toContain("**`src/lib/github-mention.ts`**:")
-    expect(out.body).toContain("score 5")
-    expect(out.body).not.toContain("(critical, score 5)")
+    // SIG-471 PR-3: file-scoped blocker → ONE row in the collapsed
+    // outside-the-diff dropdown (scope `file-scope`). The bare-path File cell is
+    // the clickable anchor; no Fix Plan, no lead count, no footer.
+    expect(out.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.body).toContain("file-scope")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
+    expect(out.body).not.toMatch(/high-severity finding/)
+    expect(out.body).not.toContain("Fix Plan")
+    expect(out.body).not.toContain("### Review Body Findings")
   })
 
   it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
@@ -438,11 +419,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
-    expect(out.body).toContain("- **High (4)** ·")
-    expect(out.body).toContain(
-      "- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl constant should stay localized",
-    )
-    expect(out.body).not.toContain("### Review Body Findings")
+    // SIG-471 PR-3: the finding posts inline, so the body is marker-only.
+    expect(out.body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
   it("keeps delete-intent non-line findings inline so the deletion suggestion is not dropped", () => {
@@ -472,11 +450,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
-    expect(out.body).toContain("- **High (4)** ·")
-    expect(out.body).toContain(
-      "- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl constant should be removed",
-    )
-    expect(out.body).not.toContain("### Review Body Findings")
+    // SIG-471 PR-3: the finding posts inline, so the body is marker-only.
+    expect(out.body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
   it("SIG-281 PR B (Rec 6): surfaces body-only high findings IN the Fix Plan (inline + body-only blockers both listed)", () => {
@@ -501,21 +476,14 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     })
 
     expect(out.comments).toHaveLength(1)
-    expect(out.body).toContain("- **High (4)** ·")
-    // Inline blocker → Fix Plan entry (unchanged).
-    expect(out.body).toContain("- **High (4)** · `src/lib/github-mention.ts:436` · `logic` — ttl is too short")
-    // SIG-281 PR B (Rec 6): the body-only blocker now ALSO appears as a
-    // Fix Plan entry — surfacing it is the whole point. Previously it was
-    // suppressed from the table, leaving a real blocker buried below.
-    expect(out.body).toContain(
-      "- **High (4)** · `src/lib/github-mention.ts:436` · `security` — dismiss command trusts the issue-comment author",
-    )
-    // ...and its full evidence lives in the single non-inline dropdown,
-    // with the tightened `<anchor> · score N` meta (no "Comment-level" prefix).
-    expect(out.body).toContain("couldn't be anchored to a line")
-    expect(out.body).toContain("**`src/lib/github-mention.ts:436`**:")
-    expect(out.body).toContain("score 4")
-    expect(out.body).not.toContain("Comment-level")
+    // SIG-471 PR-3: the inline blocker posts as an inline comment (NOT echoed in
+    // the body). The body-only blocker appears as ONE row in the collapsed
+    // outside-the-diff dropdown — surfaced, never dropped.
+    expect(out.body).not.toContain("ttl is too short") // inline → not in body
+    expect(out.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.body).toContain("file-scope")
+    expect(out.body).toContain("dismiss command trusts the issue-comment author")
+    expect(out.body).not.toContain("Fix Plan")
   })
 })
 
@@ -631,7 +599,11 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     })
     expect(out.submission.comments).toHaveLength(50)
     expect(out.bodyOnlyFindings).toHaveLength(2) // 52 - 50, never dropped
-    expect(out.submission.body).toContain("inline comment cap exceeded; shown here")
+    // SIG-471 PR-3: the 2 overflow findings appear in the outside-the-diff
+    // dropdown (never dropped). The minimal dropdown no longer echoes the
+    // "inline comment cap exceeded" anchorNote — the headline rows are the signal.
+    expect(out.submission.body).toContain("<summary><b>2 findings outside the diff</b></summary>")
+    expect(out.bodyOnlyFindings.map((f) => f.headline).every((h) => out.submission.body!.includes(h))).toBe(true)
   })
 
   it("Rec 3: at the backstop, prioritizes higher-severity findings to keep inline; the lowest-severity blocker overflows", () => {
@@ -689,39 +661,35 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
   const submit = (findings: PrReviewFinding[]) =>
     buildReviewSubmission({ verdict: mkVerdict(findings), prAuthor: "a", headSha: "abc" })
 
-  it("a body-only blocker renders in the Fix Plan list + single dropdown detail, NOT Review Body Findings", () => {
+  it("SIG-471 PR-3: a body-only blocker renders as ONE row in the collapsed outside-the-diff dropdown", () => {
     const out = submit([lf({ scope: "file", score: 5, headline: "file blocker" })])
-    expect(out.body).toContain("- **Critical (5)** · `src/lib/foo.ts` · `logic` — file blocker")
-    expect(out.body).toContain("couldn't be anchored to a line")
+    expect(out.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
+    expect(out.body).toContain("file-scope")
     expect(out.body).toContain("file blocker")
+    expect(out.body).not.toContain("Fix Plan")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
-  it("a body-only NON-blocker (score < 4) stays visible in the single non-inline dropdown", () => {
+  it("SIG-471 PR-3: a body-only NON-blocker (score < 4) is still visible in the dropdown (never dropped)", () => {
     const out = submit([lf({ scope: "file", score: 3, headline: "file nit" })])
-    expect(out.body).not.toContain("### Review Body Findings")
-    expect(out.body).toContain("couldn't be anchored to a line")
+    expect(out.body).toContain("<summary><b>1 finding outside the diff</b></summary>")
     expect(out.body).toContain("file nit")
-    expect(out.body).not.toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).not.toContain("### Review Body Findings")
   })
 
-  it("Kimi Q3: a file-level blocker's Fix Plan location is the bare path (no `:line`)", () => {
+  it("SIG-471 PR-3: a file-level finding's File cell is the bare path (no `:line`)", () => {
     const out = submit([lf({ scope: "file", score: 5, path: "src/lib/foo.ts", line: 42, headline: "x" })])
-    expect(out.body).toMatch(/- \*\*Critical \(5\)\*\* · `src\/lib\/foo\.ts` · `logic` — x/)
+    expect(out.body).toContain("`src/lib/foo.ts`")
     expect(out.body).not.toContain("`src/lib/foo.ts:42`")
   })
 
-  it("the Fix Plan caption appears only when the list contains body-only (non-inline) blockers", () => {
-    const withBodyOnlyBlocker = submit([lf({ scope: "file", score: 5 })])
-    expect(withBodyOnlyBlocker.body).toContain("Entries without a line number are file-level or PR-level")
+  it("SIG-471 PR-3: an inline-only review is marker-only (no Fix Plan, no caption)", () => {
     const inlineOnly = submit([lf({ score: 5, line: 42 })])
-    expect(inlineOnly.body).toContain(
-      "- **Critical (5)** · `src/lib/foo.ts:42` · `logic` — missing null guard on `user.profile`",
-    )
-    expect(inlineOnly.body).not.toContain("Entries without a line number are file-level or PR-level")
+    expect(inlineOnly.body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(inlineOnly.body).not.toContain("Fix Plan")
   })
 
-  it("mixed: inline blocker + body-only blocker + body-only nit land in their three distinct surfaces", () => {
+  it("SIG-471 PR-3: mixed — inline blocker posts inline; both body-only findings land in the ONE dropdown", () => {
     const out = buildReviewSubmissionWithMetadata({
       verdict: mkVerdict([
         lf({ score: 5, line: 42, headline: "inline blocker" }),
@@ -732,13 +700,13 @@ describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (K
       headSha: "abc",
     })
     const body = out.submission.body
-    expect(out.submission.comments).toHaveLength(1) // inline blocker
-    expect(body).toContain("inline blocker") // Fix Plan row
-    expect(body).toContain("body-only blocker") // Fix Plan row + dropdown detail
-    expect(body).toContain("couldn't be anchored to a line")
-    expect(body).not.toContain("### Review Body Findings")
-    expect(body).toContain("couldn't be anchored to a line")
+    expect(out.submission.comments).toHaveLength(1) // inline blocker posts inline
+    expect(body).not.toContain("inline blocker") // not echoed in the body
+    expect(body).toContain("<summary><b>2 findings outside the diff</b></summary>")
+    expect(body).toContain("body-only blocker")
     expect(body).toContain("body-only nit")
+    expect(body).not.toContain("Fix Plan")
+    expect(body).not.toContain("### Review Body Findings")
   })
 })
 
@@ -833,35 +801,21 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     expect(body).not.toContain("](https://github.com/")
   })
 
-  it("leads with the bold location + trails score in <sub>, no bracketed severity (line scope)", () => {
+  it("SIG-471 PR-3: a line-scope body-only finding renders as a table row with the headline (no <sub> score)", () => {
     const body = buildBody(lineFinding)
-    expect(body).toContain("**`src/lib/foo.ts:42`**:")
-    expect(body).toContain("score 3")
-    expect(body).not.toContain("(medium, score 3)")
-    expect(body).not.toContain("Line 42")
-    expect(body).not.toContain("Comment-level")
+    expect(body).toContain("| File | Scope | Finding |")
+    expect(body).toContain("`src/lib/foo.ts:42`")
+    expect(body).toContain("missing null guard")
+    // The old `**location**:` + `<sub>score N</sub>` row format is gone.
+    expect(body).not.toContain("**`src/lib/foo.ts:42`**:")
+    expect(body).not.toContain("<sub>score 3")
   })
 
-  it("leads with the bold path for pr-scope (no `:line`)", () => {
+  it("SIG-471 PR-3: a pr-scope body-only finding's File cell is the bare path", () => {
     const body = buildBody(prFinding)
-    expect(body).toContain("**`src/lib/foo.ts`**:")
-    expect(body).toContain("score 3")
-    // SIG-281 PR B: the body-only explanation copy now legitimately
-    // contains the phrase "PR-level scope", so guard against the OLD
-    // per-finding "PR-level (severity, score N)" location LABEL format
-    // specifically, not the bare substring.
-    expect(body).not.toContain("PR-level (")
-  })
-
-  it("renders the row as `**<location>**: **<headline>** … <sub>score N</sub>` (Kimi prominence)", () => {
-    const body = buildBody(lineFinding)
-    // bold location LEADS the row, immediately followed by the bold headline,
-    // and the score collapses into a trailing <sub>.
-    expect(body).toMatch(/\*\*`src\/lib\/foo\.ts:42`\*\*: \*\*/)
-    expect(body).toContain("<sub>score 3")
-    // Guard against accidental bullet/asterisk separators in the score meta.
-    expect(body).not.toContain(" • score") // • bullet
-    expect(body).not.toContain(" * score")
+    expect(body).toContain("`src/lib/foo.ts`")
+    expect(body).toContain("PR-wide policy gap")
+    expect(body).not.toContain("**`src/lib/foo.ts`**:")
   })
 })
 

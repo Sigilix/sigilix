@@ -4,6 +4,7 @@ import {
   REVIEW_STATUS_BLOCK_START,
   buildReviewStatusBlock,
   upsertReviewStatusBlock,
+  formatManageLine,
 } from "@/src/lib/pr-review-status-render"
 import { PR_OVERVIEW_WAITING_ARTS, renderPrOverviewWaitingArt } from "@/src/lib/pr-overview-waiting-art"
 import { OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
@@ -262,5 +263,85 @@ describe("review status renderer", () => {
     expect(updated).toContain("**Phase:** Retrieval")
     expect(updated).toContain("plain comment")
     expect(updated.indexOf(REVIEW_STATUS_BLOCK_START)).toBeLessThan(updated.indexOf("plain comment"))
+  })
+})
+
+// ─── SIG-471 PR-3: the relocated Manage footer ────────────────────────
+
+describe("formatManageLine (SIG-471 PR-3)", () => {
+  it("builds the markdown-only Manage line with dismiss reasons, re-run, review#, and SHA", () => {
+    const line = formatManageLine({ reviewNumber: 3, shortSha: "abcdef1" })
+    expect(line).toBe(
+      "**Manage:** Dismiss `@sigilix dismiss <reason>` in thread " +
+        "(`not-a-bug` | `bad-anchor` | `already-covered` | `too-minor` | `wrong-context`) · " +
+        "Re-run `/sigilix review` · Review #3 · `abcdef1`",
+    )
+    // PATCH-survivable: no <sub>/HTML chrome. (`<reason>` is literal text inside
+    // backticks — GitHub renders it verbatim, not as a tag.)
+    expect(line).not.toContain("<sub>")
+    expect(line).toContain("`@sigilix dismiss <reason>`")
+  })
+
+  it("omits Review #N when the review number is absent or zero (APPROVE has no counter)", () => {
+    expect(formatManageLine({ shortSha: "abcdef1" })).not.toContain("Review #")
+    expect(formatManageLine({ reviewNumber: 0, shortSha: "abcdef1" })).not.toContain("Review #")
+  })
+
+  it("omits the SHA segment when no short SHA is supplied", () => {
+    const line = formatManageLine({ reviewNumber: 2 })
+    expect(line).toContain("Review #2")
+    expect(line).not.toContain("`abcdef1`")
+  })
+})
+
+describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
+  it("renders the Manage line as the LAST content line, after Proof", () => {
+    const manage = formatManageLine({ reviewNumber: 4, shortSha: "abcdef1" })
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 9,
+      final: { status: "posted", findingsCount: 2 },
+      proof: { verified: 0, grounded: 2, model: 0 },
+      manage,
+    })
+    expect(block).toContain(manage)
+    // Manage comes AFTER Proof.
+    expect(block.indexOf("**Proof:**")).toBeLessThan(block.indexOf("**Manage:**"))
+    // And it is the last content line before the END marker.
+    const lines = block.split("\n").filter((l) => l.trim().length > 0)
+    expect(lines[lines.length - 1]).toBe(REVIEW_STATUS_BLOCK_END)
+    expect(lines[lines.length - 2]).toBe(manage)
+  })
+
+  it("omits the Manage line entirely when the snapshot carries none", () => {
+    const block = buildReviewStatusBlock({
+      phase: "synth",
+      headSha: HEAD_SHA,
+      sequence: 3,
+    })
+    expect(block).not.toContain("**Manage:**")
+  })
+
+  it("survives an upsert round-trip: the Manage line is recognized as status metadata, not stray content", () => {
+    const manage = formatManageLine({ reviewNumber: 1, shortSha: "abcdef1" })
+    const first = upsertReviewStatusBlock("plain comment", {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 1,
+      final: { status: "posted", findingsCount: 1 },
+      manage,
+    })
+    expect(first).toContain("**Manage:**")
+    // A second upsert (a later phase with no Manage) must not duplicate or
+    // strand the prior Manage line as orphaned body content.
+    const second = upsertReviewStatusBlock(first, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 2,
+      final: { status: "posted", findingsCount: 1 },
+    })
+    expect(second.match(/\*\*Manage:\*\*/g) ?? []).toHaveLength(0)
+    expect(second).toContain("plain comment")
   })
 })

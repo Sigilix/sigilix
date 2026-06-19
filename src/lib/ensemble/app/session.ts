@@ -84,6 +84,13 @@ export interface ReviewMeta {
    *  Flows verbatim into `ReviewCheckMeta.runnerEvidence` (index.ts
    *  spreads this object) so the check-run summary renders the pill. */
   runnerEvidence?: "verified" | "evidence-pending"
+  /** SIG-471 PR-3: the pre-formatted overview "Manage" footer line (dismiss/re-run
+   *  hint + Review #N + short SHA). The minimal review BODY no longer carries this
+   *  footer; it moves to the editable overview status block. Built on the posted
+   *  path from the submission affordance's `reviewCounter` + the head SHA, threaded
+   *  through `finalStatusUpdate` onto the terminal `ReviewStatusSnapshot.manage`.
+   *  Omitted → no Manage line (the overview footer is simply absent). */
+  manage?: string
 }
 
 export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }

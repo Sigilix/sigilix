@@ -13,6 +13,7 @@
 // triage-pr-review → render` cycle.
 import type { PrReviewFinding, FindingTrust } from "@/src/shared/domain/pr-review-finding"
 import type { ReviewBadgeAssetName } from "./badge-assets"
+import { badgeImg } from "./badge-img"
 
 /** Inject the ensemble's `badgeImg` so this module needs no value import from
  *  triage-pr-review (avoids a cycle) + stays unit-testable with a stub. */
@@ -51,6 +52,17 @@ function trustWord(trust: FindingTrust | undefined): "VERIFIED" | "GROUNDED" | "
 /** Per-finding trust pill (inline glyph) — append after the category glyph. */
 export function trustPill(trust: FindingTrust | undefined, badgeImg: BadgeImg): string {
   return badgeImg(trustGlyphName(trust))
+}
+
+/**
+ * SIG-473: render a trust pill from a bare tier, using the SAME `badgeImg`
+ * emitter the inline-comment renderer composes. This is the single source the
+ * `overview-proof-update` job uses to compute both the GROUNDED `oldPill` and the
+ * VERIFIED `newPill` for the in-place comment-body swap — rendering it any other
+ * way would risk byte drift against what was originally posted.
+ */
+export function renderTrustPill(tier: FindingTrust["tier"]): string {
+  return trustPill({ tier }, badgeImg)
 }
 
 /** Per-finding trust suffix for a body row's `<sub>` line. */

@@ -34,6 +34,9 @@ import {
   type ReceiptScanResult,
 } from "@/src/lib/verification/verify-finding-receipt"
 import { findExistingOverviewComment } from "@/src/lib/triage-pr-overview-scan"
+import { parseFindingFingerprint, FINDING_BLOCK_MARKER } from "@/src/lib/pr-finding-markers"
+import { renderTrustPill } from "@/src/lib/trust-ledger-render"
+import type { FindingTrust } from "@/src/shared/domain/pr-review-finding"
 import {
   computeProofCounts,
   patchProofLineInStatusBlock,
@@ -227,6 +230,56 @@ async function patchOverviewProof(
 }
 
 /**
+ * SIG-473: flip the inline review-comment trust pill GROUNDED→VERIFIED in place
+ * for each confirmed finding that carries a stored `inlineCommentId`. Runs AFTER
+ * (and never blocks) the primary overview proof-line patch. Per-finding
+ * best-effort: fetch the comment, REVALIDATE it's still our finding comment with
+ * the SAME fingerprint (skip on edited/deleted/mismatch), then PATCH the body
+ * with the grounded pill replaced by the runner-verified pill. Idempotent: if the
+ * grounded pill isn't present (already upgraded / drift) we skip. Bounded — only
+ * the confirmed (`verifiedKeys`) findings that have an id.
+ */
+async function patchInlinePills(
+  client: GitHubClient,
+  args: { owner: string; repo: string; prNumber: number },
+  findings: ReadonlyArray<ReviewManifestFinding>,
+  verifiedKeys: ReadonlySet<string>,
+): Promise<void> {
+  const newPill = renderTrustPill("runner-confirmed")
+  for (const f of findings) {
+    if (!verifiedKeys.has(f.key)) continue
+    if (typeof f.inlineCommentId !== "number" || typeof f.contentFingerprint !== "string") continue
+    try {
+      const comment = await client.getPullRequestReviewComment(args.owner, args.repo, f.inlineCommentId)
+      if (comment === null) continue // deleted
+      // REVALIDATE: still our finding comment, same fingerprint (not edited/recycled).
+      if (!comment.body.includes(FINDING_BLOCK_MARKER)) continue
+      if (parseFindingFingerprint(comment.body) !== f.contentFingerprint) continue
+      // The pre-receipt pill rendered from the finding's post-time trust tier.
+      const oldPill = renderTrustPill(f.trustTier as FindingTrust["tier"])
+      if (oldPill === newPill) continue // already runner-confirmed at post time
+      if (!comment.body.includes(oldPill)) continue // already upgraded / drift → idempotent skip
+      const next = comment.body.replace(oldPill, newPill) // single replace
+      await client.updatePullRequestReviewComment(args.owner, args.repo, f.inlineCommentId, next)
+      emit("overview-proof-update-inline-pill-patched", {
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        commentId: f.inlineCommentId,
+      })
+    } catch (err) {
+      emit("overview-proof-update-inline-pill-failed", {
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        commentId: f.inlineCommentId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+}
+
+/**
  * Resolve the immutable repository id for the receipt join key, preferring the
  * message-carried `repoId` and falling back to a `getRepository` lookup (legacy
  * ingest paths omit it). Returns null when neither resolves (→ caller skips, not
@@ -363,6 +416,10 @@ export async function handleOverviewProofUpdate(
       return
     }
     emit("overview-proof-update-applied", { owner, repo, prNumber, outcome, ...proof })
+    // SIG-473: AFTER the (primary, unconditional) overview proof-line patch, flip the
+    // inline review-comment pills GROUNDED→VERIFIED for the confirmed findings. Wholly
+    // best-effort + bounded — failures here never block or delay the overview patch above.
+    await patchInlinePills(client, { owner, repo, prNumber }, findings, verifiedKeys)
   } catch (err) {
     // Best-effort: never throw out of the consumer.
     emit("overview-proof-update-error", {

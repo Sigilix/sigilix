@@ -3,7 +3,7 @@
 // behaviour.
 
 import { describe, expect, it } from "vitest"
-import { trustPill, trustSubTag, renderTrustSummary } from "@/src/lib/trust-ledger-render"
+import { trustPill, trustSubTag, renderTrustSummary, renderTrustPill } from "@/src/lib/trust-ledger-render"
 import type { FindingTrust } from "@/src/lib/triage-pr-review"
 import type { ReviewBadgeAssetName } from "@/src/lib/badge-assets"
 
@@ -28,6 +28,19 @@ describe("trustPill / trustSubTag — tier → pill (honest wording)", () => {
     expect(trustPill(t("body-only-ungrounded").trust, badge)).toBe("<trust-model>")
     expect(trustPill(undefined, badge)).toBe("<trust-model>")
     expect(trustSubTag(undefined)).toBe(" · MODEL")
+  })
+})
+
+describe("renderTrustPill (SIG-473 — single source for the inline-pill PATCH)", () => {
+  it("renders the VERIFIED runner pill <img> for runner-confirmed and the GROUNDED <img> for grounded-model (old≠new)", () => {
+    const verified = renderTrustPill("runner-confirmed")
+    const grounded = renderTrustPill("grounded-model")
+    // Real `badgeImg` markup (NOT the stub) — the exact bytes the comment carries.
+    expect(verified).toContain('alt="VERIFIED"')
+    expect(verified).toContain("<img")
+    expect(grounded).toContain('alt="GROUNDED"')
+    // The swap is meaningful only if the two pills differ.
+    expect(verified).not.toBe(grounded)
   })
 })
 

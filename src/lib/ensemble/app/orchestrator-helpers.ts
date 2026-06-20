@@ -24,7 +24,6 @@ import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
 import { postReviewSkipNotice, type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
-import { skippedStatusUpdate } from "@/src/lib/pr-review-status-phases"
 import type { IncrementalReviewPathSelection } from "@/src/lib/ensemble/domain/incremental-coverage"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import {
@@ -264,7 +263,6 @@ export async function maybeEmptyDeltaSkip(
   telemetry: EnsembleTelemetry,
   env: Env,
   cache: ReturnType<typeof createRetrievalCache> | null,
-  statusReporter: EnsembleHandlerArgs["statusReporter"],
 ): Promise<EnsembleResult | null> {
   if (incrementalCoverage?.mode !== "on" || incrementalCoverage.selection.pathsToReview.length !== 0) {
     return null
@@ -282,6 +280,9 @@ export async function maybeEmptyDeltaSkip(
       skipped_unchanged_count: incrementalCoverage.selection.skippedUnchangedPaths.length,
     }),
   )
-  statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
+  // SIG-475: do NOT report a "Skipped" status here. The empty-delta skip posts no
+  // review and the PRIOR review's overview footer (real finding count + Manage
+  // commands) must remain — a "Skipped · 0 findings" terminal would clobber it and
+  // mislead (the prior findings are still live + blocking).
   return finalize(telemetry, env, "skipped", cache)
 }

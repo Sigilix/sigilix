@@ -7,6 +7,8 @@ import {
   extractReviewStatusBlock,
   graftReviewStatusBlock,
   formatManageLine,
+  formatProofLine,
+  computeProofCounts,
 } from "@/src/lib/pr-review-status-render"
 import { formatOverviewComment } from "@/src/lib/triage-pr-overview-format"
 import type { PrOverviewVerdict } from "@/src/lib/triage-pr-overview"
@@ -59,7 +61,7 @@ describe("review status renderer", () => {
     }
   })
 
-  it("renders dropped files, graph coverage, degraded roles, and final review link without post-review ASCII", () => {
+  it("renders the compact terminal footer for a final review: headline + View-review link, dropping the in-progress detail", () => {
     const block = buildReviewStatusBlock({
       phase: "degraded",
       headSha: HEAD_SHA,
@@ -87,21 +89,34 @@ describe("review status renderer", () => {
       footerSeed: "Sigilix/sigilix#7@abcdef1",
     })
 
-    expect(block).toContain("**Phase:** Degraded")
-    expect(block).toContain("3/4")
-    expect(block).toContain("performance")
-    expect(block).toContain("dist/bundle.js")
-    expect(block).toContain("pnpm-lock.yaml")
-    expect(block).toContain("5/8 files")
-    expect(block).toContain("19 nodes")
-    expect(block).toContain("[View review](https://github.com/Sigilix/sigilix/pull/7#pullrequestreview-123)")
-    expect(block).toContain("2 findings")
+    // Terminal footer: a thin rule + one muted `> <sub>` headline carrying the
+    // bold phase label, the short sha, and the finding count joined to the
+    // View-review link by ` · `. No `**Phase:**`/`**Commit:**`/`**Result:**`
+    // labels, no `surface:` text.
+    expect(block).toContain("---")
+    expect(block).toContain(
+      "> <sub>**Degraded** · `abcdef1` · 2 findings — [View review](https://github.com/Sigilix/sigilix/pull/7#pullrequestreview-123)</sub>",
+    )
+    expect(block).not.toContain("**Phase:**")
+    expect(block).not.toContain("**Commit:**")
+    expect(block).not.toContain("**Result:**")
+    expect(block).not.toContain("surface:")
+    // The terminal footer drops the in-progress detail by design (specialists /
+    // dropped files / graph coverage live only in the live status block).
+    expect(block).not.toContain("dist/bundle.js")
+    expect(block).not.toContain("pnpm-lock.yaml")
+    expect(block).not.toContain("5/8 files")
+    expect(block).not.toContain("19 nodes")
+    expect(block).not.toContain("3/4")
     expect(block).not.toContain("```text")
   })
 
-  it("renders specialists that were not needed", () => {
+  it("renders specialists that were not needed (in-progress block, before the terminal footer compacts it away)", () => {
+    // The "Not needed" list lives in the detailed IN-PROGRESS block; the
+    // terminal footer (final set) intentionally drops it, so cover the listing
+    // with a pre-terminal snapshot (no `final`).
     const block = buildReviewStatusBlock({
-      phase: "skipped",
+      phase: "specialists",
       headSha: HEAD_SHA,
       sequence: 4,
       specialists: {
@@ -109,10 +124,9 @@ describe("review status renderer", () => {
         completed: 0,
         notNeeded: ["logic", "security", "performance", "tests"],
       },
-      final: { status: "skipped", findingsCount: 0 },
     })
 
-    expect(block).toContain("**Phase:** Skipped")
+    expect(block).toContain("**Phase:** Specialists")
     expect(block).toContain("**Not needed:** logic, security, performance, tests")
   })
 
@@ -191,9 +205,13 @@ describe("review status renderer", () => {
     expect(updated).not.toContain("### Sigilix Review Status")
     expect(updated).not.toContain("```text")
     expect(updated).not.toContain("launch window open")
-    expect(updated).toContain("**Phase:** Posted")
+    // The replacement renders the new compact terminal footer (no `**Phase:**`/
+    // `**Result:**` labels) — phase + sha + finding count + View-review in the
+    // muted `> <sub>` headline.
+    expect(updated).not.toContain("**Phase:**")
+    expect(updated).not.toContain("**Result:**")
     expect(updated).toContain(
-      "**Result:** Posted - 6 findings - [View review](https://github.com/Sigilix/sigilix/pull/540)",
+      "> <sub>**Posted** · `abcdef1` · 6 findings — [View review](https://github.com/Sigilix/sigilix/pull/540)</sub>",
     )
     expect(updated.indexOf("Keep this summary.")).toBeLessThan(updated.indexOf(REVIEW_STATUS_BLOCK_START))
   })
@@ -273,15 +291,21 @@ describe("review status renderer", () => {
 // ─── SIG-471 PR-3: the relocated Manage footer ────────────────────────
 
 describe("formatManageLine (SIG-471 PR-3)", () => {
-  it("builds the markdown-only Manage line with dismiss reasons, re-run, review#, and SHA", () => {
+  it("builds the compact Manage affordance text with dismiss reasons, re-run, and review#", () => {
     const line = formatManageLine({ reviewNumber: 3, shortSha: "abcdef1" })
+    // Compact de-emphasized affordance text: no bold `**Manage:**` prefix and no
+    // trailing sha (the sha is shown once in the headline). `shortSha` is still
+    // accepted for back-compat but is NOT rendered.
     expect(line).toBe(
-      "**Manage:** Dismiss `@sigilix dismiss <reason>` in thread " +
+      "Dismiss `@sigilix dismiss <reason>` " +
         "(`not-a-bug` | `bad-anchor` | `already-covered` | `too-minor` | `wrong-context`) · " +
-        "Re-run `/sigilix review` · Review #3 · `abcdef1`",
+        "Re-run `/sigilix review` · Review #3",
     )
-    // PATCH-survivable: no <sub>/HTML chrome. (`<reason>` is literal text inside
-    // backticks — GitHub renders it verbatim, not as a tag.)
+    expect(line).not.toContain("**Manage:**")
+    expect(line).not.toContain("`abcdef1`") // sha is NOT rendered here
+    // formatManageLine's OWN output carries no `<sub>` chrome — the `<sub>`
+    // wrapping happens in buildReviewStatusBlock, not here. (`<reason>` is literal
+    // text inside backticks — GitHub renders it verbatim, not as a tag.)
     expect(line).not.toContain("<sub>")
     expect(line).toContain("`@sigilix dismiss <reason>`")
   })
@@ -291,15 +315,17 @@ describe("formatManageLine (SIG-471 PR-3)", () => {
     expect(formatManageLine({ reviewNumber: 0, shortSha: "abcdef1" })).not.toContain("Review #")
   })
 
-  it("omits the SHA segment when no short SHA is supplied", () => {
-    const line = formatManageLine({ reviewNumber: 2 })
+  it("never renders the SHA segment (shortSha is accepted but unused)", () => {
+    const line = formatManageLine({ reviewNumber: 2, shortSha: "abcdef1" })
     expect(line).toContain("Review #2")
     expect(line).not.toContain("`abcdef1`")
+    // And without a shortSha at all it's identical (the arg is inert).
+    expect(formatManageLine({ reviewNumber: 2 })).toBe(line)
   })
 })
 
 describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
-  it("renders the Manage line as the LAST content line, after Proof", () => {
+  it("renders the Manage line as the LAST `<sub>` content line, after Proof", () => {
     const manage = formatManageLine({ reviewNumber: 4, shortSha: "abcdef1" })
     const block = buildReviewStatusBlock({
       phase: "posted",
@@ -309,13 +335,17 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
       proof: { verified: 0, grounded: 2, model: 0 },
       manage,
     })
-    expect(block).toContain(manage)
-    // Manage comes AFTER Proof.
-    expect(block.indexOf("**Proof:**")).toBeLessThan(block.indexOf("**Manage:**"))
+    // The block wraps the affordance text in a muted `> <sub>…</sub>` line — the
+    // bare affordance text is still a substring, but there's no `**Manage:**`.
+    expect(block).toContain(`> <sub>${manage}</sub>`)
+    expect(block).toContain("Re-run `/sigilix review`")
+    expect(block).not.toContain("**Manage:**")
+    // Manage comes AFTER the Proof `<sub>` line.
+    expect(block.indexOf("**Proof:**")).toBeLessThan(block.indexOf(manage))
     // And it is the last content line before the END marker.
     const lines = block.split("\n").filter((l) => l.trim().length > 0)
     expect(lines[lines.length - 1]).toBe(REVIEW_STATUS_BLOCK_END)
-    expect(lines[lines.length - 2]).toBe(manage)
+    expect(lines[lines.length - 2]).toBe(`> <sub>${manage}</sub>`)
   })
 
   it("omits the Manage line entirely when the snapshot carries none", () => {
@@ -324,7 +354,8 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
       headSha: HEAD_SHA,
       sequence: 3,
     })
-    expect(block).not.toContain("**Manage:**")
+    expect(block).not.toContain("Re-run `/sigilix review`")
+    expect(block).not.toContain("`@sigilix dismiss <reason>`")
   })
 
   it("survives an upsert round-trip: the Manage line is recognized as status metadata, not stray content", () => {
@@ -336,7 +367,9 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
       final: { status: "posted", findingsCount: 1 },
       manage,
     })
-    expect(first).toContain("**Manage:**")
+    expect(first).toContain(`> <sub>${manage}</sub>`)
+    // Exactly one manage line in the round-tripped body.
+    expect(first.split("\n").filter((l) => l.includes("Re-run `/sigilix review`"))).toHaveLength(1)
     // A second upsert (a later phase with no Manage) must not duplicate or
     // strand the prior Manage line as orphaned body content.
     const second = upsertReviewStatusBlock(first, {
@@ -345,8 +378,86 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
       sequence: 2,
       final: { status: "posted", findingsCount: 1 },
     })
-    expect(second.match(/\*\*Manage:\*\*/g) ?? []).toHaveLength(0)
+    expect(second).not.toContain("Re-run `/sigilix review`")
     expect(second).toContain("plain comment")
+  })
+})
+
+// ─── SIG-471: computeProofCounts (moved here from overview-proof-update) ───────
+
+describe("computeProofCounts (SIG-471)", () => {
+  const f = (key: string, trustTier?: string): { key: string; trustTier?: string } =>
+    trustTier === undefined ? { key } : { key, trustTier }
+
+  it("buckets grounded tiers as grounded and body-only/missing/unknown as model", () => {
+    const findings = [
+      f("a", "grounded-model"),
+      f("b", "deterministic-grounded"),
+      f("c", "worker-token-confirmed"),
+      f("d", "runner-confirmed"),
+      f("e", "body-only-ungrounded"),
+      f("f"), // missing tier → model
+      f("g", "totally-unknown"), // unknown → model
+    ]
+    expect(computeProofCounts(findings, new Set())).toEqual({ verified: 0, grounded: 4, model: 3 })
+  })
+
+  it("counts a confirmed finding ONLY as verified (never also grounded)", () => {
+    const findings = [f("a", "grounded-model"), f("b", "deterministic-grounded"), f("c", "body-only-ungrounded")]
+    // `a` and `b` are grounded tiers, but `a` is receipt-verified → verified only.
+    expect(computeProofCounts(findings, new Set(["a"]))).toEqual({ verified: 1, grounded: 1, model: 1 })
+  })
+
+  it("the three buckets always sum to the finding count", () => {
+    const findings = [f("a", "grounded-model"), f("b"), f("c", "runner-confirmed"), f("d", "body-only-ungrounded")]
+    const proof = computeProofCounts(findings, new Set(["c"]))
+    expect(proof.verified + proof.grounded + proof.model).toBe(findings.length)
+  })
+
+  it("an all-model (no grounded) finding set renders only the model-only segment via formatProofLine", () => {
+    const proof = computeProofCounts([f("a"), f("b", "body-only-ungrounded")], new Set())
+    expect(proof).toEqual({ verified: 0, grounded: 0, model: 2 })
+    expect(formatProofLine(proof)).toBe("> <sub>**Proof:** 2 model-only</sub>")
+  })
+
+  it("an empty finding set buckets to all-zero, and formatProofLine returns null (clean approve shows no Proof line)", () => {
+    const proof = computeProofCounts([], new Set())
+    expect(proof).toEqual({ verified: 0, grounded: 0, model: 0 })
+    expect(formatProofLine(proof)).toBeNull()
+  })
+})
+
+describe("buildReviewStatusBlock Proof line (SIG-471)", () => {
+  it("renders the **Proof:** line for a posted snapshot carrying proof", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 9,
+      final: { status: "posted", findingsCount: 3 },
+      proof: { verified: 0, grounded: 2, model: 1 },
+    })
+    expect(block).toContain("**Proof:** 2 grounded · 1 model-only")
+  })
+
+  it("omits the Proof line when the snapshot carries no proof (clean approve)", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 9,
+      final: { status: "posted", findingsCount: 0 },
+    })
+    expect(block).not.toContain("**Proof:**")
+  })
+
+  it("omits the Proof line when all proof counts are zero", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 9,
+      final: { status: "posted", findingsCount: 0 },
+      proof: { verified: 0, grounded: 0, model: 0 },
+    })
+    expect(block).not.toContain("**Proof:**")
   })
 })
 
@@ -390,7 +501,7 @@ describe("SIG-472 overview-write status-block preservation", () => {
     expect(withStatus).toContain("## Sigilix Overview")
     expect(withStatus).toContain(REVIEW_STATUS_BLOCK_START)
     expect(withStatus).toContain("**Proof:**")
-    expect(withStatus).toContain("**Manage:**")
+    expect(withStatus).toContain("Re-run `/sigilix review`") // the Manage affordance
 
     // (c) a SECOND overview write (re-run / latest push). The raw
     // formatOverviewComment output carries NO status block — this is the
@@ -405,7 +516,7 @@ describe("SIG-472 overview-write status-block preservation", () => {
     expect(overview2).toContain(REVIEW_STATUS_BLOCK_START)
     expect(overview2).toContain(REVIEW_STATUS_BLOCK_END)
     expect(overview2).toContain("**Proof:** 1 grounded")
-    expect(overview2).toContain("**Manage:**")
+    expect(overview2).toContain("Re-run `/sigilix review`") // the Manage affordance
     // Exactly one status block (no duplication).
     expect(overview2.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
     // Overview content stays ABOVE the status block.

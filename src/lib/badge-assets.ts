@@ -69,42 +69,58 @@ const TRUST_BADGE_STYLES = {
   },
 } as const
 
+// SIG: per-category EXPLICIT bg + text pairs (Kimi K2.7 spec, 2026-06-19). The
+// prior global-HSL treatment (S=0.12/L=0.18) collapsed all 9 hues to the same
+// dark-grey chip — "they're all kinda the same, confusing" (founder). Each chip
+// now carries a deep, recognizable shade of its own hue as the bg (`bg`) with
+// the original pastel accent as the text (`accent`) — distinct at a glance,
+// still subordinate to the solid-fill priority pills, AA-ish text contrast, and
+// non-colliding with the priority red/amber/lime/blue + trust emerald/violet/cyan.
 const CATEGORY_BADGE_STYLES = {
   logic: {
     label: "LOGIC",
     accent: "#7DD3FC",
+    bg: "#0C4A6E",
   },
   security: {
     label: "SECURITY",
     accent: "#F0ABFC",
+    bg: "#701A75",
   },
   performance: {
     label: "PERF",
     accent: "#FDBA74",
+    bg: "#7C2D12",
   },
   "error-handling": {
     label: "ERROR",
     accent: "#FCA5A5",
+    bg: "#7F1D1D",
   },
   testing: {
     label: "TESTING",
     accent: "#86EFAC",
+    bg: "#14532D",
   },
   complexity: {
     label: "COMPLEXITY",
     accent: "#C4B5FD",
+    bg: "#4C1D95",
   },
   style: {
     label: "STYLE",
     accent: "#93C5FD",
+    bg: "#1E3A8A",
   },
   syntax: {
     label: "SYNTAX",
     accent: "#FDE68A",
+    bg: "#713F12",
   },
   docs: {
     label: "DOCS",
     accent: "#CBD5E1",
+    bg: "#334155",
   },
 } as const
 
@@ -187,7 +203,14 @@ export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.w
 // unchanged (labels identical) — only the rect fill differs, so no
 // regenerate-badge-paths needed; re-run generate-static-badges + mirror/tag the
 // new SVGs at Sigilix/sigilix-glyphs@v20260618-1 (same 17 glyphs).
-export const BADGE_ASSET_VERSION = "v20260618-1"
+// Recolour (2026-06-19): v20260618-1 → v20260619-1 recolours the 9 CATEGORY pills
+// (Kimi K2.7 spec). The prior global-HSL treatment crushed all 9 hues to the same
+// dark-grey chip ("all kinda the same, confusing" — founder); each now carries an
+// explicit deep per-hue bg + the pastel accent as text, distinct at a glance.
+// Glyph PATHS unchanged (labels identical) — only category rect fills differ, so
+// no regenerate-badge-paths; re-run generate-static-badges + mirror/tag the new
+// SVGs at Sigilix/sigilix-glyphs@v20260619-1 (same 17 glyphs).
+export const BADGE_ASSET_VERSION = "v20260619-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
@@ -201,71 +224,6 @@ const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 // Priority text color: near-black on bright accent fill (dark-on-bright for
 // AA contrast across the P0..P3 palette). SIG-216 spec value (Kimi K2.6).
 const PRIORITY_TEXT_COLOR = "#0A0A0A"
-
-// Kimi R2 treatment knobs for the category pill: figure/ground hierarchy
-// is created by remapping the brand-hue accents to a deep BG + bright text
-// at fixed saturation/lightness. Hue identity is preserved across all 9
-// categories — only S/L change.
-const CATEGORY_BG_SATURATION = 0.12
-const CATEGORY_BG_LIGHTNESS = 0.18
-const CATEGORY_TEXT_SATURATION = 0.65
-const CATEGORY_TEXT_LIGHTNESS = 0.85
-
-// Color math kept inline (no helper module) since it's used only here and the
-// applyHsl helper keeps the accent table readable as "base hue + treatment".
-function hexToHsl(hex: string): { h: number; s: number; l: number } {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
-  if (!m || !m[1]) throw new Error(`badge-assets: invalid hex ${hex}`)
-  const int = parseInt(m[1], 16)
-  const r = ((int >> 16) & 0xff) / 255
-  const g = ((int >> 8) & 0xff) / 255
-  const b = (int & 0xff) / 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  if (max === min) return { h: 0, s: 0, l }
-  const d = max - min
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-  let h: number
-  switch (max) {
-    case r:
-      h = ((g - b) / d + (g < b ? 6 : 0)) * 60
-      break
-    case g:
-      h = ((b - r) / d + 2) * 60
-      break
-    default:
-      h = ((r - g) / d + 4) * 60
-      break
-  }
-  return { h, s, l }
-}
-
-function hslToHex(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s
-  const hp = h / 60
-  const x = c * (1 - Math.abs((hp % 2) - 1))
-  let r = 0
-  let g = 0
-  let b = 0
-  if (hp >= 0 && hp < 1) [r, g, b] = [c, x, 0]
-  else if (hp < 2) [r, g, b] = [x, c, 0]
-  else if (hp < 3) [r, g, b] = [0, c, x]
-  else if (hp < 4) [r, g, b] = [0, x, c]
-  else if (hp < 5) [r, g, b] = [x, 0, c]
-  else [r, g, b] = [c, 0, x]
-  const m = l - c / 2
-  const toHex = (v: number): string => {
-    const n = Math.round((v + m) * 255)
-    return Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0")
-  }
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase()
-}
-
-function applyHsl(baseHex: string, targetSaturation: number, targetLightness: number): string {
-  const { h } = hexToHsl(baseHex)
-  return hslToHex(h, targetSaturation, targetLightness)
-}
 
 export function lookupGlyph(label: string): BadgeGlyphPath {
   const glyph = BADGE_GLYPH_PATHS[label]
@@ -301,8 +259,10 @@ function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBa
   // Same r9 pattern as `renderBadgeSvg` above, generalized for
   // variable-width category pills.
   const width = categoryBadgeWidth(style.label)
-  const bg = applyHsl(style.accent, CATEGORY_BG_SATURATION, CATEGORY_BG_LIGHTNESS)
-  const fg = applyHsl(style.accent, CATEGORY_TEXT_SATURATION, CATEGORY_TEXT_LIGHTNESS)
+  // SIG (Kimi 2026-06-19): explicit per-category bg + the pastel accent as text,
+  // replacing the global-HSL treatment that washed every hue to the same grey.
+  const bg = style.bg
+  const fg = style.accent
   const glyph = lookupGlyph(style.label)
   const innerW = width - BADGE_GUTTER_PX
   const innerH = CATEGORY_BADGE_HEIGHT - BADGE_GUTTER_PX

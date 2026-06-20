@@ -32,7 +32,8 @@ export interface FindingTrustPatch {
 }
 
 const TIER_RANK: Record<FindingTrustTier, number> = {
-  "runner-confirmed": 5,
+  "runner-confirmed": 6,
+  "deterministic-confirmed": 5,
   "deterministic-grounded": 4,
   "worker-token-confirmed": 3,
   "grounded-model": 2,
@@ -98,6 +99,7 @@ export function annotateFindingTrust(finding: PrReviewFinding, patch: FindingTru
  *  Trust Summary + the (flag-gated) telemetry recording. */
 export interface TrustTierCounts {
   runnerConfirmed: number
+  deterministicConfirmed: number
   deterministicGrounded: number
   workerTokenConfirmed: number
   groundedModel: number
@@ -111,6 +113,7 @@ export interface TrustTierCounts {
 export function countTrustTiers(findings: ReadonlyArray<Pick<PrReviewFinding, "trust">>): TrustTierCounts {
   const counts: TrustTierCounts = {
     runnerConfirmed: 0,
+    deterministicConfirmed: 0,
     deterministicGrounded: 0,
     workerTokenConfirmed: 0,
     groundedModel: 0,
@@ -122,6 +125,9 @@ export function countTrustTiers(findings: ReadonlyArray<Pick<PrReviewFinding, "t
     switch (f.trust?.tier) {
       case "runner-confirmed":
         counts.runnerConfirmed++
+        break
+      case "deterministic-confirmed":
+        counts.deterministicConfirmed++
         break
       case "deterministic-grounded":
         counts.deterministicGrounded++

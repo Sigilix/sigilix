@@ -24,13 +24,17 @@ export const REVIEW_FINDING_SCOPES: ReadonlySet<ReviewFindingScope> = new Set(["
  * at submission time (runtime-only — never parsed from model JSON). The renderer
  * (trust-ledger-render.ts) maps `tier` to the VERIFIED / GROUNDED / MODEL pill.
  * Tier precedence (most→least proof): runner-confirmed (a scanner in the
- * customer's CI corroborated it) > deterministic-grounded (an AST/scanner fact
- * backs it) > worker-token-confirmed (the cited token checks out at the cited
- * line) > grounded-model (cites real evidence, passed the gates) >
- * body-only-ungrounded.
+ * customer's CI corroborated it) > deterministic-confirmed (Sigilix's OWN
+ * deterministic AST engine independently flagged the cited vuln-class at this
+ * line — self-attested, not CI-attested) > deterministic-grounded (an AST/scanner
+ * fact backs it) > worker-token-confirmed (the cited token checks out at the
+ * cited line) > grounded-model (cites real evidence, passed the gates) >
+ * body-only-ungrounded. A receipt-confirmed (runner-confirmed) finding must always
+ * outrank a self-confirmed (deterministic-confirmed) one.
  */
 export type FindingTrustTier =
   | "runner-confirmed"
+  | "deterministic-confirmed"
   | "deterministic-grounded"
   | "worker-token-confirmed"
   | "grounded-model"

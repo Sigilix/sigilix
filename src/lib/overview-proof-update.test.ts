@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleOverviewProofUpdate, MAX_PROOF_UPDATE_ATTEMPTS } from "@/src/lib/overview-proof-update"
 import { buildReviewStatusBlock, formatManageLine } from "@/src/lib/pr-review-status-render"
 import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
+import { renderTrustPill } from "@/src/lib/trust-ledger-render"
+import { FINDING_BLOCK_MARKER } from "@/src/lib/pr-finding-markers"
 import type { Env } from "@/src/shared/types/env"
 
 // ── module mocks ────────────────────────────────────────────────────────────
@@ -37,6 +39,9 @@ const clientState = {
   diff: "" as string,
   fileContents: new Map<string, string>(),
   updatedComment: null as { id: number; body: string } | null,
+  // SIG-473: inline review comments the job fetches (by id) + the PATCHes it makes.
+  reviewComments: new Map<number, { id: number; body: string } | null>(),
+  updatedReviewComments: [] as { id: number; body: string }[],
 }
 vi.mock("@/src/shared/adapters/github", async () => {
   const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
@@ -68,6 +73,13 @@ vi.mock("@/src/shared/adapters/github", async () => {
     }
     async updateIssueComment(_o: string, _r: string, id: number, body: string) {
       clientState.updatedComment = { id, body }
+    }
+    async getPullRequestReviewComment(_o: string, _r: string, id: number) {
+      // `undefined` (no entry) → behave like a genuine 404 (null).
+      return clientState.reviewComments.has(id) ? clientState.reviewComments.get(id)! : null
+    }
+    async updatePullRequestReviewComment(_o: string, _r: string, id: number, body: string) {
+      clientState.updatedReviewComments.push({ id, body })
     }
   }
   return { ...actual, GitHubClient: GitHubClientMock }
@@ -160,6 +172,8 @@ beforeEach(() => {
   clientState.diff = ""
   clientState.fileContents = new Map()
   clientState.updatedComment = null
+  clientState.reviewComments = new Map()
+  clientState.updatedReviewComments = []
   lookupState.result = { state: "runner-absent" }
   manifestState.result = { kind: "missing" }
 })
@@ -431,5 +445,103 @@ describe("handleOverviewProofUpdate", () => {
 
     expect(clientState.updatedComment).toBeNull() // never patched a newer review's overview
     expect(sent).toHaveLength(0) // stale → skip, NOT retry
+  })
+})
+
+// ── SIG-473: inline-pill GROUNDED→VERIFIED PATCH (best-effort, after the overview) ─────
+describe("handleOverviewProofUpdate — inline pill flip (SIG-473)", () => {
+  const FP = "a".repeat(64)
+  const GROUNDED_PILL = renderTrustPill("grounded-model")
+  const VERIFIED_PILL = renderTrustPill("runner-confirmed")
+  // A confirming receipt: CWE-94 (code-injection) at x.ts:10.
+  const CONFIRMING_RECEIPT = {
+    state: "verified",
+    sarif: JSON.stringify({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "semgrep" } },
+          results: [
+            {
+              ruleId: "detect-eval",
+              message: { text: "untrusted input flows into eval" },
+              properties: { sigilixRuleClass: "code-injection" },
+              locations: [{ physicalLocation: { artifactLocation: { uri: "x.ts" }, region: { startLine: 10 } } }],
+            },
+          ],
+        },
+      ],
+    }),
+  }
+  // A confirmed manifest finding carrying an inlineCommentId + fingerprint.
+  const confirmedFinding = (over: Partial<ReviewManifestFinding> = {}): ReviewManifestFinding => ({
+    key: "a",
+    path: "x.ts",
+    headline: "eval of untrusted input",
+    score: 5,
+    consensus: 1,
+    line: 10,
+    category: "security",
+    cweId: "CWE-94",
+    trustTier: "grounded-model",
+    contentFingerprint: FP,
+    inlineCommentId: 4242,
+    ...over,
+  })
+  const commentBody = (fp: string, pill: string): string =>
+    `${FINDING_BLOCK_MARKER}\n${pill} eval risk\n<!-- sigilix:fingerprint:${fp} -->`
+
+  function setup(finding: ReviewManifestFinding, comment: { id: number; body: string } | null | "absent"): void {
+    manifestState.result = { kind: "ok", manifest: { headSha: "pr-head-sha", findings: [finding] } }
+    lookupState.result = CONFIRMING_RECEIPT
+    clientState.overview = { id: 555, body: STATUS_BLOCK }
+    if (comment !== "absent" && comment !== null) clientState.reviewComments.set(comment.id, comment)
+    else if (comment === null) clientState.reviewComments.set(4242, null) // deleted → get→null
+    // "absent" leaves no entry → also resolves to null (404).
+  }
+
+  it("flips GROUNDED→VERIFIED in place AND still patches the overview proof line (fails on revert)", async () => {
+    setup(confirmedFinding(), { id: 4242, body: commentBody(FP, GROUNDED_PILL) })
+    await handleOverviewProofUpdate(baseMessage, makeEnv([]))
+    // overview proof line still patched (primary, unconditional)
+    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
+    // inline pill PATCHed: grounded → verified, single replace
+    expect(clientState.updatedReviewComments).toHaveLength(1)
+    const next = clientState.updatedReviewComments[0]!
+    expect(next.id).toBe(4242)
+    expect(next.body).toContain(VERIFIED_PILL)
+    expect(next.body).not.toContain(GROUNDED_PILL)
+    // fingerprint marker preserved (single replace only swapped the pill)
+    expect(next.body).toContain(`<!-- sigilix:fingerprint:${FP} -->`)
+  })
+
+  it("deleted comment (get → null) → skips, no throw, overview still patched", async () => {
+    setup(confirmedFinding(), null)
+    await handleOverviewProofUpdate(baseMessage, makeEnv([]))
+    expect(clientState.updatedReviewComments).toHaveLength(0)
+    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
+  })
+
+  it("fingerprint mismatch (comment edited/recycled) → skips the pill PATCH", async () => {
+    setup(confirmedFinding(), { id: 4242, body: commentBody("b".repeat(64), GROUNDED_PILL) })
+    await handleOverviewProofUpdate(baseMessage, makeEnv([]))
+    expect(clientState.updatedReviewComments).toHaveLength(0)
+    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
+  })
+
+  it("already-verified body (no grounded pill present) → idempotent no-op", async () => {
+    setup(confirmedFinding(), { id: 4242, body: commentBody(FP, VERIFIED_PILL) })
+    await handleOverviewProofUpdate(baseMessage, makeEnv([]))
+    expect(clientState.updatedReviewComments).toHaveLength(0)
+    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
+  })
+
+  it("no inlineCommentId stored → only the overview proof line is patched", async () => {
+    const finding = confirmedFinding()
+    delete finding.inlineCommentId
+    setup(finding, "absent")
+    await handleOverviewProofUpdate(baseMessage, makeEnv([]))
+    expect(clientState.updatedReviewComments).toHaveLength(0)
+    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
   })
 })

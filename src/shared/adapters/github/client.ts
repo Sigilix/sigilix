@@ -1192,6 +1192,11 @@ export class GitHubClient {
     await this.restPatch<unknown>(`/repos/${owner}/${repo}/issues/comments/${commentId}`, { body })
   }
 
+  /** SIG-473: PATCH an inline PR review comment body in place (e.g. flip a trust pill). */
+  async updatePullRequestReviewComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
+    await this.restPatch<unknown>(`/repos/${owner}/${repo}/pulls/comments/${commentId}`, { body })
+  }
+
   /**
    * Delete a top-level issue/PR-conversation comment. Used by the
    * pr-overview helper's one-way migration to delete the legacy

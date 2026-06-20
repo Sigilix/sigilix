@@ -65,6 +65,21 @@ describe("updateReviewBody", () => {
   })
 })
 
+describe("updatePullRequestReviewComment", () => {
+  it("PATCHes the pulls/comments endpoint with the right path + body", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 555, body: "new" }))
+    const c = newClient()
+    await c.updatePullRequestReviewComment("o", "r", 555, "new body")
+    const call = fetchSpy.mock.calls[0]!
+    const url =
+      typeof call[0] === "string" ? call[0] : call[0] instanceof URL ? call[0].toString() : (call[0] as Request).url
+    const init = call[1] as RequestInit | undefined
+    expect(url).toContain("/repos/o/r/pulls/comments/555")
+    expect(init?.method).toBe("PATCH")
+    expect(init?.body).toBe(JSON.stringify({ body: "new body" }))
+  })
+})
+
 describe("getIssueComment", () => {
   it("returns the comment body on 200", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResp({ id: 99, body: "issue body" }))

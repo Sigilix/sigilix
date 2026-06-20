@@ -179,6 +179,38 @@ describe("readReviewManifest", () => {
     const result = await readReviewManifest(fakeEnv(stub), "o", "r", 1)
     expect(result).toEqual({ kind: "invalid", reason: "shape" })
   })
+
+  // SIG-473: the inline-pill fields round-trip + the positive-int guard on inlineCommentId.
+  it("round-trips a finding carrying contentFingerprint + inlineCommentId", async () => {
+    const m: ReviewManifestV1 = {
+      ...validManifest(),
+      findings: [
+        {
+          key: "k1",
+          path: "src/x.ts",
+          headline: "h",
+          score: 4,
+          consensus: 1,
+          contentFingerprint: "c".repeat(64),
+          inlineCommentId: 9876,
+        },
+      ],
+    }
+    const { stub } = fakeKV({ "pr-review-manifest:owner/repo#42": JSON.stringify(m) })
+    const result = await readReviewManifest(fakeEnv(stub), "owner", "repo", 42)
+    expect(result).toEqual({ kind: "ok", manifest: m })
+  })
+
+  it("rejects a finding whose inlineCommentId is not a positive integer (malformed → invalid shape)", async () => {
+    const { stub } = fakeKV({
+      "pr-review-manifest:o/r#1": JSON.stringify({
+        ...validManifest(),
+        findings: [{ key: "k1", path: "src/x.ts", headline: "h", score: 4, consensus: 1, inlineCommentId: 0 }],
+      }),
+    })
+    const result = await readReviewManifest(fakeEnv(stub), "o", "r", 1)
+    expect(result).toEqual({ kind: "invalid", reason: "shape" })
+  })
 })
 
 describe("toManifestFinding (SIG-471 — the omission contract PR-2/3 depend on)", () => {
@@ -221,6 +253,22 @@ describe("toManifestFinding (SIG-471 — the omission contract PR-2/3 depend on)
     expect("line" in out).toBe(false)
     expect("deterministicFactIds" in out).toBe(false)
     expect("trustTier" in out).toBe(false)
+  })
+
+  // SIG-473: the content fingerprint persisted for the inline-pill PATCH path.
+  it("sets contentFingerprint when the finding carries it, omits it when absent", () => {
+    const withFp = toManifestFinding("k3", 1, {
+      path: "src/z.ts",
+      headline: "h",
+      score: 4,
+      contentFingerprint: "f".repeat(64),
+    })
+    expect(withFp.contentFingerprint).toBe("f".repeat(64))
+
+    const withoutFp = toManifestFinding("k4", 1, { path: "src/z.ts", headline: "h", score: 4 })
+    expect("contentFingerprint" in withoutFp).toBe(false)
+    // inlineCommentId is NEVER set by toManifestFinding (injected post-submit).
+    expect("inlineCommentId" in withFp).toBe(false)
   })
 })
 

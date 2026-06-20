@@ -22,7 +22,8 @@ import {
   isPositionReviewable,
   type ReviewableMap,
 } from "@/src/shared/util/diff-positions"
-import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
+import { type ReviewBadgeAssetName } from "@/src/lib/badge-assets"
+import { badgeImg } from "@/src/lib/badge-img"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import {
   FINDING_MORE_INFO_SECTION_KEYS,
@@ -407,21 +408,6 @@ function renderFindingEvidenceBlock(finding: PrReviewFinding): string {
  */
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
-
-function badgeImg(file: ReviewBadgeAssetName): string {
-  const label = badgeAssetLabel(file)
-  // SIG-238 r9 pattern. Empirical: this combo defeats Primer's bubble
-  // rule on github.com PR comments. Specifically:
-  //   - `<a href="#">` WRAP (we used to drop this per r4; that
-  //     diagnosis was wrong — the anchor is REQUIRED, not harmful).
-  //   - `<img>` with `align="top"` and NO explicit width/height. The
-  //     missing dimensions appear to suppress whichever Primer CSS
-  //     rule paints `bgColor-muted` under the image (the "bubble"
-  //     visible in r7).
-  // Why this works: not fully understood — empirical. See
-  // `badge-geometry.ts:BADGE_PADDING_PX` for r4-through-r9 history.
-  return `<a href="#"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top"></a>`
-}
 
 function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {
   return badgeImg(file)

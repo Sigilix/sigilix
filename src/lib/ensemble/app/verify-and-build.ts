@@ -620,47 +620,6 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     }
   }
 
-  // SIG-477 PR-1 (execution-sandbox eligibility, DARK — SHADOW telemetry ONLY): the
-  // measurement instrument that gates whether the reproduce engine (PR-2+) is worth
-  // building. For each submitted finding, run the PURE `isReproducibleEligible` gate
-  // (already grounded + an executable allowlist class + a dependency-closure-PURE,
-  // non-fabricated, liftable closure) and persist eligible/ineligible to
-  // VerificationMetricsDO under the `reproduce_eligibility` corpus. Read GET
-  // /metrics/verification → `reproduceEligibility.eligibleFraction`.
-  //
-  // CRITICAL — this block NEVER mutates a trust tier, NEVER renders, and NEVER
-  // executes anything, in ANY mode (off | shadow | on). PR-1 is pre-engine: even
-  // `on` ONLY measures here; the execute → `reproduced-by-execution` annotate is
-  // PR-5 with the actual QuickJS runner. So this stays DARK regardless of the mode.
-  const reproduceMode = ensembleConfig.flags.reproduceMode
-  if (reproduceMode !== "off") {
-    for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
-      const elig = isReproducibleEligible(finding, astSecurityFindings ?? [])
-      console.log(
-        JSON.stringify({
-          event: "verification-reproduce-eligibility",
-          mode: reproduceMode,
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding),
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          eligible: elig.eligible,
-          reason: elig.reason,
-          ...(elig.klass !== undefined ? { klass: elig.klass } : {}),
-        }),
-      )
-      verificationMetricItems.push({
-        category: REPRODUCE_ELIGIBILITY_CATEGORY,
-        verdict: elig.eligible ? "eligible" : "ineligible",
-        occurredAt: verificationOccurredAt,
-      })
-    }
-  }
-
   // SIG Trust Ledger v0: give every final visible
   // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
   // runner-confirmed — were already set in place above), then record the per-tier
@@ -693,6 +652,53 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
       verificationMetricItems.push({
         verdict: finding.trust?.tier ?? "body-only-ungrounded",
         category: TRUSTLEDGER_CATEGORY,
+        occurredAt: verificationOccurredAt,
+      })
+    }
+  }
+
+  // SIG-477 PR-1 (execution-sandbox eligibility, DARK — SHADOW telemetry ONLY): the
+  // measurement instrument that gates whether the reproduce engine (PR-2+) is worth
+  // building. For each submitted finding, run the PURE `isReproducibleEligible` gate
+  // (already grounded + an executable allowlist class + a dependency-closure-PURE,
+  // non-fabricated, liftable closure) and persist eligible/ineligible to
+  // VerificationMetricsDO under the `reproduce_eligibility` corpus. Read GET
+  // /metrics/verification → `reproduceEligibility.eligibleFraction`.
+  //
+  // PLACEMENT (SIG-477 de-risk): runs AFTER the trust-ledger baseline above so the
+  // grounded-model / deterministic-grounded tiers are SET before `isReproducibleEligible`
+  // reads them — otherwise a model-only finding (no manifest evidenceId, tier not yet
+  // assigned) reads as `not-grounded` and is under-counted. The first probe showed
+  // 6/14 ineligible for `not-grounded` purely from the pre-baseline placement.
+  //
+  // CRITICAL — this block NEVER mutates a trust tier, NEVER renders, and NEVER
+  // executes anything, in ANY mode (off | shadow | on). PR-1 is pre-engine: even
+  // `on` ONLY measures here; the execute → `reproduced-by-execution` annotate is
+  // PR-5 with the actual QuickJS runner. So this stays DARK regardless of the mode.
+  const reproduceMode = ensembleConfig.flags.reproduceMode
+  if (reproduceMode !== "off") {
+    for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
+      const elig = isReproducibleEligible(finding, astSecurityFindings ?? [])
+      console.log(
+        JSON.stringify({
+          event: "verification-reproduce-eligibility",
+          mode: reproduceMode,
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding),
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          eligible: elig.eligible,
+          reason: elig.reason,
+          ...(elig.klass !== undefined ? { klass: elig.klass } : {}),
+        }),
+      )
+      verificationMetricItems.push({
+        category: REPRODUCE_ELIGIBILITY_CATEGORY,
+        verdict: elig.eligible ? "eligible" : "ineligible",
         occurredAt: verificationOccurredAt,
       })
     }

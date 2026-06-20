@@ -51,6 +51,8 @@ import { noXxe } from "./rules/no-xxe"
 import { noHardcodedSecretFallback } from "./rules/no-hardcoded-secret-fallback"
 // SIG-392 (b20): deterministic HMAC-over-reserialized-body floor (CWE-345/347).
 import { noHmacOverReserializedBody } from "./rules/no-hmac-over-reserialized-body"
+// SIG-477 PR-0: ReDoS grounding floor (CWE-1333; grounds a model finding only).
+import { noRedos } from "./rules/no-redos"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -112,6 +114,8 @@ export const ALL_RULES: readonly AstRule[] = [
   // SIG-392 (b14): security-specialist deterministic fail-open hardcoded-secret floor (CWE-798, severity: warning).
   noHardcodedSecretFallback,
   noHmacOverReserializedBody,
+  // SIG-477 PR-0: security-specialist ReDoS grounding floor (CWE-1333, severity: warning).
+  noRedos,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

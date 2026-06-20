@@ -38,7 +38,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 37 rules in the canonical order", () => {
+  it("exports exactly 38 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -93,6 +93,8 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-hardcoded-secret-fallback",
       // SIG-392 (b20): deterministic HMAC-over-reserialized-body floor (CWE-345/347, security/warning).
       "no-hmac-over-reserialized-body",
+      // SIG-477 PR-0: ReDoS grounding floor (CWE-1333, security/warning).
+      "no-redos",
     ])
   })
 
@@ -135,6 +137,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-xxe": { severity: "warning", roleHint: "security" },
       "no-hardcoded-secret-fallback": { severity: "warning", roleHint: "security" },
       "no-hmac-over-reserialized-body": { severity: "warning", roleHint: "security" },
+      "no-redos": { severity: "warning", roleHint: "security" },
     }
     for (const r of ALL_RULES) {
       expect({ severity: r.severity, roleHint: r.roleHint }).toEqual(expected[r.id])

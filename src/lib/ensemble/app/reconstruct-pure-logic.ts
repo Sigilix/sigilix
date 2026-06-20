@@ -107,56 +107,63 @@ function similarity(a: string, b: string): number {
 // SIG-479 tolerant-locate tuning (FP-safety hardened per DeepSeek): the line a fix
 // REPLACES is its NEAR-TWIN (an off-by-one differs by ~1 char). We NEVER splice a line
 // that isn't a near-twin (≥ MIN_SIMILARITY) — that prevents splicing the fix into an
-// unrelated line and fabricating a divergence (the false-reproduce vector). When several
-// lines are near-twins we PREFER one within ±PROXIMITY of the finding's anchor (mis-
-// anchoring is usually local — a header just above the bug); only go GLOBAL when no local
-// near-twin exists, and then require a clear MARGIN over the runner-up so a coincidental
-// near-clone elsewhere can't win (it safely skips instead → never a false reproduce).
+// unrelated line and fabricating a divergence (the false-reproduce vector). And we only
+// relocate when the near-twin is UNAMBIGUOUS: exactly ONE distinct source REGION matches.
+// If two+ distinct regions are near-twins (two sibling functions, a coincidental clone),
+// we can't tell which is the bug → skip (null). This is FP-safe by construction: we never
+// RANK among distinct regions (neither similarity nor closeness — both were shown to pick
+// the wrong sibling), we only act on a unique match. Recall cost is accepted — REPRODUCED
+// is a minority signal, and a wrong inline badge is worse than a missed one.
 const LOCATE_MIN_SIMILARITY = 0.8
-const LOCATE_MIN_MARGIN = 0.1
-const LOCATE_PROXIMITY = 12
 const LOCATE_MAX_LINE_LEN = 400
+// A fix often COLLAPSES a multi-line buggy region into fewer lines (e.g. a 2-line loop +
+// body → one line). So match the fix against WINDOWS of up to this many consecutive
+// source lines (joined), not just single lines — the joined window is the near-twin.
+const LOCATE_MAX_WINDOW = 3
 
 /**
- * SIG-479: locate the buggy line by matching the (single-line) FIX against the source.
- * Real findings often anchor `finding.line` to the function header / an adjacent
- * function, so the enclosing-fn lookup grabs the wrong function. The fix is a near-twin
- * of the line it replaces. Returns a 1-based line (a confident near-twin) or null.
- *   - PROXIMITY: among near-twins within ±LOCATE_PROXIMITY of `anchorLine`, take the most
- *     similar (ties → closest) — a LOCAL mis-anchor, no margin needed.
- *   - GLOBAL: else the single best near-twin, but ONLY if it beats the runner-up by
- *     ≥ MARGIN (a tie among far near-clones → null, the FP-safe skip).
+ * SIG-479: locate the buggy REGION by matching the FIX against the source. Real findings
+ * often anchor `finding.line` at the function header / an adjacent function, so the
+ * enclosing-fn lookup grabs the wrong function. The fix is a near-twin of the lines it
+ * replaces (a single line for an in-place edit, or a joined multi-line window for a
+ * collapse). Returns the 1-based inclusive [start,end] of the UNIQUE near-twin region, or
+ * null when there is none OR more than one distinct region (ambiguous → FP-safe skip).
  */
-function locateNearTwinLine(source: string, fixLine: string, anchorLine: number): number | null {
-  const target = normalizeLine(fixLine)
-  if (target.length === 0 || target.length > LOCATE_MAX_LINE_LEN) return null
+function locateNearTwinRange(source: string, fix: string): [number, number] | null {
+  const target = normalizeLine(fix.replace(/\r?\n/g, " "))
+  if (target.length === 0 || target.length > LOCATE_MAX_LINE_LEN * LOCATE_MAX_WINDOW) return null
   const lines = source.split(/\r?\n/)
-  const candidates: Array<{ line: number; sim: number }> = []
+  const cands: Array<{ start: number; end: number; sim: number }> = []
   for (let i = 0; i < lines.length; i++) {
-    const norm = normalizeLine(lines[i] ?? "")
-    if (norm.length === 0 || norm.length > LOCATE_MAX_LINE_LEN) continue
-    if (norm === target) continue // the fix is already present here — not the buggy line
-    const sim = similarity(norm, target)
-    if (sim >= LOCATE_MIN_SIMILARITY) candidates.push({ line: i + 1, sim })
+    const parts: string[] = []
+    for (let w = 0; w < LOCATE_MAX_WINDOW && i + w < lines.length; w++) {
+      const ln = normalizeLine(lines[i + w] ?? "")
+      if (w === 0 && ln.length === 0) break // don't start a window on a blank line
+      parts.push(ln)
+      const joined = parts.join(" ").trim()
+      if (joined.length === 0 || joined.length > LOCATE_MAX_LINE_LEN * LOCATE_MAX_WINDOW) continue
+      if (joined === target) continue // the fix is already present here — not the buggy region
+      const sim = similarity(joined, target)
+      if (sim >= LOCATE_MIN_SIMILARITY) cands.push({ start: i + 1, end: i + w + 1, sim })
+    }
   }
-  if (candidates.length === 0) return null
-  // PROXIMITY: prefer a local near-twin — BUT require the same clear MARGIN as the global
-  // path. Without it, two sibling functions with an identical line (finding mis-anchored
-  // at the second's header) would coin-flip to the closest = a false reproduce on a
-  // non-bug. Near-equal local clones → null (the FP-safe skip), never closest-wins.
-  const local = candidates.filter((c) => Math.abs(c.line - anchorLine) <= LOCATE_PROXIMITY)
-  if (local.length > 0) {
-    local.sort((a, b) => b.sim - a.sim || Math.abs(a.line - anchorLine) - Math.abs(b.line - anchorLine))
-    const top = local[0]
-    const runnerUp = local[1]?.sim ?? 0
-    return top && top.sim - runnerUp >= LOCATE_MIN_MARGIN ? top.line : null
+  if (cands.length === 0) return null
+  // Merge OVERLAPPING windows into distinct regions (same bug at different window sizes is
+  // one region); keep each region's best-similarity window. Then require EXACTLY ONE region.
+  cands.sort((a, b) => a.start - b.start || a.end - b.end)
+  const regions: Array<{ end: number; best: { start: number; end: number; sim: number } }> = []
+  for (const c of cands) {
+    const last = regions[regions.length - 1]
+    if (last && c.start <= last.end) {
+      last.end = Math.max(last.end, c.end)
+      if (c.sim > last.best.sim) last.best = c
+    } else {
+      regions.push({ end: c.end, best: c })
+    }
   }
-  // GLOBAL: a single confident winner with a clear margin only.
-  candidates.sort((a, b) => b.sim - a.sim)
-  const best = candidates[0]
-  const second = candidates[1]?.sim ?? 0
-  if (best && best.sim - second >= LOCATE_MIN_MARGIN) return best.line
-  return null
+  if (regions.length !== 1) return null // none or ambiguous (2+ distinct regions) → skip
+  const r = regions[0]?.best
+  return r ? [r.start, r.end] : null
 }
 
 /** Splice `repl` into the FIRST of `ranges` that yields a parseable, CHANGED enclosing
@@ -204,12 +211,13 @@ export function reconstructPureLogicPair(
     const startLine = typeof finding.startLine === "number" && finding.startLine >= 1 ? finding.startLine : line
 
     if (replLineCount === 1) {
-      // SIG-479: locate the buggy line by NEAR-TWIN match to the fix (FP-guarded) so a
+      // SIG-479: locate the buggy REGION by NEAR-TWIN match to the fix (FP-guarded) so a
       // mis-anchored `finding.line` (header / adjacent fn) still reconstructs the RIGHT
-      // function — the near-twin requirement means we never splice an unrelated line.
-      const anchor = locateNearTwinLine(source, repl, line)
-      if (anchor !== null) {
-        const r = reconstructFromRanges(source, [[anchor, anchor]], repl, anchor, ext)
+      // function, and a fix that COLLAPSES a multi-line region matches its joined window.
+      // The near-twin requirement means we never splice an unrelated line/region.
+      const region = locateNearTwinRange(source, repl)
+      if (region !== null) {
+        const r = reconstructFromRanges(source, [region], repl, region[0], ext)
         if (r !== null) return r
       }
       // Fallback (pre-SIG-479 behavior): documented ranges at the finding's anchor —

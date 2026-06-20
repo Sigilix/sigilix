@@ -112,6 +112,32 @@ describe("reconstructPureLogicPair", () => {
     expect(pair!.fixed).not.toContain("n + 1")
   })
 
+  it("SIG-479: a fix that COLLAPSES a multi-line region matches the joined window (the backoff probe shape)", () => {
+    // The bug spans 2 source lines (loop header + body); the fix collapses them into ONE
+    // line. Single-line matching scores ~0.6 vs either line, but the JOINED [3,4] window
+    // is a near-twin → reconstruct backoffDelays even though the finding mis-anchored.
+    const src = [
+      "export function backoffDelays(attempts: number, baseMs: number): number[] {", // 1
+      "  const out: number[] = [];", // 2
+      "  for (let i = 0; i <= attempts; i++) {", // 3  ← bug
+      "    out.push(baseMs * 2 ** i);", // 4
+      "  }", // 5
+      "  return out;", // 6
+      "}", // 7
+      "",
+    ].join("\n")
+    const pair = reconstructPureLogicPair(src, {
+      path: "src/x.ts",
+      line: 1, // mis-anchored at the header
+      suggestedReplacement: "for (let i = 0; i < attempts; i++) { out.push(baseMs * 2 ** i); }",
+    })
+    expect(pair).not.toBeNull()
+    expect(pair!.buggy).toContain("function backoffDelays")
+    expect(pair!.buggy).toContain("<= attempts")
+    expect(pair!.fixed).toContain("< attempts")
+    expect(pair!.fixed).not.toContain("<= attempts")
+  })
+
   it("SIG-479 FP-safety: two sibling functions with an IDENTICAL line within proximity → null", () => {
     // validateA is buggy, validateB is correct + has the identical line. The finding
     // mis-anchors at validateB's header (line 4). Both bodies are 1-char near-twins of
@@ -155,6 +181,31 @@ describe("reconstructPureLogicPair", () => {
       path: "src/x.ts",
       line: 15, // far (>12) from both twins (line 2 and line ~29)
       suggestedReplacement: "  return n + 3;",
+    })
+    expect(pair).toBeNull()
+  })
+
+  it("SIG-479 FP-safety: a clean SIBLING window must not beat the messy true twin → null (2 regions)", () => {
+    // The true bug (billTrue, messy: extra `+ 0`) and an unrelated sibling (billOther,
+    // a near-clone of the fix split across 2 lines) are BOTH near-twins → two distinct
+    // regions → null. Never rank a clean sibling over the messy true bug.
+    // (code-reviewer-found: margin let the clean sibling win.)
+    const src = [
+      "function billTrue(sumDollars: number): number {", // 1
+      "  const totalCents = Math.round(sumDollars * 100.0 + 0);", // 2  ← true bug (messy)
+      "  return totalCents;", // 3
+      "}", // 4
+      "function billOther(sumDollars: number): number {", // 5
+      "  const totalCents", // 6
+      "    = Math.round(sumDollars * 101);", // 7  ← unrelated clean sibling (near-twin window)
+      "  return totalCents;", // 8
+      "}", // 9
+      "",
+    ].join("\n")
+    const pair = reconstructPureLogicPair(src, {
+      path: "src/x.ts",
+      line: 1,
+      suggestedReplacement: "  const totalCents = Math.round(sumDollars * 100);",
     })
     expect(pair).toBeNull()
   })

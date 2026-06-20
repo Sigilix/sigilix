@@ -11,6 +11,7 @@ import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { parseReceiptJoinMode } from "./verification/verify-finding-receipt"
 import { parseSelfConfirmMode } from "./verification/confirm-finding-inworker"
+import { parseReproduceMode } from "./verification/reproduce-eligibility"
 import { parseTrustLedgerMode } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 
 const DEFAULT_WINDOW_DAYS = 7
@@ -74,6 +75,12 @@ export async function handleVerificationMetricsRoute(request: Request, env: Env)
       // sub-state. `selfConfirmMode` tells the reader whether the numbers accrue.
       selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
       selfConfirm: metrics.selfConfirm,
+      // SIG-477 PR-1: the execution-sandbox eligibility distribution (separate
+      // corpus). `eligibleFraction` is THE GO/NO-GO deciding whether the reproduce
+      // engine (PR-2+) is worth building. `reproduceMode` tells the reader whether
+      // the numbers are accruing (shadow/on) or the gate is off.
+      reproduceMode: parseReproduceMode(env.OPENCLAW_REPRODUCE_MODE),
+      reproduceEligibility: metrics.reproduceEligibility,
     },
     200,
   )

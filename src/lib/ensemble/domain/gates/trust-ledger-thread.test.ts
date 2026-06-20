@@ -44,13 +44,25 @@ describe("resolveTier — highest-proof wins, order-independent", () => {
       "deterministic-grounded",
     )
   })
-  it("deterministic-confirmed sits between runner-confirmed and deterministic-grounded", () => {
+  it("deterministic-confirmed sits between reproduced-by-execution and deterministic-grounded", () => {
     // self-confirmed beats deterministic-grounded (and everything weaker)…
     expect(resolveTier(["deterministic-grounded", "deterministic-confirmed", "worker-token-confirmed"])).toBe(
       "deterministic-confirmed",
     )
     // …but a runner (CI) receipt always outranks a self-confirmed finding.
     expect(resolveTier(["deterministic-confirmed", "runner-confirmed"])).toBe("runner-confirmed")
+  })
+  it("SIG-477: reproduced-by-execution beats deterministic-confirmed but loses to runner-confirmed (rank 7 > 6 > 5)", () => {
+    // the execution-sandbox tier outranks the static self-attested tier…
+    expect(resolveTier(["deterministic-confirmed", "reproduced-by-execution"])).toBe("reproduced-by-execution")
+    expect(resolveTier(["deterministic-grounded", "reproduced-by-execution", "worker-token-confirmed"])).toBe(
+      "reproduced-by-execution",
+    )
+    // …but an independent CI receipt (runner-confirmed) still wins (the moat).
+    expect(resolveTier(["reproduced-by-execution", "runner-confirmed"])).toBe("runner-confirmed")
+    expect(resolveTier(["runner-confirmed", "reproduced-by-execution", "deterministic-confirmed"])).toBe(
+      "runner-confirmed",
+    )
   })
   it("worker-token beats plain grounded-model", () => {
     expect(resolveTier(["grounded-model", "worker-token-confirmed"])).toBe("worker-token-confirmed")
@@ -138,6 +150,7 @@ describe("countTrustTiers", () => {
     const findings = [
       f({ trust: { tier: "runner-confirmed" } }),
       f({ trust: { tier: "runner-confirmed" } }),
+      f({ trust: { tier: "reproduced-by-execution" } }),
       f({ trust: { tier: "deterministic-confirmed" } }),
       f({ trust: { tier: "deterministic-grounded" } }),
       f({ trust: { tier: "worker-token-confirmed" } }),
@@ -147,17 +160,19 @@ describe("countTrustTiers", () => {
     ]
     expect(countTrustTiers(findings)).toEqual({
       runnerConfirmed: 2,
+      reproducedByExecution: 1,
       deterministicConfirmed: 1,
       deterministicGrounded: 1,
       workerTokenConfirmed: 1,
       groundedModel: 1,
       bodyOnlyUngrounded: 2,
-      total: 8,
+      total: 9,
     })
   })
   it("empty → all zero", () => {
     expect(countTrustTiers([])).toEqual({
       runnerConfirmed: 0,
+      reproducedByExecution: 0,
       deterministicConfirmed: 0,
       deterministicGrounded: 0,
       workerTokenConfirmed: 0,

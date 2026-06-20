@@ -25,6 +25,7 @@ import type { SecurityGroundingValidatorMode } from "./gates/validate-security-g
 import type { SecurityUsageValidatorMode } from "./gates/validate-security-usage"
 import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import type { SelfConfirmMode } from "@/src/lib/verification/confirm-finding-inworker"
+import type { ReproduceMode } from "@/src/lib/verification/reproduce-eligibility"
 import type { LogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import type { LogicInputCompositionMode } from "./logic-input-composition"
 import type { AstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
@@ -117,6 +118,14 @@ export interface EnsembleFeatureFlags {
    *  pill (PR3) or should be a GROUNDED sub-state. `on` also annotates a confirmed
    *  finding with the `deterministic-confirmed` signal. */
   selfConfirmMode: SelfConfirmMode
+  /** SIG-477 PR-1: execution-sandbox eligibility gate mode — "off" (default) |
+   *  "shadow" | "on". `shadow`/`on` run the PURE `isReproducibleEligible` gate over
+   *  the submitted findings and MEASURE the eligible fraction (the
+   *  `reproduce_eligibility` corpus on VerificationMetricsDO) — the GO/NO-GO that
+   *  decides whether the reproduce engine (PR-2+) is worth building. DARK: NO
+   *  execution, NO render, NO tier mutation in ANY mode (even `on` only measures;
+   *  the annotate comes in PR-5 with the engine). */
+  reproduceMode: ReproduceMode
   logicPromptBudgetMode: LogicPromptBudgetMode
   /** SIG-369(b): `OPENCLAW_LOGIC_INPUT_COMPOSITION` "off" | "shadow" (default
    *  "off"). When "shadow", the logic specialist's input-token composition is

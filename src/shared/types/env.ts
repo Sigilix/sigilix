@@ -386,6 +386,14 @@ export interface Env {
   // (PR3) or stays a GROUNDED sub-state. `on` also annotates a confirmed finding with
   // the `deterministic-confirmed` trust signal. NO render change in any mode (PR3).
   OPENCLAW_SELFCONFIRM_MODE?: string
+  // SIG-477 PR-1: execution-sandbox eligibility gate — "off" (default) | "shadow" |
+  // "on". `shadow`/`on` run the PURE `isReproducibleEligible` gate over the submitted
+  // findings and MEASURE the eligible fraction (the `reproduce_eligibility` corpus on
+  // VerificationMetricsDO, read at GET /metrics/verification) — the GO/NO-GO deciding
+  // whether the reproduce engine (PR-2+) is worth building. DARK: NO execution, NO
+  // render, NO tier mutation in ANY mode (even `on` only measures; the annotate comes
+  // in PR-5 with the engine).
+  OPENCLAW_REPRODUCE_MODE?: string
   // SIG Trust Ledger v0: off | shadow | on. `off` (default) attaches per-finding
   // trust metadata in-memory but records no telemetry + renders nothing. `shadow`
   // also records the tier distribution (TRUSTLEDGER_CATEGORY on VerificationMetricsDO,

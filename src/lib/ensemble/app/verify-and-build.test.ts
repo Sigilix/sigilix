@@ -69,16 +69,22 @@ function makeArgs(opts: {
   verificationMode?: string
   trustLedgerMode?: "off" | "shadow" | "on"
   selfConfirmMode?: "off" | "shadow" | "on"
+  reproduceMode?: "off" | "shadow" | "on"
   receiptScanIndex?: Map<string, ReceiptScanResult[]> | null
   astSecurityFindings?: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
 }): VerifyAndBuildArgs {
   const env = opts.env
   const baseConfig = parseEnsembleConfig(env)
-  // SIG-476 PR2: the self-confirm gate is read off ensembleConfig.flags (no separate
-  // orchestrator arg), so the harness overrides the parsed flag per test.
+  // SIG-476 PR2 / SIG-477 PR-1: the self-confirm + reproduce gates are read off
+  // ensembleConfig.flags (no separate orchestrator arg), so the harness overrides
+  // the parsed flags per test.
   const ensembleConfig = {
     ...baseConfig,
-    flags: { ...baseConfig.flags, selfConfirmMode: (opts.selfConfirmMode ?? "off") as "off" | "shadow" | "on" },
+    flags: {
+      ...baseConfig.flags,
+      selfConfirmMode: (opts.selfConfirmMode ?? "off") as "off" | "shadow" | "on",
+      reproduceMode: (opts.reproduceMode ?? "off") as "off" | "shadow" | "on",
+    },
   }
   const verdict: PrReviewVerdict = {
     summary: "test",
@@ -428,6 +434,126 @@ describe("verifyAndBuildSubmission — SIG-476 PR2 self-confirm shadow-assignmen
 
     // no-check is skipped → no selfconfirm item → empty batch → no DO call.
     expect(recordBatchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe("verifyAndBuildSubmission — SIG-477 PR-1 reproduce-eligibility shadow telemetry (DARK)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+
+  // A grounded (real evidenceId), allowlist-class (off-by-one → pure-function-logic),
+  // PURE + liftable closure → ELIGIBLE. Built fresh so a prior in-place trust
+  // mutation can't leak via a copied `trust` field.
+  const eligibleFinding = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>
+    ({
+      category: "logic",
+      score: 4,
+      path: "src/lib/parse.ts",
+      line: 42,
+      headline: "off-by-one in clampIndex",
+      body: "Boundary slips by one.",
+      evidenceId: "ast:no-constant-binary-condition:ast/x/h/42",
+      failureExample: "export function clampIndex(i, max) { return i <= max ? i : max }",
+      ...over,
+    }) as PrReviewFinding
+
+  // An UNGROUNDED finding → ineligible (Gate 1a).
+  const ineligibleFinding = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>
+    ({
+      category: "logic",
+      score: 3,
+      path: "src/lib/x.ts",
+      line: 9,
+      headline: "minor nit",
+      body: "style only",
+      evidenceId: "NONE",
+      ...over,
+    }) as PrReviewFinding
+
+  it("shadow: records an `eligible` verdict and does NOT mutate any trust tier (DARK)", async () => {
+    const env = makeEnv()
+    const finding = eligibleFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(recordBatchSpy).toHaveBeenCalledTimes(1)
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    const re = items.filter((i) => i.category === "reproduce_eligibility")
+    expect(re).toHaveLength(1)
+    expect(re[0]!.verdict).toBe("eligible")
+    // DARK: NO trust tier is ever set by this block.
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("shadow: an ungrounded finding records `ineligible`", async () => {
+    const env = makeEnv()
+    const finding = ineligibleFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    expect(items.filter((i) => i.category === "reproduce_eligibility").map((i) => i.verdict)).toEqual(["ineligible"])
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("DARKNESS: in BOTH shadow AND on, NO finding's tier is mutated by the reproduce block (never annotates reproduced-by-execution)", async () => {
+    for (const mode of ["shadow", "on"] as const) {
+      const env = makeEnv()
+      const finding = eligibleFinding()
+      const args = makeArgs({
+        env,
+        findings: [finding],
+        verificationMode: "off",
+        trustLedgerMode: "off",
+        selfConfirmMode: "off",
+        reproduceMode: mode,
+      })
+
+      await verifyAndBuildSubmission(args)
+
+      // The reproduce block ONLY measures — even "on" never annotates a tier in PR-1
+      // (the execute → reproduced-by-execution annotate is PR-5 with the engine).
+      expect(finding.trust).toBeUndefined()
+      expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+      // …but it DID record the verdict (so we know the block ran).
+      const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+      expect(items.some((i) => i.category === "reproduce_eligibility")).toBe(true)
+    }
+  })
+
+  it("off: no reproduce record and no mutation (true no-op)", async () => {
+    const env = makeEnv()
+    const finding = eligibleFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "off",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    // Every corpus off → empty batch → DO never touched; no tier set.
+    expect(recordBatchSpy).not.toHaveBeenCalled()
+    expect(finding.trust).toBeUndefined()
   })
 })
 

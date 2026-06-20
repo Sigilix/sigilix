@@ -43,7 +43,13 @@ CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
  *  checks `logic`/`security` findings; the receipt-join check records under
  *  RECEIPTJOIN_CATEGORY. A closed union (not a free `string`) so a typo can't
  *  silently misclassify a record and leak across the corpus split. */
-export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trustledger" | "selfconfirm"
+export type VerificationCategory =
+  | "logic"
+  | "security"
+  | "receiptjoin"
+  | "trustledger"
+  | "selfconfirm"
+  | "reproduce_eligibility"
 
 /** SIG-476 PR2: the in-worker self-confirmation verdict (the `selfconfirm` corpus).
  *  Both `uplift` and `redundant` imply the finding was CONFIRMED by our independent
@@ -53,6 +59,14 @@ export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trust
  *  case the GO/NO-GO watches for). `inconclusive` = eligible but not confirmed. A
  *  closed union so the metric corpus can't be silently miscounted. */
 export type SelfConfirmVerdict = "uplift" | "redundant" | "inconclusive"
+
+/** SIG-477 PR-1: the execution-sandbox eligibility verdict (the `reproduce_eligibility`
+ *  corpus). `eligible` = the finding's cited code is safe + standalone enough that a
+ *  future sandbox could reproduce it (the executable set); `ineligible` = it isn't
+ *  (the under-strict-safe fail-open). A closed union so the corpus can't be silently
+ *  miscounted. The eligible FRACTION is the GO/NO-GO deciding whether the engine
+ *  (PR-2+) is worth building. */
+export type ReproduceEligibilityVerdict = "eligible" | "ineligible"
 
 /**
  * One verdict record. Discriminated by `category` so the `verdict` value can't be
@@ -78,8 +92,15 @@ export type RecordVerificationArgs =
       occurredAt?: string
     }
   | {
+      /** SIG-477 PR-1 — the execution-sandbox eligibility corpus. */
+      category: "reproduce_eligibility"
+      verdict: ReproduceEligibilityVerdict
+      /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+      occurredAt?: string
+    }
+  | {
       /** Worker-token verdicts (`logic`/`security`) + the receipt-join corpus. */
-      category: Exclude<VerificationCategory, "trustledger" | "selfconfirm">
+      category: Exclude<VerificationCategory, "trustledger" | "selfconfirm" | "reproduce_eligibility">
       verdict: VerificationVerdict
       /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
       occurredAt?: string
@@ -99,6 +120,11 @@ export const TRUSTLEDGER_CATEGORY = "trustledger"
  *  confirmed/uplift distribution, a SEPARATE corpus from worker-token / receipt-join
  *  / trust-ledger (no schema migration; kept out of the worker-token aggregates). */
 export const SELFCONFIRM_CATEGORY = "selfconfirm"
+
+/** Sentinel `category` the SIG-477 execution-sandbox eligibility gate records under —
+ *  the eligible/ineligible distribution, a SEPARATE corpus from all the others (no
+ *  schema migration; kept out of the worker-token aggregates). */
+export const REPRODUCE_ELIGIBILITY_CATEGORY = "reproduce_eligibility"
 
 export interface VerificationMetricsQuery {
   /** verdict → category → count. WORKER-TOKEN only (excludes receipt-join). */
@@ -142,6 +168,16 @@ export interface VerificationMetricsQuery {
     total: number
     confirmedFraction: number
     upliftFraction: number
+  }
+  /** SIG-477 PR-1: the execution-sandbox eligibility distribution (separate corpus).
+   *  `eligibleFraction = eligible / (eligible + ineligible)` — THE GO/NO-GO deciding
+   *  whether the reproduce engine (PR-2+) is worth building. Divide-by-zero guarded
+   *  (empty corpus → 0). */
+  reproduceEligibility: {
+    eligible: number
+    ineligible: number
+    total: number
+    eligibleFraction: number
   }
   window: { days: number; startDay: string; endDay: string }
 }
@@ -224,6 +260,7 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const rjByVerdict: Record<string, number> = {}
     const tlByTier: Record<string, number> = {}
     const scByVerdict: Record<string, number> = {}
+    const reByVerdict: Record<string, number> = {}
     let total = 0
     let tlTotal = 0
     for (const row of sql.exec<{ verdict: string; category: string; total: number }>(
@@ -250,6 +287,10 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         scByVerdict[row.verdict] = (scByVerdict[row.verdict] ?? 0) + row.total
         continue
       }
+      if (row.category === REPRODUCE_ELIGIBILITY_CATEGORY) {
+        reByVerdict[row.verdict] = (reByVerdict[row.verdict] ?? 0) + row.total
+        continue
+      }
       ;(counts[row.verdict] ??= {})[row.category] = row.total
       byVerdict[row.verdict] = (byVerdict[row.verdict] ?? 0) + row.total
       total += row.total
@@ -273,6 +314,13 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const scConfirmed = scUplift + scRedundant
     const scTotal = scConfirmed + scInconclusive
 
+    // SIG-477 PR-1: execution-sandbox eligibility corpus. eligibleFraction =
+    // eligible/(eligible+ineligible) — the GO/NO-GO deciding whether the reproduce
+    // engine (PR-2+) is worth building.
+    const reEligible = reByVerdict["eligible" satisfies ReproduceEligibilityVerdict] ?? 0
+    const reIneligible = reByVerdict["ineligible" satisfies ReproduceEligibilityVerdict] ?? 0
+    const reTotal = reEligible + reIneligible
+
     return {
       counts,
       byVerdict,
@@ -294,6 +342,12 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         total: scTotal,
         confirmedFraction: ratio(scConfirmed, scTotal),
         upliftFraction: ratio(scUplift, scConfirmed),
+      },
+      reproduceEligibility: {
+        eligible: reEligible,
+        ineligible: reIneligible,
+        total: reTotal,
+        eligibleFraction: ratio(reEligible, reTotal),
       },
       window: { days: args.windowDays, startDay, endDay },
     }

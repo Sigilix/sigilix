@@ -38,6 +38,19 @@ describe("runPureLogicHarness — REPRODUCED on a real logic divergence (two-sid
     expect(res.status).toBe("reproduced")
   })
 
+  it("reproduces a 2-arg off-by-one that diverges on the FIRST (string) arg — locks battery sampling", async () => {
+    // Divergence requires arg0 to be a STRING (length defined). The old truncated
+    // cartesian pinned arg0 to its first few numeric pool values → never diverged;
+    // even-sampling makes arg0 span the full pool. Agrees when arg0 is a number.
+    const res = await runPureLogicHarness(
+      withPair(
+        `(label, n) => (label.length > n ? label[n] : "x")`,
+        `(label, n) => (label.length > n ? label[n - 1] : "x")`,
+      ),
+    )
+    expect(res.status).toBe("reproduced")
+  })
+
   it("lifts the buggy fn from a body code fence + the fix from suggestedReplacement", async () => {
     const res = await runPureLogicHarness({
       body: "The loop bound is inclusive:\n```js\nfunction f(n){return n<=0 ? 0 : n+1;}\n```\n",

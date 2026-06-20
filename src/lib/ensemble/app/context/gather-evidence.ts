@@ -330,6 +330,11 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // map for its AST proof — trigger the fetch so it can't silently no-op (and
   // mis-read as "0 would-drops") if the other AST features are ever flipped off.
   const wantLogicClaimRefutation = ensembleConfig.validatorModes.logicClaimRefutationMode !== "off"
+  // SIG-477 PR-4b: the reproduce pass reconstructs the buggy + fixed FUNCTION from
+  // the full-file source (findings cite only line-level fragments), so it needs this
+  // map populated whenever reproduce is on — else it can't lift a function pair and
+  // every pure-logic finding records `not-liftable-closure`.
+  const wantReproduce = ensembleConfig.flags.reproduceMode !== "off"
   const astFilesByPath = new Map<string, string>()
   if (
     (astRulesConfig.enabled ||
@@ -339,7 +344,8 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
       asymmetryMode !== "off" ||
       toctouMode !== "off" ||
       wantWindowBlindness ||
-      wantLogicClaimRefutation) &&
+      wantLogicClaimRefutation ||
+      wantReproduce) &&
     jsTsPaths.length > 0
   ) {
     const astFetchStartedAtMs = Date.now()

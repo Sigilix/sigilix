@@ -784,14 +784,13 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // marker<->finding index alignment the builder relies on (SIG-127).
     let findingMarkers: Array<string | null> = findingMarkersFromPrep
 
-    // SIG-88 (2026-05-18): on the merged branch, we now submit a
-    // marker-only APPROVE instead of bailing to a skip-notice. Posting
-    // REQUEST_CHANGES on already-merged code is noise (and was the
-    // pre-ARC-286 behavior that ARC-286 fixed by bailing); CodeRabbit
-    // posts a lightweight APPROVE here so the GitHub Checks UI shows
-    // a clean "passed" state instead of an empty skip. The ensemble
-    // verdict we just computed is discarded — submitting it as
-    // REQUEST_CHANGES would compete with the merge.
+    // SIG-88 (2026-05-18): on the merged branch, we submit a marker-only
+    // APPROVE instead of bailing to a skip-notice. Posting REQUEST_CHANGES on
+    // already-merged code is noise (the pre-ARC-286 behavior ARC-286 fixed by
+    // bailing); a lightweight APPROVE here gives the GitHub Checks UI a clean
+    // "passed" state instead of an empty skip. The ensemble verdict we just
+    // computed is discarded — submitting it as REQUEST_CHANGES would compete
+    // with the merge.
     const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
     if (mergeGuard.shouldSkip) {
       telemetry.fellBackReason = "merged_during_review"
@@ -874,6 +873,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       renderableUnanchoredForSubmission,
       findingMarkers,
       astSecurityFindings: securityAstFactsForReceiptJoin(astResult), // SIG-470: co-located class → VERIFIED
+      astFilesByPath, // SIG-477 PR-4b: full-file source for pure-logic function reconstruction
     })
     findingMarkers = findingMarkersAfterBuild
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)

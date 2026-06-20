@@ -27,3 +27,19 @@ one documented danger (exposing host `fetch` with cookies) is avoided by never w
 any host bridge. Caps (memory / max-stack / deadline-interrupt) are set on the runtime
 BEFORE any `evalCode`; context + runtime disposed in `finally` on every path;
 `runInSandbox` never throws. Per-PR aggregate budget in `sandbox-budget.ts`.
+
+## Harnesses
+
+A harness lifts a finding's cited code, runs it in the sandbox, and returns an
+OBJECTIVE verdict — so `reproduced` means "we ran it and saw the bug", never model
+judgment. Each is pure-ish (calls `runInSandbox`) and NEVER throws.
+
+- **`harness-redos.ts`** (SIG-477 PR-3, the first) — catastrophic-backtracking
+  (ReDoS). Extracts the first RegExpLiteral from the cited code (AST), then runs a
+  deterministic **two-sided** test: a BENIGN short input must return fast, AND a small
+  ADVERSARIAL pump input (`pumpChar.repeat(N) + mismatch`) must TIME OUT at small N
+  *and reproduce on a re-run*. Only then → `reproduced`. A SAFE regex never trips side
+  two → `inconclusive` (the FP-safety; the harness NEVER refutes). No extractable
+  regex / over-budget / any error → `skipped`. Wired in `verify-and-build.ts` in
+  **SHADOW** (measure-only, the `reproduce_result` corpus); the customer flip (annotate
+  the `reproduced-by-execution` tier in `on`) is PR-5.

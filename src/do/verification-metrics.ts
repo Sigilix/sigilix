@@ -50,6 +50,7 @@ export type VerificationCategory =
   | "trustledger"
   | "selfconfirm"
   | "reproduce_eligibility"
+  | "reproduce_result"
 
 /** SIG-476 PR2: the in-worker self-confirmation verdict (the `selfconfirm` corpus).
  *  Both `uplift` and `redundant` imply the finding was CONFIRMED by our independent
@@ -67,6 +68,16 @@ export type SelfConfirmVerdict = "uplift" | "redundant" | "inconclusive"
  *  miscounted. The eligible FRACTION is the GO/NO-GO deciding whether the engine
  *  (PR-2+) is worth building. */
 export type ReproduceEligibilityVerdict = "eligible" | "ineligible"
+
+/** SIG-477 PR-3: the execution-HARNESS result verdict (the `reproduce_result` corpus).
+ *  `reproduced` = the sandbox actually re-ran the finding's cited code and observed the
+ *  predicted failure (e.g. a ReDoS regex's catastrophic backtracking — the honest
+ *  two-sided test fired); `inconclusive` = the harness ran but could NOT prove the
+ *  failure (it NEVER refutes); `skipped` = nothing to run / over-budget / a fail-safe.
+ *  A closed union so the corpus can't be silently miscounted. `reproducedFraction` =
+ *  reproduced / (reproduced + inconclusive) is the GO/NO-GO for the PR-5 customer flip;
+ *  `skipped` is reported separately (it isn't an attempt that produced a verdict). */
+export type ReproduceResultVerdict = "reproduced" | "inconclusive" | "skipped"
 
 /**
  * One verdict record. Discriminated by `category` so the `verdict` value can't be
@@ -99,8 +110,18 @@ export type RecordVerificationArgs =
       occurredAt?: string
     }
   | {
+      /** SIG-477 PR-3 — the execution-HARNESS result corpus. */
+      category: "reproduce_result"
+      verdict: ReproduceResultVerdict
+      /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+      occurredAt?: string
+    }
+  | {
       /** Worker-token verdicts (`logic`/`security`) + the receipt-join corpus. */
-      category: Exclude<VerificationCategory, "trustledger" | "selfconfirm" | "reproduce_eligibility">
+      category: Exclude<
+        VerificationCategory,
+        "trustledger" | "selfconfirm" | "reproduce_eligibility" | "reproduce_result"
+      >
       verdict: VerificationVerdict
       /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
       occurredAt?: string
@@ -125,6 +146,11 @@ export const SELFCONFIRM_CATEGORY = "selfconfirm"
  *  the eligible/ineligible distribution, a SEPARATE corpus from all the others (no
  *  schema migration; kept out of the worker-token aggregates). */
 export const REPRODUCE_ELIGIBILITY_CATEGORY = "reproduce_eligibility"
+
+/** Sentinel `category` the SIG-477 PR-3 execution HARNESS records its result under —
+ *  the reproduced/inconclusive/skipped distribution, a SEPARATE corpus from all the
+ *  others (no schema migration; kept out of the worker-token aggregates). */
+export const REPRODUCE_RESULT_CATEGORY = "reproduce_result"
 
 export interface VerificationMetricsQuery {
   /** verdict → category → count. WORKER-TOKEN only (excludes receipt-join). */
@@ -178,6 +204,19 @@ export interface VerificationMetricsQuery {
     ineligible: number
     total: number
     eligibleFraction: number
+  }
+  /** SIG-477 PR-3: the execution-HARNESS result distribution (separate corpus).
+   *  `reproducedFraction = reproduced / (reproduced + inconclusive)` — the share of
+   *  ATTEMPTED reproductions that succeeded (the GO/NO-GO for the PR-5 customer flip).
+   *  `skipped` is reported separately (it isn't an attempt that produced a verdict),
+   *  so it is EXCLUDED from the fraction denominator. Divide-by-zero guarded. */
+  reproduceResult: {
+    reproduced: number
+    inconclusive: number
+    skipped: number
+    /** reproduced + inconclusive (the harness runs that produced a verdict). */
+    total: number
+    reproducedFraction: number
   }
   window: { days: number; startDay: string; endDay: string }
 }
@@ -261,6 +300,7 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const tlByTier: Record<string, number> = {}
     const scByVerdict: Record<string, number> = {}
     const reByVerdict: Record<string, number> = {}
+    const rrByVerdict: Record<string, number> = {}
     let total = 0
     let tlTotal = 0
     for (const row of sql.exec<{ verdict: string; category: string; total: number }>(
@@ -289,6 +329,10 @@ export class VerificationMetricsDO extends DurableObject<Env> {
       }
       if (row.category === REPRODUCE_ELIGIBILITY_CATEGORY) {
         reByVerdict[row.verdict] = (reByVerdict[row.verdict] ?? 0) + row.total
+        continue
+      }
+      if (row.category === REPRODUCE_RESULT_CATEGORY) {
+        rrByVerdict[row.verdict] = (rrByVerdict[row.verdict] ?? 0) + row.total
         continue
       }
       ;(counts[row.verdict] ??= {})[row.category] = row.total
@@ -321,6 +365,15 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const reIneligible = reByVerdict["ineligible" satisfies ReproduceEligibilityVerdict] ?? 0
     const reTotal = reEligible + reIneligible
 
+    // SIG-477 PR-3: execution-HARNESS result corpus. reproducedFraction =
+    // reproduced/(reproduced+inconclusive) — the share of ATTEMPTED reproductions
+    // that succeeded (the GO/NO-GO for the PR-5 customer flip). `skipped` is reported
+    // but EXCLUDED from the denominator (it isn't an attempt that produced a verdict).
+    const rrReproduced = rrByVerdict["reproduced" satisfies ReproduceResultVerdict] ?? 0
+    const rrInconclusive = rrByVerdict["inconclusive" satisfies ReproduceResultVerdict] ?? 0
+    const rrSkipped = rrByVerdict["skipped" satisfies ReproduceResultVerdict] ?? 0
+    const rrTotal = rrReproduced + rrInconclusive
+
     return {
       counts,
       byVerdict,
@@ -348,6 +401,13 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         ineligible: reIneligible,
         total: reTotal,
         eligibleFraction: ratio(reEligible, reTotal),
+      },
+      reproduceResult: {
+        reproduced: rrReproduced,
+        inconclusive: rrInconclusive,
+        skipped: rrSkipped,
+        total: rrTotal,
+        reproducedFraction: ratio(rrReproduced, rrTotal),
       },
       window: { days: args.windowDays, startDay, endDay },
     }

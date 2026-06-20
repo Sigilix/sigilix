@@ -81,6 +81,11 @@ export async function handleVerificationMetricsRoute(request: Request, env: Env)
       // the numbers are accruing (shadow/on) or the gate is off.
       reproduceMode: parseReproduceMode(env.OPENCLAW_REPRODUCE_MODE),
       reproduceEligibility: metrics.reproduceEligibility,
+      // SIG-477 PR-3: the execution-HARNESS result distribution (separate corpus).
+      // `reproducedFraction` is THE GO/NO-GO for the PR-5 customer flip (the share of
+      // ATTEMPTED reproductions that actually fired); `skipped` is reported separately.
+      // Same `reproduceMode` gates whether the harness ran (shadow/on) or not (off).
+      reproduceResult: metrics.reproduceResult,
     },
     200,
   )

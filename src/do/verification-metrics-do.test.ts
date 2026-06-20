@@ -8,6 +8,7 @@ import {
   TRUSTLEDGER_CATEGORY,
   SELFCONFIRM_CATEGORY,
   REPRODUCE_ELIGIBILITY_CATEGORY,
+  REPRODUCE_RESULT_CATEGORY,
 } from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
@@ -258,6 +259,44 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
       ineligible: 0,
       total: 0,
       eligibleFraction: 0,
+    })
+  })
+
+  it("SIG-477 PR-3: reproduce-result verdicts are a SEPARATE corpus; skipped is excluded from the fraction", async () => {
+    const { do_ } = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security", occurredAt: T }, // worker-token
+      { verdict: "eligible", category: REPRODUCE_ELIGIBILITY_CATEGORY, occurredAt: T }, // eligibility corpus
+      { verdict: "reproduced", category: REPRODUCE_RESULT_CATEGORY, occurredAt: T }, // result corpus ↓
+      { verdict: "reproduced", category: REPRODUCE_RESULT_CATEGORY, occurredAt: T },
+      { verdict: "inconclusive", category: REPRODUCE_RESULT_CATEGORY, occurredAt: T },
+      { verdict: "skipped", category: REPRODUCE_RESULT_CATEGORY, occurredAt: T },
+    ])
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    // Worker-token aggregates EXCLUDE the result corpus (no contamination).
+    expect(out.total).toBe(1)
+    expect(out.byVerdict).toEqual({ confirmed: 1 })
+    expect(out.counts.reproduced).toBeUndefined()
+    // reproduced = 2, inconclusive = 1, skipped = 1; total (attempts) = reproduced +
+    // inconclusive = 3; reproducedFraction = 2/3 = 0.667 — skipped is NOT in the denom.
+    expect(out.reproduceResult).toEqual({
+      reproduced: 2,
+      inconclusive: 1,
+      skipped: 1,
+      total: 3,
+      reproducedFraction: 0.667,
+    })
+  })
+
+  it("reproduceResult is zeroed (no divide-by-zero) on an empty corpus", async () => {
+    const { do_ } = makeDo()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.reproduceResult).toEqual({
+      reproduced: 0,
+      inconclusive: 0,
+      skipped: 0,
+      total: 0,
+      reproducedFraction: 0,
     })
   })
 

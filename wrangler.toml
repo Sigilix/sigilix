@@ -540,18 +540,17 @@ OPENCLAW_RECEIPTJOIN_MODE = "shadow"
 # or should be a GROUNDED sub-state. Rollback: set "off".
 OPENCLAW_SELFCONFIRM_MODE = "shadow"
 
-# SIG-477 PR-1 (2026-06-19): execution-sandbox eligibility gate — "off" | "shadow" |
-# "on". Flipped off -> "shadow" to START the GO/NO-GO measurement: the PR-1 PURE gate
-# (`isReproducibleEligible`) re-checks each submitted finding (already grounded + an
-# executable allowlist class: ReDoS / pure-function-logic / hmac-byte-divergence + a
-# dependency-closure-PURE, non-fabricated, liftable closure) and persists the
-# eligible/ineligible distribution to VerificationMetricsDO under the
-# `reproduce_eligibility` category. DARK IN EVERY MODE — this gate NEVER executes,
-# NEVER renders, and NEVER mutates a trust tier; even "on" only MEASURES here (the
-# execute -> `reproduced-by-execution` annotate is PR-5 with the QuickJS runner). Read
-# GET /metrics/verification -> `reproduceEligibility.eligibleFraction`: THE number
-# deciding whether the reproduce engine (PR-2+) is worth building. Rollback: set "off".
-OPENCLAW_REPRODUCE_MODE = "shadow"
+# SIG-477: execution-sandbox reproduce mode — "off" | "shadow" | "on".
+# "shadow": eligibility + the QuickJS harness run and telemeter (reproduce_eligibility /
+# reproduce_result), but NO tier mutation, NO pill. "on" (PR-5, 2026-06-20): on a real
+# reproduction the finding is annotated `reproduced-by-execution` (rank 6, below
+# runner-confirmed) and renders the blue REPRODUCED pill. SAFE: the FP eval
+# (npm run reproduce-fp-eval) measures 0% over-fire on behavior-preserving changes,
+# annotate is PROMOTION-ONLY (never demotes), reproduction requires the finding to be
+# GROUNDED first, and the model-authored `failureExample` overclaim is suppressed under
+# REPRODUCED. Rollback: set "shadow" (or "off"). Read GET /metrics/verification ->
+# reproduceEligibility / reproduceResult.
+OPENCLAW_REPRODUCE_MODE = "on"
 
 # SIG Trust Ledger v0: "off" (default) | "shadow" | "on". `shadow` attaches the
 # per-finding trust tier (worker-token-confirmed / runner-confirmed / deterministic-

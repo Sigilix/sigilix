@@ -50,22 +50,33 @@ judgment. Each is pure-ish (calls `runInSandbox`) and NEVER throws.
   > (deferred), not engine-timeout.
 
 - **`harness-purelogic.ts`** (SIG-477 PR-4, **the v1 wedge**) — pure-function logic
-  divergence (off-by-one / fence-post / boundary / coercion). Lifts BOTH the BUGGY
-  function (from `failureExample` / `astEvidence` / body fences) AND the corrected
-  function (from `suggestedReplacement` / `fixExample`) into callable expressions (AST
-  slice; a declaration is wrapped to yield its value), then runs both over a
-  boundary-biased input **battery** in the sandbox and tallies agree/diverge. The
-  **two-sided** test: `reproduced` only when they **AGREE on ≥1** input (same function
-  bar a targeted defect) **AND DIVERGE on ≥1** input (the buggy code returns a
-  different value somewhere) **AND** the tally re-runs identically. all-agree →
-  `inconclusive` (no-divergence); all-diverge → `inconclusive` (wholesale rewrite, FP-
-  safe); arity mismatch / no liftable pair / error → `skipped`. **Why this, not
-  ReDoS:** a pure function's output is ENGINE-INDEPENDENT (identical in QuickJS and
-  V8), the signal is a deterministic output comparison (no timeout flakiness), and a
-  runaway buggy loop is BYTECODE — exactly what the opcode-cycle interrupt bounds.
+  divergence (off-by-one / fence-post / boundary / coercion). Runs the BUGGY function and
+  the corrected function side-by-side over a boundary-biased input **battery** and tallies
+  agree/diverge. Decision: `reproduced` iff they **DIVERGE on ≥1** input AND the tally
+  re-runs identically; all-AGREE (diverge=0) → `inconclusive` (the fix is a no-op on the
+  battery — the FP-safety floor: a behavior-PRESERVING change never reproduces). all-DIVERGE
+  is NOT special-cased — under reconstruction (below) the two are never unrelated functions,
+  so all-diverge is a real constant-offset bug. Lifting **strips TS types** and selects the
+  OUTERMOST function. **Why this, not ReDoS:** a pure function's output is ENGINE-INDEPENDENT
+  (identical in QuickJS and V8), the signal is a deterministic output comparison (no timeout
+  flakiness), and a runaway loop is BYTECODE — exactly what the opcode-cycle interrupt bounds.
+  - **Type-aware battery**: each param is swept over an IN-TYPE pool from its TS annotation
+    (+ the function's own numeric literals ±1 for boundary comparisons); an `any`/untyped
+    param gets the full mixed pool. Plus a CANONICAL (object-key-order-insensitive) result
+    serializer. Together these stop a type-correct equivalent rewrite (`x*2` vs `x+x`) or an
+    object-key reorder (`{x,y}` vs `{y,x}`) from FALSELY diverging.
 
-Both harnesses are dispatched by `run-reproduce-pass.ts` (the eligibility loop +
-per-class harness, extracted from `verify-and-build.ts`) in **SHADOW** (measure-only,
-the `reproduce_eligibility` + `reproduce_result` corpora; no tier mutation, no pill).
-The customer flip (annotate the `reproduced-by-execution` tier in mode `on`, render the
-REPRODUCED pill) is PR-5, gated on a confirmed live reproduction + a clean shadow soak.
+- **`../ensemble/app/reconstruct-pure-logic.ts`** (SIG-477 PR-4b) — the INPUT layer. Real
+  findings cite code at the LINE level (a one-line `suggestedReplacement`), not a whole
+  function. So reconstruct the pair from the full NEW-side file source: find the smallest
+  function enclosing `finding.line` (the BUGGY fn), splice the suggestion in (the FIXED fn),
+  feed the harness that pair. Fail-opens to skip on a LEFT anchor / missing source / no
+  enclosing fn / unchanged fn. Without this the harness never fires on real findings.
+
+The harnesses are dispatched by `../ensemble/app/run-reproduce-pass.ts` (eligibility loop +
+reconstruction + per-class harness). FP-safety + recall are measured by the corpus eval
+`e2e/reproduce-fp-eval.test.ts` (`npm run reproduce-fp-eval`): **100% recall, 0% over-fire**
+on behavior-preserving changes, modelfp=100% worst-case (the harness proves divergence, not
+wrongness — REPRODUCED therefore requires the finding to be GROUNDED first). Customer flip
+(SIG-477 PR-5): annotate the `reproduced-by-execution` tier in mode `on`, render the
+REPRODUCED pill, suppress the model-authored `failureExample` overclaim.

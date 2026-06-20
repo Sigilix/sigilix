@@ -74,6 +74,114 @@ function spliceLines(source: string, startLine: number, endLine: number, replace
   return [...before, ...replLines, ...after].join("\n")
 }
 
+/** Normalize a line for similarity matching: trim + collapse internal whitespace. */
+function normalizeLine(s: string): string {
+  return s.trim().replace(/\s+/g, " ")
+}
+
+/** Levenshtein distance, bounded (caller caps input length). */
+function levenshtein(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  let prev = Array.from({ length: n + 1 }, (_, j) => j)
+  let curr = new Array<number>(n + 1)
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min((prev[j] ?? 0) + 1, (curr[j - 1] ?? 0) + 1, (prev[j - 1] ?? 0) + cost)
+    }
+    ;[prev, curr] = [curr, prev]
+  }
+  return prev[n] ?? Math.max(m, n)
+}
+
+/** Char-level similarity in [0,1] (1 = identical). */
+function similarity(a: string, b: string): number {
+  const max = Math.max(a.length, b.length)
+  return max === 0 ? 1 : 1 - levenshtein(a, b) / max
+}
+
+// SIG-479 tolerant-locate tuning (FP-safety hardened per DeepSeek): the line a fix
+// REPLACES is its NEAR-TWIN (an off-by-one differs by ~1 char). We NEVER splice a line
+// that isn't a near-twin (≥ MIN_SIMILARITY) — that prevents splicing the fix into an
+// unrelated line and fabricating a divergence (the false-reproduce vector). When several
+// lines are near-twins we PREFER one within ±PROXIMITY of the finding's anchor (mis-
+// anchoring is usually local — a header just above the bug); only go GLOBAL when no local
+// near-twin exists, and then require a clear MARGIN over the runner-up so a coincidental
+// near-clone elsewhere can't win (it safely skips instead → never a false reproduce).
+const LOCATE_MIN_SIMILARITY = 0.8
+const LOCATE_MIN_MARGIN = 0.1
+const LOCATE_PROXIMITY = 12
+const LOCATE_MAX_LINE_LEN = 400
+
+/**
+ * SIG-479: locate the buggy line by matching the (single-line) FIX against the source.
+ * Real findings often anchor `finding.line` to the function header / an adjacent
+ * function, so the enclosing-fn lookup grabs the wrong function. The fix is a near-twin
+ * of the line it replaces. Returns a 1-based line (a confident near-twin) or null.
+ *   - PROXIMITY: among near-twins within ±LOCATE_PROXIMITY of `anchorLine`, take the most
+ *     similar (ties → closest) — a LOCAL mis-anchor, no margin needed.
+ *   - GLOBAL: else the single best near-twin, but ONLY if it beats the runner-up by
+ *     ≥ MARGIN (a tie among far near-clones → null, the FP-safe skip).
+ */
+function locateNearTwinLine(source: string, fixLine: string, anchorLine: number): number | null {
+  const target = normalizeLine(fixLine)
+  if (target.length === 0 || target.length > LOCATE_MAX_LINE_LEN) return null
+  const lines = source.split(/\r?\n/)
+  const candidates: Array<{ line: number; sim: number }> = []
+  for (let i = 0; i < lines.length; i++) {
+    const norm = normalizeLine(lines[i] ?? "")
+    if (norm.length === 0 || norm.length > LOCATE_MAX_LINE_LEN) continue
+    if (norm === target) continue // the fix is already present here — not the buggy line
+    const sim = similarity(norm, target)
+    if (sim >= LOCATE_MIN_SIMILARITY) candidates.push({ line: i + 1, sim })
+  }
+  if (candidates.length === 0) return null
+  // PROXIMITY: prefer a local near-twin — BUT require the same clear MARGIN as the global
+  // path. Without it, two sibling functions with an identical line (finding mis-anchored
+  // at the second's header) would coin-flip to the closest = a false reproduce on a
+  // non-bug. Near-equal local clones → null (the FP-safe skip), never closest-wins.
+  const local = candidates.filter((c) => Math.abs(c.line - anchorLine) <= LOCATE_PROXIMITY)
+  if (local.length > 0) {
+    local.sort((a, b) => b.sim - a.sim || Math.abs(a.line - anchorLine) - Math.abs(b.line - anchorLine))
+    const top = local[0]
+    const runnerUp = local[1]?.sim ?? 0
+    return top && top.sim - runnerUp >= LOCATE_MIN_MARGIN ? top.line : null
+  }
+  // GLOBAL: a single confident winner with a clear margin only.
+  candidates.sort((a, b) => b.sim - a.sim)
+  const best = candidates[0]
+  const second = candidates[1]?.sim ?? 0
+  if (best && best.sim - second >= LOCATE_MIN_MARGIN) return best.line
+  return null
+}
+
+/** Splice `repl` into the FIRST of `ranges` that yields a parseable, CHANGED enclosing
+ *  function (extracted at the splice start). The buggy side is the function enclosing
+ *  `enclosingLine`. Returns the pair or null. */
+function reconstructFromRanges(
+  source: string,
+  ranges: ReadonlyArray<[number, number]>,
+  repl: string,
+  enclosingLine: number,
+  ext: SourceExt,
+): ReconstructedPair | null {
+  const buggy = enclosingFunctionText(source, enclosingLine, ext)
+  if (buggy === null) return null
+  for (const [s, e] of ranges) {
+    if (s < 1 || s > e) continue
+    const fixedSource = spliceLines(source, s, e, repl)
+    if (fixedSource === null) continue
+    const fixed = enclosingFunctionText(fixedSource, s, ext)
+    if (fixed === null || buggy.trim() === fixed.trim()) continue // no change → no two-sided test
+    return { buggy, fixed }
+  }
+  return null
+}
+
 /**
  * Reconstruct the BUGGY + FIXED function for a pure-logic finding from the full-file
  * NEW-side `source`. Returns null on any guard (see module header). NEVER throws.
@@ -92,44 +200,47 @@ export function reconstructPureLogicPair(
     if (typeof repl !== "string" || repl.trim().length === 0) return null
 
     const ext = extForPath(finding.path)
-
-    // BUGGY: the smallest function enclosing the finding line in the original file.
-    const buggy = enclosingFunctionText(source, line, ext)
-    if (buggy === null) return null
-
-    // FIXED: splice `repl` into the source and re-extract the enclosing function.
-    // The range `repl` actually replaces is ambiguous — `startLine` is often the wider
-    // ENCLOSING-BLOCK start (e.g. the function header), not the literal replaced span,
-    // so splicing [startLine, line] with a one-line fix can delete the header and make
-    // the file unparseable. So try candidate ranges (narrowest-meaningful first) and
-    // take the FIRST that yields a parseable, CHANGED enclosing function:
-    //   - a SINGLE-line fix replaces just the anchor line [line, line];
-    //   - a K-line fix replaces the documented [startLine ?? line, line], then the
-    //     K lines ending at the anchor [line-K+1, line], then the anchor line alone.
     const replLineCount = repl.replace(/\r?\n$/, "").split(/\r?\n/).length
     const startLine = typeof finding.startLine === "number" && finding.startLine >= 1 ? finding.startLine : line
-    const candidateRanges: Array<[number, number]> =
-      replLineCount === 1
-        ? [
-            [line, line],
-            [startLine, line],
-          ]
-        : [
-            [startLine, line],
-            [line - replLineCount + 1, line],
-            [line, line],
-          ]
-    for (const [s, e] of candidateRanges) {
-      if (s < 1 || s > e) continue
-      const fixedSource = spliceLines(source, s, e, repl)
-      if (fixedSource === null) continue
-      const fixed = enclosingFunctionText(fixedSource, s, ext)
-      if (fixed === null) continue
-      // A fix that doesn't change the function gives no two-sided test → try the next.
-      if (buggy.trim() === fixed.trim()) continue
-      return { buggy, fixed }
+
+    if (replLineCount === 1) {
+      // SIG-479: locate the buggy line by NEAR-TWIN match to the fix (FP-guarded) so a
+      // mis-anchored `finding.line` (header / adjacent fn) still reconstructs the RIGHT
+      // function — the near-twin requirement means we never splice an unrelated line.
+      const anchor = locateNearTwinLine(source, repl, line)
+      if (anchor !== null) {
+        const r = reconstructFromRanges(source, [[anchor, anchor]], repl, anchor, ext)
+        if (r !== null) return r
+      }
+      // Fallback (pre-SIG-479 behavior): documented ranges at the finding's anchor —
+      // covers a single-line fix that COLLAPSES a multi-line block (no near-twin), and
+      // the correctly-anchored case. [line,line] first (a 1-line fix usually replaces
+      // just the anchor), then the wider [startLine,line].
+      return reconstructFromRanges(
+        source,
+        [
+          [line, line],
+          [startLine, line],
+        ],
+        repl,
+        line,
+        ext,
+      )
     }
-    return null
+
+    // Multi-line fix: documented ranges at the finding's anchor (no tolerant relocation
+    // in v1 — single-line is the dominant + the observed mis-anchored case).
+    return reconstructFromRanges(
+      source,
+      [
+        [startLine, line],
+        [line - replLineCount + 1, line],
+        [line, line],
+      ],
+      repl,
+      line,
+      ext,
+    )
   } catch {
     return null
   }

@@ -8,6 +8,7 @@ import {
   TRUSTLEDGER_CATEGORY,
   SELFCONFIRM_CATEGORY,
   REPRODUCE_ELIGIBILITY_CATEGORY,
+  REPRODUCE_RESULT_CATEGORY,
 } from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
@@ -257,6 +258,41 @@ describe("handleVerificationMetricsRoute", () => {
   it("defaults reproduceMode to off when OPENCLAW_REPRODUCE_MODE is unset", async () => {
     const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
     expect(((await res.json()) as { reproduceMode: string }).reproduceMode).toBe("off")
+  })
+
+  it("SIG-477 PR-3: surfaces the reproduceResult corpus, kept out of the worker-token totals", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security" }, // worker-token
+      { verdict: "reproduced", category: REPRODUCE_RESULT_CATEGORY },
+      { verdict: "inconclusive", category: REPRODUCE_RESULT_CATEGORY },
+      { verdict: "skipped", category: REPRODUCE_RESULT_CATEGORY },
+    ])
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_REPRODUCE_MODE: "shadow" }, do_),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number
+      reproduceMode: string
+      reproduceResult: {
+        reproduced: number
+        inconclusive: number
+        skipped: number
+        total: number
+        reproducedFraction: number
+      }
+    }
+    expect(body.total).toBe(1) // worker-token only — result corpus excluded
+    expect(body.reproduceMode).toBe("shadow")
+    expect(body.reproduceResult).toEqual({
+      reproduced: 1,
+      inconclusive: 1,
+      skipped: 1,
+      total: 2, // skipped excluded from the attempt total
+      reproducedFraction: 0.5,
+    })
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {

@@ -84,11 +84,10 @@ export type { EnsembleHandlerArgs }
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise<EnsembleResult> {
-  // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode
-  // routing (shadow vs post) is gone; this handler is the only
-  // production review path. The `EnsembleTelemetry.mode` field is
-  // pinned to `"post"` for back-compat with downstream analytics
-  // queries that may filter on it.
+  // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode routing (shadow vs
+  // post) is gone; this handler is the only production review path. The
+  // `EnsembleTelemetry.mode` field is pinned to `"post"` for back-compat with
+  // downstream analytics queries that may filter on it.
   const mode = "post" as const
   const { owner, repo, prNumber, headSha, installationId, env } = args
   // SIG-318 (PR 5a): typed config parsed once at the Worker edge and injected via
@@ -846,6 +845,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       repo,
       prNumber,
       headSha,
+      startMs, // SIG-477 PR-3: under-load guard for the SHADOW ReDoS harness
       ensembleConfig,
       validationSink: args.validationSink,
       meta,

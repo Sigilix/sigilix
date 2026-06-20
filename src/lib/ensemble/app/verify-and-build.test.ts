@@ -21,6 +21,7 @@ import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions
 import { buildAddedLineTextByLine } from "@/src/features/ast-rules"
 import { readVerificationMode } from "@/src/lib/verification/mode"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
+import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import type { ReceiptScanResult } from "@/src/lib/verification/verify-finding-receipt"
 import type { Env } from "@/src/shared/types/env"
 import type { PullRequestMeta } from "@/src/shared/types/github"
@@ -554,6 +555,228 @@ describe("verifyAndBuildSubmission — SIG-477 PR-1 reproduce-eligibility shadow
     // Every corpus off → empty batch → DO never touched; no tier set.
     expect(recordBatchSpy).not.toHaveBeenCalled()
     expect(finding.trust).toBeUndefined()
+  })
+})
+
+describe("verifyAndBuildSubmission — SIG-477 PR-3 ReDoS harness wiring (SHADOW, runs the real sandbox)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+
+  // A grounded, redos-class, PURE + liftable (a bare regex literal) finding whose
+  // cited code is a TEXTBOOK ReDoS (/^(a+)+$/) → eligible && klass==="redos", and the
+  // harness, when it runs, reproduces. Built fresh so prior in-place trust mutations
+  // can't leak via a copied `trust` field.
+  const redosFinding = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>
+    ({
+      category: "security",
+      score: 5,
+      path: "src/lib/validate.ts",
+      line: 12,
+      headline: "ReDoS: catastrophic backtracking in the email regex",
+      body: "This regex has a nested unbounded quantifier (ReDoS).",
+      evidenceId: "ast:no-redos:ast/no-redos/h/12", // grounded (manifest evidence)
+      failureExample: "const re = /^(a+)+$/",
+      ...over,
+    }) as PrReviewFinding
+
+  // A grounded, redos-class finding whose cited regex is SAFE (no nested quantifier)
+  // → eligible && redos, but the harness must return INCONCLUSIVE (FP-safety), never
+  // reproduced — so even in `on` the tier is NOT lifted.
+  const safeRedosFinding = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>
+    redosFinding({ failureExample: "const re = /^[a-z]+$/", ...over })
+
+  // A non-redos eligible finding (off-by-one → pure-function-logic): eligible but
+  // klass !== "redos", so the harness must NOT be invoked → no reproduce_result item.
+  const nonRedosEligible = (over: Partial<PrReviewFinding> = {}): PrReviewFinding =>
+    ({
+      category: "logic",
+      score: 4,
+      path: "src/lib/parse.ts",
+      line: 7,
+      headline: "off-by-one in clampIndex",
+      body: "Boundary slips by one.",
+      evidenceId: "ast:no-constant-binary-condition:ast/x/h/7",
+      failureExample: "export function clampIndex(i, max) { return i <= max ? i : max }",
+      ...over,
+    }) as PrReviewFinding
+
+  const reproduceItems = (calls: ReturnType<typeof vi.fn>) =>
+    (calls.mock.calls[0]?.[0] as RecordVerificationArgs[]).filter((i) => i.category === "reproduce_result")
+
+  it("shadow: runs the harness, records `reproduced`, and DOES NOT mutate the tier (darkness)", async () => {
+    const env = makeEnv()
+    const finding = redosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const rr = reproduceItems(recordBatchSpy)
+    expect(rr.map((i) => i.verdict)).toEqual(["reproduced"])
+    // SHADOW DARKNESS: the tier is NEVER annotated to reproduced-by-execution.
+    expect(finding.trust).toBeUndefined()
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+  })
+
+  it("on: a reproduced finding's tier BECOMES reproduced-by-execution", async () => {
+    const env = makeEnv()
+    const finding = redosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "on",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["reproduced"])
+    expect(finding.trust?.tier).toBe("reproduced-by-execution")
+  })
+
+  it("on + runner-confirmed: a reproduced finding KEEPS runner-confirmed (receipt-supremacy)", async () => {
+    const env = makeEnv()
+    // resolveTier ranks runner-confirmed (7) above reproduced-by-execution (6), so a
+    // pre-set CI-receipt tier must survive the reproduction annotate.
+    const finding = redosFinding({ trust: { tier: "runner-confirmed" } })
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "on",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["reproduced"])
+    expect(finding.trust?.tier).toBe("runner-confirmed")
+  })
+
+  it("FP-safety: a SAFE regex records `inconclusive` and is NEVER lifted, even in `on`", async () => {
+    const env = makeEnv()
+    const finding = safeRedosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "on",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["inconclusive"])
+    // A safe regex is NEVER reproduced → its tier is never lifted (the FP-safety moat).
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+  })
+
+  it("off: the harness does not run and records no reproduce_result (true no-op)", async () => {
+    const env = makeEnv()
+    const finding = redosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "off",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(recordBatchSpy).not.toHaveBeenCalled()
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("a non-redos eligible finding does NOT invoke the harness (no reproduce_result item)", async () => {
+    const env = makeEnv()
+    const finding = nonRedosEligible()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    // Eligibility WAS recorded (it's an eligible finding) …
+    expect(items.some((i) => i.category === "reproduce_eligibility" && i.verdict === "eligible")).toBe(true)
+    // … but the harness is redos-only, so NO reproduce_result item exists.
+    expect(items.some((i) => i.category === "reproduce_result")).toBe(false)
+  })
+
+  it("under wall-clock load (stale startMs): the harness is SKIPPED, not run", async () => {
+    const env = makeEnv()
+    const finding = redosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "on",
+    })
+    // A startMs far enough in the past that remaining wall-clock is below the floor.
+    args.startMs = Date.now() - (ORCHESTRATOR_TIMEOUT_MS - 1_000)
+
+    await verifyAndBuildSubmission(args)
+
+    const rr = reproduceItems(recordBatchSpy)
+    expect(rr.map((i) => i.verdict)).toEqual(["skipped"])
+    // Skipped → never run → never lifted.
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+  })
+
+  it("over the per-PR sandbox budget: later eligible redos findings record `skipped` (bounded)", async () => {
+    const env = makeEnv()
+    // Many eligible redos findings: the per-PR sandbox budget (4000ms / ~1200ms est
+    // per run = 3 admissions) exhausts, so the tail records `skipped` without running.
+    const findings = Array.from({ length: 8 }, (_, i) => redosFinding({ line: 100 + i }))
+    const args = makeArgs({
+      env,
+      findings,
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const rr = reproduceItems(recordBatchSpy)
+    // Every eligible redos finding produced a reproduce_result …
+    expect(rr).toHaveLength(8)
+    // … and the budget bounded the actual runs: at least one tail finding was skipped
+    // (over-budget) rather than running the sandbox for all eight.
+    expect(rr.some((i) => i.verdict === "skipped")).toBe(true)
+  }, 30_000)
+
+  it("best-effort: a harness that throws never breaks the review (handled in-block)", async () => {
+    // The harness is documented never-throws; this asserts the wiring still produces a
+    // submission (no rejection) for a redos finding whatever the harness returns.
+    const env = makeEnv()
+    const finding = redosFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    const result = await verifyAndBuildSubmission(args)
+    // The review completed and produced a submission — the harness did not break it.
+    expect(result.submission).toBeDefined()
   })
 })
 

@@ -89,9 +89,10 @@ export const PURELOGIC_HARNESS_MAX_TOTAL_MS = 2_000
  *  fence-post bugs are overwhelmingly 1-2 arg functions). */
 const MAX_ARITY = 3
 /** Cap on battery size (bounds the in-guest loop → keeps opcode cost under the cycle
- *  cap). The cartesian is generated boundary-first, so the cap keeps the most
- *  informative (small / edge) tuples. */
-const MAX_BATTERY = 64
+ *  cap; ~165 small calls is far under HARNESS_MAX_INTERRUPTS). Sized to admit the FULL
+ *  per-arg anchor sweep for arity ≤ 3 (arity 3 = 3 positions × 3 anchors × 19 pool ≈
+ *  165 before dedup). */
+const MAX_BATTERY = 165
 
 /** Boundary-biased input values: small ints around 0/±1, strings of increasing
  *  length, arrays of increasing length, booleans — exactly where off-by-one /
@@ -118,35 +119,41 @@ const SCALAR_POOL: readonly unknown[] = [
   false,
 ]
 
-/** Build the arg-tuple battery for a given arity. Arity 1 → one tuple per pool value;
- *  higher arity → the FULL cartesian product, then EVENLY SAMPLED down to MAX_BATTERY.
- *  Even-sampling (not truncation) is essential: a truncated cartesian pins the earlier
- *  arg positions to their first few pool values, so a 2-arg fn like `truncate(label,
- *  maxLen)` would only ever see numeric `label`s and never diverge. Sampling across the
- *  whole product makes EVERY arg position span the full pool. */
+/** Representative "other-arg" values held fixed while one position sweeps the pool:
+ *  a small number, a non-trivial string, and a non-trivial array. Sweeping each
+ *  position against each anchor guarantees a single-arg off-by-one is exercised with
+ *  meaningful partners (a length-defined string/array and a small index/count). */
+const ANCHORS: readonly unknown[] = [1, "ab", [1, 2, 3]]
+
+/** Build the arg-tuple battery for a given arity. Arity 1 → one tuple per pool value.
+ *  Higher arity → a PER-ARG ANCHOR SWEEP: for each position, vary it over the full
+ *  pool while holding the other positions at each anchor. This guarantees EVERY arg
+ *  position spans the pool against meaningful partners — a cartesian (even sampled)
+ *  can starve a position and miss a bug that only manifests on, say, the 3rd arg.
+ *  The loops are ordered anchor → value → POSITION (position innermost) so that, if the
+ *  MAX_BATTERY cap trims the tail, every position still gets the full-pool sweep against
+ *  the earlier anchors — a position-OUTERMOST order would starve the last position. */
 function buildBattery(arity: number): unknown[][] {
   if (arity === 1) return SCALAR_POOL.map((v) => [v])
-  const full: unknown[][] = []
-  const rec = (depth: number, acc: unknown[]): void => {
-    if (depth === arity) {
-      full.push(acc.slice())
-      return
-    }
+  const battery: unknown[][] = []
+  const seen = new Set<string>()
+  const add = (tuple: unknown[]): boolean => {
+    const key = JSON.stringify(tuple)
+    if (seen.has(key)) return true
+    seen.add(key)
+    battery.push(tuple)
+    return battery.length < MAX_BATTERY
+  }
+  for (const anchor of ANCHORS) {
     for (const v of SCALAR_POOL) {
-      acc.push(v)
-      rec(depth + 1, acc)
-      acc.pop()
+      for (let p = 0; p < arity; p++) {
+        const tuple = new Array(arity).fill(anchor)
+        tuple[p] = v
+        if (!add(tuple)) return battery
+      }
     }
   }
-  rec(0, [])
-  if (full.length <= MAX_BATTERY) return full
-  const stride = full.length / MAX_BATTERY
-  const sampled: unknown[][] = []
-  for (let k = 0; k < MAX_BATTERY; k++) {
-    const tuple = full[Math.floor(k * stride)]
-    if (tuple !== undefined) sampled.push(tuple)
-  }
-  return sampled
+  return battery
 }
 
 /** Param arity of a function-ish AST node. */

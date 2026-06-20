@@ -50,6 +50,17 @@ describe("reconstructPureLogicPair", () => {
     expect(pair!.fixed).toContain("function truncateLabel")
   })
 
+  it("reconstructs when startLine is the WIDE enclosing-block (the prod #64 shape)", () => {
+    // Real finding: line=4 (the buggy loop) but startLine=2 (the function header), with
+    // a SINGLE-line fix. Splicing [2,4] would delete the header → unparseable; the fix
+    // must replace just the anchor line [4,4]. (Drove the reconstructed:false in prod.)
+    const pair = reconstructPureLogicPair(SRC, finding({ startLine: 2, line: 4 }))
+    expect(pair).not.toBeNull()
+    expect(pair!.fixed).toContain("function truncateLabel")
+    expect(pair!.fixed).toContain("< maxLen")
+    expect(pair!.fixed).not.toContain("<= maxLen")
+  })
+
   it("returns null on a LEFT anchor (old-side line won't resolve in the new-file AST)", () => {
     expect(reconstructPureLogicPair(SRC, finding({ anchorSide: "LEFT" }))).toBeNull()
   })

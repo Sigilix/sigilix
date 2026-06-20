@@ -51,6 +51,15 @@ describe("runPureLogicHarness — REPRODUCED on a real logic divergence (two-sid
     expect(res.status).toBe("reproduced")
   })
 
+  it("reproduces a 3-arg off-by-one that diverges only on the THIRD arg — locks per-position coverage", async () => {
+    // Agree/diverge depends solely on arg2 (n): agrees for n < 1, diverges for n >= 1.
+    // Requires the battery to sweep position 2 over the FULL pool (both <1 and >=1) —
+    // the old cap starved position 2 to the 3 anchor values (all >= 1) → all-diverge →
+    // inconclusive. arg0/arg1 are ignored by the function.
+    const res = await runPureLogicHarness(withPair(`(a, b, n) => (n < 1 ? 0 : n + 1)`, `(a, b, n) => (n < 1 ? 0 : n)`))
+    expect(res.status).toBe("reproduced")
+  })
+
   it("lifts the buggy fn from a body code fence + the fix from suggestedReplacement", async () => {
     const res = await runPureLogicHarness({
       body: "The loop bound is inclusive:\n```js\nfunction f(n){return n<=0 ? 0 : n+1;}\n```\n",

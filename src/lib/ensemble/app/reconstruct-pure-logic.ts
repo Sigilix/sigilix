@@ -97,18 +97,39 @@ export function reconstructPureLogicPair(
     const buggy = enclosingFunctionText(source, line, ext)
     if (buggy === null) return null
 
-    // FIXED: splice the replacement into the anchored range [startLine ?? line, line],
-    // then re-extract the enclosing function at the fix's start (still inside the fn).
+    // FIXED: splice `repl` into the source and re-extract the enclosing function.
+    // The range `repl` actually replaces is ambiguous — `startLine` is often the wider
+    // ENCLOSING-BLOCK start (e.g. the function header), not the literal replaced span,
+    // so splicing [startLine, line] with a one-line fix can delete the header and make
+    // the file unparseable. So try candidate ranges (narrowest-meaningful first) and
+    // take the FIRST that yields a parseable, CHANGED enclosing function:
+    //   - a SINGLE-line fix replaces just the anchor line [line, line];
+    //   - a K-line fix replaces the documented [startLine ?? line, line], then the
+    //     K lines ending at the anchor [line-K+1, line], then the anchor line alone.
+    const replLineCount = repl.replace(/\r?\n$/, "").split(/\r?\n/).length
     const startLine = typeof finding.startLine === "number" && finding.startLine >= 1 ? finding.startLine : line
-    if (startLine > line) return null
-    const fixedSource = spliceLines(source, startLine, line, repl)
-    if (fixedSource === null) return null
-    const fixed = enclosingFunctionText(fixedSource, startLine, ext)
-    if (fixed === null) return null
-
-    // A fix that doesn't change the function gives no two-sided test → skip.
-    if (buggy.trim() === fixed.trim()) return null
-    return { buggy, fixed }
+    const candidateRanges: Array<[number, number]> =
+      replLineCount === 1
+        ? [
+            [line, line],
+            [startLine, line],
+          ]
+        : [
+            [startLine, line],
+            [line - replLineCount + 1, line],
+            [line, line],
+          ]
+    for (const [s, e] of candidateRanges) {
+      if (s < 1 || s > e) continue
+      const fixedSource = spliceLines(source, s, e, repl)
+      if (fixedSource === null) continue
+      const fixed = enclosingFunctionText(fixedSource, s, ext)
+      if (fixed === null) continue
+      // A fix that doesn't change the function gives no two-sided test → try the next.
+      if (buggy.trim() === fixed.trim()) continue
+      return { buggy, fixed }
+    }
+    return null
   } catch {
     return null
   }

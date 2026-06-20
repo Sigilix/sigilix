@@ -183,3 +183,76 @@ describe("runPureLogicHarness — clock-independent (the Cloudflare frozen-clock
     expect(res.detail).toBe("guest-no-tally")
   })
 })
+
+describe("runPureLogicHarness — SIG-478 array-constructor-idiom rewrites (FP-safe)", () => {
+  // A behavior-preserving new-vs-from rewrite must NOT reproduce: it diverges only on an
+  // out-of-domain length (new Array(-1) throws) or, untyped, on coercion inputs — a
+  // constructor-domain artifact, detected at the expression level and bailed BEFORE the
+  // battery (param-type-independent, so it closes BOTH the typed RangeError vector and the
+  // untyped value-coercion vector).
+  it("does NOT reproduce new Array(n).fill(0) vs Array.from({length:n},()=>0) (typed)", async () => {
+    const res = await runPureLogicHarness(
+      withPair(`(n: number) => new Array(n).fill(0)`, `(n: number) => Array.from({ length: n }, () => 0)`),
+    )
+    expect(res.status).toBe("inconclusive")
+    expect(res.detail).toBe("array-ctor-rewrite")
+  })
+
+  it("does NOT reproduce bare new Array(n) vs Array.from({length:n}) on an UNTYPED param (the value-coercion vector)", async () => {
+    // Untyped → the full mixed pool diverges on ~11 inputs (n=-1 RangeError PLUS value
+    // coercions like new Array('a')=['a'] vs Array.from({length:'a'})=[]). An error-message
+    // heuristic can't catch these; the expression-level detector does.
+    const res = await runPureLogicHarness(withPair(`(n) => new Array(n)`, `(n) => Array.from({ length: n })`))
+    expect(res.status).toBe("inconclusive")
+    expect(res.detail).toBe("array-ctor-rewrite")
+  })
+
+  it("does NOT reproduce an index-IGNORING mapper rewrite (Array.from((_,i)=>0) ≡ .fill(0))", async () => {
+    const res = await runPureLogicHarness(
+      withPair(`(n) => new Array(n).fill(0)`, `(n) => Array.from({ length: n }, (_, i) => 0)`),
+    )
+    expect(res.status).toBe("inconclusive")
+    expect(res.detail).toBe("array-ctor-rewrite")
+  })
+
+  // RECALL-SAFETY: the detector preserves length + per-element semantics, so a real change
+  // INSIDE the construction — or any non-array bug — STILL reproduces.
+  it("STILL reproduces a fill-VALUE change inside the construction (0 vs 1)", async () => {
+    const res = await runPureLogicHarness(
+      withPair(`(n: number) => new Array(n).fill(0)`, `(n: number) => new Array(n).fill(1)`),
+    )
+    expect(res.status).toBe("reproduced")
+  })
+
+  it("STILL reproduces a LENGTH off-by-one inside the construction (n vs n+1)", async () => {
+    const res = await runPureLogicHarness(
+      withPair(
+        `(n: number) => Array.from({ length: n }, () => 0)`,
+        `(n: number) => Array.from({ length: n + 1 }, () => 0)`,
+      ),
+    )
+    expect(res.status).toBe("reproduced")
+  })
+
+  it("STILL reproduces an index-USING mapper change ((_,i)=>i is not equivalent to ()=>0)", async () => {
+    const res = await runPureLogicHarness(
+      withPair(
+        `(n: number) => Array.from({ length: n }, () => 0)`,
+        `(n: number) => Array.from({ length: n }, (_, i) => i)`,
+      ),
+    )
+    expect(res.status).toBe("reproduced")
+  })
+
+  it("STILL reproduces the dangerous guard-fix throw→return class (NOT an array rewrite)", async () => {
+    // The ticket's load-bearing recall case: buggy throws (unguarded), fix returns. This is
+    // the SAME tally shape as the array-ctor FP but is a REAL bug — must NOT be suppressed.
+    const res = await runPureLogicHarness(
+      withPair(
+        `(s: string) => s.length > 3 ? s[5].length : 0`,
+        `(s: string) => s.length > 3 ? (s[5] ? s[5].length : 0) : 0`,
+      ),
+    )
+    expect(res.status).toBe("reproduced")
+  })
+})

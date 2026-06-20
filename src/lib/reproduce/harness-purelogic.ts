@@ -388,6 +388,159 @@ function fixedCandidates(finding: PureLogicHarnessInput): string[] {
   return parts
 }
 
+// ── SIG-478: array-constructor-idiom rewrite detector ───────────────────────
+// A behavior-preserving rewrite of the array-construction IDIOM
+// (`new Array(n).fill(v)` ↔ `Array.from({length:n},()=>v)`, or bare `new Array(n)` ↔
+// `Array.from({length:n})`) is equivalent for every VALID length but DIVERGES at an
+// out-of-domain length (`new Array(-1)` throws RangeError; `Array.from({length:-1})`
+// returns []) and — for an UNTYPED param — on coercion inputs (`new Array("a")` → `["a"]`
+// vs `Array.from({length:"a"})` → []). That divergence is a constructor-domain artifact,
+// NOT the cited bug, yet it slips the all-agree FP floor. We detect it at the lifted-
+// EXPRESSION level (param-type-independent, so it closes BOTH the typed RangeError and the
+// untyped coercion vectors a runtime/error-message heuristic can't) and bail to
+// inconclusive BEFORE the battery. The detector PRESERVES the length expression and the
+// per-element value and only canonicalizes the new-vs-from idiom, so a real change INSIDE
+// the construction (fill value 1-vs-0, length n-vs-n+1, an index-using mapper `(_,i)=>i`)
+// keeps the skeletons distinct and still reproduces. Recall-safe: the worst case is a
+// withheld REPRODUCED pill on a behavior-preserving rewrite (the finding still posts) —
+// never a hidden real bug. The harness stays promotion-only.
+
+const ARRBUILD_HOLE = "HOLE"
+
+/** `Array` referenced as the global by NAME (a locally-shadowed `Array` is a known,
+ *  contrived limitation — see the ticket residual-risks). */
+function isArrayIdentifier(node: AstNode): boolean {
+  return node?.type === "Identifier" && node?.name === "Array"
+}
+
+/** Does a mapper fn body reference any of its OWN params (an index/value-using mapper —
+ *  a genuine behavior difference vs a constant `.fill`)? */
+function mapperUsesParams(fn: AstNode): boolean {
+  const names: string[] = (Array.isArray(fn?.params) ? fn.params : [])
+    .map((p: AstNode) => (p?.type === "Identifier" ? p.name : null))
+    .filter((n: unknown): n is string => typeof n === "string")
+  if (names.length === 0) return false
+  let used = false
+  const walk = (n: AstNode): void => {
+    if (used || n === null || typeof n !== "object") return
+    if (n.type === "Identifier" && names.includes(n.name)) {
+      used = true
+      return
+    }
+    for (const key in n) {
+      if (key === "start" || key === "end" || key === "loc" || key === "range" || key === "parent") continue
+      const c = (n as Record<string, unknown>)[key]
+      if (Array.isArray(c)) for (const x of c) walk(x as AstNode)
+      else if (c !== null && typeof c === "object") walk(c as AstNode)
+    }
+  }
+  walk(fn.body)
+  return used
+}
+
+/** If `node` is a recognized array construction, return its {length node, element-skeleton
+ *  fn}; else null. Recognizes `new Array(e)` / `Array(e)` (→ HOLE), `<ctor>.fill(v)` (→
+ *  CONST(v)), `Array.from({length:e})` (→ HOLE), `Array.from({length:e}, mapper)` (→ CONST
+ *  for a param-free constant arrow, else MAPPER). Returns null on any other shape (multi-arg
+ *  `Array(a,b)`, `Array.from(iterable)`, computed access, `.map`/other chains) so genuine
+ *  behavior differences are NOT collapsed. */
+function arrayBuild(node: AstNode): { length: AstNode; element: () => string } | null {
+  if (node === null || typeof node !== "object") return null
+  if (
+    (node.type === "NewExpression" || node.type === "CallExpression") &&
+    isArrayIdentifier(node.callee) &&
+    Array.isArray(node.arguments) &&
+    node.arguments.length === 1
+  ) {
+    return { length: node.arguments[0], element: () => ARRBUILD_HOLE }
+  }
+  if (
+    node.type === "CallExpression" &&
+    node.callee?.type === "MemberExpression" &&
+    node.callee.computed !== true &&
+    node.callee.property?.name === "fill"
+  ) {
+    const inner = arrayBuild(node.callee.object)
+    if (inner !== null && Array.isArray(node.arguments) && node.arguments.length <= 1) {
+      const v = node.arguments[0]
+      return { length: inner.length, element: () => (v === undefined ? "CONST(undefined)" : `CONST(${skeleton(v)})`) }
+    }
+  }
+  if (
+    node.type === "CallExpression" &&
+    node.callee?.type === "MemberExpression" &&
+    node.callee.computed !== true &&
+    isArrayIdentifier(node.callee.object) &&
+    node.callee.property?.name === "from" &&
+    Array.isArray(node.arguments) &&
+    node.arguments.length >= 1
+  ) {
+    const a0 = node.arguments[0]
+    if (a0?.type === "ObjectExpression" && Array.isArray(a0.properties) && a0.properties.length === 1) {
+      const p = a0.properties[0]
+      const keyName = p?.key?.name ?? p?.key?.value
+      if (p?.type === "Property" && p.computed !== true && keyName === "length") {
+        const mapper = node.arguments[1]
+        return {
+          length: p.value,
+          element: () => {
+            if (mapper === undefined) return ARRBUILD_HOLE
+            if (mapper.type === "ArrowFunctionExpression" || mapper.type === "FunctionExpression") {
+              if (!mapperUsesParams(mapper) && mapper.body && mapper.body.type !== "BlockStatement") {
+                return `CONST(${skeleton(mapper.body)})`
+              }
+              return `MAPPER(${skeleton(mapper)})`
+            }
+            return `MAPPER(${skeleton(mapper)})`
+          },
+        }
+      }
+    }
+  }
+  return null
+}
+
+/** Structural skeleton string of an AST subtree, with array-construction subtrees
+ *  canonicalized to `ARRBUILD(<length-skeleton>;<element>)`. Ignores location + TS-only
+ *  keys. Sets `state.saw` when any array construction was canonicalized. */
+function skeleton(node: AstNode, state: { saw: boolean } = { saw: false }): string {
+  if (node === null || typeof node !== "object") return JSON.stringify(node)
+  const build = arrayBuild(node)
+  if (build !== null) {
+    state.saw = true
+    return `ARRBUILD(${skeleton(build.length, state)};${build.element()})`
+  }
+  const parts: string[] = []
+  for (const key of Object.keys(node).sort()) {
+    if (key === "start" || key === "end" || key === "loc" || key === "range" || key === "parent") continue
+    if (key === "typeAnnotation" || key === "returnType" || key === "typeParameters" || key === "typeArguments")
+      continue
+    const c = (node as Record<string, unknown>)[key]
+    if (Array.isArray(c)) parts.push(`${key}=[${c.map((x) => skeleton(x as AstNode, state)).join(",")}]`)
+    else if (c !== null && typeof c === "object") parts.push(`${key}=${skeleton(c as AstNode, state)}`)
+    else parts.push(`${key}=${JSON.stringify(c)}`)
+  }
+  return `${node.type}{${parts.join(",")}}`
+}
+
+/** True iff the two lifted expressions differ ONLY in array-construction idiom: both parse,
+ *  both contain an array construction, and their idiom-canonicalized skeletons are identical.
+ *  Fail-safe to false (never throws). */
+function isArrayCtorOnlyRewrite(buggyExpr: string, fixedExpr: string): boolean {
+  try {
+    const pb = parseSource(buggyExpr, ".ts" as SourceExt)
+    const pf = parseSource(fixedExpr, ".ts" as SourceExt)
+    if (!pb.ok || !pf.ok) return false
+    const sb = { saw: false }
+    const sf = { saw: false }
+    const kb = skeleton(pb.ast as AstNode, sb)
+    const kf = skeleton(pf.ast as AstNode, sf)
+    return sb.saw && sf.saw && kb === kf
+  } catch {
+    return false
+  }
+}
+
 /**
  * Build the sandbox guest that defines the two lifted functions and runs the battery,
  * tallying agree/diverge. Each call gets a DEEP-CLONED copy of its args (so a function
@@ -471,6 +624,17 @@ export async function runPureLogicHarness(
     }
     if (arity < 1 || arity > MAX_ARITY) {
       return { status: "skipped", detail: `arity-out-of-range:${arity}`, elapsedMs: elapsed() }
+    }
+    // SIG-478: a behavior-preserving array-constructor IDIOM rewrite
+    // (`new Array(n).fill(0)` vs `Array.from({length:n},()=>0)`) is equivalent for every
+    // VALID length but DIVERGES at an out-of-domain length (`new Array(-1)` throws while
+    // `Array.from` returns []) and, for an untyped param, on coercion inputs. It is a
+    // constructor-domain artifact, not the cited bug — detect it at the lifted-expression
+    // level and bail BEFORE the battery (also saves the two sandbox runs). The detector
+    // preserves the length + per-element semantics, so a real change inside the construction
+    // still reproduces.
+    if (isArrayCtorOnlyRewrite(buggy.expr, fixed.expr)) {
+      return { status: "inconclusive", detail: "array-ctor-rewrite", elapsedMs: elapsed() }
     }
     // Use the BUGGY param types (arity already matched) — they drive the in-type battery,
     // augmented with the function's own numeric literals so boundary comparisons are hit.

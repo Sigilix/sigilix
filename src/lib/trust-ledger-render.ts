@@ -21,25 +21,30 @@ type BadgeImg = (file: ReviewBadgeAssetName) => string
 
 type Finding = Pick<PrReviewFinding, "trust">
 
-/** Tier → trust glyph. VERIFIED is reserved for an actual runner receipt. */
+/** Tier → trust glyph. Believability ladder: VERIFIED (runner receipt) > REPRODUCED
+ *  (execution-reproduced) > GROUNDED (evidence exists) > MODEL (model-only). */
 function trustGlyphName(trust: FindingTrust | undefined): ReviewBadgeAssetName {
   switch (trust?.tier) {
     case "runner-confirmed":
       return "runner-verified" // VERIFIED — cyan; the existing runner pill
+    case "reproduced-by-execution":
+      return "trust-reproduced" // REPRODUCED — blue; the sandbox ran it and saw the divergence
     case "deterministic-grounded":
     case "worker-token-confirmed":
     case "grounded-model":
-      return "trust-grounded" // GROUNDED — slate; evidence exists, not "proven"
+      return "trust-grounded" // GROUNDED — emerald; evidence exists, not "proven"
     default:
-      return "trust-model" // MODEL — muted gray; body-only-ungrounded / no trust
+      return "trust-model" // MODEL — violet; body-only-ungrounded / no trust
   }
 }
 
 /** Tier → terse `<sub>` suffix (no glyph). */
-function trustWord(trust: FindingTrust | undefined): "VERIFIED" | "GROUNDED" | "MODEL" {
+function trustWord(trust: FindingTrust | undefined): "VERIFIED" | "REPRODUCED" | "GROUNDED" | "MODEL" {
   switch (trust?.tier) {
     case "runner-confirmed":
       return "VERIFIED"
+    case "reproduced-by-execution":
+      return "REPRODUCED"
     case "deterministic-grounded":
     case "worker-token-confirmed":
     case "grounded-model":
@@ -93,6 +98,7 @@ export function renderTrustSummary(args: {
   const all = [...args.inlineFindings, ...args.bodyFindings]
   const tally = (pred: (f: Finding) => boolean): number => all.filter(pred).length
   const runnerVerified = tally((f) => f.trust?.tier === "runner-confirmed")
+  const reproduced = tally((f) => f.trust?.tier === "reproduced-by-execution")
   const grounded = tally(
     (f) =>
       f.trust?.tier === "deterministic-grounded" ||
@@ -107,6 +113,7 @@ export function renderTrustSummary(args: {
 
   const proof: string[] = []
   if (runnerVerified > 0) proof.push(`${runnerVerified} runner-verified`)
+  if (reproduced > 0) proof.push(`${reproduced} reproduced`)
   if (grounded > 0) proof.push(`${grounded} grounded`)
   if (proof.length > 0) seg.push(`**Proof**: ${proof.join(" · ")}`)
 

@@ -67,7 +67,7 @@ const CATEGORY_LABELS = [
 const RUNNER_LABELS = ["VERIFIED", "PENDING"] as const
 // Trust Ledger v0: per-finding trust pills (Kimi spec). Same category-pill
 // geometry as the runner pills (variable width, 20-tall), muted slate/gray fill.
-const TRUST_LABELS = ["GROUNDED", "MODEL"] as const
+const TRUST_LABELS = ["GROUNDED", "MODEL", "REPRODUCED"] as const
 
 interface BakedGlyph {
   readonly d: string

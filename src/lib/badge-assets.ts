@@ -67,6 +67,15 @@ const TRUST_BADGE_STYLES = {
     accent: "#A78BFA", // violet — model-only, no stronger proof; claims no authority
     ariaLabel: "Model-only: no deterministic or runner evidence backs this",
   },
+  // SIG-477 PR-5: the execution-reproduction pill (Kimi K2.7 spec, 2026-06-20). Sits
+  // just below cyan VERIFIED (runner receipt) and above emerald GROUNDED in the
+  // believability ladder — the sandbox RAN the cited code + the fix and observed them
+  // diverge. Blue (not amber — that's P1 severity) reads as independently-replicated.
+  "trust-reproduced": {
+    label: "REPRODUCED",
+    accent: "#2563EB", // blue — execution-reproduced; hue-distinct from cyan/emerald/violet/amber
+    ariaLabel: "Execution reproduced: buggy code and proposed fix returned different values on a tested input",
+  },
 } as const
 
 // SIG: per-category EXPLICIT bg + text pairs (Kimi K2.7 spec, 2026-06-19). The
@@ -210,7 +219,11 @@ export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.w
 // Glyph PATHS unchanged (labels identical) — only category rect fills differ, so
 // no regenerate-badge-paths; re-run generate-static-badges + mirror/tag the new
 // SVGs at Sigilix/sigilix-glyphs@v20260619-1 (same 17 glyphs).
-export const BADGE_ASSET_VERSION = "v20260619-1"
+// SIG-477 PR-5 (2026-06-20): v20260619-1 → v20260620-1 adds the `trust-reproduced`
+// pill (REPRODUCED, blue #2563EB). New LABEL → re-run regenerate-badge-paths (bakes the
+// "REPRODUCED" glyph) + generate-static-badges + mirror/tag the new SVGs at
+// Sigilix/sigilix-glyphs@v20260620-1 (18 glyphs total).
+export const BADGE_ASSET_VERSION = "v20260620-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
@@ -311,6 +324,7 @@ const BADGE_SVGS: Record<ReviewBadgeAssetName, string> = {
   "runner-pending": renderRunnerBadgeSvg(RUNNER_BADGE_STYLES["runner-pending"]),
   "trust-grounded": renderRunnerBadgeSvg(TRUST_BADGE_STYLES["trust-grounded"]),
   "trust-model": renderRunnerBadgeSvg(TRUST_BADGE_STYLES["trust-model"]),
+  "trust-reproduced": renderRunnerBadgeSvg(TRUST_BADGE_STYLES["trust-reproduced"]),
 }
 
 export function badgeAssetUrl(name: ReviewBadgeAssetName): string {

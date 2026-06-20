@@ -589,7 +589,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
       // the `deterministic-confirmed` tier (rank 5) WOULD do to this finding given the
       // signals already set above (worker-token-confirmed / runner-confirmed are set;
       // the trust-ledger baseline runs BELOW this block): it only genuinely RAISES a
-      // finding whose tier-so-far is below it. A runner-confirmed (rank 6) finding is
+      // finding whose tier-so-far is below it. A runner-confirmed (rank 7) finding is
       // unchanged → redundant; a finding the baseline would give deterministic-grounded
       // (rank 4, real manifest evidence) is only a +1 relabel → redundant (the
       // "near-subset of existing GROUNDED" case the GO/NO-GO watches for); otherwise

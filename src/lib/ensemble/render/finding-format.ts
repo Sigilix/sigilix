@@ -523,7 +523,12 @@ function formatFindingStructuredDetailsMarkdown(
 ): string {
   const includeFixExample = opts.includeFixExample ?? !hasStructuredFix(finding)
   const sections: string[] = []
-  if (finding.failureExample) {
+  // SIG-477 PR-5: `failureExample` is a MODEL-AUTHORED "Example:" that implies proof.
+  // For a finding the execution sandbox actually REPRODUCED, that fabricated example
+  // would sit next to (and undercut) the execution-proven REPRODUCED pill — suppress it
+  // so the only proof shown is the one we verified by running the code.
+  const reproducedByExecution = finding.trust?.tier === "reproduced-by-execution"
+  if (finding.failureExample && !reproducedByExecution) {
     const section = formatFenceSection("**Example:**", finding.failureExample, "text")
     if (section) sections.push(section)
   }

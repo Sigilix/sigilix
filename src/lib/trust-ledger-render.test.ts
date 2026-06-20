@@ -18,6 +18,10 @@ describe("trustPill / trustSubTag — tier → pill (honest wording)", () => {
     expect(trustPill(t("runner-confirmed").trust, badge)).toBe("<runner-verified>")
     expect(trustSubTag(t("runner-confirmed").trust)).toBe(" · VERIFIED")
   })
+  it("reproduced-by-execution → the blue REPRODUCED pill (SIG-477 PR-5; below VERIFIED, above GROUNDED)", () => {
+    expect(trustPill(t("reproduced-by-execution").trust, badge)).toBe("<trust-reproduced>")
+    expect(trustSubTag(t("reproduced-by-execution").trust)).toBe(" · REPRODUCED")
+  })
   it("the grounded tiers → the slate GROUNDED pill (evidence, not proof)", () => {
     for (const tier of ["deterministic-grounded", "worker-token-confirmed", "grounded-model"] as const) {
       expect(trustPill(t(tier).trust, badge)).toBe("<trust-grounded>")
@@ -61,6 +65,15 @@ describe("renderTrustSummary", () => {
     expect(out).toBe(
       "**5 findings** · 3 inline · 1 outside diff · 1 PR-level · **Proof**: 2 runner-verified · 2 grounded · **Quiet**: 4 suppressed · 2 demoted to body",
     )
+  })
+
+  it("counts reproduced findings in the Proof segment (SIG-477 PR-5)", () => {
+    const out = renderTrustSummary({
+      inlineFindings: [t("reproduced-by-execution"), t("grounded-model")],
+      bodyFindings: [],
+      counts: { suppressed: 0, demotedToBody: 0 },
+    })
+    expect(out).toBe("**2 findings** · 2 inline · **Proof**: 1 reproduced · 1 grounded")
   })
 
   it("collapses zero segments (no Proof / Quiet when zero)", () => {

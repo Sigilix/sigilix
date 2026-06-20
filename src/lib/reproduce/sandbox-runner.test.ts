@@ -4,12 +4,17 @@
 // plugin (which mirrors the Workers default-export-WebAssembly.Module semantics),
 // so what runs here is what runs in production.
 
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, afterEach, vi } from "vitest"
 import { runInSandbox, DEFAULT_SANDBOX_CAPS, type SandboxCaps } from "./sandbox-runner"
 
 // A small, generous deadline for the "ok"/"threw" cases (the timeout test uses a
-// tighter one). 32MB / 256KB match the production defaults.
-const CAPS: SandboxCaps = { memoryBytes: 32 * 1024 * 1024, maxStackBytes: 256 * 1024, deadlineMs: 1000 }
+// tighter one). 32MB / 256KB / 100k interrupts match the production defaults.
+const CAPS: SandboxCaps = {
+  memoryBytes: 32 * 1024 * 1024,
+  maxStackBytes: 256 * 1024,
+  deadlineMs: 1000,
+  maxInterrupts: 100_000,
+}
 
 describe("runInSandbox — happy path", () => {
   it("runs a pure function over __INPUT__ and returns the computed value", async () => {
@@ -37,8 +42,17 @@ describe("runInSandbox — happy path", () => {
 })
 
 describe("runInSandbox — caps (the load-bearing limits)", () => {
-  it("interrupts an infinite loop and returns timed-out within ~the deadline", async () => {
-    const tightCaps: SandboxCaps = { ...CAPS, deadlineMs: 300 }
+  // The frozen-clock tests stub Date.now; restore the real clock after each test so
+  // an assertion failure can't leave a frozen clock leaking into later tests.
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("interrupts an infinite loop and returns timed-out via the WALL-CLOCK deadline (Date.now advancing)", async () => {
+    // A huge interrupt budget so the COUNTER never trips here — this test proves the
+    // wall-clock path still works when Date.now() advances (node/vitest), matching the
+    // prior behavior. The frozen-clock test below proves the counter path independently.
+    const tightCaps: SandboxCaps = { ...CAPS, deadlineMs: 300, maxInterrupts: Number.MAX_SAFE_INTEGER }
     const t0 = Date.now()
     const res = await runInSandbox(`while (true) {}`, null, tightCaps)
     const wall = Date.now() - t0
@@ -49,8 +63,39 @@ describe("runInSandbox — caps (the load-bearing limits)", () => {
     expect(res.elapsedMs).toBeGreaterThanOrEqual(tightCaps.deadlineMs - 50)
   })
 
+  it("interrupts a CPU-bound loop even when Date.now() is FROZEN (the Cloudflare-Workers regression — counter path)", async () => {
+    // THE load-bearing regression test for the prod-only bug: on Cloudflare Workers
+    // `Date.now()` is frozen during synchronous compute, so a wall-clock-only deadline
+    // NEVER fires for a CPU-bound guest. We simulate that by stubbing Date.now to a
+    // CONSTANT (the clock never advances), then assert an infinite loop is STILL
+    // interrupted — which can only happen via the cycle counter, not the clock.
+    // This MUST fail if the `maxInterrupts` counter is removed (then nothing would
+    // interrupt the loop and the test would hang / never return "timed-out").
+    const FROZEN = 1_700_000_000_000
+    vi.spyOn(Date, "now").mockReturnValue(FROZEN)
+    // Sanity: the clock really is frozen for the duration of the run.
+    expect(Date.now()).toBe(FROZEN)
+
+    const frozenCaps: SandboxCaps = { ...CAPS, deadlineMs: 300, maxInterrupts: 50_000 }
+    const res = await runInSandbox(`while (true) {}`, null, frozenCaps)
+    expect(res.status).toBe("timed-out")
+  })
+
+  it("does NOT false-trip the cycle counter on light/benign work (returns ok)", async () => {
+    // A trivial computation must finish in far fewer than maxInterrupts interrupt
+    // calls — the counter is a runaway-CPU bound, not a tripwire on normal work.
+    const res = await runInSandbox(`__INPUT__ + 1`, 41, CAPS)
+    expect(res.status).toBe("ok")
+    expect(res.value).toBe(42)
+  })
+
   it("aborts a memory bomb without crashing the host (oom or timed-out)", async () => {
-    const tinyMem: SandboxCaps = { memoryBytes: 1024 * 1024, maxStackBytes: 256 * 1024, deadlineMs: 2000 }
+    const tinyMem: SandboxCaps = {
+      memoryBytes: 1024 * 1024,
+      maxStackBytes: 256 * 1024,
+      deadlineMs: 2000,
+      maxInterrupts: 100_000,
+    }
     const res = await runInSandbox(`const a = []; while (true) { a.push(new Array(100000).fill(7)) }`, null, tinyMem)
     // A memory bomb is bounded either by the memory cap (oom) or the deadline; both
     // are acceptable — the point is the host survives and we get a structured status.

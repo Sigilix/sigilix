@@ -26,7 +26,7 @@
 // allocations. `runInSandbox` NEVER throws: any unexpected failure returns
 // `status: "error"`.
 
-import { newQuickJSWASMModule, newVariant, RELEASE_SYNC, shouldInterruptAfterDeadline } from "quickjs-emscripten"
+import { newQuickJSWASMModule, newVariant, RELEASE_SYNC } from "quickjs-emscripten"
 import type { QuickJSWASMModule } from "quickjs-emscripten"
 // The vendored RELEASE_SYNC QuickJS variant `.wasm`, committed under this dir. On
 // Workers this import resolves to a compiled `WebAssembly.Module` natively; in
@@ -43,6 +43,15 @@ export interface SandboxCaps {
   /** Wall-clock deadline in ms from the start of the eval. A guest that runs past
    *  it is interrupted (→ status "timed-out"). */
   deadlineMs: number
+  /** Max number of interpreter-driven interrupt-handler calls before the guest is
+   *  interrupted (→ status "timed-out"). This is the CPU/opcode-cycle bound, and it
+   *  is the load-bearing limit on Cloudflare Workers, where `Date.now()` is FROZEN
+   *  during synchronous compute (a Spectre mitigation — the clock only advances on
+   *  I/O). A CPU-bound guest (e.g. a catastrophic regex backtrack) does no I/O, so
+   *  `deadlineMs` alone NEVER trips in prod; QuickJS calls the interrupt handler
+   *  PERIODICALLY as it runs opcodes (independent of the clock), so a COUNTER bounds
+   *  CPU work regardless of the frozen clock. */
+  maxInterrupts: number
 }
 
 /** The structured outcome of a sandbox run. `runInSandbox` always resolves to one
@@ -61,12 +70,21 @@ export interface SandboxResult {
   elapsedMs: number
 }
 
-/** Sensible default caps: 32MB memory, 256KB stack, 1s deadline. Small enough to
- *  bound a misbehaving guest, generous enough for a lifted pure closure. */
+/** Sensible default caps: 32MB memory, 256KB stack, 1s deadline, 100k interrupt
+ *  cycles. Small enough to bound a misbehaving guest, generous enough for a lifted
+ *  pure closure.
+ *
+ *  `maxInterrupts` is a STARTING ESTIMATE that needs LIVE TUNING on Cloudflare: the
+ *  interrupt handler fires periodically as QuickJS runs opcodes, so the right value
+ *  is the one where a BENIGN guest finishes with FEW interrupt-handler calls (well
+ *  under the cap) while a CATASTROPHIC backtrack EXCEEDS it before CF kills the
+ *  isolate. Calibrate it with a live probe (benign regex must pass; a known ReDoS
+ *  must be cut by the counter); 100_000 is a conservative first guess, not measured. */
 export const DEFAULT_SANDBOX_CAPS: SandboxCaps = {
   memoryBytes: 32 * 1024 * 1024,
   maxStackBytes: 256 * 1024,
   deadlineMs: 1000,
+  maxInterrupts: 100_000,
 }
 
 /** The global the guest reads its (JSON-serialized) input from. */
@@ -153,13 +171,26 @@ export async function runInSandbox(source: string, input: unknown, caps: Sandbox
   const runtime = QuickJS.newRuntime()
   let context: ReturnType<typeof runtime.newContext> | null = null
   try {
-    // ── Caps ── memory + stack ceilings, then a wall-clock interrupt deadline.
+    // ── Caps ── memory + stack ceilings, then a CYCLE-COUNT + wall-clock interrupt.
     runtime.setMemoryLimit(caps.memoryBytes)
     runtime.setMaxStackSize(caps.maxStackBytes)
-    // shouldInterruptAfterDeadline returns true once `Date.now() > deadline`,
-    // interrupting the interpreter (QuickJS can't read wall-clock itself, so the
-    // host-side handler is the standard deadline mechanism).
-    runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + caps.deadlineMs))
+    // The interrupt handler is called PERIODICALLY by the interpreter as it runs
+    // opcodes (NOT on a wall-clock — QuickJS can't read the clock itself). We bound
+    // CPU work TWO ways and interrupt on EITHER:
+    //   • interruptCount > maxInterrupts — the opcode/cycle bound. This is the one
+    //     that fires on Cloudflare Workers, where `Date.now()` is FROZEN during
+    //     synchronous compute (Spectre mitigation; the clock only advances on I/O),
+    //     so a CPU-bound guest does no I/O and the deadline below never advances.
+    //   • Date.now() > deadline — the wall-clock bound. On node/vitest the clock DOES
+    //     advance, so this path still trips (and matches the prior behavior); in prod
+    //     it is effectively dormant for CPU-bound guests. Keeping both means the guest
+    //     is interrupted whichever bound is reachable in the current environment.
+    const deadline = Date.now() + caps.deadlineMs
+    let interruptCount = 0
+    runtime.setInterruptHandler(() => {
+      interruptCount++
+      return interruptCount > caps.maxInterrupts || Date.now() > deadline
+    })
 
     // ── Fresh context. NO host functions injected — the seal. ──
     context = runtime.newContext()

@@ -62,10 +62,18 @@ interface ExtractedRegex {
  *  trips it, while a benign linear match finishes well under it. Memory/stack are
  *  generous (a regex match is not memory-bound) but still bounded by the runner. */
 const HARNESS_DEADLINE_MS = 250
+/** Opcode/cycle bound for a harness sandbox run. On Cloudflare `Date.now()` is FROZEN
+ *  during synchronous compute, so `HARNESS_DEADLINE_MS` alone never trips for a
+ *  CPU-bound regex backtrack — the cycle counter is what surfaces a catastrophic
+ *  match as `timed-out` in prod (the harness's `"timed-out"` → reproduced logic is
+ *  unchanged). STARTING ESTIMATE; same value as DEFAULT_SANDBOX_CAPS, to be tuned via
+ *  a live probe (a benign regex must finish under it; a real ReDoS must exceed it). */
+const HARNESS_MAX_INTERRUPTS = 100_000
 const HARNESS_CAPS: SandboxCaps = {
   memoryBytes: 32 * 1024 * 1024,
   maxStackBytes: 256 * 1024,
   deadlineMs: HARNESS_DEADLINE_MS,
+  maxInterrupts: HARNESS_MAX_INTERRUPTS,
 }
 
 /** HARD wall-clock cap on a SINGLE harness invocation (the TRUE aggregate bound).

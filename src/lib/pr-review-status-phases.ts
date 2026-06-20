@@ -99,6 +99,12 @@ export function finalStatusUpdate(args: {
   prNumber: number
 }): ReviewStatusUpdate | null {
   if (args.status === "stale_head" || args.status === "shadow_recorded") return null
+  // SIG-475: the incremental empty-delta skip (maybeEmptyDeltaSkip) posts NO review
+  // and carries NO reviewMeta. It must NOT overwrite the prior review's overview
+  // footer (which holds the real finding count + the Manage commands) with a
+  // misleading "Skipped · 0 findings". First-run skips (label-gate / cost-governor)
+  // DO pass reviewMeta and still render a terminal footer.
+  if (args.status === "skipped" && args.reviewMeta === undefined) return null
   const failed = args.status === "errored"
   const skipped = args.status === "skipped"
   return {

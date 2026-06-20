@@ -32,3 +32,18 @@ describe("finalStatusUpdate proof threading (SIG-471)", () => {
     expect(update!.proof).toBeUndefined()
   })
 })
+
+describe("finalStatusUpdate skip footer (SIG-475)", () => {
+  it("returns null for an empty-delta skip (skipped + no reviewMeta) so the prior footer is preserved", () => {
+    // The incremental empty-delta skip posts no review + carries no reviewMeta; it
+    // MUST NOT overwrite the prior review's footer (real count + Manage) with a
+    // misleading "Skipped · 0 findings". Reverting the guard returns a snapshot here.
+    expect(finalStatusUpdate({ status: "skipped", ...ARGS })).toBeNull()
+  })
+
+  it("STILL renders a skipped footer for a first-run skip that carries reviewMeta (label-gate / cost-governor)", () => {
+    const update = finalStatusUpdate({ status: "skipped", ...ARGS, reviewMeta: { findingsCount: 0 } })
+    expect(update).not.toBeNull()
+    expect(update!.phase).toBe("skipped")
+  })
+})

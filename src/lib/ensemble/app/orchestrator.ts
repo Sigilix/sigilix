@@ -368,7 +368,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     } = packed
 
     // Empty incremental delta → skip (false-APPROVE guard, sigilix-monitor#36; see maybeEmptyDeltaSkip).
-    const emptyDeltaSkip = await maybeEmptyDeltaSkip(incrementalCoverage, telemetry, env, cache, args.statusReporter)
+    const emptyDeltaSkip = await maybeEmptyDeltaSkip(incrementalCoverage, telemetry, env, cache)
     if (emptyDeltaSkip) return emptyDeltaSkip
     let disclosure = buildReviewDisclosure({
       policySkipped: filesDroppedByFilter,

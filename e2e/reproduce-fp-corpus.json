@@ -441,6 +441,24 @@
       "anchorLineText": "  return { x: x, y: y };",
       "suggestedReplacement": "  return { y: y, x: x };",
       "rationale": "reordering object keys is behavior-preserving; must NOT reproduce (all-diverge representational case)"
+    },
+    {
+      "name": "array-ctor-new-vs-from-noop",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export function makeSlots(n: number): unknown[] {\n  return new Array(n);\n}\n",
+      "anchorLineText": "  return new Array(n);",
+      "suggestedReplacement": "  return Array.from({ length: n });",
+      "rationale": "SIG-478: new Array(n) and Array.from({length:n}) build the same length-n array for every valid length; they diverge ONLY on an out-of-domain length (n=-1: new Array(-1) throws RangeError but Array.from({length:-1}) returns []). That sole divergence is an array-constructor idiom artifact, not the cited bug, so isArrayCtorOnlyRewrite returns inconclusive ('array-ctor-rewrite') BEFORE the battery -- it must NOT reproduce. No-fill form chosen so source reconstruction lifts a clean same-arity buggy/fixed pair (a .fill(0) form's suggestedReplacement carries a ()=>0 arrow the locator lifts as the fixed fn -> vacuous arity-mismatch skip)."
+    },
+    {
+      "name": "array-ctor-untyped-new-vs-from-noop",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export function makeSlots(n) {\n  return new Array(n);\n}\n",
+      "anchorLineText": "  return new Array(n);",
+      "suggestedReplacement": "  return Array.from({ length: n });",
+      "rationale": "SIG-478 UNTYPED guard: with no annotation the harness sweeps the full mixed pool, where the rewrite diverges on ~11 inputs -- the n=-1 RangeError PLUS ~10 VALUE divergences (new Array('a')=['a']=>V:[0] vs Array.from({length:'a'}) coerces Number('a')=NaN->0 =>V:[]). These are NOT host-errors, so an error-message-only refinement still falsely reproduces this case. The expression-level detector is param-type-independent and keeps it inconclusive -- this fixture is the regression guard locking in the type-independent resolution."
     }
   ]
 }

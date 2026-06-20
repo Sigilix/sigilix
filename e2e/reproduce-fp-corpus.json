@@ -1,0 +1,446 @@
+{
+  "note": "SIG-477 REPRODUCED FP+recall eval corpus. truth: bug=real bug+correct fix (should reproduce); noop=correct code + behavior-preserving change (must NOT reproduce); modelfp=correct code + behavior-changing wrong fix (worst-case, grounding-gated in prod). 44 generated + adversarially-verified (reproduce-fp-corpus workflow) + 4 hand-authored seeds.",
+  "fixtures": [
+    {
+      "name": "adult-age-gt-vs-gte",
+      "truth": "bug",
+      "bucket": "comparison-operator",
+      "source": "export function isAdult(age: number): boolean {\n  if (age > 18) {\n    return true;\n  }\n  return false;\n}\n",
+      "anchorLineText": "  if (age > 18) {",
+      "suggestedReplacement": "  if (age >= 18) {",
+      "rationale": "A person who is exactly 18 is a legal adult, but `> 18` wrongly returns false at the boundary; `>= 18` fixes it while agreeing on all other ages."
+    },
+    {
+      "name": "and-to-ternary-guard",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export default function bothPositive(a: number, b: number): boolean {\n  return a > 0 && b > 0;\n}",
+      "anchorLineText": "  return a > 0 && b > 0;",
+      "suggestedReplacement": "  return a > 0 ? b > 0 : false;",
+      "rationale": "Both operands of && are already booleans, so a > 0 && b > 0 is exactly the short-circuit ternary a > 0 ? b > 0 : false."
+    },
+    {
+      "name": "between-markers-slice-end",
+      "truth": "bug",
+      "bucket": "slice-substring",
+      "source": "export const betweenMarkers = (s: string, start: number, end: number): string => s.slice(start, end - 1);",
+      "anchorLineText": "export const betweenMarkers = (s: string, start: number, end: number): string => s.slice(start, end - 1);",
+      "suggestedReplacement": "export const betweenMarkers = (s: string, start: number, end: number): string => s.slice(start, end);",
+      "rationale": "slice end should be the exclusive end index; using end - 1 chops off the last intended character."
+    },
+    {
+      "name": "bounds-upper-inclusive",
+      "truth": "bug",
+      "bucket": "inclusive-exclusive",
+      "source": "export const isWithinBounds = (index: number, length: number): boolean => {\n  return index >= 0 && index < length - 1;\n};\n",
+      "anchorLineText": "  return index >= 0 && index < length - 1;",
+      "suggestedReplacement": "  return index >= 0 && index < length;",
+      "rationale": "The comparison against length-1 incorrectly rejects the last valid index (length-1) while agreeing for interior and out-of-range indices; the upper bound should be length."
+    },
+    {
+      "name": "clamp-to-last-index",
+      "truth": "bug",
+      "bucket": "boundary-condition",
+      "source": "export function clampToLast(i: number, len: number): number {\n  if (i < 0) return 0;\n  if (i > len) return len - 1;\n  return i;\n}\n",
+      "anchorLineText": "  if (i > len) return len - 1;",
+      "suggestedReplacement": "  if (i >= len) return len - 1;",
+      "rationale": "Clamping uses > len, so i === len slips through and is returned as a one-past-the-end index instead of being clamped to len - 1."
+    },
+    {
+      "name": "clamp-upper-bound-inclusive",
+      "truth": "bug",
+      "bucket": "inclusive-exclusive",
+      "source": "export function clampToRange(value: number, min: number, max: number): number {\n  if (value < min) return min;\n  if (value >= max) return max - 1;\n  return value;\n}\n",
+      "anchorLineText": "  if (value >= max) return max - 1;",
+      "suggestedReplacement": "  if (value > max) return max;",
+      "rationale": "The clamp treats max as exclusive (returns max-1) but it should be an inclusive bound, so value==max is wrongly pushed to max-1 while values below max are unaffected."
+    },
+    {
+      "name": "clamp-upper-off-by-one",
+      "truth": "bug",
+      "bucket": "boundary-condition",
+      "source": "export function clampValue(value: number, lo: number, hi: number): number {\n  if (value < lo) return lo;\n  if (value > hi) return hi + 1;\n  return value;\n}\n",
+      "anchorLineText": "  if (value > hi) return hi + 1;",
+      "suggestedReplacement": "  if (value > hi) return hi;",
+      "rationale": "upper clamp returns hi+1 instead of hi"
+    },
+    {
+      "name": "count-at-or-above-cutoff",
+      "truth": "modelfp",
+      "bucket": "overzealous-bound-flip",
+      "source": "export const countAtOrAbove = (values: number[], cutoff: number): number => {\n  let count = 0;\n  for (const v of values) {\n    if (v >= cutoff) {\n      count += 1;\n    }\n  }\n  return count;\n};",
+      "anchorLineText": "    if (v >= cutoff) {",
+      "suggestedReplacement": "    if (v > cutoff) {",
+      "rationale": "The original correctly counts values equal to the cutoff; flipping >= to > drops at-cutoff values and undercounts, so the original is right."
+    },
+    {
+      "name": "count-matches-misses-last",
+      "truth": "bug",
+      "bucket": "off-by-one-loop",
+      "source": "function countMatches(text: string, target: string): number {\n  let count = 0;\n  for (let i = 0; i < text.length - target.length; i++) {\n    if (text.substr(i, target.length) === target) {\n      count++;\n    }\n  }\n  return count;\n}\n\nexport { countMatches };",
+      "anchorLineText": "  for (let i = 0; i < text.length - target.length; i++) {",
+      "suggestedReplacement": "  for (let i = 0; i <= text.length - target.length; i++) {",
+      "rationale": "The last valid start position is text.length - target.length, so `<` skips it and undercounts any match ending exactly at the end of the string."
+    },
+    {
+      "name": "count-seeded-one",
+      "truth": "bug",
+      "bucket": "accumulator-init",
+      "source": "export function countMatches(items: string[], target: string): number {\n  let total = 1;\n  for (const it of items) {\n    if (it === target) total += 1;\n  }\n  return total;\n}",
+      "anchorLineText": "  let total = 1;",
+      "suggestedReplacement": "  let total = 0;",
+      "rationale": "A counter seeded at 1 reports every count one too high; the additive accumulator must start at 0."
+    },
+    {
+      "name": "days-between-inclusive",
+      "truth": "bug",
+      "bucket": "fence-post",
+      "source": "export const daysInclusive = (startDay: number, endDay: number): number => {\n  return endDay - startDay;\n};",
+      "anchorLineText": "  return endDay - startDay;",
+      "suggestedReplacement": "  return endDay - startDay + 1;",
+      "rationale": "Counting both endpoints inclusively means the day count must add one to the endpoint difference."
+    },
+    {
+      "name": "default-falsy-coalesce",
+      "truth": "modelfp",
+      "bucket": "correct-code-wrong-fix",
+      "source": "export const labelOrDefault = (label: string | null | undefined): string => {\n  if (label === null || label === undefined) {\n    return \"untitled\";\n  }\n  return label;\n};\n",
+      "anchorLineText": "  if (label === null || label === undefined) {",
+      "suggestedReplacement": "  if (!label) {",
+      "rationale": "The code intentionally only defaults on null/undefined; switching to a falsy check would also replace a legitimate empty-string label with 'untitled'."
+    },
+    {
+      "name": "double-negation-to-boolean",
+      "truth": "noop",
+      "bucket": "cosmetic-style",
+      "source": "export function hasItems(count: number): boolean {\n  const present = count > 0 ? true : false;\n  return present;\n}\n",
+      "anchorLineText": "  const present = count > 0 ? true : false;",
+      "suggestedReplacement": "  const present = count > 0;",
+      "rationale": "Replacing the `cond ? true : false` ternary with the bare comparison gives the identical boolean for every input."
+    },
+    {
+      "name": "drop-tail-splice-count",
+      "truth": "bug",
+      "bucket": "slice-substring",
+      "source": "export function dropTail(arr: string[], keep: number): string[] {\n  const copy = arr.slice();\n  copy.splice(keep, arr.length - keep - 1);\n  return copy;\n}",
+      "anchorLineText": "  copy.splice(keep, arr.length - keep - 1);",
+      "suggestedReplacement": "  copy.splice(keep, arr.length - keep);",
+      "rationale": "The splice deleteCount should be arr.length - keep to remove all trailing elements; subtracting 1 leaves the last element behind."
+    },
+    {
+      "name": "eq-to-not-neq",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export const isEqual = (a: number, b: number): boolean => a === b;",
+      "anchorLineText": "export const isEqual = (a: number, b: number): boolean => a === b;",
+      "suggestedReplacement": "export const isEqual = (a: number, b: number): boolean => !(a !== b);",
+      "rationale": "By De Morgan / strict-equality duality, a === b is identical to !(a !== b) for all numeric inputs including NaN."
+    },
+    {
+      "name": "exclusive-end-slice-count",
+      "truth": "modelfp",
+      "bucket": "correct-code-wrong-fix",
+      "source": "export const countInHalfOpen = (start: number, end: number): number => {\n  if (end <= start) {\n    return 0;\n  }\n  return end - start;\n};\n",
+      "anchorLineText": "  return end - start;",
+      "suggestedReplacement": "  return end - start + 1;",
+      "rationale": "This computes the count of a half-open [start, end) interval, so end - start is correct; adding 1 would overcount by one."
+    },
+    {
+      "name": "extra-spacing-object-literal",
+      "truth": "noop",
+      "bucket": "cosmetic-style",
+      "source": "export function makePoint(x: number, y: number): { x: number; y: number } {\n  return {x: x, y: y};\n}\n",
+      "anchorLineText": "  return {x: x, y: y};",
+      "suggestedReplacement": "  return { x, y };",
+      "rationale": "Adding spaces and using shorthand property syntax yields the exact same object on all inputs."
+    },
+    {
+      "name": "fence-posts-vs-segments",
+      "truth": "bug",
+      "bucket": "fence-post",
+      "source": "export function countFencePosts(totalLength: number, segmentSize: number): number {\n  const segments = Math.floor(totalLength / segmentSize);\n  return segments;\n}",
+      "anchorLineText": "  return segments;",
+      "suggestedReplacement": "  return segments + 1;",
+      "rationale": "A straight fence of N segments needs N+1 posts, so returning the segment count undercounts the posts by one."
+    },
+    {
+      "name": "find-index-not-found",
+      "truth": "modelfp",
+      "bucket": "correct-code-wrong-fix",
+      "source": "export function firstEvenIndex(nums: number[]): number {\n  for (let i = 0; i < nums.length; i++) {\n    if (nums[i] % 2 === 0) {\n      return i;\n    }\n  }\n  return -1;\n}\n",
+      "anchorLineText": "  return -1;",
+      "suggestedReplacement": "  return 0;",
+      "rationale": "Returning -1 is the correct sentinel for 'no even number found'; returning 0 would falsely report index 0 as a match."
+    },
+    {
+      "name": "first-page-slice-end",
+      "truth": "bug",
+      "bucket": "slice-substring",
+      "source": "export const firstPage = (items: number[], pageSize: number): number[] => {\n  return items.slice(0, pageSize - 1);\n};",
+      "anchorLineText": "  return items.slice(0, pageSize - 1);",
+      "suggestedReplacement": "  return items.slice(0, pageSize);",
+      "rationale": "slice end should be pageSize to return pageSize items; pageSize - 1 returns one too few."
+    },
+    {
+      "name": "get-or-last-oob",
+      "truth": "bug",
+      "bucket": "boundary-condition",
+      "source": "export function getOrLast(arr: string[], i: number): string {\n  if (i > arr.length) return arr[arr.length - 1];\n  return arr[i];\n}\n",
+      "anchorLineText": "  if (i > arr.length) return arr[arr.length - 1];",
+      "suggestedReplacement": "  if (i >= arr.length) return arr[arr.length - 1];",
+      "rationale": "The upper-bound guard uses > instead of >=, so when i equals arr.length it falls through to arr[i] and reads one past the end (undefined) instead of clamping to the last element."
+    },
+    {
+      "name": "inclusive-range-off-by-one",
+      "truth": "modelfp",
+      "bucket": "correct-code-wrong-fix",
+      "source": "export function isInClosedRange(value: number, low: number, high: number): boolean {\n  if (low > high) {\n    return false;\n  }\n  return value >= low && value <= high;\n}\n",
+      "anchorLineText": "  return value >= low && value <= high;",
+      "suggestedReplacement": "  return value > low && value < high;",
+      "rationale": "The function intentionally tests a closed (inclusive) range; changing >= and <= to > and < would wrongly exclude the endpoints."
+    },
+    {
+      "name": "inclusive-range-upper-bound",
+      "truth": "modelfp",
+      "bucket": "overzealous-bound-flip",
+      "source": "export function isWithinInclusiveRange(value: number, lo: number, hi: number): boolean {\n  if (lo > hi) {\n    return false;\n  }\n  return value >= lo && value <= hi;\n}",
+      "anchorLineText": "  return value >= lo && value <= hi;",
+      "suggestedReplacement": "  return value >= lo && value < hi;",
+      "rationale": "The original correctly treats the range as inclusive of hi; flipping <= to < wrongly excludes value === hi, changing behavior, so the original is right."
+    },
+    {
+      "name": "integer-count-in-range",
+      "truth": "bug",
+      "bucket": "fence-post",
+      "source": "export const integerCount = (lo: number, hi: number): number => hi - lo;",
+      "anchorLineText": "export const integerCount = (lo: number, hi: number): number => hi - lo;",
+      "suggestedReplacement": "export const integerCount = (lo: number, hi: number): number => hi - lo + 1;",
+      "rationale": "The number of integers in the closed interval [lo, hi] is hi - lo + 1, not the bare endpoint difference."
+    },
+    {
+      "name": "is-even-correct-wrong-fix",
+      "truth": "modelfp",
+      "bucket": "correct-code-wrong-fix",
+      "source": "export function lastIndexOrDefault(items: number[], fallback: number): number {\n  if (items.length === 0) return fallback;\n  return items[items.length - 1] ?? fallback;\n}\n",
+      "anchorLineText": "  return items[items.length - 1] ?? fallback;",
+      "suggestedReplacement": "  return items[items.length] ?? fallback;",
+      "rationale": "original is correct; the wrong fix reads one past the end (off-by-one INTRODUCED)"
+    },
+    {
+      "name": "last-full-page-index",
+      "truth": "modelfp",
+      "bucket": "overzealous-bound-flip",
+      "source": "function lastPageIndex(totalItems: number, pageSize: number): number {\n  if (pageSize <= 0) {\n    return 0;\n  }\n  let page = 0;\n  while ((page + 1) * pageSize <= totalItems) {\n    page += 1;\n  }\n  return page;\n}\nexport { lastPageIndex };",
+      "anchorLineText": "  while ((page + 1) * pageSize <= totalItems) {",
+      "suggestedReplacement": "  while ((page + 1) * pageSize < totalItems) {",
+      "rationale": "The original correctly counts a page that exactly fills to totalItems; flipping <= to < stops one page short when items align to a page boundary, so the original is right."
+    },
+    {
+      "name": "last-n-chars-substring-end",
+      "truth": "bug",
+      "bucket": "slice-substring",
+      "source": "export function lastNChars(text: string, n: number): string {\n  const start = Math.max(0, text.length - n);\n  return text.substring(start, text.length - 1);\n}",
+      "anchorLineText": "  return text.substring(start, text.length - 1);",
+      "suggestedReplacement": "  return text.substring(start, text.length);",
+      "rationale": "The substring end index should be text.length, not text.length - 1, which drops the final character."
+    },
+    {
+      "name": "max-seeded-zero",
+      "truth": "bug",
+      "bucket": "accumulator-init",
+      "source": "export const maxValue = (xs: number[]): number => {\n  let best = 0;\n  for (const x of xs) {\n    if (x > best) best = x;\n  }\n  return best;\n};",
+      "anchorLineText": "  let best = 0;",
+      "suggestedReplacement": "  let best = -Infinity;",
+      "rationale": "Seeding the running max at 0 clamps the result to at least 0, so all-negative inputs return 0 instead of the true (negative) maximum; -Infinity is the correct neutral seed."
+    },
+    {
+      "name": "max-window-inclusive-bound",
+      "truth": "bug",
+      "bucket": "off-by-one-loop",
+      "source": "export function maxInWindow(arr: number[], k: number): number {\n  let best = arr[0];\n  for (let i = 0; i <= k; i++) {\n    if (arr[i] > best) {\n      best = arr[i];\n    }\n  }\n  return best;\n}",
+      "anchorLineText": "  for (let i = 0; i <= k; i++) {",
+      "suggestedReplacement": "  for (let i = 0; i < k; i++) {",
+      "rationale": "A window of size k covers indices 0..k-1, but `<= k` also reads arr[k] (the (k+1)th element), so the max can include a value outside the window."
+    },
+    {
+      "name": "min-seeded-zero",
+      "truth": "bug",
+      "bucket": "accumulator-init",
+      "source": "export const minPositive = (vals: number[]): number => {\n  let smallest = 0;\n  for (const v of vals) {\n    if (v < smallest) smallest = v;\n  }\n  return smallest;\n};",
+      "anchorLineText": "  let smallest = 0;",
+      "suggestedReplacement": "  let smallest = Infinity;",
+      "rationale": "Seeding the running min at 0 caps the result at 0, so all-positive inputs return 0 instead of their true minimum; Infinity is the correct neutral seed and only diverges when no value is below 0."
+    },
+    {
+      "name": "page-count-exact-multiple",
+      "truth": "bug",
+      "bucket": "boundary-condition",
+      "source": "export const pageCount = (total: number, perPage: number): number => {\n  return Math.floor(total / perPage) + 1;\n};\n",
+      "anchorLineText": "  return Math.floor(total / perPage) + 1;",
+      "suggestedReplacement": "  return Math.ceil(total / perPage);",
+      "rationale": "floor(total/perPage)+1 over-counts by one whenever total is an exact multiple of perPage (and returns 1 for total=0); ceil gives the correct page count, agreeing only on non-multiple totals."
+    },
+    {
+      "name": "page-slice-end-off-by-one",
+      "truth": "bug",
+      "bucket": "inclusive-exclusive",
+      "source": "export function pageSlice(items: string[], page: number, pageSize: number): string[] {\n  const start = page * pageSize;\n  const end = start + pageSize + 1;\n  return items.slice(start, end);\n}\n",
+      "anchorLineText": "  const end = start + pageSize + 1;",
+      "suggestedReplacement": "  const end = start + pageSize;",
+      "rationale": "The end index adds an extra +1, making the slice inclusive of one element from the next page; it agrees with the fix only when the page is the last one and the array ends before the extra index."
+    },
+    {
+      "name": "password-too-short-lte-vs-lt",
+      "truth": "bug",
+      "bucket": "comparison-operator",
+      "source": "export const passwordTooShort = (length: number, minLength: number): boolean => {\n  return length <= minLength;\n};\n",
+      "anchorLineText": "  return length <= minLength;",
+      "suggestedReplacement": "  return length < minLength;",
+      "rationale": "A password of exactly the minimum length is acceptable, but `length <= minLength` wrongly flags it as too short; `length < minLength` fixes the boundary while agreeing on all other lengths."
+    },
+    {
+      "name": "product-range-plus-one-index",
+      "truth": "bug",
+      "bucket": "off-by-one-loop",
+      "source": "export const productOfRange = (arr: number[], count: number): number => {\n  let product = 1;\n  for (let i = 0; i < count; i++) {\n    product *= arr[i + 1];\n  }\n  return product;\n};",
+      "anchorLineText": "    product *= arr[i + 1];",
+      "suggestedReplacement": "    product *= arr[i];",
+      "rationale": "`arr[i + 1]` shifts the multiplied window by one, skipping arr[0] and reaching arr[count], producing a wrong product whenever neighbors differ."
+    },
+    {
+      "name": "product-seeded-zero",
+      "truth": "bug",
+      "bucket": "accumulator-init",
+      "source": "export function product(nums: number[]): number {\n  let acc = 0;\n  for (const n of nums) {\n    acc *= n;\n  }\n  return acc;\n}",
+      "anchorLineText": "  let acc = 0;",
+      "suggestedReplacement": "  let acc = 1;",
+      "rationale": "A multiplicative accumulator seeded at 0 forces every product to 0; the identity element for multiplication is 1, so it only matches the buggy version when the input contains a zero."
+    },
+    {
+      "name": "redundant-parens-arithmetic",
+      "truth": "noop",
+      "bucket": "cosmetic-style",
+      "source": "export function rectArea(width: number, height: number): number {\n  const area = (width * height);\n  return area;\n}\n",
+      "anchorLineText": "  const area = (width * height);",
+      "suggestedReplacement": "  const area = width * height;",
+      "rationale": "Removing the redundant parentheses around a single multiplication does not change the computed value on any input."
+    },
+    {
+      "name": "ruler-tick-marks",
+      "truth": "bug",
+      "bucket": "fence-post",
+      "source": "export function rulerTicks(span: number, spacing: number): number {\n  const intervals = Math.floor(span / spacing);\n  return intervals;\n}",
+      "anchorLineText": "  return intervals;",
+      "suggestedReplacement": "  return intervals + 1;",
+      "rationale": "A ruler with K equal intervals has K+1 tick marks because both ends are marked, so returning the interval count is off by one."
+    },
+    {
+      "name": "score-meets-threshold",
+      "truth": "modelfp",
+      "bucket": "overzealous-bound-flip",
+      "source": "export const passesThreshold = (score: number, threshold: number): boolean =>\n  score >= threshold;",
+      "anchorLineText": "  score >= threshold;",
+      "suggestedReplacement": "  score > threshold;",
+      "rationale": "The original correctly passes scores that exactly meet the threshold; flipping >= to > rejects an at-threshold score, changing behavior, so the original is right."
+    },
+    {
+      "name": "slice-tail-exclusive-end",
+      "truth": "bug",
+      "bucket": "inclusive-exclusive",
+      "source": "export const lastNItems = (arr: number[], n: number): number[] => {\n  return arr.slice(arr.length - n, arr.length - 1);\n};\n",
+      "anchorLineText": "  return arr.slice(arr.length - n, arr.length - 1);",
+      "suggestedReplacement": "  return arr.slice(arr.length - n, arr.length);",
+      "rationale": "The slice end uses length-1 which drops the final element when n>=1, but agrees with the fix when n==0 (both empty); end should be length to be exclusive of nothing in the tail."
+    },
+    {
+      "name": "sum-first-n-plus-one-index",
+      "truth": "bug",
+      "bucket": "off-by-one-loop",
+      "source": "export const sumFirstN = (xs: number[], n: number): number => {\n  let total = 0;\n  for (let i = 0; i < n; i++) {\n    total += xs[i + 1];\n  }\n  return total;\n};",
+      "anchorLineText": "    total += xs[i + 1];",
+      "suggestedReplacement": "    total += xs[i];",
+      "rationale": "`xs[i + 1]` skips the first element xs[0] and reads xs[n] (often undefined), summing the wrong n elements."
+    },
+    {
+      "name": "sum-range-equivalent-rewrite",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export function sumRange(values: number[], count: number): number {\n  let total = 0;\n  for (let i = 0; i < count; i++) {\n    total = total + (values[i] ?? 0);\n  }\n  return total;\n}\n",
+      "anchorLineText": "    total = total + (values[i] ?? 0);",
+      "suggestedReplacement": "    total += values[i] ?? 0;",
+      "rationale": "+= is behaviorally identical to total = total + x"
+    },
+    {
+      "name": "sum-to-n-exclusive-loop",
+      "truth": "bug",
+      "bucket": "boundary-condition",
+      "source": "export const sumToN = (n: number): number => {\n  let s = 0;\n  for (let k = 1; k < n; k++) s += k;\n  return s;\n};\n",
+      "anchorLineText": "  for (let k = 1; k < n; k++) s += k;",
+      "suggestedReplacement": "  for (let k = 1; k <= n; k++) s += k;",
+      "rationale": "The loop uses k < n so it stops before adding the final term n, undercounting the inclusive 1..n sum for every n >= 1 while still agreeing at n <= 1."
+    },
+    {
+      "name": "ternary-to-if-else",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export function clampLabel(n: number): string {\n  return n > 0 ? \"positive\" : \"non-positive\";\n}",
+      "anchorLineText": "  return n > 0 ? \"positive\" : \"non-positive\";",
+      "suggestedReplacement": "  if (n > 0) { return \"positive\"; } else { return \"non-positive\"; }",
+      "rationale": "Rewriting the ternary as an if/else returns the identical value for every input n."
+    },
+    {
+      "name": "ternary-to-if-same-result",
+      "truth": "noop",
+      "bucket": "cosmetic-style",
+      "source": "export const clampMin = (value: number, floor: number): number => {\n  return value < floor ? floor : value;\n};\n",
+      "anchorLineText": "  return value < floor ? floor : value;",
+      "suggestedReplacement": "  if (value < floor) return floor;\n  return value;",
+      "rationale": "Rewriting the ternary as an equivalent if/return produces identical output for every input pair."
+    },
+    {
+      "name": "times-two-to-self-add",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "function double(x: number): number {\n  return x * 2;\n}\nexport { double };",
+      "anchorLineText": "  return x * 2;",
+      "suggestedReplacement": "  return x + x;",
+      "rationale": "x * 2 and x + x produce identical IEEE-754 results for every double, including negatives, fractions, NaN and Infinity."
+    },
+    {
+      "name": "truncate-label-inclusive-bound",
+      "truth": "bug",
+      "bucket": "off-by-one-loop",
+      "source": "export function truncateLabel(label: string, maxLen: number): string {\n  let out = \"\";\n  for (let i = 0; i <= maxLen; i++) {\n    if (i < label.length) {\n      out += label[i];\n    }\n  }\n  return out;\n}\n",
+      "anchorLineText": "  for (let i = 0; i <= maxLen; i++) {",
+      "suggestedReplacement": "  for (let i = 0; i < maxLen; i++) {",
+      "rationale": "inclusive loop bound keeps maxLen+1 chars"
+    },
+    {
+      "name": "valid-percent-lt-vs-lte-zero",
+      "truth": "bug",
+      "bucket": "comparison-operator",
+      "source": "export const isValidPercent = (value: number): boolean => {\n  if (value <= 0 || value > 100) {\n    return false;\n  }\n  return true;\n};\n",
+      "anchorLineText": "  if (value <= 0 || value > 100) {",
+      "suggestedReplacement": "  if (value < 0 || value > 100) {",
+      "rationale": "0 is a valid percentage, but `value <= 0` wrongly rejects it at the boundary; `value < 0` fixes it while every other value is unaffected."
+    },
+    {
+      "name": "within-budget-lt-vs-lte",
+      "truth": "bug",
+      "bucket": "comparison-operator",
+      "source": "function withinBudget(spent: number, budget: number): boolean {\n  return spent < budget;\n}\nexport { withinBudget };\n",
+      "anchorLineText": "  return spent < budget;",
+      "suggestedReplacement": "  return spent <= budget;",
+      "rationale": "Spending exactly the budget is still within budget, but `spent < budget` returns false when they are equal; `<=` fixes the boundary while agreeing elsewhere."
+    },
+    {
+      "name": "object-key-reorder-noop",
+      "truth": "noop",
+      "bucket": "equivalent-rewrite",
+      "source": "export function toPoint(x: number, y: number): { x: number; y: number } {\n  return { x: x, y: y };\n}\n",
+      "anchorLineText": "  return { x: x, y: y };",
+      "suggestedReplacement": "  return { y: y, x: x };",
+      "rationale": "reordering object keys is behavior-preserving; must NOT reproduce (all-diverge representational case)"
+    }
+  ]
+}

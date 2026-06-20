@@ -99,10 +99,31 @@ describe("runPureLogicHarness — INCONCLUSIVE (never a false reproduce; the FP-
     expect(res.detail).toBe("no-divergence-found")
   })
 
-  it("wholesale-different functions → wholesale-divergence (a rewrite, not a targeted bug)", async () => {
-    const res = await runPureLogicHarness(withPair(`x => x + 100`, `x => x`))
+  it("type-correct equivalent rewrite does NOT reproduce (no coercion over-fire)", async () => {
+    // `x * 2` vs `x + x` are equal for numbers but DIFFER on strings ("ab"); a typed
+    // `number` param means the battery feeds only numbers → no divergence → not reproduced.
+    const res = await runPureLogicHarness(withPair(`(x: number) => x * 2`, `(x: number) => x + x`))
     expect(res.status).toBe("inconclusive")
-    expect(res.detail).toBe("wholesale-divergence")
+    expect(res.detail).toBe("no-divergence-found")
+  })
+
+  it("an object-KEY reorder does NOT reproduce (canonical key-order, not a behavior change)", async () => {
+    // `{x,y}` vs `{y,x}` is behavior-preserving but JSON.stringify is key-order-sensitive
+    // → would diverge on every input (all-diverge). The canonical serializer sorts keys
+    // so it keys identically → AGREE → not reproduced. (Reviewer-found all-diverge hole.)
+    const res = await runPureLogicHarness(
+      withPair(`(x: number, y: number) => ({ x: x, y: y })`, `(x: number, y: number) => ({ y: y, x: x })`),
+    )
+    expect(res.status).toBe("inconclusive")
+    expect(res.detail).toBe("no-divergence-found")
+  })
+
+  it("an ARRAY reorder DOES reproduce (array order is significant)", async () => {
+    // Unlike object keys, reordering an array changes behavior, so it must still diverge.
+    const res = await runPureLogicHarness(
+      withPair(`(a: number, b: number) => [a, b]`, `(a: number, b: number) => [b, a]`),
+    )
+    expect(res.status).toBe("reproduced")
   })
 })
 

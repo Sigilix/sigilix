@@ -59,6 +59,7 @@
     "js-yaml": "^4.2.0",
     "jsonrepair": "^3.14.0",
     "picomatch": "^4.0.4",
+    "quickjs-emscripten": "^0.32.0",
     "semver": "7.6.3"
   }
 }

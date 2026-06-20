@@ -7,6 +7,7 @@ import {
   RECEIPTJOIN_CATEGORY,
   TRUSTLEDGER_CATEGORY,
   SELFCONFIRM_CATEGORY,
+  REPRODUCE_ELIGIBILITY_CATEGORY,
 } from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
@@ -223,6 +224,39 @@ describe("handleVerificationMetricsRoute", () => {
   it("defaults selfConfirmMode to off when OPENCLAW_SELFCONFIRM_MODE is unset", async () => {
     const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
     expect(((await res.json()) as { selfConfirmMode: string }).selfConfirmMode).toBe("off")
+  })
+
+  it("SIG-477: surfaces reproduceMode + the reproduceEligibility corpus, kept out of the worker-token totals", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security" }, // worker-token
+      { verdict: "eligible", category: REPRODUCE_ELIGIBILITY_CATEGORY },
+      { verdict: "ineligible", category: REPRODUCE_ELIGIBILITY_CATEGORY },
+      { verdict: "ineligible", category: REPRODUCE_ELIGIBILITY_CATEGORY },
+    ])
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_REPRODUCE_MODE: "shadow" }, do_),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number
+      reproduceMode: string
+      reproduceEligibility: { eligible: number; ineligible: number; total: number; eligibleFraction: number }
+    }
+    expect(body.total).toBe(1) // worker-token only — reproduce corpus excluded
+    expect(body.reproduceMode).toBe("shadow")
+    expect(body.reproduceEligibility).toEqual({
+      eligible: 1,
+      ineligible: 2,
+      total: 3,
+      eligibleFraction: 0.333,
+    })
+  })
+
+  it("defaults reproduceMode to off when OPENCLAW_REPRODUCE_MODE is unset", async () => {
+    const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
+    expect(((await res.json()) as { reproduceMode: string }).reproduceMode).toBe("off")
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {

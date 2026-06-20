@@ -29,6 +29,7 @@ import { parseSecurityGroundingValidatorMode } from "./domain/gates/validate-sec
 import { parseSecurityUsageValidatorMode } from "./domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import { parseSelfConfirmMode } from "@/src/lib/verification/confirm-finding-inworker"
+import { parseReproduceMode } from "@/src/lib/verification/reproduce-eligibility"
 import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import { parseLogicInputCompositionMode } from "./domain/logic-input-composition"
 import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
@@ -165,6 +166,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_RECEIPTJOIN_MODE?: string | undefined
   // SIG-476 PR2: in-worker self-confirmation gate (off | shadow | on; default off)
   OPENCLAW_SELFCONFIRM_MODE?: string | undefined
+  // SIG-477 PR-1: execution-sandbox eligibility gate (off | shadow | on; default off)
+  OPENCLAW_REPRODUCE_MODE?: string | undefined
   OPENCLAW_LOGIC_PROMPT_BUDGET?: string | undefined
   // SIG-369(b): logic-input-composition telemetry (off | shadow; default off)
   OPENCLAW_LOGIC_INPUT_COMPOSITION?: string | undefined
@@ -283,6 +286,8 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       // SIG-476 PR2: in-worker self-confirmation gate mode (default off → no-op).
       selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
+      // SIG-477 PR-1: execution-sandbox eligibility gate mode (default off → no-op).
+      reproduceMode: parseReproduceMode(env.OPENCLAW_REPRODUCE_MODE),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
       // SIG-369(b): logic-input-composition telemetry mode (default off → no-op).
       logicInputCompositionMode: parseLogicInputCompositionMode(env.OPENCLAW_LOGIC_INPUT_COMPOSITION),

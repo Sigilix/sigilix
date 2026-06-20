@@ -32,7 +32,11 @@ export interface FindingTrustPatch {
 }
 
 const TIER_RANK: Record<FindingTrustTier, number> = {
-  "runner-confirmed": 6,
+  "runner-confirmed": 7,
+  // SIG-477: the execution-sandbox reproduction tier sits ABOVE the static
+  // self-attested tier (deterministic-confirmed) but BELOW an independent CI
+  // receipt (runner-confirmed) — the receipt-supremacy law (pr-review-finding.ts).
+  "reproduced-by-execution": 6,
   "deterministic-confirmed": 5,
   "deterministic-grounded": 4,
   "worker-token-confirmed": 3,
@@ -99,6 +103,8 @@ export function annotateFindingTrust(finding: PrReviewFinding, patch: FindingTru
  *  Trust Summary + the (flag-gated) telemetry recording. */
 export interface TrustTierCounts {
   runnerConfirmed: number
+  /** SIG-477: findings the execution sandbox re-ran and reproduced. */
+  reproducedByExecution: number
   deterministicConfirmed: number
   deterministicGrounded: number
   workerTokenConfirmed: number
@@ -113,6 +119,7 @@ export interface TrustTierCounts {
 export function countTrustTiers(findings: ReadonlyArray<Pick<PrReviewFinding, "trust">>): TrustTierCounts {
   const counts: TrustTierCounts = {
     runnerConfirmed: 0,
+    reproducedByExecution: 0,
     deterministicConfirmed: 0,
     deterministicGrounded: 0,
     workerTokenConfirmed: 0,
@@ -125,6 +132,9 @@ export function countTrustTiers(findings: ReadonlyArray<Pick<PrReviewFinding, "t
     switch (f.trust?.tier) {
       case "runner-confirmed":
         counts.runnerConfirmed++
+        break
+      case "reproduced-by-execution":
+        counts.reproducedByExecution++
         break
       case "deterministic-confirmed":
         counts.deterministicConfirmed++

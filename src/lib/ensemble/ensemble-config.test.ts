@@ -21,6 +21,7 @@ import { parseSecurityGroundingValidatorMode } from "@/src/lib/ensemble/domain/g
 import { parseSecurityUsageValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
 import { parseSelfConfirmMode } from "@/src/lib/verification/confirm-finding-inworker"
+import { parseReproduceMode } from "@/src/lib/verification/reproduce-eligibility"
 import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import { parseLogicInputCompositionMode } from "@/src/lib/ensemble/domain/logic-input-composition"
 import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
@@ -198,6 +199,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_RECEIPTJOIN_MODE: "enforce",
       // SIG-476 PR2: in-worker self-confirmation gate (off|shadow|on).
       OPENCLAW_SELFCONFIRM_MODE: "shadow",
+      // SIG-477 PR-1: execution-sandbox eligibility gate (off|shadow|on).
+      OPENCLAW_REPRODUCE_MODE: "on",
       OPENCLAW_LOGIC_PROMPT_BUDGET: "shadow",
       // SIG-369(b): logic-input-composition telemetry flag (off|shadow).
       OPENCLAW_LOGIC_INPUT_COMPOSITION: "shadow",
@@ -250,6 +253,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // parsed via each field's own dedicated parser
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
+      reproduceMode: parseReproduceMode(env.OPENCLAW_REPRODUCE_MODE),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
       logicInputCompositionMode: parseLogicInputCompositionMode(env.OPENCLAW_LOGIC_INPUT_COMPOSITION),
       astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
@@ -305,6 +309,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       synthRecovery: "off",
       receiptJoinMode: parseReceiptJoinMode(undefined),
       selfConfirmMode: parseSelfConfirmMode(undefined),
+      reproduceMode: parseReproduceMode(undefined),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(undefined),
       logicInputCompositionMode: parseLogicInputCompositionMode(undefined),
       astEmitFloorMode: parseAstEmitFloorMode(undefined),
@@ -402,6 +407,27 @@ describe("SIG-476 PR2 parseSelfConfirmMode (OPENCLAW_SELFCONFIRM_MODE)", () => {
     expect(parseSelfConfirmMode("")).toBe("off")
     expect(parseSelfConfirmMode("enforce")).toBe("off") // not a valid value here
     expect(parseSelfConfirmMode("nonsense")).toBe("off")
+  })
+})
+
+describe("SIG-477 PR-1 parseReproduceMode (OPENCLAW_REPRODUCE_MODE)", () => {
+  it("defaults to off when unset", () => {
+    expect(parseReproduceMode(undefined)).toBe("off")
+    expect(parseEnsembleConfig({}).flags.reproduceMode).toBe("off")
+  })
+
+  it("parses off | shadow | on (trim + lowercase), everything else → off", () => {
+    expect(parseReproduceMode("off")).toBe("off")
+    expect(parseReproduceMode("  SHADOW  ")).toBe("shadow")
+    expect(parseReproduceMode("On")).toBe("on")
+    expect(parseReproduceMode("")).toBe("off")
+    expect(parseReproduceMode("enforce")).toBe("off") // not a valid value here
+    expect(parseReproduceMode("nonsense")).toBe("off")
+  })
+
+  it("wires OPENCLAW_REPRODUCE_MODE through to flags.reproduceMode", () => {
+    expect(parseEnsembleConfig({ OPENCLAW_REPRODUCE_MODE: "shadow" }).flags.reproduceMode).toBe("shadow")
+    expect(parseEnsembleConfig({ OPENCLAW_REPRODUCE_MODE: "  On  " }).flags.reproduceMode).toBe("on")
   })
 })
 

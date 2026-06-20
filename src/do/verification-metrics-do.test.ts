@@ -7,6 +7,7 @@ import {
   RECEIPTJOIN_CATEGORY,
   TRUSTLEDGER_CATEGORY,
   SELFCONFIRM_CATEGORY,
+  REPRODUCE_ELIGIBILITY_CATEGORY,
 } from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
@@ -220,6 +221,43 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
       total: 0,
       confirmedFraction: 0,
       upliftFraction: 0,
+    })
+  })
+
+  it("SIG-477: reproduce-eligibility verdicts are a SEPARATE corpus and compute eligibleFraction", async () => {
+    const { do_ } = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security", occurredAt: T }, // worker-token
+      { verdict: "uplift", category: SELFCONFIRM_CATEGORY, occurredAt: T }, // self-confirm
+      { verdict: "eligible", category: REPRODUCE_ELIGIBILITY_CATEGORY, occurredAt: T }, // reproduce ↓
+      { verdict: "ineligible", category: REPRODUCE_ELIGIBILITY_CATEGORY, occurredAt: T },
+      { verdict: "ineligible", category: REPRODUCE_ELIGIBILITY_CATEGORY, occurredAt: T },
+      { verdict: "ineligible", category: REPRODUCE_ELIGIBILITY_CATEGORY, occurredAt: T },
+    ])
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    // Worker-token aggregates EXCLUDE the reproduce corpus (no contamination).
+    expect(out.total).toBe(1)
+    expect(out.byVerdict).toEqual({ confirmed: 1 })
+    expect(out.counts.eligible).toBeUndefined()
+    expect(out.counts.ineligible).toBeUndefined()
+    expect(out.counts.confirmed?.[REPRODUCE_ELIGIBILITY_CATEGORY]).toBeUndefined()
+    // eligible = 1, ineligible = 3; total = 4; eligibleFraction = 1/4 = 0.25.
+    expect(out.reproduceEligibility).toEqual({
+      eligible: 1,
+      ineligible: 3,
+      total: 4,
+      eligibleFraction: 0.25,
+    })
+  })
+
+  it("reproduceEligibility is zeroed (no divide-by-zero) on an empty corpus", async () => {
+    const { do_ } = makeDo()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.reproduceEligibility).toEqual({
+      eligible: 0,
+      ineligible: 0,
+      total: 0,
+      eligibleFraction: 0,
     })
   })
 

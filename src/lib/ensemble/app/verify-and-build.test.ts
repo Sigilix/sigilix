@@ -73,6 +73,7 @@ function makeArgs(opts: {
   reproduceMode?: "off" | "shadow" | "on"
   receiptScanIndex?: Map<string, ReceiptScanResult[]> | null
   astSecurityFindings?: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
+  astFilesByPath?: ReadonlyMap<string, string>
 }): VerifyAndBuildArgs {
   const env = opts.env
   const baseConfig = parseEnsembleConfig(env)
@@ -141,6 +142,7 @@ function makeArgs(opts: {
     renderableUnanchoredForSubmission: [],
     findingMarkers: opts.findings.map(() => null),
     ...(opts.astSecurityFindings !== undefined ? { astSecurityFindings: opts.astSecurityFindings } : {}),
+    ...(opts.astFilesByPath !== undefined ? { astFilesByPath: opts.astFilesByPath } : {}),
   }
 }
 
@@ -741,6 +743,47 @@ describe("verifyAndBuildSubmission — SIG-477 PR-3 ReDoS harness wiring (SHADOW
 
     expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["reproduced"])
     // SHADOW: a real reproduction is recorded but the tier is NOT mutated (darkness).
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+  })
+
+  it("SIG-477 PR-4b: a LINE-LEVEL fix REPRODUCES via source reconstruction (astFilesByPath)", async () => {
+    const env = makeEnv()
+    // The real-world shape: the finding cites only a single line, and the fix is a
+    // single line — NOT a liftable function. Reconstruction rebuilds the full buggy +
+    // fixed function from astFilesByPath so the harness can run the pair.
+    const source = [
+      "// header", // 1
+      "export function truncateLabel(label, maxLen) {", // 2
+      '  let out = "";', // 3
+      "  for (let i = 0; i <= maxLen; i++) {", // 4  ← the off-by-one
+      "    if (i < label.length) {", // 5
+      "      out += label[i];", // 6
+      "    }", // 7
+      "  }", // 8
+      "  return out;", // 9
+      "}", // 10
+      "",
+    ].join("\n")
+    const finding = nonRedosEligible({
+      headline: "off-by-one in truncateLabel keeps one extra char",
+      path: "src/util/labels.ts",
+      line: 4,
+      // line-level cited code + line-level fix — neither is a liftable function.
+      failureExample: "for (let i = 0; i <= maxLen; i++) {",
+      suggestedReplacement: "  for (let i = 0; i < maxLen; i++) {",
+    })
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+      astFilesByPath: new Map([["src/util/labels.ts", source]]),
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["reproduced"])
     expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
   })
 

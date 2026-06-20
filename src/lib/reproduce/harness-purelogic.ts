@@ -119,25 +119,34 @@ const SCALAR_POOL: readonly unknown[] = [
 ]
 
 /** Build the arg-tuple battery for a given arity. Arity 1 → one tuple per pool value;
- *  higher arity → the cartesian product, generated boundary-first and capped. */
+ *  higher arity → the FULL cartesian product, then EVENLY SAMPLED down to MAX_BATTERY.
+ *  Even-sampling (not truncation) is essential: a truncated cartesian pins the earlier
+ *  arg positions to their first few pool values, so a 2-arg fn like `truncate(label,
+ *  maxLen)` would only ever see numeric `label`s and never diverge. Sampling across the
+ *  whole product makes EVERY arg position span the full pool. */
 function buildBattery(arity: number): unknown[][] {
   if (arity === 1) return SCALAR_POOL.map((v) => [v])
-  const battery: unknown[][] = []
+  const full: unknown[][] = []
   const rec = (depth: number, acc: unknown[]): void => {
-    if (battery.length >= MAX_BATTERY) return
     if (depth === arity) {
-      battery.push(acc.slice())
+      full.push(acc.slice())
       return
     }
     for (const v of SCALAR_POOL) {
-      if (battery.length >= MAX_BATTERY) return
       acc.push(v)
       rec(depth + 1, acc)
       acc.pop()
     }
   }
   rec(0, [])
-  return battery
+  if (full.length <= MAX_BATTERY) return full
+  const stride = full.length / MAX_BATTERY
+  const sampled: unknown[][] = []
+  for (let k = 0; k < MAX_BATTERY; k++) {
+    const tuple = full[Math.floor(k * stride)]
+    if (tuple !== undefined) sampled.push(tuple)
+  }
+  return sampled
 }
 
 /** Param arity of a function-ish AST node. */

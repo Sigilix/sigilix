@@ -20,7 +20,12 @@
 
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { findingKey } from "@/src/lib/verification/verify-finding"
-import { isReproducibleEligible, type ReproduceMode } from "@/src/lib/verification/reproduce-eligibility"
+import {
+  isReproducibleEligible,
+  executableClassForFinding,
+  type ReproduceMode,
+} from "@/src/lib/verification/reproduce-eligibility"
+import { reconstructPureLogicPair } from "./reconstruct-pure-logic"
 import { runBoundedRedosHarness } from "@/src/lib/reproduce/harness-redos-runner"
 import { runBoundedPureLogicHarness } from "@/src/lib/reproduce/harness-purelogic-runner"
 import { HARNESS_MAX_TOTAL_MS } from "@/src/lib/reproduce/harness-redos"
@@ -56,6 +61,10 @@ interface BoundedHarnessOutcome {
 export interface ReproducePassContext {
   reproduceMode: Exclude<ReproduceMode, "off">
   astSecurityFindings: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
+  /** Full-file NEW-side source (path → content at headSha) for pure-logic function
+   *  reconstruction. Absent / empty ⇒ reconstruction is skipped (the pass falls back
+   *  to lifting the finding's cited fragments). */
+  astFilesByPath?: ReadonlyMap<string, string>
   /** Orchestrator start time (epoch ms) for the under-load wall-clock check; absent ⇒
    *  never skip on load (the per-PR sandbox budget still bounds cost). */
   startMs: number | undefined
@@ -85,7 +94,27 @@ export async function runReproducePass(
   const underLoad = remainingMs < REPRODUCE_MIN_REMAINING_MS
 
   for (const finding of findings) {
-    const elig = isReproducibleEligible(finding, astSecurityFindings)
+    // SIG-477 PR-4b: a pure-logic finding cites only line-level code, so reconstruct
+    // the full BUGGY + FIXED function from the file source and feed the harness that
+    // liftable pair (via the cited-code fields it already reads). Eligibility + the
+    // harness run on this enriched copy; identity, telemetry, and the on-only annotate
+    // stay on the ORIGINAL finding. Reconstruction fail-opens → the original finding is
+    // used (which usually records `not-liftable-closure`). ReDoS is untouched.
+    let recoInput: PrReviewFinding = finding
+    let reconstructed = false
+    if (executableClassForFinding(finding) === "pure-function-logic") {
+      const recon = reconstructPureLogicPair(ctx.astFilesByPath?.get(finding.path), finding)
+      if (recon !== null) {
+        // The harness reads `failureExample` before `astEvidence` (buggy side) and
+        // `suggestedReplacement` before `fixExample` (fixed side), so overriding just
+        // these two makes the reconstructed FULL functions win over any line-level
+        // cited fragments — no need to clear the others.
+        recoInput = { ...finding, failureExample: recon.buggy, suggestedReplacement: recon.fixed }
+        reconstructed = true
+      }
+    }
+
+    const elig = isReproducibleEligible(recoInput, astSecurityFindings)
     console.log(
       JSON.stringify({
         event: "verification-reproduce-eligibility",
@@ -98,6 +127,7 @@ export async function runReproducePass(
         path: finding.path,
         line: finding.line,
         score: finding.score,
+        reconstructed,
         eligible: elig.eligible,
         reason: elig.reason,
         ...(elig.klass !== undefined ? { klass: elig.klass } : {}),
@@ -116,14 +146,14 @@ export async function runReproducePass(
     let harness: BoundedHarnessOutcome | null = null
     if (elig.klass === "redos") {
       harness = await runBoundedRedosHarness({
-        finding,
+        finding: recoInput,
         budget: sandboxBudget,
         underLoad,
         estMs: HARNESS_MAX_TOTAL_MS,
       })
     } else if (elig.klass === "pure-function-logic") {
       harness = await runBoundedPureLogicHarness({
-        finding,
+        finding: recoInput,
         budget: sandboxBudget,
         underLoad,
         estMs: PURELOGIC_HARNESS_MAX_TOTAL_MS,
@@ -143,6 +173,7 @@ export async function runReproducePass(
         path: finding.path,
         line: finding.line,
         klass: elig.klass,
+        reconstructed,
         status: harness.verdict,
         detail: harness.detail,
         elapsedMs: harness.elapsedMs,

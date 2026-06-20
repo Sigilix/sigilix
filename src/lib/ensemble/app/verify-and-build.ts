@@ -150,6 +150,13 @@ export interface VerifyAndBuildArgs {
    * receipt-join behaves exactly as before (no co-located facts considered).
    */
   astSecurityFindings?: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
+  /**
+   * SIG-477 PR-4b — full-file NEW-side source (path → content at `headSha`), used by
+   * the reproduce pass to reconstruct the BUGGY + FIXED function for a pure-logic
+   * finding (findings cite only line-level fragments). Absent / empty ⇒ reconstruction
+   * is skipped and the pass falls back to lifting the finding's cited fields.
+   */
+  astFilesByPath?: ReadonlyMap<string, string>
 }
 
 export interface VerifyAndBuildResult {
@@ -221,6 +228,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     submissionVerdict,
     renderableUnanchoredForSubmission,
     astSecurityFindings,
+    astFilesByPath,
   } = a
   // `findingMarkers` is reassigned by the refuted-demote, so it is a local `let`
   // (mirrors the orchestrator's `let findingMarkers` at the merge-guard boundary)
@@ -684,6 +692,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
       {
         reproduceMode,
         astSecurityFindings: astSecurityFindings ?? [],
+        ...(astFilesByPath !== undefined ? { astFilesByPath } : {}),
         startMs,
         owner,
         repo,

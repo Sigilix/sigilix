@@ -196,8 +196,10 @@ function eachNode(node: Node, cb: (n: Node) => void): void {
   }
 }
 
-/** The SMALLEST function node whose body spans `line`. */
-function enclosingFunctions(ast: Node, line: number): Node[] {
+/** The SMALLEST function node whose body spans `line` (sorted smallest-span-first).
+ *  Exported for reuse by the reproduce pass (SIG-477 PR-4b), which reconstructs the
+ *  enclosing function at a finding's line from full-file source. */
+export function enclosingFunctions(ast: Node, line: number): Node[] {
   const matches: Node[] = []
   eachNode(ast, (n) => {
     if (!FUNCTION_TYPES.has(n.type)) return

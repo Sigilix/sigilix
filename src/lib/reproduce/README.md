@@ -40,6 +40,32 @@ judgment. Each is pure-ish (calls `runInSandbox`) and NEVER throws.
   ADVERSARIAL pump input (`pumpChar.repeat(N) + mismatch`) must TIME OUT at small N
   *and reproduce on a re-run*. Only then → `reproduced`. A SAFE regex never trips side
   two → `inconclusive` (the FP-safety; the harness NEVER refutes). No extractable
-  regex / over-budget / any error → `skipped`. Wired in `verify-and-build.ts` in
-  **SHADOW** (measure-only, the `reproduce_result` corpus); the customer flip (annotate
-  the `reproduced-by-execution` tier in `on`) is PR-5.
+  regex / over-budget / any error → `skipped`.
+  > ⚠️ **ReDoS does NOT reproduce in QuickJS** (live-confirmed, probes ×2). QuickJS's
+  > regex engine (libregexp) ≠ V8's, so a V8-catastrophic regex isn't necessarily
+  > catastrophic here, and a regex match is a single C call the cycle-interrupt can't
+  > subdivide → textbook catastrophic regexes return `inconclusive`. The harness is
+  > retained (FP-safe, never reproduces a safe regex) but is **not** the v1 wedge.
+  > Faithful ReDoS reproduction needs a JS-level step-bounded backtracking simulator
+  > (deferred), not engine-timeout.
+
+- **`harness-purelogic.ts`** (SIG-477 PR-4, **the v1 wedge**) — pure-function logic
+  divergence (off-by-one / fence-post / boundary / coercion). Lifts BOTH the BUGGY
+  function (from `failureExample` / `astEvidence` / body fences) AND the corrected
+  function (from `suggestedReplacement` / `fixExample`) into callable expressions (AST
+  slice; a declaration is wrapped to yield its value), then runs both over a
+  boundary-biased input **battery** in the sandbox and tallies agree/diverge. The
+  **two-sided** test: `reproduced` only when they **AGREE on ≥1** input (same function
+  bar a targeted defect) **AND DIVERGE on ≥1** input (the buggy code returns a
+  different value somewhere) **AND** the tally re-runs identically. all-agree →
+  `inconclusive` (no-divergence); all-diverge → `inconclusive` (wholesale rewrite, FP-
+  safe); arity mismatch / no liftable pair / error → `skipped`. **Why this, not
+  ReDoS:** a pure function's output is ENGINE-INDEPENDENT (identical in QuickJS and
+  V8), the signal is a deterministic output comparison (no timeout flakiness), and a
+  runaway buggy loop is BYTECODE — exactly what the opcode-cycle interrupt bounds.
+
+Both harnesses are dispatched by `run-reproduce-pass.ts` (the eligibility loop +
+per-class harness, extracted from `verify-and-build.ts`) in **SHADOW** (measure-only,
+the `reproduce_eligibility` + `reproduce_result` corpora; no tier mutation, no pill).
+The customer flip (annotate the `reproduced-by-execution` tier in mode `on`, render the
+REPRODUCED pill) is PR-5, gated on a confirmed live reproduction + a clean shadow soak.

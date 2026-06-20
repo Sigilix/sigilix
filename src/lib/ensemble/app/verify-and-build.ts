@@ -62,17 +62,11 @@ import {
   RECEIPTJOIN_CATEGORY,
   TRUSTLEDGER_CATEGORY,
   SELFCONFIRM_CATEGORY,
-  REPRODUCE_ELIGIBILITY_CATEGORY,
-  REPRODUCE_RESULT_CATEGORY,
   type RecordVerificationArgs,
   type SelfConfirmVerdict,
 } from "@/src/do/verification-metrics"
 import { confirmFindingAgainstInWorkerAst } from "@/src/lib/verification/confirm-finding-inworker"
-import { isReproducibleEligible } from "@/src/lib/verification/reproduce-eligibility"
-import { runBoundedRedosHarness } from "@/src/lib/reproduce/harness-redos-runner"
-import { HARNESS_MAX_TOTAL_MS } from "@/src/lib/reproduce/harness-redos"
-import { createSandboxBudget } from "@/src/lib/reproduce/sandbox-budget"
-import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
+import { runReproducePass } from "./run-reproduce-pass"
 import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 import { assessApprovalReadiness } from "@/src/lib/approval-readiness"
 import { chooseReviewEvent, resolveReviewEventOverride, type ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
@@ -94,21 +88,6 @@ type SynthesizerProvenanceFindings = SynthesizerProvenance["findings"]
  * snapshot reads it tolerating the optional element).
  */
 type FilteredProvenance = Array<SynthesizerProvenanceFindings[number] | undefined>
-
-// SIG-477 PR-3 — recall-safety bounds for the SHADOW ReDoS-harness block (the
-// sandbox runs INLINE on the review's critical path, so it is bounded three ways):
-//   - REPRODUCE_PR_BUDGET_MS: per-PR aggregate sandbox-time ceiling (a PR with many
-//     eligible redos findings can't, in aggregate, blow the orchestrator wall). Sized
-//     to admit ~2 harness runs at the HONEST worst-case per-run cost below.
-//   - REPRODUCE_HARNESS_EST_MS: per-run cost reserved against that budget BEFORE a run.
-//     It is the harness's HARD internal wall-clock cap (HARNESS_MAX_TOTAL_MS) — NOT an
-//     under-estimate — so the per-PR aggregate ceiling is honest (DeepSeek/Codex flag).
-//   - REPRODUCE_MIN_REMAINING_MS: when the review's remaining wall-clock is below this
-//     floor, SKIP the harness (mirrors publish.ts's INLINE_OVERVIEW_MIN_BUDGET guard) —
-//     a finding is never delayed/lost for a SHADOW measurement.
-const REPRODUCE_HARNESS_EST_MS = HARNESS_MAX_TOTAL_MS
-const REPRODUCE_PR_BUDGET_MS = 2 * REPRODUCE_HARNESS_EST_MS
-const REPRODUCE_MIN_REMAINING_MS = 30_000
 
 export interface VerifyAndBuildArgs {
   env: Env
@@ -686,103 +665,34 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     }
   }
 
-  // SIG-477 PR-1 (execution-sandbox eligibility, DARK — SHADOW telemetry ONLY): the
-  // measurement instrument that gates whether the reproduce engine (PR-2+) is worth
-  // building. For each submitted finding, run the PURE `isReproducibleEligible` gate
-  // (already grounded + an executable allowlist class + a dependency-closure-PURE,
-  // non-fabricated, liftable closure) and persist eligible/ineligible to
-  // VerificationMetricsDO under the `reproduce_eligibility` corpus. Read GET
-  // /metrics/verification → `reproduceEligibility.eligibleFraction`.
+  // SIG-477 (execution-sandbox reproduce pass, SHADOW telemetry by default): for each
+  // submitted finding, run the PURE `isReproducibleEligible` gate (already grounded +
+  // an executable allowlist class + a dependency-closure-PURE, non-fabricated, liftable
+  // closure) → `reproduce_eligibility` corpus; then dispatch the per-class execution
+  // HARNESS (ReDoS / pure-function-logic) → `reproduce_result` corpus. The whole pass
+  // lives in `runReproducePass` (extracted to keep this file under the size budget);
+  // see it for the recall-safety bounds + the on-only annotate. Read GET
+  // /metrics/verification → `reproduceEligibility` / `reproduceResult`.
   //
   // PLACEMENT (SIG-477 de-risk): runs AFTER the trust-ledger baseline above so the
-  // grounded-model / deterministic-grounded tiers are SET before `isReproducibleEligible`
-  // reads them — otherwise a model-only finding (no manifest evidenceId, tier not yet
-  // assigned) reads as `not-grounded` and is under-counted. The first probe showed
-  // 6/14 ineligible for `not-grounded` purely from the pre-baseline placement.
-  //
-  // SIG-477 PR-3 extends this block: ELIGIBLE redos findings now run the ReDoS
-  // HARNESS (the sandbox) below — in SHADOW it stays measure-only (the eligibility +
-  // result corpora, no tier mutation, no pill); the `reproduced-by-execution` annotate
-  // is gated to `on` (the prod env stays "shadow" until PR-5 flips the customer pill).
+  // grounded tiers are SET before the gate reads them (else a model-only finding reads
+  // as `not-grounded` and is under-counted).
   const reproduceMode = ensembleConfig.flags.reproduceMode
   if (reproduceMode !== "off") {
-    // SIG-477 PR-3 — recall-safety bound (b): ONE per-PR aggregate sandbox-time budget
-    // for the whole review (exhausted ⇒ later eligible findings record `skipped`).
-    const sandboxBudget = createSandboxBudget(REPRODUCE_PR_BUDGET_MS)
-    // SIG-477 PR-3 — recall-safety bound (c): SKIP the harness under wall-clock load.
-    // Computed ONCE from the threaded startMs; absent startMs ⇒ never skip on load (the
-    // per-PR sandbox budget above still bounds cost).
-    const remainingMs =
-      startMs !== undefined ? ORCHESTRATOR_TIMEOUT_MS - (Date.now() - startMs) : Number.POSITIVE_INFINITY
-    const underLoad = remainingMs < REPRODUCE_MIN_REMAINING_MS
-    for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
-      const elig = isReproducibleEligible(finding, astSecurityFindings ?? [])
-      console.log(
-        JSON.stringify({
-          event: "verification-reproduce-eligibility",
-          mode: reproduceMode,
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding),
-          path: finding.path,
-          line: finding.line,
-          score: finding.score,
-          eligible: elig.eligible,
-          reason: elig.reason,
-          ...(elig.klass !== undefined ? { klass: elig.klass } : {}),
-        }),
-      )
-      verificationMetricItems.push({
-        category: REPRODUCE_ELIGIBILITY_CATEGORY,
-        verdict: elig.eligible ? "eligible" : "ineligible",
-        occurredAt: verificationOccurredAt,
-      })
-
-      // SIG-477 PR-3 — the FIRST execution HARNESS (ReDoS), SHADOW by default. Only
-      // ELIGIBLE redos findings (recall-safety bound (a) — rare) run the sandbox.
-      // `runBoundedRedosHarness` enforces the rest of the bounds: (c) skip under
-      // wall-clock load; (b) reserve the per-PR sandbox budget before running, over-
-      // budget → `skipped`; (d) best-effort — a thrown harness becomes `skipped`, NEVER
-      // affecting the review/findings. The verdict accrues to the `reproduce_result`
-      // corpus (GET /metrics/verification → reproduceResult).
-      if (!(elig.eligible && elig.klass === "redos")) continue
-      const harness = await runBoundedRedosHarness({
-        finding,
-        budget: sandboxBudget,
-        underLoad,
-        estMs: REPRODUCE_HARNESS_EST_MS,
-      })
-      console.log(
-        JSON.stringify({
-          event: "verification-reproduce-result",
-          mode: reproduceMode,
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          findingKey: findingKey(finding),
-          path: finding.path,
-          line: finding.line,
-          status: harness.verdict,
-          detail: harness.detail,
-          elapsedMs: harness.elapsedMs,
-        }),
-      )
-      verificationMetricItems.push({
-        category: REPRODUCE_RESULT_CATEGORY,
-        verdict: harness.verdict,
-        occurredAt: verificationOccurredAt,
-      })
-      // ANNOTATE gated to `on` ONLY (NOT shadow): on a real reproduction, lift the
-      // finding to the execution-reproduction tier. In SHADOW this NEVER runs — the
-      // block stays measure-only (no tier mutation, no customer pill). PR-5 is the
-      // customer flip (wrangler.toml stays OPENCLAW_REPRODUCE_MODE = "shadow").
-      if (reproduceMode === "on" && harness.verdict === "reproduced") {
-        annotateFindingTrust(finding, { signals: ["reproduced-by-execution"] })
-      }
-    }
+    await runReproducePass(
+      [...submissionVerdict.findings, ...renderableUnanchoredForSubmission],
+      {
+        reproduceMode,
+        astSecurityFindings: astSecurityFindings ?? [],
+        startMs,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        verificationOccurredAt,
+      },
+      verificationMetricItems,
+    )
   }
 
   // SIG-423: ONE batched VerificationMetricsDO write for the whole phase

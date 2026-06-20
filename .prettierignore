@@ -6,6 +6,8 @@ coverage
 package-lock.json
 worker-configuration.d.ts
 src/lib/dep-vulns/db
+# Vendored binary WebAssembly module (SIG-477 QuickJS sandbox runner).
+*.wasm
 .claude
 # Golden fixtures + captured eval data are records, not hand-authored code.
 e2e/_golden

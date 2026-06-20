@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config"
 import path from "node:path"
 import { createRequire } from "node:module"
+import { readFileSync } from "node:fs"
 
 // SIG-138: node:sqlite is an experimental Node 22 built-in that Vite
 // (running in ESM mode) doesn't recognise as external because `sqlite`
@@ -40,6 +41,27 @@ export default defineConfig({
         if (id === VIRTUAL_ID) {
           return NODE_SQLITE_PROXY
         }
+      },
+    },
+    {
+      // SIG-477: `.wasm` imports. Cloudflare Workers resolves `import m from
+      // "./x.wasm"` to a compiled `WebAssembly.Module` natively (wrangler/esbuild
+      // treats `.wasm` as a module asset). Vite (under vitest) doesn't support
+      // that ESM-WASM proposal, so we mirror the Workers semantics: read the bytes
+      // at build time, compile them at module-eval, and default-export the
+      // resulting `WebAssembly.Module`. This lets the QuickJS sandbox runner load
+      // the SAME vendored module in tests that it loads in production.
+      name: "wasm-module-default-export",
+      enforce: "pre",
+      load(id: string) {
+        const clean = id.split("?")[0] ?? id
+        if (!clean.endsWith(".wasm")) return
+        const bytes = readFileSync(clean)
+        // Embed the bytes as base64 so the emitted module is self-contained, then
+        // compile synchronously to a WebAssembly.Module on first eval.
+        const b64 = bytes.toString("base64")
+        return `const __bytes = Uint8Array.from(atob(${JSON.stringify(b64)}), (c) => c.charCodeAt(0));
+export default new WebAssembly.Module(__bytes);`
       },
     },
   ],

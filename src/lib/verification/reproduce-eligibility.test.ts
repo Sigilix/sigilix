@@ -80,6 +80,40 @@ describe("executableClassForFinding — allowlist (taint-flow classes excluded)"
     expect(executableClassForFinding({ headline: "added a boundary to the UI card", body: "" })).toBeNull()
     expect(executableClassForFinding({ headline: "the docs are inclusive of all cases", body: "" })).toBeNull()
   })
+  it("SIG-477: a `logic`-category finding the keywords miss falls back to pure-function-logic", () => {
+    // The probe-#67 shape: a real boundary off-by-one the model worded by its SYMPTOM
+    // ("can return len" / "out of bounds"), which no keyword names — the logic category
+    // is the fallback signal so reconstruction + the harness still get a shot.
+    expect(
+      executableClassForFinding({
+        headline: "`clampIndex` can return `len`, which is out of bounds for an array of length `len`",
+        body: "",
+        category: "logic",
+      }),
+    ).toBe("pure-function-logic")
+    expect(
+      executableClassForFinding({ headline: "the helper reads one past the end", body: "", category: "logic" }),
+    ).toBe("pure-function-logic")
+  })
+  it("SIG-477: the category fallback applies ONLY to `logic` — other categories without a keyword stay null", () => {
+    const symptom = "`clampIndex` can return `len`, which is out of bounds"
+    for (const category of ["security", "performance", "error-handling", "style", "docs", "testing"] as const) {
+      expect(executableClassForFinding({ headline: symptom, body: "", category })).toBeNull()
+    }
+    // and with no category at all (the unit-call shape) it also stays null.
+    expect(executableClassForFinding({ headline: symptom, body: "" })).toBeNull()
+  })
+  it("SIG-477: the category fallback never mis-routes a keyword class (ReDoS/HMAC win first)", () => {
+    // A logic-category finding that names ReDoS must class as ReDoS, NOT pure-function-
+    // logic — the keyword checks run before the fallback. A performance-category ReDoS
+    // (keyword path, independent of category) still classes correctly.
+    expect(
+      executableClassForFinding({ headline: "ReDoS via catastrophic backtracking", body: "", category: "logic" }),
+    ).toBe("redos")
+    expect(executableClassForFinding({ headline: "ReDoS in the matcher", body: "", category: "performance" })).toBe(
+      "redos",
+    )
+  })
   it("matches hmac-byte-divergence", () => {
     expect(
       executableClassForFinding({ headline: "HMAC computed over the reserialized body", body: "byte mismatch" }),
@@ -108,6 +142,39 @@ describe("isReproducibleEligible — ELIGIBLE cases", () => {
     expect(r.eligible).toBe(true)
     expect(r.klass).toBe("pure-function-logic")
     expect(r.reason).toBe("eligible")
+  })
+
+  it("SIG-477: a grounded logic-category boundary bug worded by symptom (no keyword) is eligible via the fallback", () => {
+    // The probe-#67 end-to-end shape: grounded, logic category, a pure liftable closure,
+    // but the headline names only the SYMPTOM. Reverting the category fallback flips this
+    // to `class-not-in-allowlist` — so this asserts the real path the fix unblocks.
+    const f = finding({
+      category: "logic",
+      headline: "`clampIndex` can return `len`, which is out of bounds for an array of length `len`",
+      body: "It returns `len`, one past the last valid index.",
+      failureExample: "export function clampIndex(i, len) { return Math.min(i, len) }",
+    })
+    const r = isReproducibleEligible(f, NO_AST)
+    expect(r.eligible).toBe(true)
+    expect(r.klass).toBe("pure-function-logic")
+    // the carve-out: the SAME finding in a non-logic category gets no fallback → ineligible.
+    expect(isReproducibleEligible(finding({ ...f, category: "docs" }), NO_AST).reason).toBe("class-not-in-allowlist")
+  })
+
+  it("SIG-477: an UNGROUNDED logic-category symptom finding is refused at Gate 1a (grounding is the sole modelfp filter)", () => {
+    // The category fallback widens the grounded-logic population reaching the harness, and
+    // grounding is the SOLE filter against the modelfp class (correct code + behavior-
+    // changing wrong fix). Pin that precondition: with NO grounding, the symptom-worded
+    // logic finding must fail-closed at Gate 1a BEFORE the class fallback is even reached.
+    const f = finding({
+      category: "logic",
+      headline: "`clampIndex` can return `len`, which is out of bounds",
+      body: "Returns one past the last valid index.",
+      evidenceId: "NONE",
+      trust: undefined,
+      failureExample: "export function clampIndex(i, len) { return Math.min(i, len) }",
+    })
+    expect(isReproducibleEligible(f, NO_AST).reason).toBe("not-grounded")
   })
 
   it("a grounded ReDoS regex literal is eligible", () => {

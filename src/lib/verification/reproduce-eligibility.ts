@@ -110,8 +110,25 @@ function classifyText(finding: Pick<PrReviewFinding, "headline" | "body">): stri
  * model names these classes in plain language; there is no deterministic AST
  * rule-id for ReDoS / off-by-one / hmac-byte divergence the way there is for the
  * taint-flow classes). Conservative: an ambiguous text → null → ineligible.
+ *
+ * SIG-477: the keyword list can't enumerate every way the model DESCRIBES a
+ * boundary/off-by-one bug — it often names the SYMPTOM ("can return len", "is out
+ * of bounds", "reads one past the end") rather than the class. So `category ===
+ * "logic"` is a FALLBACK class signal: a logic-specialist finding that survived
+ * grounding is a pure-function-logic CANDIDATE. This only widens the CANDIDATE
+ * set — Gate 2 (purity) + Gate 3 (liftable, non-request-tainted) + the
+ * reconstruction's unique-near-twin requirement + the harness's diverge-AND-stable
+ * test are the real filters, so an over-broad class never inflates the REPRODUCED
+ * set for a BEHAVIOR-PRESERVING change (it yields `inconclusive`). The residual
+ * risk is a behavior-CHANGING WRONG fix on already-correct code (a model FP): the
+ * harness proves buggy≠fix, NOT buggy-is-wrong, so it CAN reproduce — the GROUNDING
+ * gate (Gate 1a) is the SOLE filter for that class, and this fallback widens the
+ * grounded-logic population reaching it. Acceptable while grounding holds; revisit
+ * if logic findings start grounding cheaply.
  */
-export function executableClassForFinding(finding: Pick<PrReviewFinding, "headline" | "body">): ExecutableClass | null {
+export function executableClassForFinding(
+  finding: Pick<PrReviewFinding, "headline" | "body"> & Partial<Pick<PrReviewFinding, "category">>,
+): ExecutableClass | null {
   const t = classifyText(finding)
   // ReDoS / catastrophic backtracking.
   if (/\bredos\b/.test(t) || /catastrophic backtrack/.test(t) || /regex(?:p|ular expression)?\s+dos/.test(t)) {
@@ -143,6 +160,14 @@ export function executableClassForFinding(finding: Pick<PrReviewFinding, "headli
     /\b(?:inclusive|exclusive)\b[^.]*\b(?:bound|range|index|end|boundary|slice|loop)\b/.test(t) ||
     /\b(?:parser|type|string|number|boolean) coercion\b/.test(t)
   ) {
+    return "pure-function-logic"
+  }
+  // SIG-477 category fallback (see the doc-comment): a `logic`-category finding the
+  // keyword list didn't name is still a pure-function-logic CANDIDATE — the downstream
+  // purity/liftability gates, the near-twin reconstruction, and the harness's
+  // diverge-AND-stable test remain the real filters. ReDoS / HMAC are matched above, so
+  // this never mis-routes those (a logic finding worded as one already returned early).
+  if (finding.category === "logic") {
     return "pure-function-logic"
   }
   return null

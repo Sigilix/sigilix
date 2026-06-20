@@ -33,6 +33,7 @@ import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
 import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
+import type { ReviewStatusProof } from "@/src/lib/pr-review-status-render"
 import { emitReviewSlo, computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
 import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 
@@ -91,6 +92,12 @@ export interface ReviewMeta {
    *  through `finalStatusUpdate` onto the terminal `ReviewStatusSnapshot.manage`.
    *  Omitted → no Manage line (the overview footer is simply absent). */
   manage?: string
+  /** SIG-471 pre-receipt proof counts for the terminal overview status block;
+   *  verified=0 until the runner receipt patches it. Built on the posted path from
+   *  the manifest findings (empty verifiedKeys), threaded through `finalStatusUpdate`
+   *  onto the terminal `ReviewStatusSnapshot.proof` so the overview shows the Proof
+   *  line immediately rather than only after the receipt lands. */
+  proof?: ReviewStatusProof
 }
 
 export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }

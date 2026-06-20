@@ -10,11 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import {
-  computeProofCounts,
-  handleOverviewProofUpdate,
-  MAX_PROOF_UPDATE_ATTEMPTS,
-} from "@/src/lib/overview-proof-update"
+import { handleOverviewProofUpdate, MAX_PROOF_UPDATE_ATTEMPTS } from "@/src/lib/overview-proof-update"
+import { buildReviewStatusBlock, formatManageLine } from "@/src/lib/pr-review-status-render"
 import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
 import type { Env } from "@/src/shared/types/env"
 
@@ -138,17 +135,21 @@ const baseMessage = {
   repoId: 424242,
 }
 
+// Built from the REAL `buildReviewStatusBlock` so the upgrade seam is exercised
+// against the exact compact terminal footer prod produces (headline → Proof →
+// manage, each a `> <sub>…</sub>` line) — not a stale hand-rolled format.
 const STATUS_BLOCK = [
   "<!-- sigilix:pr-overview -->",
   "## Sigilix Overview",
   "",
-  "<!-- sigilix:review-run-status:start -->",
-  "",
-  "**Phase:** Posted",
-  "**Commit:** `abc1234`",
-  "**Result:** Posted - 2 findings",
-  "",
-  "<!-- sigilix:review-run-status:end -->",
+  buildReviewStatusBlock({
+    phase: "posted",
+    headSha: "abc1234def",
+    sequence: 1,
+    final: { status: "posted", findingsCount: 2, reviewUrl: "https://github.com/o/r/pull/1" },
+    proof: { verified: 0, grounded: 2, model: 0 },
+    manage: formatManageLine({ reviewNumber: 1 }),
+  }),
 ].join("\n")
 
 beforeEach(() => {
@@ -167,37 +168,9 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-// ── computeProofCounts ──────────────────────────────────────────────────────
-
-describe("computeProofCounts", () => {
-  const f = (key: string, trustTier?: string): Pick<ReviewManifestFinding, "key" | "trustTier"> =>
-    trustTier === undefined ? { key } : { key, trustTier }
-
-  it("buckets grounded tiers as grounded and body-only/missing as model", () => {
-    const findings = [
-      f("a", "grounded-model"),
-      f("b", "deterministic-grounded"),
-      f("c", "worker-token-confirmed"),
-      f("d", "runner-confirmed"),
-      f("e", "body-only-ungrounded"),
-      f("f"), // missing tier → model
-      f("g", "totally-unknown"), // unknown → model
-    ]
-    expect(computeProofCounts(findings, new Set())).toEqual({ verified: 0, grounded: 4, model: 3 })
-  })
-
-  it("counts a confirmed finding ONLY as verified (never also grounded)", () => {
-    const findings = [f("a", "grounded-model"), f("b", "deterministic-grounded"), f("c", "body-only-ungrounded")]
-    // `a` and `b` are grounded tiers, but `a` is receipt-verified → verified only.
-    expect(computeProofCounts(findings, new Set(["a"]))).toEqual({ verified: 1, grounded: 1, model: 1 })
-  })
-
-  it("the three buckets always sum to the finding count", () => {
-    const findings = [f("a", "grounded-model"), f("b"), f("c", "runner-confirmed"), f("d", "body-only-ungrounded")]
-    const proof = computeProofCounts(findings, new Set(["c"]))
-    expect(proof.verified + proof.grounded + proof.model).toBe(findings.length)
-  })
-})
+// `computeProofCounts` moved to `pr-review-status-render` (the render leaf); its
+// unit coverage lives in `pr-review-status-render.test.ts`. The handler tests
+// below still exercise it end-to-end via the patched Proof line.
 
 // ── handleOverviewProofUpdate skip / retry / happy-path ──────────────────────
 
@@ -287,10 +260,15 @@ describe("handleOverviewProofUpdate", () => {
     expect(sent).toHaveLength(0) // no retry
     expect(clientState.updatedComment).not.toBeNull()
     expect(clientState.updatedComment!.id).toBe(555)
-    // Proof line patched in place; the status details survive (targeted patch).
-    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 grounded · 1 model-only")
-    expect(clientState.updatedComment!.body).toContain("**Phase:** Posted")
-    expect(clientState.updatedComment!.body).toContain("**Result:** Posted - 2 findings")
+    // Proof line patched in place; the compact footer details survive (targeted patch).
+    const patched = clientState.updatedComment!.body
+    expect(patched).toContain("**Proof:** 1 grounded · 1 model-only")
+    expect(patched).toContain("**Posted**") // compact headline
+    expect(patched).toContain("2 findings")
+    // Order preserved: Proof stays ABOVE the manage line after the in-place patch.
+    expect(patched.indexOf("**Proof:**")).toBeLessThan(patched.indexOf("Re-run `/sigilix review`"))
+    // Exactly one Proof line.
+    expect(patched.match(/\*\*Proof:\*\*/g)).toHaveLength(1)
   })
 
   it("retries when the overview comment is not present yet", async () => {
@@ -371,8 +349,8 @@ describe("handleOverviewProofUpdate", () => {
     expect(sent).toHaveLength(0)
     expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
     expect(clientState.updatedComment!.body).not.toContain("grounded")
-    // status details preserved (targeted patch)
-    expect(clientState.updatedComment!.body).toContain("**Phase:** Posted")
+    // compact footer details preserved (targeted patch)
+    expect(clientState.updatedComment!.body).toContain("**Posted**")
   })
 
   it("CREDIBILITY: a line-less (file-scope) finding is NOT receipt-join eligible (no line:0 over-confirm)", async () => {

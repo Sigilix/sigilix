@@ -67,7 +67,7 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toBe(getBadgeSvg("p2"))
   })
 
-  it("serves low-saturation filled category chips for specialist labels (Kimi R2 + SIG-216 path-bake)", async () => {
+  it("serves explicit per-hue category chips: deep bg + pastel accent text (Kimi 2026-06-19 recolour + SIG-216 path-bake)", async () => {
     const res = handleBadgeAssetRoute(
       new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`),
     )
@@ -85,11 +85,12 @@ describe("badge assets (SIG-201)", () => {
     expect(body).not.toContain('rx="0"')
     expect(body).not.toContain('shape-rendering="crispEdges"')
     expect(body).not.toContain('<g transform="translate')
-    // Hue identity preserved (magenta family) but desaturated/darkened for BG
-    // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
-    expect(body).not.toContain("#F0ABFC")
-    expect(body).toContain('fill="#322833"') // BG @ S=12% L=18%, hue 295
-    expect(body).toContain('fill="#EAC0F2"') // FG @ S=65% L=85%, hue 295
+    // Kimi 2026-06-19 recolour: each category now carries an EXPLICIT deep
+    // per-hue background rect + the pastel accent as the glyph text — replacing
+    // the prior global-HSL treatment that crushed every hue to the same grey.
+    // security → magenta family: bg #701A75, accent text #F0ABFC.
+    expect(body).toContain('<rect width="67.512" height="19.512" rx="1" fill="#701A75"/>')
+    expect(body).toContain('fill="#F0ABFC"') // pastel accent is now the glyph fill
     // SIG-216 path-bake: no <text>, no font attrs — just a <path>.
     expect(body).toContain('<path d="')
     expect(body).not.toContain("<text")
@@ -98,6 +99,28 @@ describe("badge assets (SIG-201)", () => {
     expect(body).not.toContain("font-weight")
     expect(body).not.toContain("letter-spacing")
     expect(body).toBe(getBadgeSvg("security"))
+  })
+
+  it("recolours each category pill with a DISTINCT deep bg + its own pastel accent (no more uniform grey)", async () => {
+    // The whole point of the Kimi 2026-06-19 recolour: the 9 categories are no
+    // longer the same dark-grey chip — each has its own explicit bg+accent pair.
+    const security = getBadgeSvg("security")
+    expect(security).toContain('rx="1" fill="#701A75"/>') // bg
+    expect(security).toContain('fill="#F0ABFC"/>') // accent text
+
+    const logic = getBadgeSvg("logic")
+    expect(logic).toContain('rx="1" fill="#0C4A6E"/>') // bg
+    expect(logic).toContain('fill="#7DD3FC"/>') // accent text
+
+    const testing = getBadgeSvg("testing")
+    expect(testing).toContain('rx="1" fill="#14532D"/>') // bg
+    expect(testing).toContain('fill="#86EFAC"/>') // accent text
+
+    // Different categories carry DIFFERENT backgrounds (the recolour's reason
+    // for existing) — they're no longer washed to one shared grey.
+    expect(security).not.toContain('fill="#0C4A6E"/>')
+    expect(logic).not.toContain('fill="#701A75"/>')
+    expect(testing).not.toContain('fill="#701A75"/>')
   })
 
   it("supports HEAD for external image probes without returning a body (worker self-serve path)", async () => {

@@ -87,17 +87,15 @@ const DISMISS_REASON_HINT = ALL_DISMISS_REASONS.filter((r) => r !== "unlabeled")
  * editable overview. Pure — exported for tests.
  */
 export function formatManageLine(args: { reviewNumber?: number; shortSha?: string }): string {
-  const parts = [
-    `Dismiss \`@sigilix dismiss <reason>\` in thread (\`${DISMISS_REASON_HINT}\`)`,
-    "Re-run `/sigilix review`",
-  ]
+  // SIG (Kimi 2026-06-19): compact, de-emphasized affordance text for the muted
+  // terminal footer — no bold "**Manage:**" prefix and no trailing sha (the sha
+  // is shown once after the phase in the headline). `shortSha` stays in the
+  // signature for back-compat with the caller but is no longer rendered here.
+  const parts = [`Dismiss \`@sigilix dismiss <reason>\` (\`${DISMISS_REASON_HINT}\`)`, "Re-run `/sigilix review`"]
   if (typeof args.reviewNumber === "number" && args.reviewNumber > 0) {
     parts.push(`Review #${args.reviewNumber}`)
   }
-  if (args.shortSha) {
-    parts.push(`\`${args.shortSha}\``)
-  }
-  return `**Manage:** ${parts.join(" · ")}`
+  return parts.join(" · ")
 }
 
 /**
@@ -112,7 +110,60 @@ export function formatProofLine(proof: ReviewStatusProof | undefined): string | 
   if (proof.verified > 0) parts.push(`${proof.verified} runner-verified`)
   if (proof.grounded > 0) parts.push(`${proof.grounded} grounded`)
   if (proof.model > 0) parts.push(`${proof.model} model-only`)
-  return parts.length > 0 ? `**Proof:** ${parts.join(" · ")}` : null
+  // SIG (Kimi 2026-06-19): the Proof line lives in the MUTED terminal footer —
+  // a blockquoted `<sub>` line. Kept as a STANDALONE line (still carrying the
+  // `**Proof:**` token) so the runner-receipt `patchProofLineInStatusBlock` can
+  // find + replace it in place for the quiet grounded→verified upgrade.
+  return parts.length > 0 ? `> <sub>**Proof:** ${parts.join(" · ")}</sub>` : null
+}
+
+/**
+ * Bucket a finding into exactly ONE proof tier. Mutually exclusive, and a
+ * receipt-verified finding counts ONLY as `verified` (never also grounded). The
+ * tier strings are `FindingTrustTier` values persisted on the manifest:
+ *   - grounded  ← runner-confirmed | deterministic-grounded | worker-token-confirmed
+ *                 | grounded-model (any tier that cites real evidence + passed gates)
+ *   - model     ← body-only-ungrounded, an unknown tier string, OR a missing tier
+ * Robust to a missing/garbage `trustTier`: treats it as model-only.
+ */
+export function isGroundedTier(tier: string | undefined): boolean {
+  switch (tier) {
+    case "runner-confirmed":
+    case "deterministic-grounded":
+    case "worker-token-confirmed":
+    case "grounded-model":
+      return true
+    default:
+      // "body-only-ungrounded", unknown strings, undefined → model-only.
+      return false
+  }
+}
+
+/**
+ * Pure: count the three proof tiers over the manifest findings, given the set of
+ * finding keys the receipt-join CONFIRMED. A confirmed finding is `verified`
+ * (and counts ONLY there); every other finding is `grounded` or `model` by its
+ * stored `trustTier`. Mutually exclusive buckets; the three sum to the finding
+ * count. Side-effect-free + dependency-free (structural finding shape, no
+ * `review-manifest` import) so the bucketing is unit-tested in isolation.
+ */
+export function computeProofCounts(
+  findings: ReadonlyArray<{ key: string; trustTier?: string }>,
+  verifiedKeys: ReadonlySet<string>,
+): ReviewStatusProof {
+  let verified = 0
+  let grounded = 0
+  let model = 0
+  for (const f of findings) {
+    if (verifiedKeys.has(f.key)) {
+      verified += 1
+    } else if (isGroundedTier(f.trustTier)) {
+      grounded += 1
+    } else {
+      model += 1
+    }
+  }
+  return { verified, grounded, model }
 }
 
 export function reviewStatusPhaseRank(phase: ReviewStatusPhase): number {
@@ -135,6 +186,14 @@ export function reviewStatusPhaseRank(phase: ReviewStatusPhase): number {
 }
 
 export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
+  // SIG (Kimi 2026-06-19): the TERMINAL state (`final` set — posted/failed/
+  // skipped) renders a compact, MUTED footer (thin rule + small blockquoted
+  // `<sub>` lines) so it reads as a footer, not a headline. The IN-PROGRESS
+  // phases keep the detailed status block below (Specialists/Dispatched/… — the
+  // founder finds that live "ascii" detail useful), so the compaction is
+  // terminal-only.
+  if (snapshot.final) return buildTerminalFooterBlock(snapshot)
+
   const lines: string[] = [
     REVIEW_STATUS_BLOCK_START,
     "",
@@ -149,11 +208,32 @@ export function buildReviewStatusBlock(snapshot: ReviewStatusSnapshot): string {
   appendList(lines, "Dropped files", snapshot.droppedFiles)
   const graph = graphSummary(snapshot.graphCoverage)
   if (graph) lines.push(`**Graph context:** ${graph}`)
-  if (snapshot.final) lines.push(`**Result:** ${finalSummary(snapshot.final)}`)
+  lines.push("")
+  lines.push(REVIEW_STATUS_BLOCK_END)
+  return lines.join("\n")
+}
+
+/**
+ * SIG (Kimi 2026-06-19): the compact muted terminal footer. One bold phase +
+ * commit + result line, the optional Proof line, then the manage affordances —
+ * each a small `> <sub>…</sub>` line under a thin `---` rule. Keeps the Proof
+ * line standalone for the quiet grounded→verified `patchProofLineInStatusBlock`.
+ */
+function buildTerminalFooterBlock(snapshot: ReviewStatusSnapshot): string {
+  const headline: string[] = [`**${phaseLabel(snapshot.phase)}**`, `\`${snapshot.headSha.slice(0, 7)}\``]
+  const final = snapshot.final
+  if (final) {
+    if (typeof final.findingsCount === "number") {
+      const count = `${final.findingsCount} ${plural("finding", final.findingsCount)}`
+      headline.push(final.reviewUrl ? `${count} — [View review](${final.reviewUrl})` : count)
+    } else if (final.reviewUrl) {
+      headline.push(`[View review](${final.reviewUrl})`)
+    }
+  }
+  const lines: string[] = [REVIEW_STATUS_BLOCK_START, "", "---", `> <sub>${headline.join(" · ")}</sub>`]
   const proofLine = formatProofLine(snapshot.proof)
   if (proofLine) lines.push(proofLine)
-  // SIG-471 PR-3: the Manage footer is the LAST line of the block, after Proof.
-  if (snapshot.manage) lines.push(snapshot.manage)
+  if (snapshot.manage) lines.push(`> <sub>${snapshot.manage}</sub>`)
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)
   return lines.join("\n")
@@ -211,10 +291,13 @@ export function graftReviewStatusBlock(overviewBody: string, sourceBody: string)
  * every other line (Phase/Commit/Specialists/Result/…). The runner-receipt
  * proof-update job uses this — it does NOT hold the full terminal snapshot, so it
  * must NOT call `upsertReviewStatusBlock` (which rebuilds the whole block and would
- * drop the status details). Removes any prior Proof line, then inserts the new one
- * immediately before the block END marker. Returns `body` unchanged when there is
- * no status block to patch (the caller's retry waits for the terminal block first)
- * or when `proof` renders nothing.
+ * drop the status details). Replaces the existing Proof line IN PLACE so the
+ * compact-footer order (headline → Proof → manage) is preserved across the quiet
+ * grounded→verified upgrade; if there's no Proof line yet it inserts one right
+ * after the headline (or, for a legacy flat block with no `> <sub>` headline,
+ * before the trailing blank/END). Returns `body` unchanged when there is no status
+ * block to patch (the caller's retry waits for the terminal block first) or when
+ * `proof` renders nothing.
  */
 export function patchProofLineInStatusBlock(body: string, proof: ReviewStatusProof | undefined): string {
   const proofLine = formatProofLine(proof)
@@ -223,15 +306,32 @@ export function patchProofLineInStatusBlock(body: string, proof: ReviewStatusPro
   if (start < 0) return body
   const end = body.indexOf(REVIEW_STATUS_BLOCK_END, start + REVIEW_STATUS_BLOCK_START.length)
   if (end <= start) return body
-  const block = body.slice(start, end)
   const after = body.slice(end)
-  // Drop any existing Proof line, then re-insert before the trailing blank/END.
-  const kept = block.split("\n").filter((l) => !/^\*\*Proof:\*\*/.test(l.trim()))
-  // Trim trailing blank lines off the kept block, append the proof line + one blank,
-  // so the END marker (in `after`) stays separated by exactly one blank line.
-  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop()
-  kept.push(proofLine, "")
-  return kept.join("\n") + after
+  const lines = body.slice(start, end).split("\n")
+  // Contain-match (not anchored): the Proof line is wrapped in `> <sub>…</sub>` in
+  // the compact terminal footer, so `**Proof:**` is no longer at line-start.
+  const isProof = (l: string): boolean => /\*\*Proof:\*\*/.test(l)
+  const existingIdx = lines.findIndex(isProof)
+  if (existingIdx >= 0) {
+    // Replace in place (preserves headline → Proof → manage order), then drop any
+    // stray duplicate Proof lines after it.
+    lines[existingIdx] = proofLine
+    for (let i = lines.length - 1; i > existingIdx; i--) {
+      if (isProof(lines[i]!)) lines.splice(i, 1)
+    }
+    return lines.join("\n") + after
+  }
+  // No Proof line yet: insert right after the compact headline (first `> <sub>`
+  // line) so it lands above the manage line; else (legacy flat block) append
+  // before the trailing blank/END.
+  const headlineIdx = lines.findIndex((l) => /^>\s*<sub>/.test(l))
+  if (headlineIdx >= 0) {
+    lines.splice(headlineIdx + 1, 0, proofLine)
+    return lines.join("\n") + after
+  }
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop()
+  lines.push(proofLine, "")
+  return lines.join("\n") + after
 }
 
 function removeReviewStatusBlock(body: string): string {
@@ -269,6 +369,10 @@ function stripMalformedStatusPreamble(tail: string): string {
 }
 
 function isStatusMetadataLine(trimmed: string): boolean {
+  // Compact terminal footer (Kimi 2026-06-19): the headline/Proof/manage lines are
+  // `> <sub>…</sub>` and the section opens with a `---` rule — recognize both so a
+  // malformed (END-less) block's footer lines are stripped, not stranded as body.
+  if (trimmed === "---" || /^>\s*<sub>/.test(trimmed)) return true
   return /^\*\*(?:Phase|Commit|Specialists|Dispatched|Completed|Missing|Not needed|Dropped files|Graph context|Result|Proof|Manage):\*\*/.test(
     trimmed,
   )
@@ -327,15 +431,6 @@ function graphSummary(g: ReviewStatusGraphCoverage | undefined): string | null {
   }
   if (typeof g.nodes === "number") parts.push(`${g.nodes} nodes`)
   return parts.length > 0 ? parts.join("; ") : null
-}
-
-function finalSummary(final: ReviewStatusFinal): string {
-  const pieces: string[] = [phaseLabel(final.status)]
-  if (typeof final.findingsCount === "number")
-    pieces.push(`${final.findingsCount} ${plural("finding", final.findingsCount)}`)
-  if (final.surface) pieces.push(`surface: ${final.surface}`)
-  if (final.reviewUrl) pieces.push(`[View review](${final.reviewUrl})`)
-  return pieces.join(" - ")
 }
 
 function appendList(lines: string[], label: string, values: readonly string[] | undefined): void {

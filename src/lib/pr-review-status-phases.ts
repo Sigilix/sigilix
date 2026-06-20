@@ -1,7 +1,7 @@
 import { ALL_SPECIALISTS, type SpecialistRole } from "@/src/shared/domain/specialist-role"
 import type { GraphContextNode } from "@/src/shared/domain/graph-context"
 import type { ReviewStatusUpdate } from "./pr-review-status-reporter"
-import type { ReviewStatusFinal } from "./pr-review-status-render"
+import type { ReviewStatusFinal, ReviewStatusProof } from "./pr-review-status-render"
 
 export function retrievalStatusUpdate(): ReviewStatusUpdate {
   return {
@@ -88,7 +88,12 @@ export function synthStatusUpdate(args: {
 
 export function finalStatusUpdate(args: {
   status: "posted" | "shadow_recorded" | "skipped" | "errored" | "stale_head"
-  reviewMeta?: { findingsCount?: number; surface?: ReviewStatusFinal["surface"]; manage?: string }
+  reviewMeta?: {
+    findingsCount?: number
+    surface?: ReviewStatusFinal["surface"]
+    manage?: string
+    proof?: ReviewStatusProof
+  }
   owner: string
   repo: string
   prNumber: number
@@ -102,6 +107,10 @@ export function finalStatusUpdate(args: {
     // snapshot so `buildReviewStatusBlock` renders it as the **Manage:** line. Only
     // present on a posted review (the affordance carries the counter there).
     ...(args.reviewMeta?.manage !== undefined ? { manage: args.reviewMeta.manage } : {}),
+    // SIG-471: thread the pre-receipt proof counts onto the terminal snapshot so
+    // `buildReviewStatusBlock` renders the **Proof:** line on a posted review
+    // (the runner receipt later patches grounded→verified in place).
+    ...(args.reviewMeta?.proof !== undefined ? { proof: args.reviewMeta.proof } : {}),
     final: {
       status: failed ? "failed" : skipped ? "skipped" : "posted",
       findingsCount: args.reviewMeta?.findingsCount ?? 0,

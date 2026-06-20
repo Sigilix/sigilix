@@ -69,7 +69,7 @@ import { emitPhaseCompleted, type EnsembleRunCtx } from "@/src/lib/ensemble-perf
 import { withSubmissionAffordance, buildSuggestionEmissionLogEvents, type SubmissionAffordance } from "./affordances"
 import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta } from "./session"
 import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
-import { formatManageLine } from "@/src/lib/pr-review-status-render"
+import { computeProofCounts, formatManageLine } from "@/src/lib/pr-review-status-render"
 
 // SIG-216: the inline-overview budget thresholds — the min remaining budget to
 // attempt the inline render, the max budget to spend on it, and the reserve held
@@ -652,6 +652,8 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         ...(primaryAffordance.reviewCounter !== undefined ? { reviewNumber: primaryAffordance.reviewCounter } : {}),
         shortSha: headSha.slice(0, 7),
       }),
+      // SIG-471: pre-receipt Proof line (verified=0; runner receipt patches it later).
+      proof: computeProofCounts(currentFindingsForManifest, new Set()),
       ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
       ...deterministicCheckAnnotationMeta(),
       // SIG-144 (PR #339 review fix): in annotations-only mode inline

@@ -35,6 +35,7 @@ import {
 } from "@/src/lib/verification/verify-finding-receipt"
 import { findExistingOverviewComment } from "@/src/lib/triage-pr-overview-scan"
 import {
+  computeProofCounts,
   patchProofLineInStatusBlock,
   REVIEW_STATUS_BLOCK_START,
   type ReviewStatusProof,
@@ -49,55 +50,6 @@ export const MAX_PROOF_UPDATE_ATTEMPTS = 5
  *  derivation (mirror of `securityAstFactsForReceiptJoin` in verify-and-build;
  *  duplicated here to avoid an `app/ensemble` import edge from this leaf). */
 type AstSecurityFact = { path: string; line: number; astFindingId: string }
-
-/**
- * Bucket a finding into exactly ONE proof tier. Mutually exclusive, and a
- * receipt-verified finding counts ONLY as `verified` (never also grounded). The
- * tier strings are `FindingTrustTier` values persisted on the manifest:
- *   - grounded  ← runner-confirmed | deterministic-grounded | worker-token-confirmed
- *                 | grounded-model (any tier that cites real evidence + passed gates)
- *   - model     ← body-only-ungrounded, an unknown tier string, OR a missing tier
- * Robust to a missing/garbage `trustTier`: treats it as model-only.
- */
-function isGroundedTier(tier: string | undefined): boolean {
-  switch (tier) {
-    case "runner-confirmed":
-    case "deterministic-grounded":
-    case "worker-token-confirmed":
-    case "grounded-model":
-      return true
-    default:
-      // "body-only-ungrounded", unknown strings, undefined → model-only.
-      return false
-  }
-}
-
-/**
- * Pure: count the three proof tiers over the manifest findings, given the set of
- * finding keys the receipt-join CONFIRMED. A confirmed finding is `verified`
- * (and counts ONLY there); every other finding is `grounded` or `model` by its
- * stored `trustTier`. Mutually exclusive buckets; the three sum to the finding
- * count. Side-effect-free + dependency-free so the bucketing is unit-tested in
- * isolation.
- */
-export function computeProofCounts(
-  findings: ReadonlyArray<Pick<ReviewManifestFinding, "key" | "trustTier">>,
-  verifiedKeys: ReadonlySet<string>,
-): ReviewStatusProof {
-  let verified = 0
-  let grounded = 0
-  let model = 0
-  for (const f of findings) {
-    if (verifiedKeys.has(f.key)) {
-      verified += 1
-    } else if (isGroundedTier(f.trustTier)) {
-      grounded += 1
-    } else {
-      model += 1
-    }
-  }
-  return { verified, grounded, model }
-}
 
 function emit(event: string, fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ event, ...fields }))

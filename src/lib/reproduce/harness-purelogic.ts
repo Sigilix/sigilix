@@ -18,19 +18,25 @@
 // DETERMINISTIC OUTPUT COMPARISON (no timeout/flakiness), and a runaway buggy loop is
 // BYTECODE — exactly what the opcode-cycle interrupt CAN bound.
 //
-// ── THE HONEST DECISION (a deterministic TWO-SIDED test) ────────────────────
-// A finding is "reproduced" ONLY when the buggy and fixed functions:
-//   (1) AGREE on at least one battery input — they're the SAME function bar a
-//       targeted defect (not two unrelated functions / a wholesale rewrite); AND
-//   (2) DIVERGE on at least one battery input — the buggy code demonstrably returns
-//       a different value somewhere (the off-by-one / fence-post signature: same
-//       behavior except at a boundary); AND
-//   (3) the tally REPRODUCES on a re-run (determinism — pure code is deterministic by
-//       construction since the eligibility gate refused Date/random, but a re-run
-//       catches anything that slipped).
-// all-AGREE → INCONCLUSIVE (the fix is a no-op on our battery — can't demonstrate the
-// bug); all-DIVERGE → INCONCLUSIVE (a wholesale rewrite or a mismatched function
-// pair, not a targeted bug — FP-safe). The harness NEVER refutes and NEVER throws.
+// ── THE HONEST DECISION ─────────────────────────────────────────────────────
+// A finding is "reproduced" iff the buggy and fixed functions DIVERGE on ≥1 battery
+// input AND the tally REPRODUCES on a re-run (determinism — pure code is deterministic
+// since the eligibility gate refused Date/random, but a re-run catches anything that
+// slipped). all-AGREE (diverge=0) → INCONCLUSIVE: the fix is a no-op on the battery, so
+// the bug can't be demonstrated — this is the FP-SAFETY FLOOR (a behavior-PRESERVING
+// change never reproduces). all-DIVERGE is NOT special-cased: under source-reconstruction
+// `fixed` = `buggy` + the suggested hunk, so the two are never unrelated functions, and
+// an all-diverge result is a constant-offset / wrong-seed bug (a real, always-wrong
+// defect). The harness NEVER refutes and NEVER throws.
+//
+// ── THE BATTERY (type-aware) ────────────────────────────────────────────────
+// Each parameter is swept over an IN-TYPE pool derived from its TS annotation (a `number`
+// param gets only numbers, etc.), augmented with the function's own numeric literals ±1
+// so boundary comparisons (`age > 18` vs `>= 18`) are hit. This is what keeps a
+// type-correct equivalent rewrite (`x*2` vs `x+x`, identical for numbers but not for
+// strings) from FALSELY diverging via coercion. An untyped (`any`) param gets the full
+// mixed pool, so a genuine coercion bug is still exercised. Measured by the FP eval
+// (e2e/reproduce-fp-eval.test.ts): 100% recall, 0% over-fire on the corpus.
 
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import { parseSource, type SourceExt, type AstNode } from "@/src/features/ast-rules"
@@ -60,11 +66,18 @@ export interface PureLogicHarnessResult {
   elapsedMs: number
 }
 
+/** The coarse runtime type of a parameter, derived from its TS annotation (or `any`
+ *  when untyped/unknown). Drives a TYPE-AWARE battery so a numerically-equivalent
+ *  rewrite (`x * 2` vs `x + x`) isn't falsely flagged as divergent by feeding a `string`
+ *  to a `number` param — while an untyped (`any`) param still gets the full pool, so a
+ *  genuine coercion bug is still exercised. */
+type ParamType = "number" | "string" | "boolean" | "array" | "any"
+
 /** A liftable function pulled from a cited snippet: an EXPRESSION text usable as a
- *  value (a declaration is wrapped so it yields the function), plus its param arity. */
+ *  value (a declaration is wrapped so it yields the function), plus its param types. */
 interface LiftedFunction {
   expr: string
-  arity: number
+  paramTypes: ParamType[]
 }
 
 /** Per-run sandbox caps. A pure-function battery is BYTECODE, so the opcode-cycle
@@ -88,10 +101,9 @@ export const PURELOGIC_HARNESS_MAX_TOTAL_MS = 2_000
 /** Max function arity we form a battery for (>3 → combinatorial blow-up; off-by-one /
  *  fence-post bugs are overwhelmingly 1-2 arg functions). */
 const MAX_ARITY = 3
-/** Cap on battery size (bounds the in-guest loop → keeps opcode cost under the cycle
- *  cap; ~165 small calls is far under HARNESS_MAX_INTERRUPTS). Sized to admit the FULL
- *  per-arg anchor sweep for arity ≤ 3 (arity 3 = 3 positions × 3 anchors × 19 pool ≈
- *  165 before dedup). */
+/** Cap on battery size (bounds the in-guest loop → keeps opcode cost well under the
+ *  cycle cap). The type-correct cartesian stays under this for typed params; an
+ *  all-`any` arity-3 fn overflows and is evenly sampled to this many tuples. */
 const MAX_BATTERY = 165
 
 /** Boundary-biased input values: small ints around 0/±1, strings of increasing
@@ -119,47 +131,94 @@ const SCALAR_POOL: readonly unknown[] = [
   false,
 ]
 
-/** Representative "other-arg" values held fixed while one position sweeps the pool:
- *  a small number, a non-trivial string, and a non-trivial array. Sweeping each
- *  position against each anchor guarantees a single-arg off-by-one is exercised with
- *  meaningful partners (a length-defined string/array and a small index/count). */
-const ANCHORS: readonly unknown[] = [1, "ab", [1, 2, 3]]
-
-/** Build the arg-tuple battery for a given arity. Arity 1 → one tuple per pool value.
- *  Higher arity → a PER-ARG ANCHOR SWEEP: for each position, vary it over the full
- *  pool while holding the other positions at each anchor. This guarantees EVERY arg
- *  position spans the pool against meaningful partners — a cartesian (even sampled)
- *  can starve a position and miss a bug that only manifests on, say, the 3rd arg.
- *  The loops are ordered anchor → value → POSITION (position innermost) so that, if the
- *  MAX_BATTERY cap trims the tail, every position still gets the full-pool sweep against
- *  the earlier anchors — a position-OUTERMOST order would starve the last position. */
-function buildBattery(arity: number): unknown[][] {
-  if (arity === 1) return SCALAR_POOL.map((v) => [v])
-  const battery: unknown[][] = []
-  const seen = new Set<string>()
-  const add = (tuple: unknown[]): boolean => {
-    const key = JSON.stringify(tuple)
-    if (seen.has(key)) return true
-    seen.add(key)
-    battery.push(tuple)
-    return battery.length < MAX_BATTERY
-  }
-  for (const anchor of ANCHORS) {
-    for (const v of SCALAR_POOL) {
-      for (let p = 0; p < arity; p++) {
-        const tuple = new Array(arity).fill(anchor)
-        tuple[p] = v
-        if (!add(tuple)) return battery
-      }
-    }
-  }
-  return battery
+/** The value pool swept for a parameter, BY its type. A typed param gets only in-type
+ *  values (so a type-correct rewrite never diverges via coercion); an `any` param gets
+ *  the full mixed pool (so genuine coercion bugs are still caught). */
+const POOL_BY_TYPE: Record<ParamType, readonly unknown[]> = {
+  number: [-1, 0, 1, 2, 3, 5, 10],
+  string: ["", "a", "ab", "abc", "abcde"],
+  boolean: [true, false],
+  array: [[], [1], [1, 2], [1, 2, 3], [1, 2, 3, 4, 5]],
+  any: SCALAR_POOL,
 }
 
-/** Param arity of a function-ish AST node. */
-function paramArity(node: AstNode): number {
+/** Numeric literals appearing in the function text, each expanded to {n-1, n, n+1}, so
+ *  a boundary-comparison bug (`age > 18` vs `>= 18`) is exercised AT its boundary (18 is
+ *  not in the default pool). Bounded; ignores huge magnitudes. */
+function numericLiteralsFrom(text: string): number[] {
+  const out = new Set<number>()
+  const re = /-?\b\d+\b/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const n = Number(m[0])
+    if (Number.isInteger(n) && Math.abs(n) <= 100_000) {
+      out.add(n - 1)
+      out.add(n)
+      out.add(n + 1)
+    }
+  }
+  return [...out].slice(0, 18)
+}
+
+/** Build the arg-tuple battery from the per-position TYPES: the FULL cartesian product
+ *  of each position's IN-TYPE pool, EVENLY SAMPLED down to MAX_BATTERY when it overflows.
+ *  Type-correct pools mean a numerically-equivalent rewrite is never fed a type-violating
+ *  value (no coercion over-fire), and the cartesian covers cross-position combinations
+ *  (so a bug needing two specific args is found). `extraNumbers` (the function's own
+ *  literals ±1) augment the number/any pools so boundary comparisons are hit. The
+ *  cartesian stays small for typed params; an all-`any` arity-3 fn hits the cap, where
+ *  even-sampling still spreads each position across its pool. */
+function buildBattery(paramTypes: readonly ParamType[], extraNumbers: readonly number[] = []): unknown[][] {
+  const numberPool =
+    extraNumbers.length === 0 ? POOL_BY_TYPE.number : [...new Set([...extraNumbers, ...POOL_BY_TYPE.number])]
+  const anyPool = extraNumbers.length === 0 ? POOL_BY_TYPE.any : [...new Set([...extraNumbers, ...POOL_BY_TYPE.any])]
+  const poolFor = (t: ParamType): readonly unknown[] =>
+    t === "number" ? numberPool : t === "any" ? anyPool : POOL_BY_TYPE[t]
+  const pools = paramTypes.map((t) => poolFor(t ?? "any"))
+  if (pools.length === 1) return [...(pools[0] ?? POOL_BY_TYPE.any)].map((v) => [v])
+  const full: unknown[][] = []
+  const rec = (depth: number, acc: unknown[]): void => {
+    if (depth === pools.length) {
+      full.push(acc.slice())
+      return
+    }
+    for (const v of pools[depth] ?? []) {
+      acc.push(v)
+      rec(depth + 1, acc)
+      acc.pop()
+    }
+  }
+  rec(0, [])
+  if (full.length <= MAX_BATTERY) return full
+  const stride = full.length / MAX_BATTERY
+  const sampled: unknown[][] = []
+  for (let k = 0; k < MAX_BATTERY; k++) {
+    const tuple = full[Math.floor(k * stride)]
+    if (tuple !== undefined) sampled.push(tuple)
+  }
+  return sampled
+}
+
+/** The coarse {@link ParamType} of a function parameter from its TS annotation. */
+function paramTypeOf(param: AstNode): ParamType {
+  const id = param?.type === "AssignmentPattern" ? param.left : param?.type === "RestElement" ? param.argument : param
+  const ann = id?.typeAnnotation?.typeAnnotation
+  const t = typeof ann?.type === "string" ? ann.type : ""
+  if (t === "TSNumberKeyword") return "number"
+  if (t === "TSStringKeyword") return "string"
+  if (t === "TSBooleanKeyword") return "boolean"
+  if (t === "TSArrayType") return "array"
+  if (t === "TSTypeReference") {
+    const name = ann?.typeName?.name
+    if (name === "Array" || name === "ReadonlyArray") return "array"
+  }
+  return "any"
+}
+
+/** Per-position {@link ParamType}s of a function-ish AST node. */
+function paramTypesOf(node: AstNode): ParamType[] {
   const params = node?.params
-  return Array.isArray(params) ? params.length : 0
+  return Array.isArray(params) ? params.map((p: AstNode) => paramTypeOf(p)) : []
 }
 
 const FUNCTION_NODE_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"])
@@ -295,7 +354,8 @@ function liftFunction(candidates: readonly string[]): LiftedFunction | null {
     if (text === null) continue
     const name = fnNode.type === "FunctionDeclaration" ? fnNode?.id?.name : undefined
     const expr = typeof name === "string" && name.length > 0 ? `(()=>{${text};return ${name};})()` : `(${text})`
-    return { expr, arity: paramArity(fnNode) }
+    // Param types read from the (un-stripped) AST node — drives the type-aware battery.
+    return { expr, paramTypes: paramTypesOf(fnNode) }
   }
   return null
 }
@@ -337,15 +397,22 @@ function fixedCandidates(finding: PureLogicHarnessInput): string[] {
  * expression is the `{agree,diverge,sample}` object → `runInSandbox` dumps it.
  */
 function buildHarnessSource(buggyExpr: string, fixedExpr: string): string {
+  // `canon` is an ORDER-INSENSITIVE-for-object-keys serializer: object keys are sorted
+  // so a behavior-preserving key REORDER (`{x,y}` vs `{y,x}`) keys identically → AGREE,
+  // not a false divergence (JSON.stringify is key-order-sensitive). ARRAY order is kept
+  // significant — reordering an array IS a behavior change, correctly divergent.
   return (
+    `function canon(v){if(v===null||typeof v!=="object")return JSON.stringify(v);` +
+    `if(Array.isArray(v))return "["+v.map(canon).join(",")+"]";` +
+    `var ks=Object.keys(v).sort();return "{"+ks.map(function(k){return JSON.stringify(k)+":"+canon(v[k]);}).join(",")+"}";}` +
     `const __B__=${buggyExpr};` +
     `const __F__=${fixedExpr};` +
     `const A=__INPUT__.battery;` +
     `let agree=0,diverge=0,sample=null;` +
     `for(let i=0;i<A.length;i++){` +
     `var bk,fk;` +
-    `try{bk="V:"+JSON.stringify(__B__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){bk="E:"+((e&&e.name)?e.name:"err");}` +
-    `try{fk="V:"+JSON.stringify(__F__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){fk="E:"+((e&&e.name)?e.name:"err");}` +
+    `try{bk="V:"+canon(__B__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){bk="E:"+((e&&e.name)?e.name:"err");}` +
+    `try{fk="V:"+canon(__F__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){fk="E:"+((e&&e.name)?e.name:"err");}` +
     `if(bk===fk){agree++;}else{diverge++;if(sample===null){sample={i:i,buggy:bk,fixed:fk};}}` +
     `}` +
     `({agree:agree,diverge:diverge,sample:sample})`
@@ -398,13 +465,16 @@ export async function runPureLogicHarness(
     if (buggy === null || fixed === null) {
       return { status: "skipped", detail: buggy === null ? "no-buggy-fn" : "no-fixed-fn", elapsedMs: elapsed() }
     }
-    if (buggy.arity !== fixed.arity) {
-      return { status: "skipped", detail: `arity-mismatch:${buggy.arity}!=${fixed.arity}`, elapsedMs: elapsed() }
+    const arity = buggy.paramTypes.length
+    if (arity !== fixed.paramTypes.length) {
+      return { status: "skipped", detail: `arity-mismatch:${arity}!=${fixed.paramTypes.length}`, elapsedMs: elapsed() }
     }
-    if (buggy.arity < 1 || buggy.arity > MAX_ARITY) {
-      return { status: "skipped", detail: `arity-out-of-range:${buggy.arity}`, elapsedMs: elapsed() }
+    if (arity < 1 || arity > MAX_ARITY) {
+      return { status: "skipped", detail: `arity-out-of-range:${arity}`, elapsedMs: elapsed() }
     }
-    const battery = buildBattery(buggy.arity)
+    // Use the BUGGY param types (arity already matched) — they drive the in-type battery,
+    // augmented with the function's own numeric literals so boundary comparisons are hit.
+    const battery = buildBattery(buggy.paramTypes, numericLiteralsFrom(buggy.expr))
     if (battery.length === 0) {
       return { status: "skipped", detail: "empty-battery", elapsedMs: elapsed() }
     }
@@ -414,15 +484,15 @@ export async function runPureLogicHarness(
     if (first === null) {
       return { status: "inconclusive", detail: "guest-no-tally", elapsedMs: elapsed() }
     }
-    // Two-sided: AGREE on ≥1 AND DIVERGE on ≥1 = a targeted behavioral difference.
-    // all-agree → can't demonstrate (no-divergence-found); all-diverge → wholesale
-    // rewrite / mismatched pair → inconclusive (FP-safe; the harness NEVER refutes).
-    if (first.agree < 1 || first.diverge < 1) {
-      return {
-        status: "inconclusive",
-        detail: first.diverge < 1 ? "no-divergence-found" : "wholesale-divergence",
-        elapsedMs: elapsed(),
-      }
+    // DIVERGE on ≥1 input = the buggy code measurably behaves differently from the fix.
+    // all-AGREE (diverge=0) → the fix is a no-op on the (type-correct) battery → can't
+    // demonstrate the bug → inconclusive (this is the FP-safety floor: a behavior-
+    // PRESERVING change never reproduces). all-DIVERGE is NOT special-cased: under
+    // source-reconstruction `fixed` = `buggy` + the suggested hunk, so the two are never
+    // unrelated functions — an all-diverge result is a constant-offset / wrong-seed bug
+    // (a real, always-wrong defect), not a wholesale rewrite. The harness NEVER refutes.
+    if (first.diverge < 1) {
+      return { status: "inconclusive", detail: "no-divergence-found", elapsedMs: elapsed() }
     }
     // Determinism: re-run the full battery and require the SAME tally + sample.
     const second = parseTally(await runInSandbox(source, { battery }, caps))

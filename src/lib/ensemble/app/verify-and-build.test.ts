@@ -697,8 +697,10 @@ describe("verifyAndBuildSubmission — SIG-477 PR-3 ReDoS harness wiring (SHADOW
     expect(finding.trust).toBeUndefined()
   })
 
-  it("a non-redos eligible finding does NOT invoke the harness (no reproduce_result item)", async () => {
+  it("SIG-477 PR-4: a pure-function-logic finding WITHOUT a fix runs the harness → skipped", async () => {
     const env = makeEnv()
+    // off-by-one (→ pure-function-logic) but NO suggestedReplacement: the harness has
+    // no corrected variant to compare against, so it records `skipped`, never lifts.
     const finding = nonRedosEligible()
     const args = makeArgs({
       env,
@@ -713,8 +715,33 @@ describe("verifyAndBuildSubmission — SIG-477 PR-3 ReDoS harness wiring (SHADOW
     const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
     // Eligibility WAS recorded (it's an eligible finding) …
     expect(items.some((i) => i.category === "reproduce_eligibility" && i.verdict === "eligible")).toBe(true)
-    // … but the harness is redos-only, so NO reproduce_result item exists.
-    expect(items.some((i) => i.category === "reproduce_result")).toBe(false)
+    // … and PR-4 now dispatches the pure-logic harness, which records `skipped`
+    // (no fix → no two-sided test), never `reproduced`.
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["skipped"])
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
+  })
+
+  it("SIG-477 PR-4: a pure-function-logic finding WITH a fix REPRODUCES (shadow → no tier mutation)", async () => {
+    const env = makeEnv()
+    const finding = nonRedosEligible({
+      headline: "off-by-one in clampIndex (inclusive bound)",
+      // Buggy `<=` agrees with the fix below the boundary, diverges past it.
+      failureExample: "export function clampIndex(i, max) { return i <= max ? i + 1 : max }",
+      suggestedReplacement: "export function clampIndex(i, max) { return i <= max ? i : max }",
+    })
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      reproduceMode: "shadow",
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(reproduceItems(recordBatchSpy).map((i) => i.verdict)).toEqual(["reproduced"])
+    // SHADOW: a real reproduction is recorded but the tier is NOT mutated (darkness).
+    expect(finding.trust?.tier).not.toBe("reproduced-by-execution")
   })
 
   it("under wall-clock load (stale startMs): the harness is SKIPPED, not run", async () => {

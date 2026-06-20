@@ -64,6 +64,22 @@ describe("executableClassForFinding — allowlist (taint-flow classes excluded)"
       "pure-function-logic",
     )
   })
+  it("matches the BROADENED pure-function-logic phrasings (SIG-477 PR-4)", () => {
+    const m = (headline: string) => executableClassForFinding({ headline, body: "" })
+    expect(m("boundary condition skips the last element")).toBe("pure-function-logic")
+    expect(m("the loop runs one extra iteration")).toBe("pure-function-logic")
+    expect(m("the bound is inclusive but should be exclusive on the range")).toBe("pure-function-logic")
+    expect(m("`<=` should be `<` in the slice bound")).toBe("pure-function-logic")
+    expect(m("loop range off by the exclusive end")).toBe("pure-function-logic")
+    expect(m("type coercion changes the comparison")).toBe("pure-function-logic")
+  })
+  it("does NOT over-match unrelated 'boundary'/'inclusive' prose", () => {
+    // The broadened keywords still require the bug-shaped phrasing — generic words
+    // alone must not class a finding (they'd only be filtered by the gates anyway,
+    // but keep the class signal meaningful).
+    expect(executableClassForFinding({ headline: "added a boundary to the UI card", body: "" })).toBeNull()
+    expect(executableClassForFinding({ headline: "the docs are inclusive of all cases", body: "" })).toBeNull()
+  })
   it("matches hmac-byte-divergence", () => {
     expect(
       executableClassForFinding({ headline: "HMAC computed over the reserialized body", body: "byte mismatch" }),

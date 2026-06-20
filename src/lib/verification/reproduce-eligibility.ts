@@ -121,8 +121,28 @@ export function executableClassForFinding(finding: Pick<PrReviewFinding, "headli
   if (/hmac/.test(t) && (/byte/.test(t) || /diverg/.test(t) || /mismatch/.test(t) || /reserializ/.test(t))) {
     return "hmac-byte-divergence"
   }
-  // Pure-function logic: off-by-one / fence-post / parser coercion.
-  if (/off[-\s]?by[-\s]?one/.test(t) || /fence[-\s]?post/.test(t) || /\bparser coercion\b/.test(t)) {
+  // Pure-function logic: off-by-one / fence-post / boundary / coercion bugs whose
+  // failure is a WRONG RETURN VALUE at a boundary input (re-runnable as a two-sided
+  // test: buggy output ≠ corrected output). Broadened beyond the literal "off-by-one"
+  // phrasing to the way the model actually names these. A generous class match only
+  // widens the CANDIDATE set — every match still has to clear Gate 2 (purity) + Gate 3
+  // (liftable, non-request-tainted), so an over-broad keyword never inflates the
+  // EXECUTED set, and the pure-logic harness's agree+diverge requirement is the real
+  // filter (a misclassified finding just yields `inconclusive`).
+  if (
+    /off[-\s]?by[-\s]?one/.test(t) ||
+    /fence[-\s]?post|fencepost/.test(t) ||
+    /\bboundary (?:condition|error|bug|case|check|issue|off)/.test(t) ||
+    /\bone (?:too many|too few|extra|fewer|short) (?:iteration|element|item|index|character|char|loop|byte|row)/.test(
+      t,
+    ) ||
+    /(?:<=|>=)[\s`'"]*should be[\s`'"]*(?:<|>)|(?:<|>)[\s`'"]*should be[\s`'"]*(?:<=|>=)/.test(t) ||
+    /\bloop (?:bound|boundary|condition|range)\b[^.]*\b(?:off|wrong|incorrect|error|one|exclusive|inclusive)\b/.test(
+      t,
+    ) ||
+    /\b(?:inclusive|exclusive)\b[^.]*\b(?:bound|range|index|end|boundary|slice|loop)\b/.test(t) ||
+    /\b(?:parser|type|string|number|boolean) coercion\b/.test(t)
+  ) {
     return "pure-function-logic"
   }
   return null
@@ -378,11 +398,11 @@ function looksRequestTainted(code: string): boolean {
   return REQUEST_TAINT_TOKENS.some((tok) => lc.includes(tok))
 }
 
-/** Is the cited code a LIFTABLE pure closure — a function/arrow/expression or a
- *  regex literal — rather than an empty or obviously non-closure fragment? Parses
- *  as a standalone module; a clean parse with at least one function/regex/return
- *  is a liftable closure. Never throws (parseSource returns ok:false on failure). */
-function isLiftableClosure(code: string): boolean {
+/** Is a SINGLE cited fragment a LIFTABLE pure closure — a function/arrow/expression
+ *  or a regex literal — rather than an empty or non-closure fragment? Parses as a
+ *  standalone module; a clean parse with ≥1 function/regex/return is liftable. Never
+ *  throws (parseSource returns ok:false on failure). */
+function isLiftablePart(code: string): boolean {
   const trimmed = code.trim()
   if (trimmed.length === 0) return false
   // A bare regex literal admits a one-line two-sided test (ReDoS timing), so it's
@@ -411,14 +431,27 @@ function isLiftableClosure(code: string): boolean {
   return liftable
 }
 
+/** Does ANY cited fragment hold a liftable closure? Checked PER-FRAGMENT (not on the
+ *  joined blob) to match how the harnesses lift code — each parses its candidates
+ *  INDEPENDENTLY. The joined blob frequently fails to parse for a genuinely-liftable
+ *  finding (e.g. the buggy `export function f` in `failureExample` AND the corrected
+ *  `export function f` in `suggestedReplacement` → a duplicate-export SyntaxError, or
+ *  prose mixed with a code fence) — gating those out would refuse exactly the findings
+ *  the pure-logic harness CAN run. Per-fragment is strictly wider and never throws. */
+function hasLiftableClosure(parts: readonly string[]): boolean {
+  return parts.some(isLiftablePart)
+}
+
 // --- The gate ---------------------------------------------------------------
 
-/** The cited-code text the gates scan. Prefers the fields that carry VERBATIM code
- *  the harness would lift: the structured examples + the committable fix, then a
- *  code-fenced region of the body. Joined so a sink in ANY of them refuses. */
-function citedCode(
+/** The cited-code FRAGMENTS the gates scan. Prefers the fields that carry VERBATIM
+ *  code the harness would lift: the structured examples + the committable fix, then
+ *  code-fenced regions of the body. Returned as parts so liftability is checked
+ *  per-fragment (matching the harness) while impurity is checked on the join (a sink
+ *  in ANY of them refuses). */
+function citedCodeParts(
   finding: Pick<PrReviewFinding, "failureExample" | "fixExample" | "suggestedReplacement" | "astEvidence" | "body">,
-): string {
+): string[] {
   const parts: string[] = []
   for (const v of [finding.failureExample, finding.fixExample, finding.suggestedReplacement, finding.astEvidence]) {
     if (typeof v === "string" && v.trim().length > 0) parts.push(v)
@@ -431,7 +464,7 @@ function citedCode(
   while ((m = fence.exec(body)) !== null) {
     if (m[1] && m[1].trim().length > 0) parts.push(m[1])
   }
-  return parts.join("\n")
+  return parts
 }
 
 /**
@@ -494,7 +527,10 @@ export function isReproducibleEligible(
       return { eligible: false, reason: "class-not-in-allowlist" }
     }
 
-    const code = citedCode(finding)
+    const parts = citedCodeParts(finding)
+    // Impurity is checked on the JOIN (a sink in ANY fragment refuses); liftability is
+    // checked PER-FRAGMENT below (matching the harness's independent lifting).
+    const code = parts.join("\n")
     if (code.trim().length === 0) {
       // No verbatim cited code to lift → can't reproduce → ineligible (fail-open).
       return { eligible: false, reason: "no-cited-code" }
@@ -528,7 +564,7 @@ export function isReproducibleEligible(
     if (looksRequestTainted(code)) {
       return { eligible: false, reason: "request-tainted-fragment" }
     }
-    if (!isLiftableClosure(code)) {
+    if (!hasLiftableClosure(parts)) {
       return { eligible: false, reason: "not-liftable-closure" }
     }
 

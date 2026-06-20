@@ -527,6 +527,19 @@ OPENCLAW_VERIFICATION_REANCHOR = "on"
 # vs receipts-as-trust. Needs a VERIFIED runner receipt (dogfood has one).
 OPENCLAW_RECEIPTJOIN_MODE = "shadow"
 
+# SIG-476 PR2 (2026-06-19): in-worker self-confirmation gate — "off" | "shadow" |
+# "on". Flipped off -> "shadow" to START the GO/NO-GO measurement: the PR-1 helper
+# (`confirmFindingAgainstInWorkerAst`) re-checks each submitted score>=4 SECURITY
+# finding against OUR OWN in-worker deterministic AST engine and persists the
+# confirmed/uplift distribution to VerificationMetricsDO under the `selfconfirm`
+# category. SHADOW IS MEASURE-ONLY — it NEVER mutates the trust tier (the tier
+# ANNOTATE is gated to "on"; OPENCLAW_TRUST_LEDGER is "on" in prod, so a shadow
+# mutation would be a live render change). NO render change in any mode (PR3). Read
+# GET /metrics/verification -> `selfConfirm.confirmedFraction` + `.upliftFraction`:
+# THE number deciding whether `deterministic-confirmed` earns a distinct pill (PR3)
+# or should be a GROUNDED sub-state. Rollback: set "off".
+OPENCLAW_SELFCONFIRM_MODE = "shadow"
+
 # SIG Trust Ledger v0: "off" (default) | "shadow" | "on". `shadow` attaches the
 # per-finding trust tier (worker-token-confirmed / runner-confirmed / deterministic-
 # / grounded-model / body-only-ungrounded) + records the tier distribution to

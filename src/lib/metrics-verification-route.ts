@@ -10,6 +10,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { parseReceiptJoinMode } from "./verification/verify-finding-receipt"
+import { parseSelfConfirmMode } from "./verification/confirm-finding-inworker"
 import { parseTrustLedgerMode } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 
 const DEFAULT_WINDOW_DAYS = 7
@@ -67,6 +68,12 @@ export async function handleVerificationMetricsRoute(request: Request, env: Env)
       // accruing (shadow/on) or the ledger is off.
       trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
       trustLedger: metrics.trustLedger,
+      // SIG-476 PR2: the in-worker self-confirmation distribution (separate corpus).
+      // `confirmedFraction` + `upliftFraction` are THE GO/NO-GO deciding whether
+      // `deterministic-confirmed` earns a distinct pill (PR3) or stays a GROUNDED
+      // sub-state. `selfConfirmMode` tells the reader whether the numbers accrue.
+      selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
+      selfConfirm: metrics.selfConfirm,
     },
     200,
   )

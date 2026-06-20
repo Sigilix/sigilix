@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from "vitest"
 import { handleVerificationMetricsRoute } from "@/src/lib/metrics-verification-route"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/src/do/verification-metrics"
+import {
+  VerificationMetricsDO,
+  RECEIPTJOIN_CATEGORY,
+  TRUSTLEDGER_CATEGORY,
+  SELFCONFIRM_CATEGORY,
+} from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
@@ -173,6 +178,51 @@ describe("handleVerificationMetricsRoute", () => {
   it("defaults trustLedgerMode to off when OPENCLAW_TRUST_LEDGER is unset", async () => {
     const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
     expect(((await res.json()) as { trustLedgerMode: string }).trustLedgerMode).toBe("off")
+  })
+
+  it("SIG-476: surfaces selfConfirmMode + the selfConfirm corpus, kept out of the worker-token totals", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security" }, // worker-token
+      { verdict: "uplift", category: SELFCONFIRM_CATEGORY },
+      { verdict: "uplift", category: SELFCONFIRM_CATEGORY },
+      { verdict: "redundant", category: SELFCONFIRM_CATEGORY },
+      { verdict: "inconclusive", category: SELFCONFIRM_CATEGORY },
+    ])
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_SELFCONFIRM_MODE: "shadow" }, do_),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number
+      selfConfirmMode: string
+      selfConfirm: {
+        uplift: number
+        redundant: number
+        inconclusive: number
+        confirmed: number
+        total: number
+        confirmedFraction: number
+        upliftFraction: number
+      }
+    }
+    expect(body.total).toBe(1) // worker-token only — self-confirm excluded
+    expect(body.selfConfirmMode).toBe("shadow")
+    expect(body.selfConfirm).toEqual({
+      uplift: 2,
+      redundant: 1,
+      inconclusive: 1,
+      confirmed: 3,
+      total: 4,
+      confirmedFraction: 0.75,
+      upliftFraction: 0.667,
+    })
+  })
+
+  it("defaults selfConfirmMode to off when OPENCLAW_SELFCONFIRM_MODE is unset", async () => {
+    const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
+    expect(((await res.json()) as { selfConfirmMode: string }).selfConfirmMode).toBe("off")
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {

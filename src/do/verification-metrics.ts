@@ -43,7 +43,16 @@ CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
  *  checks `logic`/`security` findings; the receipt-join check records under
  *  RECEIPTJOIN_CATEGORY. A closed union (not a free `string`) so a typo can't
  *  silently misclassify a record and leak across the corpus split. */
-export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trustledger"
+export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trustledger" | "selfconfirm"
+
+/** SIG-476 PR2: the in-worker self-confirmation verdict (the `selfconfirm` corpus).
+ *  Both `uplift` and `redundant` imply the finding was CONFIRMED by our independent
+ *  in-worker AST engine; they differ in whether the `deterministic-confirmed` tier
+ *  GENUINELY raised the finding (`uplift`) or merely relabelled a finding already at
+ *  an equal-or-higher tier (`redundant` — the "near-subset of existing GROUNDED"
+ *  case the GO/NO-GO watches for). `inconclusive` = eligible but not confirmed. A
+ *  closed union so the metric corpus can't be silently miscounted. */
+export type SelfConfirmVerdict = "uplift" | "redundant" | "inconclusive"
 
 /**
  * One verdict record. Discriminated by `category` so the `verdict` value can't be
@@ -62,8 +71,15 @@ export type RecordVerificationArgs =
       occurredAt?: string
     }
   | {
+      /** SIG-476 PR2 — the in-worker self-confirmation corpus. */
+      category: "selfconfirm"
+      verdict: SelfConfirmVerdict
+      /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+      occurredAt?: string
+    }
+  | {
       /** Worker-token verdicts (`logic`/`security`) + the receipt-join corpus. */
-      category: Exclude<VerificationCategory, "trustledger">
+      category: Exclude<VerificationCategory, "trustledger" | "selfconfirm">
       verdict: VerificationVerdict
       /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
       occurredAt?: string
@@ -78,6 +94,11 @@ export const RECEIPTJOIN_CATEGORY = "receiptjoin"
  *  tier distribution, a SEPARATE corpus from the worker-token / receipt-join
  *  verdicts (no schema migration; kept out of the worker-token aggregates). */
 export const TRUSTLEDGER_CATEGORY = "trustledger"
+
+/** Sentinel `category` the SIG-476 in-worker self-confirmation records under — the
+ *  confirmed/uplift distribution, a SEPARATE corpus from worker-token / receipt-join
+ *  / trust-ledger (no schema migration; kept out of the worker-token aggregates). */
+export const SELFCONFIRM_CATEGORY = "selfconfirm"
 
 export interface VerificationMetricsQuery {
   /** verdict → category → count. WORKER-TOKEN only (excludes receipt-join). */
@@ -105,6 +126,22 @@ export interface VerificationMetricsQuery {
   trustLedger: {
     byTier: Record<string, number>
     total: number
+  }
+  /** SIG-476 PR2: the in-worker self-confirmation distribution (separate corpus).
+   *  `confirmed = uplift + redundant; total = confirmed + inconclusive`.
+   *  `confirmedFraction = confirmed / total` (how often an eligible finding is
+   *  independently confirmed) and `upliftFraction = uplift / confirmed` (how often
+   *  a confirmation GENUINELY raises the tier vs merely relabels an already-grounded
+   *  one) — together THE GO/NO-GO deciding whether `deterministic-confirmed` earns a
+   *  distinct pill (PR3) or should be a GROUNDED sub-state. */
+  selfConfirm: {
+    uplift: number
+    redundant: number
+    inconclusive: number
+    confirmed: number
+    total: number
+    confirmedFraction: number
+    upliftFraction: number
   }
   window: { days: number; startDay: string; endDay: string }
 }
@@ -186,6 +223,7 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const byVerdict: Record<string, number> = {}
     const rjByVerdict: Record<string, number> = {}
     const tlByTier: Record<string, number> = {}
+    const scByVerdict: Record<string, number> = {}
     let total = 0
     let tlTotal = 0
     for (const row of sql.exec<{ verdict: string; category: string; total: number }>(
@@ -208,6 +246,10 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         tlTotal += row.total
         continue
       }
+      if (row.category === SELFCONFIRM_CATEGORY) {
+        scByVerdict[row.verdict] = (scByVerdict[row.verdict] ?? 0) + row.total
+        continue
+      }
       ;(counts[row.verdict] ??= {})[row.category] = row.total
       byVerdict[row.verdict] = (byVerdict[row.verdict] ?? 0) + row.total
       total += row.total
@@ -220,6 +262,16 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const rjConfirmed = rjByVerdict["confirmed" satisfies VerificationVerdict] ?? 0
     const rjInconclusive = rjByVerdict["inconclusive" satisfies VerificationVerdict] ?? 0
     const rjTotal = rjConfirmed + rjInconclusive
+
+    // SIG-476 PR2: self-confirmation corpus. uplift + redundant both imply CONFIRMED;
+    // confirmedFraction = confirmed/total tells us how often an eligible finding is
+    // independently confirmed, and upliftFraction = uplift/confirmed how often that
+    // confirmation GENUINELY raises the tier (vs relabeling an already-grounded one).
+    const scUplift = scByVerdict["uplift" satisfies SelfConfirmVerdict] ?? 0
+    const scRedundant = scByVerdict["redundant" satisfies SelfConfirmVerdict] ?? 0
+    const scInconclusive = scByVerdict["inconclusive" satisfies SelfConfirmVerdict] ?? 0
+    const scConfirmed = scUplift + scRedundant
+    const scTotal = scConfirmed + scInconclusive
 
     return {
       counts,
@@ -234,6 +286,15 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         refutableEligibleFraction: ratio(rjInconclusive, rjTotal),
       },
       trustLedger: { byTier: tlByTier, total: tlTotal },
+      selfConfirm: {
+        uplift: scUplift,
+        redundant: scRedundant,
+        inconclusive: scInconclusive,
+        confirmed: scConfirmed,
+        total: scTotal,
+        confirmedFraction: ratio(scConfirmed, scTotal),
+        upliftFraction: ratio(scUplift, scConfirmed),
+      },
       window: { days: args.windowDays, startDay, endDay },
     }
   }

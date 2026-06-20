@@ -68,10 +68,18 @@ function makeArgs(opts: {
   findings: PrReviewFinding[]
   verificationMode?: string
   trustLedgerMode?: "off" | "shadow" | "on"
+  selfConfirmMode?: "off" | "shadow" | "on"
   receiptScanIndex?: Map<string, ReceiptScanResult[]> | null
+  astSecurityFindings?: ReadonlyArray<{ path: string; line: number; astFindingId: string }>
 }): VerifyAndBuildArgs {
   const env = opts.env
-  const ensembleConfig = parseEnsembleConfig(env)
+  const baseConfig = parseEnsembleConfig(env)
+  // SIG-476 PR2: the self-confirm gate is read off ensembleConfig.flags (no separate
+  // orchestrator arg), so the harness overrides the parsed flag per test.
+  const ensembleConfig = {
+    ...baseConfig,
+    flags: { ...baseConfig.flags, selfConfirmMode: (opts.selfConfirmMode ?? "off") as "off" | "shadow" | "on" },
+  }
   const verdict: PrReviewVerdict = {
     summary: "test",
     confidence: 4,
@@ -125,6 +133,7 @@ function makeArgs(opts: {
     submissionVerdict: verdict,
     renderableUnanchoredForSubmission: [],
     findingMarkers: opts.findings.map(() => null),
+    ...(opts.astSecurityFindings !== undefined ? { astSecurityFindings: opts.astSecurityFindings } : {}),
   }
 }
 
@@ -232,6 +241,193 @@ describe("verifyAndBuildSubmission — SIG-423 verification metric coalescing", 
     expect(items.length).toBeGreaterThanOrEqual(1)
     expect(items.map((i) => i.category)).toContain("logic")
     expect(items.every((i) => i.category !== "trustledger")).toBe(true)
+  })
+})
+
+describe("verifyAndBuildSubmission — SIG-476 PR2 self-confirm shadow-assignment", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+
+  // A sev>=4 security finding whose class derives from a CWE (FINDING-OWN), with NO
+  // manifest evidenceId — so a confirming co-located AST fact yields an UPLIFT (the
+  // baseline would only give it grounded-model / body-only-ungrounded ≤ rank 2).
+  // Built FRESH (not spread from the shared `baseFinding`, which earlier in-place
+  // trust mutations would otherwise leak in via the copied `trust` field).
+  const upliftFinding = (over: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    category: "security",
+    score: 5,
+    path: "src/lib/auth.ts",
+    line: 42,
+    headline: "eval of user input",
+    body: "An `eval` on request data.",
+    evidenceId: "NONE",
+    cweId: "CWE-94", // code-injection (finding-own)
+    ...over,
+  })
+  // The OUR-engine co-located AST fact (no-eval-call → code-injection) that
+  // independently corroborates the upliftFinding's class within the line window.
+  const confirmingAstFact = { path: "src/lib/auth.ts", line: 40, astFindingId: "ast/no-eval-call/h1/40" }
+
+  it("shadow: records a confirmed-uplift finding as `uplift` and does NOT mutate the tier", async () => {
+    const env = makeEnv()
+    const finding = upliftFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "shadow",
+      astSecurityFindings: [confirmingAstFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    expect(recordBatchSpy).toHaveBeenCalledTimes(1)
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    const sc = items.filter((i) => i.category === "selfconfirm")
+    expect(sc).toHaveLength(1)
+    expect(sc[0]!.verdict).toBe("uplift")
+    // SHADOW MUST NOT MUTATE: the tier is never annotated to deterministic-confirmed.
+    expect(finding.trust?.tier).not.toBe("deterministic-confirmed")
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("on: a confirmed-uplift finding's tier BECOMES deterministic-confirmed", async () => {
+    const env = makeEnv()
+    const finding = upliftFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "on",
+      astSecurityFindings: [confirmingAstFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    expect(items.filter((i) => i.category === "selfconfirm").map((i) => i.verdict)).toEqual(["uplift"])
+    // `on` annotates the tier in place.
+    expect(finding.trust?.tier).toBe("deterministic-confirmed")
+  })
+
+  it("on: a receipt runner-confirmed finding that ALSO self-confirms → `redundant`, tier STAYS runner-confirmed (moat)", async () => {
+    const env = makeEnv()
+    // Pre-set the runner-confirmed tier (as the receipt-join would have, above this
+    // block). resolveTier precedence (rank 6) must keep it over deterministic-confirmed.
+    const finding = upliftFinding({ trust: { tier: "runner-confirmed" } })
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "on",
+      astSecurityFindings: [confirmingAstFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    expect(items.filter((i) => i.category === "selfconfirm").map((i) => i.verdict)).toEqual(["redundant"])
+    // The moat: a self-confirmation NEVER outranks an independent CI receipt.
+    expect(finding.trust?.tier).toBe("runner-confirmed")
+  })
+
+  it("a confirmed finding WITH manifest evidence is `redundant` (near-subset of existing GROUNDED)", async () => {
+    const env = makeEnv()
+    // class from the `ast:` evidenceId (manifest evidence present → deterministic-
+    // grounded baseline, rank 4) + a DISTINCT independent co-located fact (passes the
+    // non-circularity independence guard) → confirmed but only a +1 relabel. NO cweId
+    // (the class comes solely from the ast: rule).
+    const ownFactId = "ast/no-eval-call/abc1234/42"
+    const finding: PrReviewFinding = {
+      category: "security",
+      score: 5,
+      path: "src/lib/auth.ts",
+      line: 42,
+      headline: "eval of user input",
+      body: "An `eval` on request data.",
+      evidenceId: `ast:no-eval-call:${ownFactId}`,
+    }
+    const ownFact = { path: "src/lib/auth.ts", line: 42, astFindingId: ownFactId }
+    const independentFact = { path: "src/lib/auth.ts", line: 41, astFindingId: "ast/no-eval-call/zzz9999/41" }
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "shadow",
+      astSecurityFindings: [ownFact, independentFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    expect(items.filter((i) => i.category === "selfconfirm").map((i) => i.verdict)).toEqual(["redundant"])
+    // Shadow: still no mutation.
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("an eligible-but-not-confirmed finding records `inconclusive`", async () => {
+    const env = makeEnv()
+    // Class derives (CWE-94 code-injection) but the co-located fact is a DIFFERENT
+    // class (no-ssrf), so no independent corroboration → inconclusive.
+    const finding = upliftFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "shadow",
+      astSecurityFindings: [{ path: "src/lib/auth.ts", line: 41, astFindingId: "ast/no-ssrf/h/41" }],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    const items = recordBatchSpy.mock.calls[0]![0] as RecordVerificationArgs[]
+    expect(items.filter((i) => i.category === "selfconfirm").map((i) => i.verdict)).toEqual(["inconclusive"])
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("off: no self-confirm record and no mutation (true no-op)", async () => {
+    const env = makeEnv()
+    const finding = upliftFinding()
+    const args = makeArgs({
+      env,
+      findings: [finding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "off",
+      astSecurityFindings: [confirmingAstFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    // Every corpus off → empty batch → DO never touched.
+    expect(recordBatchSpy).not.toHaveBeenCalled()
+    expect(finding.trust).toBeUndefined()
+  })
+
+  it("a no-check finding (non-security / below sev) produces no self-confirm item", async () => {
+    const env = makeEnv()
+    // baseFinding is a logic finding → confirmFindingAgainstInWorkerAst → no-check.
+    const args = makeArgs({
+      env,
+      findings: [baseFinding],
+      verificationMode: "off",
+      trustLedgerMode: "off",
+      selfConfirmMode: "shadow",
+      astSecurityFindings: [confirmingAstFact],
+    })
+
+    await verifyAndBuildSubmission(args)
+
+    // no-check is skipped → no selfconfirm item → empty batch → no DO call.
+    expect(recordBatchSpy).not.toHaveBeenCalled()
   })
 })
 

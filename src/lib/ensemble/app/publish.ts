@@ -59,6 +59,7 @@ import { writeLastReviewedSha } from "@/src/lib/incremental-review"
 import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import { writeReviewManifestForEnsemble } from "@/src/lib/ensemble/adapters/persistence"
+import { captureInlineCommentIds } from "@/src/lib/inline-comment-capture"
 import {
   writeIncrementalReviewCoverage,
   type IncrementalReviewCoverageWriteEntry,
@@ -199,45 +200,17 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     deterministicCheckAnnotationMeta,
     deterministicErroredReviewMeta,
   } = a
-  // ─── SIG-216: post the overview comment IMMEDIATELY before the
-  // review submit so the two GitHub timeline entries land in the
-  // same time window (CodeRabbit-style Walkthrough-then-Review).
-  // The overview is informed by the review's verdict — we pass
-  // findingsCount + severity + category breakdown + the chosen
-  // event so the model can summarize "what reviewer concluded"
-  // instead of running blind. Gated on `overview.enabled` per the
-  // same `sigilixConfig` the ensemble loaded earlier; opted-out
-  // customers skip the inline render.
-  //
-  // Awaited (not `ctx.waitUntil`) so the overview comment is
-  // GUARANTEED on the PR timeline before `submitReview` fires.
-  // `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
-  // lock inside `handlePrOverview` so a sibling queued run (legacy
-  // warmup refresh, etc.) on this SHA can't block us — but does
-  // NOT bypass the in-handler stale-head guards (those still fire
-  // on this path, catching head moves that landed during the
-  // review's own Ollama window). SIG-216 fix-up swap from
-  // `force: true` (which historically bypassed both).
-  //
-  // Budgeting (SIG-216 fix-up): the overview runs against the
-  // REMAINING review budget so a stalled overview can't push the
-  // handler past ORCHESTRATOR_TIMEOUT_MS (the wall the orchestrator
-  // itself aborts on). Capped at INLINE_OVERVIEW_MAX_BUDGET_MS even
-  // on a budget surplus so the overview never eats more than its
-  // fair share. When remaining budget falls under
-  // INLINE_OVERVIEW_MIN_BUDGET_MS we skip the inline render entirely
-  // — the overview can fire on the next push.
-  //
-  // Retry policy (SIG-216 fix-up): single retry on transient
-  // failures (timeouts / 502 / 503 / 504 / fetch-failed /
-  // budget-exceeded). Pre-SIG-216 the queue consumer gave
-  // MAX_RETRIES=3 on Ollama transients; the inline path had zero.
-  // One retry only — bounded by the same Promise.race budget so
-  // we can't blow the wall-clock even on a double attempt.
-  //
-  // Best-effort: even after the single retry, a failure here
-  // NEVER blocks the review submit. The customer still gets the
-  // review even if the overview comment fails to land.
+  // ─── SIG-216: post the overview comment IMMEDIATELY before the review submit so
+  // the two GitHub timeline entries land in the same window (CR-style
+  // Walkthrough-then-Review). The overview is informed by the verdict (findings
+  // count + severity/category breakdown + event). Gated on `overview.enabled`.
+  // Awaited (not `ctx.waitUntil`) so it's GUARANTEED on the timeline before
+  // `submitReview`. `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
+  // lock (so a sibling queued run can't block us) but NOT the in-handler
+  // stale-head guards. Budgeted against the REMAINING review budget vs
+  // ORCHESTRATOR_TIMEOUT_MS, capped at INLINE_OVERVIEW_MAX_BUDGET_MS and skipped
+  // under INLINE_OVERVIEW_MIN_BUDGET_MS. Single retry on transients, bounded by
+  // the same Promise.race budget. Best-effort: a failure NEVER blocks the submit.
   if (isPrOverviewEnabled(sigilixConfig)) {
     const overviewStartMs = Date.now()
     const overviewReviewContext: PrOverviewReviewContext = {
@@ -569,6 +542,31 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     // current-review chronologically. ARC-279's comment-fallback
     // covers the "dismiss succeeded + submit failed" failure mode.
 
+    // SIG-473: capture each posted inline comment's id onto its manifest finding
+    // (by content fingerprint) so the receipt-driven proof-update job can later
+    // PATCH the GROUNDED→VERIFIED pill in place. Gated to where inline pills can
+    // exist (trust ledger on, comments posted, not annotations-only, manifest
+    // enabled). Best-effort — never fails the posted review.
+    if (
+      trustLedgerMode === "on" &&
+      (submission.comments?.length ?? 0) > 0 &&
+      reviewOutputSurface !== "annotations" &&
+      reviewManifestEnabled
+    ) {
+      try {
+        await captureInlineCommentIds(client, owner, repo, prNumber, currentFindingsForManifest)
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            event: "inline-comment-id-capture-failed",
+            owner,
+            repo,
+            prNumber,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
+      }
+    }
     // ARC-184: write review-provenance manifest. Best-effort.
     // ARC-271: also persist the per-finding snapshot so the next
     // push's review can compute a new/still-open/likely-fixed

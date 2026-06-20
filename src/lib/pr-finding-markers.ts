@@ -1,6 +1,6 @@
 import { FINDING_CATEGORIES, type FindingCategory } from "./triage-pr-review"
 
-const FINDING_BLOCK_MARKER = "<!-- sigilix:pr-review-finding -->"
+export const FINDING_BLOCK_MARKER = "<!-- sigilix:pr-review-finding -->"
 export const MAX_FINDING_OUTCOME_MARKERS = 50
 const MAX_FINDING_OUTCOME_BODY_CHARS = 128_000
 

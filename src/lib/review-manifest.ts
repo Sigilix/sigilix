@@ -66,6 +66,17 @@ export interface ReviewManifestFinding {
   /** Deterministic AST fact-ids carried on the finding's evidence (the path-(a)/(b)
    *  class sources in `canonicalClassForFinding`). */
   deterministicFactIds?: string[]
+  /**
+   * SIG-473 (inline pill VERIFIED): the finding's content fingerprint (the
+   * 64-hex marker embedded in its inline comment body) + the GitHub id of the
+   * posted inline review comment. Both OPTIONAL — `contentFingerprint` set at
+   * snapshot time from the finding; `inlineCommentId` injected post-submit once
+   * the posted comments are listed back. Together they let the
+   * `overview-proof-update` job PATCH the GROUNDED→VERIFIED pill in place on a
+   * confirmed finding's comment (revalidating the fingerprint first).
+   */
+  contentFingerprint?: string
+  inlineCommentId?: number
 }
 
 export interface ReviewManifestV1 {
@@ -119,6 +130,7 @@ export function toManifestFinding(
     cweId?: string
     trust?: { tier?: string }
     evidence?: { deterministicFactIds?: string[] }
+    contentFingerprint?: string
   },
 ): ReviewManifestFinding {
   return {
@@ -136,6 +148,10 @@ export function toManifestFinding(
     ...(f.evidence?.deterministicFactIds && f.evidence.deterministicFactIds.length > 0
       ? { deterministicFactIds: f.evidence.deterministicFactIds }
       : {}),
+    // SIG-473: persist the content fingerprint so the inline-pill PATCH can match
+    // the posted comment back to this finding. `inlineCommentId` is NOT set here —
+    // it's injected post-submit once the posted comments are listed (publish.ts).
+    ...(typeof f.contentFingerprint === "string" ? { contentFingerprint: f.contentFingerprint } : {}),
   }
 }
 
@@ -181,7 +197,12 @@ function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding
     (o.cweId === undefined || typeof o.cweId === "string") &&
     (o.trustTier === undefined || typeof o.trustTier === "string") &&
     (o.deterministicFactIds === undefined ||
-      (Array.isArray(o.deterministicFactIds) && o.deterministicFactIds.every((f) => typeof f === "string")))
+      (Array.isArray(o.deterministicFactIds) && o.deterministicFactIds.every((f) => typeof f === "string"))) &&
+    // SIG-473: optional inline-pill fields — validate type ONLY when present.
+    // `inlineCommentId` must be a positive integer (a GitHub comment id).
+    (o.contentFingerprint === undefined || typeof o.contentFingerprint === "string") &&
+    (o.inlineCommentId === undefined ||
+      (typeof o.inlineCommentId === "number" && Number.isInteger(o.inlineCommentId) && o.inlineCommentId > 0))
   )
 }
 

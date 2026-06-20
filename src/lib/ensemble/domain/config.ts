@@ -24,6 +24,7 @@ import type { WindowBlindnessValidatorMode } from "./gates/validate-window-blind
 import type { SecurityGroundingValidatorMode } from "./gates/validate-security-grounding"
 import type { SecurityUsageValidatorMode } from "./gates/validate-security-usage"
 import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
+import type { SelfConfirmMode } from "@/src/lib/verification/confirm-finding-inworker"
 import type { LogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import type { LogicInputCompositionMode } from "./logic-input-composition"
 import type { AstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
@@ -109,6 +110,13 @@ export interface EnsembleFeatureFlags {
   /** Normalized `OPENCLAW_TOCTOU_HINTS` (default "off", trim + lowercase). */
   toctouHints: AstScanMode
   receiptJoinMode: ReceiptJoinMode
+  /** SIG-476 PR2: in-worker self-confirmation gate mode — "off" (default) |
+   *  "shadow" | "on". `shadow` MEASURES the confirmed/uplift fractions (the
+   *  `selfconfirm` corpus on VerificationMetricsDO) WITHOUT mutating any tier —
+   *  the GO/NO-GO that decides whether `deterministic-confirmed` earns a distinct
+   *  pill (PR3) or should be a GROUNDED sub-state. `on` also annotates a confirmed
+   *  finding with the `deterministic-confirmed` signal. */
+  selfConfirmMode: SelfConfirmMode
   logicPromptBudgetMode: LogicPromptBudgetMode
   /** SIG-369(b): `OPENCLAW_LOGIC_INPUT_COMPOSITION` "off" | "shadow" (default
    *  "off"). When "shadow", the logic specialist's input-token composition is

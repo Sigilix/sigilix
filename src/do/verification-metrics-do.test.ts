@@ -2,7 +2,12 @@
 // as the other metrics DOs (real in-memory node:sqlite).
 
 import { describe, expect, it } from "vitest"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "@/src/do/verification-metrics"
+import {
+  VerificationMetricsDO,
+  RECEIPTJOIN_CATEGORY,
+  TRUSTLEDGER_CATEGORY,
+  SELFCONFIRM_CATEGORY,
+} from "@/src/do/verification-metrics"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
@@ -171,6 +176,51 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
     const { do_ } = makeDo()
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.trustLedger).toEqual({ byTier: {}, total: 0 })
+  })
+
+  it("SIG-476: self-confirm verdicts are a SEPARATE corpus and compute confirmed/uplift fractions", async () => {
+    const { do_ } = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security", occurredAt: T }, // worker-token
+      { verdict: "refuted", category: "logic", occurredAt: T }, // worker-token
+      { verdict: "confirmed", category: RECEIPTJOIN_CATEGORY, occurredAt: T }, // receipt-join
+      { verdict: "runner-confirmed", category: TRUSTLEDGER_CATEGORY, occurredAt: T }, // trust-ledger
+      { verdict: "uplift", category: SELFCONFIRM_CATEGORY, occurredAt: T }, // self-confirm ↓
+      { verdict: "uplift", category: SELFCONFIRM_CATEGORY, occurredAt: T },
+      { verdict: "redundant", category: SELFCONFIRM_CATEGORY, occurredAt: T },
+      { verdict: "inconclusive", category: SELFCONFIRM_CATEGORY, occurredAt: T },
+    ])
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    // Worker-token aggregates EXCLUDE the self-confirm corpus (no contamination).
+    expect(out.total).toBe(2)
+    expect(out.byVerdict).toEqual({ confirmed: 1, refuted: 1 })
+    expect(out.counts.uplift).toBeUndefined()
+    expect(out.counts.confirmed?.[SELFCONFIRM_CATEGORY]).toBeUndefined()
+    // The self-confirm corpus: confirmed = uplift + redundant = 3; total = confirmed
+    // + inconclusive = 4. confirmedFraction = 3/4; upliftFraction = uplift/confirmed = 2/3.
+    expect(out.selfConfirm).toEqual({
+      uplift: 2,
+      redundant: 1,
+      inconclusive: 1,
+      confirmed: 3,
+      total: 4,
+      confirmedFraction: 0.75,
+      upliftFraction: 0.667, // 2/3 rounded to 3dp (matches the receipt-join ratio helper)
+    })
+  })
+
+  it("selfConfirm is zeroed (no divide-by-zero) on an empty corpus", async () => {
+    const { do_ } = makeDo()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.selfConfirm).toEqual({
+      uplift: 0,
+      redundant: 0,
+      inconclusive: 0,
+      confirmed: 0,
+      total: 0,
+      confirmedFraction: 0,
+      upliftFraction: 0,
+    })
   })
 
   it("arms a GC alarm after the first record, and the alarm drops out-of-window buckets", async () => {

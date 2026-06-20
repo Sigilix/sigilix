@@ -20,6 +20,7 @@ import { parseWindowBlindnessValidatorMode } from "@/src/lib/ensemble/domain/gat
 import { parseSecurityGroundingValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
+import { parseSelfConfirmMode } from "@/src/lib/verification/confirm-finding-inworker"
 import { parseLogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import { parseLogicInputCompositionMode } from "@/src/lib/ensemble/domain/logic-input-composition"
 import { parseAstEmitFloorMode } from "@/src/lib/degraded-finding-floor"
@@ -195,6 +196,8 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_ASYMMETRY_HINTS: "  SHADOW  ",
       OPENCLAW_TOCTOU_HINTS: "On",
       OPENCLAW_RECEIPTJOIN_MODE: "enforce",
+      // SIG-476 PR2: in-worker self-confirmation gate (off|shadow|on).
+      OPENCLAW_SELFCONFIRM_MODE: "shadow",
       OPENCLAW_LOGIC_PROMPT_BUDGET: "shadow",
       // SIG-369(b): logic-input-composition telemetry flag (off|shadow).
       OPENCLAW_LOGIC_INPUT_COMPOSITION: "shadow",
@@ -246,6 +249,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
       // parsed via each field's own dedicated parser
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
+      selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET),
       logicInputCompositionMode: parseLogicInputCompositionMode(env.OPENCLAW_LOGIC_INPUT_COMPOSITION),
       astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
@@ -300,6 +304,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       toctouHints: "off",
       synthRecovery: "off",
       receiptJoinMode: parseReceiptJoinMode(undefined),
+      selfConfirmMode: parseSelfConfirmMode(undefined),
       logicPromptBudgetMode: parseLogicPromptBudgetMode(undefined),
       logicInputCompositionMode: parseLogicInputCompositionMode(undefined),
       astEmitFloorMode: parseAstEmitFloorMode(undefined),
@@ -373,9 +378,30 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     // Normalization is each parser's own job (its own suite); here we only guard
     // that the edge hands the RAW string to the right parser, so a stray `.trim()`
     // added in parseEnsembleConfig is caught.
-    const env = { OPENCLAW_RECEIPTJOIN_MODE: "  ENFORCE  ", OPENCLAW_TRUST_LEDGER: "On" }
+    const env = {
+      OPENCLAW_RECEIPTJOIN_MODE: "  ENFORCE  ",
+      OPENCLAW_TRUST_LEDGER: "On",
+      OPENCLAW_SELFCONFIRM_MODE: "  Shadow  ",
+    }
     expect(parseEnsembleConfig(env).flags.receiptJoinMode).toBe(parseReceiptJoinMode("  ENFORCE  "))
     expect(parseEnsembleConfig(env).flags.trustLedgerMode).toBe(parseTrustLedgerMode("On"))
+    expect(parseEnsembleConfig(env).flags.selfConfirmMode).toBe(parseSelfConfirmMode("  Shadow  "))
+  })
+})
+
+describe("SIG-476 PR2 parseSelfConfirmMode (OPENCLAW_SELFCONFIRM_MODE)", () => {
+  it("defaults to off when unset", () => {
+    expect(parseSelfConfirmMode(undefined)).toBe("off")
+    expect(parseEnsembleConfig({}).flags.selfConfirmMode).toBe("off")
+  })
+
+  it("parses off | shadow | on (trim + lowercase), everything else → off", () => {
+    expect(parseSelfConfirmMode("off")).toBe("off")
+    expect(parseSelfConfirmMode("  SHADOW  ")).toBe("shadow")
+    expect(parseSelfConfirmMode("On")).toBe("on")
+    expect(parseSelfConfirmMode("")).toBe("off")
+    expect(parseSelfConfirmMode("enforce")).toBe("off") // not a valid value here
+    expect(parseSelfConfirmMode("nonsense")).toBe("off")
   })
 })
 

@@ -58,7 +58,14 @@ import {
   type ReceiptScanResult,
 } from "@/src/lib/verification/verify-finding-receipt"
 import { recordVerificationMetricsBounded } from "@/src/lib/verification-metrics-client"
-import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "@/src/do/verification-metrics"
+import {
+  RECEIPTJOIN_CATEGORY,
+  TRUSTLEDGER_CATEGORY,
+  SELFCONFIRM_CATEGORY,
+  type RecordVerificationArgs,
+  type SelfConfirmVerdict,
+} from "@/src/do/verification-metrics"
+import { confirmFindingAgainstInWorkerAst } from "@/src/lib/verification/confirm-finding-inworker"
 import { annotateFindingTrust } from "@/src/lib/ensemble/domain/gates/trust-ledger-thread"
 import { assessApprovalReadiness } from "@/src/lib/approval-readiness"
 import { chooseReviewEvent, resolveReviewEventOverride, type ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
@@ -473,6 +480,22 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     }
   }
 
+  // SIG-476 PR2: the in-worker self-confirmation gate mode. Read off the threaded
+  // `ensembleConfig.flags` (same convention as anchorPrecision / reviewOutputSurface
+  // below), so no separate orchestrator arg is needed.
+  const selfConfirmMode = ensembleConfig.flags.selfConfirmMode
+
+  // SIG-476 PR2 / SIG Trust Ledger v0: does the finding carry a real manifest
+  // evidenceId (the SIG-108 security-evidence path)? Hoisted to phase scope so BOTH
+  // the self-confirm shadow-assignment block (below) and the trust-ledger baseline
+  // block read the SAME predicate (the baseline uses it to choose deterministic-
+  // grounded vs grounded-model; the self-confirm block uses it to classify an
+  // uplift vs a redundant relabel of an already-GROUNDED finding).
+  const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
+    const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
+    return ev.length > 0 && ev !== "NONE"
+  }
+
   // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED runner
   // receipt is present (receiptScanIndex built above), re-check each submitted
   // score>=4 SECURITY finding with a resolvable evidenceId against HEAD's OWN
@@ -528,6 +551,73 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     // the end). Best-effort + bounded — a record failure NEVER breaks the review.
   }
 
+  // SIG-476 PR2 (in-worker self-confirmation, SHADOW by default): re-check each
+  // submitted score>=4 SECURITY finding with the PR-1 `confirmFindingAgainstInWorkerAst`
+  // helper — CONFIRMED when our OWN in-worker deterministic AST engine independently
+  // flagged the SAME canonical vuln-class at the finding's line (anti-hallucination,
+  // NOT bug-certainty). This block instruments the GO/NO-GO metric (the `selfconfirm`
+  // corpus): how often eligible findings are confirmed (`confirmedFraction`) and how
+  // often that confirmation GENUINELY raises the tier (`upliftFraction`) vs merely
+  // relabels a finding already at deterministic-grounded/runner-confirmed
+  // (`redundant`). MEASURE-ONLY in shadow (never mutates the tier — OPENCLAW_TRUST_LEDGER
+  // is "on" in prod, so a tier mutation in shadow would be a live render change); the
+  // tier ANNOTATE is gated SEPARATELY to "on" only. Independent of trustLedgerMode for
+  // the measurement so the metric accrues even where the ledger is off.
+  if (selfConfirmMode !== "off") {
+    for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
+      const result = confirmFindingAgainstInWorkerAst(finding, astSecurityFindings ?? [])
+      if (result === "no-check") continue
+      // Classify the metric verdict. CONFIRMED is split uplift-vs-redundant by what
+      // the `deterministic-confirmed` tier (rank 5) WOULD do to this finding given the
+      // signals already set above (worker-token-confirmed / runner-confirmed are set;
+      // the trust-ledger baseline runs BELOW this block): it only genuinely RAISES a
+      // finding whose tier-so-far is below it. A runner-confirmed (rank 6) finding is
+      // unchanged → redundant; a finding the baseline would give deterministic-grounded
+      // (rank 4, real manifest evidence) is only a +1 relabel → redundant (the
+      // "near-subset of existing GROUNDED" case the GO/NO-GO watches for); otherwise
+      // the baseline gives grounded-model/body-only-ungrounded (≤ rank 2) and the new
+      // tier genuinely lifts it → uplift.
+      const alreadyGrounded = hasManifestEvidence(finding)
+      let metricVerdict: SelfConfirmVerdict
+      if (result === "inconclusive") {
+        metricVerdict = "inconclusive"
+      } else if (finding.trust?.tier === "runner-confirmed") {
+        metricVerdict = "redundant"
+      } else if (alreadyGrounded) {
+        metricVerdict = "redundant"
+      } else {
+        metricVerdict = "uplift"
+      }
+      console.log(
+        JSON.stringify({
+          event: "verification-selfconfirm",
+          mode: selfConfirmMode,
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding),
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          result,
+          metricVerdict,
+          alreadyGrounded,
+        }),
+      )
+      verificationMetricItems.push({
+        category: SELFCONFIRM_CATEGORY,
+        verdict: metricVerdict,
+        occurredAt: verificationOccurredAt,
+      })
+      // ANNOTATE ONLY in "on" (NOT shadow — shadow must not mutate; OPENCLAW_TRUST_LEDGER
+      // is "on" in prod, so an annotate in shadow would be a live render change).
+      if (selfConfirmMode === "on" && result === "confirmed") {
+        annotateFindingTrust(finding, { signals: ["deterministic-confirmed"] })
+      }
+    }
+  }
+
   // SIG Trust Ledger v0: give every final visible
   // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
   // runner-confirmed — were already set in place above), then record the per-tier
@@ -544,10 +634,6 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
   // so `off` (default) is a true no-op; `on` lets the renderer surface these
   // tiers as the Trust Summary and per-finding pills.
   if (trustLedgerMode !== "off") {
-    const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
-      const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
-      return ev.length > 0 && ev !== "NONE"
-    }
     for (const finding of submissionVerdict.findings) {
       annotateFindingTrust(finding, {
         signals: [hasManifestEvidence(finding) ? "deterministic-grounded" : "grounded-model"],

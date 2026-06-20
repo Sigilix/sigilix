@@ -39,6 +39,23 @@ import { canonicalClassForFinding, coLocatedAstFactIds } from "./verify-finding-
 export type InWorkerConfirmDecision = "confirmed" | "inconclusive" | "no-check"
 
 /**
+ * SIG-476 PR2 — the self-confirmation gate mode (`OPENCLAW_SELFCONFIRM_MODE`).
+ * `off` (default): the gate doesn't run. `shadow`: compute + telemeter the
+ * confirmed/uplift fractions, NO behavior change (never mutates the tier — the
+ * GO/NO-GO metric that decides whether `deterministic-confirmed` earns a distinct
+ * pill or stays a GROUNDED sub-state). `on`: also annotate a `confirmed` finding
+ * with the `deterministic-confirmed` signal. Three-state with `off` default,
+ * mirroring `parseReceiptJoinMode` / `parseTrustLedgerMode`. */
+export type SelfConfirmMode = "off" | "shadow" | "on"
+
+export function parseSelfConfirmMode(raw: string | undefined): SelfConfirmMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "on") return "on"
+  return "off"
+}
+
+/**
  * The underlying identity of an AST fact, normalized away from its wrapper. Both
  * the finding's own `ast:<ruleId>:ast/<ruleId>/<hash>/<line>` evidenceId and a
  * co-located `ast/<ruleId>/<hash>/<line>` fact id reduce to this triple, so two

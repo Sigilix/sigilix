@@ -378,6 +378,14 @@ export interface Env {
   // eligible fraction is measurable before any demote path. NO new GitHub perm.
   // "enforce" reserved (demotion is PR4/5). Review UNCHANGED in all modes.
   OPENCLAW_RECEIPTJOIN_MODE?: string
+  // SIG-476 PR2: in-worker self-confirmation gate — off | shadow | on (default off).
+  // `shadow` runs the PR-1 `confirmFindingAgainstInWorkerAst` join over the submitted
+  // findings and MEASURES the confirmed/uplift fractions (the `selfconfirm` corpus on
+  // VerificationMetricsDO, read at GET /metrics/verification) WITHOUT mutating any tier
+  // — the GO/NO-GO deciding whether `deterministic-confirmed` earns a distinct pill
+  // (PR3) or stays a GROUNDED sub-state. `on` also annotates a confirmed finding with
+  // the `deterministic-confirmed` trust signal. NO render change in any mode (PR3).
+  OPENCLAW_SELFCONFIRM_MODE?: string
   // SIG Trust Ledger v0: off | shadow | on. `off` (default) attaches per-finding
   // trust metadata in-memory but records no telemetry + renders nothing. `shadow`
   // also records the tier distribution (TRUSTLEDGER_CATEGORY on VerificationMetricsDO,

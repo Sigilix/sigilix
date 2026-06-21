@@ -37,6 +37,17 @@ describe("isCredentialName — credential-shaped names match", () => {
     "salt",
     "passwordSalt",
     "bcryptSalt",
+    // SIG-486: HTTP auth-header credentials. authz/bearer = strong; authorization + cookie
+    // = ambiguous-but-secret here (the header VALUE / session cookie).
+    "authorization",
+    "userAuthorization",
+    "authz",
+    "bearer",
+    "cookie",
+    "cookies",
+    "sessionCookie",
+    "authCookie",
+    "signedCookie",
   ]
   for (const name of positives) {
     it(`matches ${name}`, () => expect(isCredentialName(name)).toBe(true))
@@ -69,6 +80,24 @@ describe("isCredentialName — non-secret names do NOT match", () => {
     "seaSalt",
     "basalt",
     "rockSalt",
+    // SIG-486: non-secret authorization PROCESS names (re/pre/de) + names ending in a
+    // non-"authorization" suffix
+    "preauthorization",
+    "reauthorization",
+    "deauthorization",
+    "authorizationStatus",
+    "authorizationLevel",
+    "isAuthorized",
+    // SIG-486: cookie UI / action / flag names (not the value)
+    "cookieConsent",
+    "cookieBanner",
+    "enableCookies",
+    "thirdPartyCookie",
+    "getCookie",
+    "setCookie",
+    "parseCookie",
+    "secureCookie",
+    "validateCookie",
   ]
   for (const name of negatives) {
     it(`does not match ${JSON.stringify(name)}`, () =>

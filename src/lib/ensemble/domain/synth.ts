@@ -40,10 +40,12 @@ export const SPECIALIST_VERDICT_TOKEN_CAP_HIGH = 16_000
 
 /** SIG-484: the per-verdict synth-input cap to use. Multi-batch uncaps (Infinity); the
  *  source-floor-low flag raises to the bounded HIGH cap so score 2-3 findings reach synth
- *  (+ the floor); otherwise `undefined` keeps the default 8k. */
-export function synthInputCapFor(multiBatch: boolean, floorLowActive: boolean): number | undefined {
+ *  (+ the floor) ONLY when it is `on` — `floorLowOn` must be `flags.synthSourceFloorLow ===
+ *  "on"`, NOT `!== "off"`, because raising the cap changes the synth INPUT (a behavior
+ *  change that must NOT happen in `shadow`). Otherwise `undefined` keeps the default 8k. */
+export function synthInputCapFor(multiBatch: boolean, floorLowOn: boolean): number | undefined {
   if (multiBatch) return Number.POSITIVE_INFINITY
-  if (floorLowActive) return SPECIALIST_VERDICT_TOKEN_CAP_HIGH
+  if (floorLowOn) return SPECIALIST_VERDICT_TOKEN_CAP_HIGH
   return undefined
 }
 

@@ -49,6 +49,7 @@ import { noPrototypePollution } from "./rules/no-prototype-pollution"
 import { noXxe } from "./rules/no-xxe"
 // SIG-392 (b14): deterministic fail-open hardcoded-secret floor (CWE-798).
 import { noHardcodedSecretFallback } from "./rules/no-hardcoded-secret-fallback"
+import { noSecretInLogSink } from "./rules/no-secret-in-log-sink"
 // SIG-392 (b20): deterministic HMAC-over-reserialized-body floor (CWE-345/347).
 import { noHmacOverReserializedBody } from "./rules/no-hmac-over-reserialized-body"
 // SIG-477 PR-0: ReDoS grounding floor (CWE-1333; grounds a model finding only).
@@ -113,6 +114,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noXxe,
   // SIG-392 (b14): security-specialist deterministic fail-open hardcoded-secret floor (CWE-798, severity: warning).
   noHardcodedSecretFallback,
+  // SIG-485: security deterministic secret-in-log recall floor (CWE-532, severity: warning).
+  noSecretInLogSink,
   noHmacOverReserializedBody,
   // SIG-477 PR-0: security-specialist ReDoS grounding floor (CWE-1333, severity: warning).
   noRedos,

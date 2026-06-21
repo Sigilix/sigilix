@@ -287,6 +287,11 @@ export interface Env {
   // (default) | shadow (telemeter overlap/new/error only) | on (merge pre-synth).
   OPENCLAW_SECURITY_KUNION?: string
 
+  // SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 findings at the
+  // vague-prefix / uncited-testing gates. off (default) | shadow (count would-saves)
+  // | on (demote sev>=4 to a P2 note instead of dropping; low-sev still drops).
+  OPENCLAW_GATE_DEMOTE_HIGH_SEV?: string
+
   // SIG-317 step 6 Part A: deterministic AST-emit injection floor. off (default)
   // | shadow (log what WOULD inject) | on (inject). Force-surfaces an
   // `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

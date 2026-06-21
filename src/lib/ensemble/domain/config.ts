@@ -143,6 +143,11 @@ export interface EnsembleFeatureFlags {
    *  (recall-suffixed) security pass; `on` unions its findings into the security verdict
    *  pre-synth, `shadow` telemeters overlap/new/error only (no behavior change). */
   securityKUnionMode: AstScanMode
+  /** SIG-488 (recall #5): `OPENCLAW_GATE_DEMOTE_HIGH_SEV` (off|shadow|on, default off).
+   *  `on` = a sev>=4 finding the vague-prefix / uncited-testing HARD-DROP heuristics
+   *  would delete is demoted to a P2 note instead (visible, non-blocking) rather than
+   *  lost; low-sev nits still drop. `shadow` telemeters the would-saves only. */
+  highSevGateDemoteMode: AstScanMode
   astEmitFloorMode: AstEmitFloorMode
   trustLedgerMode: TrustLedgerMode
   reviewMemoryClaimShadowMode: ClaimShadowMode

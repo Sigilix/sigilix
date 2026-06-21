@@ -7,7 +7,7 @@
 //      gets dropped, the `droppedForVaguePrefix` counter increments,
 //      and the surviving findings flow through correctly.
 
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { hasVaguePrefix, validateForSubmission, VAGUE_PREFIXES } from "@/src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "@/src/lib/triage-pr-review"
 
@@ -360,5 +360,82 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
     expect(result.droppedForVaguePrefix).toBe(1)
     expect(result.demotedScore1).toBe(0)
     expect(result.verdict.findings).toHaveLength(0)
+  })
+})
+
+// ── SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 ──
+
+describe("validateForSubmission — SIG-488 high-sev gate demote (recall #5)", () => {
+  const highSevVague = () => ({
+    verdict: {
+      summary: "Test",
+      confidence: 4,
+      confidenceReason: "Test reason.",
+      findings: [finding({ headline: "Ensure the admin check runs before the destructive delete", score: 5, line: 1 })],
+    },
+    provenance: {
+      findings: [
+        { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+      ],
+      dropped: [],
+      softened: [],
+    } satisfies SynthesizerProvenance,
+  })
+  const verdicts = () => makeSpecialistVerdicts() as any
+
+  it("off (default): a sev>=4 vague-prefix finding still HARD-DROPS (byte-identical)", () => {
+    const result = validateForSubmission({
+      synthOutput: highSevVague(),
+      reviewable: makeReviewable(),
+      specialistVerdicts: verdicts(),
+    })
+    expect(result.droppedForVaguePrefix).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+  })
+
+  it("on: a sev>=4 vague-prefix finding is DEMOTED to P2 (kept, score 3) not dropped", () => {
+    const result = validateForSubmission({
+      synthOutput: highSevVague(),
+      reviewable: makeReviewable(),
+      specialistVerdicts: verdicts(),
+      highSevGateDemoteMode: "on",
+    })
+    expect(result.droppedForVaguePrefix).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.headline).toContain("Ensure the admin check")
+    expect(result.verdict.findings[0]!.score).toBe(3)
+  })
+
+  it("on: a LOW-sev (score 3) vague-prefix finding still drops (only sev>=4 is saved)", () => {
+    const synthOutput = highSevVague()
+    synthOutput.verdict.findings = [finding({ headline: "Consider extracting a helper here", score: 3, line: 1 })]
+    const result = validateForSubmission({
+      synthOutput,
+      reviewable: makeReviewable(),
+      specialistVerdicts: verdicts(),
+      highSevGateDemoteMode: "on",
+    })
+    expect(result.droppedForVaguePrefix).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+  })
+
+  it("shadow: a sev>=4 vague-prefix finding still DROPS but logs a would-save", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    try {
+      const result = validateForSubmission({
+        synthOutput: highSevVague(),
+        reviewable: makeReviewable(),
+        specialistVerdicts: verdicts(),
+        highSevGateDemoteMode: "shadow",
+      })
+      expect(result.droppedForVaguePrefix).toBe(1)
+      expect(result.verdict.findings).toHaveLength(0)
+      const ev = logSpy.mock.calls
+        .map((c) => JSON.parse(c[0] as string))
+        .find((e) => e.event === "pr-review-highsev-gate-demote")
+      expect(ev).toMatchObject({ reason: "vague-prefix", mode: "shadow", saved: false, score: 5 })
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 })

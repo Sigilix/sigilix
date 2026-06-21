@@ -436,6 +436,13 @@ OPENCLAW_SYNTH_SOURCE_FLOOR_LOW = "on"
 # finds new findings: ship "shadow" to measure `newFindings`/`overlap`, then flip
 # "on" (or back to "off") based on that signal. Rollback: "shadow"/"off".
 OPENCLAW_SECURITY_KUNION = "shadow"
+# SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 at the vague-prefix +
+# uncited-testing gates. off|shadow|on. "on" = a sev>=4 finding those HARD-DROP
+# heuristics would DELETE is demoted to a P2 non-blocking note instead (visible, never
+# blocks) rather than lost; low-sev nits still drop. Recall-safe + precision-bounded:
+# can only ADD a finding (was being dropped), P2-capped so it can never add a P0/P1 FP.
+# Shipped "on" for the recall probe. Rollback: "shadow" (count-only) / "off" (inert).
+OPENCLAW_GATE_DEMOTE_HIGH_SEV = "on"
 
 # SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
 # `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

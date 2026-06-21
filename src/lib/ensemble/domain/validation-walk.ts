@@ -46,22 +46,13 @@ import {
   isSelfOriginatedSecurityFinding,
   sourceRolesInclude,
   firstSpecialistRoleFromSourceIds,
+  type HardDropResult,
   type ResolvedValidationArgs,
   type ValidationContext,
   type ValidationState,
 } from "./validation-args"
+import { resolveVaguePrefixGate, resolveUncitedTestingGate } from "./validation-highsev-demote"
 import type { SynthesizerProvenance } from "./validation"
-
-/**
- * The result of running the HARD-DROP gate sequence on one finding. `kind:
- * "continue"` means the original loop would have `continue`d here (the finding
- * was dropped or demoted-to-body and pushed to `unanchoredFindings` already, all
- * via mutations on the shared `state`); `kind: "proceed"` carries the (possibly
- * cloned + score-damped + evidence-enriched) finding forward to the demote
- * gates. The PR-12 exit-arm pattern — the loop's `continue` stays in the
- * skeleton.
- */
-type HardDropResult = { kind: "continue" } | { kind: "proceed"; finding: PrReviewFinding }
 
 /**
  * SIG-386 (PR2) — the HARD-DROP gate sequence for ONE finding: hallucination
@@ -230,10 +221,9 @@ function applyHardDropGates(
   // the advisory bucket. Runs AFTER hallucination guard so the
   // counter attribution is unambiguous (hallucinated findings
   // shouldn't have meaningful prefix content anyway).
-  if (hasVaguePrefix(f)) {
-    state.droppedForVaguePrefix++
-    return { kind: "continue" }
-  }
+  // SIG-488 (recall #5): drops a vague-prefix finding — but DEMOTES a sev>=4 one to a
+  // P2 note (mode `on`) instead of deleting it. off/shadow/low-sev → byte-identical drop.
+  if (hasVaguePrefix(f)) return resolveVaguePrefixGate(f, args, state)
 
   // SIG-113: testing-evidence citation gate. Drops
   // `category: "testing"` findings that don't cite evidence —
@@ -243,12 +233,10 @@ function applyHardDropGates(
   // nit also drops (no advisory bucket leak). Runs AFTER vague-
   // prefix + hallucination guards so the counter attribution
   // stays clean.
+  // SIG-488 (recall #5): drops an uncited testing finding — but DEMOTES a sev>=4 one
+  // to a P2 note (mode `on`) instead of deleting it. off/shadow/low-sev → byte-identical.
   const citationCheck = evaluateTestingFindingCitation(f, args.testingEvidence, args.coverageGaps)
-  if (!citationCheck.keep) {
-    state.droppedForUncitedTestingEvidence++
-    args.onTestingFindingDropped?.(f, citationCheck.reason)
-    return { kind: "continue" }
-  }
+  if (!citationCheck.keep) return resolveUncitedTestingGate(f, citationCheck.reason, args, state)
 
   // SIG-111: tests-finding specificity gate. Runs IMMEDIATELY AFTER
   // the SIG-113 citation gate (disjoint question: SIG-113 asks "did

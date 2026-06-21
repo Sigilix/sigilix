@@ -258,6 +258,9 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     // to "enforce". Reuses the `pr-review-finding-rejected-validation`
     // event with a `gate: "tests"` discriminator.
     testsValidatorMode: ensembleConfig.validatorModes.testsValidatorMode,
+    // SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 at the
+    // vague-prefix / uncited-testing gates (off|shadow|on).
+    highSevGateDemoteMode: ensembleConfig.flags.highSevGateDemoteMode,
     // SIG-118: thread the real coverage-gap set so both the SIG-113
     // citation gate and the SIG-111 specificity gate accept a
     // `coverageGap:<path>:<line>` ref as a genuine missing-coverage

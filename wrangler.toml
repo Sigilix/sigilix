@@ -770,14 +770,16 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # prod token accounting is untouched (cost-isolated). Gathers organic large-PR
 # data. "on" (output-union enforce) ships in SIG-432, gated on a distributed-bug
 # fixture proving the recall delta. Code default is off (parseEnsembleConfig).
-# 2026-06-15: paused OFF earlier today (the shadow batch makes REAL o3 calls on
-# every spillover PR — telemetry-cost-isolated but still BILLED on OpenRouter —
-# i.e. untracked credit burn). RE-ENABLED "shadow" (same date, founder) as the
-# deliberate, time-boxed cost+coverage canary the OFF note reserved: size the
-# spend on a few dense PRs (#584 landed the "on"/enforce path dark), then flip
-# back OFF once sized — or to "on" if the recall delta justifies the spend. The
-# posted review is UNCHANGED in shadow (recall-safe by construction).
-OPENCLAW_REVIEW_MULTIBATCH_MODE = "shadow"
+# 2026-06-20 (SIG-418 lever #3, founder-authorized for large PRs): flipped to "on"
+# (output-union enforce). Large PRs (>12k-token diff) now review their spillover
+# batches + a cross-batch seam pass; the union feeds synth and the recall floors run
+# over the FULL union. Recall-safe by construction: the synth-budgeted deadline caps
+# wall-clock (reserves the synth tail) and the floors can only ADD, never drop. Cost:
+# ~2-4x model spend on large PRs ONLY (rare; small PRs never spill → unchanged). Now
+# observable in prod via the `multibatch-enforce-summary` event (spilloverFilesReviewed /
+# spilloverFindingCount / batchesLaunched / haltReason / elapsedMs). Rollback: "shadow"
+# (telemetry only, output unchanged) or "off" (inert).
+OPENCLAW_REVIEW_MULTIBATCH_MODE = "on"
 
 # SIG-437: `@sigilix summary` webhook feature. "on" => the trigger enqueues a job
 # that writes a structured PR summary into the PR description. A webhook/product

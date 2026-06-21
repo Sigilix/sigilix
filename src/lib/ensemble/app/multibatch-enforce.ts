@@ -294,6 +294,51 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
   }
 }
 
+/** SIG-418 lever #3: emit `multibatch-enforce-summary` — observability for the
+ *  ENFORCE path on real large PRs once flipped on. Companion to (NOT identical-unit
+ *  with) the shadow `multibatch-summary`: fields are named for exactly what they
+ *  count here — recovered coverage, recovered findings (the cost-justification
+ *  signal), budget/halt state, per-role-verdict failures. Only fires when enforce ran. */
+export function emitMultiBatchEnforceSummary(
+  args: {
+    owner: string
+    repo: string
+    prNumber: number
+    headSha: string
+    startMs: number
+    spilloverBatches: readonly (readonly DiffFileBlock[])[]
+  },
+  result: MultiBatchEnforceResult,
+): void {
+  const spilloverFindingCount = result.collected.reduce((n, v) => n + (v.verdict?.findings.length ?? 0), 0)
+  // Per ROLE-verdict failures (one collected entry per batch×role), NOT per-batch —
+  // distinct unit from the shadow summary's `erroredBatches`, hence the distinct name.
+  const erroredRoleVerdicts = result.collected.filter((v) => v.verdict === null).length
+  console.log(
+    JSON.stringify({
+      event: "multibatch-enforce-summary",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      headSha: args.headSha.slice(0, 7),
+      mode: "on",
+      spilloverBatchesAvailable: args.spilloverBatches.length,
+      batchesLaunched: result.batchesLaunched,
+      unlaunchedBatches: result.unlaunchedBatches.length,
+      haltedEarly: result.haltedEarly,
+      haltReason: result.haltReason,
+      // Spillover files actually reviewed beyond the posted batch[0] (disjoint from
+      // batch[0] by construction; the seam pass re-reviews already-counted files, so
+      // it is NOT added here). = the recovered-coverage signal.
+      spilloverFilesReviewed: result.launchedBatches.reduce((n, b) => n + b.length, 0),
+      // recovered findings (incl. the seam pass) + per-role-verdict failure count.
+      spilloverFindingCount,
+      erroredRoleVerdicts,
+      elapsedMs: Date.now() - args.startMs,
+    }),
+  )
+}
+
 export async function runMultiBatchEnforceForSpecialists(args: {
   enabled: boolean
   env: Env
@@ -369,24 +414,28 @@ export async function runMultiBatchEnforceForSpecialists(args: {
     graphBlastCallerPaths: args.graphBlastCallerPaths,
     graphBlastDependentPaths: args.graphBlastDependentPaths,
   })
-  if (seamBatch.length === 0) return result
-  const seam = await runMultiBatchEnforce({
-    owner: args.owner,
-    repo: args.repo,
-    prNumber: args.prNumber,
-    headSha: args.headSha,
-    perfCtx: args.perfCtx,
-    orchCtrl: args.orchCtrl,
-    startMs: args.startMs,
-    spilloverBatches: [seamBatch],
-    roles: args.roles,
-    currentSourceJsonChars:
-      args.currentSourceJsonChars +
-      result.launchedBatches.reduce((sum, batch) => sum + batchToDiff(batch).length, 0) +
-      JSON.stringify(result.collected.map((v) => v.verdict)).length,
-    maxSynthInputChars: MAX_MULTIBATCH_SYNTH_INPUT_CHARS,
-    firstBatchIdx: args.spilloverBatches.length + 1,
-    runRole,
-  })
-  return { ...result, collected: [...result.collected, ...seam.collected] }
+  let finalResult = result
+  if (seamBatch.length > 0) {
+    const seam = await runMultiBatchEnforce({
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      headSha: args.headSha,
+      perfCtx: args.perfCtx,
+      orchCtrl: args.orchCtrl,
+      startMs: args.startMs,
+      spilloverBatches: [seamBatch],
+      roles: args.roles,
+      currentSourceJsonChars:
+        args.currentSourceJsonChars +
+        result.launchedBatches.reduce((sum, batch) => sum + batchToDiff(batch).length, 0) +
+        JSON.stringify(result.collected.map((v) => v.verdict)).length,
+      maxSynthInputChars: MAX_MULTIBATCH_SYNTH_INPUT_CHARS,
+      firstBatchIdx: args.spilloverBatches.length + 1,
+      runRole,
+    })
+    finalResult = { ...result, collected: [...result.collected, ...seam.collected] }
+  }
+  emitMultiBatchEnforceSummary(args, finalResult)
+  return finalResult
 }

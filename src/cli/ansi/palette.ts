@@ -2,8 +2,10 @@
 // category hexes MIRROR the canonical badge-assets.ts style tables, but are
 // RE-DECLARED here (not imported) on purpose: importing badge-assets.ts builds
 // the baked-glyph SVG table at module load and throws if a glyph is missing —
-// unsafe to drag into the CLI runtime. `palette.test.ts` asserts every hex below
-// still equals the badge SVG, so this copy can never silently drift.
+// unsafe to drag into the CLI runtime. `palette.test.ts` drift-guards the
+// SEVERITY / TRUST / CATEGORY hexes against the badge SVGs (and locks
+// CATEGORY_FALLBACK to CATEGORY_HEX.docs). THEME is CLI-original (the approved
+// red splash/panel theme) with no badge-assets counterpart, so it is not guarded.
 
 import type { FindingView } from "@/src/cli/render/finding-view"
 
@@ -47,16 +49,16 @@ export const CATEGORY_FALLBACK = { bg: "#334155", fg: "#CBD5E1" } as const
  * review panel and the animated splash so they stay one source of truth.
  */
 export const THEME = {
-  bg: "#0d0d12",
-  red: "#ef4444",
-  redHi: "#f87171",
-  redDeep: "#7f1d1d",
-  text: "#e2e8f0",
-  dim: "#8b95a7",
-  white: "#f8fafc",
-  diffMinus: "#f87171", // standard diff deletion (red)
-  diffPlus: "#4ade80", // standard diff addition (green)
-  star: "#39414f",
-  star2: "#5b6479",
-  starHi: "#c2cad8",
+  bg: "#0D0D12",
+  red: "#EF4444",
+  redHi: "#F87171",
+  redDeep: "#7F1D1D",
+  text: "#E2E8F0",
+  dim: "#8B95A7",
+  white: "#F8FAFC",
+  diffMinus: "#F87171", // standard diff deletion (red)
+  diffPlus: "#4ADE80", // standard diff addition (green)
+  star: "#39414F",
+  star2: "#5B6479",
+  starHi: "#C2CAD8",
 } as const

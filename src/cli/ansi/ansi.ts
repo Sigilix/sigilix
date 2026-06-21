@@ -44,6 +44,11 @@ export interface PaintOptions {
 /**
  * Wrap `text` in the requested SGR codes, ALWAYS closing with RESET so styles
  * never leak into subsequent output. With no options, returns `text` unchanged.
+ *
+ * LEAF-ONLY / NON-NESTABLE: the trailing RESET clears ALL attributes, so a
+ * painted span placed INSIDE another painted span ends the outer style at the
+ * inner RESET. Compose by painting discrete leaves (pill, headline, path) and
+ * concatenating — never paint() a string that already contains paint() output.
  */
 export function paint(text: string, opts: PaintOptions = {}): string {
   let prefix = ""
@@ -57,7 +62,10 @@ export function paint(text: string, opts: PaintOptions = {}): string {
 
 // Built via RegExp(ESC) rather than a control char in a regex literal (no-control-regex).
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g")
-/** Strip SGR escape sequences — for visible-width math and tests. */
+/**
+ * Strip SGR (color) escape sequences. NB: `stripAnsi(s).length` is ASCII visible
+ * width only — NOT column-accurate for wide/CJK/emoji/combining glyphs.
+ */
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "")
 }

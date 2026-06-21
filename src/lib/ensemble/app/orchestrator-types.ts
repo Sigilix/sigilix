@@ -24,6 +24,7 @@
 // `import("../../dynamic-dispatcher")`). It never imports the orchestrator god-file.
 
 import type { Env } from "@/src/shared/types/env"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import type { SpecialistRole, RouterDecision } from "@/src/lib/ensemble-router"
 import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
@@ -119,6 +120,21 @@ export interface EnsembleHandlerArgs {
    * "off"). Absent on all other enqueue paths.
    */
   forceFullCoverage?: boolean
+  /**
+   * SIG-304 (review CLI): a pre-built GitHubClient injected by a headless/Node
+   * caller. When present, the orchestrator uses it instead of `buildClient(env,
+   * installationId)` (skips the GitHub-App id/key + KV-token cache). Absent on every
+   * prod/Worker path → byte-identical behavior.
+   */
+  githubClient?: GitHubClient
+  /**
+   * SIG-304 (review CLI): headless dry-run. When true the orchestrator runs the full
+   * review pipeline but performs NO side effects — no posting, no requeue, no
+   * merge-on-approve, no skip-notice, no publish — and returns the built review on
+   * `EnsembleResult.dryRunReview`. The stale-head / merged-on-approve short-circuits
+   * are skipped (a local diff is authoritative). Absent on every prod path.
+   */
+  dryRun?: boolean
 }
 
 export interface EnsembleTelemetry {

@@ -33,6 +33,7 @@ import {
   buildDeterministicErroredReviewMeta,
   runBailWithSkipNotice,
   maybeEmptyDeltaSkip,
+  dryRunResult,
 } from "./orchestrator-helpers"
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
@@ -164,7 +165,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   })
 
   try {
-    const client = await buildClient(env, installationId)
+    const client = args.githubClient ?? (await buildClient(env, installationId)) // SIG-304: injectable for CLI
     clientForFetchSummary = client
 
     // SIG-366: the ARC-280 skip-notice bail moved (verbatim) to
@@ -187,22 +188,18 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         telemetry,
         cache,
         deterministicCheckAnnotations,
+        ...(args.dryRun ? { dryRun: true } : {}), // SIG-304: dry-run → skipped, no notice
       })
 
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
-    if (meta.head?.sha && meta.head.sha !== headSha) {
-      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` —
-      // the dispatcher short-circuits Phase 3 on `stale_head`, so this
-      // path doesn't actually fall back. Leaving it true would
-      // overcount Phase 3 saves and blur stale-head telemetry.
+    if (meta.head?.sha && meta.head.sha !== headSha && !args.dryRun) {
+      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` — the dispatcher
+      // short-circuits Phase 3 on `stale_head`; leaving it true overcounts saves.
       telemetry.fellBackReason = "stale_head_before_fanout"
-      // ARC-250: hand off to the helper for structured telemetry + a
-      // user-visible sticky comment. ARC-251: helper auto-requeues
-      // against the live SHA when depth < cap; falls through to the
-      // sticky on exhaustion. Either way we return `stale_head` so
-      // the dispatcher does NOT fall through to Phase 3 (which would
-      // also stale-head and post a duplicate sticky / second requeue).
+      // ARC-250/251: helper does structured telemetry + a sticky comment, and
+      // auto-requeues the live SHA when depth < cap. We return `stale_head` so the
+      // dispatcher does NOT fall through to Phase 3 (duplicate sticky / second requeue).
       await handleStaleHead({
         env,
         owner,
@@ -233,7 +230,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // guard further down (post-synth) still calls `checkIsPrMerged`
     // because by then the cached `meta` is ~30-60s old and the merge
     // may have happened during fan-out.
-    if (meta.merged_at !== null && meta.merged_at !== undefined) {
+    if (meta.merged_at !== null && meta.merged_at !== undefined && !args.dryRun) {
       const mergedAtMs = new Date(meta.merged_at).getTime()
       telemetry.fellBackReason = "merged_before_fanout"
       const out = await submitMergedOnApprove({
@@ -695,7 +692,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // posted-return sites below so it only runs after a successful
     // GitHub submit.
     const meta2 = await client.getPullRequest(owner, repo, prNumber)
-    if (meta2.head?.sha && meta2.head.sha !== headSha) {
+    if (meta2.head?.sha && meta2.head.sha !== headSha && !args.dryRun) {
       // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3`
       // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
@@ -792,7 +789,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // computed is discarded — submitting it as REQUEST_CHANGES would compete
     // with the merge.
     const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
-    if (mergeGuard.shouldSkip) {
+    if (mergeGuard.shouldSkip && !args.dryRun) {
       telemetry.fellBackReason = "merged_during_review"
       const out = await submitMergedOnApprove({
         client,
@@ -877,6 +874,8 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     })
     findingMarkers = findingMarkersAfterBuild
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)
+    // SIG-304: dry-run cut — return the built review without publishing.
+    if (args.dryRun) return dryRunResult(telemetry, submissionVerdict, renderableUnanchoredForSubmission)
     // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, and persistence.
     return attachInvariantLensAmendmentWork(
       await publishReviewSubmission({

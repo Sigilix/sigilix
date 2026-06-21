@@ -32,6 +32,7 @@ import {
   type ValidatedOutput,
 } from "@/src/lib/ensemble/domain/validation"
 import { finalize, type ReviewMeta } from "./session"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -208,8 +209,15 @@ export async function runBailWithSkipNotice(args: {
   telemetry: EnsembleTelemetry
   cache: ReturnType<typeof createRetrievalCache> | null
   deterministicCheckAnnotations: CheckRunAnnotation[] | undefined
+  /** SIG-304 (review CLI): dry-run — return a "skipped" result WITHOUT posting the notice. */
+  dryRun?: boolean
 }): Promise<EnsembleResult> {
   const { reason, opts, env, client, owner, repo, prNumber, headSha, telemetry, cache } = args
+  // SIG-304: a headless/CLI dry-run never posts a skip-notice comment. The CLI reads
+  // status "skipped" with no `dryRunReview` as "nothing to review".
+  if (args.dryRun) {
+    return finalize(telemetry, env, "skipped", cache)
+  }
   const out = await postReviewSkipNotice({
     env,
     client,
@@ -239,6 +247,20 @@ export async function runBailWithSkipNotice(args: {
     cache,
     buildDeterministicErroredReviewMeta(args.deterministicCheckAnnotations),
   )
+}
+
+/**
+ * SIG-304 (review CLI): the `EnsembleResult` a `dryRun` orchestrator run returns —
+ * the fully-built review (final validated verdict + body-only findings) carried out
+ * on `dryRunReview`, with status "skipped" because nothing was posted. Kept here (not
+ * inline) so the orchestrator god-file stays under its line budget.
+ */
+export function dryRunResult(
+  telemetry: EnsembleTelemetry,
+  verdict: PrReviewVerdict,
+  unanchoredFindings: readonly PrReviewFinding[],
+): EnsembleResult {
+  return { status: "skipped", telemetry, dryRunReview: { verdict, unanchoredFindings } }
 }
 
 /**

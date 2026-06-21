@@ -27,6 +27,8 @@ import {
   applySynthSourceFindingFloor,
   recoverTruncatedSynthFindings,
   injectUnmatchedAstEmits,
+  SYNTH_SOURCE_FLOOR_MIN_SCORE,
+  SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
 } from "@/src/lib/degraded-finding-floor"
 import { collapseNearDuplicateFindings } from "@/src/lib/ensemble/domain/near-dup-collapse"
 import { collapseCoverageStamps } from "@/src/lib/ensemble/domain/coverage-stamp-collapse"
@@ -145,7 +147,7 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
   // pass through the normal hallucination, grounding, validator, anchor, and
   // rendering gates below.
   {
-    const floored = applySynthSourceFindingFloor({
+    const floorArgs = {
       findings: effectiveSynthVerdict.findings,
       provenanceFindings: effectiveSynthProvenance.findings,
       provenanceDropped: effectiveSynthProvenance.dropped,
@@ -157,7 +159,35 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
       // guard (validateForSubmission's `astFindingIds`, below). A spoofed
       // `<id>` is NOT honored, so the floor restores the finding (recall-safe).
       astFindingIds: new Set(astResult.findings.map((f) => f.astFindingId)),
-    })
+    }
+    // SIG-484: `on` lowers the floor to score>=2 (restores the score 2-3 source
+    // findings the synth thins on dense PRs); `off`/`shadow` keep the score>=4 floor.
+    const floorLowMode = ensembleConfig.flags.synthSourceFloorLow
+    const appliedMinScore = floorLowMode === "on" ? SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW : SYNTH_SOURCE_FLOOR_MIN_SCORE
+    const floored = applySynthSourceFindingFloor({ ...floorArgs, minScore: appliedMinScore })
+    // SIG-484 shadow: measure what the LOWERED floor WOULD additionally restore (the
+    // score 2-3 delta) without applying it — the recall-gain signal to grade before flip.
+    if (floorLowMode === "shadow") {
+      const shadow = applySynthSourceFindingFloor({ ...floorArgs, minScore: SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW })
+      const wouldRestoreDelta = shadow.restored.length - floored.restored.length
+      if (wouldRestoreDelta > 0) {
+        console.log(
+          JSON.stringify({
+            event: "pr-review-synth-source-floor-low-shadow",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            appliedMinScore,
+            lowMinScore: SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
+            wouldRestoreDelta,
+            wouldRestore: shadow.restored
+              .filter((r) => r.score < appliedMinScore)
+              .map((r) => ({ role: r.role, id: r.id, score: r.score })),
+          }),
+        )
+      }
+    }
     if (floored.restored.length > 0) {
       effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
       effectiveSynthProvenance = {
@@ -171,6 +201,7 @@ export function applyRecallFloors(a: RecallFloorsArgs): RecallFloorsResult {
           repo,
           prNumber,
           headSha: headSha.slice(0, 7),
+          minScore: appliedMinScore,
           restoredCount: floored.restored.length,
           restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
         }),

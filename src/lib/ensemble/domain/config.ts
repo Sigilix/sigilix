@@ -134,6 +134,10 @@ export interface EnsembleFeatureFlags {
   logicInputCompositionMode: LogicInputCompositionMode
   /** Normalized `OPENCLAW_SYNTH_RECOVERY` (default "off", trim + lowercase). */
   synthRecovery: AstScanMode
+  /** SIG-484: `OPENCLAW_SYNTH_SOURCE_FLOOR_LOW` (off|shadow|on, default off). Lowers the
+   *  full-coverage synth source floor 4→2 + raises the per-verdict synth-input cap to the
+   *  bounded HIGH value. `shadow` logs the would-restore delta only (no behavior change). */
+  synthSourceFloorLow: AstScanMode
   astEmitFloorMode: AstEmitFloorMode
   trustLedgerMode: TrustLedgerMode
   reviewMemoryClaimShadowMode: ClaimShadowMode

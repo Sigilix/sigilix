@@ -107,6 +107,13 @@ export function applyDegradedCoverageFindingFloor(args: {
 /** Minimum specialist-finding score the full-coverage source floor restores. */
 export const SYNTH_SOURCE_FLOOR_MIN_SCORE = 4
 
+/** SIG-484: the LOWERED floor (gated by `synthSourceFloorLow`). The default floor=4
+ *  leaves score 2-3 source findings the LLM-synth thins/over-merges on dense PRs
+ *  permanently lost (the score>=2 degraded floor only runs when a specialist FAILED).
+ *  Lowering to 2 re-aligns the deterministic floor with the synth prompt's retention
+ *  directive (protect score>=2). Same orphaned + not-proof-dropped gates → recall-safe. */
+export const SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW = 2
+
 const SOURCE_FLOOR_ROLE_PRIORITY: Record<SpecialistRole, number> = {
   security: 4,
   logic: 3,

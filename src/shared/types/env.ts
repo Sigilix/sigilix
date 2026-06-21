@@ -278,6 +278,11 @@ export interface Env {
   // provenance but truncated out of verdict.findings on target-rich PRs.
   OPENCLAW_SYNTH_RECOVERY?: string
 
+  // SIG-484: lower the full-coverage synth source floor 4→2 + raise the per-verdict
+  // synth-input cap (bounded). off (default) | shadow (log the would-restore delta) |
+  // on (apply). Recovers score 2-3 source findings the synth thins on dense PRs.
+  OPENCLAW_SYNTH_SOURCE_FLOOR_LOW?: string
+
   // SIG-317 step 6 Part A: deterministic AST-emit injection floor. off (default)
   // | shadow (log what WOULD inject) | on (inject). Force-surfaces an
   // `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

@@ -52,7 +52,7 @@ import { decideEarlyExitAction, computeDegradedCoverage } from "@/src/lib/ensemb
 import { type PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
 import type { CollectedVerdict, SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
-import { buildLeverOrigins, buildSynthInputVerdicts } from "@/src/lib/ensemble/domain/synth"
+import { buildLeverOrigins, buildSynthInputVerdicts, synthInputCapFor } from "@/src/lib/ensemble/domain/synth"
 import type { ShadowBakeoffState } from "./shadow-settle"
 import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
@@ -925,7 +925,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
   const synthInputVerdicts = buildSynthInputVerdicts(
     verdictsForSynth,
-    multiBatchEnforce !== null ? Number.POSITIVE_INFINITY : undefined,
+    synthInputCapFor(multiBatchEnforce !== null, ensembleConfig.flags.synthSourceFloorLow !== "off"),
   )
   const synthPhase = await runSynthPhase({
     env,

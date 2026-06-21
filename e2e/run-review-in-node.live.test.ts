@@ -25,8 +25,10 @@ const FIXTURE = {
 
 // READ methods pass through to the real client; EVERYTHING else (create/submit/
 // update/delete/dismiss/add/reply/resolve …) is recorded + NO-OP'd, so a stray write
-// on any code path can neither post to GitHub nor escape the assertion.
-const READ_PREFIX = /^(get|list|search|restGet|fetch)/
+// on any code path can neither post to GitHub nor escape the assertion. NOTE: a few
+// reads (e.g. `compareCommits`) don't match this prefix and would be NO-OP'd, but
+// they're not on the review hot path; revisit if a compare read joins it.
+const READ_PREFIX = /^(get|list|search|restGet|fetch|compare)/
 
 function recordingClient(real: GitHubClient): { client: GitHubClient; writeCalls: string[] } {
   const writeCalls: string[] = []

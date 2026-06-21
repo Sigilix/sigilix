@@ -104,13 +104,6 @@ export interface ReviewMeta {
 export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
 
 /**
- * The review-result contract, generic over the telemetry type the handler holds.
- * The god-file binds `Tel = EnsembleTelemetry` (the concrete, public
- * `EnsembleResult`); this generic exists so the result can name the orchestrator's
- * full telemetry shape without this module importing the god-file-private
- * `EnsembleTelemetry` interface (see the header note).
- */
-/**
  * SIG-304 (review CLI): the built review carried out of a `dryRun` orchestrator run
  * — the final validated/demoted verdict (anchored findings) plus the body-only
  * (unanchored) findings — so a headless/Node caller can render PR-parity output
@@ -121,6 +114,13 @@ export interface DryRunReview {
   unanchoredFindings: readonly PrReviewFinding[]
 }
 
+/**
+ * The review-result contract, generic over the telemetry type the handler holds.
+ * The god-file binds `Tel = EnsembleTelemetry` (the concrete, public
+ * `EnsembleResult`); this generic exists so the result can name the orchestrator's
+ * full telemetry shape without this module importing the god-file-private
+ * `EnsembleTelemetry` interface (see the header note).
+ */
 export interface EnsembleResult<Tel = FinalizeTelemetry> {
   status: EnsembleResultStatus
   telemetry: Tel

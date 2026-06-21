@@ -132,7 +132,9 @@ export interface EnsembleHandlerArgs {
    * review pipeline but performs NO side effects — no posting, no requeue, no
    * merge-on-approve, no skip-notice, no publish — and returns the built review on
    * `EnsembleResult.dryRunReview`. The stale-head / merged-on-approve short-circuits
-   * are skipped (a local diff is authoritative). Absent on every prod path.
+   * are skipped (a local diff is authoritative). Absent on every prod path. NOTE
+   * (Codex): do NOT also pass `statusReporter` in dry-run — it patches an overview
+   * comment via its own client; the CLI/local-env path never supplies one.
    */
   dryRun?: boolean
 }

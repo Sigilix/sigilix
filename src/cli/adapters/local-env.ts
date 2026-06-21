@@ -44,13 +44,20 @@ function inMemoryKv(store: Map<string, string> = new Map()): KVNamespace {
 }
 
 /** A present-but-inert DurableObjectNamespace: `idFromName`/`newUniqueId` return a
- *  marker id and `get` returns a stub whose `fetch` resolves to an empty 200 — the
- *  engine's DO calls are all best-effort and never read a meaningful body in the
- *  diff-only regime. */
+ *  marker id and `get` returns a stub that answers `fetch` with an empty 200 and ANY
+ *  RPC method (e.g. `recordBatch`) with an async no-op. Every engine DO call is
+ *  best-effort, so a flag that leaks via `process.env` can't throw on an
+ *  unimplemented method. */
 function noopDurableObject(): DurableObjectNamespace {
-  const stub = {
-    fetch: async () => new Response(null, { status: 200 }),
-  } as unknown as DurableObjectStub
+  const stub = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === "fetch") return async () => new Response(null, { status: 200 })
+        return async () => undefined
+      },
+    },
+  ) as unknown as DurableObjectStub
   return {
     idFromName: (name: string) => ({ toString: () => name, equals: () => false }) as unknown as DurableObjectId,
     idFromString: (id: string) => ({ toString: () => id, equals: () => false }) as unknown as DurableObjectId,

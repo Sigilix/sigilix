@@ -1,0 +1,63 @@
+// SIG-304 (review CLI) Phase 1b — pure ANSI/truecolor primitives for the rich
+// terminal render + the splash. No I/O: every helper returns a string. Emits
+// 24-bit (truecolor) SGR sequences; callers gate on a `color` flag
+// (process.stdout.isTTY && !NO_COLOR) and fall back to plain text when false.
+
+export interface Rgb {
+  r: number
+  g: number
+  b: number
+}
+
+const clamp = (n: number): number => (n < 0 ? 0 : n > 255 ? 255 : Math.round(n))
+
+/** Parse a `#rrggbb` (or `rrggbb`) hex string into an {r,g,b} triple. Throws on malformed input. */
+export function hexToRgb(hex: string): Rgb {
+  const cleaned = hex.trim().replace(/^#/, "")
+  if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+    throw new Error(`hexToRgb: not a 6-digit hex color: ${JSON.stringify(hex)}`)
+  }
+  const n = parseInt(cleaned, 16)
+  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff }
+}
+
+export const RESET = "\x1b[0m"
+export const BOLD = "\x1b[1m"
+export const DIM = "\x1b[2m"
+export const ITALIC = "\x1b[3m"
+
+/** Foreground truecolor SGR: `\x1b[38;2;r;g;bm`. */
+export const fg = ({ r, g, b }: Rgb): string => `\x1b[38;2;${clamp(r)};${clamp(g)};${clamp(b)}m`
+/** Background truecolor SGR: `\x1b[48;2;r;g;bm`. */
+export const bg = ({ r, g, b }: Rgb): string => `\x1b[48;2;${clamp(r)};${clamp(g)};${clamp(b)}m`
+
+export interface PaintOptions {
+  /** foreground hex (`#rrggbb`) */
+  fg?: string
+  /** background hex (`#rrggbb`) */
+  bg?: string
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+}
+
+/**
+ * Wrap `text` in the requested SGR codes, ALWAYS closing with RESET so styles
+ * never leak into subsequent output. With no options, returns `text` unchanged.
+ */
+export function paint(text: string, opts: PaintOptions = {}): string {
+  let prefix = ""
+  if (opts.bold) prefix += BOLD
+  if (opts.dim) prefix += DIM
+  if (opts.italic) prefix += ITALIC
+  if (opts.fg) prefix += fg(hexToRgb(opts.fg))
+  if (opts.bg) prefix += bg(hexToRgb(opts.bg))
+  return prefix === "" ? text : `${prefix}${text}${RESET}`
+}
+
+// Built via RegExp(ESC) rather than a control char in a regex literal (no-control-regex).
+const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g")
+/** Strip SGR escape sequences — for visible-width math and tests. */
+export function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "")
+}

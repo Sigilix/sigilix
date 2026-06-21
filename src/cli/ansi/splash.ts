@@ -87,7 +87,7 @@ export function renderSplashFrame(frame: number): string {
   blit(GLM_PLANET, earthCharTop, earthLeft, GLM_PLANET_LEG)
 
   // progress = the rocket's flight: approach → pitch → vertical retro-descent → land
-  const p = Math.min(1, frame / (TOTAL - 1))
+  const p = Math.max(0, Math.min(1, frame / (TOTAL - 1))) // clamp: keep repeat() counts non-negative for any frame
   const flyTop = 5
   const approachEnd = 0.36
   const pitchEnd = 0.46
@@ -168,7 +168,7 @@ export interface SplashOptions {
  */
 export async function runWithSplash<T>(work: Promise<T>, opts: SplashOptions = {}): Promise<T> {
   const out = opts.out ?? process.stderr
-  const total = opts.total ?? TOTAL
+  const total = Math.max(1, opts.total ?? TOTAL)
   const frameMs = opts.frameMs ?? 90
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   let settled = false
@@ -182,6 +182,10 @@ export async function runWithSplash<T>(work: Promise<T>, opts: SplashOptions = {
       throw e
     },
   )
+  // Keep `tracked` "handled" during the animation window so a mid-run rejection
+  // never fires unhandledRejection; the real error is still surfaced to the
+  // caller via the returned `tracked` below.
+  void tracked.catch(() => {})
   const restore = (): void => void out.write(SHOW_CURSOR)
   const onSignal = (): void => {
     restore()

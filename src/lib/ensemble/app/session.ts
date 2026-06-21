@@ -30,6 +30,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
+import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
@@ -103,6 +104,17 @@ export interface ReviewMeta {
 export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"; error: string }
 
 /**
+ * SIG-304 (review CLI): the built review carried out of a `dryRun` orchestrator run
+ * — the final validated/demoted verdict (anchored findings) plus the body-only
+ * (unanchored) findings — so a headless/Node caller can render PR-parity output
+ * locally without anything being posted. Only set when `args.dryRun` was true.
+ */
+export interface DryRunReview {
+  verdict: PrReviewVerdict
+  unanchoredFindings: readonly PrReviewFinding[]
+}
+
+/**
  * The review-result contract, generic over the telemetry type the handler holds.
  * The god-file binds `Tel = EnsembleTelemetry` (the concrete, public
  * `EnsembleResult`); this generic exists so the result can name the orchestrator's
@@ -117,6 +129,8 @@ export interface EnsembleResult<Tel = FinalizeTelemetry> {
   reviewMeta?: ReviewMeta
   /** Merge-gated follow-up work that must finish before the dispatcher completes the Check Run. */
   postReviewWork?: Promise<PostReviewWorkOutcome>
+  /** SIG-304: the built review from a `dryRun` run (CLI/headless). Absent on all prod paths. */
+  dryRunReview?: DryRunReview
 }
 
 /**

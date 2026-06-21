@@ -7,11 +7,12 @@
 // pill chrome here. On a non-TTY / NO_COLOR run the caller passes color:false and
 // we delegate to renderPlain so piped output stays clean + ANSI-free.
 
-import { paint, stripAnsi } from "@/src/cli/ansi/ansi"
+import { paint, stripAnsi, clipAnsi } from "@/src/cli/ansi/ansi"
 import { SEVERITY_HEX, CATEGORY_HEX, CATEGORY_FALLBACK, THEME } from "@/src/cli/ansi/palette"
 import { type FindingView, viewsFor } from "./finding-view"
 import { renderSequenceDiagram, diagramWidth } from "./sequence-diagram"
 import { renderPlain } from "./plain"
+import { exitCodeForFindings } from "@/src/cli/app/exit-code"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import type { PrOverviewVerdict } from "@/src/lib/triage-pr-overview"
 
@@ -50,7 +51,8 @@ const dim = (t: string): string => paint(t, { fg: THEME.dim })
 function box(contentLines: string[], w: number): string {
   const bd = (s: string): string => paint(s, { fg: BORDER })
   let o = "  " + bd("┌" + "─".repeat(w + 2) + "┐") + "\n"
-  for (const ln of contentLines) {
+  for (const raw of contentLines) {
+    const ln = clipAnsi(raw, w) // never let a long line (e.g. a wide diagram row) overflow the frame
     const pad = Math.max(0, w - stripAnsi(ln).length)
     o += "  " + bd("│") + " " + ln + " ".repeat(pad) + " " + bd("│") + "\n"
   }
@@ -118,7 +120,8 @@ function findingBlock(v: FindingView): string {
  */
 export function renderRich(review: DryRunReview, overview: PrOverviewVerdict | null, opts: RichOptions): string {
   if (!opts.color) return renderPlain(review)
-  const w = (opts.width ?? 76) - 4
+  // Floor the width so a narrow / transiently-0 terminal never drives "─".repeat() negative.
+  const w = Math.max(20, (opts.width ?? 88) - 4)
   const { inline, body } = viewsFor(review.verdict.findings, review.unanchoredFindings)
   const all = [...inline, ...body].sort(byScoreThenLoc)
 
@@ -159,7 +162,7 @@ export function renderRich(review: DryRunReview, overview: PrOverviewVerdict | n
         paint(sev, { fg: SEVERITY_HEX[sev], bold: true }) +
           " " +
           paint(f.path, { fg: THEME.text }) +
-          dim(` — ${f.overview}`.slice(0, w - f.path.length - 8)),
+          dim(` — ${f.overview}`.slice(0, Math.max(0, w - f.path.length - 8))),
       )
     }
   }
@@ -210,7 +213,7 @@ export function renderRich(review: DryRunReview, overview: PrOverviewVerdict | n
     dim("   proof — most → least") +
     "\n"
 
-  const code = all.some((v) => v.severity === "P0" || v.severity === "P1") ? 1 : all.length > 0 ? 2 : 0
+  const code = exitCodeForFindings(all) // single source of truth (matches the process exit code)
   o +=
     "\n  " +
     paint(`exit ${code}`, { fg: code === 0 ? THEME.diffPlus : THEME.redHi, bold: true }) +

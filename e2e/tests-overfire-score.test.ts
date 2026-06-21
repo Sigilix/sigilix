@@ -10,7 +10,7 @@ import {
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
 
-const EXPECTED_TESTS_PROMPT_HASH = "4cacbadb"
+const EXPECTED_TESTS_PROMPT_HASH = "8bec6266" // SIG-485: shared-constraint carve-out for secret/PII-in-log (CWE-532, score-3 security)
 
 const branchCase = TESTS_OVERFIRE_CASES.find((c) => c.id === "real-missing-branch-assertion")!
 const docsCase = TESTS_OVERFIRE_CASES.find((c) => c.id === "safe-docs-only-release-note")!

@@ -19,7 +19,7 @@ export const SHARED_NEGATIVE_CONSTRAINTS = `
 
 Do NOT tell the author to check, verify, consider, or ensure things related to code or dependencies. The author owns their work; vague nudges waste reviewer time.
 
-Do NOT make comments about logs (log statements, log levels, missing logs, leftover console.log output).
+Do NOT make comments about logs (log statements, log levels, missing logs, leftover console.log output) — with ONE exception: DO flag a log/console call that writes a SECRET, CREDENTIAL, or PII (e.g. \`console.log(apiKey)\`, \`logger.info({ token })\`, logging a password, session token, auth header, cookie, or personal data). Emit it as a \`category: "security"\` finding with \`cweId: "CWE-532"\` and \`score: 3\` (a P2 hardening gap — it requires log access to exploit, so it is not a P0/P1). That is a real vulnerability — sensitive data leaked into plaintext logs — not a logging nit. This exception is ONLY for secret/credential/PII leaks; it does NOT reopen log-level, missing-log, or leftover-console.log nits.
 
 Do NOT tell the author to add docstrings, JSDoc, or inline comments. Either the code is self-explanatory or it isn't; suggesting documentation as a code-review finding is noise.
 

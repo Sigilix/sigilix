@@ -12,6 +12,7 @@ import { type SigilixConfig, resolveSpecialistMcpTools } from "@/src/lib/sigilix
 import { applyLogicPromptBudget, type LogicPromptBudgetMode } from "@/src/lib/logic-prompt-budget"
 import { modelApiKeys, runSpecialist } from "@/src/lib/ensemble/adapters/model-provider"
 import { specialistSystemPrompt } from "@/src/prompts/pr-review-specialists"
+import { appendRoleRule } from "@/src/lib/ensemble/app/role-message"
 import { isHighRiskPath } from "@/src/lib/ensemble/domain/resweep"
 import { composeSignals } from "@/src/lib/ensemble/domain/shadow-grace"
 import { renderHitsForPrompt, runDeterministicChecks } from "@/src/shared/domain/deterministic-checks"
@@ -315,12 +316,11 @@ export async function runMultiBatchEnforceForSpecialists(args: {
   reasoningPromptRoles: ReadonlySet<SpecialistRole>
   reasoningByRole: ReadonlyMap<SpecialistRole, "high" | "medium" | "low">
   messageForBatchRole: (role: SpecialistRole, batchDiff: string, batchFactsBlock: string) => string
-  appendRoleRule: (baseMessage: string, role: SpecialistRole, config: SigilixConfig) => string
 }): Promise<MultiBatchEnforceResult | null> {
   if (!args.enabled || args.spilloverBatches.length === 0) return null
   const runRole = async ({ role, batchDiff, signal }: MultiBatchRoleRunArgs): Promise<PrReviewVerdict | null> => {
     const batchFactsBlock = await buildBatchFactBlockForRole({ role, batchDiff, sigilixConfig: args.sigilixConfig })
-    let initialMessage = args.appendRoleRule(
+    let initialMessage = appendRoleRule(
       args.messageForBatchRole(role, batchDiff, batchFactsBlock),
       role,
       args.sigilixConfig,

@@ -283,6 +283,10 @@ export interface Env {
   // on (apply). Recovers score 2-3 source findings the synth thins on dense PRs.
   OPENCLAW_SYNTH_SOURCE_FLOOR_LOW?: string
 
+  // SIG-487: run a 2nd (recall-suffixed) security pass + union its findings. off
+  // (default) | shadow (telemeter overlap/new/error only) | on (merge pre-synth).
+  OPENCLAW_SECURITY_KUNION?: string
+
   // SIG-317 step 6 Part A: deterministic AST-emit injection floor. off (default)
   // | shadow (log what WOULD inject) | on (inject). Force-surfaces an
   // `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

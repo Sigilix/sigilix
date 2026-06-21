@@ -58,6 +58,8 @@ import { runSynthPhase, type SynthesizeTelemetry } from "./synthesize"
 import { resweepResultForSynth, scheduleResweepForSynth } from "./resweep-scheduler"
 import { startInvariantLens, type InvariantLensApplyResult } from "./invariant-lens"
 import { invariantLensResultForSynth, scheduleInvariantLensForSynth } from "./invariant-lens-scheduler"
+import { startSecurityKUnion, applySecurityKUnion } from "./security-kunion"
+import { appendRoleRule } from "./role-message"
 import { applyRecallFloors } from "./recall-floors"
 import {
   buildEnforcedReviewUnion,
@@ -428,6 +430,9 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     // single-charge calls, and the e2e harness measures this exact message.
     userMessage: appendRoleRule(messageForRole("logic"), "logic", sigilixConfig),
   })
+
+  // SIG-487: start the 2nd (recall-suffixed) security pass concurrent with the fan-out.
+  const securityKUnion = startSecurityKUnion(a)
 
   // SIG-235 quorum collector. Drains role promises one at a time;
   // when `N-1` of `N` have returned a non-null verdict AND mode is
@@ -835,7 +840,6 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     reasoningPromptRoles: ensembleConfig.flags.reasoningPromptRoles,
     reasoningByRole: ensembleConfig.flags.reasoningByRole,
     messageForBatchRole,
-    appendRoleRule,
   })
   const multiBatchReviewUnion =
     multiBatchEnforce !== null
@@ -922,7 +926,9 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   const lensApplied = invariantLensResultForSynth(scheduledLens)
   const invariantLensAmendmentWork =
     scheduledLens.kind === "amendment-scheduled" ? scheduledLens.amendmentWork : undefined
-  const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
+  // SIG-487: union the 2nd security pass into the verdicts pre-synth (degrades to pass-1).
+  const lensVerdicts = lensApplied.verdicts as CollectedVerdict[]
+  const verdictsForSynth = (await applySecurityKUnion(securityKUnion, lensVerdicts, a)) as CollectedVerdict[]
   const synthInputVerdicts = buildSynthInputVerdicts(
     verdictsForSynth,
     synthInputCapFor(multiBatchEnforce !== null, ensembleConfig.flags.synthSourceFloorLow === "on"),
@@ -991,10 +997,4 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     ...(multiBatchReviewUnion !== undefined ? { multiBatchReviewUnion } : {}),
     ...(invariantLensAmendmentWork !== undefined ? { invariantLensAmendmentWork } : {}),
   }
-}
-
-function appendRoleRule(baseMessage: string, role: SpecialistRole, config: SigilixConfig): string {
-  const rule = config.rules?.[role]
-  if (!rule) return baseMessage
-  return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
 }

@@ -206,6 +206,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_LOGIC_INPUT_COMPOSITION: "shadow",
       OPENCLAW_SYNTH_RECOVERY: "  ON  ",
       OPENCLAW_SYNTH_SOURCE_FLOOR_LOW: "shadow",
+      OPENCLAW_SECURITY_KUNION: "shadow",
       OPENCLAW_AST_EMIT_FLOOR: "shadow",
       OPENCLAW_TRUST_LEDGER: "on",
       OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW: "soften",
@@ -252,6 +253,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       toctouHints: scanMode(env.OPENCLAW_TOCTOU_HINTS),
       synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
       synthSourceFloorLow: scanMode(env.OPENCLAW_SYNTH_SOURCE_FLOOR_LOW),
+      securityKUnionMode: scanMode(env.OPENCLAW_SECURITY_KUNION),
       // parsed via each field's own dedicated parser
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
@@ -310,6 +312,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       toctouHints: "off",
       synthRecovery: "off",
       synthSourceFloorLow: "off",
+      securityKUnionMode: "off",
       receiptJoinMode: parseReceiptJoinMode(undefined),
       selfConfirmMode: parseSelfConfirmMode(undefined),
       reproduceMode: parseReproduceMode(undefined),

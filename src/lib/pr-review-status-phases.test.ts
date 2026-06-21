@@ -8,11 +8,11 @@ describe("finalStatusUpdate proof threading (SIG-471)", () => {
     const update = finalStatusUpdate({
       status: "posted",
       ...ARGS,
-      reviewMeta: { findingsCount: 3, proof: { verified: 0, grounded: 2, model: 1 } },
+      reviewMeta: { findingsCount: 3, proof: { verified: 0, reproduced: 0, grounded: 2, model: 1 } },
     })
     expect(update).not.toBeNull()
     expect(update!.phase).toBe("posted")
-    expect(update!.proof).toEqual({ verified: 0, grounded: 2, model: 1 })
+    expect(update!.proof).toEqual({ verified: 0, reproduced: 0, grounded: 2, model: 1 })
   })
 
   it("omits `proof` from the snapshot when reviewMeta has none", () => {

@@ -31,6 +31,24 @@ import type { ApprovalReadinessSourceFinding } from "@/src/lib/approval-readines
 // builder it bounds.
 export const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 
+// SIG-484: the RAISED per-verdict cap (gated by `synthSourceFloorLow`). The default
+// 8k cap drops lowest-score-first, starving score 2-3 findings before synth sees them
+// on dense PRs — which also starves the SIG-484 source floor. A BOUNDED raise (per the
+// DeepSeek-v4-pro sign-off: NOT full removal, to avoid blowing the synth context budget
+// + diluting dedup attention) gives the densest PRs headroom while staying capped.
+export const SPECIALIST_VERDICT_TOKEN_CAP_HIGH = 16_000
+
+/** SIG-484: the per-verdict synth-input cap to use. Multi-batch uncaps (Infinity); the
+ *  source-floor-low flag raises to the bounded HIGH cap so score 2-3 findings reach synth
+ *  (+ the floor) ONLY when it is `on` — `floorLowOn` must be `flags.synthSourceFloorLow ===
+ *  "on"`, NOT `!== "off"`, because raising the cap changes the synth INPUT (a behavior
+ *  change that must NOT happen in `shadow`). Otherwise `undefined` keeps the default 8k. */
+export function synthInputCapFor(multiBatch: boolean, floorLowOn: boolean): number | undefined {
+  if (multiBatch) return Number.POSITIVE_INFINITY
+  if (floorLowOn) return SPECIALIST_VERDICT_TOKEN_CAP_HIGH
+  return undefined
+}
+
 export interface ApprovalReadinessSourceVerdict {
   role: SpecialistRole
   verdict: (PrReviewVerdict & { findings: Array<PrReviewFinding & { id: string }> }) | null

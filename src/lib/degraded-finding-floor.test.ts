@@ -10,6 +10,7 @@ import {
   applySynthSourceFindingFloor,
   DEGRADED_FLOOR_MIN_SCORE,
   SYNTH_SOURCE_FLOOR_MIN_SCORE,
+  SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
   type FloorProvenanceFinding,
   type DegradedFloorSpecialist,
 } from "@/src/lib/degraded-finding-floor"
@@ -171,6 +172,57 @@ describe("applySynthSourceFindingFloor", () => {
       ],
     })
     expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("SIG-484: the DEFAULT floor (minScore=4) leaves an orphaned score-3 finding lost (the gap the lowered floor closes)", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 3)] }],
+    })
+    expect(r.restored).toHaveLength(0) // score 3 < 4 → permanently lost today
+  })
+
+  it("SIG-484: the LOWERED floor (minScore=2) restores an orphaned score-3 finding", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 3)] }],
+      minScore: SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
+    })
+    expect(r.restored).toEqual([{ role: "logic", id: "logic-0", score: 3, headline: "finding logic-0" }])
+  })
+
+  it("SIG-484 CANARY: a legitimately-MERGED score-3 finding (its id in a kept provenance row) is NOT restored even at minScore=2", () => {
+    // The DeepSeek-flagged over-restore failure mode: logic-0 (score 3) was correctly
+    // merged into the kept synth finding security-0, so its id IS in the kept row's
+    // sourceFindingIds → accounted, NOT orphaned → not restored (no duplicate).
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("security-0", 5)],
+      provenanceFindings: [prov("logic-0", "security-0")],
+      provenanceDropped: [],
+      specialists: [
+        { role: "logic", findings: [finding("logic-0", 3)] },
+        { role: "security", findings: [finding("security-0", 5)] },
+      ],
+      minScore: SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
+    })
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("SIG-484 CANARY: a score-3 finding the synth PROOF-DROPPED ('false positive on diff inspection') is NOT restored at minScore=2", () => {
+    // Proof-dropped findings are model-adjudicated FPs — the lowered floor must still
+    // honor them (recall-safety must not resurrect a proven FP).
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [{ sourceFindingId: "logic-0", reason: "false positive on diff inspection" }],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 3)] }],
+      minScore: SYNTH_SOURCE_FLOOR_MIN_SCORE_LOW,
+    })
     expect(r.restored).toHaveLength(0)
   })
 

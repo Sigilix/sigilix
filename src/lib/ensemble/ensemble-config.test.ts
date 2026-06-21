@@ -205,6 +205,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       // SIG-369(b): logic-input-composition telemetry flag (off|shadow).
       OPENCLAW_LOGIC_INPUT_COMPOSITION: "shadow",
       OPENCLAW_SYNTH_RECOVERY: "  ON  ",
+      OPENCLAW_SYNTH_SOURCE_FLOOR_LOW: "shadow",
       OPENCLAW_AST_EMIT_FLOOR: "shadow",
       OPENCLAW_TRUST_LEDGER: "on",
       OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW: "soften",
@@ -250,6 +251,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       asymmetryHints: scanMode(env.OPENCLAW_ASYMMETRY_HINTS),
       toctouHints: scanMode(env.OPENCLAW_TOCTOU_HINTS),
       synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
+      synthSourceFloorLow: scanMode(env.OPENCLAW_SYNTH_SOURCE_FLOOR_LOW),
       // parsed via each field's own dedicated parser
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       selfConfirmMode: parseSelfConfirmMode(env.OPENCLAW_SELFCONFIRM_MODE),
@@ -307,6 +309,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       asymmetryHints: "off",
       toctouHints: "off",
       synthRecovery: "off",
+      synthSourceFloorLow: "off",
       receiptJoinMode: parseReceiptJoinMode(undefined),
       selfConfirmMode: parseSelfConfirmMode(undefined),
       reproduceMode: parseReproduceMode(undefined),

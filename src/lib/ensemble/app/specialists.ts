@@ -925,7 +925,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   const verdictsForSynth = lensApplied.verdicts as CollectedVerdict[]
   const synthInputVerdicts = buildSynthInputVerdicts(
     verdictsForSynth,
-    synthInputCapFor(multiBatchEnforce !== null, ensembleConfig.flags.synthSourceFloorLow !== "off"),
+    synthInputCapFor(multiBatchEnforce !== null, ensembleConfig.flags.synthSourceFloorLow === "on"),
   )
   const synthPhase = await runSynthPhase({
     env,

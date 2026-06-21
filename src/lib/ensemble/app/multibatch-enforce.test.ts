@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { buildSynthesizerInitialMessage } from "@/src/prompts/pr-review-specialists"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import { applySynthSourceFindingFloor } from "@/src/lib/degraded-finding-floor"
@@ -6,7 +6,9 @@ import { isFindingAnchorable } from "@/src/lib/ensemble/render/finding-format"
 import {
   buildBatchFactBlockForRole,
   buildEnforcedReviewUnion,
+  emitMultiBatchEnforceSummary,
   mergeSecurityManifestWithUnionSecrets,
+  type MultiBatchEnforceResult,
   namespaceBatchVerdict,
   renderSynthCoverageScopeBlock,
   selectCrossBatchSeamFiles,
@@ -249,5 +251,58 @@ describe("batch-1 source floor and anchorability", () => {
     expect(floored.provenanceFindings[0]?.sourceFindingIds).toEqual(["logic-b1-0"])
     expect(isFindingAnchorable(floored.findings[0]!, union.reviewable)).toBe(true)
     expect(isFindingAnchorable(floored.findings[0]!, batch0Only.reviewable)).toBe(false)
+  })
+})
+
+describe("emitMultiBatchEnforceSummary (SIG-418 lever #3 observability)", () => {
+  it("emits coverage-delta, recovered-finding count, and budget/error fields when enforce ran", () => {
+    const result: MultiBatchEnforceResult = {
+      // 1 verdict with a finding + 1 errored (null) batch-role verdict.
+      collected: [
+        {
+          role: "logic",
+          verdict: namespaceBatchVerdict("logic", 1, verdictWithFinding("src/b.ts", 1, "spillover bug")),
+          elapsedMs: 1,
+        },
+        { role: "security", verdict: null, elapsedMs: 1 },
+      ],
+      // 2 spillover files actually reviewed → coverageDeltaFiles = 2.
+      launchedBatches: [[diffBlock("src/b.ts", 1), diffBlock("src/c.ts", 2)]],
+      unlaunchedBatches: [[diffBlock("src/d.ts", 3)]],
+      batchesLaunched: 1,
+      haltedEarly: true,
+      haltReason: "deadline",
+    }
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    try {
+      emitMultiBatchEnforceSummary(
+        {
+          owner: "o",
+          repo: "r",
+          prNumber: 7,
+          headSha: "a".repeat(40),
+          startMs: Date.now() - 5,
+          spilloverBatches: [[], []],
+        },
+        result,
+      )
+      const ev = JSON.parse(logSpy.mock.calls[0]![0] as string)
+      expect(ev).toMatchObject({
+        event: "multibatch-enforce-summary",
+        mode: "on",
+        headSha: "aaaaaaa",
+        spilloverBatchesAvailable: 2,
+        batchesLaunched: 1,
+        unlaunchedBatches: 1,
+        haltedEarly: true,
+        haltReason: "deadline",
+        spilloverFilesReviewed: 2,
+        spilloverFindingCount: 1,
+        erroredRoleVerdicts: 1,
+      })
+      expect(ev.elapsedMs).toBeGreaterThanOrEqual(0)
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 })

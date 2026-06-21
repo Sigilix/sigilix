@@ -6,28 +6,33 @@
 
 import { parseArgs } from "node:util"
 import { runReviewInNode } from "./run-review-in-node"
+import { runOverviewInNode } from "./run-overview-in-node"
 import { exitCodeForFindings } from "./exit-code"
 import { toFindingView } from "@/src/cli/render/finding-view"
 import { renderJson } from "@/src/cli/render/json"
 import { renderAgentMarkdown } from "@/src/cli/render/agent-markdown"
 import { renderPlain } from "@/src/cli/render/plain"
+import { renderRich } from "@/src/cli/render/rich"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 
 const USAGE = `sigilix review — local PR review (BYO model key via env)
 
 Usage:
-  sigilix review --repo <owner/repo> --pr <number> [--json | --ai | --plain] [--token <gh-token>]
+  sigilix review --repo <owner/repo> --pr <number> [--rich | --json | --ai | --plain] [--token <gh-token>]
 
 Options:
   --repo    owner/repo (required)
   --pr      pull-request number (required)
+  --rich    truecolor PR-style panel: overview + sequence diagram + findings
+            (default on a TTY; also runs the overview pass for the diagram)
   --json    machine-readable JSON (findings + proof tiers)
   --ai      deterministic markdown for an AI coding agent (Claude Code / Codex)
-  --plain   terse one-line-per-finding (default)
+  --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
   --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
 
-Model key: set \$OPENROUTER_API_KEY (or your provider key) in the environment.
-Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3).`
+Model key: set \$OPENROUTER_API_KEY (or your provider key); --rich also needs
+\$OLLAMA_API_KEY (or an \$OPENCLAW_MODEL override) for the overview pass.
+Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.`
 
 export function renderReview(review: DryRunReview, mode: "json" | "ai" | "plain"): string {
   if (mode === "json") return renderJson(review)
@@ -57,6 +62,7 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         repo: { type: "string" },
         pr: { type: "string" },
         token: { type: "string" },
+        rich: { type: "boolean" },
         json: { type: "boolean" },
         ai: { type: "boolean" },
         plain: { type: "boolean" },
@@ -86,14 +92,42 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
     return 2
   }
-  const mode: "json" | "ai" | "plain" = values.json ? "json" : values.ai ? "ai" : "plain"
+  // Color iff an interactive TTY and NO_COLOR is unset. Rich is the default for a
+  // human terminal; piped / CI / NO_COLOR get plain (ANSI-free, grep-safe).
+  const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
+  const explicitMode = values.json ? "json" : values.ai ? "ai" : values.rich ? "rich" : values.plain ? "plain" : null
+  const mode: "json" | "ai" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
 
   const review = await runReviewInNode({ owner, repo: repoName, prNumber, githubToken })
   if (review === null) {
     process.stdout.write("sigilix: nothing to review\n")
     return 0
   }
-  const out = renderReview(review, mode)
+
+  let out: string
+  if (mode === "rich") {
+    // The rich panel also runs the overview pass (summary + file table + the real
+    // mermaid sequence diagram). Skip it when color is off — rich then degrades to
+    // plain, so the extra model call would be wasted. A failed overview pass is
+    // non-fatal: render the review alone.
+    let overview: Awaited<ReturnType<typeof runOverviewInNode>> = null
+    if (color) {
+      try {
+        overview = await runOverviewInNode({ owner, repo: repoName, prNumber, githubToken })
+      } catch (err) {
+        process.stderr.write(
+          `sigilix: overview pass failed (${err instanceof Error ? err.message : String(err)}); rendering review only\n`,
+        )
+      }
+    }
+    out = renderRich(review, overview, {
+      color,
+      width: process.stdout.columns ?? 88,
+      subject: `${owner}/${repoName}#${prNumber}`,
+    })
+  } else {
+    out = renderReview(review, mode)
+  }
   process.stdout.write(out.endsWith("\n") ? out : out + "\n")
   const views = [...review.verdict.findings, ...review.unanchoredFindings].map(toFindingView)
   return exitCodeForFindings(views)

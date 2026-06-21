@@ -69,3 +69,34 @@ const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g")
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "")
 }
+
+// Sticky variant of ANSI_RE — matches an SGR sequence anchored at lastIndex.
+const ANSI_AT = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "y")
+/**
+ * Truncate `s` to at most `width` VISIBLE chars, preserving SGR sequences (they
+ * don't count toward width). Appends RESET if the cut lands mid-style, so a
+ * clipped line never leaks color past the box border. ASCII-width only (see
+ * stripAnsi). `width <= 0` → "".
+ */
+export function clipAnsi(s: string, width: number): string {
+  if (width <= 0) return ""
+  let out = ""
+  let vis = 0
+  let sawSgr = false
+  let i = 0
+  while (i < s.length) {
+    ANSI_AT.lastIndex = i
+    const m = ANSI_AT.exec(s)
+    if (m) {
+      out += m[0]
+      sawSgr = true
+      i += m[0].length
+      continue
+    }
+    if (vis >= width) return out + (sawSgr ? RESET : "")
+    out += s[i]
+    vis++
+    i++
+  }
+  return out
+}

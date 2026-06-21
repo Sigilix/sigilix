@@ -1,7 +1,7 @@
 // SIG-304 (review CLI) Phase 1b — unit coverage for the pure ANSI primitives.
 
 import { describe, it, expect } from "vitest"
-import { hexToRgb, fg, bg, paint, stripAnsi, RESET, BOLD } from "./ansi"
+import { hexToRgb, fg, bg, paint, stripAnsi, clipAnsi, RESET, BOLD } from "./ansi"
 
 describe("ansi: hexToRgb", () => {
   it("parses #rrggbb and bare rrggbb", () => {
@@ -42,5 +42,20 @@ describe("ansi: stripAnsi", () => {
   it("removes all SGR sequences", () => {
     expect(stripAnsi(`${fg({ r: 1, g: 2, b: 3 })}x${RESET}`)).toBe("x")
     expect(stripAnsi("no-codes")).toBe("no-codes")
+  })
+})
+
+describe("ansi: clipAnsi", () => {
+  it("truncates to visible width, not counting SGR length", () => {
+    expect(stripAnsi(clipAnsi(paint("HELLO", { fg: "#B91C1C" }) + "world", 3))).toBe("HEL")
+  })
+  it("appends RESET when the cut lands mid-style", () => {
+    const c = clipAnsi(paint("HELLOworld", { fg: "#B91C1C" }), 3)
+    expect(stripAnsi(c)).toBe("HEL")
+    expect(c.endsWith(RESET)).toBe(true)
+  })
+  it("returns '' for width<=0 and the whole string when width>=length", () => {
+    expect(clipAnsi("abc", 0)).toBe("")
+    expect(clipAnsi("abc", 10)).toBe("abc")
   })
 })

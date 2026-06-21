@@ -424,9 +424,11 @@ OPENCLAW_INGEST_AI_INSTRUCTIONS = "on"
 # Rollback: "shadow" (telemetry only) or "off" (inert).
 OPENCLAW_SYNTH_RECOVERY = "on"
 # SIG-484: lower the full-coverage synth source floor 4→2 + raise the per-verdict synth-input
-# cap (bounded 16k). Ship "shadow" first (log the would-restore delta, no behavior change);
-# flip to "on" after grading the recall delta + flat hi-sev-FP on the frozen dense fixture.
-OPENCLAW_SYNTH_SOURCE_FLOOR_LOW = "shadow"
+# cap (bounded 16k). Flipped to "on" after the dense-fixture grade: recall up (a P0 went
+# 2/3→3/3 + real P1/P2 bugs restored), hi-sev-FP FLAT by construction (floor restores only
+# score 2-3 → P2/P3, can never add a P0/P1 FP). Cap raise unexercised by the fixture but
+# recall-safe-by-design. Rollback: "shadow" (telemetry only) or "off" (inert).
+OPENCLAW_SYNTH_SOURCE_FLOOR_LOW = "on"
 
 # SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
 # `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

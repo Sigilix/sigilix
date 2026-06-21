@@ -429,6 +429,13 @@ OPENCLAW_SYNTH_RECOVERY = "on"
 # score 2-3 → P2/P3, can never add a P0/P1 FP). Cap raise unexercised by the fixture but
 # recall-safe-by-design. Rollback: "shadow" (telemetry only) or "off" (inert).
 OPENCLAW_SYNTH_SOURCE_FLOOR_LOW = "on"
+# SIG-487: 2nd full-strength security pass + union (recall #4). off|shadow|on.
+# A faithful K=2 draw (same recall prompt/reasoning/MCP tools as pass-1) — recovers
+# the NON-deterministic security misses pass-1 drops (security has no lens/resweep
+# booster). NOT differentiated from pass-1, so the 2x spend is justified ONLY if it
+# finds new findings: ship "shadow" to measure `newFindings`/`overlap`, then flip
+# "on" (or back to "off") based on that signal. Rollback: "shadow"/"off".
+OPENCLAW_SECURITY_KUNION = "shadow"
 
 # SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
 # `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its

@@ -139,6 +139,10 @@ export interface EnsembleFeatureFlags {
    *  cap to the bounded HIGH value. `shadow` is pure observability — it logs the
    *  would-restore delta only; it does NOT lower the floor or raise the cap (no behavior change). */
   synthSourceFloorLow: AstScanMode
+  /** SIG-487: `OPENCLAW_SECURITY_KUNION` (off|shadow|on, default off). Runs a 2nd
+   *  (recall-suffixed) security pass; `on` unions its findings into the security verdict
+   *  pre-synth, `shadow` telemeters overlap/new/error only (no behavior change). */
+  securityKUnionMode: AstScanMode
   astEmitFloorMode: AstEmitFloorMode
   trustLedgerMode: TrustLedgerMode
   reviewMemoryClaimShadowMode: ClaimShadowMode

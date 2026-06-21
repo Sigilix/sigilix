@@ -8,8 +8,7 @@
 // through the GitHubClient.
 
 import { generate } from "@/src/shared/adapters/model"
-import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import { GitHubClient } from "@/src/shared/adapters/github"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PrChangedFile, PrCommit, PullRequestMeta } from "@/src/shared/types/github"
 import { PR_OVERVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { PR_OVERVIEW_PROMPT } from "@/src/prompts/pr-overview"
@@ -28,6 +27,7 @@ import { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } 
 import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
 import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } from "./triage-pr-overview-scan"
 import { graftReviewStatusBlock } from "./pr-review-status-render"
+import { buildClient } from "./triage-pr-overview-client"
 
 // SIG-376: re-export every symbol relocated into the leaves so external
 // importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
@@ -152,20 +152,37 @@ export interface PrOverviewArgs {
    * deadline). Absent on queue-driven calls.
    */
   abortSignal?: AbortSignal
+  /** SIG-304 CLI seam: inject a GitHub client to bypass the App `buildClient`. */
+  githubClient?: GitHubClient
+  /** SIG-304 CLI seam: compute + return the verdict, post nothing (webhook callers omit → prod unchanged). */
+  dryRun?: boolean
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
-export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env, force, reviewContext, skipDedupe, abortSignal } = args
+export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverviewVerdict | void> {
+  const {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    installationId,
+    env,
+    force,
+    reviewContext,
+    skipDedupe,
+    abortSignal,
+    githubClient,
+    dryRun,
+  } = args
   // SIG-216 fix-up: `force` historically bypassed BOTH the KV dedupe
   // lock AND the in-handler stale-head guards. We've split those
   // semantics: `skipDedupe` (preferred for the inline-from-review
   // path) bypasses only the dedupe lock; `force` (kept for legacy
   // queue-driven post-review refresh callers) still bypasses both.
   // `bypassDedupe` is the union — read at every dedupe-lock site.
-  const bypassDedupe = skipDedupe === true || force === true
+  const bypassDedupe = skipDedupe === true || force === true || dryRun === true
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -213,7 +230,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   }
 
   try {
-    const client = await buildClient(env, installationId)
+    const client = githubClient ?? (await buildClient(env, installationId))
     since("auth-ready")
 
     // CodeRabbit catch round-2 on PR #81: track `listPullRequestFiles`
@@ -322,7 +339,8 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // review's own Ollama window. The ensemble's post-overview
     // re-check is the belt-and-braces layer that catches moves
     // landing AFTER this overview call returns.
-    if (!force && meta.head?.sha && meta.head.sha !== headSha) {
+    // SIG-304: dryRun never posts → no stale-head overwrite hazard; skip guard #1.
+    if (!force && !dryRun && meta.head?.sha && meta.head.sha !== headSha) {
       console.log(
         JSON.stringify({
           event: "pr-overview-stale-head-before-ollama",
@@ -508,6 +526,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     } else {
       delete verdict.suggestedReviewers
     }
+
+    // SIG-304 CLI seam: the verdict (summary + files + mermaidDiagram) is fully
+    // computed here — return it before the re-scan / render / stale-head guard /
+    // GitHub writes / cache that only matter when POSTing. No write has occurred
+    // (dedupe lock bypassed under dryRun; the finally skips the release too).
+    if (dryRun) return verdict
 
     // Stage 1 race mitigation (ARC-231). KV remains advisory — Cloudflare
     // KV is eventually consistent across regions, so two Workers can both
@@ -973,17 +997,4 @@ export function buildPrompt(ctx: PromptCtx): string {
   }
   sections.push("[OUTPUT]", "Return only the JSON object. No prose, no Markdown fence, no array.")
   return sections.join("\n")
-}
-
-async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
-  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY must be configured")
-  }
-  const token = await getInstallationToken({
-    kv: env.OPENCLAW_STATE,
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_PRIVATE_KEY,
-    installationId,
-  })
-  return new GitHubClient({ token })
 }

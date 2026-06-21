@@ -132,6 +132,8 @@ export async function dispatchJob(
         triggerReason: job.triggerReason ?? "mention",
       })
     case "pr-overview":
+      // handlePrOverview returns the verdict only under the SIG-304 CLI dryRun
+      // seam; the webhook dispatch ignores it and stays Promise<void>.
       return handlePrOverview({
         owner: job.owner,
         repo: job.repo,
@@ -140,7 +142,7 @@ export async function dispatchJob(
         installationId: job.installationId,
         env,
         ...(job.force ? { force: true } : {}),
-      })
+      }).then(() => {})
     case "pr-labels":
       // ARC-265/SIG-135: auto-label picker. Short-circuits only when
       // `sigilix.json::labels.enabled` is false; otherwise it uses

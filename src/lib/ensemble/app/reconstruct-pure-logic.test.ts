@@ -3,7 +3,7 @@
 // file source so the harness has a liftable pair.
 
 import { describe, it, expect } from "vitest"
-import { reconstructPureLogicPair, type ReconstructInput } from "./reconstruct-pure-logic"
+import { reconstructPureLogicPair, reconstructPureLogicPairDiag, type ReconstructInput } from "./reconstruct-pure-logic"
 
 // 1: // header
 // 2: export function truncateLabel(label: string, maxLen: number): string {
@@ -241,5 +241,49 @@ describe("reconstructPureLogicPair", () => {
     expect(pair).not.toBeNull()
     expect(pair!.fixed).toContain("label.slice(0, maxLen)")
     expect(pair!.fixed).not.toContain("<= maxLen")
+  })
+})
+
+describe("reconstructPureLogicPairDiag — failure reasons (SIG-481 observability)", () => {
+  it("returns reason 'ok' with the pair on success", () => {
+    const d = reconstructPureLogicPairDiag(SRC, finding())
+    expect(d.reason).toBe("ok")
+    expect(d.pair).not.toBeNull()
+  })
+
+  it("names the input-guard reasons", () => {
+    expect(reconstructPureLogicPairDiag(undefined, finding()).reason).toBe("no-source")
+    expect(reconstructPureLogicPairDiag("", finding()).reason).toBe("no-source")
+    expect(reconstructPureLogicPairDiag(SRC, finding({ anchorSide: "LEFT" })).reason).toBe("left-anchor")
+    expect(reconstructPureLogicPairDiag(SRC, finding({ line: 0 })).reason).toBe("bad-line")
+    expect(reconstructPureLogicPairDiag(SRC, finding({ suggestedReplacement: "   " })).reason).toBe("no-fix")
+  })
+
+  it("returns 'no-changed-fn' when the fix is identical to the existing code (no two-sided test)", () => {
+    const d = reconstructPureLogicPairDiag(
+      SRC,
+      finding({ suggestedReplacement: "  for (let i = 0; i <= maxLen; i++) {" }),
+    )
+    expect(d.pair).toBeNull()
+    expect(d.reason).toBe("no-changed-fn")
+  })
+
+  it("returns 'no-enclosing-fn' when neither a near-twin nor an enclosing function resolves", () => {
+    // A fix that matches no source line (no near-twin region) anchored at a line OUTSIDE
+    // any function (the leading comment) → the documented-range fallback finds no enclosing
+    // function → no-enclosing-fn. (A mis-anchor with no recoverable function.)
+    const src = "// just a comment\n// another comment\nconst x = 1\n"
+    const d = reconstructPureLogicPairDiag(src, {
+      path: "src/x.ts",
+      line: 1,
+      suggestedReplacement: "  return computeTotalsByRegion(quarter, ledger);",
+    })
+    expect(d.pair).toBeNull()
+    expect(d.reason).toBe("no-enclosing-fn")
+  })
+
+  it("reconstructPureLogicPair stays a thin pair-only wrapper (same result as .pair)", () => {
+    expect(reconstructPureLogicPair(SRC, finding())).toEqual(reconstructPureLogicPairDiag(SRC, finding()).pair)
+    expect(reconstructPureLogicPair(SRC, finding({ anchorSide: "LEFT" }))).toBeNull()
   })
 })

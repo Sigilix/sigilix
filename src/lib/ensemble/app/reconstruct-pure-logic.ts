@@ -166,45 +166,58 @@ function locateNearTwinRange(source: string, fix: string): [number, number] | nu
   return r ? [r.start, r.end] : null
 }
 
+/** SIG-481: the reconstruction outcome WITH a stable machine-readable reason, so a
+ *  `reconstructed:false` in prod telemetry stops being a black box. `reason` is `"ok"` on
+ *  success; otherwise it names the gate that fired (see {@link reconstructPureLogicPairDiag}). */
+export interface ReconstructDiag {
+  pair: ReconstructedPair | null
+  /** "ok" | "no-source" | "left-anchor" | "bad-line" | "no-fix" | "no-enclosing-fn" |
+   *  "no-changed-fn" | "error" */
+  reason: string
+}
+
 /** Splice `repl` into the FIRST of `ranges` that yields a parseable, CHANGED enclosing
  *  function (extracted at the splice start). The buggy side is the function enclosing
- *  `enclosingLine`. Returns the pair or null. */
+ *  `enclosingLine`. Returns the pair (reason `"ok"`), or null with the blocking reason:
+ *  `"no-enclosing-fn"` (no function spans the anchor — a mis-anchor) or `"no-changed-fn"`
+ *  (no range produced a parseable, changed function). */
 function reconstructFromRanges(
   source: string,
   ranges: ReadonlyArray<[number, number]>,
   repl: string,
   enclosingLine: number,
   ext: SourceExt,
-): ReconstructedPair | null {
+): ReconstructDiag {
   const buggy = enclosingFunctionText(source, enclosingLine, ext)
-  if (buggy === null) return null
+  if (buggy === null) return { pair: null, reason: "no-enclosing-fn" }
   for (const [s, e] of ranges) {
     if (s < 1 || s > e) continue
     const fixedSource = spliceLines(source, s, e, repl)
     if (fixedSource === null) continue
     const fixed = enclosingFunctionText(fixedSource, s, ext)
     if (fixed === null || buggy.trim() === fixed.trim()) continue // no change → no two-sided test
-    return { buggy, fixed }
+    return { pair: { buggy, fixed }, reason: "ok" }
   }
-  return null
+  return { pair: null, reason: "no-changed-fn" }
 }
 
 /**
  * Reconstruct the BUGGY + FIXED function for a pure-logic finding from the full-file
- * NEW-side `source`. Returns null on any guard (see module header). NEVER throws.
+ * NEW-side `source`, returning the pair AND a stable reason (see {@link ReconstructDiag}).
+ * NEVER throws. Reasons: `no-source` / `left-anchor` / `bad-line` / `no-fix` are the input
+ * guards; `no-enclosing-fn` / `no-changed-fn` come from the splice attempt; `error` is the
+ * fail-safe catch. This is the instrumented core — {@link reconstructPureLogicPair} is the
+ * thin pair-only wrapper kept for existing callers.
  */
-export function reconstructPureLogicPair(
-  source: string | undefined,
-  finding: ReconstructInput,
-): ReconstructedPair | null {
+export function reconstructPureLogicPairDiag(source: string | undefined, finding: ReconstructInput): ReconstructDiag {
   try {
-    if (typeof source !== "string" || source.length === 0) return null
+    if (typeof source !== "string" || source.length === 0) return { pair: null, reason: "no-source" }
     // A LEFT anchor's `line` is an OLD-side number; it won't resolve in the NEW-file AST.
-    if (finding.anchorSide === "LEFT") return null
+    if (finding.anchorSide === "LEFT") return { pair: null, reason: "left-anchor" }
     const line = finding.line
-    if (typeof line !== "number" || !Number.isInteger(line) || line < 1) return null
+    if (typeof line !== "number" || !Number.isInteger(line) || line < 1) return { pair: null, reason: "bad-line" }
     const repl = finding.suggestedReplacement
-    if (typeof repl !== "string" || repl.trim().length === 0) return null
+    if (typeof repl !== "string" || repl.trim().length === 0) return { pair: null, reason: "no-fix" }
 
     const ext = extForPath(finding.path)
     const replLineCount = repl.replace(/\r?\n$/, "").split(/\r?\n/).length
@@ -218,7 +231,7 @@ export function reconstructPureLogicPair(
       const region = locateNearTwinRange(source, repl)
       if (region !== null) {
         const r = reconstructFromRanges(source, [region], repl, region[0], ext)
-        if (r !== null) return r
+        if (r.pair !== null) return r
       }
       // Fallback (pre-SIG-479 behavior): documented ranges at the finding's anchor —
       // covers a single-line fix that COLLAPSES a multi-line block (no near-twin), and
@@ -250,6 +263,18 @@ export function reconstructPureLogicPair(
       ext,
     )
   } catch {
-    return null
+    return { pair: null, reason: "error" }
   }
+}
+
+/**
+ * Reconstruct the BUGGY + FIXED function for a pure-logic finding from the full-file
+ * NEW-side `source`. Returns null on any guard (see module header). NEVER throws. Thin
+ * wrapper over {@link reconstructPureLogicPairDiag} for callers that don't need the reason.
+ */
+export function reconstructPureLogicPair(
+  source: string | undefined,
+  finding: ReconstructInput,
+): ReconstructedPair | null {
+  return reconstructPureLogicPairDiag(source, finding).pair
 }

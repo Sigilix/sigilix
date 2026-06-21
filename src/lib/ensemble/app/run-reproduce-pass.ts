@@ -25,7 +25,7 @@ import {
   executableClassForFinding,
   type ReproduceMode,
 } from "@/src/lib/verification/reproduce-eligibility"
-import { reconstructPureLogicPair } from "./reconstruct-pure-logic"
+import { reconstructPureLogicPairDiag } from "./reconstruct-pure-logic"
 import { runBoundedRedosHarness } from "@/src/lib/reproduce/harness-redos-runner"
 import { runBoundedPureLogicHarness } from "@/src/lib/reproduce/harness-purelogic-runner"
 import { HARNESS_MAX_TOTAL_MS } from "@/src/lib/reproduce/harness-redos"
@@ -102,15 +102,22 @@ export async function runReproducePass(
     // used (which usually records `not-liftable-closure`). ReDoS is untouched.
     let recoInput: PrReviewFinding = finding
     let reconstructed = false
+    // SIG-481: capture WHY reconstruction failed (no-enclosing-fn / no-changed-fn / no-fix
+    // / left-anchor / …) so a `reconstructed:false` in prod telemetry is diagnosable rather
+    // than a black box. Logged only when reconstruction was ATTEMPTED and did NOT produce a
+    // pair (i.e. reason !== "ok").
+    let reconstructReason: string | undefined
     if (executableClassForFinding(finding) === "pure-function-logic") {
-      const recon = reconstructPureLogicPair(ctx.astFilesByPath?.get(finding.path), finding)
-      if (recon !== null) {
+      const recon = reconstructPureLogicPairDiag(ctx.astFilesByPath?.get(finding.path), finding)
+      if (recon.pair !== null) {
         // The harness reads `failureExample` before `astEvidence` (buggy side) and
         // `suggestedReplacement` before `fixExample` (fixed side), so overriding just
         // these two makes the reconstructed FULL functions win over any line-level
         // cited fragments — no need to clear the others.
-        recoInput = { ...finding, failureExample: recon.buggy, suggestedReplacement: recon.fixed }
+        recoInput = { ...finding, failureExample: recon.pair.buggy, suggestedReplacement: recon.pair.fixed }
         reconstructed = true
+      } else {
+        reconstructReason = recon.reason
       }
     }
 
@@ -128,6 +135,7 @@ export async function runReproducePass(
         line: finding.line,
         score: finding.score,
         reconstructed,
+        ...(reconstructReason !== undefined ? { reconstructReason } : {}),
         eligible: elig.eligible,
         reason: elig.reason,
         ...(elig.klass !== undefined ? { klass: elig.klass } : {}),

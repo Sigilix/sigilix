@@ -174,6 +174,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_SYNTH_RECOVERY?: string | undefined
   OPENCLAW_SYNTH_SOURCE_FLOOR_LOW?: string | undefined
   OPENCLAW_SECURITY_KUNION?: string | undefined
+  OPENCLAW_GATE_DEMOTE_HIGH_SEV?: string | undefined
   OPENCLAW_AST_EMIT_FLOOR?: string | undefined
   OPENCLAW_TRUST_LEDGER?: string | undefined
   OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW?: string | undefined
@@ -296,6 +297,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       synthRecovery: scanMode(env.OPENCLAW_SYNTH_RECOVERY),
       synthSourceFloorLow: scanMode(env.OPENCLAW_SYNTH_SOURCE_FLOOR_LOW),
       securityKUnionMode: scanMode(env.OPENCLAW_SECURITY_KUNION),
+      highSevGateDemoteMode: scanMode(env.OPENCLAW_GATE_DEMOTE_HIGH_SEV),
       astEmitFloorMode: parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR),
       trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
       reviewMemoryClaimShadowMode: resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW),

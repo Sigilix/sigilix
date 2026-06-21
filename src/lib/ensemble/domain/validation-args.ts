@@ -21,6 +21,7 @@ import {
   type SecurityDropReason,
 } from "./gates/validate-security-finding"
 import { parseCoverageGapRef, type TestsValidatorMode, type TestDropReason } from "./gates/validate-test-finding"
+import type { AstScanMode } from "./config"
 import type { LogicValidatorMode, LogicDropReason, LogicEvidence } from "./gates/validate-logic-finding"
 import type { LogicRefutationMode, LogicRefutationDropReason } from "./gates/validate-logic-refutation"
 import type { RefutationSurvivalMode, RefutationSurvivalDropReason } from "./gates/validate-refutation-survival"
@@ -351,6 +352,13 @@ export type ValidateForSubmissionArgs = {
    */
   testsValidatorMode?: TestsValidatorMode
   /**
+   * SIG-488 (recall #5): `off | shadow | on` (default off). `on` demotes a sev>=4
+   * finding the vague-prefix / uncited-testing HARD-DROP heuristics would delete to
+   * a P2 note instead of dropping it; low-sev nits still drop. `shadow` counts the
+   * would-saves only. Sourced from `ensembleConfig.flags.highSevGateDemoteMode`.
+   */
+  highSevGateDemoteMode?: AstScanMode
+  /**
    * SIG-111: optional telemetry callback fired once per testing finding
    * the specificity gate flagged (whether or not it was actually
    * dropped — the `dropped` arg distinguishes enforce from shadow).
@@ -653,6 +661,15 @@ export type ValidateForSubmissionArgs = {
  * exactly the same fields the inline loop did. Behavior-identical: each counter
  * is bumped at the same site, in the same order, with the same value.
  */
+/**
+ * SIG-386: the result of running one HARD-DROP gate. `continue` = the loop would
+ * `continue` (finding dropped or demoted-to-body via `state` mutations already);
+ * `proceed` carries the (possibly cloned/score-damped) finding to the demote gates.
+ * Lives here (shared leaf) so both `validation-walk` and the gate resolvers it
+ * delegates to (e.g. `validation-highsev-demote`) reference one type, no cycle.
+ */
+export type HardDropResult = { kind: "continue" } | { kind: "proceed"; finding: PrReviewFinding }
+
 export interface ValidationState {
   cleanFindings: PrReviewFinding[]
   cleanFindingProvenance: SynthesizerProvenance["findings"]
@@ -713,6 +730,7 @@ export interface ResolvedValidationArgs {
   securityReclassEnabled: boolean
   onSecurityFindingDropped: ValidateForSubmissionArgs["onSecurityFindingDropped"]
   testsValidatorMode: TestsValidatorMode
+  highSevGateDemoteMode: AstScanMode
   onTestFindingDropped: ValidateForSubmissionArgs["onTestFindingDropped"]
   coverageGaps: ReadonlySet<string>
   testToSourceRatio: number

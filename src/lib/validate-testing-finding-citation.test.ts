@@ -472,3 +472,72 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
     expect(result.verdict.findings).toHaveLength(0)
   })
 })
+
+// ── SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 ──
+
+describe("validateForSubmission — SIG-488 high-sev demote at the uncited-testing gate", () => {
+  const uncitedHighSev = () => ({
+    verdict: {
+      summary: "Test",
+      confidence: 4,
+      confidenceReason: "Reason.",
+      // category:"testing", score 5, no inspectedTestFiles/evidenceRefs → fails citation.
+      findings: [finding({ headline: "Critical: the new auth helper ships with NO tests", score: 5 })],
+    },
+    provenance: makeProvenance(1),
+  })
+
+  it("on: a sev>=4 uncited testing finding is DEMOTED to P2 (kept, score 3); counter NOT bumped, callback NOT fired", () => {
+    const onDrop = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: uncitedHighSev(),
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts() as never,
+      testingEvidence: pack(),
+      onTestingFindingDropped: onDrop,
+      highSevGateDemoteMode: "on",
+    })
+    expect(result.droppedForUncitedTestingEvidence).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.score).toBe(3)
+    expect(onDrop).not.toHaveBeenCalled()
+  })
+
+  it("off (default): a sev>=4 uncited testing finding still HARD-DROPS + fires the callback (byte-identical)", () => {
+    const onDrop = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: uncitedHighSev(),
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts() as never,
+      testingEvidence: pack(),
+      onTestingFindingDropped: onDrop,
+    })
+    expect(result.droppedForUncitedTestingEvidence).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it("shadow: a sev>=4 uncited testing finding still DROPS + fires callback, but logs a would-save", () => {
+    const onDrop = vi.fn()
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    try {
+      const result = validateForSubmission({
+        synthOutput: uncitedHighSev(),
+        reviewable: makeReviewable(),
+        specialistVerdicts: makeSpecialistVerdicts() as never,
+        testingEvidence: pack(),
+        onTestingFindingDropped: onDrop,
+        highSevGateDemoteMode: "shadow",
+      })
+      expect(result.droppedForUncitedTestingEvidence).toBe(1)
+      expect(result.verdict.findings).toHaveLength(0)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      const ev = logSpy.mock.calls
+        .map((c) => JSON.parse(c[0] as string))
+        .find((e) => e.event === "pr-review-highsev-gate-demote")
+      expect(ev).toMatchObject({ reason: "uncited-testing", mode: "shadow", saved: false, score: 5 })
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+})

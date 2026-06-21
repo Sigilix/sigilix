@@ -24,8 +24,10 @@ const NON_SECRET_TOKEN_PREFIX_RE =
 // SIG-486: "authorization" is AMBIGUOUS — the HTTP Authorization header value is a
 // Bearer/Basic credential (`req.headers.authorization`), but `re/pre/de-authorization`
 // are payment-hold / OAuth PROCESS names (an id/status, not the credential). Treat
-// `…authorization` as a secret UNLESS prefixed by one of those.
-const NON_SECRET_AUTHORIZATION_PREFIX_RE = /(?:re|pre|de)$/
+// `…authorization` as a secret UNLESS the prefix is EXACTLY one of those process words.
+// (Exact, not a `…re$`/`…de$` suffix — else `coreAuthorization`/`nodeAuthorization`
+// would be wrongly excluded; code-reviewer MINOR.)
+const NON_SECRET_AUTHORIZATION_PREFIXES: ReadonlySet<string> = new Set(["re", "pre", "de"])
 // SIG-486: "cookie"/"cookies" is AMBIGUOUS — the Cookie/Set-Cookie header value + a
 // session cookie are secrets (`req.headers.cookie`, `sessionCookie`), but the action /
 // CRUD / flag prefixes name a FUNCTION or BOOLEAN, not the value (`parseCookie`,
@@ -36,7 +38,7 @@ const NON_SECRET_COOKIE_PREFIX_RE =
 // END in "salt" (`basalt`, `seaSalt`, `rockSalt`). Match only the crypto sense.
 const CRYPTO_SALT_RE = /(?:password|passwd|pw|hash|crypto|bcrypt|scrypt|pbkdf2|auth)salt$/
 
-/** Does a normalized identifier name a credential / secret? (CWE-338/CWE-798 sink.) */
+/** Does a normalized identifier name a credential / secret? (CWE-338/CWE-798/CWE-532 sink.) */
 export function isCredentialName(name: string | null | undefined): boolean {
   if (!name) return false
   const n = name.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -47,7 +49,7 @@ export function isCredentialName(name: string | null | undefined): boolean {
   }
   // SIG-486 …authorization: the auth-header credential, unless a re/pre/de process name.
   if (n.endsWith("authorization")) {
-    return !NON_SECRET_AUTHORIZATION_PREFIX_RE.test(n.slice(0, -"authorization".length))
+    return !NON_SECRET_AUTHORIZATION_PREFIXES.has(n.slice(0, -"authorization".length))
   }
   // SIG-486 …cookie(s): the cookie header / session value, unless an action/flag prefix.
   if (/cookies?$/.test(n)) {

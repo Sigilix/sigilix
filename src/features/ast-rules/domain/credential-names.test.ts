@@ -1,9 +1,9 @@
 // credential-names — direct unit coverage for the shared `isCredentialName`
-// matcher. It is the FP-safety gate for TWO security floors
-// (no-insecure-random-token / CWE-338 and no-hardcoded-secret-fallback /
-// CWE-798), so a silent regression here affects both rules — this file pins the
-// boundary conditions documented in the source rather than only exercising them
-// indirectly through the rule tests.
+// matcher. It is the FP-safety gate for THREE security floors
+// (no-insecure-random-token / CWE-338, no-hardcoded-secret-fallback / CWE-798,
+// and no-secret-in-log-sink / CWE-532), so a silent regression here affects all
+// three rules — this file pins the boundary conditions documented in the source
+// rather than only exercising them indirectly through the rule tests.
 
 import { describe, it, expect } from "vitest"
 import { isCredentialName } from "@/src/features/ast-rules/domain/credential-names"
@@ -41,6 +41,10 @@ describe("isCredentialName — credential-shaped names match", () => {
     // = ambiguous-but-secret here (the header VALUE / session cookie).
     "authorization",
     "userAuthorization",
+    "proxyAuthorization",
+    // SIG-486: prefix merely ENDS in re/de but isn't the re/pre/de process word → secret
+    "coreAuthorization",
+    "nodeAuthorization",
     "authz",
     "bearer",
     "cookie",

@@ -44,6 +44,8 @@ const EMIT_RULES = new Set([
   "no-xxe",
   // SIG-392 (b14): the fail-open hardcoded-secret floor (CWE-798, security/warning — FP-safe at P2).
   "no-hardcoded-secret-fallback",
+  // SIG-485: the secret-in-log recall floor (CWE-532, security/warning — FP-safe at P2).
+  "no-secret-in-log-sink",
   // SIG-392 (b20): the HMAC-over-reserialized-body floor (CWE-345/347, security/warning — FP-safe at P2).
   "no-hmac-over-reserialized-body",
 ])

@@ -38,7 +38,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 38 rules in the canonical order", () => {
+  it("exports exactly 39 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -91,6 +91,8 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-xxe",
       // SIG-392 (b14): deterministic fail-open hardcoded-secret floor (CWE-798, security/warning).
       "no-hardcoded-secret-fallback",
+      // SIG-485: deterministic secret-in-log recall floor (CWE-532, security/warning).
+      "no-secret-in-log-sink",
       // SIG-392 (b20): deterministic HMAC-over-reserialized-body floor (CWE-345/347, security/warning).
       "no-hmac-over-reserialized-body",
       // SIG-477 PR-0: ReDoS grounding floor (CWE-1333, security/warning).
@@ -136,6 +138,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-prototype-pollution": { severity: "warning", roleHint: "security" },
       "no-xxe": { severity: "warning", roleHint: "security" },
       "no-hardcoded-secret-fallback": { severity: "warning", roleHint: "security" },
+      "no-secret-in-log-sink": { severity: "warning", roleHint: "security" },
       "no-hmac-over-reserialized-body": { severity: "warning", roleHint: "security" },
       "no-redos": { severity: "warning", roleHint: "security" },
     }

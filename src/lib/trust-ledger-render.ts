@@ -39,7 +39,7 @@ function trustGlyphName(trust: FindingTrust | undefined): ReviewBadgeAssetName {
 }
 
 /** Tier → terse `<sub>` suffix (no glyph). */
-function trustWord(trust: FindingTrust | undefined): "VERIFIED" | "REPRODUCED" | "GROUNDED" | "MODEL" {
+export function trustWord(trust: FindingTrust | undefined): "VERIFIED" | "REPRODUCED" | "GROUNDED" | "MODEL" {
   switch (trust?.tier) {
     case "runner-confirmed":
       return "VERIFIED"

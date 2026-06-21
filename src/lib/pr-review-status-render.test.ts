@@ -8,7 +8,9 @@ import {
   graftReviewStatusBlock,
   formatManageLine,
   formatProofLine,
+  formatProofLegend,
   computeProofCounts,
+  isReproducedTier,
 } from "@/src/lib/pr-review-status-render"
 import { formatOverviewComment } from "@/src/lib/triage-pr-overview-format"
 import type { PrOverviewVerdict } from "@/src/lib/triage-pr-overview"
@@ -332,7 +334,7 @@ describe("buildReviewStatusBlock Manage line (SIG-471 PR-3)", () => {
       headSha: HEAD_SHA,
       sequence: 9,
       final: { status: "posted", findingsCount: 2 },
-      proof: { verified: 0, grounded: 2, model: 0 },
+      proof: { verified: 0, reproduced: 0, grounded: 2, model: 0 },
       manage,
     })
     // The block wraps the affordance text in a muted `> <sub>…</sub>` line — the
@@ -399,31 +401,71 @@ describe("computeProofCounts (SIG-471)", () => {
       f("f"), // missing tier → model
       f("g", "totally-unknown"), // unknown → model
     ]
-    expect(computeProofCounts(findings, new Set())).toEqual({ verified: 0, grounded: 4, model: 3 })
+    expect(computeProofCounts(findings, new Set())).toEqual({ verified: 0, reproduced: 0, grounded: 4, model: 3 })
   })
 
   it("counts a confirmed finding ONLY as verified (never also grounded)", () => {
     const findings = [f("a", "grounded-model"), f("b", "deterministic-grounded"), f("c", "body-only-ungrounded")]
     // `a` and `b` are grounded tiers, but `a` is receipt-verified → verified only.
-    expect(computeProofCounts(findings, new Set(["a"]))).toEqual({ verified: 1, grounded: 1, model: 1 })
+    expect(computeProofCounts(findings, new Set(["a"]))).toEqual({ verified: 1, reproduced: 0, grounded: 1, model: 1 })
   })
 
-  it("the three buckets always sum to the finding count", () => {
+  it("the four buckets always sum to the finding count", () => {
     const findings = [f("a", "grounded-model"), f("b"), f("c", "runner-confirmed"), f("d", "body-only-ungrounded")]
     const proof = computeProofCounts(findings, new Set(["c"]))
-    expect(proof.verified + proof.grounded + proof.model).toBe(findings.length)
+    expect(proof.verified + proof.reproduced + proof.grounded + proof.model).toBe(findings.length)
+  })
+
+  it("SIG-482: buckets reproduced-by-execution as its OWN tier (not model-only)", () => {
+    const findings = [
+      f("a", "reproduced-by-execution"),
+      f("b", "reproduced-by-execution"),
+      f("c", "grounded-model"),
+      f("d", "body-only-ungrounded"),
+    ]
+    expect(computeProofCounts(findings, new Set())).toEqual({ verified: 0, reproduced: 2, grounded: 1, model: 1 })
+  })
+
+  it("SIG-482: a receipt-verified reproduced finding counts ONLY as verified", () => {
+    const findings = [f("a", "reproduced-by-execution"), f("b", "reproduced-by-execution")]
+    // `a` got a runner receipt → verified; `b` stays reproduced.
+    expect(computeProofCounts(findings, new Set(["a"]))).toEqual({ verified: 1, reproduced: 1, grounded: 0, model: 0 })
   })
 
   it("an all-model (no grounded) finding set renders only the model-only segment via formatProofLine", () => {
     const proof = computeProofCounts([f("a"), f("b", "body-only-ungrounded")], new Set())
-    expect(proof).toEqual({ verified: 0, grounded: 0, model: 2 })
+    expect(proof).toEqual({ verified: 0, reproduced: 0, grounded: 0, model: 2 })
     expect(formatProofLine(proof)).toBe("> <sub>**Proof:** 2 model-only</sub>")
   })
 
   it("an empty finding set buckets to all-zero, and formatProofLine returns null (clean approve shows no Proof line)", () => {
     const proof = computeProofCounts([], new Set())
-    expect(proof).toEqual({ verified: 0, grounded: 0, model: 0 })
+    expect(proof).toEqual({ verified: 0, reproduced: 0, grounded: 0, model: 0 })
     expect(formatProofLine(proof)).toBeNull()
+  })
+
+  it("SIG-482: formatProofLine renders tiers strongest→weakest incl. reproduced", () => {
+    expect(formatProofLine({ verified: 2, reproduced: 1, grounded: 3, model: 1 })).toBe(
+      "> <sub>**Proof:** 2 runner-verified · 1 reproduced · 3 grounded · 1 model-only</sub>",
+    )
+    // only non-zero tiers render
+    expect(formatProofLine({ verified: 0, reproduced: 1, grounded: 0, model: 0 })).toBe(
+      "> <sub>**Proof:** 1 reproduced</sub>",
+    )
+  })
+
+  it("SIG-482: the trust-tier legend explains all four tiers (Kimi copy)", () => {
+    expect(formatProofLegend()).toBe(
+      "> <sub>`runner-verified` = CI receipt · `reproduced` = sandbox observed diff · " +
+        "`grounded` = deterministic detector/worker-token · `model-only` = model judgment only</sub>",
+    )
+  })
+
+  it("SIG-482: isReproducedTier matches only reproduced-by-execution", () => {
+    expect(isReproducedTier("reproduced-by-execution")).toBe(true)
+    expect(isReproducedTier("grounded-model")).toBe(false)
+    expect(isReproducedTier("runner-confirmed")).toBe(false)
+    expect(isReproducedTier(undefined)).toBe(false)
   })
 })
 
@@ -434,7 +476,7 @@ describe("buildReviewStatusBlock Proof line (SIG-471)", () => {
       headSha: HEAD_SHA,
       sequence: 9,
       final: { status: "posted", findingsCount: 3 },
-      proof: { verified: 0, grounded: 2, model: 1 },
+      proof: { verified: 0, reproduced: 0, grounded: 2, model: 1 },
     })
     expect(block).toContain("**Proof:** 2 grounded · 1 model-only")
   })
@@ -455,7 +497,7 @@ describe("buildReviewStatusBlock Proof line (SIG-471)", () => {
       headSha: HEAD_SHA,
       sequence: 9,
       final: { status: "posted", findingsCount: 0 },
-      proof: { verified: 0, grounded: 0, model: 0 },
+      proof: { verified: 0, reproduced: 0, grounded: 0, model: 0 },
     })
     expect(block).not.toContain("**Proof:**")
   })
@@ -495,7 +537,7 @@ describe("SIG-472 overview-write status-block preservation", () => {
       headSha: HEAD_SHA,
       sequence: 5,
       final: { status: "posted", findingsCount: 1, reviewUrl: "https://github.com/Sigilix/sigilix/pull/7" },
-      proof: { verified: 0, grounded: 1, model: 0 },
+      proof: { verified: 0, reproduced: 0, grounded: 1, model: 0 },
       manage: manage(),
     })
     expect(withStatus).toContain("## Sigilix Overview")

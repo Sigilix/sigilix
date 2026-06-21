@@ -301,7 +301,7 @@ describe("handlePrOverview — SIG-472 status-block preservation on re-write", (
       headSha: QUEUED_HEAD,
       sequence: 7,
       final: { status: "posted", findingsCount: 2, reviewUrl: "https://github.com/acme/site/pull/73" },
-      proof: { verified: 0, grounded: 2, model: 0 },
+      proof: { verified: 0, reproduced: 0, grounded: 2, model: 0 },
       manage: "**Manage:** Re-run `/sigilix review`",
     })
     return `${OVERVIEW_MARKER}\n\n## Sigilix Overview\n\n### Summary\n\nPrior overview body.\n\n${block}`

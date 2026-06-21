@@ -159,7 +159,7 @@ const STATUS_BLOCK = [
     headSha: "abc1234def",
     sequence: 1,
     final: { status: "posted", findingsCount: 2, reviewUrl: "https://github.com/o/r/pull/1" },
-    proof: { verified: 0, grounded: 2, model: 0 },
+    proof: { verified: 0, reproduced: 0, grounded: 2, model: 0 },
     manage: formatManageLine({ reviewNumber: 1 }),
   }),
 ].join("\n")
@@ -361,8 +361,11 @@ describe("handleOverviewProofUpdate", () => {
     await handleOverviewProofUpdate(baseMessage, makeEnv(sent))
 
     expect(sent).toHaveLength(0)
-    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 runner-verified")
-    expect(clientState.updatedComment!.body).not.toContain("grounded")
+    // SIG-482: assert the PROOF line specifically — the new tier legend line names every
+    // tier, so a whole-body .not.toContain("grounded") would false-fail.
+    const proofLine = clientState.updatedComment!.body.split("\n").find((l) => l.includes("**Proof:**"))!
+    expect(proofLine).toContain("1 runner-verified")
+    expect(proofLine).not.toContain("grounded")
     // compact footer details preserved (targeted patch)
     expect(clientState.updatedComment!.body).toContain("**Posted**")
   })
@@ -413,8 +416,10 @@ describe("handleOverviewProofUpdate", () => {
 
     await handleOverviewProofUpdate(baseMessage, makeEnv(sent))
 
-    expect(clientState.updatedComment!.body).toContain("**Proof:** 1 grounded")
-    expect(clientState.updatedComment!.body).not.toContain("runner-verified")
+    // SIG-482: target the PROOF line (the legend line names every tier).
+    const proofLine = clientState.updatedComment!.body.split("\n").find((l) => l.includes("**Proof:**"))!
+    expect(proofLine).toContain("1 grounded")
+    expect(proofLine).not.toContain("runner-verified")
   })
 
   it("HEAD-BIND: a stale receipt (manifest head advanced past the receipt head) SKIPS — no patch, no retry", async () => {

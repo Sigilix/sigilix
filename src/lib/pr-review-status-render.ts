@@ -47,6 +47,7 @@ export interface ReviewStatusFinal {
  */
 export interface ReviewStatusProof {
   verified: number
+  reproduced: number
   grounded: number
   model: number
 }
@@ -107,7 +108,10 @@ export function formatManageLine(args: { reviewNumber?: number; shortSha?: strin
 export function formatProofLine(proof: ReviewStatusProof | undefined): string | null {
   if (!proof) return null
   const parts: string[] = []
+  // SIG-482 (Kimi 2026-06-20): tiers render strongest→weakest —
+  // runner-verified → reproduced → grounded → model-only.
   if (proof.verified > 0) parts.push(`${proof.verified} runner-verified`)
+  if (proof.reproduced > 0) parts.push(`${proof.reproduced} reproduced`)
   if (proof.grounded > 0) parts.push(`${proof.grounded} grounded`)
   if (proof.model > 0) parts.push(`${proof.model} model-only`)
   // SIG (Kimi 2026-06-19): the Proof line lives in the MUTED terminal footer —
@@ -115,6 +119,20 @@ export function formatProofLine(proof: ReviewStatusProof | undefined): string | 
   // `**Proof:**` token) so the runner-receipt `patchProofLineInStatusBlock` can
   // find + replace it in place for the quiet grounded→verified upgrade.
   return parts.length > 0 ? `> <sub>**Proof:** ${parts.join(" · ")}</sub>` : null
+}
+
+/**
+ * SIG-482 (Kimi 2026-06-20): the one-line trust-tier LEGEND, rendered directly
+ * UNDER the Proof line so a reader understands what model/grounded/reproduced/
+ * runner-verified mean. A standalone muted `<sub>` line (NOT carrying the
+ * `**Proof:**` token, so `patchProofLineInStatusBlock` never matches it). Copy is
+ * Kimi's, verbatim.
+ */
+export function formatProofLegend(): string {
+  return (
+    "> <sub>`runner-verified` = CI receipt · `reproduced` = sandbox observed diff · " +
+    "`grounded` = deterministic detector/worker-token · `model-only` = model judgment only</sub>"
+  )
 }
 
 /**
@@ -135,15 +153,26 @@ export function isGroundedTier(tier: string | undefined): boolean {
       return true
     default:
       // "body-only-ungrounded", unknown strings, undefined → model-only.
+      // NB: "reproduced-by-execution" is deliberately NOT here — it's its own
+      // (stronger) tier, bucketed by `isReproducedTier` BEFORE this check.
       return false
   }
 }
 
 /**
- * Pure: count the three proof tiers over the manifest findings, given the set of
+ * SIG-482: the REPRODUCED tier — a finding the execution sandbox ran and observed
+ * diverge (rank 6, below runner-verified, above grounded). Its own proof bucket so
+ * the overview Proof line shows `N reproduced` instead of miscounting it as model-only
+ * (it is not in `isGroundedTier`). */
+export function isReproducedTier(tier: string | undefined): boolean {
+  return tier === "reproduced-by-execution"
+}
+
+/**
+ * Pure: count the four proof tiers over the manifest findings, given the set of
  * finding keys the receipt-join CONFIRMED. A confirmed finding is `verified`
  * (and counts ONLY there); every other finding is `grounded` or `model` by its
- * stored `trustTier`. Mutually exclusive buckets; the three sum to the finding
+ * stored `trustTier`. Mutually exclusive buckets; the four sum to the finding
  * count. Side-effect-free + dependency-free (structural finding shape, no
  * `review-manifest` import) so the bucketing is unit-tested in isolation.
  */
@@ -152,18 +181,21 @@ export function computeProofCounts(
   verifiedKeys: ReadonlySet<string>,
 ): ReviewStatusProof {
   let verified = 0
+  let reproduced = 0
   let grounded = 0
   let model = 0
   for (const f of findings) {
     if (verifiedKeys.has(f.key)) {
       verified += 1
+    } else if (isReproducedTier(f.trustTier)) {
+      reproduced += 1
     } else if (isGroundedTier(f.trustTier)) {
       grounded += 1
     } else {
       model += 1
     }
   }
-  return { verified, grounded, model }
+  return { verified, reproduced, grounded, model }
 }
 
 export function reviewStatusPhaseRank(phase: ReviewStatusPhase): number {
@@ -232,7 +264,12 @@ function buildTerminalFooterBlock(snapshot: ReviewStatusSnapshot): string {
   }
   const lines: string[] = [REVIEW_STATUS_BLOCK_START, "", "---", `> <sub>${headline.join(" · ")}</sub>`]
   const proofLine = formatProofLine(snapshot.proof)
-  if (proofLine) lines.push(proofLine)
+  if (proofLine) {
+    lines.push(proofLine)
+    // SIG-482: the trust-tier legend directly under the Proof line (only when a Proof
+    // line renders). A standalone line so `patchProofLineInStatusBlock` never matches it.
+    lines.push(formatProofLegend())
+  }
   if (snapshot.manage) lines.push(`> <sub>${snapshot.manage}</sub>`)
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)

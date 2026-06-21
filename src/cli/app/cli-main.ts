@@ -13,6 +13,7 @@ import { renderJson } from "@/src/cli/render/json"
 import { renderAgentMarkdown } from "@/src/cli/render/agent-markdown"
 import { renderPlain } from "@/src/cli/render/plain"
 import { renderRich } from "@/src/cli/render/rich"
+import { runWithSplash } from "@/src/cli/ansi/splash"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 
 const USAGE = `sigilix review — local PR review (BYO model key via env)
@@ -28,6 +29,7 @@ Options:
   --json    machine-readable JSON (findings + proof tiers)
   --ai      deterministic markdown for an AI coding agent (Claude Code / Codex)
   --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
+  --splash  animated launch splash while the review runs (TTY only; off in CI / piped)
   --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
 
 Model key: set \$OPENROUTER_API_KEY (or your provider key); --rich also needs
@@ -66,6 +68,7 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         json: { type: "boolean" },
         ai: { type: "boolean" },
         plain: { type: "boolean" },
+        splash: { type: "boolean" },
       },
       allowPositionals: false,
     }).values
@@ -97,8 +100,12 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
   const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
   const explicitMode = values.json ? "json" : values.ai ? "ai" : values.rich ? "rich" : values.plain ? "plain" : null
   const mode: "json" | "ai" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
+  // Opt-in animated splash, hard-gated to an interactive non-CI terminal so piped
+  // / scripted output is never touched. It animates on stderr while the review runs.
+  const splash = Boolean(values.splash) && color && !process.env.CI
 
-  const review = await runReviewInNode({ owner, repo: repoName, prNumber, githubToken })
+  const reviewWork = runReviewInNode({ owner, repo: repoName, prNumber, githubToken })
+  const review = splash ? await runWithSplash(reviewWork) : await reviewWork
   if (review === null) {
     process.stdout.write("sigilix: nothing to review\n")
     return 0

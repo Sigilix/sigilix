@@ -59,18 +59,22 @@ import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
   const store = new Map<string, string>()
+  const putSpy = vi.fn()
+  const deleteSpy = vi.fn()
   const kv = {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
     },
     async put(key: string, value: string): Promise<void> {
+      putSpy(key)
       store.set(key, value)
     },
     async delete(key: string): Promise<void> {
+      deleteSpy(key)
       store.delete(key)
     },
   } as unknown as Env["OPENCLAW_STATE"]
-  return { kv, store }
+  return { kv, store, putSpy, deleteSpy }
 }
 
 function makeEnv(kv: Env["OPENCLAW_STATE"]): Env {
@@ -138,7 +142,7 @@ beforeEach(() => {
 
 describe("handlePrOverview — dryRun seam (SIG-304)", () => {
   it("returns the computed verdict (incl. mermaidDiagram) and posts NOTHING", async () => {
-    const { kv, store } = makeKvStub()
+    const { kv, store, putSpy, deleteSpy } = makeKvStub()
 
     const result = await handlePrOverview({ ...args, env: makeEnv(kv), dryRun: true })
 
@@ -148,10 +152,13 @@ describe("handlePrOverview — dryRun seam (SIG-304)", () => {
     expect(result.files).toHaveLength(1)
     expect(result.mermaidDiagram).toContain("sequenceDiagram")
     expect(mockGenerate).toHaveBeenCalledOnce()
-    // No posting, no late re-scan, no dedupe KV write.
+    // No posting, no late re-scan.
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
     expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+    // dryRun ∈ bypassDedupe → the lock is neither written nor released (finally).
     expect(store.size).toBe(0)
+    expect(putSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
   })
 
   it("uses an injected githubClient and never builds the GitHub-App client", async () => {
@@ -189,6 +196,26 @@ describe("handlePrOverview — dryRun seam (SIG-304)", () => {
     expect(updateSpy).not.toHaveBeenCalled()
   })
 
+  it("reviews the requested SHA even when the live head moved (stale-head guard #1 exempt)", async () => {
+    // Live head differs from the requested headSha — the prod path would abort at
+    // stale-head guard #1, but dryRun is exempt (it never posts, so no overwrite
+    // hazard) and must still return a verdict for the requested SHA.
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: "z".repeat(40), ref: "feature" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      title: "Some PR",
+      body: "Body",
+    })
+    const { kv } = makeKvStub()
+
+    const result = await handlePrOverview({ ...args, env: makeEnv(kv), dryRun: true })
+
+    if (!result) throw new Error("expected a verdict despite a moved head")
+    expect(result.mermaidDiagram).toContain("sequenceDiagram")
+    expect(mockGenerate).toHaveBeenCalledOnce()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
+
   it("default path (dryRun absent) still posts — prod path unchanged", async () => {
     const { kv } = makeKvStub()
 
@@ -196,5 +223,8 @@ describe("handlePrOverview — dryRun seam (SIG-304)", () => {
 
     expect(result).toBeUndefined()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    // Parity: the same diagram dryRun returns is rendered into the posted body.
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("sequenceDiagram")
   })
 })

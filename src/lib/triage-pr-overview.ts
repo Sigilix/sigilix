@@ -339,7 +339,8 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     // review's own Ollama window. The ensemble's post-overview
     // re-check is the belt-and-braces layer that catches moves
     // landing AFTER this overview call returns.
-    if (!force && meta.head?.sha && meta.head.sha !== headSha) {
+    // SIG-304: dryRun never posts → no stale-head overwrite hazard; skip guard #1.
+    if (!force && !dryRun && meta.head?.sha && meta.head.sha !== headSha) {
       console.log(
         JSON.stringify({
           event: "pr-overview-stale-head-before-ollama",

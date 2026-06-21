@@ -19,6 +19,8 @@ export interface FindingView {
   headline: string
   body: string
   suggestedReplacement?: string
+  /** SIG-162: shape of the proposed change; `"delete"` means remove the anchored range. */
+  kind?: "delete" | "replace" | "insert" | "describe"
 }
 
 export function toFindingView(f: PrReviewFinding): FindingView {
@@ -34,6 +36,7 @@ export function toFindingView(f: PrReviewFinding): FindingView {
     headline: f.headline,
     body: f.body,
     ...(f.suggestedReplacement !== undefined ? { suggestedReplacement: f.suggestedReplacement } : {}),
+    ...(f.kind !== undefined ? { kind: f.kind } : {}),
   }
 }
 

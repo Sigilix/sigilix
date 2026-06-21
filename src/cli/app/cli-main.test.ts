@@ -81,4 +81,19 @@ describe("cliMain — validation + dispatch", () => {
     expect(JSON.parse(out.join("")).counts.total).toBe(1)
     expect(code).toBe(2) // advisory only
   })
+  it("unknown flag → exit 2 (a parse error must not look like a blocking finding)", async () => {
+    expect(await cliMain(["review", "--repo", "o/r", "--pr", "1", "--token", "t", "--nope"])).toBe(2)
+    expect(mockRun).not.toHaveBeenCalled()
+  })
+  it("malformed --repo (empty owner) → exit 2", async () => {
+    expect(await cliMain(["review", "--repo", "/r", "--pr", "1", "--token", "t"])).toBe(2)
+    expect(mockRun).not.toHaveBeenCalled()
+  })
+  it("malformed --repo (extra slash) → exit 2", async () => {
+    expect(await cliMain(["review", "--repo", "a/b/c", "--pr", "1", "--token", "t"])).toBe(2)
+  })
+  it("non-numeric --pr (1e3) → exit 2", async () => {
+    expect(await cliMain(["review", "--repo", "o/r", "--pr", "1e3", "--token", "t"])).toBe(2)
+    expect(mockRun).not.toHaveBeenCalled()
+  })
 })

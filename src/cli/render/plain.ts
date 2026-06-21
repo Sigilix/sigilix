@@ -7,7 +7,8 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import { type FindingView, viewsFor } from "./finding-view"
 
 function line(v: FindingView): string {
-  return `${v.path}:${v.line}  ${v.severity}  ${v.category.toUpperCase()}  ${v.trust}  ${v.headline}`
+  const loc = v.anchorSide === "LEFT" ? `${v.path}:${v.line} (del)` : `${v.path}:${v.line}`
+  return `${loc}  ${v.severity}  ${v.category.toUpperCase()}  ${v.trust}  ${v.headline}`
 }
 
 export function renderPlain(review: DryRunReview): string {

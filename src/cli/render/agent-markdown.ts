@@ -7,11 +7,16 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import { type FindingView, viewsFor } from "./finding-view"
 
 function renderOne(v: FindingView): string {
-  const loc =
+  const base =
     v.startLine !== undefined && v.startLine !== v.line ? `${v.path}:${v.startLine}-${v.line}` : `${v.path}:${v.line}`
+  const loc = v.anchorSide === "LEFT" ? `${base} (deleted line)` : base
   const tags = `[${v.severity}][${v.category}][${v.trust}]`
   const lines = [`### ${loc} — ${tags} ${v.headline}`, "", v.body.trim()]
-  if (v.suggestedReplacement !== undefined && v.suggestedReplacement.length > 0) {
+  // A "delete" suggestion carries suggestedReplacement === "" (an empty fence = one-click
+  // removal); render the intent so an agent doesn't lose the fix.
+  if (v.kind === "delete") {
+    lines.push("", "Suggested fix: delete the anchored line(s).")
+  } else if (v.suggestedReplacement !== undefined && v.suggestedReplacement.length > 0) {
     lines.push("", "Suggested fix:", "```suggestion", v.suggestedReplacement, "```")
   }
   return lines.join("\n")

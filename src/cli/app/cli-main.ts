@@ -46,37 +46,46 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     return 2
   }
 
-  const { values } = parseArgs({
-    args: [...argv.slice(1)],
-    options: {
-      repo: { type: "string" },
-      pr: { type: "string" },
-      token: { type: "string" },
-      json: { type: "boolean" },
-      ai: { type: "boolean" },
-      plain: { type: "boolean" },
-    },
-    allowPositionals: false,
-  })
+  // parseArgs THROWS on an unknown flag / positional / missing value. Catch it and
+  // return the usage code (2) — otherwise it would propagate to bin.ts and exit 1,
+  // which CI can't tell apart from "a blocking finding was found".
+  let values
+  try {
+    values = parseArgs({
+      args: [...argv.slice(1)],
+      options: {
+        repo: { type: "string" },
+        pr: { type: "string" },
+        token: { type: "string" },
+        json: { type: "boolean" },
+        ai: { type: "boolean" },
+        plain: { type: "boolean" },
+      },
+      allowPositionals: false,
+    }).values
+  } catch (err) {
+    process.stderr.write(`sigilix: ${err instanceof Error ? err.message : String(err)}\n\n${USAGE}\n`)
+    return 2
+  }
 
-  const repo = values.repo
-  if (repo === undefined || !repo.includes("/")) {
+  // --repo must be exactly `owner/repo`, both non-empty (reject "/r", "o/", "a/b/c").
+  const repoParts = (values.repo ?? "").split("/")
+  if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
     process.stderr.write("sigilix: --repo <owner/repo> is required\n")
     return 2
   }
-  const prNumber = Number(values.pr)
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+  const [owner, repoName] = repoParts as [string, string]
+  // --pr must be a plain positive integer (reject "1e3", "0x10", " 12 ").
+  if (!/^\d+$/.test(values.pr ?? "")) {
     process.stderr.write("sigilix: --pr <number> is required\n")
     return 2
   }
+  const prNumber = Number(values.pr)
   const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
   if (githubToken === undefined || githubToken.length === 0) {
     process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
     return 2
   }
-  const slash = repo.indexOf("/")
-  const owner = repo.slice(0, slash)
-  const repoName = repo.slice(slash + 1)
   const mode: "json" | "ai" | "plain" = values.json ? "json" : values.ai ? "ai" : "plain"
 
   const review = await runReviewInNode({ owner, repo: repoName, prNumber, githubToken })

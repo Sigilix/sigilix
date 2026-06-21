@@ -59,6 +59,15 @@ describe("render: --ai (agent markdown)", () => {
   it("notes no findings cleanly", () => {
     expect(renderAgentMarkdown(review([]))).toContain("_No findings._")
   })
+  it("renders a delete suggestion (empty replacement + kind:delete) as a deletion instruction", () => {
+    const md = renderAgentMarkdown(review([finding({ kind: "delete", suggestedReplacement: "" })]))
+    expect(md).toContain("Suggested fix: delete the anchored line(s).")
+    expect(md).not.toContain("```suggestion")
+  })
+  it("marks a LEFT (deleted-line) anchor + a startLine range in the locus", () => {
+    const md = renderAgentMarkdown(review([finding({ anchorSide: "LEFT", startLine: 8 })]))
+    expect(md).toContain("src/a.ts:8-10 (deleted line)")
+  })
 })
 
 describe("render: --plain", () => {

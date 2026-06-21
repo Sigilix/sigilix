@@ -5,6 +5,7 @@
 // Returns the process exit code; never calls process.exit (the bin does).
 
 import { parseArgs } from "node:util"
+import { execFileSync } from "node:child_process"
 import { runReviewInNode } from "./run-review-in-node"
 import { runOverviewInNode } from "./run-overview-in-node"
 import { exitCodeForFindings } from "./exit-code"
@@ -19,11 +20,16 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 const USAGE = `sigilix review — local PR review (BYO model key via env)
 
 Usage:
-  sigilix review --repo <owner/repo> --pr <number> [--rich | --json | --ai | --plain] [--token <gh-token>]
+  sigilix review --repo <owner/repo> --pr <number> [output] [--token <gh-token>]
+  sigilix review --uncommitted [output]            # review your local working-tree changes
+  sigilix review --diff <base> [output]            # review <base>...HEAD (no PR / no token)
 
-Options:
-  --repo    owner/repo (required)
-  --pr      pull-request number (required)
+Source (pick one):
+  --repo + --pr   review a GitHub PR (needs a token)
+  --uncommitted   review uncommitted working-tree changes (local git, no token)
+  --diff <base>   review the <base>...HEAD range (local git, no token)
+
+Options (output):
   --rich    truecolor PR-style panel: overview + sequence diagram + findings
             (default on a TTY; also runs the overview pass for the diagram)
   --json    machine-readable JSON (findings + proof tiers)
@@ -64,6 +70,8 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         repo: { type: "string" },
         pr: { type: "string" },
         token: { type: "string" },
+        uncommitted: { type: "boolean" },
+        diff: { type: "string" },
         rich: { type: "boolean" },
         json: { type: "boolean" },
         ai: { type: "boolean" },
@@ -77,24 +85,54 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     return 2
   }
 
-  // --repo must be exactly `owner/repo`, both non-empty (reject "/r", "o/", "a/b/c").
-  const repoParts = (values.repo ?? "").split("/")
-  if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
-    process.stderr.write("sigilix: --repo <owner/repo> is required\n")
-    return 2
+  // Source: local working tree (--uncommitted) or a base range (--diff <base>),
+  // else a real GitHub PR (--repo + --pr + token).
+  const localMode = values.uncommitted === true || values.diff !== undefined
+  let owner: string
+  let repoName: string
+  let prNumber: number
+  let source: { githubToken: string } | { git: { cwd: string; base?: string } }
+  let subject: string
+
+  if (localMode) {
+    let cwd: string
+    try {
+      cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()
+    } catch {
+      process.stderr.write("sigilix: --uncommitted / --diff must be run inside a git repository\n")
+      return 2
+    }
+    // owner/repo only label local logs; honor --repo if given, else a stub.
+    const rp = (values.repo ?? "local/local").split("/")
+    owner = rp[0] || "local"
+    repoName = rp[1] || "local"
+    prNumber = 0
+    source = { git: { cwd, ...(values.diff !== undefined ? { base: values.diff } : {}) } }
+    subject = values.diff !== undefined ? `${values.diff}...HEAD` : "working tree"
+  } else {
+    // --repo must be exactly `owner/repo`, both non-empty (reject "/r", "o/", "a/b/c").
+    const repoParts = (values.repo ?? "").split("/")
+    if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
+      process.stderr.write("sigilix: --repo <owner/repo> is required (or use --uncommitted / --diff <base>)\n")
+      return 2
+    }
+    owner = repoParts[0]!
+    repoName = repoParts[1]!
+    // --pr must be a plain positive integer (reject "1e3", "0x10", " 12 ").
+    if (!/^\d+$/.test(values.pr ?? "")) {
+      process.stderr.write("sigilix: --pr <number> is required (or use --uncommitted / --diff <base>)\n")
+      return 2
+    }
+    prNumber = Number(values.pr)
+    const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
+    if (githubToken === undefined || githubToken.length === 0) {
+      process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
+      return 2
+    }
+    source = { githubToken }
+    subject = `${owner}/${repoName}#${prNumber}`
   }
-  const [owner, repoName] = repoParts as [string, string]
-  // --pr must be a plain positive integer (reject "1e3", "0x10", " 12 ").
-  if (!/^\d+$/.test(values.pr ?? "")) {
-    process.stderr.write("sigilix: --pr <number> is required\n")
-    return 2
-  }
-  const prNumber = Number(values.pr)
-  const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
-  if (githubToken === undefined || githubToken.length === 0) {
-    process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
-    return 2
-  }
+
   // Color iff an interactive TTY and NO_COLOR is unset. Rich is the default for a
   // human terminal; piped / CI / NO_COLOR get plain (ANSI-free, grep-safe).
   const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
@@ -104,7 +142,7 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
   // / scripted output is never touched. It animates on stderr while the review runs.
   const splash = Boolean(values.splash) && color && !process.env.CI
 
-  const reviewWork = runReviewInNode({ owner, repo: repoName, prNumber, githubToken })
+  const reviewWork = runReviewInNode({ owner, repo: repoName, prNumber, ...source })
   const review = splash ? await runWithSplash(reviewWork) : await reviewWork
   if (review === null) {
     process.stdout.write("sigilix: nothing to review\n")
@@ -120,18 +158,14 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     let overview: Awaited<ReturnType<typeof runOverviewInNode>> = null
     if (color) {
       try {
-        overview = await runOverviewInNode({ owner, repo: repoName, prNumber, githubToken })
+        overview = await runOverviewInNode({ owner, repo: repoName, prNumber, ...source })
       } catch (err) {
         process.stderr.write(
           `sigilix: overview pass failed (${err instanceof Error ? err.message : String(err)}); rendering review only\n`,
         )
       }
     }
-    out = renderRich(review, overview, {
-      color,
-      width: process.stdout.columns ?? 88,
-      subject: `${owner}/${repoName}#${prNumber}`,
-    })
+    out = renderRich(review, overview, { color, width: process.stdout.columns ?? 88, subject })
   } else {
     out = renderReview(review, mode)
   }

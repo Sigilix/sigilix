@@ -10,13 +10,19 @@ import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { createLocalEnv } from "@/src/cli/adapters/local-env"
+import { localGitClient } from "@/src/cli/adapters/local-git-client"
 
 export interface RunReviewInNodeArgs {
   owner: string
   repo: string
   prNumber: number
-  /** A GitHub token (PAT / `gh auth token`) used ONLY to read the PR + diff. */
-  githubToken: string
+  /** A GitHub token (PAT / `gh auth token`) to read the PR + diff. Required unless `git` is set. */
+  githubToken?: string
+  /**
+   * Local-git source (SIG-304): review the working tree (`--uncommitted`) or a
+   * `<base>...HEAD` range (`--diff <base>`) via a read-only git client, no GitHub.
+   */
+  git?: { cwd: string; base?: string }
   /** Env source for model keys + flags (BYO models). Defaults to `process.env`. */
   processEnv?: Record<string, string | undefined>
 }
@@ -33,7 +39,12 @@ export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRun
   const env = createLocalEnv({
     processEnv: { ...(args.processEnv ?? process.env), OLLAMA_CHAT_ENABLE: "on" },
   })
-  const client = new GitHubClient({ token: args.githubToken })
+  // Local-git review uses the read-only adapter (no GitHub); else a PAT client.
+  // The adapter implements every method the dry-run engine calls (the cast is
+  // sound — see local-git-client.ts); submitReview is publish-only + never hit.
+  const client: GitHubClient = args.git
+    ? (localGitClient(args.git) as unknown as GitHubClient)
+    : new GitHubClient({ token: args.githubToken ?? "" })
   const meta = await client.getPullRequest(args.owner, args.repo, args.prNumber)
   const headSha = meta.head?.sha
   if (!headSha) {

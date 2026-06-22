@@ -76,6 +76,15 @@ describe("renderRich", () => {
     expect(plain.indexOf("high")).toBeLessThan(plain.indexOf("low"))
   })
 
+  it("RECALL-SAFETY: a degraded (incomplete) review shows the partial banner AND a non-zero exit footer (never 'exit 0')", () => {
+    const r: DryRunReview = { ...review([]), incomplete: { rolesMissing: ["logic"] } }
+    const plain = stripAnsi(renderRich(r, null, { color: true, width: 88 }))
+    expect(plain).toContain("Partial review") // the OVERVIEW banner
+    expect(plain).toContain("logic")
+    expect(plain).toContain("exit 2") // the footer matches the real process exit code, NOT exit 0
+    expect(plain).not.toContain("exit 0")
+  })
+
   it("proof tally counts trust tiers", () => {
     const plain = stripAnsi(
       renderRich(

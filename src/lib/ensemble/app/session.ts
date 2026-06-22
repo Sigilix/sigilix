@@ -113,6 +113,13 @@ export type PostReviewWorkOutcome = { status: "completed" } | { status: "failed"
 export interface DryRunReview {
   verdict: PrReviewVerdict
   unanchoredFindings: readonly PrReviewFinding[]
+  /** SIG-304 recall-safety: set when the review ran with DEGRADED coverage — a
+   *  specialist was unavailable (e.g. logic timed out / provider 500), so the engine
+   *  produced a verdict on PARTIAL input. The prod GitHub path downgrades APPROVE→COMMENT
+   *  + posts a Coverage line for exactly this; headless callers MUST surface it too (a
+   *  partial review is NEVER a clean pass): a banner in plain/rich + a field in json +
+   *  a non-zero exit even with zero findings. Absent → full coverage. */
+  incomplete?: { rolesMissing: readonly string[] }
 }
 
 /**

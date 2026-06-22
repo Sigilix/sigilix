@@ -5,13 +5,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 vi.mock("@/src/lib/ensemble/app/orchestrator", () => ({ handlePrReviewEnsemble: vi.fn() }))
+// Mode B builds the real GitHub client in-route (to resolve headSha) — mock it so the
+// grounded tests don't need real GitHub App creds. getPullRequest returns a fixed head.
+vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({
+  buildClient: vi.fn(async () => ({
+    getPullRequest: vi.fn(async () => ({ head: { sha: "server-resolved-sha" }, base: { sha: "base" } })),
+  })),
+}))
 
 import { handleReviewApiRoute } from "./api-review-route"
 import { parseUnifiedDiff } from "./api-review-diff-client"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
+import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import type { Env } from "@/src/shared/types/env"
 
 const mockEngine = vi.mocked(handlePrReviewEnsemble)
+const mockBuildClient = vi.mocked(buildClient)
 const TOKEN = "test-secret-key"
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
   ({ OPENCLAW_SIGILIX_API_KEY: key, ...extra }) as unknown as Env
@@ -46,7 +55,13 @@ function req(body: unknown, token: string | null = TOKEN): Request {
 }
 const validBody = { owner: "o", repo: "r", prNumber: 1, headSha: "abc123", diff: DIFF }
 
-beforeEach(() => mockEngine.mockReset())
+beforeEach(() => {
+  mockEngine.mockReset()
+  mockBuildClient.mockReset()
+  mockBuildClient.mockResolvedValue({
+    getPullRequest: vi.fn(async () => ({ head: { sha: "server-resolved-sha" }, base: { sha: "base" } })),
+  } as never)
+})
 
 describe("handleReviewApiRoute — auth + validation", () => {
   it("503 when the API key is unset (endpoint inert)", async () => {
@@ -142,14 +157,15 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
     expect(((await res.json()) as { error?: string }).error).toBe("app_not_installed")
     expect(mockEngine).not.toHaveBeenCalled()
   })
-  it("grounded runs the engine with the RESOLVED installation, the REAL env, and NO injected client", async () => {
+  it("grounded runs the engine with the RESOLVED installation, the REAL grounded env, and the in-route client", async () => {
     mockEngine.mockResolvedValue(okResult)
     const e = groundedEnv()
     const res = await handleReviewApiRoute(req(groundedBody), e)
     expect(res.status).toBe(200)
     const callArgs = mockEngine.mock.calls[0]?.[0] as unknown as Record<string, unknown>
     expect(callArgs.installationId).toBe(42) // resolved from the map
-    expect(callArgs.githubClient).toBeUndefined() // orchestrator builds the real client
+    expect(callArgs.githubClient).toBeDefined() // built in-route (to resolve headSha) and injected
+    expect(callArgs.headSha).toBe("abc123") // the client-provided headSha is honored
     expect(callArgs.repoId).toBeUndefined() // no repoId → no review-memory / learnings writes
     expect(callArgs.dryRun).toBe(true) // a CLI review never posts
     expect(callArgs.forceFullCoverage).toBe(true)
@@ -157,6 +173,27 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
     expect(passedEnv.GITHUB_APP_ID).toBe("1") // REAL env passthrough (not a fresh stub)
     expect(passedEnv.OPENCLAW_CODE_INDEX).toBeUndefined() // NOT the ungrounded clone → grounded retrieval is live
     expect(passedEnv.OPENCLAW_REVIEW_MEMORY_ENABLED).toBe("off") // review-memory disabled → no compute-path write
+  })
+  it("resolves headSha from the PR when the client omits it (hosted, no token)", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const { headSha: _omit, ...noHead } = groundedBody
+    const res = await handleReviewApiRoute(req(noHead), groundedEnv())
+    expect(res.status).toBe(200)
+    const callArgs = mockEngine.mock.calls[0]?.[0] as unknown as Record<string, unknown>
+    expect(callArgs.headSha).toBe("server-resolved-sha") // fetched via the App
+    expect(callArgs.githubClient).toBeDefined()
+  })
+  it("502 pr_unavailable when the App can't read the PR (bad creds / 404 / GitHub down)", async () => {
+    mockBuildClient.mockResolvedValue({
+      getPullRequest: vi.fn(async () => {
+        throw new Error("Not Found")
+      }),
+    } as never)
+    const { headSha: _omit, ...noHead } = groundedBody
+    const res = await handleReviewApiRoute(req(noHead), groundedEnv())
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error?: string }).error).toBe("pr_unavailable")
+    expect(mockEngine).not.toHaveBeenCalled()
   })
   it("RECALL-SAFETY: a grounded errored run → 500, never a clean pass", async () => {
     mockEngine.mockResolvedValue({ status: "errored", telemetry: { internalError: "boom" } } as never)

@@ -11,6 +11,9 @@ export function renderJson(review: DryRunReview): string {
     {
       summary: review.verdict.summary,
       confidence: review.verdict.confidence,
+      // RECALL-SAFETY: surface a partial (degraded-coverage) review so scripts key on
+      // it structurally rather than parsing prose. Absent → full coverage.
+      ...(review.incomplete ? { incomplete: review.incomplete } : {}),
       counts: {
         total: inline.length + body.length,
         inline: inline.length,

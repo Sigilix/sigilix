@@ -8,7 +8,7 @@
 
 import { parseArgs } from "node:util"
 import { execFileSync } from "node:child_process"
-import { runReviewRemote } from "./run-review-remote"
+import { runReviewRemote, runReviewRemoteGrounded } from "./run-review-remote"
 import { exitCodeForFindings } from "./exit-code"
 import { toFindingView } from "@/src/cli/render/finding-view"
 import { renderJson } from "@/src/cli/render/json"
@@ -21,6 +21,7 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 const USAGE = `sigilix review — hosted code review (runs on Sigilix's models)
 
 Usage:
+  sigilix review --repo <owner/repo> --pr <n> [output]  # review a GitHub PR (grounded)
   sigilix review --uncommitted [output]      # review your working-tree changes
   sigilix review --diff <base> [output]      # review the <base>...HEAD range
 
@@ -29,7 +30,8 @@ Output:
   --agent   agent-friendly (Claude Code / Codex)  --plain  terse one-line-per-finding
   --no-splash   disable the animated splash       --endpoint <url>  Sigilix API base URL
 
-Auth: set \$SIGILIX_API_KEY. Override the API host with --endpoint / \$SIGILIX_ENDPOINT.
+Auth: set \$SIGILIX_API_KEY. --repo/--pr is reviewed GROUNDED via our GitHub App (no
+token needed); it must be installed on the repo. Override the host with --endpoint.
 Exit: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). NO_COLOR forces plain.`
 
 function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): string {
@@ -54,6 +56,8 @@ export async function cliMainRemote(argv: readonly string[]): Promise<number> {
     values = parseArgs({
       args: [...argv.slice(1)],
       options: {
+        repo: { type: "string" },
+        pr: { type: "string" },
         uncommitted: { type: "boolean" },
         diff: { type: "string" },
         rich: { type: "boolean" },
@@ -77,36 +81,66 @@ export async function cliMainRemote(argv: readonly string[]): Promise<number> {
   }
   const endpoint = values.endpoint ?? process.env.SIGILIX_ENDPOINT ?? "https://api.sigilix.ai"
 
-  // Source: exactly one of --uncommitted / --diff <base>.
+  // Source: exactly one of --repo/--pr (grounded), --uncommitted, or --diff <base>. The
+  // PR source is keyed off --pr (matching the full CLI); --repo is validated in-branch.
+  const hasPr = values.pr !== undefined
   const hasUncommitted = values.uncommitted === true
   const hasDiff = values.diff !== undefined
-  if (hasUncommitted === hasDiff) {
-    process.stderr.write("sigilix: pick exactly one source — --uncommitted or --diff <base>\n")
+  if ([hasPr, hasUncommitted, hasDiff].filter(Boolean).length !== 1) {
+    process.stderr.write("sigilix: pick exactly one source — --repo/--pr, --uncommitted, or --diff <base>\n")
     return 2
   }
-  let cwd: string
-  try {
-    cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()
-  } catch {
-    process.stderr.write("sigilix: must be run inside a git repository\n")
+  // Reject an empty --diff base (would mislabel a working-tree review as a range).
+  if (values.diff !== undefined && values.diff.trim() === "") {
+    process.stderr.write("sigilix: --diff <base> needs a non-empty base ref (e.g. --diff main)\n")
     return 2
   }
-  // RECALL-SAFETY: --uncommitted reviews tracked changes only; warn about untracked files.
-  if (hasUncommitted) {
-    try {
-      const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
-        .split("\n")
-        .filter((l) => l.trim() !== "")
-      if (untracked.length > 0) {
-        const shown = untracked.slice(0, 8).join(", ") + (untracked.length > 8 ? ", …" : "")
-        process.stderr.write(`sigilix: ⚠ ${untracked.length} untracked file(s) will NOT be reviewed: ${shown}\n`)
-      }
-    } catch {
-      /* best-effort */
+
+  let compute: () => Promise<DryRunReview | null>
+  let subject: string
+
+  if (hasPr) {
+    // Grounded PR review: the server reads the PR via our GitHub App (no token, no clone).
+    const repoParts = (values.repo ?? "").split("/")
+    if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
+      process.stderr.write("sigilix: --repo <owner/repo> is required with --pr\n")
+      return 2
     }
+    if (!/^\d+$/.test(values.pr ?? "")) {
+      process.stderr.write("sigilix: --pr <number> is required with --repo\n")
+      return 2
+    }
+    const owner = repoParts[0]!
+    const repo = repoParts[1]!
+    const prNumber = Number(values.pr)
+    subject = `${owner}/${repo}#${prNumber}  ·  hosted`
+    compute = () => runReviewRemoteGrounded({ endpoint, apiKey, owner, repo, prNumber })
+  } else {
+    let cwd: string
+    try {
+      cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()
+    } catch {
+      process.stderr.write("sigilix: --uncommitted / --diff must be run inside a git repository\n")
+      return 2
+    }
+    // RECALL-SAFETY: --uncommitted reviews tracked changes only; warn about untracked files.
+    if (hasUncommitted) {
+      try {
+        const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+        if (untracked.length > 0) {
+          const shown = untracked.slice(0, 8).join(", ") + (untracked.length > 8 ? ", …" : "")
+          process.stderr.write(`sigilix: ⚠ ${untracked.length} untracked file(s) will NOT be reviewed: ${shown}\n`)
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
+    const git = { cwd, ...(values.diff !== undefined ? { base: values.diff } : {}) }
+    subject = `${values.diff !== undefined ? `${values.diff}...HEAD` : "working tree"}  ·  hosted`
+    compute = () => runReviewRemote({ endpoint, apiKey, owner: "local", repo: "local", git })
   }
-  const git = { cwd, ...(values.diff !== undefined ? { base: values.diff } : {}) }
-  const subject = `${values.diff !== undefined ? `${values.diff}...HEAD` : "working tree"}  ·  hosted`
 
   const color =
     !process.env.NO_COLOR &&
@@ -123,8 +157,6 @@ export async function cliMainRemote(argv: readonly string[]): Promise<number> {
   const mode: "json" | "agent" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
   const splashOn = color && !process.env.CI && values["no-splash"] !== true
 
-  const compute = (): Promise<DryRunReview | null> =>
-    runReviewRemote({ endpoint, apiKey, owner: "local", repo: "local", git })
   const review = splashOn ? await runWithSplash(compute()) : await compute()
   if (review === null) {
     process.stdout.write("sigilix: nothing to review\n")
@@ -135,5 +167,8 @@ export async function cliMainRemote(argv: readonly string[]): Promise<number> {
       ? renderRich(review, null, { color, width: process.stdout.columns ?? 88, subject })
       : renderReview(review, mode)
   process.stdout.write(out.endsWith("\n") ? out : out + "\n")
-  return exitCodeForFindings([...review.verdict.findings, ...review.unanchoredFindings].map(toFindingView))
+  return exitCodeForFindings(
+    [...review.verdict.findings, ...review.unanchoredFindings].map(toFindingView),
+    review.incomplete != null,
+  )
 }

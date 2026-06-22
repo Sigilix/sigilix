@@ -5,11 +5,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import type { PrReviewFinding, PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 
-vi.mock("./run-review-remote", () => ({ runReviewRemote: vi.fn() }))
-import { runReviewRemote } from "./run-review-remote"
+vi.mock("./run-review-remote", () => ({ runReviewRemote: vi.fn(), runReviewRemoteGrounded: vi.fn() }))
+import { runReviewRemote, runReviewRemoteGrounded } from "./run-review-remote"
 import { cliMainRemote } from "./cli-main-remote"
 
 const mockRemote = vi.mocked(runReviewRemote)
+const mockGrounded = vi.mocked(runReviewRemoteGrounded)
 const review = (findings: PrReviewFinding[]): DryRunReview => ({
   verdict: { summary: "s", confidence: 4, confidenceReason: "x", findings } as PrReviewVerdict,
   unanchoredFindings: [],
@@ -25,6 +26,7 @@ beforeEach(() => {
   vi.spyOn(process.stdout, "write").mockImplementation((s) => (out.push(String(s)), true))
   vi.spyOn(process.stderr, "write").mockImplementation((s) => (err.push(String(s)), true))
   mockRemote.mockReset()
+  mockGrounded.mockReset()
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -95,5 +97,28 @@ describe("cliMainRemote", () => {
       throw new Error("hosted review failed (HTTP 500)")
     })
     await expect(withKey(() => cliMainRemote(["review", "--diff", "main", "--plain"]))).rejects.toThrow(/HTTP 500/)
+  })
+
+  // Mode B: a real PR reviewed grounded via the GitHub App (no token, no local git).
+  it("grounded: --repo/--pr posts a PR reference (no local git) and returns the exit code", async () => {
+    mockGrounded.mockResolvedValue(review([finding(5)]))
+    const code = await withKey(() => cliMainRemote(["review", "--repo", "o/r", "--pr", "7", "--plain"]))
+    expect(mockGrounded).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "hk", owner: "o", repo: "r", prNumber: 7 }),
+    )
+    expect(mockRemote).not.toHaveBeenCalled() // no local-diff path
+    expect(code).toBe(1)
+  })
+  it("grounded + a local source → exit 2 (one source only)", async () => {
+    expect(await withKey(() => cliMainRemote(["review", "--repo", "o/r", "--pr", "7", "--uncommitted"]))).toBe(2)
+    expect(mockGrounded).not.toHaveBeenCalled()
+  })
+  it("--pr without a valid --repo → exit 2", async () => {
+    expect(await withKey(() => cliMainRemote(["review", "--pr", "7"]))).toBe(2)
+    expect(err.join("")).toContain("--repo")
+  })
+  it("--repo without a valid --pr → exit 2", async () => {
+    expect(await withKey(() => cliMainRemote(["review", "--repo", "o/r", "--pr", "x"]))).toBe(2)
+    expect(err.join("")).toContain("--pr")
   })
 })

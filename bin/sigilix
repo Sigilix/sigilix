@@ -17,9 +17,11 @@ while [ -L "$SOURCE" ]; do
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")/.." >/dev/null 2>&1 && pwd)"
 
-# Auto-load model keys from .dev.vars (only if unset — an explicit env wins).
+# Auto-load keys from .dev.vars (only if unset — an explicit env wins). Includes
+# SIGILIX_API_KEY: once it's in .dev.vars, `sigilix review` runs HOSTED (our models)
+# instead of falling back to the local engine — no flag, no export needed.
 if [[ -f "$ROOT/.dev.vars" ]]; then
-  for key in OPENROUTER_API_KEY OLLAMA_API_KEY GITHUB_TOKEN; do
+  for key in SIGILIX_API_KEY OPENROUTER_API_KEY OLLAMA_API_KEY GITHUB_TOKEN; do
     if [[ -z "${!key:-}" ]]; then
       val="$(grep -E "^${key}=" "$ROOT/.dev.vars" | head -n1 | cut -d= -f2- || true)"
       [[ -n "$val" ]] && export "$key=$val"

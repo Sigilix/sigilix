@@ -27,7 +27,8 @@ const finding = (score: number): PrReviewFinding =>
 
 let out: string[]
 let err: string[]
-let savedSigilixKey: string | undefined
+const KEY_ENV = ["SIGILIX_API_KEY", "OPENROUTER_API_KEY", "OPENCLAW_MODEL"] as const
+let savedEnv: Record<string, string | undefined> = {}
 beforeEach(() => {
   out = []
   err = []
@@ -36,14 +37,19 @@ beforeEach(() => {
   mockRun.mockReset()
   mockRemote.mockReset()
   mockGrounded.mockReset()
-  // Hermetic: the BYO/PR tests assume no hosted key. The hosted tests set it explicitly.
-  savedSigilixKey = process.env.SIGILIX_API_KEY
-  delete process.env.SIGILIX_API_KEY
+  // Hermetic: control hosted + local model keys per-test (tests set what they need).
+  savedEnv = {}
+  for (const k of KEY_ENV) {
+    savedEnv[k] = process.env[k]
+    delete process.env[k]
+  }
 })
 afterEach(() => {
   vi.restoreAllMocks()
-  if (savedSigilixKey === undefined) delete process.env.SIGILIX_API_KEY
-  else process.env.SIGILIX_API_KEY = savedSigilixKey
+  for (const k of KEY_ENV) {
+    if (savedEnv[k] === undefined) delete process.env[k]
+    else process.env[k] = savedEnv[k]
+  }
 })
 
 describe("cliMain — validation + dispatch", () => {
@@ -58,11 +64,20 @@ describe("cliMain — validation + dispatch", () => {
     expect(await cliMain(["frobnicate"])).toBe(2)
     expect(err.join("")).toContain("unknown command")
   })
-  it("hosted is the default: no $SIGILIX_API_KEY and no --local → exit 2 (hosted required)", async () => {
+  it("no keys at all (no $SIGILIX_API_KEY, no $OPENROUTER_API_KEY) → exit 2", async () => {
     expect(await cliMain(["review", "--uncommitted"])).toBe(2)
     expect(err.join("")).toContain("SIGILIX_API_KEY")
     expect(mockRun).not.toHaveBeenCalled()
     expect(mockRemote).not.toHaveBeenCalled()
+  })
+  it("auto-local: no hosted key but $OPENROUTER_API_KEY present → runs the local engine, no flags", async () => {
+    process.env.OPENROUTER_API_KEY = "byo"
+    mockRun.mockResolvedValue(review([finding(5)]))
+    const code = await cliMain(["review", "--uncommitted", "--plain"]) // no --local, no --rich
+    expect(mockRun).toHaveBeenCalled() // fell back to the local engine
+    expect(mockRemote).not.toHaveBeenCalled()
+    expect(err.join("")).toContain("running locally")
+    expect(code).toBe(1)
   })
   it("--local: missing --repo → exit 2, no engine call", async () => {
     expect(await cliMain(["review", "--pr", "5", "--token", "t", "--local"])).toBe(2)

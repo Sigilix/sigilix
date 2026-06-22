@@ -11,6 +11,7 @@ import { isDryRunEngineFailure, type DryRunReview } from "@/src/lib/ensemble/app
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { createLocalEnv } from "@/src/cli/adapters/local-env"
 import { localGitClient } from "@/src/cli/adapters/local-git-client"
+import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
 
 export interface RunReviewInNodeArgs {
   owner: string
@@ -70,5 +71,14 @@ export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRun
     const tel = result.telemetry as { internalError?: string; fellBackReason?: string }
     throw new Error(`review failed — ${tel.internalError ?? tel.fellBackReason ?? "the review engine errored"}`)
   }
-  return result.dryRunReview ?? null
+  const review = result.dryRunReview ?? null
+  if (!review) return null
+  // Enrich findings with a code-context slice from the diff we already have (display
+  // evidence for the rich panel). Best-effort: never fail a good review on it.
+  try {
+    const diff = await client.getPullRequestDiff(args.owner, args.repo, args.prNumber)
+    return attachCodeContextToReview(review, diff)
+  } catch {
+    return review
+  }
 }

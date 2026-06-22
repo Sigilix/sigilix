@@ -23,6 +23,7 @@ import { parseSarif } from "@/src/features/sarif-evidence"
 import { claimRunnerReceipt } from "./runner-receipt-client"
 import { recordRunnerToolManifestMetric } from "./runner-tool-metrics-client"
 import { isSafeRunnerToolId } from "@/src/shared/domain/runner-tool-catalog"
+import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken, resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import type { JobMessage } from "@/src/shared/types/job"
@@ -345,43 +346,6 @@ async function enqueueOverviewProofUpdate(args: {
       }),
     )
   }
-}
-
-/**
- * Read the request body as text, enforcing a BYTE cap as the stream is consumed
- * (so an oversized body is aborted, not fully buffered). Returns `null` once the
- * cap is exceeded. A cheap Content-Length precheck short-circuits the obvious
- * case; the stream count is the real guard (CL can be absent or lie low).
- */
-async function readBodyCapped(request: Request, maxBytes: number): Promise<string | null> {
-  const cl = Number(request.headers.get("content-length") ?? "")
-  if (Number.isFinite(cl) && cl > maxBytes) return null
-  const body = request.body
-  if (!body) {
-    const t = await request.text()
-    return new TextEncoder().encode(t).byteLength > maxBytes ? null : t
-  }
-  const reader = body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-    total += value.byteLength
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {})
-      return null
-    }
-    chunks.push(value)
-  }
-  const merged = new Uint8Array(total)
-  let off = 0
-  for (const c of chunks) {
-    merged.set(c, off)
-    off += c.byteLength
-  }
-  return new TextDecoder().decode(merged)
 }
 
 interface IngestEnvelope {

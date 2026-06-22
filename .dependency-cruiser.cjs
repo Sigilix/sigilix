@@ -52,10 +52,16 @@ module.exports = {
       // import the `DryRunReview` TYPE only, never value-import the ensemble engine.
       name: "thin-client-ships-no-engine",
       comment:
-        "src/cli/app/run-review-remote.ts is the published thin-client driver — it may import the DryRunReview TYPE only, never value-import src/lib/ensemble/** (that would ship the moat). SIG-304 Phase 2.",
+        "The published thin-client graph (bin-remote → cli-main-remote → run-review-remote + the renderers + ansi) may NOT value-import the engine/IP: the ensemble app|adapters, the specialist PROMPTS, or the model adapters. Pure ensemble/domain + types are fine (DryRunReview is type-only). The bundle moat-gate (thin-client-policy) is the artifact backstop. SIG-304 Phase 2.",
       severity: "error",
-      from: { path: "^src/cli/app/run-review-remote\\.ts$", pathNot: TEST },
-      to: { path: "^src/lib/ensemble/", dependencyTypesNot: ["type-only"] },
+      from: {
+        path: "^src/cli/(bin-remote\\.ts|app/(cli-main-remote|run-review-remote)\\.ts|render/|ansi/)",
+        pathNot: TEST,
+      },
+      to: {
+        path: ["^src/lib/ensemble/app/", "^src/lib/ensemble/adapters/", "^src/prompts/", "^src/shared/adapters/"],
+        dependencyTypesNot: ["type-only"],
+      },
     },
     {
       name: "cross-feature-barrel-only",

@@ -30,22 +30,19 @@ Source (pick one):
   --uncommitted   review uncommitted working-tree changes
   --diff <base>   review the <base>...HEAD range
 
-Options (output):
-  --rich    truecolor PR-style panel: overview + sequence diagram + findings
-            (default on a TTY)
+Output (defaults to --rich on a terminal — you don't need to pass it):
+  --rich    truecolor PR-style panel: overview + sequence diagram + finding cards
   --json    machine-readable JSON (findings + proof tiers)
   --agent   agent-friendly output for a coding agent (Claude Code / Codex): path:line + fixes
   --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
   --no-splash  disable the animated splash (it runs by default on a TTY while reviewing)
   --endpoint  Sigilix API base URL (else \$SIGILIX_ENDPOINT)
 
-Auth: set \$SIGILIX_API_KEY — the review runs on Sigilix's models server-side (no model
-key of your own). A PR (--repo/--pr) is reviewed grounded via our GitHub App.
-Set SIGILIX_DEBUG=1 to see engine logs.
-Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.
-
-[dev] --local runs the bundled engine on your own \$OPENROUTER_API_KEY instead of hosted
-(testing / the agent substrate; --rich then also runs a \$OLLAMA_API_KEY overview pass).`
+Auth: set \$SIGILIX_API_KEY → the review runs on Sigilix's models server-side (no model
+key of your own); a PR (--repo/--pr) is reviewed grounded via our GitHub App. With no
+hosted key, it falls back to a local engine on \$OPENROUTER_API_KEY (--local forces that).
+SIGILIX_DEBUG=1 shows engine logs.
+Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.`
 
 export function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): string {
   if (mode === "json") return renderJson(review)
@@ -54,10 +51,15 @@ export function renderReview(review: DryRunReview, mode: "json" | "agent" | "pla
 }
 
 export async function cliMain(argv: readonly string[]): Promise<number> {
-  const sub = argv[0]
-  if (sub === undefined || sub === "--help" || sub === "-h") {
+  // --help / -h ANYWHERE → the full guide, exit 0 (so `sigilix review --help` works too).
+  if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(USAGE + "\n")
-    return sub === undefined ? 2 : 0
+    return 0
+  }
+  const sub = argv[0]
+  if (sub === undefined) {
+    process.stdout.write(USAGE + "\n")
+    return 2
   }
   if (sub !== "review") {
     process.stderr.write(`sigilix: unknown command '${sub}'\n\n${USAGE}\n`)
@@ -108,20 +110,25 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     return 2
   }
 
-  // HOSTED is the product: `sigilix review` runs on Sigilix's models server-side via
-  // $SIGILIX_API_KEY — local sources (--uncommitted/--diff) post their diff (Mode A); a
-  // PR (--repo/--pr) is reviewed GROUNDED via our GitHub App (Mode B). There is NO user
-  // BYO for review. `--local` is an undocumented dev/agent escape hatch that runs the
-  // bundled engine on your own $OPENROUTER_API_KEY instead (used for our own probes).
-  const useLocal = values.local === true
+  // HOSTED is the product: `sigilix review` runs on Sigilix's models server-side when
+  // $SIGILIX_API_KEY is set — local sources (--uncommitted/--diff) post their diff (Mode
+  // A); a PR (--repo/--pr) is reviewed GROUNDED via our GitHub App (Mode B). With NO
+  // hosted key, the DEV CLI falls back to the local engine when a dev model key
+  // ($OPENROUTER_API_KEY) is present (so `sigilix review` just works for us, no flags);
+  // `--local` forces that path. The PUBLISHED thin client has no such fallback — it is
+  // hosted-only (no user BYO). Issuing $SIGILIX_API_KEY auto-switches this to hosted.
   const hostedKey = process.env.SIGILIX_API_KEY ?? ""
+  const hasLocalModelKey = Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENCLAW_MODEL)
+  const useLocal = values.local === true || (hostedKey === "" && hasLocalModelKey)
   const endpoint = values.endpoint ?? process.env.SIGILIX_ENDPOINT ?? "https://api.sigilix.ai"
   if (!useLocal && hostedKey === "") {
     process.stderr.write(
-      "sigilix: set $SIGILIX_API_KEY — `sigilix review` runs on Sigilix's models (hosted). [dev: --local runs a local engine on $OPENROUTER_API_KEY]\n",
+      "sigilix: set $SIGILIX_API_KEY (hosted, runs on Sigilix's models) or $OPENROUTER_API_KEY (local engine) to run a review\n",
     )
     return 2
   }
+  // Auto-local is SILENT — it just works. (Hosted runs show "· hosted" in the panel
+  // subject; the absence of it means local, so no noisy stderr note is needed.)
 
   // Source: local working tree (--uncommitted) or a base range (--diff <base>),
   // else a real GitHub PR (--repo + --pr; + token only for the BYO local engine).

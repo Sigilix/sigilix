@@ -60,7 +60,43 @@ User-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sigilix
 5. Posts on the right surface: top-level → new issue comment; inline → reply threaded under the root review comment.
 6. Skips self-authored comments via `isArcGithubLogin()`. Other bots (CR, etc.) CAN mention Arc and get a response.
 
-Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`, `/github/webhook`. No daemon, no polling, no key on disk.
+Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`, `/github/webhook`, `/v1/review` (the CLI's hosted endpoint). No daemon, no polling, no key on disk.
+
+## CLI — `sigilix review`
+
+Review code from your terminal with the same ensemble engine the GitHub App runs — your uncommitted changes, a commit range, or a real GitHub PR. **Optional** — handy for testing the engine locally; you don't need it to develop or deploy the Worker.
+
+### Install (optional — for local testing)
+
+```bash
+git clone …  && cd sigilix
+npm install        # deps (incl. tsx) — NO build step; the CLI runs TypeScript directly
+npm link           # → a global `sigilix` command (or use ./bin/sigilix / npx sigilix)
+```
+
+Add a model key to your gitignored `.dev.vars` so a review can run:
+
+```
+OPENROUTER_API_KEY=…   # the local engine runs on this (BYO/dev)
+OLLAMA_API_KEY=…       # optional — enables the --rich overview + sequence-diagram pass
+# SIGILIX_API_KEY=…    # set this to run HOSTED (Sigilix's models) instead of local
+# SIGILIX_ENDPOINT=…   # the Worker URL for hosted (e.g. https://sigilix.<acct>.workers.dev)
+```
+
+`bin/sigilix` auto-loads these from `.dev.vars`, so a review just works after the link.
+
+### Use
+
+```bash
+sigilix review --uncommitted                  # your working-tree changes
+sigilix review --diff main                     # the main...HEAD range
+sigilix review --repo owner/repo --pr 128      # a GitHub PR
+sigilix review --help                          # the full guide (also on any bad command)
+```
+
+- **Output** defaults to a rich truecolor panel on a terminal — you don't pass `--rich`. Override with `--json` (machine), `--agent` (markdown for Claude Code / Codex), or `--plain` (terse; the default when piped / non-TTY / `NO_COLOR`). `--no-splash` disables the splash animation.
+- **Hosted vs local:** with `$SIGILIX_API_KEY` set, reviews run on Sigilix's models server-side (the flagship — no model key of your own); a PR is reviewed **grounded** via the GitHub App. With no hosted key, the dev CLI falls back to the local engine on `$OPENROUTER_API_KEY` (`--local` forces it; a PR then needs `--token` / `$GITHUB_TOKEN`).
+- **Exit codes:** `0` clean · `1` blocking (P0/P1) · `2` advisory (P2/P3) — CI-usable. A degraded review (a specialist was unavailable) is flagged and never exits `0`.
 
 ## Why a Worker
 

@@ -84,6 +84,31 @@ the system is built and where code goes; read it before working in an unfamiliar
 
 ---
 
+## The review CLI (`sigilix review`)
+
+The same ensemble engine, run from a terminal (SIG-304) — **optional**, for running a
+review locally while testing (not required to work on the Worker). Code lives under
+`src/cli/` (NOT a separate package — the render stack is the single source of truth). It
+is Node-runnable with **no build step** (runs TS via `tsx`).
+
+- **Run it locally:** `npm install` then `npm link` → a global `sigilix` (or `./bin/sigilix`).
+  `bin/sigilix` pins the repo tsconfig (so `@/` resolves from any cwd) and auto-loads
+  `SIGILIX_API_KEY` / `SIGILIX_ENDPOINT` / `OPENROUTER_API_KEY` / `OLLAMA_API_KEY` /
+  `GITHUB_TOKEN` from `.dev.vars`.
+- **Sources:** `--uncommitted` (working tree), `--diff <base>` (`<base>...HEAD`),
+  `--repo <owner/repo> --pr <n>` (a real PR). **Output:** rich (TTY default — don't pass
+  `--rich`), `--json`, `--agent`, `--plain`. **Exit:** 0 clean / 1 blocking / 2 advisory.
+- **Hosted vs local:** `$SIGILIX_API_KEY` set → HOSTED via `POST /v1/review` on our models
+  (the flagship; the published thin client `src/cli/bin-remote.ts` is hosted-ONLY — no user
+  BYO). No hosted key → the dev CLI falls back to the local engine on `$OPENROUTER_API_KEY`
+  (`--local` forces it). The engine path is the prod review path in `dryRun` (nothing posted).
+- **Recall-safety (do not regress):** an errored OR degraded (specialist-unavailable)
+  review must NEVER read as a clean pass — it exits non-zero + shows a banner. The render
+  stack + diff slicer (`src/shared/util/diff-code-context.ts`) are display-only and never
+  gate findings. The published bundle must ship NO engine (the `thin-client` moat gate).
+
+---
+
 ## Model-eval testing (the live specialists)
 
 Some tests run a **real review specialist through a live model** — e.g. the subtle-logic

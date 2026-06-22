@@ -46,6 +46,10 @@ describe("cliMainRemote", () => {
     expect(await cliMainRemote(["--help"])).toBe(0)
     expect(out.join("")).toContain("hosted code review")
   })
+  it("review --help → exit 0 (the full guide), even after the subcommand", async () => {
+    expect(await cliMainRemote(["review", "--help"])).toBe(0)
+    expect(out.join("")).toContain("hosted code review")
+  })
   it("unknown command → exit 2", async () => {
     expect(await cliMainRemote(["frob"])).toBe(2)
   })

@@ -17,9 +17,13 @@ while [ -L "$SOURCE" ]; do
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")/.." >/dev/null 2>&1 && pwd)"
 
-# Auto-load model keys from .dev.vars (only if unset — an explicit env wins).
+# Auto-load keys from .dev.vars (only if unset — an explicit env wins). Includes
+# SIGILIX_API_KEY + SIGILIX_ENDPOINT: drop both in .dev.vars and `sigilix review` runs
+# HOSTED (our models) against that endpoint — no flag, no export. (The Worker lives at
+# its *.workers.dev URL today; api.sigilix.ai is the marketing/app site, so point
+# SIGILIX_ENDPOINT at the Worker until a custom API route exists.)
 if [[ -f "$ROOT/.dev.vars" ]]; then
-  for key in OPENROUTER_API_KEY OLLAMA_API_KEY GITHUB_TOKEN; do
+  for key in SIGILIX_API_KEY SIGILIX_ENDPOINT OPENROUTER_API_KEY OLLAMA_API_KEY GITHUB_TOKEN; do
     if [[ -z "${!key:-}" ]]; then
       val="$(grep -E "^${key}=" "$ROOT/.dev.vars" | head -n1 | cut -d= -f2- || true)"
       [[ -n "$val" ]] && export "$key=$val"

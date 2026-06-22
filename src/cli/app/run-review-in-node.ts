@@ -7,7 +7,7 @@
 // sourcing (`--uncommitted` / `--diff`) lands in a follow-up via a git-backed client.
 
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
-import type { DryRunReview } from "@/src/lib/ensemble/app/session"
+import { isDryRunEngineFailure, type DryRunReview } from "@/src/lib/ensemble/app/session"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { createLocalEnv } from "@/src/cli/adapters/local-env"
 import { localGitClient } from "@/src/cli/adapters/local-git-client"
@@ -62,13 +62,13 @@ export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRun
     dryRun: true,
     forceFullCoverage: true, // single-shot: no cross-run KV → avoid the SIG-459 empty-delta skip
   })
-  // RECALL-SAFETY: an engine failure (model 500 / timeout / internal throw) returns
-  // status "errored" with no dryRunReview. NEVER collapse that into the same `null`
-  // that means "nothing to review" — that would render a real failure as a clean
-  // pass (exit 0). Throw so the bin surfaces it and exits non-zero.
-  if (result.status === "errored") {
-    const reason = (result.telemetry as { internalError?: string }).internalError ?? "the review engine errored"
-    throw new Error(`review failed — ${reason}`)
+  // RECALL-SAFETY: an engine failure (errored, OR a no-verdict bail like a total
+  // model outage) must NEVER collapse into the `null` that means "nothing to review"
+  // — that would render a real failure as a clean pass (exit 0). Throw so the bin
+  // surfaces it and exits non-zero.
+  if (isDryRunEngineFailure(result)) {
+    const tel = result.telemetry as { internalError?: string; fellBackReason?: string }
+    throw new Error(`review failed — ${tel.internalError ?? tel.fellBackReason ?? "the review engine errored"}`)
   }
   return result.dryRunReview ?? null
 }

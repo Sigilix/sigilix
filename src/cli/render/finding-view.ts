@@ -3,7 +3,7 @@
 // from the canonical engine helpers, so json / agent-markdown / plain / (later) rich
 // all agree. Reuses `severityLabelForScore` + `trustWord` — no re-derivation.
 
-import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { PrReviewFinding, CodeContext } from "@/src/shared/domain/pr-review-finding"
 import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"
 import { trustWord } from "@/src/lib/trust-ledger-render"
 
@@ -21,6 +21,8 @@ export interface FindingView {
   suggestedReplacement?: string
   /** SIG-162: shape of the proposed change; `"delete"` means remove the anchored range. */
   kind?: "delete" | "replace" | "insert" | "describe"
+  /** SIG-304: runtime diff slice for the rich code panel (display evidence). */
+  codeContext?: CodeContext
 }
 
 export function toFindingView(f: PrReviewFinding): FindingView {
@@ -37,6 +39,7 @@ export function toFindingView(f: PrReviewFinding): FindingView {
     body: f.body,
     ...(f.suggestedReplacement !== undefined ? { suggestedReplacement: f.suggestedReplacement } : {}),
     ...(f.kind !== undefined ? { kind: f.kind } : {}),
+    ...(f.codeContext !== undefined ? { codeContext: f.codeContext } : {}),
   }
 }
 

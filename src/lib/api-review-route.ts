@@ -44,6 +44,7 @@ import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
+import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
 import { diffReviewClient } from "./api-review-diff-client"
 
 const MAX_DIFF_BYTES = 1_500_000 // reject oversized diffs (cost/abuse guard) → 413
@@ -179,11 +180,15 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a probe
   // that mints an installation token + hits GitHub still counts against the ceiling.
   let args: EnsembleHandlerArgs
+  // The diff we already have on each path → the per-finding code-context slice for the
+  // `--rich` panel (display evidence; attached to the result below, never gates anything).
+  let contextDiff: string | undefined
   if (parsed.mode === "diff") {
     if (parsed.diff.length > MAX_DIFF_BYTES) {
       return json({ error: "diff_too_large", detail: `diff exceeds ${MAX_DIFF_BYTES} bytes` }, 413)
     }
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    contextDiff = parsed.diff
     args = {
       owner: parsed.owner,
       repo: parsed.repo,
@@ -225,6 +230,12 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
       // Couldn't auth as the installation or read the PR (bad creds / PR not found / GitHub down).
       return json({ error: "pr_unavailable", detail: err instanceof Error ? err.message : String(err) }, 502)
     }
+    // Best-effort code-context source for the rich panel (display-only; never 502 on it).
+    try {
+      contextDiff = await client.getPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber)
+    } catch {
+      /* code context is best-effort — leave undefined */
+    }
     args = {
       owner: parsed.owner,
       repo: parsed.repo,
@@ -253,6 +264,9 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     const tel = result.telemetry as { internalError?: string; fellBackReason?: string }
     return json({ error: "review_failed", detail: tel.internalError ?? tel.fellBackReason ?? "engine error" }, 500)
   }
-  // 200 with the DryRunReview verbatim; `null` body = nothing to review (skipped).
-  return json(result.dryRunReview ?? null, 200)
+  // 200 with the DryRunReview; `null` body = nothing to review (skipped). Enrich the
+  // findings with the code-context slice (display evidence) from the diff we already had.
+  const review = result.dryRunReview
+  if (!review) return json(null, 200)
+  return json(contextDiff ? attachCodeContextToReview(review, contextDiff) : review, 200)
 }

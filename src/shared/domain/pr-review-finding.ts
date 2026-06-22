@@ -82,6 +82,27 @@ export interface EvidenceRecord {
   consensusScore: number
 }
 
+/**
+ * SIG-304 (review CLI): a runtime-only slice of the unified diff around a finding's
+ * anchor — the code context the `--rich` renderer shows as a line-numbered, diff-colored
+ * panel (the depth a hosted GitHub review gets from GitHub's own diff render). Sliced
+ * from the diff the engine ALREADY has (display evidence, like `trust` — never parsed
+ * from model output, never gates recall: absent → the card simply omits the panel). */
+export interface CodeContextLine {
+  /** new-file line number (RIGHT side); absent for a pure deletion line. */
+  newNumber?: number
+  /** old-file line number (LEFT side); absent for a pure addition line. */
+  oldNumber?: number
+  text: string
+  kind: "add" | "del" | "ctx"
+}
+export interface CodeContext {
+  side: "LEFT" | "RIGHT"
+  lines: CodeContextLine[]
+  /** true when the hunk window was capped (more lines exist than shown). */
+  truncated?: boolean
+}
+
 export interface PrReviewFinding {
   path: string
   line: number
@@ -149,6 +170,12 @@ export interface PrReviewFinding {
    * redacted by the AST runner; never parsed from model output.
    */
   astEvidence?: string
+  /**
+   * SIG-304 (review CLI): runtime-only diff slice for the `--rich` code panel,
+   * attached by the CLI driver / hosted route from the diff already in hand. Pure
+   * display evidence — never parsed from model output, never affects recall.
+   */
+  codeContext?: CodeContext
   /**
    * Inlines-only / outside-diff (founder ask): runtime-only flag — the finding's
    * `path` is NOT one of the PR's changed files, so it's about code OUTSIDE this

@@ -41,10 +41,15 @@ function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): s
 }
 
 export async function cliMainRemote(argv: readonly string[]): Promise<number> {
-  const sub = argv[0]
-  if (sub === undefined || sub === "--help" || sub === "-h") {
+  // --help / -h ANYWHERE → the full guide, exit 0 (so `sigilix review --help` works too).
+  if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(USAGE + "\n")
-    return sub === undefined ? 2 : 0
+    return 0
+  }
+  const sub = argv[0]
+  if (sub === undefined) {
+    process.stdout.write(USAGE + "\n")
+    return 2
   }
   if (sub !== "review") {
     process.stderr.write(`sigilix: unknown command '${sub}'\n\n${USAGE}\n`)

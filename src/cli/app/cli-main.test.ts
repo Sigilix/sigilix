@@ -57,6 +57,10 @@ describe("cliMain — validation + dispatch", () => {
     expect(await cliMain(["--help"])).toBe(0)
     expect(out.join("")).toContain("sigilix review")
   })
+  it("review --help → exit 0 (the full guide), even after the subcommand", async () => {
+    expect(await cliMain(["review", "--help"])).toBe(0)
+    expect(out.join("")).toContain("Source (pick one)")
+  })
   it("no args → exit 2 (usage)", async () => {
     expect(await cliMain([])).toBe(2)
   })

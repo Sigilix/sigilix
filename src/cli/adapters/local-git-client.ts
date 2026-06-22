@@ -12,7 +12,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import type { GitHubPort } from "@/src/lib/ensemble/ports/github"
-import type { PrChangedFile, PullRequestMeta } from "@/src/shared/types/github"
+import type { PrChangedFile, PrCommit, PullRequestMeta } from "@/src/shared/types/github"
 
 const pexec = promisify(execFile)
 
@@ -63,7 +63,17 @@ export type LocalReviewClient = GitHubPort & {
     repo: string,
     sha: string,
   ): Promise<{ headSha: string; treeSha: string; parents: string[] } | null>
+  getPullRequestCommits(owner: string, repo: string, prNumber: number): Promise<PrCommit[]>
   submitReview(owner: string, repo: string, prNumber: number, review: unknown): Promise<{ id: number; state: string }>
+  // Comment surface the overview pass references. Under dryRun only the reads run
+  // (return empty — a local review has no GitHub comments); the writes are
+  // publish-only and throw if ever reached.
+  listIssueComments(owner: string, repo: string, prNumber: number): Promise<unknown[]>
+  listIssueCommentsPage(owner: string, repo: string, prNumber: number, page: number): Promise<unknown[]>
+  getIssueComment(owner: string, repo: string, commentId: number): Promise<unknown>
+  createIssueComment(owner: string, repo: string, prNumber: number, body: string): Promise<{ id: number }>
+  updateIssueComment(owner: string, repo: string, commentId: number, body: string): Promise<unknown>
+  deleteIssueComment(owner: string, repo: string, commentId: number): Promise<unknown>
 }
 
 export function localGitClient(args: LocalGitArgs): LocalReviewClient {
@@ -198,9 +208,43 @@ export function localGitClient(args: LocalGitArgs): LocalReviewClient {
       return { headSha: sha, treeSha, parents }
     },
 
+    // getPullRequestCommits: the overview pass uses these for context. --uncommitted
+    // has none (changes aren't committed); --diff <base> = `git log <base>..HEAD`.
+    async getPullRequestCommits(): Promise<PrCommit[]> {
+      if (!base) return []
+      const raw = (await gitOrNull(cwd, ["log", "--format=%H%x09%s", `${base}..HEAD`])) ?? ""
+      return raw
+        .split("\n")
+        .filter((l) => l.trim() !== "")
+        .map((line) => {
+          const tab = line.indexOf("\t")
+          return tab === -1 ? { sha: line, message: "" } : { sha: line.slice(0, tab), message: line.slice(tab + 1) }
+        })
+    },
+
     // submitReview: the publish path is gated out under dryRun, so this must never run.
     async submitReview(): Promise<{ id: number; state: string }> {
       throw new Error("local-git-client: submitReview is unavailable for a local (dry-run) review — nothing is posted")
+    },
+
+    // Comment reads → empty (no GitHub comments on a local review); writes → throw.
+    async listIssueComments(): Promise<unknown[]> {
+      return []
+    },
+    async listIssueCommentsPage(): Promise<unknown[]> {
+      return []
+    },
+    async getIssueComment(): Promise<unknown> {
+      return null
+    },
+    async createIssueComment(): Promise<{ id: number }> {
+      throw new Error("local-git-client: createIssueComment unavailable for a local (dry-run) review")
+    },
+    async updateIssueComment(): Promise<unknown> {
+      throw new Error("local-git-client: updateIssueComment unavailable for a local (dry-run) review")
+    },
+    async deleteIssueComment(): Promise<unknown> {
+      throw new Error("local-git-client: deleteIssueComment unavailable for a local (dry-run) review")
     },
 
     // No local equivalents — the engine tolerates empties (ARC-182).

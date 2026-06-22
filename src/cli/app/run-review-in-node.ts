@@ -30,8 +30,9 @@ export interface RunReviewInNodeArgs {
 /**
  * Run the review engine headless against a real PR and return the built review
  * (final verdict + body-only findings) WITHOUT posting anything. Throws if the PR's
- * head SHA can't be resolved. Returns null when the engine skipped (nothing to
- * review). The caller picks an output mode + exit code.
+ * head SHA can't be resolved OR if the engine errored — a failed review must surface
+ * as an error (non-zero exit), never as a silent clean pass. Returns null ONLY when
+ * the engine genuinely had nothing to review. The caller picks an output mode + exit.
  */
 export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRunReview | null> {
   // chatEnabled MUST be on so the specialist models actually run (never hardcode
@@ -61,5 +62,13 @@ export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRun
     dryRun: true,
     forceFullCoverage: true, // single-shot: no cross-run KV → avoid the SIG-459 empty-delta skip
   })
+  // RECALL-SAFETY: an engine failure (model 500 / timeout / internal throw) returns
+  // status "errored" with no dryRunReview. NEVER collapse that into the same `null`
+  // that means "nothing to review" — that would render a real failure as a clean
+  // pass (exit 0). Throw so the bin surfaces it and exits non-zero.
+  if (result.status === "errored") {
+    const reason = (result.telemetry as { internalError?: string }).internalError ?? "the review engine errored"
+    throw new Error(`review failed — ${reason}`)
+  }
   return result.dryRunReview ?? null
 }

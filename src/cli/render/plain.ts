@@ -12,13 +12,18 @@ function line(v: FindingView): string {
 }
 
 export function renderPlain(review: DryRunReview): string {
+  // RECALL-SAFETY: a partial review (a specialist was unavailable) must be visible even
+  // in --plain (the CI/piped default) — never let "no findings" read as a clean pass.
+  const banner = review.incomplete
+    ? `! partial review — ${review.incomplete.rolesMissing.join(", ")} specialist(s) unavailable; NOT a full sign-off\n`
+    : ""
   const { inline, body } = viewsFor(review.verdict.findings, review.unanchoredFindings)
   const all = [...inline, ...body]
-  if (all.length === 0) return "sigilix: no findings\n"
+  if (all.length === 0) return banner + "sigilix: no findings\n"
   const counts = all.reduce<Record<string, number>>(
     (acc, v) => ((acc[v.severity] = (acc[v.severity] ?? 0) + 1), acc),
     {},
   )
   const footer = ["P0", "P1", "P2", "P3"].map((s) => `${counts[s] ?? 0} ${s}`).join(" · ")
-  return all.map(line).join("\n") + `\n\n${all.length} findings (${footer})\n`
+  return banner + all.map(line).join("\n") + `\n\n${all.length} findings (${footer})\n`
 }

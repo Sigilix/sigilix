@@ -8,7 +8,7 @@ import { parseArgs } from "node:util"
 import { execFileSync } from "node:child_process"
 import { runReviewInNode } from "./run-review-in-node"
 import { runOverviewInNode } from "./run-overview-in-node"
-import { runReviewRemote } from "./run-review-remote"
+import { runReviewRemote, runReviewRemoteGrounded } from "./run-review-remote"
 import { exitCodeForFindings } from "./exit-code"
 import { toFindingView } from "@/src/cli/render/finding-view"
 import { renderJson } from "@/src/cli/render/json"
@@ -18,34 +18,34 @@ import { renderRich } from "@/src/cli/render/rich"
 import { runWithSplash } from "@/src/cli/ansi/splash"
 import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 
-const USAGE = `sigilix review — local PR review (BYO model key via env)
+const USAGE = `sigilix review — code review on Sigilix's models (hosted)
 
 Usage:
-  sigilix review --repo <owner/repo> --pr <number> [output] [--token <gh-token>]
+  sigilix review --repo <owner/repo> --pr <number> [output]   # review a GitHub PR (grounded)
   sigilix review --uncommitted [output]            # review your local working-tree changes
-  sigilix review --diff <base> [output]            # review <base>...HEAD (no PR / no token)
+  sigilix review --diff <base> [output]            # review the <base>...HEAD range
 
 Source (pick one):
-  --repo + --pr   review a GitHub PR (needs a token)
-  --uncommitted   review uncommitted working-tree changes (local git, no token)
-  --diff <base>   review the <base>...HEAD range (local git, no token)
+  --repo + --pr   review a GitHub PR — grounded via our GitHub App (must be installed)
+  --uncommitted   review uncommitted working-tree changes
+  --diff <base>   review the <base>...HEAD range
 
 Options (output):
   --rich    truecolor PR-style panel: overview + sequence diagram + findings
-            (default on a TTY; also runs the overview pass for the diagram)
+            (default on a TTY)
   --json    machine-readable JSON (findings + proof tiers)
   --agent   agent-friendly output for a coding agent (Claude Code / Codex): path:line + fixes
   --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
   --no-splash  disable the animated splash (it runs by default on a TTY while reviewing)
-  --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
-  --endpoint  Sigilix API base URL for hosted runs (else \$SIGILIX_ENDPOINT)
+  --endpoint  Sigilix API base URL (else \$SIGILIX_ENDPOINT)
 
-Hosted (flagship): set \$SIGILIX_API_KEY and --uncommitted / --diff run on Sigilix's
-models server-side — no model key of your own needed. Otherwise it's BYO:
-Model key: set \$OPENROUTER_API_KEY (the review runs on it). The --rich sequence
-diagram also runs an overview pass that needs \$OLLAMA_API_KEY today (else --rich
-degrades to review-only). Set SIGILIX_DEBUG=1 to see engine logs.
-Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.`
+Auth: set \$SIGILIX_API_KEY — the review runs on Sigilix's models server-side (no model
+key of your own). A PR (--repo/--pr) is reviewed grounded via our GitHub App.
+Set SIGILIX_DEBUG=1 to see engine logs.
+Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.
+
+[dev] --local runs the bundled engine on your own \$OPENROUTER_API_KEY instead of hosted
+(testing / the agent substrate; --rich then also runs a \$OLLAMA_API_KEY overview pass).`
 
 export function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): string {
   if (mode === "json") return renderJson(review)
@@ -83,6 +83,7 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         plain: { type: "boolean" },
         "no-splash": { type: "boolean" },
         endpoint: { type: "string" },
+        local: { type: "boolean" },
       },
       allowPositionals: false,
     }).values
@@ -100,14 +101,35 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     process.stderr.write("sigilix: pick ONE source — --repo/--pr, --uncommitted, or --diff <base> (not several)\n")
     return 2
   }
+  // Reject an empty --diff base: `--diff ""` would label the run "...HEAD" (a range) but
+  // git treats the empty ref as falsy and reviews the working tree — a silent scope mismatch.
+  if (values.diff !== undefined && values.diff.trim() === "") {
+    process.stderr.write("sigilix: --diff <base> needs a non-empty base ref (e.g. --diff main)\n")
+    return 2
+  }
+
+  // HOSTED is the product: `sigilix review` runs on Sigilix's models server-side via
+  // $SIGILIX_API_KEY — local sources (--uncommitted/--diff) post their diff (Mode A); a
+  // PR (--repo/--pr) is reviewed GROUNDED via our GitHub App (Mode B). There is NO user
+  // BYO for review. `--local` is an undocumented dev/agent escape hatch that runs the
+  // bundled engine on your own $OPENROUTER_API_KEY instead (used for our own probes).
+  const useLocal = values.local === true
+  const hostedKey = process.env.SIGILIX_API_KEY ?? ""
+  const endpoint = values.endpoint ?? process.env.SIGILIX_ENDPOINT ?? "https://api.sigilix.ai"
+  if (!useLocal && hostedKey === "") {
+    process.stderr.write(
+      "sigilix: set $SIGILIX_API_KEY — `sigilix review` runs on Sigilix's models (hosted). [dev: --local runs a local engine on $OPENROUTER_API_KEY]\n",
+    )
+    return 2
+  }
 
   // Source: local working tree (--uncommitted) or a base range (--diff <base>),
-  // else a real GitHub PR (--repo + --pr + token).
+  // else a real GitHub PR (--repo + --pr; + token only for the BYO local engine).
   const localMode = values.uncommitted === true || values.diff !== undefined
   let owner: string
   let repoName: string
   let prNumber: number
-  let source: { githubToken: string } | { git: { cwd: string; base?: string } }
+  let source: { githubToken: string } | { git: { cwd: string; base?: string } } | { grounded: true }
   let subject: string
 
   if (localMode) {
@@ -158,23 +180,25 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
       return 2
     }
     prNumber = Number(values.pr)
-    const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
-    if (githubToken === undefined || githubToken.length === 0) {
-      process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
-      return 2
-    }
-    source = { githubToken }
     subject = `${owner}/${repoName}#${prNumber}`
+    if (!useLocal) {
+      // Grounded hosted (Mode B): the server reads the PR via our GitHub App — no token.
+      source = { grounded: true }
+    } else {
+      // --local (dev/agent BYO): a token is required to read the PR ourselves.
+      const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
+      if (githubToken === undefined || githubToken.length === 0) {
+        process.stderr.write("sigilix: --local on a PR needs a GitHub token (--token or $GITHUB_TOKEN)\n")
+        return 2
+      }
+      source = { githubToken }
+    }
   }
 
-  // HOSTED (thin-client flagship): when $SIGILIX_API_KEY is set, a local-diff
-  // source runs on the Sigilix endpoint (our models, server-side) instead of the
-  // local engine — no BYO model key needed. (--repo/--pr stays local-engine for
-  // now; grounded hosted = SIG-304 Phase 2.4.) The returned review renders
-  // identically; --rich shows the panel without the diagram (overview stays local).
-  const hostedKey = process.env.SIGILIX_API_KEY ?? ""
-  const endpoint = values.endpoint ?? process.env.SIGILIX_ENDPOINT ?? "https://api.sigilix.ai"
-  const remote = hostedKey !== "" && localMode
+  // Hosted is the default; --local runs the bundled engine on the user's own key. The
+  // review renders identically either way; --rich shows the panel without the diagram
+  // (the overview pass is a local-engine feature).
+  const remote = !useLocal
   if (remote) subject = `${subject}  ·  hosted`
 
   // Color iff an interactive TTY and NO_COLOR is unset. Rich is the default for a
@@ -203,9 +227,15 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     review: Awaited<ReturnType<typeof runReviewInNode>>
     overview: Awaited<ReturnType<typeof runOverviewInNode>>
   }> => {
-    // Hosted path: POST the local diff to /v1/review (engine runs server-side). No
-    // overview (it's a local-engine feature) → --rich renders without the diagram.
+    // Hosted paths: /v1/review runs the engine server-side. No overview (it's a
+    // local-engine feature) → --rich renders without the diagram.
+    if ("grounded" in source) {
+      // Mode B: a PR reviewed grounded via our GitHub App (server reads the PR).
+      const review = await runReviewRemoteGrounded({ endpoint, apiKey: hostedKey, owner, repo: repoName, prNumber })
+      return { review, overview: null }
+    }
     if (remote && "git" in source) {
+      // Mode A: POST the local diff (ungrounded).
       const review = await runReviewRemote({ endpoint, apiKey: hostedKey, owner, repo: repoName, git: source.git })
       return { review, overview: null }
     }
@@ -239,5 +269,5 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
       : renderReview(review, mode)
   process.stdout.write(out.endsWith("\n") ? out : out + "\n")
   const views = [...review.verdict.findings, ...review.unanchoredFindings].map(toFindingView)
-  return exitCodeForFindings(views)
+  return exitCodeForFindings(views, review.incomplete != null)
 }

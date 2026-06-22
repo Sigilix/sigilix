@@ -153,6 +153,17 @@ export function renderRich(review: DryRunReview, overview: PrOverviewVerdict | n
       paint(summaryWrapped[0] ?? "", { fg: THEME.text }),
   )
   for (const ln of summaryWrapped.slice(1)) ovLines.push(paint(ln, { fg: THEME.text }))
+  // RECALL-SAFETY: a partial review (a specialist was unavailable) is flagged loudly so
+  // a clean-looking panel is never mistaken for a full sign-off.
+  if (review.incomplete) {
+    ovLines.push("")
+    for (const ln of wrap(
+      `⚠ Partial review — ${review.incomplete.rolesMissing.join(", ")} specialist(s) unavailable; NOT a full sign-off.`,
+      w - 6,
+    )) {
+      ovLines.push(paint(ln, { fg: SEVERITY_HEX.P1, bold: true }))
+    }
+  }
   // file table (from the overview pass)
   if (overview?.files?.length) {
     ovLines.push("")
@@ -213,7 +224,9 @@ export function renderRich(review: DryRunReview, overview: PrOverviewVerdict | n
     dim("   proof — most → least") +
     "\n"
 
-  const code = exitCodeForFindings(all) // single source of truth (matches the process exit code)
+  // Pass `incomplete` so the displayed code matches the REAL process exit code — a
+  // degraded zero-finding review must not print "exit 0" under its own partial banner.
+  const code = exitCodeForFindings(all, review.incomplete != null)
   o +=
     "\n  " +
     paint(`exit ${code}`, { fg: code === 0 ? THEME.diffPlus : THEME.redHi, bold: true }) +

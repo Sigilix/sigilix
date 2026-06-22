@@ -260,7 +260,13 @@ export function dryRunResult(
   verdict: PrReviewVerdict,
   unanchoredFindings: readonly PrReviewFinding[],
 ): EnsembleResult {
-  return { status: "skipped", telemetry, dryRunReview: { verdict, unanchoredFindings } }
+  // Carry the degraded-coverage signal across the dry-run boundary so a headless
+  // caller can refuse to read a PARTIAL review (a specialist was unavailable) as a
+  // clean pass — the same incompleteness the prod path turns into an APPROVE→COMMENT
+  // downgrade + Coverage line. Full coverage → no `incomplete` field.
+  const dc = telemetry.degradedCoverage
+  const incomplete = dc && dc.rolesMissing.length > 0 ? { incomplete: { rolesMissing: dc.rolesMissing } } : {}
+  return { status: "skipped", telemetry, dryRunReview: { verdict, unanchoredFindings, ...incomplete } }
 }
 
 /**

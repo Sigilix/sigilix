@@ -12,10 +12,15 @@
 //     "ungrounded" is literally true (review is diff-only). Phase 2.1.
 //
 //   Mode B (`mode:"grounded"`) — GROUNDED via the GitHub App. The server resolves the
-//     repo's installation (resolveInstallation), lets the orchestrator build the real
-//     client (buildClient → real GitHub fetches), and passes the REAL env so live
-//     code-index / graph retrieval runs. Still dryRun (a CLI review must return JSON,
-//     never post a comment to the PR). Phase 2.4.
+//     repo's installation (resolveInstallation), builds the real client (buildClient →
+//     real GitHub fetches), and passes the REAL env so live code-index / graph
+//     retrieval runs. `headSha` is OPTIONAL here: a hosted CLI caller (`--repo/--pr`)
+//     has no token, so when it's omitted the server reads it from the PR via the App
+//     and injects the client it already built (the CLIENT is reused, though the
+//     orchestrator still re-issues its own PR-meta GETs for the stale-head guards).
+//     Still dryRun (a CLI
+//     review must return JSON, never post a comment to the PR). Phase 2.4 (server
+//     capability); the CLI wiring (`--repo/--pr` + $SIGILIX_API_KEY → grounded).
 //
 //     NO USER-FACING WRITES under dryRun: the orchestrator returns the built review
 //     BEFORE publishReviewSubmission, so nothing is posted to the PR. Review-memory /
@@ -38,6 +43,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { diffReviewClient } from "./api-review-diff-client"
 
 const MAX_DIFF_BYTES = 1_500_000 // reject oversized diffs (cost/abuse guard) → 413
@@ -108,13 +114,13 @@ interface ReviewApiCommon {
   owner: string
   repo: string
   prNumber: number
-  headSha: string
   baseSha?: string
 }
-/** Mode A: the client posts the diff; the server reviews it ungrounded. */
-type DiffModeBody = ReviewApiCommon & { mode: "diff"; diff: string }
-/** Mode B: the server fetches the PR via the GitHub App and reviews it grounded. */
-type GroundedModeBody = ReviewApiCommon & { mode: "grounded" }
+/** Mode A: the client posts the diff; the server reviews it ungrounded. headSha required. */
+type DiffModeBody = ReviewApiCommon & { mode: "diff"; headSha: string; diff: string }
+/** Mode B: the server fetches the PR via the GitHub App and reviews it grounded. headSha
+ *  is OPTIONAL — a hosted CLI caller has no token, so the server reads it from the PR. */
+type GroundedModeBody = ReviewApiCommon & { mode: "grounded"; headSha?: string }
 type ReviewApiBody = DiffModeBody | GroundedModeBody
 
 /** Validate the request body shape; return the typed body or an error string. */
@@ -124,20 +130,27 @@ function parseBody(raw: unknown): ReviewApiBody | string {
   if (typeof b.owner !== "string" || b.owner === "") return "owner (string) is required"
   if (typeof b.repo !== "string" || b.repo === "") return "repo (string) is required"
   if (typeof b.prNumber !== "number" || !Number.isInteger(b.prNumber)) return "prNumber (integer) is required"
-  if (typeof b.headSha !== "string" || b.headSha === "") return "headSha (string) is required"
   if (b.baseSha !== undefined && typeof b.baseSha !== "string") return "baseSha must be a string"
+  if (b.headSha !== undefined && typeof b.headSha !== "string") return "headSha must be a string"
   if (b.mode !== undefined && b.mode !== "diff" && b.mode !== "grounded") return 'mode must be "diff" or "grounded"'
   const common: ReviewApiCommon = {
     owner: b.owner,
     repo: b.repo,
     prNumber: b.prNumber,
-    headSha: b.headSha,
     ...(typeof b.baseSha === "string" ? { baseSha: b.baseSha } : {}),
   }
-  if (b.mode === "grounded") return { ...common, mode: "grounded" }
-  // Default (and explicit "diff"): Mode A requires the diff.
+  if (b.mode === "grounded") {
+    // headSha optional: the server resolves it from the PR when absent.
+    return {
+      ...common,
+      mode: "grounded",
+      ...(typeof b.headSha === "string" && b.headSha !== "" ? { headSha: b.headSha } : {}),
+    }
+  }
+  // Default (and explicit "diff"): Mode A requires headSha + the diff.
+  if (typeof b.headSha !== "string" || b.headSha === "") return "headSha (string) is required for Mode A"
   if (typeof b.diff !== "string" || b.diff === "") return "diff (non-empty string) is required for Mode A"
-  return { ...common, mode: "diff", diff: b.diff }
+  return { ...common, mode: "diff", headSha: b.headSha, diff: b.diff }
 }
 
 /**
@@ -159,15 +172,18 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  // Per-mode validation, then build the engine args. Both modes are dryRun (a CLI
-  // review returns JSON and never posts) + forceFullCoverage (single-shot: avoid the
-  // SIG-459 empty-delta skip). Validation rejections happen BEFORE the daily ceiling
-  // so a 400/413/422/503 doesn't consume the day's budget.
+  // Per-mode: cheap validation → daily ceiling → build the engine args. Both modes are
+  // dryRun (a CLI review returns JSON, never posts) + forceFullCoverage (single-shot:
+  // avoid the SIG-459 empty-delta skip). Cheap validation (400/413/422/503) happens
+  // BEFORE the ceiling so it doesn't consume budget; the ceiling runs BEFORE any model
+  // spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a probe
+  // that mints an installation token + hits GitHub still counts against the ceiling.
   let args: EnsembleHandlerArgs
   if (parsed.mode === "diff") {
     if (parsed.diff.length > MAX_DIFF_BYTES) {
       return json({ error: "diff_too_large", detail: `diff exceeds ${MAX_DIFF_BYTES} bytes` }, 413)
     }
+    if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
     args = {
       owner: parsed.owner,
       repo: parsed.repo,
@@ -180,8 +196,8 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
       forceFullCoverage: true,
     }
   } else {
-    // Mode B (grounded): the orchestrator builds the real client from the resolved
-    // installation, so the GitHub App must be configured and installed on the repo.
+    // Mode B (grounded): resolve the installation, build the real client, and review
+    // the live PR. The GitHub App must be configured and installed on the repo.
     if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
       return json({ error: "grounded_not_configured" }, 503)
     }
@@ -195,23 +211,31 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
         422,
       )
     }
+    // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
+    // GitHub counts against the budget (no free installation enumeration).
+    if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    const groundedEnv = groundedReviewEnv(env) // REAL bindings (retrieval live), review-memory off, no repoId.
+    let client: GitHubClient
+    let headSha: string
+    try {
+      client = await buildClient(groundedEnv, lookup.installationId)
+      // headSha is optional from a hosted CLI (no token) — read it from the PR when absent.
+      headSha = parsed.headSha ?? (await client.getPullRequest(parsed.owner, parsed.repo, parsed.prNumber)).head.sha
+    } catch (err) {
+      // Couldn't auth as the installation or read the PR (bad creds / PR not found / GitHub down).
+      return json({ error: "pr_unavailable", detail: err instanceof Error ? err.message : String(err) }, 502)
+    }
     args = {
       owner: parsed.owner,
       repo: parsed.repo,
       prNumber: parsed.prNumber,
-      headSha: parsed.headSha,
-      installationId: lookup.installationId, // orchestrator → buildClient(env, id) → real grounded client
-      env: groundedReviewEnv(env), // REAL bindings (grounded retrieval live), review-memory off, no repoId/client.
+      headSha,
+      installationId: lookup.installationId,
+      env: groundedEnv,
+      githubClient: client, // built here to resolve headSha → inject so the orchestrator doesn't rebuild the CLIENT
       dryRun: true,
       forceFullCoverage: true,
     }
-  }
-
-  // Coarse endpoint-wide daily ceiling (cost guard) — placed after all validation so a
-  // 400/413/422/503 doesn't burn budget, but BEFORE the engine: a run that reaches the
-  // engine counts even if it later errors (it can still incur real model spend).
-  if (!(await admitUnderDailyCeiling(env))) {
-    return json({ error: "daily_limit_exceeded" }, 429)
   }
 
   let result

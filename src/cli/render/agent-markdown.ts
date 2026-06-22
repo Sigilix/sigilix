@@ -30,6 +30,14 @@ export function renderAgentMarkdown(review: DryRunReview): string {
     "",
     review.verdict.summary.trim(),
   ]
+  // RECALL-SAFETY: an agent must know the review was PARTIAL (a specialist was
+  // unavailable) so it doesn't treat "no findings" as a sign-off.
+  if (review.incomplete) {
+    out.push(
+      "",
+      `> ⚠ Partial review — ${review.incomplete.rolesMissing.join(", ")} specialist(s) unavailable. This is NOT a full sign-off; re-run before relying on a clean result.`,
+    )
+  }
   if (inline.length > 0) {
     out.push("", "## Inline findings", "", ...inline.map(renderOne))
   }

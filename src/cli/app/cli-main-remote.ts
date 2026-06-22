@@ -128,20 +128,7 @@ export async function cliMainRemote(argv: readonly string[]): Promise<number> {
       process.stderr.write("sigilix: --uncommitted / --diff must be run inside a git repository\n")
       return 2
     }
-    // RECALL-SAFETY: --uncommitted reviews tracked changes only; warn about untracked files.
-    if (hasUncommitted) {
-      try {
-        const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
-          .split("\n")
-          .filter((l) => l.trim() !== "")
-        if (untracked.length > 0) {
-          const shown = untracked.slice(0, 8).join(", ") + (untracked.length > 8 ? ", …" : "")
-          process.stderr.write(`sigilix: ⚠ ${untracked.length} untracked file(s) will NOT be reviewed: ${shown}\n`)
-        }
-      } catch {
-        /* best-effort */
-      }
-    }
+    // SIG-490: --uncommitted reviews tracked + untracked (new) files; no warning needed.
     const git = { cwd, ...(values.diff !== undefined ? { base: values.diff } : {}) }
     subject = `${values.diff !== undefined ? `${values.diff}...HEAD` : "working tree"}  ·  hosted`
     compute = () => runReviewRemote({ endpoint, apiKey, owner: "local", repo: "local", git })

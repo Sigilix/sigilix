@@ -5,9 +5,11 @@
 // merge-base) via execFile — never a mutating verb, so running it has zero side
 // effects (the test asserts `git status` is unchanged afterward).
 //
-// `base` undefined ⇒ `--uncommitted` (working tree vs HEAD; tracked changes only —
-// untracked files would need an index-mutating `add -N`, which we won't do).
-// `base` set ⇒ `--diff <base>` (the PR-style `<base>...HEAD` range).
+// `base` undefined ⇒ `--uncommitted` (working tree vs HEAD). Tracked changes come from
+// `git diff HEAD`; untracked (new, non-ignored) files are ALSO reviewed (SIG-490 — new
+// files are the highest-risk pre-commit code) as new-file diffs via the read-only
+// `git diff --no-index /dev/null <f>` (NO index-mutating `add -N`).
+// `base` set ⇒ `--diff <base>` (the PR-style `<base>...HEAD` range; untracked irrelevant).
 
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -34,6 +36,20 @@ async function gitOrNull(cwd: string, args: readonly string[]): Promise<string |
     return await git(cwd, args)
   } catch {
     return null
+  }
+}
+// `git diff --no-index /dev/null <file>` → a new-file diff for an UNTRACKED file, with
+// NO index mutation (read-only). It exits 1 when there are differences (always, for a
+// new file), which execFile surfaces as a rejection carrying `.stdout` — return that;
+// exit >1 (e.g. a read error) → null (skip the file, never fail the review).
+async function diffNoIndex(cwd: string, file: string): Promise<string | null> {
+  try {
+    // core.quotePath=false so the diff headers carry the REAL path (not C-quoted
+    // `"caf\303\251.ts"`), matching how the file is named for the parser + renderer.
+    return await git(cwd, ["-c", "core.quotePath=false", "diff", "--no-index", "--no-color", "/dev/null", file])
+  } catch (e) {
+    const err = e as { code?: number; stdout?: string }
+    return err.code === 1 && typeof err.stdout === "string" ? err.stdout : null
   }
 }
 
@@ -105,6 +121,32 @@ export function localGitClient(args: LocalGitArgs): LocalReviewClient {
     return files
   }
 
+  // SIG-490: untracked (new, non-ignored) files for `--uncommitted`, each as a read-only
+  // new-file diff. `git ls-files --others --exclude-standard` already honors .gitignore.
+  // Oversized files (>MAX_FILE_BYTES) are skipped to bound the diff. [] for `--diff`.
+  async function untrackedEntries(): Promise<Array<{ path: string; diff: string; additions: number }>> {
+    if (base !== undefined) return []
+    // `core.quotePath=false` → real paths, NOT C-quoted (`"caf\303\251.ts"`), so
+    // diffNoIndex can actually find Unicode/space-named files instead of failing and
+    // dropping them (the file would otherwise go unreviewed — a recall gap).
+    const listRaw =
+      (await gitOrNull(cwd, ["-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard"])) ?? ""
+    const paths = listRaw.split("\n").filter((p) => p.trim() !== "")
+    const out: Array<{ path: string; diff: string; additions: number }> = []
+    for (const path of paths) {
+      const diff = await diffNoIndex(cwd, path)
+      // Skip: null/empty (exit >1, or a "Could not access" failure → exit 1 + empty stdout)
+      // or oversized. A new file's diff is non-empty; an empty result means we couldn't read it.
+      if (!diff || diff.length > MAX_FILE_BYTES) continue
+      const additions = diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).length
+      // additions === 0 ⇒ a binary file ("Binary files … differ", no + lines) or an empty
+      // file → nothing reviewable, and pushing it would inject a phantom `added` entry.
+      if (additions === 0) continue
+      out.push({ path, diff, additions })
+    }
+    return out
+  }
+
   return {
     async getPullRequest(_owner: string, _repo: string, prNumber: number): Promise<PullRequestMeta> {
       const headSha = (await gitOrNull(cwd, ["rev-parse", "HEAD"]))?.trim() ?? ""
@@ -123,11 +165,18 @@ export function localGitClient(args: LocalGitArgs): LocalReviewClient {
     },
 
     async getPullRequestDiff(): Promise<string> {
-      return git(cwd, ["diff", ...diffRange(base)])
+      const tracked = await git(cwd, ["diff", ...diffRange(base)])
+      // --uncommitted: append untracked new-file diffs so new files get reviewed (SIG-490).
+      const untracked = (await untrackedEntries()).map((e) => e.diff).join("")
+      return untracked ? tracked + untracked : tracked
     },
 
     async listPullRequestFiles(): Promise<PrChangedFile[]> {
-      return changedFiles()
+      const files = await changedFiles()
+      for (const e of await untrackedEntries()) {
+        files.push({ filename: e.path, status: "added", additions: e.additions, deletions: 0 })
+      }
+      return files
     },
 
     async listPullFilesForManifest(): Promise<{
@@ -150,6 +199,9 @@ export function localGitClient(args: LocalGitArgs): LocalReviewClient {
           }
         })
         .filter((e) => e.filename !== "")
+      for (const e of await untrackedEntries()) {
+        entries.push({ filename: e.path, previous_filename: null, status: "added" })
+      }
       return { overflow: false, entries }
     },
 

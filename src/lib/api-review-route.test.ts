@@ -13,8 +13,26 @@ import type { Env } from "@/src/shared/types/env"
 
 const mockEngine = vi.mocked(handlePrReviewEnsemble)
 const TOKEN = "test-secret-key"
-const env = (key?: string): Env => ({ OPENCLAW_SIGILIX_API_KEY: key }) as unknown as Env
+const env = (key?: string, extra: Partial<Env> = {}): Env =>
+  ({ OPENCLAW_SIGILIX_API_KEY: key, ...extra }) as unknown as Env
+/** A grounded-ready env: GitHub App configured + an installation map for o/r → 42. */
+const groundedEnv = (extra: Partial<Env> = {}): Env =>
+  env(TOKEN, {
+    GITHUB_APP_ID: "1",
+    GITHUB_PRIVATE_KEY: "pk",
+    OPENCLAW_GITHUB_INSTALLATION_MAP: '{"o/r":"42"}',
+    ...extra,
+  })
+/** Minimal KVNamespace mock for the daily-ceiling counter. */
+function kvMock(getVal: string | null = null): Env["OPENCLAW_STATE"] {
+  return {
+    get: vi.fn(async () => getVal),
+    put: vi.fn(async () => undefined),
+  } as unknown as Env["OPENCLAW_STATE"]
+}
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-const x=1\n+const x=2\n"
+const okReview = { verdict: { summary: "s", confidence: 4, findings: [] }, unanchoredFindings: [] }
+const okResult = { status: "skipped", dryRunReview: okReview, telemetry: {} } as never
 
 function req(body: unknown, token: string | null = TOKEN): Request {
   return new Request("https://api.sigilix.ai/v1/review", {
@@ -87,6 +105,104 @@ describe("handleReviewApiRoute — engine status mapping (recall-safety)", () =>
     const res = await handleReviewApiRoute(req(validBody), env(TOKEN))
     expect(res.status).toBe(200)
     expect(await res.json()).toBeNull()
+  })
+  // Regression for the recall-safety hole the reviewers caught: these no-verdict bail
+  // reasons used to be missing from NO_VERDICT_FAILURES → a failed synth read as 200/null.
+  it.each(["synth_failed_parse", "synth_invalid_provenance", "cost_governor_trimmed_all_routable"])(
+    "RECALL-SAFETY: a no-verdict bail (%s) → 500, NOT a 200/null clean pass",
+    async (fellBackReason) => {
+      mockEngine.mockResolvedValue({ status: "skipped", telemetry: { fellBackReason } } as never)
+      expect((await handleReviewApiRoute(req(validBody), env(TOKEN))).status).toBe(500)
+    },
+  )
+})
+
+describe("handleReviewApiRoute — Mode B (grounded)", () => {
+  const groundedBody = { mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "abc123" }
+
+  it("400 on an unknown mode value", async () => {
+    const res = await handleReviewApiRoute(req({ ...validBody, mode: "wat" }), env(TOKEN))
+    expect(res.status).toBe(400)
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+  it("grounded does NOT require a diff (no 400)", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv())).status).toBe(200)
+  })
+  it("503 grounded_not_configured when the GitHub App secrets are unset", async () => {
+    const res = await handleReviewApiRoute(req(groundedBody), env(TOKEN)) // no APP_ID/PRIVATE_KEY
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error?: string }).error).toBe("grounded_not_configured")
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+  it("422 app_not_installed when the repo isn't in the installation map", async () => {
+    const e = groundedEnv({ OPENCLAW_GITHUB_INSTALLATION_MAP: '{"other/repo":"9"}' })
+    const res = await handleReviewApiRoute(req(groundedBody), e)
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { error?: string }).error).toBe("app_not_installed")
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+  it("grounded runs the engine with the RESOLVED installation, the REAL env, and NO injected client", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const e = groundedEnv()
+    const res = await handleReviewApiRoute(req(groundedBody), e)
+    expect(res.status).toBe(200)
+    const callArgs = mockEngine.mock.calls[0]?.[0] as unknown as Record<string, unknown>
+    expect(callArgs.installationId).toBe(42) // resolved from the map
+    expect(callArgs.githubClient).toBeUndefined() // orchestrator builds the real client
+    expect(callArgs.repoId).toBeUndefined() // no repoId → no review-memory / learnings writes
+    expect(callArgs.dryRun).toBe(true) // a CLI review never posts
+    expect(callArgs.forceFullCoverage).toBe(true)
+    const passedEnv = callArgs.env as Record<string, unknown>
+    expect(passedEnv.GITHUB_APP_ID).toBe("1") // REAL env passthrough (not a fresh stub)
+    expect(passedEnv.OPENCLAW_CODE_INDEX).toBeUndefined() // NOT the ungrounded clone → grounded retrieval is live
+    expect(passedEnv.OPENCLAW_REVIEW_MEMORY_ENABLED).toBe("off") // review-memory disabled → no compute-path write
+  })
+  it("RECALL-SAFETY: a grounded errored run → 500, never a clean pass", async () => {
+    mockEngine.mockResolvedValue({ status: "errored", telemetry: { internalError: "boom" } } as never)
+    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv())).status).toBe(500)
+  })
+})
+
+describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
+  it("429 once the day's counter has reached the limit (engine not called)", async () => {
+    const e = env(TOKEN, { OPENCLAW_STATE: kvMock("200") }) // default limit is 200
+    const res = await handleReviewApiRoute(req(validBody), e)
+    expect(res.status).toBe(429)
+    expect(((await res.json()) as { error?: string }).error).toBe("daily_limit_exceeded")
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+  it("admits and increments the counter when under the limit", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const kv = kvMock(null)
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: kv }))
+    expect(res.status).toBe(200)
+    expect(kv.put).toHaveBeenCalledWith(expect.stringMatching(/^v1review:count:/), "1", expect.anything())
+  })
+  it("respects a custom OPENCLAW_SIGILIX_API_DAILY_LIMIT", async () => {
+    const e = env(TOKEN, { OPENCLAW_STATE: kvMock("5"), OPENCLAW_SIGILIX_API_DAILY_LIMIT: "5" })
+    expect((await handleReviewApiRoute(req(validBody), e)).status).toBe(429)
+  })
+  it("is best-effort: a KV failure never blocks the review", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const throwingKv = {
+      get: vi.fn(async () => {
+        throw new Error("kv down")
+      }),
+      put: vi.fn(),
+    } as unknown as Env["OPENCLAW_STATE"]
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: throwingKv }))
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+  it("a validation rejection (422) does NOT consume the day's budget", async () => {
+    const kv = kvMock(null)
+    const e = groundedEnv({ OPENCLAW_GITHUB_INSTALLATION_MAP: "{}", OPENCLAW_STATE: kv })
+    expect(
+      (await handleReviewApiRoute(req({ mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "s" }), e))
+        .status,
+    ).toBe(422)
+    expect(kv.put).not.toHaveBeenCalled()
   })
 })
 

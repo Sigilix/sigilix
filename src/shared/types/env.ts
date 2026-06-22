@@ -336,6 +336,12 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SIGILIX_API_KEY <token>` (openssl rand -base64 32).
   OPENCLAW_SIGILIX_API_KEY?: string
 
+  // SIG-304 Phase 2.4: coarse endpoint-wide daily request ceiling for POST
+  // /v1/review (cost/abuse guard for the grounded path). Numeric string; unset →
+  // a built-in default. A global KV counter (`v1review:count:<YYYY-MM-DD>`), not
+  // per-key metering — once the day's count hits the limit the endpoint returns 429.
+  OPENCLAW_SIGILIX_API_DAILY_LIMIT?: string
+
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace

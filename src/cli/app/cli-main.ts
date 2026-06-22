@@ -38,8 +38,9 @@ Options (output):
   --no-splash  disable the animated splash (it runs by default on a TTY while reviewing)
   --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
 
-Model key: set \$OPENROUTER_API_KEY (or your provider key); --rich also needs
-\$OLLAMA_API_KEY (or an \$OPENCLAW_MODEL override) for the overview pass.
+Model key: set \$OPENROUTER_API_KEY (the review runs on it). The --rich sequence
+diagram also runs an overview pass that needs \$OLLAMA_API_KEY today (else --rich
+degrades to review-only). Set SIGILIX_DEBUG=1 to see engine logs.
 Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.`
 
 export function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): string {
@@ -176,9 +177,9 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
           ? "plain"
           : null
   const mode: "json" | "agent" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
-  // Splash is the DEFAULT on a color TTY: it animates (footer) while we wait, then
-  // the rocket lands and the review prints UNDER it. Off when piped / CI / NO_COLOR
-  // / --no-splash so scripted + non-TTY output is never touched.
+  // Splash is the DEFAULT on a color TTY: the spinning Earth + starfield animate
+  // while we wait, then the review prints UNDER the landed frame. Off when piped /
+  // CI / NO_COLOR / --no-splash so scripted + non-TTY output is never touched.
   const splashOn = color && !process.env.CI && values["no-splash"] !== true
 
   // Compute review (+ the overview pass for rich) — wrapped by the splash so it
@@ -189,6 +190,11 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
   }> => {
     const review = await runReviewInNode({ owner, repo: repoName, prNumber, ...source })
     if (review === null || mode !== "rich" || !color) return { review, overview: null }
+    // The overview pass (summary + sequence diagram) is Ollama-only today (SIG-491),
+    // so skip it cleanly when there's no Ollama key — the rich panel degrades to
+    // review-only rather than erroring with an Ollama 404 for BYO OpenRouter users.
+    const hasOllama = Boolean(process.env.OLLAMA_API_KEY || process.env.OPENCLAW_MODEL)
+    if (!hasOllama) return { review, overview: null }
     let overview: Awaited<ReturnType<typeof runOverviewInNode>> = null
     try {
       overview = await runOverviewInNode({ owner, repo: repoName, prNumber, ...source })

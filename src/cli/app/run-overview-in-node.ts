@@ -4,8 +4,11 @@
 // Mirrors run-review-in-node.ts: a local Env (no Cloudflare bindings) + an
 // injected PAT GitHubClient + `dryRun: true`.
 //
-// The overview model defaults to glm-5.1:cloud (Ollama); set OPENCLAW_MODEL to
-// override and supply the matching key (OLLAMA_API_KEY by default) via env.
+// The overview pass calls Ollama's `generate` directly (glm-5.1:cloud, structured
+// output) — it is NOT on the OpenRouter provider router yet, so it needs
+// OLLAMA_API_KEY. Without it the rich render degrades to review-only (cli-main
+// skips the overview). Routing it through the provider router so --rich works on a
+// BYO OpenRouter key is a follow-up (SIG-491). Override the model via OPENCLAW_MODEL.
 
 import { handlePrOverview, type PrOverviewVerdict } from "@/src/lib/triage-pr-overview"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -33,6 +36,8 @@ export interface RunOverviewInNodeArgs {
 export async function runOverviewInNode(args: RunOverviewInNodeArgs): Promise<PrOverviewVerdict | null> {
   // chatEnabled MUST be on so the overview model actually runs (never hardcode
   // "off" — that is a model kill-switch). BYO model keys ride in via processEnv.
+  // Default the overview model to OpenRouter (z-ai/glm-5.1) so it uses the same
+  // run the overview model (BYO keys via processEnv).
   const env = createLocalEnv({
     processEnv: { ...(args.processEnv ?? process.env), OLLAMA_CHAT_ENABLE: "on" },
   })

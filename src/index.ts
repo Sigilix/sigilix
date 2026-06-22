@@ -29,6 +29,7 @@ import {
 } from "@/src/lib/recall-alarm"
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
+import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -223,6 +224,12 @@ export default {
     // Inert (503) until OPENCLAW_SIGILIX_API_KEY is set.
     if (request.method === "POST" && url.pathname === "/v1/review") {
       return handleReviewApiRoute(request, env)
+    }
+
+    // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},
+    // returns a packed context slice (index + graph). Inert (503) until the API key is set.
+    if (request.method === "POST" && url.pathname === "/v1/context") {
+      return handleAgentContextRoute(request, env)
     }
 
     // SIG-156: authenticated manual (re)index trigger.

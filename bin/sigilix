@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# SIG-304 — local `sigilix` launcher (Phase 1, no build step). Resolves the repo
+# root from this script's location, auto-loads the BYO model keys from the
+# gitignored .dev.vars if they aren't already in the environment, and runs the
+# CLI entrypoint through the repo's local tsx. Phase 2 ships a real npm bin.
+#
+#   alias sigilix="$(git rev-parse --show-toplevel)/bin/sigilix"   # then: sigilix review --diff main --rich
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Auto-load model keys from .dev.vars (only if unset — an explicit env wins).
+if [[ -f "$ROOT/.dev.vars" ]]; then
+  for key in OPENROUTER_API_KEY OLLAMA_API_KEY GITHUB_TOKEN; do
+    if [[ -z "${!key:-}" ]]; then
+      val="$(grep -E "^${key}=" "$ROOT/.dev.vars" | head -n1 | cut -d= -f2- || true)"
+      [[ -n "$val" ]] && export "$key=$val"
+    fi
+  done
+fi
+
+# Pin tsx to the sigilix tsconfig so the `@/` path alias (and every transitive
+# engine import) resolves against the SIGILIX repo — not the user's cwd. Without
+# this, running from any other repo (the whole point of --uncommitted / --diff)
+# fails with "Cannot find package '@/src'".
+exec env TSX_TSCONFIG_PATH="$ROOT/tsconfig.json" \
+  "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/src/cli/bin.ts" "$@"

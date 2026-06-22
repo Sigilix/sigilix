@@ -50,6 +50,15 @@ describe("cliMain — validation + dispatch", () => {
   it("missing --pr → exit 2", async () => {
     expect(await cliMain(["review", "--repo", "o/r", "--token", "t"])).toBe(2)
   })
+  it("conflicting sources (--pr + --uncommitted) → exit 2, no engine call", async () => {
+    expect(await cliMain(["review", "--repo", "o/r", "--pr", "5", "--token", "t", "--uncommitted"])).toBe(2)
+    expect(mockRun).not.toHaveBeenCalled()
+    expect(err.join("")).toContain("pick ONE source")
+  })
+  it("conflicting sources (--uncommitted + --diff) → exit 2", async () => {
+    expect(await cliMain(["review", "--uncommitted", "--diff", "main"])).toBe(2)
+    expect(err.join("")).toContain("pick ONE source")
+  })
   it("missing token → exit 2", async () => {
     const saved = { gh: process.env.GITHUB_TOKEN, g: process.env.GH_TOKEN }
     delete process.env.GITHUB_TOKEN

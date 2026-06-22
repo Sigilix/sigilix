@@ -5,21 +5,20 @@ import { renderSplashFrame, runWithSplash, TOTAL } from "./splash"
 import { stripAnsi } from "./ansi"
 
 describe("renderSplashFrame", () => {
-  it("frame 0: wordmark blocks + 'reviewing' status + a progress bar, with ANSI", () => {
+  it("frame 0: spinning Earth (half-block) + sigil stamp + 'reviewing' status, with ANSI", () => {
     const out = renderSplashFrame(0)
     expect(out.includes("\x1b[")).toBe(true) // truecolor ANSI present
-    expect(out).toContain("█") // red wordmark blocks
+    expect(out).toContain("▀") // half-block Earth / stars
     const plain = stripAnsi(out)
+    expect(plain).toContain("sigilix") // tiny corner stamp wordmark
+    expect(plain).toContain("❖") // the sigil stamp glyph
     expect(plain).toContain("reviewing your changes")
-    expect(plain).toMatch(/\d+%/)
   })
 
-  it("final frame: landed state (✓ + review complete + 100%)", () => {
+  it("final frame: complete state (✓ + review complete)", () => {
     const plain = stripAnsi(renderSplashFrame(TOTAL - 1))
     expect(plain).toContain("review complete")
-    expect(plain).toContain("landed")
     expect(plain).toContain("✓")
-    expect(plain).toContain("100%")
   })
 
   it("is pure / deterministic for a given frame", () => {
@@ -64,11 +63,20 @@ describe("runWithSplash", () => {
     expect(writes.join("")).toContain("\x1b[?25h") // cursor restored
   })
 
-  it("clamps total<=0 instead of throwing", async () => {
+  it("redraws IN PLACE — no \\x1b[2J scrollback churn, steps the cursor up to overwrite", async () => {
+    const writes: string[] = []
+    await runWithSplash(Promise.resolve("ok"), { out: fakeOut(writes), frameMs: 0, sleep: async () => {} })
+    const all = writes.join("")
+    expect(all).not.toContain("\x1b[2J") // never a full-screen clear → no stacked frames in scrollback
+    expect(all).toMatch(/\x1b\[\d+A/) // moves the cursor up to redraw the same lines
+  })
+
+  it("does NOT show '✓ review complete' when the work fails (no false success)", async () => {
     const writes: string[] = []
     await expect(
-      runWithSplash(Promise.resolve("ok"), { out: fakeOut(writes), total: 0, frameMs: 0, sleep: async () => {} }),
-    ).resolves.toBe("ok")
+      runWithSplash(Promise.reject(new Error("boom")), { out: fakeOut(writes), frameMs: 0, sleep: async () => {} }),
+    ).rejects.toThrow("boom")
+    expect(stripAnsi(writes.join(""))).not.toContain("review complete")
   })
 
   it("restores the cursor and rethrows when work rejects", async () => {

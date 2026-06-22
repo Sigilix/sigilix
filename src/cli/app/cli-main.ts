@@ -1,10 +1,11 @@
 // SIG-304 (review CLI) Phase 1 — argument parsing + mode dispatch for `sigilix`.
-// Phase 1 surface: `sigilix review --repo <owner/repo> --pr <n> [--json|--ai|--plain]`.
-// Output modes: --json (machine), --ai (agent markdown), --plain (terse; default).
-// The rich truecolor terminal render + animated splash land in Phase 1b (Kimi UI).
-// Returns the process exit code; never calls process.exit (the bin does).
+// Sources: --repo/--pr (a GitHub PR), --uncommitted (working tree), --diff <base>
+// (a `<base>...HEAD` range). Output modes: --rich (truecolor panel + animated
+// splash, default on a TTY), --json (machine), --agent (agent markdown), --plain
+// (terse; default when piped). Returns the exit code; never calls process.exit.
 
 import { parseArgs } from "node:util"
+import { execFileSync } from "node:child_process"
 import { runReviewInNode } from "./run-review-in-node"
 import { runOverviewInNode } from "./run-overview-in-node"
 import { exitCodeForFindings } from "./exit-code"
@@ -19,26 +20,31 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 const USAGE = `sigilix review — local PR review (BYO model key via env)
 
 Usage:
-  sigilix review --repo <owner/repo> --pr <number> [--rich | --json | --ai | --plain] [--token <gh-token>]
+  sigilix review --repo <owner/repo> --pr <number> [output] [--token <gh-token>]
+  sigilix review --uncommitted [output]            # review your local working-tree changes
+  sigilix review --diff <base> [output]            # review <base>...HEAD (no PR / no token)
 
-Options:
-  --repo    owner/repo (required)
-  --pr      pull-request number (required)
+Source (pick one):
+  --repo + --pr   review a GitHub PR (needs a token)
+  --uncommitted   review uncommitted working-tree changes (local git, no token)
+  --diff <base>   review the <base>...HEAD range (local git, no token)
+
+Options (output):
   --rich    truecolor PR-style panel: overview + sequence diagram + findings
             (default on a TTY; also runs the overview pass for the diagram)
   --json    machine-readable JSON (findings + proof tiers)
-  --ai      deterministic markdown for an AI coding agent (Claude Code / Codex)
+  --agent   agent-friendly output for a coding agent (Claude Code / Codex): path:line + fixes
   --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
-  --splash  animated launch splash while the review runs (TTY only; off in CI / piped)
+  --no-splash  disable the animated splash (it runs by default on a TTY while reviewing)
   --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
 
 Model key: set \$OPENROUTER_API_KEY (or your provider key); --rich also needs
 \$OLLAMA_API_KEY (or an \$OPENCLAW_MODEL override) for the overview pass.
 Exit codes: 0 clean · 1 blocking (P0/P1) · 2 advisory (P2/P3). Set NO_COLOR to force plain.`
 
-export function renderReview(review: DryRunReview, mode: "json" | "ai" | "plain"): string {
+export function renderReview(review: DryRunReview, mode: "json" | "agent" | "plain"): string {
   if (mode === "json") return renderJson(review)
-  if (mode === "ai") return renderAgentMarkdown(review)
+  if (mode === "agent") return renderAgentMarkdown(review)
   return renderPlain(review)
 }
 
@@ -64,11 +70,13 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         repo: { type: "string" },
         pr: { type: "string" },
         token: { type: "string" },
+        uncommitted: { type: "boolean" },
+        diff: { type: "string" },
         rich: { type: "boolean" },
         json: { type: "boolean" },
-        ai: { type: "boolean" },
+        agent: { type: "boolean" },
         plain: { type: "boolean" },
-        splash: { type: "boolean" },
+        "no-splash": { type: "boolean" },
       },
       allowPositionals: false,
     }).values
@@ -77,64 +85,131 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     return 2
   }
 
-  // --repo must be exactly `owner/repo`, both non-empty (reject "/r", "o/", "a/b/c").
-  const repoParts = (values.repo ?? "").split("/")
-  if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
-    process.stderr.write("sigilix: --repo <owner/repo> is required\n")
+  // Source must be EXACTLY one of: a PR (--pr), --uncommitted, or --diff <base>.
+  // Reject ambiguous combos so a fat-fingered flag never silently reviews the wrong
+  // thing (e.g. `--pr 5 --uncommitted` would otherwise ignore the PR). (--repo on
+  // its own is allowed in local mode — it only labels logs.)
+  const sources = [values.pr !== undefined, values.uncommitted === true, values.diff !== undefined].filter(Boolean)
+  if (sources.length > 1) {
+    process.stderr.write("sigilix: pick ONE source — --repo/--pr, --uncommitted, or --diff <base> (not several)\n")
     return 2
   }
-  const [owner, repoName] = repoParts as [string, string]
-  // --pr must be a plain positive integer (reject "1e3", "0x10", " 12 ").
-  if (!/^\d+$/.test(values.pr ?? "")) {
-    process.stderr.write("sigilix: --pr <number> is required\n")
-    return 2
+
+  // Source: local working tree (--uncommitted) or a base range (--diff <base>),
+  // else a real GitHub PR (--repo + --pr + token).
+  const localMode = values.uncommitted === true || values.diff !== undefined
+  let owner: string
+  let repoName: string
+  let prNumber: number
+  let source: { githubToken: string } | { git: { cwd: string; base?: string } }
+  let subject: string
+
+  if (localMode) {
+    let cwd: string
+    try {
+      cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()
+    } catch {
+      process.stderr.write("sigilix: --uncommitted / --diff must be run inside a git repository\n")
+      return 2
+    }
+    // RECALL-SAFETY: `--uncommitted` reviews `git diff HEAD` (tracked changes only).
+    // Untracked/new files are NOT in that diff — and new files are the highest-risk
+    // content pre-commit. Warn loudly so a clean result is never silently misleading.
+    if (values.diff === undefined) {
+      try {
+        const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+        if (untracked.length > 0) {
+          const shown = untracked.slice(0, 8).join(", ") + (untracked.length > 8 ? ", …" : "")
+          process.stderr.write(
+            `sigilix: ⚠ ${untracked.length} untracked file(s) will NOT be reviewed (\`git add\` them first): ${shown}\n`,
+          )
+        }
+      } catch {
+        // non-fatal: the warning is best-effort
+      }
+    }
+    // owner/repo only label local logs; honor --repo if given, else a stub.
+    const rp = (values.repo ?? "local/local").split("/")
+    owner = rp[0] || "local"
+    repoName = rp[1] || "local"
+    prNumber = 0
+    source = { git: { cwd, ...(values.diff !== undefined ? { base: values.diff } : {}) } }
+    subject = values.diff !== undefined ? `${values.diff}...HEAD` : "working tree"
+  } else {
+    // --repo must be exactly `owner/repo`, both non-empty (reject "/r", "o/", "a/b/c").
+    const repoParts = (values.repo ?? "").split("/")
+    if (repoParts.length !== 2 || repoParts[0]!.length === 0 || repoParts[1]!.length === 0) {
+      process.stderr.write("sigilix: --repo <owner/repo> is required (or use --uncommitted / --diff <base>)\n")
+      return 2
+    }
+    owner = repoParts[0]!
+    repoName = repoParts[1]!
+    // --pr must be a plain positive integer (reject "1e3", "0x10", " 12 ").
+    if (!/^\d+$/.test(values.pr ?? "")) {
+      process.stderr.write("sigilix: --pr <number> is required (or use --uncommitted / --diff <base>)\n")
+      return 2
+    }
+    prNumber = Number(values.pr)
+    const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
+    if (githubToken === undefined || githubToken.length === 0) {
+      process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
+      return 2
+    }
+    source = { githubToken }
+    subject = `${owner}/${repoName}#${prNumber}`
   }
-  const prNumber = Number(values.pr)
-  const githubToken = values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
-  if (githubToken === undefined || githubToken.length === 0) {
-    process.stderr.write("sigilix: a GitHub token is required (--token or $GITHUB_TOKEN)\n")
-    return 2
-  }
+
   // Color iff an interactive TTY and NO_COLOR is unset. Rich is the default for a
   // human terminal; piped / CI / NO_COLOR get plain (ANSI-free, grep-safe).
-  const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-  const explicitMode = values.json ? "json" : values.ai ? "ai" : values.rich ? "rich" : values.plain ? "plain" : null
-  const mode: "json" | "ai" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
-  // Opt-in animated splash, hard-gated to an interactive non-CI terminal so piped
-  // / scripted output is never touched. It animates on stderr while the review runs.
-  const splash = Boolean(values.splash) && color && !process.env.CI
+  const color =
+    !process.env.NO_COLOR &&
+    (Boolean(process.stdout.isTTY) || process.env.FORCE_COLOR === "1" || process.env.FORCE_COLOR === "true")
+  const explicitMode = values.json
+    ? "json"
+    : values.agent
+      ? "agent"
+      : values.rich
+        ? "rich"
+        : values.plain
+          ? "plain"
+          : null
+  const mode: "json" | "agent" | "plain" | "rich" = explicitMode ?? (color ? "rich" : "plain")
+  // Splash is the DEFAULT on a color TTY: it animates (footer) while we wait, then
+  // the rocket lands and the review prints UNDER it. Off when piped / CI / NO_COLOR
+  // / --no-splash so scripted + non-TTY output is never touched.
+  const splashOn = color && !process.env.CI && values["no-splash"] !== true
 
-  const reviewWork = runReviewInNode({ owner, repo: repoName, prNumber, githubToken })
-  const review = splash ? await runWithSplash(reviewWork) : await reviewWork
+  // Compute review (+ the overview pass for rich) — wrapped by the splash so it
+  // covers the whole wait. A failed overview pass is non-fatal (review-only).
+  const compute = async (): Promise<{
+    review: Awaited<ReturnType<typeof runReviewInNode>>
+    overview: Awaited<ReturnType<typeof runOverviewInNode>>
+  }> => {
+    const review = await runReviewInNode({ owner, repo: repoName, prNumber, ...source })
+    if (review === null || mode !== "rich" || !color) return { review, overview: null }
+    let overview: Awaited<ReturnType<typeof runOverviewInNode>> = null
+    try {
+      overview = await runOverviewInNode({ owner, repo: repoName, prNumber, ...source })
+    } catch (err) {
+      process.stderr.write(
+        `sigilix: overview pass failed (${err instanceof Error ? err.message : String(err)}); rendering review only\n`,
+      )
+    }
+    return { review, overview }
+  }
+
+  const { review, overview } = splashOn ? await runWithSplash(compute()) : await compute()
   if (review === null) {
     process.stdout.write("sigilix: nothing to review\n")
     return 0
   }
 
-  let out: string
-  if (mode === "rich") {
-    // The rich panel also runs the overview pass (summary + file table + the real
-    // mermaid sequence diagram). Skip it when color is off — rich then degrades to
-    // plain, so the extra model call would be wasted. A failed overview pass is
-    // non-fatal: render the review alone.
-    let overview: Awaited<ReturnType<typeof runOverviewInNode>> = null
-    if (color) {
-      try {
-        overview = await runOverviewInNode({ owner, repo: repoName, prNumber, githubToken })
-      } catch (err) {
-        process.stderr.write(
-          `sigilix: overview pass failed (${err instanceof Error ? err.message : String(err)}); rendering review only\n`,
-        )
-      }
-    }
-    out = renderRich(review, overview, {
-      color,
-      width: process.stdout.columns ?? 88,
-      subject: `${owner}/${repoName}#${prNumber}`,
-    })
-  } else {
-    out = renderReview(review, mode)
-  }
+  const out =
+    mode === "rich"
+      ? renderRich(review, overview, { color, width: process.stdout.columns ?? 88, subject })
+      : renderReview(review, mode)
   process.stdout.write(out.endsWith("\n") ? out : out + "\n")
   const views = [...review.verdict.findings, ...review.unanchoredFindings].map(toFindingView)
   return exitCodeForFindings(views)

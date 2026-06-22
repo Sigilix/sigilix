@@ -8,6 +8,7 @@ import { parseArgs } from "node:util"
 import { execFileSync } from "node:child_process"
 import { runReviewInNode } from "./run-review-in-node"
 import { runOverviewInNode } from "./run-overview-in-node"
+import { runReviewRemote } from "./run-review-remote"
 import { exitCodeForFindings } from "./exit-code"
 import { toFindingView } from "@/src/cli/render/finding-view"
 import { renderJson } from "@/src/cli/render/json"
@@ -37,7 +38,10 @@ Options (output):
   --plain   terse one-line-per-finding (default when piped / non-TTY / NO_COLOR)
   --no-splash  disable the animated splash (it runs by default on a TTY while reviewing)
   --token   GitHub token (else \$GITHUB_TOKEN / \$GH_TOKEN); used only to read the PR
+  --endpoint  Sigilix API base URL for hosted runs (else \$SIGILIX_ENDPOINT)
 
+Hosted (flagship): set \$SIGILIX_API_KEY and --uncommitted / --diff run on Sigilix's
+models server-side — no model key of your own needed. Otherwise it's BYO:
 Model key: set \$OPENROUTER_API_KEY (the review runs on it). The --rich sequence
 diagram also runs an overview pass that needs \$OLLAMA_API_KEY today (else --rich
 degrades to review-only). Set SIGILIX_DEBUG=1 to see engine logs.
@@ -78,6 +82,7 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
         agent: { type: "boolean" },
         plain: { type: "boolean" },
         "no-splash": { type: "boolean" },
+        endpoint: { type: "string" },
       },
       allowPositionals: false,
     }).values
@@ -162,6 +167,16 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     subject = `${owner}/${repoName}#${prNumber}`
   }
 
+  // HOSTED (thin-client flagship): when $SIGILIX_API_KEY is set, a local-diff
+  // source runs on the Sigilix endpoint (our models, server-side) instead of the
+  // local engine — no BYO model key needed. (--repo/--pr stays local-engine for
+  // now; grounded hosted = SIG-304 Phase 2.4.) The returned review renders
+  // identically; --rich shows the panel without the diagram (overview stays local).
+  const hostedKey = process.env.SIGILIX_API_KEY ?? ""
+  const endpoint = values.endpoint ?? process.env.SIGILIX_ENDPOINT ?? "https://api.sigilix.ai"
+  const remote = hostedKey !== "" && localMode
+  if (remote) subject = `${subject}  ·  hosted`
+
   // Color iff an interactive TTY and NO_COLOR is unset. Rich is the default for a
   // human terminal; piped / CI / NO_COLOR get plain (ANSI-free, grep-safe).
   const color =
@@ -188,6 +203,12 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     review: Awaited<ReturnType<typeof runReviewInNode>>
     overview: Awaited<ReturnType<typeof runOverviewInNode>>
   }> => {
+    // Hosted path: POST the local diff to /v1/review (engine runs server-side). No
+    // overview (it's a local-engine feature) → --rich renders without the diagram.
+    if (remote && "git" in source) {
+      const review = await runReviewRemote({ endpoint, apiKey: hostedKey, owner, repo: repoName, git: source.git })
+      return { review, overview: null }
+    }
     const review = await runReviewInNode({ owner, repo: repoName, prNumber, ...source })
     if (review === null || mode !== "rich" || !color) return { review, overview: null }
     // The overview pass (summary + sequence diagram) is Ollama-only today (SIG-491),

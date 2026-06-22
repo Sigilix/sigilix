@@ -32,6 +32,16 @@ interface ParsedFile {
   patch: string
 }
 
+/** Strip the `a/`/`b/` diff prefix from a `--- `/`+++ ` path; `/dev/null` → null
+ *  (an add/delete side). The `--- a/<path>` / `+++ b/<path>` lines carry the path
+ *  verbatim even when it contains `" b/"`, so they're more reliable than splitting
+ *  the `diff --git a/<old> b/<new>` header (whose regex can't tell where `<old>`
+ *  ends if the name itself contains `" b/"`). */
+function diffSidePath(s: string, prefix: "a/" | "b/"): string | null {
+  if (s === "/dev/null") return null
+  return s.startsWith(prefix) ? s.slice(prefix.length) : s
+}
+
 /** Parse a unified diff into per-file entries (status + line counts + per-file patch). */
 export function parseUnifiedDiff(diff: string): ParsedFile[] {
   const out: ParsedFile[] = []
@@ -43,23 +53,44 @@ export function parseUnifiedDiff(diff: string): ParsedFile[] {
     const lines = body.split(/\r?\n/) // CRLF-safe: strip a trailing \r per line
     const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(lines[0] ?? "")
     if (!m) continue
-    const oldPath = m[1]!
-    const newPath = m[2]!
+    const headerOld = m[1]!
+    const headerNew = m[2]!
     let code = "M"
     let previousFilename: string | null = null
     let additions = 0
     let deletions = 0
+    // The `--- a/<path>` / `+++ b/<path>` paths (when present) are authoritative —
+    // they survive `" b/"`-in-filename ambiguity the header regex can't. Only read
+    // them in the header region (before the first `@@`), so a content line like
+    // `+++ foo` inside a hunk is never mistaken for a path header.
+    let minusPath: string | null = null
+    let plusPath: string | null = null
+    let inHunk = false
     for (const l of lines) {
-      if (l.startsWith("new file mode")) code = "A"
-      else if (l.startsWith("deleted file mode")) code = "D"
-      else if (l.startsWith("rename from ")) {
+      if (l.startsWith("@@")) inHunk = true
+      if (!inHunk && l.startsWith("new file mode")) code = "A"
+      else if (!inHunk && l.startsWith("deleted file mode")) code = "D"
+      else if (!inHunk && l.startsWith("rename from ")) {
         code = "R"
         previousFilename = l.slice("rename from ".length).trim()
-      } else if (l.startsWith("copy from ")) {
+      } else if (!inHunk && l.startsWith("copy from ")) {
         code = "C"
         previousFilename = l.slice("copy from ".length).trim()
-      } else if (l.startsWith("+") && !l.startsWith("+++")) additions++
+      } else if (!inHunk && l.startsWith("--- ")) minusPath = diffSidePath(l.slice(4), "a/")
+      else if (!inHunk && l.startsWith("+++ ")) plusPath = diffSidePath(l.slice(4), "b/")
+      else if (l.startsWith("+") && !l.startsWith("+++")) additions++
       else if (l.startsWith("-") && !l.startsWith("---")) deletions++
+    }
+    // Prefer the `---`/`+++` paths (handle `" b/"` filenames); fall back to the header.
+    const newPath = plusPath ?? headerNew
+    const oldPath = minusPath ?? headerOld
+    // L3: a rename/copy with no explicit `rename from`/`copy from` line — git still
+    // shows the differing paths in the header (`a/<old> b/<new>`); a plain modify
+    // always has old === new, so old !== new means the file moved. Default to a
+    // rename (the engine only needs `previousFilename` to anchor across the move).
+    if (code === "M" && oldPath !== newPath) {
+      code = "R"
+      previousFilename = oldPath
     }
     const filename = code === "D" ? oldPath : newPath
     if (filename) out.push({ filename, previousFilename, status: STATUS(code), additions, deletions, patch: body })

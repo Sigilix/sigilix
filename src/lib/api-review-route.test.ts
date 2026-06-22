@@ -88,6 +88,15 @@ describe("handleReviewApiRoute — auth + validation", () => {
     expect((await handleReviewApiRoute(req(huge), env(TOKEN))).status).toBe(413)
     expect(mockEngine).not.toHaveBeenCalled()
   })
+  it("413 payload_too_large when the whole BODY exceeds the cap (before parse, no engine)", async () => {
+    // The body cap is enforced as the stream is read, BEFORE JSON.parse — so an
+    // oversized envelope is rejected with payload_too_large (not diff_too_large).
+    const huge = { ...validBody, diff: "x".repeat(3_100_000) }
+    const res = await handleReviewApiRoute(req(huge), env(TOKEN))
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { error?: string }).error).toBe("payload_too_large")
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
 })
 
 describe("handleReviewApiRoute — engine status mapping (recall-safety)", () => {
@@ -260,5 +269,34 @@ describe("parseUnifiedDiff", () => {
   it("is CRLF-safe (does not return an empty manifest on \\r\\n diffs)", () => {
     const [f] = parseUnifiedDiff(DIFF.replace(/\n/g, "\r\n"))
     expect(f).toMatchObject({ filename: "a.ts", additions: 1, deletions: 1 })
+  })
+  // L2: a filename literally containing " b/" defeats the `a/<old> b/<new>` header
+  // regex; the `--- a/`/`+++ b/` lines carry the path verbatim and win.
+  it('L2: handles a filename containing " b/"', () => {
+    const diff =
+      "diff --git a/src/a b/c.ts b/src/a b/c.ts\n--- a/src/a b/c.ts\n+++ b/src/a b/c.ts\n@@ -1 +1 @@\n-x\n+y\n"
+    const [f] = parseUnifiedDiff(diff)
+    expect(f).toMatchObject({ filename: "src/a b/c.ts", status: "modified", additions: 1, deletions: 1 })
+  })
+  // L3: a rename with NO explicit `rename from` line (header old !== new) is detected
+  // as a rename, not silently downgraded to a modify on the new path.
+  it("L3: detects a rename with no explicit `rename from` line", () => {
+    const diff =
+      "diff --git a/old.ts b/new.ts\nindex abc1234..def5678 100644\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-x\n+y\n"
+    const [f] = parseUnifiedDiff(diff)
+    expect(f).toMatchObject({
+      filename: "new.ts",
+      previousFilename: "old.ts",
+      status: "renamed",
+      additions: 1,
+      deletions: 1,
+    })
+  })
+  // Regression guard for the parser refactor: an EXPLICIT `rename from`/`rename to`
+  // (pure rename, no content change, no ---/+++ lines) still resolves correctly.
+  it("still handles an explicit `rename from`/`rename to` (pure rename)", () => {
+    const diff = "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n"
+    const [f] = parseUnifiedDiff(diff)
+    expect(f).toMatchObject({ filename: "new.ts", previousFilename: "old.ts", status: "renamed" })
   })
 })

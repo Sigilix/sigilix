@@ -45,9 +45,15 @@ import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
+import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { diffReviewClient } from "./api-review-diff-client"
 
 const MAX_DIFF_BYTES = 1_500_000 // reject oversized diffs (cost/abuse guard) → 413
+// Whole-envelope cap, enforced as the stream is read (BEFORE JSON.parse) so an
+// oversized body is aborted, not buffered. 2× MAX_DIFF_BYTES leaves headroom for
+// JSON-escaping a max-size diff + the small meta fields; the diff-specific 413
+// (diff_too_large) still gives the precise reason for a legitimately-shaped body.
+const MAX_BODY_BYTES = 3_000_000
 const DEFAULT_DAILY_LIMIT = 200 // coarse endpoint-wide daily request ceiling (cost guard)
 const DAY_COUNTER_TTL_SECONDS = 2 * 24 * 60 * 60 // expire yesterday's counter (2-day window)
 
@@ -164,9 +170,14 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   if (!token) return json({ error: "review_endpoint_not_configured" }, 503)
   if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
 
+  // Body read is CAPPED as the stream is consumed (post-auth) so an oversized
+  // payload is aborted, never fully buffered; `null` = over the cap → 413.
   let raw: unknown
   try {
-    raw = await request.json()
+    const capped = await readBodyCapped(request, MAX_BODY_BYTES)
+    if (capped === null)
+      return json({ error: "payload_too_large", detail: `body exceeds ${MAX_BODY_BYTES} bytes` }, 413)
+    raw = JSON.parse(capped)
   } catch {
     return json({ error: "invalid_json" }, 400)
   }

@@ -35,6 +35,7 @@ import type { RetrievalCacheStats } from "@/src/lib/retrieval-cache"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
 import type { ReviewStatusProof } from "@/src/lib/pr-review-status-render"
+import type { SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import { emitReviewSlo, computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
 import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 
@@ -134,13 +135,26 @@ export interface EnsembleResult<Tel = FinalizeTelemetry> {
 }
 
 /** Fallback reasons that mean the engine COULD NOT produce a verdict (vs a
- *  legitimate empty/skipped review). See the `fellBackReason` note above. */
-const NO_VERDICT_FAILURES: ReadonlySet<string> = new Set([
-  "specialists_all_failed",
-  "router_no_specialists",
-  "synth_timeout",
-  "internal_error",
-])
+ *  legitimate empty/skipped review). See the `fellBackReason` note above.
+ *
+ *  Every `SkipNoticeReason` IS a no-verdict failure by definition — each is the
+ *  reason a skip-notice (not a review) was posted — so this set is the WHOLE union,
+ *  derived exhaustively: the `satisfies Record<SkipNoticeReason, true>` makes the
+ *  compiler reject any new reason that isn't listed here. This prevents the drift
+ *  that previously dropped `synth_failed_parse` / `synth_invalid_provenance` /
+ *  `cost_governor_trimmed_all_routable`, which let a failed dry-run synth read as a
+ *  clean 200/null pass — the SIG-304 Phase 2.4 recall-safety hole. */
+const NO_VERDICT_FAILURES: ReadonlySet<string> = new Set(
+  Object.keys({
+    router_no_specialists: true,
+    specialists_all_failed: true,
+    synth_timeout: true,
+    synth_failed_parse: true,
+    synth_invalid_provenance: true,
+    cost_governor_trimmed_all_routable: true,
+    internal_error: true,
+  } satisfies Record<SkipNoticeReason, true>),
+)
 
 /**
  * SIG-304 recall-safety: true when a dry-run result is an ENGINE FAILURE that

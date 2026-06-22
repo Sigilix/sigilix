@@ -115,4 +115,25 @@ describe("gatherAgentContext", () => {
     expect(res.context).toBeNull()
     expect(res.telemetry.chunkCount).toBe(1)
   })
+
+  it("trims the lowest-ranked raw chunks to fit the context budget (do-no-harm bound)", async () => {
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5), chunk("b.ts", 6, 9), chunk("c.ts", 10, 14)])
+    mockExpand.mockResolvedValue(expansion({ block: null }))
+    // each kept chunk contributes ~100 chars to the formatted block
+    mockFormat.mockImplementation((arr) => (arr.length > 0 ? "R".repeat(arr.length * 100) : null))
+    const res = await gatherAgentContext({ ...base, query: "q", maxContextChars: 250 })
+    expect(res.telemetry.rawChunksKept).toBe(2) // 3×100=300 > 250 → drop to 2 (200 ≤ 250)
+    expect(res.context?.length).toBe(200)
+    expect(res.telemetry.budget).toBe(250)
+  })
+
+  it("trims raw chunks AROUND the symbol block (co-trim against the budget)", async () => {
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5), chunk("b.ts", 6, 9), chunk("c.ts", 10, 14)])
+    mockExpand.mockResolvedValue(expansion({ block: "X".repeat(150) })) // symbolLen = 150 + 2(sep) = 152
+    mockFormat.mockImplementation((arr) => (arr.length > 0 ? "R".repeat(arr.length * 100) : null))
+    const res = await gatherAgentContext({ ...base, query: "q", maxContextChars: 300 })
+    // 152 + 3×100 > 300 → drop to 1 chunk: 152 + 100 = 252 ≤ 300
+    expect(res.telemetry.rawChunksKept).toBe(1)
+    expect(res.context?.length).toBe(252) // 150 + 2 + 100
+  })
 })

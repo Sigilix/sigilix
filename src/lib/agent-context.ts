@@ -15,6 +15,13 @@ import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./re
 import { expandHitsToSymbols, hitKey } from "./symbol-expansion"
 import type { Env } from "@/src/shared/types/env"
 
+// Section separator between the symbol block and the raw-chunk block.
+const SECTION_SEP = "\n\n"
+// Default char budget for the whole packed slice. Bounds over-injection so grounding
+// can't cost the agent materially more than reading the code itself on a narrow query
+// (the A1 measurement finding); tunable per call via maxContextChars.
+const DEFAULT_CONTEXT_BUDGET = 6000
+
 export interface AgentContextArgs {
   owner: string
   repo: string
@@ -27,6 +34,9 @@ export interface AgentContextArgs {
   signal?: AbortSignal
   /** Byte cap on the symbol-expansion body build (passed through to the expander). */
   maxBytes?: number
+  /** Char budget for the whole packed slice (do-no-harm: grounding never injects more
+   *  than this — bounds over-injection on narrow queries). Defaults to DEFAULT_CONTEXT_BUDGET. */
+  maxContextChars?: number
 }
 
 export interface AgentContextTelemetry {
@@ -36,7 +46,11 @@ export interface AgentContextTelemetry {
   symbolsExpanded: number
   callersRendered: number
   superseded: number
+  /** Raw chunks kept after budget-trimming (≤ chunkCount). */
+  rawChunksKept: number
   contextChars: number
+  /** The char budget applied to this slice. */
+  budget: number
 }
 
 export interface AgentContextResult {
@@ -60,7 +74,9 @@ function emptyResult(namespace: string): AgentContextResult {
       symbolsExpanded: 0,
       callersRendered: 0,
       superseded: 0,
+      rawChunksKept: 0,
       contextChars: 0,
+      budget: 0,
     },
   }
 }
@@ -83,27 +99,41 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
   const chunks: RetrievedChunk[] = await retrieveChunks({ text: query, teamKey: namespace, env: args.env })
   if (chunks.length === 0) return emptyResult(namespace)
 
-  // Graph expansion (SIG-407): enclosing symbol bodies + caller/importer rows. Soft-
-  // fails to `{ block: null }` when no active graph version / the fetcher fails.
+  const budget = args.maxContextChars ?? DEFAULT_CONTEXT_BUDGET
+
+  // Graph expansion (SIG-407): enclosing symbol bodies + caller/importer rows, bounded to
+  // the budget so the block can't alone blow it. Soft-fails to `{ block: null }` when no
+  // active graph version / the fetcher fails.
   const expansion = await expandHitsToSymbols({
     env: args.env,
     owner: args.owner,
     repo: args.repo,
     hits: chunks,
     fetchFileContent: args.fetchFileContent,
+    maxBytes: Math.min(args.maxBytes ?? budget, budget),
     ...(args.signal ? { signal: args.signal } : {}),
-    ...(args.maxBytes !== undefined ? { maxBytes: args.maxBytes } : {}),
   })
 
-  // Drop raw chunks whose span is already contained by a rendered symbol body.
+  // Drop raw chunks whose span the symbol block already contains (it supersedes them),
+  // then fit the rest into the remaining budget alongside the block — keep the
+  // highest-ranked chunks, drop the lowest until it fits. retrieveChunks returns chunks
+  // ranked best-first, so slicing from the end drops the weakest. This is the do-no-harm
+  // bound: a narrow query can't be charged more than ~budget for grounding.
   const superseded = new Set(expansion.supersededHitKeys)
-  const rawChunks = chunks.filter((c) => !superseded.has(hitKey(c)))
-  const rawBlock = formatChunksForPrompt(rawChunks)
+  const symbolBlock = expansion.block
+  const symbolLen = symbolBlock ? symbolBlock.length + SECTION_SEP.length : 0
+
+  let rawKept = chunks.filter((c) => !superseded.has(hitKey(c)))
+  let rawBlock = formatChunksForPrompt(rawKept)
+  while (rawBlock !== null && symbolLen + rawBlock.length > budget && rawKept.length > 0) {
+    rawKept = rawKept.slice(0, -1)
+    rawBlock = formatChunksForPrompt(rawKept)
+  }
 
   const sections: string[] = []
-  if (expansion.block) sections.push(expansion.block)
+  if (symbolBlock) sections.push(symbolBlock)
   if (rawBlock) sections.push(rawBlock)
-  const context = sections.length > 0 ? sections.join("\n\n") : null
+  const context = sections.length > 0 ? sections.join(SECTION_SEP) : null
 
   return {
     context,
@@ -114,7 +144,9 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
       symbolsExpanded: expansion.telemetry.symbolsExpanded,
       callersRendered: expansion.telemetry.callersRendered,
       superseded: expansion.telemetry.superseded,
+      rawChunksKept: rawKept.length,
       contextChars: context ? context.length : 0,
+      budget,
     },
   }
 }

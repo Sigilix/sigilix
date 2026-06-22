@@ -31,6 +31,8 @@ interface ContextApiBody {
   query: string
   /** Optional byte cap on the symbol-expansion body build (passed to the expander). */
   maxBytes?: number
+  /** Optional char budget for the whole packed slice (bounds over-injection). */
+  maxContextChars?: number
 }
 
 function parseBody(raw: unknown): ContextApiBody | string {
@@ -45,11 +47,18 @@ function parseBody(raw: unknown): ContextApiBody | string {
   ) {
     return "maxBytes must be a positive integer"
   }
+  if (
+    b.maxContextChars !== undefined &&
+    (typeof b.maxContextChars !== "number" || !Number.isInteger(b.maxContextChars) || b.maxContextChars <= 0)
+  ) {
+    return "maxContextChars must be a positive integer"
+  }
   return {
     owner: b.owner,
     repo: b.repo,
     query: b.query,
     ...(typeof b.maxBytes === "number" ? { maxBytes: b.maxBytes } : {}),
+    ...(typeof b.maxContextChars === "number" ? { maxContextChars: b.maxContextChars } : {}),
   }
 }
 
@@ -111,6 +120,7 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
       env,
       fetchFileContent,
       ...(parsed.maxBytes !== undefined ? { maxBytes: parsed.maxBytes } : {}),
+      ...(parsed.maxContextChars !== undefined ? { maxContextChars: parsed.maxContextChars } : {}),
     })
     return json({ context: result.context, telemetry: result.telemetry }, 200)
   } catch (err) {

@@ -4,6 +4,9 @@
   "private": true,
   "description": "Sigilix — multi-agent AI code review for GitHub. Cloudflare Worker + OpenRouter specialists. The mark of merge-ready code.",
   "type": "module",
+  "bin": {
+    "sigilix": "bin/sigilix"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

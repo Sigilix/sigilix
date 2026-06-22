@@ -7,7 +7,15 @@
 #   alias sigilix="$(git rev-parse --show-toplevel)/bin/sigilix"   # then: sigilix review --diff main --rich
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve through symlinks so `npm link` (which points a global bin symlink at this
+# file) still finds the real repo root — not the global bin dir.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE:0:1}" != "/" ] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." >/dev/null 2>&1 && pwd)"
 
 # Auto-load model keys from .dev.vars (only if unset — an explicit env wins).
 if [[ -f "$ROOT/.dev.vars" ]]; then

@@ -17,9 +17,12 @@ import { resolveInstallation } from "@/src/shared/adapters/github/github-install
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { gatherAgentContext } from "./agent-context"
+import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
 
 // Queries are short (a turn's intent), so the body is tiny — cap well below the diff routes.
 const MAX_BODY_BYTES = 64 * 1024
+// Max team-learning rules to surface as negative memory (most-recent first).
+const MAX_LEARNINGS = 20
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -62,29 +65,64 @@ function parseBody(raw: unknown): ContextApiBody | string {
   }
 }
 
+interface Grounding {
+  /** Best-effort file fetcher for graph symbol-body expansion (default-branch HEAD). */
+  fetchFileContent: (path: string) => Promise<string | null>
+  /** GitHub repo id (the learnings keyspace key), or null when the App is unavailable. */
+  repoId: number | null
+}
+
 /**
- * Resolve a best-effort file fetcher (for graph symbol-body expansion) via the GitHub App,
- * pinned to the repo's default-branch HEAD. Returns a null-fetcher (index-only grounding)
- * when the App is unconfigured / not installed / unavailable — never throws.
+ * Resolve the GitHub-App grounding handles via ONE getRepository call: a best-effort file
+ * fetcher (graph symbol-body expansion, pinned to default-branch HEAD) + the repo id (for
+ * the learnings keyspace). Degrades to a null fetcher + null repoId when the App is
+ * unconfigured / not installed / unavailable — never throws.
  */
-async function resolveFileFetcher(
-  env: Env,
-  owner: string,
-  repo: string,
-): Promise<(path: string) => Promise<string | null>> {
-  const nullFetcher = async (): Promise<string | null> => null
-  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return nullFetcher
+async function resolveGrounding(env: Env, owner: string, repo: string): Promise<Grounding> {
+  const none: Grounding = { fetchFileContent: async () => null, repoId: null }
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return none
   const lookup = resolveInstallation(owner, repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
-  if (!lookup.ok) return nullFetcher
+  if (!lookup.ok) return none
   try {
     const client = await buildClient(env, lookup.installationId)
     const repoMeta = await client.getRepository(owner, repo)
+    const repoId = typeof repoMeta?.id === "number" ? repoMeta.id : null
     const defaultBranch = repoMeta?.default_branch ?? "main"
     const branch = await client.getBranch(owner, repo, defaultBranch).catch(() => null)
     const ref = branch?.headSha ?? defaultBranch
-    return (path: string) => client.getFileContent(owner, repo, path, ref)
+    return { fetchFileContent: (path: string) => client.getFileContent(owner, repo, path, ref), repoId }
   } catch {
-    return nullFetcher
+    return none
+  }
+}
+
+/** One readable line per learning rule (Phase B negative memory). Polarity is surfaced so
+ *  the agent tells a dismissal ("don't re-flag") from a required convention. */
+function formatLearning(e: LearningEntry): string {
+  const tag = e.polarity === "suppress" ? "[dismissed] " : e.polarity === "require" ? "[required] " : ""
+  const cat = e.category ? ` (${e.category})` : ""
+  return `${tag}${e.rule.trim()}${cat}`
+}
+
+/** Parse a learning's createdTs to epoch ms for chronological sort. `createdTs` is a bare
+ *  string (no schema-enforced format), so don't rely on lexicographic order — a date-only
+ *  value would sort before a full-ISO one. Unparseable → 0 (sorts last under desc). */
+function learningTs(s: string): number {
+  const n = Date.parse(s)
+  return Number.isNaN(n) ? 0 : n
+}
+
+/** Load the repo's review learnings as readable rules (most-recent first, capped). Soft-fail. */
+async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
+  try {
+    const store = await loadLearnings(env, "repo", String(repoId))
+    if (!store || store.entries.length === 0) return []
+    return [...store.entries]
+      .sort((a, b) => learningTs(b.createdTs) - learningTs(a.createdTs))
+      .slice(0, MAX_LEARNINGS)
+      .map(formatLearning)
+  } catch {
+    return []
   }
 }
 
@@ -110,7 +148,8 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  const fetchFileContent = await resolveFileFetcher(env, parsed.owner, parsed.repo)
+  const { fetchFileContent, repoId } = await resolveGrounding(env, parsed.owner, parsed.repo)
+  const learnings = repoId !== null ? await loadRepoLearnings(env, repoId) : []
 
   try {
     const result = await gatherAgentContext({
@@ -119,6 +158,7 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
       query: parsed.query,
       env,
       fetchFileContent,
+      ...(learnings.length > 0 ? { learnings } : {}),
       ...(parsed.maxBytes !== undefined ? { maxBytes: parsed.maxBytes } : {}),
       ...(parsed.maxContextChars !== undefined ? { maxContextChars: parsed.maxContextChars } : {}),
     })

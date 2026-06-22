@@ -37,6 +37,10 @@ export interface AgentContextArgs {
   /** Char budget for the whole packed slice (do-no-harm: grounding never injects more
    *  than this — bounds over-injection on narrow queries). Defaults to DEFAULT_CONTEXT_BUDGET. */
   maxContextChars?: number
+  /** Readable "team conventions / past decisions" (Phase B negative memory) — the repo's
+   *  review learnings (each a one-line rule). Injected first, capped to a slice of the
+   *  budget so they never crowd out code. Recall-safe: they BIAS the agent, never suppress. */
+  learnings?: readonly string[]
 }
 
 export interface AgentContextTelemetry {
@@ -48,6 +52,8 @@ export interface AgentContextTelemetry {
   superseded: number
   /** Raw chunks kept after budget-trimming (≤ chunkCount). */
   rawChunksKept: number
+  /** Team-learning rules injected as negative memory (≤ provided). */
+  learningsInjected: number
   contextChars: number
   /** The char budget applied to this slice. */
   budget: number
@@ -75,10 +81,40 @@ function emptyResult(namespace: string): AgentContextResult {
       callersRendered: 0,
       superseded: 0,
       rawChunksKept: 0,
+      learningsInjected: 0,
       contextChars: 0,
       budget: 0,
     },
   }
+}
+
+/**
+ * Build the "team conventions / past decisions" block from the repo's review learnings
+ * (Phase B negative memory). Capped to ~1/3 of the budget so it never crowds out code
+ * context; rules are added best-first (the route passes them most-relevant/recent first)
+ * until the cap. Returns the block + how many rules made it in.
+ */
+function buildLearningsBlock(
+  learnings: readonly string[] | undefined,
+  budget: number,
+): { block: string | null; count: number } {
+  if (!learnings || learnings.length === 0) return { block: null, count: 0 }
+  const cap = Math.max(800, Math.floor(budget / 3))
+  const header =
+    "# Team conventions & past decisions (from this repo's Sigilix review history)\n" +
+    "What this team has already decided or dismissed — respect it; don't re-flag or undo settled calls.\n"
+  const lines: string[] = []
+  let used = header.length
+  for (const rule of learnings) {
+    const trimmed = rule.trim()
+    if (!trimmed) continue
+    const line = `- ${trimmed}`
+    if (used + line.length + 1 > cap) break
+    lines.push(line)
+    used += line.length + 1
+  }
+  if (lines.length === 0) return { block: null, count: 0 }
+  return { block: header + lines.join("\n"), count: lines.length }
 }
 
 /**
@@ -90,16 +126,38 @@ function emptyResult(namespace: string): AgentContextResult {
  */
 export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentContextResult> {
   const namespace = indexNamespaceFor(args.owner, args.repo)
-
-  const query = args.query.trim()
-  if (!query) return emptyResult(namespace)
-
-  // retrieveChunks soft-fails to [] (embed/query error, unindexed namespace) — that's
-  // the blind baseline, never a thrown turn.
-  const chunks: RetrievedChunk[] = await retrieveChunks({ text: query, teamKey: namespace, env: args.env })
-  if (chunks.length === 0) return emptyResult(namespace)
-
   const budget = args.maxContextChars ?? DEFAULT_CONTEXT_BUDGET
+
+  // Team conventions / past decisions (Phase B negative memory) — readable, high-signal,
+  // cheap; injected FIRST and useful even when no code chunk matches.
+  const learnings = buildLearningsBlock(args.learnings, budget)
+  const learningsLen = learnings.block ? learnings.block.length + SECTION_SEP.length : 0
+
+  // retrieveChunks soft-fails to [] (empty query, embed/query error, unindexed namespace) —
+  // the blind baseline, never a thrown turn.
+  const query = args.query.trim()
+  const chunks: RetrievedChunk[] = query ? await retrieveChunks({ text: query, teamKey: namespace, env: args.env }) : []
+
+  // No code match: still surface team conventions if we have them (the agent benefits even
+  // without a code hit); otherwise the blind baseline.
+  if (chunks.length === 0) {
+    if (!learnings.block) return emptyResult(namespace)
+    return {
+      context: learnings.block,
+      telemetry: {
+        namespace,
+        chunkCount: 0,
+        graphAvailable: false,
+        symbolsExpanded: 0,
+        callersRendered: 0,
+        superseded: 0,
+        rawChunksKept: 0,
+        learningsInjected: learnings.count,
+        contextChars: learnings.block.length,
+        budget,
+      },
+    }
+  }
 
   // Graph expansion (SIG-407): enclosing symbol bodies + caller/importer rows, bounded to
   // the budget so the block can't alone blow it. Soft-fails to `{ block: null }` when no
@@ -114,23 +172,28 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
     ...(args.signal ? { signal: args.signal } : {}),
   })
 
-  // Drop raw chunks whose span the symbol block already contains (it supersedes them),
-  // then fit the rest into the remaining budget alongside the block — keep the
+  // Drop raw chunks whose span the symbol block already contains (it supersedes them), then
+  // fit the rest into the budget ALONGSIDE the learnings + symbol blocks — keep the
   // highest-ranked chunks, drop the lowest until it fits. retrieveChunks returns chunks
-  // ranked best-first, so slicing from the end drops the weakest. This is the do-no-harm
-  // bound: a narrow query can't be charged more than ~budget for grounding.
+  // ranked best-first, so slicing from the end drops the weakest. Do-no-harm bound: a
+  // narrow query can't be charged more than ~budget for grounding.
   const superseded = new Set(expansion.supersededHitKeys)
   const symbolBlock = expansion.block
   const symbolLen = symbolBlock ? symbolBlock.length + SECTION_SEP.length : 0
 
   let rawKept = chunks.filter((c) => !superseded.has(hitKey(c)))
   let rawBlock = formatChunksForPrompt(rawKept)
-  while (rawBlock !== null && symbolLen + rawBlock.length > budget && rawKept.length > 0) {
+  while (rawBlock !== null && learningsLen + symbolLen + rawBlock.length > budget && rawKept.length > 0) {
     rawKept = rawKept.slice(0, -1)
     rawBlock = formatChunksForPrompt(rawKept)
   }
 
+  // Order: learnings → symbol block → raw chunks. The symbol block (the matched code's full
+  // bodies) is intentionally budget-EXEMPT — only raw chunks trim. So total can reach up to
+  // ~budget (symbol) + ~budget/3 (learnings); that's deliberate (keep both conventions AND the
+  // matched code), not a bug to "fix" into dropping matched code.
   const sections: string[] = []
+  if (learnings.block) sections.push(learnings.block)
   if (symbolBlock) sections.push(symbolBlock)
   if (rawBlock) sections.push(rawBlock)
   const context = sections.length > 0 ? sections.join(SECTION_SEP) : null
@@ -145,6 +208,7 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
       callersRendered: expansion.telemetry.callersRendered,
       superseded: expansion.telemetry.superseded,
       rawChunksKept: rawKept.length,
+      learningsInjected: learnings.count,
       contextChars: context ? context.length : 0,
       budget,
     },

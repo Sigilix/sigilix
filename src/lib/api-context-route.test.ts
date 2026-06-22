@@ -8,16 +8,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 vi.mock("./agent-context", () => ({ gatherAgentContext: vi.fn() }))
 vi.mock("@/src/shared/adapters/github/github-installation", () => ({ resolveInstallation: vi.fn() }))
 vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({ buildClient: vi.fn() }))
+vi.mock("@/src/features/learnings", () => ({ loadLearnings: vi.fn() }))
 
 import { handleAgentContextRoute } from "./api-context-route"
 import { gatherAgentContext } from "./agent-context"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
+import { loadLearnings } from "@/src/features/learnings"
 import type { Env } from "@/src/shared/types/env"
 
 const mockGather = vi.mocked(gatherAgentContext)
 const mockResolve = vi.mocked(resolveInstallation)
 const mockBuild = vi.mocked(buildClient)
+const mockLoadLearnings = vi.mocked(loadLearnings)
 const TOKEN = "ctx-secret"
 
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
@@ -73,6 +76,7 @@ beforeEach(() => {
   getFileContentMock = vi.fn(async () => "file")
   mockClient(async () => ({ headSha: "abc", treeSha: "t" }))
   mockGather.mockResolvedValue(okResult as never)
+  mockLoadLearnings.mockResolvedValue(null) // default: no learnings
 })
 
 describe("handleAgentContextRoute — auth + validation", () => {
@@ -134,6 +138,29 @@ describe("handleAgentContextRoute — retrieval", () => {
     await handleAgentContextRoute(req(validBody), appEnv())
     await capturedFetcher()("src/x.ts")
     expect(getFileContentMock).toHaveBeenCalledWith("o", "r", "src/x.ts", "main")
+  })
+  it("loads the repo's learnings (negative memory) and passes them, most-recent first", async () => {
+    mockLoadLearnings.mockResolvedValue({
+      schemaVersion: 1,
+      scope: "repo",
+      subjectId: "1",
+      entries: [
+        { id: "1", rule: "cents are integers", polarity: "require", createdTs: "2026-06-01" },
+        { id: "2", rule: "empty catch in worker.ts is intentional", polarity: "suppress", createdTs: "2026-06-02" },
+      ],
+    } as never)
+    await handleAgentContextRoute(req(validBody), appEnv())
+    expect(mockLoadLearnings).toHaveBeenCalledWith(expect.anything(), "repo", "1") // repoId from getRepository
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings?.length).toBe(2)
+    expect(call.learnings?.[0]).toContain("empty catch in worker.ts is intentional") // newest first
+    expect(call.learnings?.[0]).toContain("[dismissed]") // suppress polarity surfaced
+  })
+  it("does not load learnings when the App can't resolve a repo id (index-only)", async () => {
+    await handleAgentContextRoute(req(validBody), env(TOKEN)) // no APP_ID
+    expect(mockLoadLearnings).not.toHaveBeenCalled()
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings).toBeUndefined()
   })
   it("degrades to index-only (no buildClient) when the App is unconfigured", async () => {
     const res = await handleAgentContextRoute(req(validBody), env(TOKEN)) // no APP_ID / PRIVATE_KEY

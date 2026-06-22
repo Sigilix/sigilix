@@ -136,4 +136,42 @@ describe("gatherAgentContext", () => {
     expect(res.telemetry.rawChunksKept).toBe(1)
     expect(res.context?.length).toBe(252) // 150 + 2 + 100
   })
+
+  it("injects team learnings (negative memory) as the FIRST section", async () => {
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5)])
+    mockExpand.mockResolvedValue(expansion({ block: "SYMBOLS" }))
+    mockFormat.mockReturnValue("RAW")
+    const res = await gatherAgentContext({
+      ...base,
+      query: "q",
+      learnings: ["always validate cents as integers", "the empty-catch in worker.ts is intentional"],
+    })
+    expect(res.telemetry.learningsInjected).toBe(2)
+    // learnings block comes first, then symbol, then raw
+    expect(res.context?.startsWith("# Team conventions")).toBe(true)
+    expect(res.context).toContain("always validate cents as integers")
+    expect(res.context).toContain("SYMBOLS")
+    expect(res.context?.indexOf("# Team conventions")).toBeLessThan(res.context?.indexOf("SYMBOLS") ?? -1)
+  })
+
+  it("surfaces learnings even when there is NO code match (chunks empty)", async () => {
+    mockRetrieve.mockResolvedValue([]) // no index hit
+    const res = await gatherAgentContext({
+      ...base,
+      query: "q",
+      learnings: ["dismissed: console noise is fine in dev"],
+    })
+    expect(res.context).not.toBeNull()
+    expect(res.context).toContain("console noise is fine in dev")
+    expect(res.telemetry.chunkCount).toBe(0)
+    expect(res.telemetry.learningsInjected).toBe(1)
+    expect(mockExpand).not.toHaveBeenCalled()
+  })
+
+  it("no learnings + no code match → null (blind), learningsInjected 0", async () => {
+    mockRetrieve.mockResolvedValue([])
+    const res = await gatherAgentContext({ ...base, query: "q" })
+    expect(res.context).toBeNull()
+    expect(res.telemetry.learningsInjected).toBe(0)
+  })
 })

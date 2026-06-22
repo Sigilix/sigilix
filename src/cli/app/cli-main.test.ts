@@ -6,10 +6,13 @@ import type { DryRunReview } from "@/src/lib/ensemble/app/session"
 import type { PrReviewFinding, PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 
 vi.mock("./run-review-in-node", () => ({ runReviewInNode: vi.fn() }))
+vi.mock("./run-review-remote", () => ({ runReviewRemote: vi.fn() }))
 import { runReviewInNode } from "./run-review-in-node"
+import { runReviewRemote } from "./run-review-remote"
 import { cliMain } from "./cli-main"
 
 const mockRun = vi.mocked(runReviewInNode)
+const mockRemote = vi.mocked(runReviewRemote)
 
 function review(findings: PrReviewFinding[]): DryRunReview {
   return {
@@ -28,6 +31,7 @@ beforeEach(() => {
   vi.spyOn(process.stdout, "write").mockImplementation((s) => (out.push(String(s)), true))
   vi.spyOn(process.stderr, "write").mockImplementation((s) => (err.push(String(s)), true))
   mockRun.mockReset()
+  mockRemote.mockReset()
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -83,6 +87,20 @@ describe("cliMain — validation + dispatch", () => {
     mockRun.mockResolvedValue(null)
     expect(await cliMain(["review", "--repo", "o/r", "--pr", "1", "--token", "t"])).toBe(0)
     expect(out.join("")).toContain("nothing to review")
+  })
+  it("hosted: $SIGILIX_API_KEY + a local source → the remote endpoint, NOT the local engine", async () => {
+    const saved = process.env.SIGILIX_API_KEY
+    process.env.SIGILIX_API_KEY = "hk"
+    try {
+      mockRemote.mockResolvedValue(review([finding(5)]))
+      const code = await cliMain(["review", "--diff", "main", "--plain"])
+      expect(mockRemote).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "hk", git: expect.anything() }))
+      expect(mockRun).not.toHaveBeenCalled() // local engine bypassed
+      expect(code).toBe(1) // exit derived from the remote review (P0 blocking)
+    } finally {
+      if (saved === undefined) delete process.env.SIGILIX_API_KEY
+      else process.env.SIGILIX_API_KEY = saved
+    }
   })
   it("--json selects JSON output", async () => {
     mockRun.mockResolvedValue(review([finding(3)]))

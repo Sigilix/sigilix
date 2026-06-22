@@ -47,6 +47,17 @@ module.exports = {
       to: { path: FEATURE_INTERNAL, pathNot: TEST },
     },
     {
+      // SIG-304 Phase 2: the moat guard. The hosted thin-client driver is bundled
+      // into the PUBLISHED client (Phase 2.3), so it must ship NO engine — it may
+      // import the `DryRunReview` TYPE only, never value-import the ensemble engine.
+      name: "thin-client-ships-no-engine",
+      comment:
+        "src/cli/app/run-review-remote.ts is the published thin-client driver — it may import the DryRunReview TYPE only, never value-import src/lib/ensemble/** (that would ship the moat). SIG-304 Phase 2.",
+      severity: "error",
+      from: { path: "^src/cli/app/run-review-remote\\.ts$", pathNot: TEST },
+      to: { path: "^src/lib/ensemble/", dependencyTypesNot: ["type-only"] },
+    },
+    {
       name: "cross-feature-barrel-only",
       comment:
         "A feature may import another feature only through its barrel (index.ts), never an internal path. COMPLIANCE.md §2.",

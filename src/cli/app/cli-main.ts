@@ -147,24 +147,8 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
       process.stderr.write("sigilix: --uncommitted / --diff must be run inside a git repository\n")
       return 2
     }
-    // RECALL-SAFETY: `--uncommitted` reviews `git diff HEAD` (tracked changes only).
-    // Untracked/new files are NOT in that diff — and new files are the highest-risk
-    // content pre-commit. Warn loudly so a clean result is never silently misleading.
-    if (values.diff === undefined) {
-      try {
-        const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" })
-          .split("\n")
-          .filter((l) => l.trim() !== "")
-        if (untracked.length > 0) {
-          const shown = untracked.slice(0, 8).join(", ") + (untracked.length > 8 ? ", …" : "")
-          process.stderr.write(
-            `sigilix: ⚠ ${untracked.length} untracked file(s) will NOT be reviewed (\`git add\` them first): ${shown}\n`,
-          )
-        }
-      } catch {
-        // non-fatal: the warning is best-effort
-      }
-    }
+    // SIG-490: `--uncommitted` reviews tracked changes AND untracked (new, non-ignored)
+    // files (the local-git client includes them as new-file diffs) — no warning needed.
     // owner/repo only label local logs; honor --repo if given, else a stub.
     const rp = (values.repo ?? "local/local").split("/")
     owner = rp[0] || "local"

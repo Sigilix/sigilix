@@ -127,10 +127,8 @@ export async function cliMain(argv: readonly string[]): Promise<number> {
     )
     return 2
   }
-  // Tell the user which path ran when we auto-fell-back (not on an explicit --local).
-  if (useLocal && hostedKey === "" && values.local !== true) {
-    process.stderr.write("sigilix: no $SIGILIX_API_KEY — running locally on your model key (set the key for hosted)\n")
-  }
+  // Auto-local is SILENT — it just works. (Hosted runs show "· hosted" in the panel
+  // subject; the absence of it means local, so no noisy stderr note is needed.)
 
   // Source: local working tree (--uncommitted) or a base range (--diff <base>),
   // else a real GitHub PR (--repo + --pr; + token only for the BYO local engine).

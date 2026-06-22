@@ -74,13 +74,13 @@ describe("cliMain — validation + dispatch", () => {
     expect(mockRun).not.toHaveBeenCalled()
     expect(mockRemote).not.toHaveBeenCalled()
   })
-  it("auto-local: no hosted key but $OPENROUTER_API_KEY present → runs the local engine, no flags", async () => {
+  it("auto-local: no hosted key but $OPENROUTER_API_KEY present → runs the local engine silently, no flags", async () => {
     process.env.OPENROUTER_API_KEY = "byo"
     mockRun.mockResolvedValue(review([finding(5)]))
     const code = await cliMain(["review", "--uncommitted", "--plain"]) // no --local, no --rich
     expect(mockRun).toHaveBeenCalled() // fell back to the local engine
     expect(mockRemote).not.toHaveBeenCalled()
-    expect(err.join("")).toContain("running locally")
+    expect(err.join("")).not.toContain("running locally") // auto-local is silent (no scary note)
     expect(code).toBe(1)
   })
   it("--local: missing --repo → exit 2, no engine call", async () => {

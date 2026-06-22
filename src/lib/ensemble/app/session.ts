@@ -133,6 +133,29 @@ export interface EnsembleResult<Tel = FinalizeTelemetry> {
   dryRunReview?: DryRunReview
 }
 
+/** Fallback reasons that mean the engine COULD NOT produce a verdict (vs a
+ *  legitimate empty/skipped review). See the `fellBackReason` note above. */
+const NO_VERDICT_FAILURES: ReadonlySet<string> = new Set([
+  "specialists_all_failed",
+  "router_no_specialists",
+  "synth_timeout",
+  "internal_error",
+])
+
+/**
+ * SIG-304 recall-safety: true when a dry-run result is an ENGINE FAILURE that
+ * produced no verdict — `errored`, or a `skipped` bail whose `fellBackReason` means
+ * "couldn't even generate a verdict" (total model outage / synth exhaustion).
+ * Headless callers (CLI + /v1/review) MUST surface this as an error, NEVER as a
+ * clean pass — a transient failure must not read as "no issues found".
+ */
+export function isDryRunEngineFailure(result: EnsembleResult): boolean {
+  if (result.status === "errored") return true
+  if (result.dryRunReview) return false
+  const reason = (result.telemetry as { fellBackReason?: string }).fellBackReason
+  return reason !== undefined && NO_VERDICT_FAILURES.has(reason)
+}
+
 /**
  * Minimal structural slice of the orchestrator's `EnsembleTelemetry` that
  * `finalize` actually touches — the four routing fields, the two it writes

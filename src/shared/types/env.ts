@@ -331,6 +331,11 @@ export interface Env {
   // `wrangler secret put OPENCLAW_VALIDATION_METRICS_TOKEN <token>`.
   OPENCLAW_VALIDATION_METRICS_TOKEN?: string
 
+  // SIG-304 Phase 2: shared-secret bearer for POST /v1/review (the hosted thin
+  // client). Unset → the endpoint returns 503 (inert). Set via
+  // `wrangler secret put OPENCLAW_SIGILIX_API_KEY <token>` (openssl rand -base64 32).
+  OPENCLAW_SIGILIX_API_KEY?: string
+
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace

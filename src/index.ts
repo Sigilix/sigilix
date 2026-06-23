@@ -31,6 +31,7 @@ import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
+import { handleBlastRadiusApiRoute } from "@/src/lib/api-blast-radius-route"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
@@ -240,6 +241,14 @@ export default {
     // is set.
     if (request.method === "POST" && url.pathname === "/v1/verify") {
       return handleVerifyApiRoute(request, env)
+    }
+
+    // Graph-grounded impact preview — POSTs {owner, repo, names, paths}, returns the files
+    // that CALL those symbols and the files that IMPORT those files, so the agent knows
+    // what its edit may break. Empty (graceful) for an un-indexed repo. Inert (503) until
+    // the API key is set.
+    if (request.method === "POST" && url.pathname === "/v1/blast-radius") {
+      return handleBlastRadiusApiRoute(request, env)
     }
 
     // SIG-483: agent-memory store. PUT writes a durable per-(user, repo) memory

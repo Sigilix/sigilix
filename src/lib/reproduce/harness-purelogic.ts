@@ -8,6 +8,17 @@
 // a `reproduced` verdict means "we ran both and the buggy code returns a different
 // value at a boundary input", never a model judgment.
 //
+// ── A THIN ADAPTER OVER THE SHARED CORE ─────────────────────────────────────
+// The reusable mechanics — lifting a snippet into a callable, the type-aware battery,
+// the comparison-source builder, the agree/diverge tally, and the determinism re-run —
+// now live in `purelogic-pair.ts` (the shared core), so the /v1/verify oracle
+// (`comparePairInSandbox`) and this finding path share ONE implementation. THIS file is
+// the finding-path adapter: it reads the cited buggy + fix code off a finding, delegates
+// the comparison to `compareLiftedPair`, and maps the result to the reproduced /
+// inconclusive / skipped verdict vocabulary the review path expects. Behavior is
+// UNCHANGED by the extraction — e2e/reproduce-fp-eval.test.ts pins it (100% recall, 0%
+// over-fire on the corpus) and harness-purelogic.test.ts pins every verdict + detail tag.
+//
 // ── WHY THIS WEDGE, NOT ReDoS ───────────────────────────────────────────────
 // The ReDoS harness (the design's "cleanest" wedge) does NOT reproduce in QuickJS:
 // its regex engine (libregexp) ≠ V8's, so a V8-catastrophic regex isn't necessarily
@@ -39,8 +50,8 @@
 // (e2e/reproduce-fp-eval.test.ts): 100% recall, 0% over-fire on the corpus.
 
 import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
-import { parseSource, type SourceExt, type AstNode } from "@/src/features/ast-rules"
-import { runInSandbox, type SandboxCaps, type SandboxResult } from "./sandbox-runner"
+import type { SandboxCaps } from "./sandbox-runner"
+import { compareLiftedPair, liftFunction, PURELOGIC_PAIR_CAPS } from "./purelogic-pair"
 
 /** The cited-code fields the harness reads. All optional — a finding may carry any
  *  subset (the eligibility gate ensured at least one holds liftable code). Buggy code
@@ -66,299 +77,14 @@ export interface PureLogicHarnessResult {
   elapsedMs: number
 }
 
-/** The coarse runtime type of a parameter, derived from its TS annotation (or `any`
- *  when untyped/unknown). Drives a TYPE-AWARE battery so a numerically-equivalent
- *  rewrite (`x * 2` vs `x + x`) isn't falsely flagged as divergent by feeding a `string`
- *  to a `number` param — while an untyped (`any`) param still gets the full pool, so a
- *  genuine coercion bug is still exercised. */
-type ParamType = "number" | "string" | "boolean" | "array" | "any"
-
-/** A liftable function pulled from a cited snippet: an EXPRESSION text usable as a
- *  value (a declaration is wrapped so it yields the function), plus its param types. */
-interface LiftedFunction {
-  expr: string
-  paramTypes: ParamType[]
-}
-
-/** Per-run sandbox caps. A pure-function battery is BYTECODE, so the opcode-cycle
- *  interrupt (maxInterrupts) is the real bound — a runaway buggy loop is cut by the
- *  counter even on Cloudflare's frozen clock. Battery + arity are kept small so a
- *  benign battery finishes well under the cap while a true infinite loop trips it. */
-const HARNESS_DEADLINE_MS = 500
-const HARNESS_MAX_INTERRUPTS = 100_000
-const HARNESS_CAPS: SandboxCaps = {
-  memoryBytes: 32 * 1024 * 1024,
-  maxStackBytes: 256 * 1024,
-  deadlineMs: HARNESS_DEADLINE_MS,
-  maxInterrupts: HARNESS_MAX_INTERRUPTS,
-}
+/** Per-run sandbox caps (the shared-core caps — a pure-function battery is BYTECODE, so
+ *  the opcode-cycle interrupt is the real bound; see purelogic-pair.ts). */
+const HARNESS_CAPS: SandboxCaps = PURELOGIC_PAIR_CAPS
 
 /** HARD wall-clock cap on a SINGLE harness invocation (two full-battery sandbox runs,
  *  each bounded by the caps above). The per-run figure the caller's per-PR budget
  *  reserves, so the aggregate ceiling is HONEST. */
 export const PURELOGIC_HARNESS_MAX_TOTAL_MS = 2_000
-
-/** Max function arity we form a battery for (>3 → combinatorial blow-up; off-by-one /
- *  fence-post bugs are overwhelmingly 1-2 arg functions). */
-const MAX_ARITY = 3
-/** Cap on battery size (bounds the in-guest loop → keeps opcode cost well under the
- *  cycle cap). The type-correct cartesian stays under this for typed params; an
- *  all-`any` arity-3 fn overflows and is evenly sampled to this many tuples. */
-const MAX_BATTERY = 165
-
-/** Boundary-biased input values: small ints around 0/±1, strings of increasing
- *  length, arrays of increasing length, booleans — exactly where off-by-one /
- *  fence-post / coercion bugs manifest. All JSON-serializable (passed via __INPUT__). */
-const SCALAR_POOL: readonly unknown[] = [
-  -1,
-  0,
-  1,
-  2,
-  3,
-  5,
-  10,
-  "",
-  "a",
-  "ab",
-  "abc",
-  "abcde",
-  [],
-  [1],
-  [1, 2],
-  [1, 2, 3],
-  [1, 2, 3, 4, 5],
-  true,
-  false,
-]
-
-/** The value pool swept for a parameter, BY its type. A typed param gets only in-type
- *  values (so a type-correct rewrite never diverges via coercion); an `any` param gets
- *  the full mixed pool (so genuine coercion bugs are still caught). */
-const POOL_BY_TYPE: Record<ParamType, readonly unknown[]> = {
-  number: [-1, 0, 1, 2, 3, 5, 10],
-  string: ["", "a", "ab", "abc", "abcde"],
-  boolean: [true, false],
-  array: [[], [1], [1, 2], [1, 2, 3], [1, 2, 3, 4, 5]],
-  any: SCALAR_POOL,
-}
-
-/** Numeric literals appearing in the function text, each expanded to {n-1, n, n+1}, so
- *  a boundary-comparison bug (`age > 18` vs `>= 18`) is exercised AT its boundary (18 is
- *  not in the default pool). Bounded; ignores huge magnitudes. */
-function numericLiteralsFrom(text: string): number[] {
-  const out = new Set<number>()
-  const re = /-?\b\d+\b/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
-    const n = Number(m[0])
-    if (Number.isInteger(n) && Math.abs(n) <= 100_000) {
-      out.add(n - 1)
-      out.add(n)
-      out.add(n + 1)
-    }
-  }
-  return [...out].slice(0, 18)
-}
-
-/** Build the arg-tuple battery from the per-position TYPES: the FULL cartesian product
- *  of each position's IN-TYPE pool, EVENLY SAMPLED down to MAX_BATTERY when it overflows.
- *  Type-correct pools mean a numerically-equivalent rewrite is never fed a type-violating
- *  value (no coercion over-fire), and the cartesian covers cross-position combinations
- *  (so a bug needing two specific args is found). `extraNumbers` (the function's own
- *  literals ±1) augment the number/any pools so boundary comparisons are hit. The
- *  cartesian stays small for typed params; an all-`any` arity-3 fn hits the cap, where
- *  even-sampling still spreads each position across its pool. */
-function buildBattery(paramTypes: readonly ParamType[], extraNumbers: readonly number[] = []): unknown[][] {
-  const numberPool =
-    extraNumbers.length === 0 ? POOL_BY_TYPE.number : [...new Set([...extraNumbers, ...POOL_BY_TYPE.number])]
-  const anyPool = extraNumbers.length === 0 ? POOL_BY_TYPE.any : [...new Set([...extraNumbers, ...POOL_BY_TYPE.any])]
-  const poolFor = (t: ParamType): readonly unknown[] =>
-    t === "number" ? numberPool : t === "any" ? anyPool : POOL_BY_TYPE[t]
-  const pools = paramTypes.map((t) => poolFor(t ?? "any"))
-  if (pools.length === 1) return [...(pools[0] ?? POOL_BY_TYPE.any)].map((v) => [v])
-  const full: unknown[][] = []
-  const rec = (depth: number, acc: unknown[]): void => {
-    if (depth === pools.length) {
-      full.push(acc.slice())
-      return
-    }
-    for (const v of pools[depth] ?? []) {
-      acc.push(v)
-      rec(depth + 1, acc)
-      acc.pop()
-    }
-  }
-  rec(0, [])
-  if (full.length <= MAX_BATTERY) return full
-  const stride = full.length / MAX_BATTERY
-  const sampled: unknown[][] = []
-  for (let k = 0; k < MAX_BATTERY; k++) {
-    const tuple = full[Math.floor(k * stride)]
-    if (tuple !== undefined) sampled.push(tuple)
-  }
-  return sampled
-}
-
-/** The coarse {@link ParamType} of a function parameter from its TS annotation. */
-function paramTypeOf(param: AstNode): ParamType {
-  const id = param?.type === "AssignmentPattern" ? param.left : param?.type === "RestElement" ? param.argument : param
-  const ann = id?.typeAnnotation?.typeAnnotation
-  const t = typeof ann?.type === "string" ? ann.type : ""
-  if (t === "TSNumberKeyword") return "number"
-  if (t === "TSStringKeyword") return "string"
-  if (t === "TSBooleanKeyword") return "boolean"
-  if (t === "TSArrayType") return "array"
-  if (t === "TSTypeReference") {
-    const name = ann?.typeName?.name
-    if (name === "Array" || name === "ReadonlyArray") return "array"
-  }
-  return "any"
-}
-
-/** Per-position {@link ParamType}s of a function-ish AST node. */
-function paramTypesOf(node: AstNode): ParamType[] {
-  const params = node?.params
-  return Array.isArray(params) ? params.map((p: AstNode) => paramTypeOf(p)) : []
-}
-
-const FUNCTION_NODE_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"])
-
-/** Pull a function node out of a single top-level statement (or its exported /
- *  declared inner). Handles `function f(){}`, `const f = () => {}`, a bare
- *  `(x) => ...` expression, and the `export` / `export default` wrappers. Returns the
- *  OUTERMOST function (never a nested helper). */
-function functionFromStatement(stmt: AstNode): AstNode | null {
-  if (stmt === null || typeof stmt !== "object") return null
-  const t = stmt.type
-  if (FUNCTION_NODE_TYPES.has(t)) return stmt
-  if (t === "ExportNamedDeclaration" || t === "ExportDefaultDeclaration") return functionFromStatement(stmt.declaration)
-  if (t === "ExpressionStatement") return functionFromStatement(stmt.expression)
-  if (t === "VariableDeclaration") {
-    const decls = Array.isArray(stmt.declarations) ? stmt.declarations : []
-    for (const d of decls) {
-      const init = d?.init
-      if (init && FUNCTION_NODE_TYPES.has(init.type)) return init
-    }
-  }
-  return null
-}
-
-/** The OUTERMOST (top-level) function in a parsed snippet, by scanning the module
- *  body in source order. NOT a walk — acorn-walk visits children first, so a walk
- *  would lift a nested helper/arrow instead of the cited function. */
-function topLevelFunctionNode(ast: AstNode): AstNode | null {
-  const body = Array.isArray(ast?.body) ? ast.body : []
-  for (const stmt of body) {
-    const fn = functionFromStatement(stmt)
-    if (fn !== null) return fn
-  }
-  return null
-}
-
-/** Node types that are PURE TYPE syntax (no runtime form) — deleted whole. */
-const PURE_TYPE_NODES = new Set([
-  "TSTypeAnnotation",
-  "TSTypeParameterDeclaration",
-  "TSTypeParameterInstantiation",
-  "TSTypeAliasDeclaration",
-  "TSInterfaceDeclaration",
-  "TSDeclareFunction",
-  "TSIndexSignature",
-])
-
-/**
- * Collect [start,end) ranges of TS-only syntax anywhere in a function subtree, so the
- * sliced text can run as PLAIN JS in QuickJS (which has no TS support). A cited
- * function in this strict-TS repo carries param/return type annotations, type
- * parameters, `as`/`satisfies`/non-null assertions, and inner-var types — all of which
- * are a SyntaxError in the guest. A GENERIC recursion (not `walkAst`, whose base
- * visitor never descends into `.typeAnnotation`/`.returnType`/`.typeParameters`):
- *   - PURE type nodes → delete the whole node (+ a directly-preceding optional `?`);
- *   - `as` / `satisfies` / non-null → keep `.expression`, delete the trailing type;
- *   - `<T>expr` assertion → delete the leading `<T>`, keep `.expression`.
- * Ranges are in the snippet's coordinate system, non-overlapping by construction.
- */
-function collectTypeRanges(node: AstNode, snippet: string, ranges: Array<[number, number]>): void {
-  if (node === null || typeof node !== "object") return
-  const type = node.type
-  if (typeof type === "string") {
-    if (PURE_TYPE_NODES.has(type)) {
-      if (typeof node.start === "number" && typeof node.end === "number" && node.end > node.start) {
-        // absorb a directly-preceding optional `?` (e.g. `i?: number`)
-        const s = node.start > 0 && snippet[node.start - 1] === "?" ? node.start - 1 : node.start
-        ranges.push([s, node.end])
-      }
-      return // a type subtree has no runtime form — don't recurse into it
-    }
-    if (type === "TSAsExpression" || type === "TSSatisfiesExpression" || type === "TSNonNullExpression") {
-      const ex = node.expression
-      if (ex && typeof ex.end === "number" && typeof node.end === "number" && node.end > ex.end) {
-        ranges.push([ex.end, node.end])
-      }
-      collectTypeRanges(ex, snippet, ranges) // keep + recurse the runtime expression
-      return
-    }
-    if (type === "TSTypeAssertion") {
-      const ex = node.expression
-      if (ex && typeof node.start === "number" && typeof ex.start === "number" && ex.start > node.start) {
-        ranges.push([node.start, ex.start]) // the leading `<T>`
-      }
-      collectTypeRanges(ex, snippet, ranges)
-      return
-    }
-  }
-  for (const key in node) {
-    if (key === "start" || key === "end" || key === "loc" || key === "range" || key === "parent") continue
-    const child = (node as Record<string, unknown>)[key]
-    if (Array.isArray(child)) {
-      for (const c of child) collectTypeRanges(c as AstNode, snippet, ranges)
-    } else if (child !== null && typeof child === "object") {
-      collectTypeRanges(child as AstNode, snippet, ranges)
-    }
-  }
-}
-
-/** Slice the function text from the snippet with all TS-only syntax removed, yielding
- *  plain JS the guest can evaluate. Returns null on a malformed node range. */
-function functionTextStripped(snippet: string, fnNode: AstNode): string | null {
-  const start = fnNode?.start
-  const end = fnNode?.end
-  if (typeof start !== "number" || typeof end !== "number") return null
-  if (start < 0 || end > snippet.length || end <= start) return null
-  const ranges: Array<[number, number]> = []
-  collectTypeRanges(fnNode, snippet, ranges)
-  const within = ranges.filter(([s, e]) => s >= start && e <= end && e > s).sort((a, b) => b[0] - a[0]) // descending so each splice leaves earlier offsets valid
-  let text = snippet.slice(start, end)
-  for (const [s, e] of within) text = text.slice(0, s - start) + text.slice(e - start)
-  return text
-}
-
-/**
- * Lift the OUTERMOST function from the candidate snippets into a callable EXPRESSION
- * (TS types stripped). A FunctionDeclaration is wrapped `(()=>{<decl>;return
- * <name>;})()` so it yields the function value (and same-name buggy/fixed pairs don't
- * collide); an arrow / function expression is parenthesised. Each candidate is parsed
- * INDEPENDENTLY; the first that parses AND yields a top-level function wins. The TS
- * parser is used (the cited code may be TS), but the lifted text is plain JS. Never
- * throws.
- */
-function liftFunction(candidates: readonly string[]): LiftedFunction | null {
-  for (const code of candidates) {
-    const trimmed = code.trim()
-    if (trimmed.length === 0) continue
-    const parsed = parseSource(trimmed, ".ts" as SourceExt)
-    if (!parsed.ok) continue
-    const fnNode = topLevelFunctionNode(parsed.ast)
-    if (fnNode === null) continue
-    const text = functionTextStripped(trimmed, fnNode)
-    if (text === null) continue
-    const name = fnNode.type === "FunctionDeclaration" ? fnNode?.id?.name : undefined
-    const expr = typeof name === "string" && name.length > 0 ? `(()=>{${text};return ${name};})()` : `(${text})`
-    // Param types read from the (un-stripped) AST node — drives the type-aware battery.
-    return { expr, paramTypes: paramTypesOf(fnNode) }
-  }
-  return null
-}
 
 /** BUGGY-code candidates (the failing function), in preference order: the structured
  *  buggy fields, then the body's code fences, then the raw body. Excludes the FIX
@@ -388,220 +114,18 @@ function fixedCandidates(finding: PureLogicHarnessInput): string[] {
   return parts
 }
 
-// ── SIG-478: array-constructor-idiom rewrite detector ───────────────────────
-// A behavior-preserving rewrite of the array-construction IDIOM
-// (`new Array(n).fill(v)` ↔ `Array.from({length:n},()=>v)`, or bare `new Array(n)` ↔
-// `Array.from({length:n})`) is equivalent for every VALID length but DIVERGES at an
-// out-of-domain length (`new Array(-1)` throws RangeError; `Array.from({length:-1})`
-// returns []) and — for an UNTYPED param — on coercion inputs (`new Array("a")` → `["a"]`
-// vs `Array.from({length:"a"})` → []). That divergence is a constructor-domain artifact,
-// NOT the cited bug, yet it slips the all-agree FP floor. We detect it at the lifted-
-// EXPRESSION level (param-type-independent, so it closes BOTH the typed RangeError and the
-// untyped coercion vectors a runtime/error-message heuristic can't) and bail to
-// inconclusive BEFORE the battery. The detector PRESERVES the length expression and the
-// per-element value and only canonicalizes the new-vs-from idiom, so a real change INSIDE
-// the construction (fill value 1-vs-0, length n-vs-n+1, an index-using mapper `(_,i)=>i`)
-// keeps the skeletons distinct and still reproduces. Recall-safe: the worst case is a
-// withheld REPRODUCED pill on a behavior-preserving rewrite (the finding still posts) —
-// never a hidden real bug. The harness stays promotion-only.
-
-const ARRBUILD_HOLE = "HOLE"
-
-/** `Array` referenced as the global by NAME (a locally-shadowed `Array` is a known,
- *  contrived limitation — see the ticket residual-risks). */
-function isArrayIdentifier(node: AstNode): boolean {
-  return node?.type === "Identifier" && node?.name === "Array"
-}
-
-/** Does a mapper fn body reference any of its OWN params (an index/value-using mapper —
- *  a genuine behavior difference vs a constant `.fill`)? */
-function mapperUsesParams(fn: AstNode): boolean {
-  const names: string[] = (Array.isArray(fn?.params) ? fn.params : [])
-    .map((p: AstNode) => (p?.type === "Identifier" ? p.name : null))
-    .filter((n: unknown): n is string => typeof n === "string")
-  if (names.length === 0) return false
-  let used = false
-  const walk = (n: AstNode): void => {
-    if (used || n === null || typeof n !== "object") return
-    if (n.type === "Identifier" && names.includes(n.name)) {
-      used = true
-      return
-    }
-    for (const key in n) {
-      if (key === "start" || key === "end" || key === "loc" || key === "range" || key === "parent") continue
-      const c = (n as Record<string, unknown>)[key]
-      if (Array.isArray(c)) for (const x of c) walk(x as AstNode)
-      else if (c !== null && typeof c === "object") walk(c as AstNode)
-    }
-  }
-  walk(fn.body)
-  return used
-}
-
-/** If `node` is a recognized array construction, return its {length node, element-skeleton
- *  fn}; else null. Recognizes `new Array(e)` / `Array(e)` (→ HOLE), `<ctor>.fill(v)` (→
- *  CONST(v)), `Array.from({length:e})` (→ HOLE), `Array.from({length:e}, mapper)` (→ CONST
- *  for a param-free constant arrow, else MAPPER). Returns null on any other shape (multi-arg
- *  `Array(a,b)`, `Array.from(iterable)`, computed access, `.map`/other chains) so genuine
- *  behavior differences are NOT collapsed. */
-function arrayBuild(node: AstNode): { length: AstNode; element: () => string } | null {
-  if (node === null || typeof node !== "object") return null
-  if (
-    (node.type === "NewExpression" || node.type === "CallExpression") &&
-    isArrayIdentifier(node.callee) &&
-    Array.isArray(node.arguments) &&
-    node.arguments.length === 1
-  ) {
-    return { length: node.arguments[0], element: () => ARRBUILD_HOLE }
-  }
-  if (
-    node.type === "CallExpression" &&
-    node.callee?.type === "MemberExpression" &&
-    node.callee.computed !== true &&
-    node.callee.property?.name === "fill"
-  ) {
-    const inner = arrayBuild(node.callee.object)
-    if (inner !== null && Array.isArray(node.arguments) && node.arguments.length <= 1) {
-      const v = node.arguments[0]
-      return { length: inner.length, element: () => (v === undefined ? "CONST(undefined)" : `CONST(${skeleton(v)})`) }
-    }
-  }
-  if (
-    node.type === "CallExpression" &&
-    node.callee?.type === "MemberExpression" &&
-    node.callee.computed !== true &&
-    isArrayIdentifier(node.callee.object) &&
-    node.callee.property?.name === "from" &&
-    Array.isArray(node.arguments) &&
-    node.arguments.length >= 1
-  ) {
-    const a0 = node.arguments[0]
-    if (a0?.type === "ObjectExpression" && Array.isArray(a0.properties) && a0.properties.length === 1) {
-      const p = a0.properties[0]
-      const keyName = p?.key?.name ?? p?.key?.value
-      if (p?.type === "Property" && p.computed !== true && keyName === "length") {
-        const mapper = node.arguments[1]
-        return {
-          length: p.value,
-          element: () => {
-            if (mapper === undefined) return ARRBUILD_HOLE
-            if (mapper.type === "ArrowFunctionExpression" || mapper.type === "FunctionExpression") {
-              if (!mapperUsesParams(mapper) && mapper.body && mapper.body.type !== "BlockStatement") {
-                return `CONST(${skeleton(mapper.body)})`
-              }
-              return `MAPPER(${skeleton(mapper)})`
-            }
-            return `MAPPER(${skeleton(mapper)})`
-          },
-        }
-      }
-    }
-  }
-  return null
-}
-
-/** Structural skeleton string of an AST subtree, with array-construction subtrees
- *  canonicalized to `ARRBUILD(<length-skeleton>;<element>)`. Ignores location + TS-only
- *  keys. Sets `state.saw` when any array construction was canonicalized. */
-function skeleton(node: AstNode, state: { saw: boolean } = { saw: false }): string {
-  if (node === null || typeof node !== "object") return JSON.stringify(node)
-  const build = arrayBuild(node)
-  if (build !== null) {
-    state.saw = true
-    return `ARRBUILD(${skeleton(build.length, state)};${build.element()})`
-  }
-  const parts: string[] = []
-  for (const key of Object.keys(node).sort()) {
-    if (key === "start" || key === "end" || key === "loc" || key === "range" || key === "parent") continue
-    if (key === "typeAnnotation" || key === "returnType" || key === "typeParameters" || key === "typeArguments")
-      continue
-    const c = (node as Record<string, unknown>)[key]
-    if (Array.isArray(c)) parts.push(`${key}=[${c.map((x) => skeleton(x as AstNode, state)).join(",")}]`)
-    else if (c !== null && typeof c === "object") parts.push(`${key}=${skeleton(c as AstNode, state)}`)
-    else parts.push(`${key}=${JSON.stringify(c)}`)
-  }
-  return `${node.type}{${parts.join(",")}}`
-}
-
-/** True iff the two lifted expressions differ ONLY in array-construction idiom: both parse,
- *  both contain an array construction, and their idiom-canonicalized skeletons are identical.
- *  Fail-safe to false (never throws). */
-function isArrayCtorOnlyRewrite(buggyExpr: string, fixedExpr: string): boolean {
-  try {
-    const pb = parseSource(buggyExpr, ".ts" as SourceExt)
-    const pf = parseSource(fixedExpr, ".ts" as SourceExt)
-    if (!pb.ok || !pf.ok) return false
-    const sb = { saw: false }
-    const sf = { saw: false }
-    const kb = skeleton(pb.ast as AstNode, sb)
-    const kf = skeleton(pf.ast as AstNode, sf)
-    return sb.saw && sf.saw && kb === kf
-  } catch {
-    return false
-  }
-}
-
-/**
- * Build the sandbox guest that defines the two lifted functions and runs the battery,
- * tallying agree/diverge. Each call gets a DEEP-CLONED copy of its args (so a function
- * that mutates an array argument can't poison the other side's call or a later tuple).
- * A return value is keyed `"V:"+JSON.stringify(out)`; a throw is keyed `"E:"+name`, so
- * "both throw the same error" counts as AGREE (not a spurious divergence). The last
- * expression is the `{agree,diverge,sample}` object → `runInSandbox` dumps it.
- */
-function buildHarnessSource(buggyExpr: string, fixedExpr: string): string {
-  // `canon` is an ORDER-INSENSITIVE-for-object-keys serializer: object keys are sorted
-  // so a behavior-preserving key REORDER (`{x,y}` vs `{y,x}`) keys identically → AGREE,
-  // not a false divergence (JSON.stringify is key-order-sensitive). ARRAY order is kept
-  // significant — reordering an array IS a behavior change, correctly divergent.
-  return (
-    `function canon(v){if(v===null||typeof v!=="object")return JSON.stringify(v);` +
-    `if(Array.isArray(v))return "["+v.map(canon).join(",")+"]";` +
-    `var ks=Object.keys(v).sort();return "{"+ks.map(function(k){return JSON.stringify(k)+":"+canon(v[k]);}).join(",")+"}";}` +
-    `const __B__=${buggyExpr};` +
-    `const __F__=${fixedExpr};` +
-    `const A=__INPUT__.battery;` +
-    `let agree=0,diverge=0,sample=null;` +
-    `for(let i=0;i<A.length;i++){` +
-    `var bk,fk;` +
-    `try{bk="V:"+canon(__B__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){bk="E:"+((e&&e.name)?e.name:"err");}` +
-    `try{fk="V:"+canon(__F__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){fk="E:"+((e&&e.name)?e.name:"err");}` +
-    `if(bk===fk){agree++;}else{diverge++;if(sample===null){sample={i:i,buggy:bk,fixed:fk};}}` +
-    `}` +
-    `({agree:agree,diverge:diverge,sample:sample})`
-  )
-}
-
-/** The agree/diverge tally parsed from a sandbox run, or null when the guest didn't
- *  return a clean tally (timed-out / threw / oom / malformed). */
-interface Tally {
-  agree: number
-  diverge: number
-  sample: unknown
-}
-
-function parseTally(res: SandboxResult): Tally | null {
-  if (res.status !== "ok") return null
-  const v = res.value
-  if (v === null || typeof v !== "object") return null
-  const o = v as { agree?: unknown; diverge?: unknown; sample?: unknown }
-  if (typeof o.agree !== "number" || typeof o.diverge !== "number") return null
-  return { agree: o.agree, diverge: o.diverge, sample: o.sample ?? null }
-}
-
-/** Stable string key for a divergence sample (for the determinism re-run compare). */
-function sampleKey(sample: unknown): string {
-  try {
-    return JSON.stringify(sample) ?? "null"
-  } catch {
-    return "unstringifiable"
-  }
-}
+/** Detail tags from the shared kernel's `skipped` branch that the FINDING path treats as
+ *  INCONCLUSIVE (a measurement that didn't demonstrate a divergence — never a refutation),
+ *  not `skipped` (nothing runnable). The remaining kernel-skipped tags (arity / battery)
+ *  stay `skipped` — there was no runnable two-sided test at all. */
+const INCONCLUSIVE_SKIP_DETAILS = new Set(["array-ctor-rewrite", "guest-no-tally", "flaky-divergence"])
 
 /**
  * Run the pure-function-logic harness on ONE finding. NEVER throws; returns a
  * structured {@link PureLogicHarnessResult}. See the module header for the two-sided
- * decision and the never-reproduced-without-agreement guard.
+ * decision and the never-reproduced-without-agreement guard. A thin adapter: it lifts
+ * the cited buggy + fix code, delegates to the shared `compareLiftedPair` kernel, and
+ * maps the kernel result back to the finding-path verdict vocabulary.
  *
  * @param finding the submitted finding (its buggy + fix code is lifted).
  * @param caps optional sandbox-cap override (defaults to the harness caps).
@@ -618,61 +142,23 @@ export async function runPureLogicHarness(
     if (buggy === null || fixed === null) {
       return { status: "skipped", detail: buggy === null ? "no-buggy-fn" : "no-fixed-fn", elapsedMs: elapsed() }
     }
-    const arity = buggy.paramTypes.length
-    if (arity !== fixed.paramTypes.length) {
-      return { status: "skipped", detail: `arity-mismatch:${arity}!=${fixed.paramTypes.length}`, elapsedMs: elapsed() }
+    const cmp = await compareLiftedPair({ buggy, fixed }, caps)
+    if (cmp.kind === "diverged") {
+      // DIVERGE on ≥1 input (deterministically) = the buggy code measurably behaves
+      // differently from the fix → reproduced.
+      return { status: "reproduced", detail: cmp.detail, elapsedMs: elapsed() }
     }
-    if (arity < 1 || arity > MAX_ARITY) {
-      return { status: "skipped", detail: `arity-out-of-range:${arity}`, elapsedMs: elapsed() }
+    if (cmp.kind === "agreed") {
+      // all-AGREE → the fix is a no-op on the (type-correct) battery → can't demonstrate
+      // the bug → inconclusive (the FP-safety floor: a behavior-PRESERVING change never
+      // reproduces).
+      return { status: "inconclusive", detail: cmp.detail, elapsedMs: elapsed() }
     }
-    // SIG-478: a behavior-preserving array-constructor IDIOM rewrite
-    // (`new Array(n).fill(0)` vs `Array.from({length:n},()=>0)`) is equivalent for every
-    // VALID length but DIVERGES at an out-of-domain length (`new Array(-1)` throws while
-    // `Array.from` returns []) and, for an untyped param, on coercion inputs. It is a
-    // constructor-domain artifact, not the cited bug — detect it at the lifted-expression
-    // level and bail BEFORE the battery (also saves the two sandbox runs). The detector
-    // preserves the length + per-element semantics, so a real change inside the construction
-    // still reproduces.
-    if (isArrayCtorOnlyRewrite(buggy.expr, fixed.expr)) {
-      return { status: "inconclusive", detail: "array-ctor-rewrite", elapsedMs: elapsed() }
-    }
-    // Use the BUGGY param types (arity already matched) — they drive the in-type battery,
-    // augmented with the function's own numeric literals so boundary comparisons are hit.
-    const battery = buildBattery(buggy.paramTypes, numericLiteralsFrom(buggy.expr))
-    if (battery.length === 0) {
-      return { status: "skipped", detail: "empty-battery", elapsedMs: elapsed() }
-    }
-    const source = buildHarnessSource(buggy.expr, fixed.expr)
-
-    const first = parseTally(await runInSandbox(source, { battery }, caps))
-    if (first === null) {
-      return { status: "inconclusive", detail: "guest-no-tally", elapsedMs: elapsed() }
-    }
-    // DIVERGE on ≥1 input = the buggy code measurably behaves differently from the fix.
-    // all-AGREE (diverge=0) → the fix is a no-op on the (type-correct) battery → can't
-    // demonstrate the bug → inconclusive (this is the FP-safety floor: a behavior-
-    // PRESERVING change never reproduces). all-DIVERGE is NOT special-cased: under
-    // source-reconstruction `fixed` = `buggy` + the suggested hunk, so the two are never
-    // unrelated functions — an all-diverge result is a constant-offset / wrong-seed bug
-    // (a real, always-wrong defect), not a wholesale rewrite. The harness NEVER refutes.
-    if (first.diverge < 1) {
-      return { status: "inconclusive", detail: "no-divergence-found", elapsedMs: elapsed() }
-    }
-    // Determinism: re-run the full battery and require the SAME tally + sample.
-    const second = parseTally(await runInSandbox(source, { battery }, caps))
-    if (
-      second === null ||
-      second.agree !== first.agree ||
-      second.diverge !== first.diverge ||
-      sampleKey(first.sample) !== sampleKey(second.sample)
-    ) {
-      return { status: "inconclusive", detail: "flaky-divergence", elapsedMs: elapsed() }
-    }
-    return {
-      status: "reproduced",
-      detail: `logic-divergence:agree=${first.agree}:diverge=${first.diverge}`,
-      elapsedMs: elapsed(),
-    }
+    // kind === "skipped": split the kernel's machine-readable detail into the finding
+    // path's two non-reproduced verdicts — a measurement that didn't fire (inconclusive)
+    // vs nothing runnable at all (skipped).
+    const status = INCONCLUSIVE_SKIP_DETAILS.has(cmp.detail) ? "inconclusive" : "skipped"
+    return { status, detail: cmp.detail, elapsedMs: elapsed() }
   } catch (err) {
     return { status: "skipped", detail: `error:${err instanceof Error ? err.name : "unknown"}`, elapsedMs: elapsed() }
   }

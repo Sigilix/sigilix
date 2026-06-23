@@ -14,15 +14,20 @@ vi.mock("./symbol-expansion", () => ({
   // hitKey is pure — keep the real impl so supersededHitKeys matching works.
   hitKey: (h: { path: string; lineStart: number; lineEnd: number }) => `${h.path}:${h.lineStart}-${h.lineEnd}`,
 }))
+vi.mock("./repo-map", () => ({ buildRepoMapBlock: vi.fn() }))
 
 import { gatherAgentContext, indexNamespaceFor } from "./agent-context"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { expandHitsToSymbols } from "./symbol-expansion"
+import { buildRepoMapBlock } from "./repo-map"
 import type { Env } from "@/src/shared/types/env"
 
 const mockRetrieve = vi.mocked(retrieveChunks)
 const mockFormat = vi.mocked(formatChunksForPrompt)
 const mockExpand = vi.mocked(expandHitsToSymbols)
+const mockRepoMap = vi.mocked(buildRepoMapBlock)
+// Default: no map (soft-fail). Tests that exercise the map override this.
+const noMap = { block: null, entries: 0, chars: 0 }
 
 const env = {} as unknown as Env
 const fetchFileContent = async (): Promise<string | null> => null
@@ -46,7 +51,10 @@ const expansion = (over: Partial<Record<string, unknown>> = {}) =>
 
 const base = { owner: "O", repo: "R", env, fetchFileContent }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockRepoMap.mockResolvedValue(noMap)
+})
 
 describe("indexNamespaceFor", () => {
   it("lowercases owner/repo (SIG-132 namespace)", () => {
@@ -173,5 +181,75 @@ describe("gatherAgentContext", () => {
     const res = await gatherAgentContext({ ...base, query: "q" })
     expect(res.context).toBeNull()
     expect(res.telemetry.learningsInjected).toBe(0)
+  })
+
+  // ─── SIG-527 repo map ─────────────────────────────────────────────
+
+  it("inserts the repo map in order learnings → map → symbol → raw chunks", async () => {
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5)])
+    mockExpand.mockResolvedValue(expansion({ block: "SYMBOLS" }))
+    mockFormat.mockReturnValue("RAW")
+    mockRepoMap.mockResolvedValue({
+      block: "# Repo map\n- a.ts:1  function fn  (↑3 callers, imp 2 importers)",
+      entries: 1,
+      chars: 60,
+    })
+    const res = await gatherAgentContext({ ...base, query: "q", learnings: ["always validate cents as integers"] })
+    const idxLearn = res.context!.indexOf("# Team conventions")
+    const idxMap = res.context!.indexOf("# Repo map")
+    const idxSym = res.context!.indexOf("SYMBOLS")
+    const idxRaw = res.context!.indexOf("RAW")
+    expect(idxLearn).toBeGreaterThanOrEqual(0)
+    expect(idxLearn).toBeLessThan(idxMap)
+    expect(idxMap).toBeLessThan(idxSym)
+    expect(idxSym).toBeLessThan(idxRaw)
+    expect(res.telemetry.mapEntries).toBe(1)
+    expect(res.telemetry.mapChars).toBe(60)
+  })
+
+  it("fetches the map with biasPaths = unique chunk paths", async () => {
+    // two chunks in a.ts + one in b.ts → unique bias paths [a.ts, b.ts]
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5), chunk("a.ts", 30, 35), chunk("b.ts", 1, 9)])
+    mockExpand.mockResolvedValue(expansion({ block: null }))
+    mockFormat.mockReturnValue("RAW")
+    await gatherAgentContext({ ...base, query: "q" })
+    expect(mockRepoMap).toHaveBeenCalledTimes(1)
+    const callArg = mockRepoMap.mock.calls[0]![0]
+    expect(callArg.biasPaths).toEqual(["a.ts", "b.ts"])
+  })
+
+  it("does NOT emit a map when there are no retrieval hits (no-hit behavior preserved)", async () => {
+    mockRetrieve.mockResolvedValue([]) // no index hit
+    const res = await gatherAgentContext({ ...base, query: "q", learnings: ["console noise is fine in dev"] })
+    // learnings still surface, but the map is never fetched and telemetry stays 0
+    expect(res.context).toContain("console noise is fine in dev")
+    expect(res.context).not.toContain("# Repo map")
+    expect(mockRepoMap).not.toHaveBeenCalled()
+    expect(res.telemetry.mapEntries).toBe(0)
+    expect(res.telemetry.mapChars).toBe(0)
+  })
+
+  it("the map is additive — it does not trim the raw chunk section against the budget", async () => {
+    // raw section sized to exactly fit the budget; a large map must NOT cause a trim.
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5), chunk("b.ts", 6, 9)])
+    mockExpand.mockResolvedValue(expansion({ block: null }))
+    mockFormat.mockImplementation((arr) => (arr.length > 0 ? "R".repeat(arr.length * 100) : null))
+    mockRepoMap.mockResolvedValue({ block: "M".repeat(1000), entries: 20, chars: 1000 })
+    const res = await gatherAgentContext({ ...base, query: "q", maxContextChars: 250 })
+    // both chunks kept (2×100=200 ≤ 250); the 1000-char map is exempt, not trimmed against budget
+    expect(res.telemetry.rawChunksKept).toBe(2)
+    expect(res.context).toContain("M".repeat(1000))
+    expect(res.telemetry.mapChars).toBe(1000)
+  })
+
+  it("map soft-fails to null → context is just learnings/symbol/raw, telemetry 0", async () => {
+    mockRetrieve.mockResolvedValue([chunk("a.ts", 1, 5)])
+    mockExpand.mockResolvedValue(expansion({ block: "SYMBOLS" }))
+    mockFormat.mockReturnValue("RAW")
+    mockRepoMap.mockResolvedValue(noMap)
+    const res = await gatherAgentContext({ ...base, query: "q" })
+    expect(res.context).toBe("SYMBOLS\n\nRAW")
+    expect(res.telemetry.mapEntries).toBe(0)
+    expect(res.telemetry.mapChars).toBe(0)
   })
 })

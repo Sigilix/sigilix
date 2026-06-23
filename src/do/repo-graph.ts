@@ -33,6 +33,9 @@ import {
   DEFAULT_EXPANSION_ROWS,
 } from "./repo-graph-internals"
 import { expansionForIds, resolveEnclosingSymbolId } from "./repo-graph-expansion"
+// SIG-527: the dependency-ranked "repo map" query lives in a leaf so this DO file
+// stays under its 1,000-line budget — same precedent as repo-graph-expansion.ts.
+import { repoMapRows, MAX_REPO_MAP_ROWS } from "./repo-graph-repo-map"
 export { resolveRelative, MAX_BLAST_IDS, DEFAULT_EXPANSION_ROWS }
 
 // ─── Public result types ──────────────────────────────────────────
@@ -56,6 +59,8 @@ import type {
   GraphImportRow,
   GraphContextExpansion,
   GraphHitExpansion,
+  RepoMapEntry,
+  RepoMap,
 } from "@/src/shared/domain/graph-context"
 export type {
   GraphContextNode,
@@ -64,6 +69,8 @@ export type {
   GraphImportRow,
   GraphContextExpansion,
   GraphHitExpansion,
+  RepoMapEntry,
+  RepoMap,
 }
 
 // ─── Public arg types ─────────────────────────────────────────────
@@ -918,6 +925,36 @@ export class RepoGraphDO extends DurableObject<Env> {
       maxRows,
     )
     return { graphAvailable: true, headSha: active.headSha, definitionRows, callerRows, importRows }
+  }
+
+  /**
+   * SIG-527: the dependency-ranked "repo map" — the `limit` most-depended-on
+   * symbols in the ACTIVE graph version, NAVIGATION-ONLY (path/line/kind/name +
+   * caller/importer counts; no bodies — the DO never stores source). A small
+   * model gets repo orientation + coverage beyond the retrieved chunks.
+   *
+   * `biasPaths` (the current turn's retrieval-hit paths) nudge their local
+   * symbols toward the top without overriding a genuinely far-more-central one.
+   * The query/ranking lives in the `repoMapRows` leaf; this method only resolves
+   * the committed version (same as the expansion paths) and clamps the limit.
+   *
+   * Returns `[]` when there is no active version — graceful degrade, mirroring
+   * the empty returns of `blastRadius` / `contextExpansionForChangedSymbols`.
+   */
+  async repoMap(args: { limit?: number; biasPaths?: string[] }): Promise<RepoMap> {
+    const active = await this.debugActiveVersion()
+    if (!active) return []
+
+    // Floor + clamp to ≥1 (mirrors contextExpansionForChangedSymbols's maxRows):
+    // a positive fractional arg must not floor to 0 and turn LIMIT into LIMIT 0.
+    // Also cap at MAX_REPO_MAP_ROWS so a hostile/huge `limit` can't pull an
+    // arbitrarily large rowset out of SQLite (Codex fix #3) — the render's char
+    // cap bounds bytes, but the query itself stays bounded too.
+    const limitReq = Math.floor(args.limit ?? DEFAULT_EXPANSION_ROWS)
+    const limitBase = Number.isFinite(limitReq) && limitReq >= 1 ? limitReq : DEFAULT_EXPANSION_ROWS
+    const limit = Math.min(limitBase, MAX_REPO_MAP_ROWS)
+
+    return repoMapRows(this.sql(), active, { limit, biasPaths: args.biasPaths ?? [] })
   }
 
   /**

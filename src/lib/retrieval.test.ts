@@ -135,4 +135,29 @@ describe("formatChunksForPrompt", () => {
     // at least one should be dropped.
     expect(out!.length).toBeLessThan(20_000)
   })
+
+  it("marks a truncated chunk so the model knows it is partial (SIG-536)", () => {
+    const huge = "x".repeat(10_000)
+    const out = formatChunksForPrompt([chunk("big.ts", huge)])!
+    expect(out).toContain("[truncated: first 4000 of 10000 chars]")
+  })
+
+  it("notes chunks omitted for the budget (SIG-536)", () => {
+    const big = "y".repeat(5_000)
+    const out = formatChunksForPrompt([
+      chunk("a.ts", big),
+      chunk("b.ts", big),
+      chunk("c.ts", big),
+      chunk("d.ts", big),
+      chunk("e.ts", big),
+    ])!
+    expect(out).toMatch(/\[\+\d+ more relevant chunk/)
+    expect(out).toContain("omitted for context budget")
+  })
+
+  it("adds no truncation/omission notes when everything fits", () => {
+    const out = formatChunksForPrompt([chunk("a.ts", "AAA"), chunk("b.ts", "BBB")])!
+    expect(out).not.toContain("truncated")
+    expect(out).not.toContain("omitted")
+  })
 })

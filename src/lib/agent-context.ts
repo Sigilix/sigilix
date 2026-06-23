@@ -13,6 +13,7 @@
 
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
 import { expandHitsToSymbols, hitKey } from "./symbol-expansion"
+import { buildRepoMapBlock } from "./repo-map"
 import type { Env } from "@/src/shared/types/env"
 
 // Section separator between the symbol block and the raw-chunk block.
@@ -21,6 +22,9 @@ const SECTION_SEP = "\n\n"
 // can't cost the agent materially more than reading the code itself on a narrow query
 // (the A1 measurement finding); tunable per call via maxContextChars.
 const DEFAULT_CONTEXT_BUDGET = 6000
+// SIG-527: how many central symbols to request for the repo map before the render's
+// own char cap trims them. Generous — the ~1200-char map budget is the real bound.
+const DEFAULT_REPO_MAP_LIMIT = 40
 
 export interface AgentContextArgs {
   owner: string
@@ -54,6 +58,10 @@ export interface AgentContextTelemetry {
   rawChunksKept: number
   /** Team-learning rules injected as negative memory (≤ provided). */
   learningsInjected: number
+  /** SIG-527: repo-map symbols rendered into the slice (0 when no map). */
+  mapEntries: number
+  /** SIG-527: char length of the repo-map block (0 when no map). */
+  mapChars: number
   contextChars: number
   /** The char budget applied to this slice. */
   budget: number
@@ -82,6 +90,8 @@ function emptyResult(namespace: string): AgentContextResult {
       superseded: 0,
       rawChunksKept: 0,
       learningsInjected: 0,
+      mapEntries: 0,
+      mapChars: 0,
       contextChars: 0,
       budget: 0,
     },
@@ -153,11 +163,28 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
         superseded: 0,
         rawChunksKept: 0,
         learningsInjected: learnings.count,
+        // No retrieval hits → no repo map (preserve the current no-hit behavior).
+        mapEntries: 0,
+        mapChars: 0,
         contextChars: learnings.block.length,
         budget,
       },
     }
   }
+
+  // SIG-527: the dependency-ranked repo map — fetched ONLY now that we have retrieval
+  // hits (the no-hit path returned above, so no map is emitted with zero hits). Bias it
+  // toward the files the hits touched. It is ADDITIVE: its own ~1200-char budget, NOT
+  // carved from `budget`, and it never trims the learnings/symbol/raw sections (recall-
+  // safe). Soft-fails to `{ block: null }` (no graph / no committed version / error).
+  const biasPaths = [...new Set(chunks.map((c) => c.path))]
+  const repoMap = await buildRepoMapBlock({
+    env: args.env,
+    owner: args.owner,
+    repo: args.repo,
+    biasPaths,
+    limit: DEFAULT_REPO_MAP_LIMIT,
+  })
 
   // Graph expansion (SIG-407): enclosing symbol bodies + caller/importer rows, bounded to
   // the budget so the block can't alone blow it. Soft-fails to `{ block: null }` when no
@@ -188,12 +215,14 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
     rawBlock = formatChunksForPrompt(rawKept)
   }
 
-  // Order: learnings → symbol block → raw chunks. The symbol block (the matched code's full
-  // bodies) is intentionally budget-EXEMPT — only raw chunks trim. So total can reach up to
-  // ~budget (symbol) + ~budget/3 (learnings); that's deliberate (keep both conventions AND the
-  // matched code), not a bug to "fix" into dropping matched code.
+  // Order: learnings → repo map → symbol block → raw chunks. The repo map and the symbol
+  // block (the matched code's full bodies) are intentionally budget-EXEMPT (the map carries
+  // its OWN ~1200-char budget); only raw chunks trim against `budget`. So total can reach up
+  // to ~budget (symbol) + ~budget/3 (learnings) + ~1200 (map); that's deliberate (keep
+  // conventions, orientation AND the matched code), not a bug to "fix" into dropping any.
   const sections: string[] = []
   if (learnings.block) sections.push(learnings.block)
+  if (repoMap.block) sections.push(repoMap.block)
   if (symbolBlock) sections.push(symbolBlock)
   if (rawBlock) sections.push(rawBlock)
   const context = sections.length > 0 ? sections.join(SECTION_SEP) : null
@@ -209,6 +238,8 @@ export async function gatherAgentContext(args: AgentContextArgs): Promise<AgentC
       superseded: expansion.telemetry.superseded,
       rawChunksKept: rawKept.length,
       learningsInjected: learnings.count,
+      mapEntries: repoMap.entries,
+      mapChars: repoMap.chars,
       contextChars: context ? context.length : 0,
       budget,
     },

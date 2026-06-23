@@ -13,6 +13,7 @@ import type {
   GraphContextNode,
   GraphContextExpansion,
   GraphHitExpansion,
+  RepoMap,
 } from "@/src/do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
@@ -126,4 +127,21 @@ export async function enclosingSymbolsForHitsFor(
   args: { hits: { path: string; lineStart: number; lineEnd: number }[]; maxRows?: number },
 ): Promise<GraphHitExpansion> {
   return graphStub(env, owner, repo).enclosingSymbolsForHits(args)
+}
+
+/**
+ * SIG-527: the dependency-ranked "repo map" — the most-depended-on symbols in the
+ * repo's active graph version, NAVIGATION-ONLY (no bodies). `biasPaths` (the
+ * current turn's retrieval-hit paths) bias their local symbols toward the top.
+ * Returns `[]` (graceful degrade) when there is no active version; an RPC/DO
+ * error rejects, and the soft-fail-to-null contract is enforced one layer up in
+ * `buildRepoMapBlock` (kept thin here to match the other graph wrappers).
+ */
+export async function repoMapFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: { limit?: number; biasPaths?: string[] },
+): Promise<RepoMap> {
+  return graphStub(env, owner, repo).repoMap(args)
 }

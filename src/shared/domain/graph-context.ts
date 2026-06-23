@@ -87,3 +87,25 @@ export interface GraphContextExpansion {
 export interface GraphHitExpansion extends GraphContextExpansion {
   headSha: string | null
 }
+
+/**
+ * SIG-527: one entry in the dependency-ranked "repo map" — a NAVIGATION-ONLY
+ * pointer to a central symbol (no body, no signature; those aren't indexed).
+ * `callerCount` is the number of distinct files that call the symbol (resolved
+ * `callee_symbol_id`, so same-name symbols don't bleed together); `importerCount`
+ * is the coarser number of distinct files that import the symbol's file. Together
+ * they rank how depended-on a symbol is, giving a small model orientation +
+ * coverage beyond the retrieved chunks.
+ */
+export interface RepoMapEntry {
+  path: string
+  name: string
+  kind: string
+  line: number
+  exported: boolean
+  callerCount: number
+  importerCount: number
+}
+
+/** A dependency-ranked repo map: `RepoMapEntry[]`, most-depended-on first. */
+export type RepoMap = RepoMapEntry[]

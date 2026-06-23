@@ -349,6 +349,13 @@ export interface Env {
   // per-key metering — once the day's count hits the limit the endpoint returns 429.
   OPENCLAW_SIGILIX_API_DAILY_LIMIT?: string
 
+  // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
+  // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in
+  // default. A global KV counter (`v1verify:count:<YYYY-MM-DD>`), not per-key metering —
+  // once the day's count hits the limit the endpoint returns 429. Auth reuses
+  // OPENCLAW_SIGILIX_API_KEY (the shared agent bearer); unset → /v1/verify returns 503.
+  OPENCLAW_SIGILIX_VERIFY_DAILY_LIMIT?: string
+
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace

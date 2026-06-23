@@ -30,6 +30,7 @@ import {
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
+import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
@@ -231,6 +232,14 @@ export default {
     // returns a packed context slice (index + graph). Inert (503) until the API key is set.
     if (request.method === "POST" && url.pathname === "/v1/context") {
       return handleAgentContextRoute(request, env)
+    }
+
+    // Sealed pure-logic verification oracle — POSTs {owner, repo, before, after}, runs both
+    // in the QuickJS sandbox over a type-aware battery, returns changed/preserved/skipped.
+    // Proves behavioral change/preservation, NOT correctness. Inert (503) until the API key
+    // is set.
+    if (request.method === "POST" && url.pathname === "/v1/verify") {
+      return handleVerifyApiRoute(request, env)
     }
 
     // SIG-483: agent-memory store. PUT writes a durable per-(user, repo) memory

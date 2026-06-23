@@ -65,6 +65,17 @@ id = "df689379ea6240f7808997a75ceaed7e"
 binding = "OPENCLAW_CODE_INDEX"
 index_name = "openclaw-code-index"
 
+# SIG-483: Vectorize index for the local CLI agent's durable per-(user, repo)
+# memories. Same 768-dim BGE embeddings + cosine metric as the code index, but
+# isolated per tenant by the Vectorize namespace `<userId>/<repoId>` lowercased.
+# Backs PUT /v1/memory + POST /v1/memory/query.
+#
+# Run once: `wrangler vectorize create boreas-agent-memory \
+#   --dimensions=768 --metric=cosine`
+[[vectorize]]
+binding = "OPENCLAW_AGENT_MEMORY_INDEX"
+index_name = "boreas-agent-memory"
+
 # SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the code
 # chunks for hybrid retrieval. The indexer dual-writes here alongside the
 # Vectorize upsert; PR-review retrieval queries it in parallel with the

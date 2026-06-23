@@ -30,6 +30,7 @@ import {
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
+import { handleMemoryWriteRoute, handleMemoryQueryRoute } from "@/src/lib/agent-memory"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -230,6 +231,16 @@ export default {
     // returns a packed context slice (index + graph). Inert (503) until the API key is set.
     if (request.method === "POST" && url.pathname === "/v1/context") {
       return handleAgentContextRoute(request, env)
+    }
+
+    // SIG-483: agent-memory store. PUT writes a durable per-(user, repo) memory
+    // (embed → Vectorize tenant namespace + KV); POST/query semantically
+    // retrieves them. Static-bearer auth; inert (503) until the API key is set.
+    if (request.method === "PUT" && url.pathname === "/v1/memory") {
+      return handleMemoryWriteRoute(request, env)
+    }
+    if (request.method === "POST" && url.pathname === "/v1/memory/query") {
+      return handleMemoryQueryRoute(request, env)
     }
 
     // SIG-156: authenticated manual (re)index trigger.

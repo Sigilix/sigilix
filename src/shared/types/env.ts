@@ -13,6 +13,13 @@ export interface Env {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
   OPENCLAW_CODE_INDEX: VectorizeIndex
+  // Agent-memory store (SIG-483): 768-dim embeddings of the local CLI agent's
+  // durable per-(user, repo) memories. Tenant isolation is the Vectorize
+  // namespace `<userId>/<repoId>` lowercased — a query in a namespace can only
+  // match vectors written to it. Backs PUT /v1/memory + POST /v1/memory/query.
+  // Provisioned via `wrangler vectorize create boreas-agent-memory
+  // --dimensions=768 --metric=cosine`.
+  OPENCLAW_AGENT_MEMORY_INDEX: VectorizeIndex
   // SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the same
   // code chunks. Optional — when unbound (or the OPENCLAW_RETRIEVAL_HYBRID
   // flag is off) retrieval stays pure-vector and the indexer skips the

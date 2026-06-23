@@ -22,15 +22,16 @@ import { readHashId, readRecord, writeHashPointer, writeRecord } from "./storage
 import { queryMemoryIds, upsertMemoryVector } from "./retrieval"
 
 // Memories are short (a decision / preference / task note), so the body is tiny —
-// the same cap the /v1/context turn-query route uses.
-const MAX_BODY_BYTES = 64 * 1024
+// the same cap the /v1/context turn-query route uses. Shared with the extract
+// route (an exchange is a couple of chat turns, well under this).
+export const MAX_BODY_BYTES = 64 * 1024
 // Vectorize topK before the ts-sort + post-trim.
 const DEFAULT_TOP_K = 8
 // Default returned count after sorting newest-first; body `limit` overrides, capped.
 const DEFAULT_LIMIT = 5
 const MAX_LIMIT = 20
 
-function json(body: unknown, status: number): Response {
+export function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
@@ -40,7 +41,7 @@ function emitTelemetry(event: string, fields: Record<string, unknown>): void {
 
 // ─── SHA-256 (content dedup) ─────────────────────────────────
 
-async function sha256Hex(value: string): Promise<string> {
+export async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -76,8 +77,55 @@ function parseWriteBody(raw: unknown): WriteBody | string {
 
 /** Canonical tenant id — trimmed + lowercased. The single normalization point so
  *  KV keys and the Vectorize namespace agree (`memoryNamespace` also lowercases). */
-function canonicalTenantId(value: string): string {
+export function canonicalTenantId(value: string): string {
   return value.trim().toLowerCase()
+}
+
+/** Outcome of {@link storeMemoryFact}: the record id plus the same per-leg flags
+ *  the PUT response surfaces. `deduped` is true when an exact-content record
+ *  already existed (no second copy written); `stored`/`vectorStored` report the
+ *  KV + Vectorize legs of a fresh write (both true on a deduped hit). */
+export interface StoreMemoryFactResult {
+  id: string
+  deduped: boolean
+  stored: boolean
+  vectorStored: boolean
+}
+
+/**
+ * The single per-fact write path: SHA-256 content dedup → (on a fresh write)
+ * embed + Vectorize upsert + KV record + dedup pointer. Shared by `PUT /v1/memory`
+ * and `POST /v1/memory/extract` so the dedup/persist logic lives in ONE place.
+ *
+ * Tenant ids are assumed already canonicalized by the caller (both call sites
+ * canonicalize at parse time). May throw (a crypto/KV throw) — the caller owns
+ * the error boundary (PUT → 500; extract → soft-fail to 0 stored).
+ */
+export async function storeMemoryFact(
+  env: Env,
+  args: { userId: string; repoId: string; kind: AgentMemoryKind; content: string },
+): Promise<StoreMemoryFactResult> {
+  const { userId, repoId, kind, content } = args
+  const hash = await sha256Hex(content)
+
+  // Dedup: an exact-content record under this tenant → return its id, no write.
+  const existingId = await readHashId(env, userId, repoId, hash)
+  if (existingId !== null) {
+    return { id: existingId, deduped: true, stored: true, vectorStored: true }
+  }
+
+  const id = `mem_${crypto.randomUUID()}`
+  const ts = new Date().toISOString()
+  const record: AgentMemoryRecord = { schemaVersion: 1, id, userId, repoId, kind, content, ts, hash }
+
+  // Vector leg first (soft — a failure degrades but never aborts the KV write).
+  const vectorStored = await upsertMemoryVector(env, { id, userId, repoId, kind, content, ts })
+  const stored = await writeRecord(env, record)
+  // Only set the dedup pointer once the write is FULLY durable (record + vector):
+  // a partial write (vector failed) must stay re-writable so a later identical
+  // request re-attempts the vector instead of being deduped away forever.
+  if (stored && vectorStored) await writeHashPointer(env, record)
+  return { id, deduped: false, stored, vectorStored }
 }
 
 /**
@@ -105,27 +153,11 @@ export async function handleMemoryWriteRoute(request: Request, env: Env): Promis
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
   try {
-    const { userId, repoId, kind, content } = parsed
-    const hash = await sha256Hex(content)
-
-    // Dedup: an exact-content record under this tenant → return its id, no write.
-    const existingId = await readHashId(env, userId, repoId, hash)
-    if (existingId !== null) {
-      return json({ id: existingId, stored: true, deduped: true }, 200)
+    const result = await storeMemoryFact(env, parsed)
+    if (result.deduped) {
+      return json({ id: result.id, stored: true, deduped: true }, 200)
     }
-
-    const id = `mem_${crypto.randomUUID()}`
-    const ts = new Date().toISOString()
-    const record: AgentMemoryRecord = { schemaVersion: 1, id, userId, repoId, kind, content, ts, hash }
-
-    // Vector leg first (soft — a failure degrades but never aborts the KV write).
-    const vectorStored = await upsertMemoryVector(env, { id, userId, repoId, kind, content, ts })
-    const stored = await writeRecord(env, record)
-    // Only set the dedup pointer once the write is FULLY durable (record + vector):
-    // a partial write (vector failed) must stay re-writable so a later identical
-    // request re-attempts the vector instead of being deduped away forever.
-    if (stored && vectorStored) await writeHashPointer(env, record)
-    return json({ id, stored, vectorStored }, 200)
+    return json({ id: result.id, stored: result.stored, vectorStored: result.vectorStored }, 200)
   } catch (err) {
     return json({ error: "memory_write_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
   }

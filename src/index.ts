@@ -30,7 +30,7 @@ import {
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
-import { handleMemoryWriteRoute, handleMemoryQueryRoute } from "@/src/lib/agent-memory"
+import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -241,6 +241,11 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/v1/memory/query") {
       return handleMemoryQueryRoute(request, env)
+    }
+    // POST/extract distills 0–3 durable facts from a conversation exchange via a
+    // cheap model and stores each through the same write path PUT uses.
+    if (request.method === "POST" && url.pathname === "/v1/memory/extract") {
+      return handleMemoryExtractRoute(request, env)
     }
 
     // SIG-156: authenticated manual (re)index trigger.

@@ -341,10 +341,13 @@ export function fuseRetrieval(
  */
 export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
   if (chunks.length === 0) return null
+  const ordered = orderChunksForPrompt(chunks)
   const parts: string[] = []
   let total = 0
-  for (const c of orderChunksForPrompt(chunks)) {
-    const slice = c.content.length > MAX_CHUNK_CHARS ? c.content.slice(0, MAX_CHUNK_CHARS) : c.content
+  let kept = 0
+  for (const c of ordered) {
+    const truncated = c.content.length > MAX_CHUNK_CHARS
+    const slice = truncated ? c.content.slice(0, MAX_CHUNK_CHARS) : c.content
     // SIG-45: on the hybrid path cite the RRF score + which signal surfaced
     // the chunk; legacy vector-only chunks (no `source`) keep `(score=X)` so
     // existing prompt expectations/tests are unchanged.
@@ -353,13 +356,22 @@ export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
         ? `(${c.source}, rrf=${c.rrfScore.toFixed(4)})`
         : `(score=${c.score.toFixed(3)})`
     const freshness = formatFreshnessTag(c)
-    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag}${freshness} ---\n${slice}`
+    // SIG-536 (P9): mark a capped snippet so the model knows it's partial — don't infer the
+    // rest of the file from a truncated chunk (anti-fabrication).
+    const trunc = truncated ? ` [truncated: first ${MAX_CHUNK_CHARS} of ${c.content.length} chars]` : ""
+    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag}${freshness}${trunc} ---\n${slice}`
     if (total + block.length > MAX_TOTAL_CHARS) break
     parts.push(block)
     total += block.length
+    kept++
   }
   if (parts.length === 0) return null
-  return parts.join("\n\n")
+  // SIG-536 (P9): if budget dropped lower-ranked chunks, say so — the slice is incomplete, so the
+  // model should treat absence as "not retrieved", not "doesn't exist".
+  const omitted = ordered.length - kept
+  const footer =
+    omitted > 0 ? `\n\n[+${omitted} more relevant chunk${omitted === 1 ? "" : "s"} omitted for context budget]` : ""
+  return parts.join("\n\n") + footer
 }
 
 function formatFreshnessTag(c: RetrievedChunk): string {

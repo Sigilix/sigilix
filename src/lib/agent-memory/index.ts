@@ -3,4 +3,5 @@
 // Vectorize/embedding, and parsing internals stay private.
 
 export { handleMemoryWriteRoute, handleMemoryQueryRoute } from "./agent-memory-route"
+export { handleMemoryExtractRoute } from "./agent-memory-extract"
 export type { AgentMemoryKind, AgentMemoryRecord, AgentMemoryQueryResult } from "./types"

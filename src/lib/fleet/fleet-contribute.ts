@@ -14,9 +14,9 @@ import { recordContribution } from "@/src/lib/fleet/fleet-store"
 
 /** A finalized review finding, narrowed to the fields the fleet needs (a subset of PrReviewFinding). */
 export interface ContributableFinding {
-  category?: string
-  headline?: string
-  score?: number
+  category?: string | undefined
+  headline?: string | undefined
+  score?: number | undefined
   trust?: { tier?: string } | undefined
 }
 

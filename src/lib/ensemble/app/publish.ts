@@ -13,9 +13,10 @@
 //     control flow byte-identical). The TWO rethrows (`throw submitErr` /
 //     `throw fallbackSubmitErr`) propagate OUT of `publish()` to the
 //     orchestrator's outer catch — publish adds NO catch of its own;
-//   - the post-submit persistence (`writeReviewManifestForEnsemble` via the
-//     adapter, `writeLastReviewedSha`, `recordReviewedDiffHash`,
-//     `maybePostAstAutoInline`), per submit path.
+//   - the post-submit persistence tail (manifest write, lastReviewedSha, incremental coverage,
+//     diff-hash, AST auto-inline, + SIG-507 fleet contribution) — extracted to
+//     `persistSubmittedReview` (publish-finalize.ts) and called from BOTH submit paths
+//     (primary inline-anchored + anchorless-422-fallback), parameterized by the confirmed reviewId.
 //
 // Every terminal path ends in `finalize(...)`, so `publish()` returns the
 // orchestrator's `EnsembleResult` directly (no exit-union). It is generic over the
@@ -55,15 +56,10 @@ import { buildFallbackSubmission } from "@/src/lib/ensemble/render/fallback"
 import { previewFallbackSubmissionEvent } from "@/src/lib/ensemble/render/submission"
 import type { DeltaBadgeCounts, ReviewDisclosure } from "@/src/lib/ensemble/render/review-body"
 import { selectPrimarySubmitAnnotations } from "@/src/lib/pr-review-check-run"
-import { writeLastReviewedSha } from "@/src/lib/incremental-review"
-import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
 import type { createRetrievalCache } from "@/src/lib/retrieval-cache"
-import { writeReviewManifestForEnsemble } from "@/src/lib/ensemble/adapters/persistence"
 import { captureInlineCommentIds } from "@/src/lib/inline-comment-capture"
-import {
-  writeIncrementalReviewCoverage,
-  type IncrementalReviewCoverageWriteEntry,
-} from "@/src/lib/ensemble/adapters/incremental-coverage"
+import { type IncrementalReviewCoverageWriteEntry } from "@/src/lib/ensemble/adapters/incremental-coverage"
+import { persistSubmittedReview } from "./publish-finalize"
 import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { emitPhaseCompleted, type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
@@ -200,6 +196,24 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     deterministicCheckAnnotationMeta,
     deterministicErroredReviewMeta,
   } = a
+  // SIG-318/SIG-507: shared deps for the post-submit persistence tail (persistSubmittedReview),
+  // invoked by BOTH the primary inline-anchored and the anchorless-422-fallback success paths.
+  const persistDeps = {
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    repoId,
+    meta,
+    reviewManifestEnabled,
+    currentFindingsForManifest,
+    ...(incrementalCoverageEntries !== undefined ? { incrementalCoverageEntries } : {}),
+    fullPrDiff,
+    sigilixConfig,
+    maybePostAstAutoInline,
+  }
   // ─── SIG-216: post the overview comment IMMEDIATELY before the review submit so
   // the two GitHub timeline entries land in the same window (CR-style
   // Walkthrough-then-Review). The overview is informed by the verdict (findings
@@ -567,73 +581,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         )
       }
     }
-    // ARC-184: write review-provenance manifest. Best-effort.
-    // ARC-271: also persist the per-finding snapshot so the next
-    // push's review can compute a new/still-open/likely-fixed
-    // delta against this run.
-    await writeReviewManifestForEnsemble({
-      env,
-      client,
-      enabled: reviewManifestEnabled,
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      baseSha: meta.base?.sha ?? "",
-      modelId: "ensemble-synth",
-      reviewId: submitted.id,
-      findings: currentFindingsForManifest,
-    })
-    // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
-    // only after a confirmed GitHub submit. Previously this fired
-    // before guard #2 — a stale-head skip still marked the SHA
-    // reviewed, corrupting the next push's compare-diff.
-    //
-    // CodeRabbit PR #75 catch: a KV failure here MUST NOT bubble
-    // out as `errored`. The customer-facing review has already
-    // been submitted; an outer-catch `errored` would make
-    // `dispatchJob` fall back to Phase 3 and post a SECOND review
-    // on the same head. Best-effort: swallow + log instead.
-    try {
-      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-    } catch (err) {
-      console.error(
-        JSON.stringify({
-          event: "pr-review-last-reviewed-sha-write-failed",
-          owner,
-          repo,
-          prNumber,
-          headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }),
-      )
-    }
-    if (incrementalCoverageEntries !== undefined) {
-      await writeIncrementalReviewCoverage(env, {
-        owner,
-        repo,
-        prNumber,
-        ...(repoId !== undefined ? { repoId } : {}),
-        headSha,
-        entries: incrementalCoverageEntries,
-      })
-    }
-    // SIG-89: stash the diff hash so the next synchronize push can
-    // detect no-op merges (Update-branch button, rebase-no-op force
-    // push, empty commit) and skip dispatch. Same best-effort
-    // semantics as writeLastReviewedSha — the customer-facing
-    // review already shipped; KV failure only means the next push
-    // falls back to dispatch instead of skipping. The helper
-    // swallows internally.
-    await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-    // SIG-216: post-submit `pr-overview` refresh enqueue removed.
-    // The overview is now rendered INLINE earlier in this handler
-    // (right before `dismissPriorSigilixReviews`), informed by the
-    // same submissionVerdict the review is built from — so there's
-    // no stale-warmup-callout to clear and nothing for a separate
-    // queue job to add. ARC-258's post-review refresh use case is
-    // subsumed by the inline render.
-    await maybePostAstAutoInline()
+    await persistSubmittedReview(persistDeps, submitted.id)
     // ARC-276: signal the customer-visible verdict back to the
     // dispatcher so the Sigilix Check Run title can render
     // "Approved — no issues found" vs "N findings posted".
@@ -917,62 +865,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     // helper). Both submit paths now rely on the single pre-submit
     // dismissal at the top of this submit block.
 
-    // ARC-184: write manifest for the fallback path too. Same target
-    // shape (kind: "review") because the fallback is still a GitHub
-    // review (just anchorless body). ARC-271: same per-finding
-    // snapshot as the primary path.
-    await writeReviewManifestForEnsemble({
-      env,
-      client,
-      enabled: reviewManifestEnabled,
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      baseSha: meta.base?.sha ?? "",
-      modelId: "ensemble-synth",
-      reviewId: submittedFallback.id,
-      findings: currentFindingsForManifest,
-    })
-    // ARC-194 (moved here in ARC-250): mirror the primary submit
-    // path — only mark `lastReviewedSha` after a confirmed GitHub
-    // submit. CR PR #75 catch: same try/catch as the primary path
-    // so a KV write failure doesn't bubble out as `errored` and
-    // trigger a duplicate Phase 3 fallback review.
-    try {
-      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-    } catch (err) {
-      console.error(
-        JSON.stringify({
-          event: "pr-review-last-reviewed-sha-write-failed",
-          owner,
-          repo,
-          prNumber,
-          headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }),
-      )
-    }
-    if (incrementalCoverageEntries !== undefined) {
-      await writeIncrementalReviewCoverage(env, {
-        owner,
-        repo,
-        prNumber,
-        ...(repoId !== undefined ? { repoId } : {}),
-        headSha,
-        entries: incrementalCoverageEntries,
-      })
-    }
-    // SIG-89: mirror the primary path — stash the diff hash for
-    // noop-merge skip on the next synchronize. Same best-effort
-    // semantics as the lastReviewedSha write above.
-    await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-    // SIG-216: post-submit `pr-overview` refresh enqueue removed
-    // here too — same rationale as the primary inline-anchored
-    // submit path above. The overview already ran inline at the
-    // top of the submit block, before the 422 fallback was even
-    // considered, so the comment is already on the timeline.
-    await maybePostAstAutoInline()
+    await persistSubmittedReview(persistDeps, submittedFallback.id)
     // ARC-276: same reviewMeta plumbing as the inline-anchored
     // path — the anchorless fallback is still a posted review.
     const fallbackFindings = submissionVerdict.findings.length + renderableUnanchoredForSubmission.length

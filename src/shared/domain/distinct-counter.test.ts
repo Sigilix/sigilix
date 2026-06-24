@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { createCounter, addToCounter, estimateCount, mergeCounters } from "@/src/shared/domain/distinct-counter"
+import {
+  createCounter,
+  addToCounter,
+  estimateCount,
+  mergeCounters,
+  isValidCounter,
+} from "@/src/shared/domain/distinct-counter"
 
 const SALT = "test-salt"
 const addMany = (n: number, prefix = "tenant") => {
@@ -41,6 +47,15 @@ describe("distinct-counter (linear counting)", () => {
     // force saturation by setting every bit
     const c = { m: 64, words: new Array(2).fill(-1) } // 64 bits all set
     expect(estimateCount(c)).toBe(64)
+  })
+
+  it("isValidCounter accepts a real counter and rejects wrong geometry / corrupt JSON", () => {
+    expect(isValidCounter(createCounter())).toBe(true)
+    expect(isValidCounter({ m: 4096, words: [] })).toBe(false) // wrong word count
+    expect(isValidCounter({ m: 0, words: new Array(128).fill(0) })).toBe(false) // wrong m
+    expect(isValidCounter({ m: 4096, words: new Array(128).fill(NaN) })).toBe(false) // non-integer words
+    expect(isValidCounter(null)).toBe(false)
+    expect(isValidCounter({ nope: 1 })).toBe(false)
   })
 
   it("merges two counters as a set union (dedupes overlap)", () => {

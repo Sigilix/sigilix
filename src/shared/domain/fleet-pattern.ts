@@ -62,13 +62,13 @@ const SUBTYPE_RULES: ReadonlyArray<{ subType: string; match: RegExp }> = [
 export interface FleetFindingInput {
   category: string
   /** Free-text headline — read ONLY to derive a canonical sub-type; never emitted. */
-  headline?: string
+  headline?: string | undefined
   /** Review severity score (1–5). */
-  score?: number
+  score?: number | undefined
   /** Proven by sealed execution (the REPRODUCED tier). */
-  reproduced?: boolean
+  reproduced?: boolean | undefined
   /** The fix for this finding was verified. */
-  verified?: boolean
+  verified?: boolean | undefined
 }
 
 export interface FleetPattern {

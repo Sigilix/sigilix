@@ -32,6 +32,7 @@ import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
 import { handleBlastRadiusApiRoute } from "@/src/lib/api-blast-radius-route"
+import { handleFleetApiRoute } from "@/src/lib/api-fleet-route"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
@@ -249,6 +250,13 @@ export default {
     // the API key is set.
     if (request.method === "POST" && url.pathname === "/v1/blast-radius") {
       return handleBlastRadiusApiRoute(request, env)
+    }
+
+    // SIG-507: fleet intelligence (read-only surfacing). Given findings (category + headline),
+    // return anonymized "seen in ~N codebases" insights for patterns past the K=5 k-anonymity gate.
+    // Contributions are written server-side by the review pipeline, never here. Inert (503) until keyed.
+    if (request.method === "POST" && url.pathname === "/v1/fleet") {
+      return handleFleetApiRoute(request, env)
     }
 
     // SIG-483: agent-memory store. PUT writes a durable per-(user, repo) memory

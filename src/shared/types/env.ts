@@ -356,6 +356,11 @@ export interface Env {
   // OPENCLAW_SIGILIX_API_KEY (the shared agent bearer); unset → /v1/verify returns 503.
   OPENCLAW_SIGILIX_VERIFY_DAILY_LIMIT?: string
 
+  // SIG-507 fleet intelligence: salt for the distinct-tenant counter's tenant-hashing (defense-in-
+  // depth — the linear-counting bitmap stores no identity regardless). Set via
+  // `wrangler secret put OPENCLAW_FLEET_SALT <token>`; unset → a built-in default salt.
+  OPENCLAW_FLEET_SALT?: string
+
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace

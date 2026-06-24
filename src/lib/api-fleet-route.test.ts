@@ -77,7 +77,7 @@ describe("handleFleetApiRoute", () => {
     const body = (await res.json()) as { insights: { signature: string; insight: string }[] }
     expect(body.insights).toHaveLength(1)
     expect(body.insights[0]!.signature).toBe("security:sql-injection")
-    expect(body.insights[0]!.insight).toContain("codebases")
+    expect(body.insights[0]!.insight).toContain("teams")
     expect(body.insights[0]!.insight).toContain("reproduced by execution")
   })
 

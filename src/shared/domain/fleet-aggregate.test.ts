@@ -45,7 +45,7 @@ describe("fleet-aggregate — k-anonymity gate", () => {
     expect(isEligible(agg)).toBe(true)
     const insight = renderFleetInsight(agg)!
     expect(insight).toContain("security:sql-injection")
-    expect(insight).toContain(`~${FLEET_K} codebases`)
+    expect(insight).toContain(`~${FLEET_K} teams`)
   })
 
   it("the same tenant contributing repeatedly does NOT cross the gate (distinct, not volume)", () => {

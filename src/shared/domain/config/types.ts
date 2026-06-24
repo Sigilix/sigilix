@@ -126,6 +126,14 @@ export interface SigilixConfig {
     enabled?: boolean
   }
   /**
+   * SIG-507: per-repo opt-OUT of contributing anonymized patterns to the cross-repo
+   * fleet aggregate. Default ON (contribute). Set `fleet: { contribute: false }` to opt
+   * out — surfacing fleet insights is unaffected (benefit is decoupled from contribution).
+   */
+  fleet?: {
+    contribute?: boolean
+  }
+  /**
    * SIG-112: per-repo opt-IN for customer-visible finding evidence blocks.
    * Default OFF. Dev/dogfood can also force visibility with env
    * `OPENCLAW_SHOW_EVIDENCE=on`.

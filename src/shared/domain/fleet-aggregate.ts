@@ -48,7 +48,7 @@ export function updateAggregate(
   }
 }
 
-/** Estimated number of distinct codebases this pattern has appeared in. */
+/** Estimated number of distinct teams/orgs (the k-anonymity unit) this pattern has appeared in. */
 export const tenantCount = (agg: FleetAggregate): number => estimateCount(agg.tenants)
 
 /** k-anonymity gate: surface only once ≥ K distinct tenants have contributed. */
@@ -67,5 +67,5 @@ export function renderFleetInsight(agg: FleetAggregate): string | null {
       : agg.verified > 0
         ? ` A verified fix exists in ${agg.verified} of them.`
         : ""
-  return `Fleet signal: the \`${agg.signature}\` pattern has appeared in ~${n} codebases across the Sigilix fleet.${proof} Treat it as a known anti-pattern and prefer the verified idiomatic fix.`
+  return `Fleet signal: the \`${agg.signature}\` pattern has appeared in ~${n} teams across the Sigilix fleet.${proof} Treat it as a known anti-pattern and prefer the verified idiomatic fix.`
 }

@@ -364,6 +364,13 @@ function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
       out.overview = { enabled: overviewIn.enabled }
     }
   }
+  // SIG-507: fleet.contribute — strict-bool opt-OUT (default ON). Unknown subfields ignored.
+  if (obj.fleet && typeof obj.fleet === "object" && !Array.isArray(obj.fleet)) {
+    const fleetIn = obj.fleet as Record<string, unknown>
+    if (typeof fleetIn.contribute === "boolean") {
+      out.fleet = { contribute: fleetIn.contribute }
+    }
+  }
   // SIG-112: evidence.visible — strict-bool opt-IN. Unknown subfields
   // are ignored so future evidence settings can ship compatibly.
   if (obj.evidence && typeof obj.evidence === "object" && !Array.isArray(obj.evidence)) {

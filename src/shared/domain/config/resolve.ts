@@ -254,6 +254,15 @@ export function isPrOverviewEnabled(config: SigilixConfig | null): boolean {
   return config?.overview?.enabled !== false
 }
 
+/**
+ * SIG-507: whether this repo contributes anonymized patterns to the fleet aggregate. Default ON
+ * (opt-out) — only an explicit `fleet: { contribute: false }` disables it. Surfacing fleet insights
+ * is independent of this (benefit is decoupled from contribution).
+ */
+export function isFleetContributeEnabled(config: SigilixConfig | null): boolean {
+  return config?.fleet?.contribute !== false
+}
+
 // ─── SIG-135: pr-labels enablement resolution ────────────────────────
 
 /**

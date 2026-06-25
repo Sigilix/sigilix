@@ -349,6 +349,14 @@ roles are genuinely not invoked in actual modes and only projected in shadow mod
 - **Config** (`shared/domain/config`, `shared/adapters/config/load.ts`) — `sigilix.json` parsed
   into a typed `SigilixConfig` (gate modes, model overrides, labels, path instructions),
   fetched from the repo at the PR head SHA, with a per-team env fallback.
+- **Multi-tenant data layer & fairness** (spec: `docs/superpowers/specs/2026-06-25-multi-tenant-fairness-design.md`)
+  — the CF-native split: **Durable Objects own hot coordination** (the per-tenant
+  review-concurrency semaphore, the provider-cooldown signal) and **D1 holds the tenant registry +
+  usage ledger** (cold, queryable aggregates — D1 is poor for hot/contended writes). Tenant = GitHub
+  App `installationId`. Fairness admission gates at the **queue-consumer boundary** (before the
+  per-PR DO is picked up) and **fails open** — any fault GRANTS, so our optimization never blocks or
+  drops a review. Tickets: SIG-455 (fairness + backpressure), SIG-343 (D1 foundation), SIG-543
+  (shadow quotas + metrics).
 
 ---
 
@@ -433,8 +441,11 @@ npm run dispatch-monitor -- --input <logs.ndjson>  # dynamic-dispatcher CLI moni
   `no-restricted-imports` for `../`, `--max-warnings 0`).
 - **Vitest:** Node environment; `@` alias; `cloudflare:workers` and `node:sqlite` shimmed for the
   Worker runtime. Tests are co-located; cross-cutting suites live in `e2e/`.
-- **Wrangler:** Worker `sigilix`; bindings for KV, Vectorize (768-dim), D1 (lexical mirror),
-  Workers AI, the queue, and the DO classes; DO SQLite migrations; secrets in the secret store.
+- **Wrangler:** Worker `sigilix`; bindings for KV, Vectorize (768-dim), D1, Workers AI, the queue,
+  and the DO classes; secrets in the secret store. **Migrations are forward-only (COMPLIANCE.md §8):**
+  DO `[[migrations]]` tags apply automatically on `wrangler deploy`; **D1 migrations do NOT** — run
+  `wrangler d1 migrations apply <db> --remote` (a CI pre-deploy gate; `--local` for dev/tests) before
+  shipping code that needs the new schema.
 - **Model-eval tests** (`e2e/*.live.test.ts`, e.g. `npm run logic-recall-eval`) run a real
   specialist/synth through a live model and **skip** without an API key so CI stays green. SIG-406:
   they gate on EITHER `OPENROUTER_API_KEY` or `OLLAMA_API_KEY` in `.dev.vars` and pick the key by the
@@ -477,6 +488,15 @@ Increment rules:
   `index.ts`, and import it from the pipeline through that barrel only.
 - **A new metric:** add a metrics DO in `src/do/`, record from the relevant adapter, surface it on
   a `/metrics/*` route; this is the measure half of measure-then-flip.
+- **A new Durable Object:** add the class in `src/do/`, **export it from `src/index.ts`** (wrangler
+  resolves class names there), add the `[[durable_objects.bindings]]` + a sequential `[[migrations]]`
+  tag in `wrangler.toml` (`new_classes` KV-backed / `new_sqlite_classes` SQLite-backed), and add the
+  binding to the `Env` interface. Keep the DO **thin** — put its decision logic in a pure `domain/`
+  module so it unit-tests without the runtime (COMPLIANCE.md §8).
+- **A D1 schema change:** add the next-numbered, **immutable** file under `migrations/` (never edit an
+  applied one), apply it with `wrangler d1 migrations apply <db> --local` (dev) / `--remote` (the CI
+  pre-deploy gate), and record it in the owning spec's migration ledger. D1 holds the registry + cold
+  aggregates; keep hot/contended writes on a DO (COMPLIANCE.md §8).
 
 ---
 

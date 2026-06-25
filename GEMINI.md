@@ -14,3 +14,5 @@ applies to you.** It routes to:
 The one-line gate: research + plan → `npm run build` green → an end-to-end test for the new
 behavior → independent review pass → focused PR → all bots + CI pass → respond to every bot
 comment → the repo owner merges. No self-merge, no force-push, no `Co-Authored-By` trailers.
+Migrations are forward-only (COMPLIANCE.md §8); D1 migrations aren't auto-applied
+(`wrangler d1 migrations apply` before deploy).

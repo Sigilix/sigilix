@@ -69,6 +69,9 @@ the system is built and where code goes; read it before working in an unfamiliar
 - Do **not** push to `main`, force-push, or run destructive git without asking.
 - No `Co-Authored-By` trailers on commits.
 - **Recall-safety:** never suppress or downgrade a real P0/P1 to make output look clean.
+- **Migrations are forward-only** (COMPLIANCE.md §8): never edit an applied migration — add the next
+  one. **D1 migrations are not auto-applied** — run `wrangler d1 migrations apply <db>` before
+  deploying code that needs the new schema (DO `[[migrations]]` tags apply on deploy).
 - Only change what's asked. Don't over-engineer.
 
 ---

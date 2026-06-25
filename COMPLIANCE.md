@@ -32,6 +32,7 @@ below; the CI gates check each one.
 - Tests are **co-located** next to their module, **dot-named**, with cross-cutting suites in `e2e/`.
 - A restructuring PR is **zero-behavior** — pinned first, moved verbatim, proven unchanged.
 - The code is **Prettier-formatted** and **typechecks** (tests included).
+- Schema/state **migrations are forward-only**, version-controlled, and applied before the code that depends on them (§8).
 
 ---
 
@@ -160,6 +161,28 @@ The repo is Prettier-formatted; `prettier --check` is part of CI. Don't hand-for
 fight it. The one-shot format commit is listed in `.git-blame-ignore-revs`, so `git blame`
 skips it.
 
+## 8. Migrations are forward-only and tracked
+
+We persist state in two migrated systems. Both are version-controlled, both are **forward-only**,
+and both are applied **before** the code that depends on the new shape. **Never edit a migration
+that has already been applied — add the next one.**
+
+- **Durable Objects.** Register every new DO class with a sequential, immutable `[[migrations]]`
+  `tag` in `wrangler.toml` (`new_classes` for a KV-backed DO, `new_sqlite_classes` for a
+  SQLite-backed one) and **export the class from `src/index.ts`** (wrangler resolves class names
+  against the entry module — a missing export is a failed deploy). DO migrations run
+  **automatically on `wrangler deploy`**; Cloudflare never runs a tag backward.
+- **D1.** Schema lives in **numbered, immutable** files under `migrations/` (declared by
+  `migrations_dir` on the `[[d1_databases]]` block): `0001_*.sql`, `0002_*.sql`, … **D1 migrations
+  are NOT auto-applied on deploy.** They run as an explicit pre-deploy step —
+  `wrangler d1 migrations apply <db> --remote` (and `--local` for dev/tests) — gated in CI before
+  the dependent Worker code ships. Applied state is tracked in D1's own `d1_migrations` table.
+- **Keep a ledger.** A PR that adds a DO tag or a D1 file records it in the owning spec's
+  **migration ledger** (the ordered list of every tag/file). Canonical example:
+  `docs/superpowers/specs/2026-06-25-multi-tenant-fairness-design.md` §7.
+- **Forward-only, always.** To change schema, add the next-numbered migration; a destructive change
+  is its own reviewed migration, never an edit in place.
+
 ---
 
 ## How this is enforced
@@ -174,6 +197,7 @@ Every rule above is machine-checked. A violation is a red build, not a review co
 | No lint warnings accumulate | `eslint --max-warnings 0` |
 | Formatting | `prettier --check` |
 | Types — over **all** files, tests included | `tsc --noEmit` |
+| Migrations forward-only + applied pre-deploy | DO class export + tag (`wrangler deploy` fails otherwise); D1 `wrangler d1 migrations apply` (CI pre-deploy step); forward-only/no-edit-in-place (review) |
 
 `npm run build` runs the same gates locally, so you find a violation on your machine before CI
 does. Never push a red build.

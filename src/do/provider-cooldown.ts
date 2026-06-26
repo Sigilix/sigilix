@@ -13,7 +13,7 @@ export class ProviderCooldownDO extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (request.method === "POST" && url.pathname === "/set") return this.handleSet(request)
-    if (request.method === "POST" && url.pathname === "/get") return this.handleGet()
+    if (request.method === "GET" && url.pathname === "/get") return this.handleGet()
     return json(404, { error: "unknown route" })
   }
 
@@ -24,6 +24,7 @@ export class ProviderCooldownDO extends DurableObject<Env> {
     } catch {
       return json(400, { error: "invalid json" })
     }
+    if (typeof body !== "object" || body === null) return json(400, { error: "invalid body" })
     const { cooldownMs } = body as { cooldownMs: unknown }
     if (typeof cooldownMs !== "number" || !Number.isFinite(cooldownMs) || cooldownMs < 0) {
       return json(400, { error: "cooldownMs (non-negative finite number) required" })

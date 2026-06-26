@@ -335,6 +335,7 @@ export function applyCooldownFromPhase(
 ): void {
   const mode = resolveCooldownMode(env)
   if (mode === "off" || !providerRateLimitMs || providerRateLimitMs <= 0) return
-  backgroundWaitUntil?.(setProviderCooldown(env, providerRateLimitMs).catch(() => {}))
+  const pending = setProviderCooldown(env, providerRateLimitMs).catch(() => {})
+  if (backgroundWaitUntil) backgroundWaitUntil(pending)
   console.log(JSON.stringify({ event: "provider-cooldown-set", retryAfterMs: providerRateLimitMs, mode }))
 }

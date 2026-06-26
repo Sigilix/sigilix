@@ -91,4 +91,18 @@ describe("applyCooldownFromPhase (SIG-455 Task 5)", () => {
     expect(mockSetProviderCooldown).not.toHaveBeenCalled()
     expect(bg.calls).toHaveLength(0)
   })
+
+  it("mode=shadow + positive ms + NO runner → setProviderCooldown still called", () => {
+    const env = makeEnv("shadow") as unknown as Env
+    applyCooldownFromPhase(env, 5000) // no backgroundWaitUntil
+    expect(mockSetProviderCooldown).toHaveBeenCalledOnce()
+    expect(mockSetProviderCooldown).toHaveBeenCalledWith(env, 5000)
+  })
+
+  it("mode=enforce + positive ms + NO runner → setProviderCooldown still called", () => {
+    const env = makeEnv("enforce") as unknown as Env
+    applyCooldownFromPhase(env, 8000) // no backgroundWaitUntil
+    expect(mockSetProviderCooldown).toHaveBeenCalledOnce()
+    expect(mockSetProviderCooldown).toHaveBeenCalledWith(env, 8000)
+  })
 })

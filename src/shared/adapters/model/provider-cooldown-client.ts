@@ -32,8 +32,7 @@ export async function getProviderCooldownRemainingMs(env: Env): Promise<number> 
   try {
     const res = await cooldownStub(env).fetch(
       new Request("https://do.internal/get", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
+        method: "GET",
       }),
     )
     if (!res.ok) return 0

@@ -42,6 +42,19 @@ describe("setProviderCooldown", () => {
 })
 
 describe("getProviderCooldownRemainingMs", () => {
+  it("GETs /get with no body (idempotent)", async () => {
+    let capturedMethod: string | null = null
+    let capturedUrl: string | null = null
+    const env = envWith(async (req) => {
+      capturedMethod = req.method
+      capturedUrl = req.url
+      return new Response(JSON.stringify({ remainingMs: 0 }), { status: 200 })
+    })
+    await getProviderCooldownRemainingMs(env)
+    expect(capturedMethod).toBe("GET")
+    expect(capturedUrl).toBe("https://do.internal/get")
+  })
+
   it("returns remainingMs from a 200 body", async () => {
     const env = envWith(async () => new Response(JSON.stringify({ remainingMs: 12000 }), { status: 200 }))
     const result = await getProviderCooldownRemainingMs(env)

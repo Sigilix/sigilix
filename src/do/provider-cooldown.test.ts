@@ -32,6 +32,10 @@ function postRaw(path: string, body: string): Request {
   })
 }
 
+function get(path: string): Request {
+  return new Request(`https://do.internal${path}`, { method: "GET" })
+}
+
 type SetReply = { cooldownUntil: number }
 type GetReply = { remainingMs: number }
 
@@ -44,7 +48,7 @@ describe("ProviderCooldownDO", () => {
     const setBody = (await setRes.json()) as SetReply
     expect(setBody.cooldownUntil).toBeGreaterThan(Date.now())
 
-    const getRes = await do_.fetch(post("/get", {}))
+    const getRes = await do_.fetch(get("/get"))
     expect(getRes.status).toBe(200)
     const getBody = (await getRes.json()) as GetReply
     // Allow a few ms of drift between set and get
@@ -58,7 +62,7 @@ describe("ProviderCooldownDO", () => {
     await do_.fetch(post("/set", { cooldownMs: 30_000 }))
     await do_.fetch(post("/set", { cooldownMs: 5_000 }))
 
-    const getRes = await do_.fetch(post("/get", {}))
+    const getRes = await do_.fetch(get("/get"))
     expect(getRes.status).toBe(200)
     const body = (await getRes.json()) as GetReply
     // Must still be close to 30s, not shrunk to 5s
@@ -70,7 +74,7 @@ describe("ProviderCooldownDO", () => {
     const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
     await do_.fetch(post("/set", { cooldownMs: 999_999_999 }))
 
-    const getRes = await do_.fetch(post("/get", {}))
+    const getRes = await do_.fetch(get("/get"))
     expect(getRes.status).toBe(200)
     const body = (await getRes.json()) as GetReply
     expect(body.remainingMs).toBeLessThanOrEqual(300_000)
@@ -80,7 +84,7 @@ describe("ProviderCooldownDO", () => {
   it("get on empty state returns remainingMs 0", async () => {
     const { ctx } = makeState()
     const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
-    const getRes = await do_.fetch(post("/get", {}))
+    const getRes = await do_.fetch(get("/get"))
     expect(getRes.status).toBe(200)
     const body = (await getRes.json()) as GetReply
     expect(body.remainingMs).toBe(0)
@@ -91,7 +95,7 @@ describe("ProviderCooldownDO", () => {
     // Directly write a past cooldownUntil to simulate an expired cooldown
     await ctx.storage.put("cooldown", { cooldownUntil: Date.now() - 5_000 })
     const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
-    const getRes = await do_.fetch(post("/get", {}))
+    const getRes = await do_.fetch(get("/get"))
     expect(getRes.status).toBe(200)
     const body = (await getRes.json()) as GetReply
     expect(body.remainingMs).toBe(0)
@@ -129,6 +133,27 @@ describe("ProviderCooldownDO", () => {
     const { ctx } = makeState()
     const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
     const res = await do_.fetch(post("/unknown", {}))
+    expect(res.status).toBe(404)
+  })
+
+  it("returns 400 for null JSON body on /set", async () => {
+    const { ctx } = makeState()
+    const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
+    const res = await do_.fetch(postRaw("/set", "null"))
+    expect(res.status).toBe(400)
+  })
+
+  it("returns 400 for non-object JSON body on /set (string)", async () => {
+    const { ctx } = makeState()
+    const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
+    const res = await do_.fetch(postRaw("/set", '"x"'))
+    expect(res.status).toBe(400)
+  })
+
+  it("POST to /get returns 404 (route requires GET)", async () => {
+    const { ctx } = makeState()
+    const do_ = new ProviderCooldownDO(ctx as unknown as DurableObjectState, {} as Env)
+    const res = await do_.fetch(post("/get", {}))
     expect(res.status).toBe(404)
   })
 })

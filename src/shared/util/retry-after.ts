@@ -32,7 +32,7 @@ export function parseRetryAfterMs(header: string | null, nowMs: number, defaultM
   // Try delta-seconds: must be a non-negative integer string (no sign, no dot).
   if (/^\d+$/.test(header)) {
     const seconds = parseInt(header, 10)
-    if (!isNaN(seconds)) {
+    if (!Number.isNaN(seconds)) {
       return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
     }
   }
@@ -47,7 +47,7 @@ export function parseRetryAfterMs(header: string | null, nowMs: number, defaultM
 
   // Try HTTP-date.
   const parsed = Date.parse(header)
-  if (!isNaN(parsed)) {
+  if (!Number.isNaN(parsed)) {
     return Math.min(Math.max(0, parsed - nowMs), MAX_RETRY_AFTER_MS)
   }
 

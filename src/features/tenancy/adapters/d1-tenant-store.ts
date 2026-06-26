@@ -61,28 +61,33 @@ export async function upsertTenantAndRepo(
 }
 
 /**
- * Read the per-tenant concurrency_cap from the platform DB.
- * Returns null when the binding is absent, the tenant does not exist, or any
- * D1 error occurs.
+ * Read the per-tenant concurrency_cap and daily_budget from the platform DB.
+ * Returns null when the binding is absent, the tenant row is missing, or any
+ * D1 error occurs.  Individual fields are null when the column value is NULL
+ * (i.e. operator has not set an override yet).
  *
  * FAILS OPEN — never throws.
  */
-export async function readTenantCap(
+export async function readTenantConfig(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   installationId: number,
-): Promise<number | null> {
+): Promise<{ cap: number | null; dailyBudget: number | null } | null> {
   if (!env.SIGILIX_PLATFORM_DB) return null
   const db = env.SIGILIX_PLATFORM_DB
   try {
     const row = await db
-      .prepare("SELECT concurrency_cap FROM tenant WHERE installation_id = ?")
+      .prepare("SELECT concurrency_cap, daily_budget FROM tenant WHERE installation_id = ?")
       .bind(installationId)
-      .first<{ concurrency_cap: number }>()
-    return typeof row?.concurrency_cap === "number" ? row.concurrency_cap : null
+      .first<{ concurrency_cap: unknown; daily_budget: unknown }>()
+    if (row == null) return null
+    return {
+      cap: typeof row.concurrency_cap === "number" ? row.concurrency_cap : null,
+      dailyBudget: typeof row.daily_budget === "number" ? row.daily_budget : null,
+    }
   } catch (error) {
     console.warn(
       JSON.stringify({
-        event: "d1-tenant-cap-read-failed",
+        event: "d1-tenant-config-read-failed",
         installationId,
         err: error instanceof Error ? error.message : String(error),
       }),

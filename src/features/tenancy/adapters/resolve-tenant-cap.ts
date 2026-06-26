@@ -2,11 +2,11 @@
 //
 // Reads the operator-set concurrency cap from D1 first; falls back to the
 // env-level cap from resolveFairnessConfig when the tenant row is absent,
-// the binding is missing, or D1 is degraded.  Never throws (readTenantCap
+// the binding is missing, or D1 is degraded.  Never throws (readTenantConfig
 // is fail-open; resolveFairnessConfig is pure).
 
 import type { Env } from "@/src/shared/types/env"
-import { readTenantCap } from "@/src/features/tenancy/adapters/d1-tenant-store"
+import { readTenantConfig } from "@/src/features/tenancy/adapters/d1-tenant-store"
 import { resolveFairnessConfig } from "@/src/features/tenancy/domain/config"
 
 /**
@@ -19,6 +19,6 @@ import { resolveFairnessConfig } from "@/src/features/tenancy/domain/config"
  * FAILS OPEN — never throws; a D1 fault returns the env cap.
  */
 export async function resolveTenantCap(env: Env, installationId: number): Promise<number> {
-  const d1Cap = await readTenantCap(env, installationId)
-  return d1Cap ?? resolveFairnessConfig(env).cap
+  const cfg = await readTenantConfig(env, installationId)
+  return cfg?.cap ?? resolveFairnessConfig(env).cap
 }

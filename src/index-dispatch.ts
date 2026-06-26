@@ -619,6 +619,9 @@ export async function dispatchJob(
             // reruns carry it into RunState + the consumer's
             // review-memory lookup.
             ...(rerunRepoId !== undefined ? { repoId: rerunRepoId } : {}),
+            // SIG-38: thread PR author login so the DO-path silent rerun
+            // carries it into RunState and the consumer can enforce rate limits.
+            ...(meta.user?.login ? { authorLogin: meta.user.login } : {}),
           })
           if (!enq.ok) {
             // Codex MEDIUM on PR review: silent warmup reruns are
@@ -665,6 +668,10 @@ export async function dispatchJob(
             // here. Consumer reads it into `baseArgs` and on into the
             // ensemble's review-memory lookup.
             ...(rerunRepoId !== undefined ? { repoId: rerunRepoId } : {}),
+            // SIG-38: thread PR author login directly into the raw
+            // queue send so the consumer can enforce per-author rate
+            // limits on slash-command reruns.
+            ...(meta.user?.login ? { authorLogin: meta.user.login } : {}),
           }
           await env.OPENCLAW_JOBS.send(reviewMessage)
           // SIG-98 — telemetry so we can tell `/sigilix review` apart

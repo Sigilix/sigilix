@@ -85,6 +85,56 @@ describe("enqueuePrReviewJob — account attribution forwarding (SIG-343 Task 8)
   })
 })
 
+describe("enqueuePrReviewJob — authorLogin forwarding to DO body (SIG-38)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("includes authorLogin in the DO EnqueueRequest body when provided", async () => {
+    const doFetchSpy = vi.fn(async () => ({ ok: true }))
+    const env = {
+      OPENCLAW_STATE: { get: vi.fn(async () => null) },
+      PR_REVIEW_RUN: {
+        idFromName: vi.fn(() => "stub-id"),
+        get: vi.fn(() => ({ fetch: doFetchSpy })),
+      },
+      SIGILIX_PLATFORM_DB: undefined,
+    } as unknown as Parameters<typeof enqueuePrReviewJob>[0]
+
+    await enqueuePrReviewJob(env, {
+      ...BASE_ARGS,
+      authorLogin: "pr-author",
+    })
+
+    expect(doFetchSpy).toHaveBeenCalledOnce()
+    const fetchCall = doFetchSpy.mock.calls[0] as unknown[]
+    // Second arg is the RequestInit — body is the JSON EnqueueRequest
+    const init = fetchCall[1] as { body: string }
+    const body = JSON.parse(init.body) as Record<string, unknown>
+    expect(body.authorLogin).toBe("pr-author")
+  })
+
+  it("omits authorLogin from the DO body when not provided", async () => {
+    const doFetchSpy = vi.fn(async () => ({ ok: true }))
+    const env = {
+      OPENCLAW_STATE: { get: vi.fn(async () => null) },
+      PR_REVIEW_RUN: {
+        idFromName: vi.fn(() => "stub-id"),
+        get: vi.fn(() => ({ fetch: doFetchSpy })),
+      },
+      SIGILIX_PLATFORM_DB: undefined,
+    } as unknown as Parameters<typeof enqueuePrReviewJob>[0]
+
+    await enqueuePrReviewJob(env, BASE_ARGS)
+
+    expect(doFetchSpy).toHaveBeenCalledOnce()
+    const fetchCall = doFetchSpy.mock.calls[0] as unknown[]
+    const init = fetchCall[1] as { body: string }
+    const body = JSON.parse(init.body) as Record<string, unknown>
+    expect("authorLogin" in body).toBe(false)
+  })
+})
+
 describe("enqueuePrReviewJob — ctx.waitUntil deferred D1 upsert (SIG-343 fix)", () => {
   beforeEach(() => {
     vi.clearAllMocks()

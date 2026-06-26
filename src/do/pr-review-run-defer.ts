@@ -97,6 +97,9 @@ export async function runDeferAlarm(ctx: DurableObjectState, env: Env, state: Ru
     ...(state.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: state.staleHeadRequeueDepth } : {}),
     ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
     ...(normalizeRepoId(state.repoId) !== undefined ? { repoId: normalizeRepoId(state.repoId)! } : {}),
+    // SIG-38: forward PR author login from RunState so defer-alarm rebuilds
+    // preserve the rate-limit context (a defer is not a retry, attempts unchanged).
+    ...(state.authorLogin !== undefined ? { authorLogin: state.authorLogin } : {}),
   })
   const updated: RunState = {
     ...state,

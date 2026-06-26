@@ -416,6 +416,46 @@ describe("PrReviewRunDO.alarm — retry clears pickedUpAt", () => {
   })
 })
 
+// ─── SIG-38 — authorLogin preservation in retry alarm ────────
+
+describe("PrReviewRunDO.alarm — SIG-38 retry alarm preserves authorLogin from RunState", () => {
+  it("rebuilds the queue message including authorLogin from RunState", async () => {
+    const queue: QueueState = { sent: [] }
+    const env = makeEnv(queue)
+    const { ctx, store } = makeDoState()
+    seedState(store, {
+      state: "failed-transient",
+      attempts: 1,
+      alarmKind: "retry",
+      authorLogin: "pr-author",
+    })
+
+    const instance = new PrReviewRunDO(ctx, env)
+    await instance.alarm!()
+
+    expect(queue.sent).toHaveLength(1)
+    const msg = queue.sent[0] as { authorLogin?: string }
+    expect(msg.authorLogin).toBe("pr-author")
+    // RunState also retains authorLogin for the next alarm cycle
+    const after = store.get("state") as RunState
+    expect(after.authorLogin).toBe("pr-author")
+  })
+
+  it("omits authorLogin from retry queue message when absent on RunState", async () => {
+    const queue: QueueState = { sent: [] }
+    const env = makeEnv(queue)
+    const { ctx, store } = makeDoState()
+    seedState(store, { state: "failed-transient", attempts: 1, alarmKind: "retry" })
+
+    const instance = new PrReviewRunDO(ctx, env)
+    await instance.alarm!()
+
+    expect(queue.sent).toHaveLength(1)
+    const msg = queue.sent[0] as Record<string, unknown>
+    expect("authorLogin" in msg).toBe(false)
+  })
+})
+
 // ─── single-increment-point invariant ────────────────────────
 
 describe("PrReviewRunDO.alarm — single-increment-point", () => {

@@ -209,6 +209,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // legacy-only review-memory lookups. CR-1: normalize at the DO
       // trust boundary — caller-provided values are not pre-validated.
       ...(normalizeRepoId(body.repoId) !== undefined ? { repoId: normalizeRepoId(body.repoId)! } : {}),
+      ...(body.authorLogin !== undefined ? { authorLogin: body.authorLogin } : {}), // SIG-38: rate-limit context
     }
 
     // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
@@ -243,6 +244,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // review-memory dual-write/read-union semantics apply on this run.
       // CR-1: normalize at the DO trust boundary.
       ...(normalizeRepoId(body.repoId) !== undefined ? { repoId: normalizeRepoId(body.repoId)! } : {}),
+      ...(body.authorLogin !== undefined ? { authorLogin: body.authorLogin } : {}), // SIG-38
     })
 
     emit("do-review-enqueued", {
@@ -741,11 +743,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // but attaching is one fewer GitHub call).
       ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
       // SIG-247 Phase 1: rebuild from RunState INCLUDING the immutable
-      // repo.id so retry-alarm queue messages preserve dual-write
-      // semantics. Mirrors the staleHeadRequeueDepth pattern above.
+      // repo.id so retry-alarm queue messages preserve dual-write semantics.
       // CR-1: re-normalize on read in case a pre-Phase-1-fix RunState
       // persisted an invalid value.
       ...(normalizeRepoId(state.repoId) !== undefined ? { repoId: normalizeRepoId(state.repoId)! } : {}),
+      ...(state.authorLogin !== undefined ? { authorLogin: state.authorLogin } : {}), // SIG-38
     })
     const watchdogAt = Date.now() + config.watchdogMs
     const updated: RunState = {

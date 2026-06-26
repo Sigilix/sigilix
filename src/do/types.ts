@@ -120,6 +120,14 @@ export interface RunState {
    * is unchanged across defers. Undefined / absent means 0.
    */
   deferCount?: number
+  /**
+   * SIG-38: GitHub login of the PR author. Persisted on RunState so
+   * retry-alarm and defer-alarm rebuilds forward it to the queue message
+   * without an extra GitHub API call. Optional: absent on legacy
+   * in-flight runs and pre-SIG-38 slash-command paths; the rate-limit
+   * gate treats absent as no per-author limit.
+   */
+  authorLogin?: string
   /** SIG-169: latest sticky review-status snapshot accepted by the DO. */
   reviewStatus?: ReviewStatusSnapshot
   /** Monotonic sequence for same-rank review status updates. */
@@ -164,6 +172,14 @@ export interface EnqueueRequest {
    * lookups have it.
    */
   repoId?: number
+  /**
+   * SIG-38: GitHub login of the PR author (`payload.pull_request.user.login`).
+   * Threaded into RunState and every downstream queue message so the
+   * rate-limit gate can enforce per-author quotas without an extra API
+   * call. Optional: absent on legacy / anonymous contexts; the consumer
+   * treats absent as no per-author limit.
+   */
+  authorLogin?: string
 }
 
 export type EnqueueAction = "create" | "supersede" | "dedupe-active" | "dedupe-terminal"

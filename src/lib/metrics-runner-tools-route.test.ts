@@ -73,7 +73,10 @@ describe("handleRunnerToolsMetricsRoute", () => {
     await do_.recordManifest({
       owner: "Sigilix",
       repo: "sigilix",
-      occurredAt: "2026-06-12T12:00:00.000Z",
+      // Relative to now so the seed never ages out of the query window. A hardcoded
+      // date here was a time-bomb: it fell outside the 14d window on 2026-06-26 and
+      // started failing every run (manifestReceipts → 0).
+      occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       tools: [
         { toolId: "eslint", enabled: true, status: "produced", runCount: 1, resultCount: 2 },
         { toolId: "ruff", enabled: true, status: "empty", runCount: 1, resultCount: 0 },

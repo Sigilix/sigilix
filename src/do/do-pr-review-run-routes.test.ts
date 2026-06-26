@@ -867,3 +867,33 @@ describe("PrReviewRunDO — SIG-374 enqueuedAtMs + attempt on every OPENCLAW_JOB
     expect(retryMsg.attempt).toBe(2)
   })
 })
+
+// ─── SIG-38 — authorLogin persistence + queue threading ────────
+
+describe("PrReviewRunDO /enqueue — SIG-38 authorLogin persistence", () => {
+  it("persists authorLogin on RunState AND threads it onto the initial queue message", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    const req = makeEnqueueReq({ authorLogin: "octocat" } as Partial<EnqueueRequest>)
+    const res = await postJson(instance, "/enqueue", req)
+    expect(res.status).toBe(200)
+    const stored = state.store.get("state") as RunState
+    expect(stored.authorLogin).toBe("octocat")
+    expect(queue.sent).toHaveLength(1)
+    const queuedMsg = queue.sent[0]!.message as { authorLogin?: string }
+    expect(queuedMsg.authorLogin).toBe("octocat")
+  })
+
+  it("omits authorLogin when not provided (webhook-driven baseline)", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    const res = await postJson(instance, "/enqueue", makeEnqueueReq())
+    expect(res.status).toBe(200)
+    const stored = state.store.get("state") as RunState
+    expect("authorLogin" in stored).toBe(false)
+    const queuedMsg = queue.sent[0]!.message as Record<string, unknown>
+    expect("authorLogin" in queuedMsg).toBe(false)
+  })
+})

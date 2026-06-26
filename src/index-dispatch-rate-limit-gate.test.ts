@@ -1,0 +1,208 @@
+// SIG-38 — unit tests for runRateLimitGate (the gate extracted from index-dispatch.ts).
+//
+// Tests exercise runRateLimitGate DIRECTLY (no dispatchJob overhead), covering:
+//   1. allowed decision      → {skipped:false}, no comment, no check-close.
+//   2. denied + comment ok   → {skipped:true}, comment posted once, check closed "skipped".
+//   3. denied + comment THROWS → {skipped:false} (FAIL-OPEN), rate-limit-comment-failed warn.
+//   4. denied + comment ok, check-close THROWS → still {skipped:true}, rate-limit-check-close-failed.
+//   5. missing GitHub app creds (env check throws) → {skipped:false} (fail-open).
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { Env } from "@/src/shared/types/env"
+import type { RateLimitDecision } from "@/src/features/tenancy"
+
+// ─── hoisted mocks ────────────────────────────────────────────────────────────
+
+const { checkRateLimitMock } = vi.hoisted(() => ({ checkRateLimitMock: vi.fn<() => Promise<RateLimitDecision>>() }))
+vi.mock("@/src/features/tenancy", async (importActual) => {
+  const actual = await importActual()
+  return { ...(actual as object), checkRateLimit: checkRateLimitMock }
+})
+
+// NOTE: vi.mock for @/src/shared/adapters/github/github-app is omitted intentionally.
+// Instead, makeEnv() provides a KV stub whose get() returns a pre-cached token so
+// the real getInstallationToken short-circuits the cache path without any HTTP call.
+// This avoids relying on module-level mock hoisting for a deeply-nested import.
+
+const { createIssueCommentMock, GitHubClientMock } = vi.hoisted(() => ({
+  createIssueCommentMock: vi.fn(async () => undefined),
+  // Hoisted so we can re-establish mockImplementation in beforeEach after
+  // vi.restoreAllMocks() clears it (restoreAllMocks resets ALL tracked vi.fn
+  // implementations, not just spies).
+  GitHubClientMock: vi.fn(),
+}))
+vi.mock("@/src/shared/adapters/github", () => ({
+  GitHubClient: GitHubClientMock,
+  GitHubHttpError: class GitHubHttpError extends Error {},
+}))
+
+const { attachExistingCheckRunMock, completeCheckRunMock } = vi.hoisted(() => ({
+  attachExistingCheckRunMock: vi.fn(async () => ({ _tag: "fake-handle" })),
+  completeCheckRunMock: vi.fn(async () => undefined),
+}))
+vi.mock("@/src/lib/pr-review-check-run", async (importActual) => {
+  const actual = await importActual()
+  return {
+    ...(actual as object),
+    attachExistingCheckRun: attachExistingCheckRunMock,
+    completeCheckRun: completeCheckRunMock,
+  }
+})
+
+// ─── import SUT after mocks ───────────────────────────────────────────────────
+
+import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+function makeEnv(over: Record<string, unknown> = {}): Env {
+  return {
+    GITHUB_APP_ID: "app-123",
+    GITHUB_PRIVATE_KEY: "fake-private-key",
+    // KV stub with a pre-cached installation token so the real getInstallationToken
+    // short-circuits via the cache path without any network call or JWT signing.
+    OPENCLAW_STATE: {
+      get: async () => ({ token: "fake-gh-token", expiresAt: Date.now() + 3_600_000 }),
+      put: async () => undefined,
+    } as unknown as KVNamespace,
+    ...over,
+  } as unknown as Env
+}
+
+function makeArgs(
+  over: Partial<{
+    installationId: number
+    authorLogin: string | undefined
+    bypassClosedSkip: boolean | undefined
+    owner: string
+    repo: string
+    prNumber: number
+    checkRunId: number | undefined
+  }> = {},
+) {
+  return {
+    installationId: 42,
+    authorLogin: "alice" as string | undefined,
+    bypassClosedSkip: undefined as boolean | undefined,
+    owner: "Sigilix",
+    repo: "sigilix",
+    prNumber: 7,
+    checkRunId: undefined as number | undefined,
+    ...over,
+  }
+}
+
+/** Denied rate-limit decision (enforce, over-cap). */
+function denied(): RateLimitDecision {
+  return { allowed: false, mode: "enforce", used: 3, cap: 3, resetMs: 45_000, footer: "" }
+}
+
+/** Allowed rate-limit decision. */
+function allowed(): RateLimitDecision {
+  return { allowed: true, mode: "enforce", used: 1, cap: 3, resetMs: 0, footer: "" }
+}
+
+// ─── console spies ────────────────────────────────────────────────────────────
+
+let warnSpy: ReturnType<typeof vi.spyOn>
+
+beforeEach(() => {
+  checkRateLimitMock.mockClear()
+  createIssueCommentMock.mockClear()
+  attachExistingCheckRunMock.mockClear()
+  completeCheckRunMock.mockClear()
+  GitHubClientMock.mockClear()
+  // Re-establish defaults after mockClear/restoreAllMocks clear implementations.
+  createIssueCommentMock.mockResolvedValue(undefined)
+  attachExistingCheckRunMock.mockResolvedValue({ _tag: "fake-handle" })
+  completeCheckRunMock.mockResolvedValue(undefined)
+  // Re-establish GitHubClient constructor — vi.restoreAllMocks() (called in
+  // afterEach) clears mockImplementation on all tracked vi.fn mocks, so we
+  // must restore it here for every test.
+  GitHubClientMock.mockImplementation(() => ({
+    createIssueComment: createIssueCommentMock,
+  }))
+  vi.spyOn(console, "log").mockImplementation(() => undefined)
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+function warnEvents(): Array<Record<string, unknown>> {
+  return warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+}
+
+// ─── tests ────────────────────────────────────────────────────────────────────
+
+describe("runRateLimitGate", () => {
+  it("allowed decision → {skipped:false}, no comment, no check-close", async () => {
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    const result = await runRateLimitGate(makeEnv(), makeArgs({ checkRunId: 99 }))
+
+    expect(result.skipped).toBe(false)
+    expect(createIssueCommentMock).not.toHaveBeenCalled()
+    expect(completeCheckRunMock).not.toHaveBeenCalled()
+    expect(attachExistingCheckRunMock).not.toHaveBeenCalled()
+  })
+
+  it("denied + createIssueComment succeeds → {skipped:true}, comment posted once, check closed skipped", async () => {
+    checkRateLimitMock.mockResolvedValue(denied())
+
+    const result = await runRateLimitGate(makeEnv(), makeArgs({ checkRunId: 99 }))
+
+    expect(result.skipped).toBe(true)
+    expect(createIssueCommentMock).toHaveBeenCalledOnce()
+    expect(createIssueCommentMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      7,
+      expect.stringMatching(/Rate limit reached/),
+    )
+    // Check run must have been closed as skipped.
+    expect(attachExistingCheckRunMock).toHaveBeenCalledWith(expect.objectContaining({ checkRunId: 99 }))
+    expect(completeCheckRunMock).toHaveBeenCalledWith(expect.objectContaining({ conclusion: "skipped" }))
+  })
+
+  it("denied + createIssueComment THROWS → {skipped:false} (fail-open), rate-limit-comment-failed warn", async () => {
+    checkRateLimitMock.mockResolvedValue(denied())
+    createIssueCommentMock.mockRejectedValue(new Error("network error"))
+
+    const result = await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(result.skipped).toBe(false)
+    expect(completeCheckRunMock).not.toHaveBeenCalledWith(expect.objectContaining({ conclusion: "skipped" }))
+    const events = warnEvents()
+    expect(events.some((e) => e["event"] === "rate-limit-comment-failed")).toBe(true)
+  })
+
+  it("denied + comment ok + check-close THROWS → still {skipped:true}, rate-limit-check-close-failed logged", async () => {
+    checkRateLimitMock.mockResolvedValue(denied())
+    completeCheckRunMock.mockRejectedValue(new Error("github 500"))
+
+    const result = await runRateLimitGate(makeEnv(), makeArgs({ checkRunId: 99 }))
+
+    // The comment was posted so the decision is still skipped — check-close failure is best-effort.
+    expect(result.skipped).toBe(true)
+    expect(createIssueCommentMock).toHaveBeenCalledOnce()
+    const events = warnEvents()
+    expect(events.some((e) => e["event"] === "rate-limit-check-close-failed")).toBe(true)
+  })
+
+  it("missing GitHub app creds → {skipped:false} (fail-open), rate-limit-comment-failed warn", async () => {
+    checkRateLimitMock.mockResolvedValue(denied())
+    // env without app credentials — the gate's explicit guard throws before
+    // getInstallationToken is ever reached, so the catch fires with
+    // rate-limit-comment-failed and the gate fails open (skipped:false).
+    const result = await runRateLimitGate(
+      makeEnv({ GITHUB_APP_ID: undefined, GITHUB_PRIVATE_KEY: undefined }),
+      makeArgs(),
+    )
+
+    expect(result.skipped).toBe(false)
+    const events = warnEvents()
+    expect(events.some((e) => e["event"] === "rate-limit-comment-failed")).toBe(true)
+  })
+})

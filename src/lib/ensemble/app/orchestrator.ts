@@ -214,6 +214,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         depth: staleHeadRequeueDepth,
         source: "ensemble-before-fanout",
         ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+        ...(meta.user?.login ? { authorLogin: meta.user.login } : {}), // SIG-38: rate-limit
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
@@ -710,6 +711,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         depth: staleHeadRequeueDepth,
         source: "ensemble-after-review",
         ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+        ...(meta2.user?.login ? { authorLogin: meta2.user.login } : {}), // SIG-38: rate-limit
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
@@ -975,14 +977,12 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 
 // ─── helpers ──────────────────────────────────────────────────────────
 
-// SIG-318 (PR 12h): `checkQuorum` (the SIG-235 fan-out quorum decision) is a PURE
-// policy helper — relocated to `../domain/policy` (its natural home alongside the
-// other fan-out decisions) and re-exported through the shim. The orchestrator no
-// longer references it directly (the specialists phase owns the quorum gate).
+// SIG-318 (PR 12h): `checkQuorum` relocated to `../domain/policy` (natural home
+// for SIG-235 fan-out quorum decisions) and re-exported through the shim. The
+// orchestrator no longer references it directly (specialists phase owns the gate).
 
 // SIG-360 / SIG-366: the thin public `validateForSubmission` wrapper (astCache
-// OPTIONAL — it supplies the `createAstCache()` default the domain core requires)
-// moved to the `./orchestrator-helpers` leaf; re-exported above so the public
+// OPTIONAL) moved to `./orchestrator-helpers`; re-exported above so the public
 // surface is byte-identical.
 // ─── telemetry / result binding ──────────────────────────────────────────
 

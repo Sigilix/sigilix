@@ -908,6 +908,12 @@ export interface Env {
   //   "enforce" — reviews are rejected when a tenant exceeds their daily budget.
   SIGILIX_TENANT_QUOTA_MODE?: string
 
+  // SIG-38: per-tenant rate-limit enforcement mode (rolling-window request cap).
+  //   "shadow"  (default / unset / unknown) — rate-limit state tracked + telemetered, no blocking.
+  //   "off"     — rate-limit logic fully bypassed.
+  //   "enforce" — reviews are rejected when a tenant exceeds their rolling-window cap.
+  SIGILIX_RATE_LIMIT_MODE?: string
+
   // SIG-343 PR C: platform DB (tenant/repo/usage_ledger) — optional so a deploy that
   // hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database

@@ -394,3 +394,33 @@ describe("PrReviewRunDO /defer — non-queued run is a 200 no-op", () => {
     expect(queue.sent.length).toBe(0)
   })
 })
+
+// ─── SIG-38 — authorLogin preservation in defer alarm ─────────
+
+describe("PrReviewRunDO defer alarm — SIG-38 authorLogin forwarding", () => {
+  it("defer alarm re-send includes authorLogin from RunState when present", async () => {
+    const { instance, state, queue, runId } = await setupQueuedRun()
+    // Inject authorLogin into RunState to simulate a run enqueued with it.
+    const cur = state.store.get("state") as RunState
+    state.store.set("state", { ...cur, authorLogin: "pr-author" })
+
+    // Call /defer and then fire the alarm.
+    await postJson(instance, "/defer", { runId, backoffMs: 0 })
+    await instance.alarm()
+
+    expect(queue.sent.length).toBe(1)
+    const msg = queue.sent[0]!.message as { authorLogin?: string }
+    expect(msg.authorLogin).toBe("pr-author")
+  })
+
+  it("defer alarm re-send omits authorLogin when absent on RunState", async () => {
+    const { instance, queue, runId } = await setupQueuedRun()
+
+    await postJson(instance, "/defer", { runId, backoffMs: 0 })
+    await instance.alarm()
+
+    expect(queue.sent.length).toBe(1)
+    const msg = queue.sent[0]!.message as Record<string, unknown>
+    expect("authorLogin" in msg).toBe(false)
+  })
+})

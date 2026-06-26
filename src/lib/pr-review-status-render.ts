@@ -70,6 +70,14 @@ export interface ReviewStatusSnapshot {
    * Manage line (pre-terminal phases, or when the review number isn't known).
    */
   manage?: string
+  /**
+   * SIG-38 Task 7: per-developer usage footer (`_Sigilix · N of M reviews used
+   * in past 1h[· resets in Xm]_`), already formatted by `formatUsageFooter`.
+   * Rendered as the last `> <sub>…</sub>` line in the terminal footer block.
+   * ENFORCE-ONLY: only passed in enforce mode; shadow and off stay dark.
+   * Display-only — never gates anything.
+   */
+  rateLimitFooter?: string
   footerSeed?: string
 }
 
@@ -271,6 +279,7 @@ function buildTerminalFooterBlock(snapshot: ReviewStatusSnapshot): string {
     lines.push(formatProofLegend())
   }
   if (snapshot.manage) lines.push(`> <sub>${snapshot.manage}</sub>`)
+  if (snapshot.rateLimitFooter) lines.push(`> <sub>${snapshot.rateLimitFooter}</sub>`)
   lines.push("")
   lines.push(REVIEW_STATUS_BLOCK_END)
   return lines.join("\n")

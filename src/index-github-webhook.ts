@@ -715,9 +715,8 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
       //
       // SIG-247 Phase 1: extract the immutable repo.id from the
       // webhook payload with the same positive-integer guard the
-      // push-indexer uses (line 2827-2832). Threads through to
-      // RunState + JobMessage so the consumer's review-memory lookup
-      // hits the dual-write keyspace.
+      // push-indexer uses. Threads through RunState + JobMessage so
+      // the consumer's review-memory lookup hits the dual-write keyspace.
       const prReviewRepoId =
         typeof payload.repository?.id === "number" &&
         Number.isInteger(payload.repository.id) &&
@@ -752,6 +751,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
           ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
           ...(payload.installation?.account?.login ? { accountLogin: payload.installation.account.login } : {}),
           ...(payload.installation?.account?.type ? { accountType: payload.installation.account.type } : {}),
+          ...(pr.user?.login ? { authorLogin: pr.user.login } : {}), // SIG-38: rate-limit context
         },
         ctx,
       )

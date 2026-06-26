@@ -85,6 +85,13 @@ export interface HandleStaleHeadArgs {
    * to legacy-only review-memory lookups.
    */
   repoId?: number
+  /**
+   * SIG-38: GitHub login of the PR author. Forwarded to `enqueuePrReviewJob`
+   * on the auto-requeue path so stale-head requeues preserve the rate-limit
+   * context that was present on the original run. Optional: absent on legacy
+   * call sites; the rate-limit gate treats absent as no per-author limit.
+   */
+  authorLogin?: string
 }
 
 export type StaleHeadOutcome =
@@ -111,8 +118,20 @@ export type StaleHeadOutcome =
  * message and trigger Cloudflare Queue retries on every stale-head.
  */
 export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleHeadOutcome> {
-  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source, repoId } =
-    args
+  const {
+    env,
+    owner,
+    repo,
+    prNumber,
+    installationId,
+    queuedHeadSha,
+    currentHeadSha,
+    baseSha,
+    depth,
+    source,
+    repoId,
+    authorLogin,
+  } = args
 
   console.log(
     JSON.stringify({
@@ -162,6 +181,9 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
         deliveryId: null, // not a webhook delivery
         staleHeadRequeueDepth: depth + 1,
         ...(requeueRepoId !== undefined ? { repoId: requeueRepoId } : {}),
+        // SIG-38: forward PR author login so stale-head requeues preserve
+        // the rate-limit context from the original run.
+        ...(authorLogin !== undefined ? { authorLogin } : {}),
       })
       if (result.ok) {
         console.log(

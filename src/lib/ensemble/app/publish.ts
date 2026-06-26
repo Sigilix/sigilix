@@ -345,6 +345,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
           depth: staleHeadRequeueDepth,
           source: "ensemble-after-inline-overview",
           ...(repoId !== undefined ? { repoId } : {}),
+          // SIG-38: `meta` is in PublishArgs; forward author login so
+          // stale-head requeues preserve the rate-limit context.
+          ...(meta.user?.login ? { authorLogin: meta.user.login } : {}),
         })
         return finalize(telemetry, env, "stale_head", cache)
       }

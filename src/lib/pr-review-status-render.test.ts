@@ -614,3 +614,74 @@ describe("SIG-472 overview-write status-block preservation", () => {
     expect(extractReviewStatusBlock(`x\n${REVIEW_STATUS_BLOCK_START}\nhalf`)).toBeNull()
   })
 })
+
+// ─── SIG-38 Task 7: per-developer usage footer in review status block ─────────
+
+describe("buildReviewStatusBlock rateLimitFooter (SIG-38)", () => {
+  const FOOTER = "_Sigilix · 2 of 3 reviews used in past 1h_"
+
+  it("renders rateLimitFooter as a muted `> <sub>` line in the terminal footer", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 10,
+      final: { status: "posted", findingsCount: 1, reviewUrl: "https://github.com/Sigilix/sigilix/pull/7" },
+      rateLimitFooter: FOOTER,
+    })
+    expect(block).toContain(`> <sub>${FOOTER}</sub>`)
+  })
+
+  it("omits rateLimitFooter line when the field is absent", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 10,
+      final: { status: "posted", findingsCount: 1 },
+    })
+    expect(block).not.toContain("reviews used in past 1h")
+  })
+
+  it("omits rateLimitFooter line when the field is an empty string", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 10,
+      final: { status: "posted", findingsCount: 1 },
+      rateLimitFooter: "",
+    })
+    expect(block).not.toContain("reviews used in past 1h")
+  })
+
+  it("produces exactly ONE status block even with rateLimitFooter set", () => {
+    const block = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 10,
+      final: { status: "posted", findingsCount: 1 },
+      rateLimitFooter: FOOTER,
+    })
+    expect(block.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+    expect(block.match(new RegExp(REVIEW_STATUS_BLOCK_END, "g"))).toHaveLength(1)
+  })
+
+  it("rateLimitFooter is stripped as status metadata on block replace (no stranded content)", () => {
+    const first = upsertReviewStatusBlock("plain comment", {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 1,
+      final: { status: "posted", findingsCount: 1 },
+      rateLimitFooter: FOOTER,
+    })
+    expect(first).toContain(`> <sub>${FOOTER}</sub>`)
+    // Replace with a snapshot that carries no footer — the line must vanish.
+    const second = upsertReviewStatusBlock(first, {
+      phase: "posted",
+      headSha: HEAD_SHA,
+      sequence: 2,
+      final: { status: "posted", findingsCount: 1 },
+    })
+    expect(second).not.toContain("reviews used in past 1h")
+    expect(second).toContain("plain comment")
+    expect(second.match(new RegExp(REVIEW_STATUS_BLOCK_START, "g"))).toHaveLength(1)
+  })
+})

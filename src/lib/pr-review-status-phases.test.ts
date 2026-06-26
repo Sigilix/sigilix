@@ -47,3 +47,26 @@ describe("finalStatusUpdate skip footer (SIG-475)", () => {
     expect(update!.phase).toBe("skipped")
   })
 })
+
+describe("finalStatusUpdate rateLimitFooter threading (SIG-38)", () => {
+  it("threads rateLimitFooter onto the snapshot when provided", () => {
+    const footer = "_Sigilix · 2 of 3 reviews used in past 1h_"
+    const update = finalStatusUpdate({ status: "posted", ...ARGS, rateLimitFooter: footer })
+    expect(update).not.toBeNull()
+    expect(update!.rateLimitFooter).toBe(footer)
+  })
+
+  it("omits rateLimitFooter from the snapshot when not provided", () => {
+    const update = finalStatusUpdate({ status: "posted", ...ARGS })
+    expect(update).not.toBeNull()
+    expect(update!.rateLimitFooter).toBeUndefined()
+    expect("rateLimitFooter" in update!).toBe(false)
+  })
+
+  it("threads rateLimitFooter on an errored status too", () => {
+    const footer = "_Sigilix · 3 of 3 reviews used in past 1h · resets in 42m_"
+    const update = finalStatusUpdate({ status: "errored", ...ARGS, rateLimitFooter: footer })
+    expect(update).not.toBeNull()
+    expect(update!.rateLimitFooter).toBe(footer)
+  })
+})

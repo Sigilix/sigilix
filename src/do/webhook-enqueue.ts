@@ -40,6 +40,13 @@ export interface PrReviewEnqueueArgs {
   accountLogin?: string
   /** SIG-343 Task 8: GitHub App account type ('Organization' | 'User'). */
   accountType?: string
+  /**
+   * SIG-38: GitHub login of the PR author (`payload.pull_request.user.login`).
+   * Threaded into the DO `EnqueueRequest` body → RunState → every downstream
+   * queue message so the rate-limit gate can enforce per-author quotas. Optional:
+   * absent when `pull_request.user` is null (rare anonymous/Actions contexts).
+   */
+  authorLogin?: string
 }
 
 // SIG-98 note on slash-command reruns + the pause/ignore gate:
@@ -152,6 +159,9 @@ export async function enqueuePrReviewJob(
     deliveryId: args.deliveryId,
     ...(args.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth } : {}),
     ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+    // SIG-38: thread PR author login into the DO so RunState persists it
+    // for retry/defer alarm rebuilds.
+    ...(args.authorLogin !== undefined ? { authorLogin: args.authorLogin } : {}),
   }
   let response: Response
   try {

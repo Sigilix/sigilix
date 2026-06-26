@@ -163,6 +163,15 @@ export type JobMessage =
        * webhook-originated jobs (treated as 0 by the gate).
        */
       deferCount?: number
+      /**
+       * SIG-38: GitHub login of the PR author at webhook time. Threaded
+       * from the webhook payload through DO RunState so the rate-limit
+       * gate can enforce per-author quotas without an extra GitHub API
+       * call. Absent on legacy queue messages, slash-command raw-sends
+       * before this deploy, and (optionally) stale-head requeues on
+       * old orchestrators; the gate treats absent as no per-author limit.
+       */
+      authorLogin?: string
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that

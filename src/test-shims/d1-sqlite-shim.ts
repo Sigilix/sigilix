@@ -17,6 +17,11 @@ class D1StmtShim {
     private readonly params: Params = [],
   ) {}
 
+  /** True when this statement is a SELECT (read) statement. */
+  get isSelect(): boolean {
+    return /^\s*SELECT\b/i.test(this.sql)
+  }
+
   bind(...args: unknown[]): D1StmtShim {
     return new D1StmtShim(this.db, this.sql, args)
   }
@@ -67,10 +72,13 @@ export class D1DatabaseShim {
   async batch<T = unknown>(stmts: D1StmtShim[]): Promise<D1Result<T>[]> {
     const out: D1Result<T>[] = []
     for (const s of stmts) {
-      // A statement in a batch may be a write (run-shaped) or read; run()
-      // is safe for both under node:sqlite and returns the meta the
-      // lexical-index writer ignores anyway.
-      out.push((await s.run()) as unknown as D1Result<T>)
+      // SELECT statements need all() to return rows; writes use run() for meta.
+      if (s.isSelect) {
+        out.push(await s.all<T>())
+      } else {
+        const runResult = await s.run()
+        out.push({ ...runResult, results: [] as T[] } as D1Result<T>)
+      }
     }
     return out
   }

@@ -97,6 +97,8 @@ export function finalStatusUpdate(args: {
   owner: string
   repo: string
   prNumber: number
+  /** SIG-38 Task 7: enforce-only per-developer usage footer. */
+  rateLimitFooter?: string
 }): ReviewStatusUpdate | null {
   if (args.status === "stale_head" || args.status === "shadow_recorded") return null
   // SIG-475: the incremental empty-delta skip (maybeEmptyDeltaSkip) posts NO review
@@ -117,6 +119,8 @@ export function finalStatusUpdate(args: {
     // `buildReviewStatusBlock` renders the **Proof:** line on a posted review
     // (the runner receipt later patches grounded→verified in place).
     ...(args.reviewMeta?.proof !== undefined ? { proof: args.reviewMeta.proof } : {}),
+    // SIG-38 Task 7: enforce-only usage footer (shadow stays dark).
+    ...(args.rateLimitFooter !== undefined ? { rateLimitFooter: args.rateLimitFooter } : {}),
     final: {
       status: failed ? "failed" : skipped ? "skipped" : "posted",
       findingsCount: args.reviewMeta?.findingsCount ?? 0,

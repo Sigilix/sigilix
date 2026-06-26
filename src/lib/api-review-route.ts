@@ -201,7 +201,10 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // model spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a
   // probe that mints an installation token + hits GitHub still counts against the ceiling.
   // The fairness gate runs AFTER the ceiling (both guards are independent).
-  let args: EnsembleHandlerArgs
+  let args: EnsembleHandlerArgs | undefined
+  // Mode B: captures a buildClient/getPullRequest failure without returning early so the
+  // unified try/finally below always fires releaseTenant (SIG-455 Task 6 lease-leak fix).
+  let prBuildError: unknown
   // The diff we already have on each path → the per-finding code-context slice for the
   // `--rich` panel (display evidence; attached to the result below, never gates anything).
   let contextDiff: string | undefined
@@ -294,38 +297,54 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
       if (admit.granted) lease = { tenantId, leaseId }
     }
     const groundedEnv = groundedReviewEnv(env) // REAL bindings (retrieval live), review-memory off, no repoId.
-    let client: GitHubClient
-    let headSha: string
+    let client: GitHubClient | undefined
+    let headSha: string | undefined
     try {
       client = await buildClient(groundedEnv, lookup.installationId)
       // headSha is optional from a hosted CLI (no token) — read it from the PR when absent.
       headSha = parsed.headSha ?? (await client.getPullRequest(parsed.owner, parsed.repo, parsed.prNumber)).head.sha
     } catch (err) {
-      // Couldn't auth as the installation or read the PR (bad creds / PR not found / GitHub down).
-      return json({ error: "pr_unavailable", detail: err instanceof Error ? err.message : String(err) }, 502)
+      // Couldn't auth as the installation or read the PR — capture without returning so the
+      // unified try/finally below always runs releaseTenant (SIG-455 Task 6 lease-leak fix).
+      prBuildError = err
     }
-    // Best-effort code-context source for the rich panel (display-only; never 502 on it).
-    try {
-      contextDiff = await client.getPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber)
-    } catch {
-      /* code context is best-effort — leave undefined */
-    }
-    args = {
-      owner: parsed.owner,
-      repo: parsed.repo,
-      prNumber: parsed.prNumber,
-      headSha,
-      installationId: lookup.installationId,
-      env: groundedEnv,
-      githubClient: client, // built here to resolve headSha → inject so the orchestrator doesn't rebuild the CLIENT
-      dryRun: true,
-      forceFullCoverage: true,
+    if (!prBuildError) {
+      // Best-effort code-context source for the rich panel (display-only; never 502 on it).
+      try {
+        contextDiff = await client!.getPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber)
+      } catch {
+        /* code context is best-effort — leave undefined */
+      }
+      args = {
+        owner: parsed.owner,
+        repo: parsed.repo,
+        prNumber: parsed.prNumber,
+        headSha: headSha!,
+        installationId: lookup.installationId,
+        env: groundedEnv,
+        githubClient: client!, // built here to resolve headSha → inject so the orchestrator doesn't rebuild the CLIENT
+        dryRun: true,
+        forceFullCoverage: true,
+      }
     }
   }
 
   let result
   try {
-    result = await handlePrReviewEnsemble(args)
+    // Mode B: if buildClient/getPullRequest failed, return 502 from inside this try block
+    // so the finally always fires and releaseTenant is called. A return inside a try block
+    // always triggers finally — unlike a return that exits the function before the try is
+    // entered, which was the pre-fix behavior that leaked the lease (SIG-455 Task 6).
+    if (prBuildError !== undefined) {
+      return json(
+        {
+          error: "pr_unavailable",
+          detail: prBuildError instanceof Error ? prBuildError.message : String(prBuildError),
+        },
+        502,
+      )
+    }
+    result = await handlePrReviewEnsemble(args!)
   } catch (err) {
     // The orchestrator normally catches internally and returns status "errored";
     // a thrown error is still an engine failure → 500, never a clean pass.

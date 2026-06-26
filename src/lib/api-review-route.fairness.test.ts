@@ -24,6 +24,7 @@ vi.mock("@/src/features/tenancy", () => ({
 import { handleReviewApiRoute } from "./api-review-route"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { admitTenant, releaseTenant } from "@/src/features/tenancy"
+import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import type { Env } from "@/src/shared/types/env"
 
 const mockEngine = vi.mocked(handlePrReviewEnsemble)
@@ -163,6 +164,29 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
     const res = await handleReviewApiRoute(req(groundedBody), e)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
+  })
+
+  // Regression: SIG-455 Task 6 lease-leak fix. Before the fix, the buildClient catch block
+  // returned 502 BEFORE entering the outer try/finally, so releaseTenant was never called and
+  // the lease leaked until the 35-min TTL reaper. This test must FAIL against the old code.
+  it("enforce + GRANT + buildClient REJECTS → 502 and releaseTenant still called (lease-leak fix)", async () => {
+    mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
+    vi.mocked(buildClient).mockRejectedValueOnce(new Error("github down"))
+    const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
+    const res = await handleReviewApiRoute(req(groundedBody), e)
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toBe("pr_unavailable")
+    // The critical assertion: the lease must be released even though GitHub auth failed.
+    expect(mockRelease).toHaveBeenCalledWith(expect.anything(), "42", expect.any(String))
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("mode=off → admitTenant never called", async () => {
+    const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "off" })
+    await handleReviewApiRoute(req(groundedBody), e)
+    expect(mockAdmit).not.toHaveBeenCalled()
+    expect(mockRelease).not.toHaveBeenCalled()
   })
 })
 

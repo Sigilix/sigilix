@@ -193,7 +193,9 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
   const fairnessMode =
     env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
-  const fairnessCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10) || 2
+  // cap is floored at 1; the disable lever is SIGILIX_FAIRNESS_MODE=off, not cap=0
+  const parsedCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10)
+  const fairnessCap = Number.isInteger(parsedCap) && parsedCap > 0 ? parsedCap : 2
   // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
   let lease: { tenantId: string; leaseId: string } | undefined
 

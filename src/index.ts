@@ -448,7 +448,9 @@ export default {
     // actually defers denied jobs. Default off (the binding/flags ship dark).
     const mode =
       env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
-    const cap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10) || 2
+    // cap is floored at 1; the disable lever is SIGILIX_FAIRNESS_MODE=off, not cap=0
+    const parsedCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10)
+    const cap = Number.isInteger(parsedCap) && parsedCap > 0 ? parsedCap : 2
     for (const message of batch.messages) {
       const job = message.body
       // Fairness only applies to DO-routed pr-review runs: a string runId is

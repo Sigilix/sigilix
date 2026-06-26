@@ -229,6 +229,93 @@ describe("PrReviewRunDO defer alarm fire", () => {
   })
 })
 
+describe("PrReviewRunDO /defer — request body validation (Fix A)", () => {
+  it("400 on non-JSON body", async () => {
+    const { instance } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: "not-json{{",
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect((body as { error: string }).error).toBe("invalid_json")
+  })
+
+  it("400 when backoffMs is missing", async () => {
+    const { instance, runId } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify({ runId }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("400 when backoffMs is NaN (string that doesn't coerce)", async () => {
+    const { instance, runId } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify({ runId, backoffMs: "not-a-number" }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("400 when runId is missing", async () => {
+    const { instance } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify({ backoffMs: 30_000 }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("400 when runId is an empty string", async () => {
+    const { instance } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify({ runId: "", backoffMs: 30_000 }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+})
+
+describe("PrReviewRunDO defer alarm — watchdogDeadlineAt refreshed on re-arm (Fix B)", () => {
+  it("re-armed state has watchdogDeadlineAt ~now+watchdogMs, not the stale /defer value", async () => {
+    const { instance, state, runId } = await setupQueuedRun()
+
+    // Capture the watchdogDeadlineAt written by /defer (stale value after alarm fires).
+    await postJson(instance, "/defer", { runId, backoffMs: 30_000 })
+    const staleDeadline = (state.store.get("state") as RunState).watchdogDeadlineAt
+
+    // Simulate time passing so the defer alarm fires well after /defer was called.
+    const before = Date.now()
+    await instance.alarm()
+
+    const stored = state.store.get("state") as RunState
+    // The deadline must have been refreshed — it should be AFTER the stale value.
+    expect(stored.watchdogDeadlineAt).toBeDefined()
+    expect(new Date(stored.watchdogDeadlineAt!).getTime()).toBeGreaterThan(new Date(staleDeadline!).getTime() - 1)
+    // And ~now+watchdogMs (within a 10s window for test execution jitter).
+    const deadlineMs = new Date(stored.watchdogDeadlineAt!).getTime()
+    expect(deadlineMs).toBeGreaterThan(before + WATCHDOG_MS - 5_000)
+    expect(deadlineMs).toBeLessThan(before + WATCHDOG_MS + 5_000)
+  })
+})
+
 describe("PrReviewRunDO /defer — non-queued run is a 200 no-op", () => {
   it("running state is preserved (a duplicate deny after /pickup must NOT regress to queued)", async () => {
     const { instance, state, queue, runId } = await setupQueuedRun()

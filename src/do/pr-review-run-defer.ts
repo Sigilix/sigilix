@@ -24,7 +24,16 @@ const STATE_KEY = "state"
  * no-op so a duplicate deny can never regress an active run back to `queued`.
  */
 export async function handleDeferRequest(ctx: DurableObjectState, env: Env, request: Request): Promise<Response> {
-  const { runId, backoffMs } = (await request.json()) as { runId: string; backoffMs: number }
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse(400, { error: "invalid_json" })
+  }
+  const { runId, backoffMs } = (body ?? {}) as { runId?: unknown; backoffMs?: unknown }
+  if (typeof runId !== "string" || runId.length === 0 || typeof backoffMs !== "number" || !Number.isFinite(backoffMs)) {
+    return jsonResponse(400, { error: "runId (non-empty string) and backoffMs (finite number) are required" })
+  }
   const state = await ctx.storage.get<RunState>(STATE_KEY)
   if (!state || state.runId !== runId || state.state !== "queued") {
     return jsonResponse(200, { ok: true, noop: true })
@@ -80,7 +89,13 @@ export async function runDeferAlarm(ctx: DurableObjectState, env: Env, state: Ru
     ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
     ...(normalizeRepoId(state.repoId) !== undefined ? { repoId: normalizeRepoId(state.repoId)! } : {}),
   })
-  const updated: RunState = { ...state, alarmTargetRunId: state.runId, alarmKind: "watchdog" }
+  const updated: RunState = {
+    ...state,
+    alarmTargetRunId: state.runId,
+    alarmKind: "watchdog",
+    // Refresh the deadline to match the freshly-armed alarm (was stale /defer-time value).
+    watchdogDeadlineAt: new Date(Date.now() + config.watchdogMs).toISOString(),
+  }
   await ctx.storage.put(STATE_KEY, updated)
   await ctx.storage.setAlarm(Date.now() + config.watchdogMs)
 }

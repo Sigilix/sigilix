@@ -33,8 +33,13 @@
 // ChatResult contract. Schema-constrained final answers continue to stream.
 
 import type { LlmUsage, ChatMessage, ChatArgs, ChatResult, ToolCall } from "@/src/shared/ports/model"
+import { parseRetryAfterMs } from "@/src/shared/util/retry-after"
+import { ProviderRateLimitError } from "@/src/shared/adapters/model/provider-errors"
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+/** Default cooldown when no `Retry-After` header is present on a 429/503. */
+const DEFAULT_PROVIDER_COOLDOWN_MS = 20_000
 
 // o-series reasoning tokens count against the completion budget; a too-small cap
 // truncates the structured answer into a parse failure. Default generous; callers
@@ -120,6 +125,10 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     })
     if (!res.ok) {
       const text = await res.text().catch(() => "")
+      if (res.status === 429 || res.status === 503) {
+        const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"), Date.now(), DEFAULT_PROVIDER_COOLDOWN_MS)
+        throw new ProviderRateLimitError(`OpenRouter HTTP ${res.status}: ${text.slice(0, 500)}`, retryAfterMs)
+      }
       throw new Error(`OpenRouter HTTP ${res.status}: ${text.slice(0, 500)}`)
     }
     if (args.tools && args.tools.length > 0) {

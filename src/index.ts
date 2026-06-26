@@ -66,6 +66,7 @@ import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
+import { admitTenant, releaseTenant, MAX_DEFERS } from "@/src/features/tenancy"
 
 // SIG-318 / SIG-376 (Tier-1 8/8): entry-module decomposition. The webhook
 // handlers + the queue dispatcher + the shared mention/capture layer were
@@ -442,14 +443,70 @@ export default {
    */
   async queue(batch: MessageBatch<JobMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
     const MAX_RETRIES = 3
+    // SIG-455: per-tenant fairness mode. "off" disables admission entirely;
+    // "shadow" measures the desired decision but always proceeds; "enforce"
+    // actually defers denied jobs. Default off (the binding/flags ship dark).
+    const mode =
+      env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
+    const cap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10) || 2
     for (const message of batch.messages) {
+      const job = message.body
+      // Fairness only applies to DO-routed pr-review runs: a string runId is
+      // required (slash reruns omit it and bypass fairness — don't even
+      // acquire) and installationId is the tenant key.
+      const fairnessEligible =
+        mode !== "off" &&
+        job.type === "pr-review" &&
+        typeof job.installationId === "number" &&
+        typeof job.runId === "string"
+      let lease: { tenantId: string; leaseId: string } | undefined
+      if (fairnessEligible && job.type === "pr-review" && job.runId !== undefined) {
+        // Anti-starvation: once a job has been deferred MAX_DEFERS times, skip
+        // admission entirely and let it run.
+        const bypass = typeof job.deferCount === "number" && job.deferCount >= MAX_DEFERS
+        if (!bypass) {
+          const tenantId = String(job.installationId)
+          const leaseId = crypto.randomUUID()
+          const res = await admitTenant({ env, tenantId, leaseId, cap })
+          console.log(
+            JSON.stringify({
+              event: "fairness-decision",
+              tenantId,
+              leaseId,
+              desired: res.granted ? "GRANT" : "DENY",
+              mode,
+            }),
+          )
+          if (!res.granted && mode === "enforce") {
+            // Re-arm the per-PR DO + schedule a fresh re-send. NEVER
+            // message.retry() — that burns the Cloudflare retry budget so the
+            // review is dropped. runId is guaranteed by fairnessEligible.
+            try {
+              const id = env.PR_REVIEW_RUN.idFromName(`${job.owner}/${job.repo}#${job.prNumber}`)
+              const deferRes = await env.PR_REVIEW_RUN.get(id).fetch("https://do.internal/defer", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ runId: job.runId, backoffMs: res.retryAfterMs }),
+              })
+              if (deferRes.ok) {
+                message.ack()
+                continue
+              }
+              // /defer non-2xx → FAIL-OPEN: fall through and run the review.
+            } catch {
+              // /defer threw → FAIL-OPEN: fall through and run the review.
+            }
+          }
+          if (res.granted) lease = { tenantId, leaseId }
+        }
+      }
       try {
-        await dispatchJob(message.body, env, (promise) => ctx.waitUntil(promise))
+        await dispatchJob(job, env, (promise) => ctx.waitUntil(promise))
         message.ack()
       } catch (error) {
         const isFinalAttempt = message.attempts > MAX_RETRIES
         console.error(isFinalAttempt ? "queue job dropped (max retries)" : "queue job failed (will retry)", {
-          type: message.body.type,
+          type: job.type,
           attempts: message.attempts,
           maxRetries: MAX_RETRIES,
           error: String(error),
@@ -459,6 +516,8 @@ export default {
         } else {
           message.retry()
         }
+      } finally {
+        if (lease) await releaseTenant(env, lease.tenantId, lease.leaseId)
       }
     }
   },

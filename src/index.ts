@@ -67,6 +67,13 @@ import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig } from "@/src/features/tenancy"
+import { getProviderCooldownRemainingMs } from "@/src/shared/adapters/model/provider-cooldown-client"
+import {
+  resolveCooldownMode,
+  decorrelatedJitterMs,
+  JITTER_BASE_MS,
+  JITTER_CAP_MS,
+} from "@/src/lib/ensemble/domain/backpressure"
 
 // SIG-318 / SIG-376 (Tier-1 8/8): entry-module decomposition. The webhook
 // handlers + the queue dispatcher + the shared mention/capture layer were
@@ -449,6 +456,51 @@ export default {
     const { mode, cap } = resolveFairnessConfig(env)
     for (const message of batch.messages) {
       const job = message.body
+      // SIG-455 Task 6 (PR B): provider-cooldown read-before-fire. For eligible
+      // pr-review runs, check the provider backpressure cooldown BEFORE the fairness
+      // gate so a cooling-down provider short-circuits cheaply (no lease acquired).
+      // shadow/off → skip entirely. Fail-open: remaining=0 on any fault → fall through.
+      if (job.type === "pr-review" && typeof job.installationId === "number" && typeof job.runId === "string") {
+        const cooldownMode = resolveCooldownMode(env)
+        if (cooldownMode === "enforce") {
+          let remaining = 0
+          try {
+            remaining = await getProviderCooldownRemainingMs(env) // fail-open → 0
+          } catch {
+            // fail-open: treat as no cooldown
+          }
+          if (remaining > 0) {
+            // Anti-permanent-block: once a job has been deferred MAX_DEFERS times, let it run.
+            const bypass = typeof job.deferCount === "number" && job.deferCount >= MAX_DEFERS
+            if (!bypass) {
+              const backoffMs = remaining + decorrelatedJitterMs(JITTER_BASE_MS, JITTER_CAP_MS, Math.random())
+              try {
+                const id = env.PR_REVIEW_RUN.idFromName(`${job.owner}/${job.repo}#${job.prNumber}`)
+                const deferRes = await env.PR_REVIEW_RUN.get(id).fetch("https://do.internal/defer", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ runId: job.runId, backoffMs }),
+                })
+                if (deferRes.ok) {
+                  console.log(
+                    JSON.stringify({
+                      event: "provider-cooldown-honored",
+                      surface: "queue",
+                      remainingMs: remaining,
+                      backoffMs,
+                    }),
+                  )
+                  message.ack()
+                  continue
+                }
+                // non-2xx → FAIL-OPEN: fall through, run now
+              } catch {
+                // defer threw → FAIL-OPEN: fall through
+              }
+            }
+          }
+        }
+      }
       // Fairness only applies to DO-routed pr-review runs: a string runId is
       // required (slash reruns omit it and bypass fairness — don't even
       // acquire) and installationId is the tenant key.

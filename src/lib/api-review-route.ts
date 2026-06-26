@@ -40,6 +40,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireBearerToken } from "./auth-bearer"
+import { admitTenant, releaseTenant } from "@/src/features/tenancy"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
@@ -184,12 +185,22 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  // Per-mode: cheap validation → daily ceiling → build the engine args. Both modes are
-  // dryRun (a CLI review returns JSON, never posts) + forceFullCoverage (single-shot:
-  // avoid the SIG-459 empty-delta skip). Cheap validation (400/413/422/503) happens
-  // BEFORE the ceiling so it doesn't consume budget; the ceiling runs BEFORE any model
-  // spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a probe
-  // that mints an installation token + hits GitHub still counts against the ceiling.
+  // SIG-455: per-tenant fairness gate — same primitive as the webhook queue path (Task 5).
+  // "off" disables admission entirely; "shadow" measures but never blocks; "enforce" returns
+  // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
+  const fairnessMode =
+    env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
+  const fairnessCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10) || 2
+  // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
+  let lease: { tenantId: string; leaseId: string } | undefined
+
+  // Per-mode: cheap validation → daily ceiling → fairness gate → build the engine args.
+  // Both modes are dryRun (a CLI review returns JSON, never posts) + forceFullCoverage
+  // (single-shot: avoid the SIG-459 empty-delta skip). Cheap validation (400/413/422/503)
+  // happens BEFORE the ceiling so it doesn't consume budget; the ceiling runs BEFORE any
+  // model spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a
+  // probe that mints an installation token + hits GitHub still counts against the ceiling.
+  // The fairness gate runs AFTER the ceiling (both guards are independent).
   let args: EnsembleHandlerArgs
   // The diff we already have on each path → the per-finding code-context slice for the
   // `--rich` panel (display evidence; attached to the result below, never gates anything).
@@ -199,6 +210,31 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
       return json({ error: "diff_too_large", detail: `diff exceeds ${MAX_DIFF_BYTES} bytes` }, 413)
     }
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    // Fairness gate for Mode A: tenantId is the asserted owner/repo (lowercased).
+    if (fairnessMode !== "off") {
+      const tenantId = `${parsed.owner}/${parsed.repo}`.toLowerCase()
+      const leaseId = crypto.randomUUID()
+      const admit = await admitTenant({ env, tenantId, leaseId, cap: fairnessCap })
+      console.log(
+        JSON.stringify({
+          event: "fairness-decision",
+          surface: "v1review",
+          tenantId,
+          desired: admit.granted ? "GRANT" : "DENY",
+          mode: fairnessMode,
+        }),
+      )
+      if (!admit.granted && fairnessMode === "enforce") {
+        return new Response(JSON.stringify({ error: "tenant_busy" }), {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": String(Math.ceil(admit.retryAfterMs / 1000)),
+          },
+        })
+      }
+      if (admit.granted) lease = { tenantId, leaseId }
+    }
     contextDiff = parsed.diff
     args = {
       owner: parsed.owner,
@@ -230,6 +266,33 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
     // GitHub counts against the budget (no free installation enumeration).
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    // Fairness gate for Mode B: tenantId is the resolved installationId. Gate AFTER
+    // resolveInstallation + ceiling, BEFORE buildClient (avoids spending the GitHub
+    // App token budget on an over-cap request).
+    if (fairnessMode !== "off") {
+      const tenantId = String(lookup.installationId)
+      const leaseId = crypto.randomUUID()
+      const admit = await admitTenant({ env, tenantId, leaseId, cap: fairnessCap })
+      console.log(
+        JSON.stringify({
+          event: "fairness-decision",
+          surface: "v1review",
+          tenantId,
+          desired: admit.granted ? "GRANT" : "DENY",
+          mode: fairnessMode,
+        }),
+      )
+      if (!admit.granted && fairnessMode === "enforce") {
+        return new Response(JSON.stringify({ error: "tenant_busy" }), {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": String(Math.ceil(admit.retryAfterMs / 1000)),
+          },
+        })
+      }
+      if (admit.granted) lease = { tenantId, leaseId }
+    }
     const groundedEnv = groundedReviewEnv(env) // REAL bindings (retrieval live), review-memory off, no repoId.
     let client: GitHubClient
     let headSha: string
@@ -267,6 +330,10 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     // The orchestrator normally catches internally and returns status "errored";
     // a thrown error is still an engine failure → 500, never a clean pass.
     return json({ error: "review_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
+  } finally {
+    // Release the per-tenant slot on both success and throw so the semaphore is
+    // never leaked by an ensemble error. releaseTenant swallows all errors internally.
+    if (lease) await releaseTenant(env, lease.tenantId, lease.leaseId)
   }
 
   // RECALL-SAFETY: an engine failure (errored OR a no-verdict bail like a total model

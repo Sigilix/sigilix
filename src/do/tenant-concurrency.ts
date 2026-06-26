@@ -50,7 +50,7 @@ export class TenantConcurrencyDO extends DurableObject<Env> {
     }
     const { leaseId } = body as { leaseId: unknown }
     if (typeof leaseId !== "string") {
-      return json(400, { error: "leaseId (string) and cap (number) required" })
+      return json(400, { error: "leaseId (string) required" })
     }
     const state = release(await this.load(), leaseId)
     await this.ctx.storage.put(STATE_KEY, state)

@@ -253,11 +253,14 @@ new_sqlite_classes = ["GraphExpansionMetricsDO"]
 tag = "sig-107-tool-metrics-v1"
 new_sqlite_classes = ["RunnerToolMetricsDO"]
 
-# SIG-455: TenantConcurrencyDO uses KV-backed DO storage (new_classes) — v1
-# access pattern is point-lookup; SQLite buys nothing here. Forward-only.
+# SIG-455: TenantConcurrencyDO — new DO classes must be SQLite-backed
+# (new_sqlite_classes); Cloudflare no longer allows newly-created KV-backed DO
+# namespaces (only the grandfathered PrReviewRunDO above uses new_classes). The
+# classic ctx.storage.get/put/setAlarm API the DO uses is identical on SQLite-
+# backed DOs, so no DO code changes. Forward-only.
 [[migrations]]
 tag = "sig-455-tenant-concurrency-v1"
-new_classes = ["TenantConcurrencyDO"]
+new_sqlite_classes = ["TenantConcurrencyDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

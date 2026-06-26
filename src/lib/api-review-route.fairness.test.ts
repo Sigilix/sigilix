@@ -28,6 +28,7 @@ vi.mock("@/src/features/tenancy", async (importActual) => {
     ...(actual as object),
     admitTenant: vi.fn(),
     releaseTenant: vi.fn(),
+    checkShadowQuota: vi.fn(async () => {}),
   }
 })
 
@@ -76,6 +77,9 @@ function kvMock(getVal: string | null = null): Env["OPENCLAW_STATE"] {
   } as unknown as Env["OPENCLAW_STATE"]
 }
 
+/** Noop ExecutionContext stub — ctx.waitUntil is a no-op spy for these tests. */
+const noopCtx = { waitUntil: vi.fn() } as unknown as ExecutionContext
+
 beforeEach(() => {
   mockEngine.mockReset()
   mockAdmit.mockReset()
@@ -92,7 +96,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode A (diff)", () => {
   it("enforce + would-deny → still runs; admitTenant NOT called (semaphore bypassed for Mode A)", async () => {
     mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
     const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
+    const res = await handleReviewApiRoute(req(diffBody), e, noopCtx)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
     expect(mockAdmit).not.toHaveBeenCalled()
@@ -101,14 +105,14 @@ describe("handleReviewApiRoute — tenant fairness, Mode A (diff)", () => {
 
   it("shadow mode → admitTenant NOT called (Mode A is semaphore-free in all fairness modes)", async () => {
     const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "shadow" })
-    await handleReviewApiRoute(req(diffBody), e)
+    await handleReviewApiRoute(req(diffBody), e, noopCtx)
     expect(mockAdmit).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
   })
 
   it("mode=off → admitTenant NOT called", async () => {
     const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "off" })
-    await handleReviewApiRoute(req(diffBody), e)
+    await handleReviewApiRoute(req(diffBody), e, noopCtx)
     expect(mockAdmit).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
   })
@@ -118,7 +122,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
   it("enforce + DENY → 429 with Retry-After, ensemble NOT called", async () => {
     mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 10000 })
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(429)
     expect(res.headers.get("retry-after")).toBe("10")
     const body = (await res.json()) as { error?: string }
@@ -129,7 +133,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
   it("enforce + GRANT → ensemble runs with installationId as tenantId", async () => {
     mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
     // tenantId for Mode B is the resolved installationId ("42" from the map)
@@ -139,7 +143,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
   it("shadow + DENY → ensemble STILL runs (measurement only)", async () => {
     mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "shadow" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
   })
@@ -151,7 +155,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
     mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
     vi.mocked(buildClient).mockRejectedValueOnce(new Error("github down"))
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(502)
     const body = (await res.json()) as { error?: string }
     expect(body.error).toBe("pr_unavailable")
@@ -162,7 +166,7 @@ describe("handleReviewApiRoute — tenant fairness, Mode B (grounded)", () => {
 
   it("mode=off → admitTenant never called", async () => {
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "off" })
-    await handleReviewApiRoute(req(groundedBody), e)
+    await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(mockAdmit).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
   })
@@ -172,7 +176,7 @@ describe("handleReviewApiRoute — daily ceiling and fairness are independent", 
   it("daily ceiling fires first in Mode A — 429 daily_limit_exceeded, admitTenant never called", async () => {
     // KV returning "200" triggers the global daily ceiling before the fairness gate
     const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce", OPENCLAW_STATE: kvMock("200") })
-    const res = await handleReviewApiRoute(req(diffBody), e)
+    const res = await handleReviewApiRoute(req(diffBody), e, noopCtx)
     expect(res.status).toBe(429)
     const body = (await res.json()) as { error?: string }
     expect(body.error).toBe("daily_limit_exceeded")
@@ -181,7 +185,7 @@ describe("handleReviewApiRoute — daily ceiling and fairness are independent", 
 
   it("daily ceiling fires first in Mode B — 429 daily_limit_exceeded, admitTenant never called", async () => {
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce", OPENCLAW_STATE: kvMock("200") })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(429)
     const body = (await res.json()) as { error?: string }
     expect(body.error).toBe("daily_limit_exceeded")
@@ -193,7 +197,7 @@ describe("handleReviewApiRoute — daily ceiling and fairness are independent", 
     // is never called and the error is daily_limit_exceeded, not tenant_busy.
     mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
     const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce", OPENCLAW_STATE: kvMock("200") })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(429)
     expect(((await res.json()) as { error?: string }).error).toBe("daily_limit_exceeded")
     expect(mockAdmit).not.toHaveBeenCalled()
@@ -234,7 +238,7 @@ describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
       SIGILIX_TENANT_CONCURRENCY_CAP: "2",
       SIGILIX_PLATFORM_DB: db,
     })
-    await handleReviewApiRoute(req(groundedBody), e)
+    await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(mockAdmit).toHaveBeenCalledTimes(1)
     expect(mockAdmit.mock.calls[0]?.[0]?.cap).toBe(9)
@@ -250,7 +254,7 @@ describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
       SIGILIX_TENANT_CONCURRENCY_CAP: "5",
       SIGILIX_PLATFORM_DB: db,
     })
-    await handleReviewApiRoute(req(groundedBody), e)
+    await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(mockAdmit).toHaveBeenCalledTimes(1)
     expect(mockAdmit.mock.calls[0]?.[0]?.cap).toBe(5)

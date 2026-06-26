@@ -902,6 +902,12 @@ export interface Env {
   //   "enforce" — requests are held/rejected when a provider is in cooldown.
   SIGILIX_PROVIDER_COOLDOWN_MODE?: string
 
+  // SIG-543: per-tenant quota enforcement mode.
+  //   "shadow"  (default / unset / unknown) — quota state tracked + telemetered, no blocking.
+  //   "off"     — quota logic fully bypassed.
+  //   "enforce" — reviews are rejected when a tenant exceeds their daily budget.
+  SIGILIX_TENANT_QUOTA_MODE?: string
+
   // SIG-343 PR C: platform DB (tenant/repo/usage_ledger) — optional so a deploy that
   // hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database

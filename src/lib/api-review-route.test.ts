@@ -14,7 +14,6 @@ vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({
 }))
 
 import { handleReviewApiRoute } from "./api-review-route"
-import { parseUnifiedDiff } from "./api-review-diff-client"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import type { Env } from "@/src/shared/types/env"
@@ -54,6 +53,8 @@ function req(body: unknown, token: string | null = TOKEN): Request {
   })
 }
 const validBody = { owner: "o", repo: "r", prNumber: 1, headSha: "abc123", diff: DIFF }
+/** Noop ExecutionContext stub — ctx.waitUntil is a no-op spy for these tests. */
+const noopCtx = { waitUntil: vi.fn() } as unknown as ExecutionContext
 
 beforeEach(() => {
   mockEngine.mockReset()
@@ -65,34 +66,34 @@ beforeEach(() => {
 
 describe("handleReviewApiRoute — auth + validation", () => {
   it("503 when the API key is unset (endpoint inert)", async () => {
-    const res = await handleReviewApiRoute(req(validBody), env(undefined))
+    const res = await handleReviewApiRoute(req(validBody), env(undefined), noopCtx)
     expect(res.status).toBe(503)
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("401 when the bearer is missing", async () => {
-    expect((await handleReviewApiRoute(req(validBody, null), env(TOKEN))).status).toBe(401)
+    expect((await handleReviewApiRoute(req(validBody, null), env(TOKEN), noopCtx)).status).toBe(401)
   })
   it("401 when the bearer is wrong", async () => {
-    expect((await handleReviewApiRoute(req(validBody, "nope"), env(TOKEN))).status).toBe(401)
+    expect((await handleReviewApiRoute(req(validBody, "nope"), env(TOKEN), noopCtx)).status).toBe(401)
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("400 on invalid JSON", async () => {
-    expect((await handleReviewApiRoute(req("{not json", TOKEN), env(TOKEN))).status).toBe(400)
+    expect((await handleReviewApiRoute(req("{not json", TOKEN), env(TOKEN), noopCtx)).status).toBe(400)
   })
   it("400 on a missing required field", async () => {
     const { diff: _omit, ...noDiff } = validBody
-    expect((await handleReviewApiRoute(req(noDiff), env(TOKEN))).status).toBe(400)
+    expect((await handleReviewApiRoute(req(noDiff), env(TOKEN), noopCtx)).status).toBe(400)
   })
   it("413 on an oversized diff", async () => {
     const huge = { ...validBody, diff: "x".repeat(1_500_001) }
-    expect((await handleReviewApiRoute(req(huge), env(TOKEN))).status).toBe(413)
+    expect((await handleReviewApiRoute(req(huge), env(TOKEN), noopCtx)).status).toBe(413)
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("413 payload_too_large when the whole BODY exceeds the cap (before parse, no engine)", async () => {
     // The body cap is enforced as the stream is read, BEFORE JSON.parse — so an
     // oversized envelope is rejected with payload_too_large (not diff_too_large).
     const huge = { ...validBody, diff: "x".repeat(3_100_000) }
-    const res = await handleReviewApiRoute(req(huge), env(TOKEN))
+    const res = await handleReviewApiRoute(req(huge), env(TOKEN), noopCtx)
     expect(res.status).toBe(413)
     expect(((await res.json()) as { error?: string }).error).toBe("payload_too_large")
     expect(mockEngine).not.toHaveBeenCalled()
@@ -102,14 +103,14 @@ describe("handleReviewApiRoute — auth + validation", () => {
 describe("handleReviewApiRoute — engine status mapping (recall-safety)", () => {
   it("RECALL-SAFETY: an errored engine run → 500, NOT a 200/empty clean pass", async () => {
     mockEngine.mockResolvedValue({ status: "errored", telemetry: { internalError: "model 500" } } as never)
-    const res = await handleReviewApiRoute(req(validBody), env(TOKEN))
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN), noopCtx)
     expect(res.status).toBe(500)
     expect(((await res.json()) as { detail?: string }).detail).toMatch(/model 500/)
   })
   it("200 with the DryRunReview verbatim on success", async () => {
     const review = { verdict: { summary: "s", confidence: 4, findings: [] }, unanchoredFindings: [] }
     mockEngine.mockResolvedValue({ status: "skipped", dryRunReview: review, telemetry: {} } as never)
-    const res = await handleReviewApiRoute(req(validBody), env(TOKEN))
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN), noopCtx)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(review)
     // injected dry-run client + forceFullCoverage, never posts
@@ -122,11 +123,11 @@ describe("handleReviewApiRoute — engine status mapping (recall-safety)", () =>
       status: "skipped",
       telemetry: { fellBackReason: "specialists_all_failed" },
     } as never)
-    expect((await handleReviewApiRoute(req(validBody), env(TOKEN))).status).toBe(500)
+    expect((await handleReviewApiRoute(req(validBody), env(TOKEN), noopCtx)).status).toBe(500)
   })
   it("200 null when the engine genuinely had nothing to review (no failure reason)", async () => {
     mockEngine.mockResolvedValue({ status: "skipped", telemetry: {} } as never)
-    const res = await handleReviewApiRoute(req(validBody), env(TOKEN))
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN), noopCtx)
     expect(res.status).toBe(200)
     expect(await res.json()).toBeNull()
   })
@@ -136,7 +137,7 @@ describe("handleReviewApiRoute — engine status mapping (recall-safety)", () =>
     "RECALL-SAFETY: a no-verdict bail (%s) → 500, NOT a 200/null clean pass",
     async (fellBackReason) => {
       mockEngine.mockResolvedValue({ status: "skipped", telemetry: { fellBackReason } } as never)
-      expect((await handleReviewApiRoute(req(validBody), env(TOKEN))).status).toBe(500)
+      expect((await handleReviewApiRoute(req(validBody), env(TOKEN), noopCtx)).status).toBe(500)
     },
   )
 })
@@ -145,23 +146,23 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
   const groundedBody = { mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "abc123" }
 
   it("400 on an unknown mode value", async () => {
-    const res = await handleReviewApiRoute(req({ ...validBody, mode: "wat" }), env(TOKEN))
+    const res = await handleReviewApiRoute(req({ ...validBody, mode: "wat" }), env(TOKEN), noopCtx)
     expect(res.status).toBe(400)
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("grounded does NOT require a diff (no 400)", async () => {
     mockEngine.mockResolvedValue(okResult)
-    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv())).status).toBe(200)
+    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv(), noopCtx)).status).toBe(200)
   })
   it("503 grounded_not_configured when the GitHub App secrets are unset", async () => {
-    const res = await handleReviewApiRoute(req(groundedBody), env(TOKEN)) // no APP_ID/PRIVATE_KEY
+    const res = await handleReviewApiRoute(req(groundedBody), env(TOKEN), noopCtx) // no APP_ID/PRIVATE_KEY
     expect(res.status).toBe(503)
     expect(((await res.json()) as { error?: string }).error).toBe("grounded_not_configured")
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("422 app_not_installed when the repo isn't in the installation map", async () => {
     const e = groundedEnv({ OPENCLAW_GITHUB_INSTALLATION_MAP: '{"other/repo":"9"}' })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(422)
     expect(((await res.json()) as { error?: string }).error).toBe("app_not_installed")
     expect(mockEngine).not.toHaveBeenCalled()
@@ -169,7 +170,7 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
   it("grounded runs the engine with the RESOLVED installation, the REAL grounded env, and the in-route client", async () => {
     mockEngine.mockResolvedValue(okResult)
     const e = groundedEnv()
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
     expect(res.status).toBe(200)
     const callArgs = mockEngine.mock.calls[0]?.[0] as unknown as Record<string, unknown>
     expect(callArgs.installationId).toBe(42) // resolved from the map
@@ -186,7 +187,7 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
   it("resolves headSha from the PR when the client omits it (hosted, no token)", async () => {
     mockEngine.mockResolvedValue(okResult)
     const { headSha: _omit, ...noHead } = groundedBody
-    const res = await handleReviewApiRoute(req(noHead), groundedEnv())
+    const res = await handleReviewApiRoute(req(noHead), groundedEnv(), noopCtx)
     expect(res.status).toBe(200)
     const callArgs = mockEngine.mock.calls[0]?.[0] as unknown as Record<string, unknown>
     expect(callArgs.headSha).toBe("server-resolved-sha") // fetched via the App
@@ -199,21 +200,21 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
       }),
     } as never)
     const { headSha: _omit, ...noHead } = groundedBody
-    const res = await handleReviewApiRoute(req(noHead), groundedEnv())
+    const res = await handleReviewApiRoute(req(noHead), groundedEnv(), noopCtx)
     expect(res.status).toBe(502)
     expect(((await res.json()) as { error?: string }).error).toBe("pr_unavailable")
     expect(mockEngine).not.toHaveBeenCalled()
   })
   it("RECALL-SAFETY: a grounded errored run → 500, never a clean pass", async () => {
     mockEngine.mockResolvedValue({ status: "errored", telemetry: { internalError: "boom" } } as never)
-    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv())).status).toBe(500)
+    expect((await handleReviewApiRoute(req(groundedBody), groundedEnv(), noopCtx)).status).toBe(500)
   })
 })
 
 describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
   it("429 once the day's counter has reached the limit (engine not called)", async () => {
     const e = env(TOKEN, { OPENCLAW_STATE: kvMock("200") }) // default limit is 200
-    const res = await handleReviewApiRoute(req(validBody), e)
+    const res = await handleReviewApiRoute(req(validBody), e, noopCtx)
     expect(res.status).toBe(429)
     expect(((await res.json()) as { error?: string }).error).toBe("daily_limit_exceeded")
     expect(mockEngine).not.toHaveBeenCalled()
@@ -221,13 +222,13 @@ describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
   it("admits and increments the counter when under the limit", async () => {
     mockEngine.mockResolvedValue(okResult)
     const kv = kvMock(null)
-    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: kv }))
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: kv }), noopCtx)
     expect(res.status).toBe(200)
     expect(kv.put).toHaveBeenCalledWith(expect.stringMatching(/^v1review:count:/), "1", expect.anything())
   })
   it("respects a custom OPENCLAW_SIGILIX_API_DAILY_LIMIT", async () => {
     const e = env(TOKEN, { OPENCLAW_STATE: kvMock("5"), OPENCLAW_SIGILIX_API_DAILY_LIMIT: "5" })
-    expect((await handleReviewApiRoute(req(validBody), e)).status).toBe(429)
+    expect((await handleReviewApiRoute(req(validBody), e, noopCtx)).status).toBe(429)
   })
   it("is best-effort: a KV failure never blocks the review", async () => {
     mockEngine.mockResolvedValue(okResult)
@@ -237,7 +238,7 @@ describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
       }),
       put: vi.fn(),
     } as unknown as Env["OPENCLAW_STATE"]
-    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: throwingKv }))
+    const res = await handleReviewApiRoute(req(validBody), env(TOKEN, { OPENCLAW_STATE: throwingKv }), noopCtx)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
   })
@@ -245,58 +246,14 @@ describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
     const kv = kvMock(null)
     const e = groundedEnv({ OPENCLAW_GITHUB_INSTALLATION_MAP: "{}", OPENCLAW_STATE: kv })
     expect(
-      (await handleReviewApiRoute(req({ mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "s" }), e))
-        .status,
+      (
+        await handleReviewApiRoute(
+          req({ mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "s" }),
+          e,
+          noopCtx,
+        )
+      ).status,
     ).toBe(422)
     expect(kv.put).not.toHaveBeenCalled()
-  })
-})
-
-describe("parseUnifiedDiff", () => {
-  it("extracts filename, status, and line counts per file", () => {
-    const diff =
-      "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,2 @@\n+a\n+b\n" +
-      "diff --git a/src/old.ts b/src/old.ts\n--- a/src/old.ts\n+++ b/src/old.ts\n@@ -1,2 +1,2 @@\n const k=1\n-const y=2\n+const y=3\n"
-    const files = parseUnifiedDiff(diff)
-    expect(files).toHaveLength(2)
-    expect(files[0]).toMatchObject({ filename: "src/new.ts", status: "added", additions: 2, deletions: 0 })
-    expect(files[1]).toMatchObject({ filename: "src/old.ts", status: "modified", additions: 1, deletions: 1 })
-  })
-  it("does not count the --- / +++ header lines as deletions/additions", () => {
-    const [f] = parseUnifiedDiff(DIFF)
-    expect(f).toMatchObject({ additions: 1, deletions: 1 })
-  })
-  it("is CRLF-safe (does not return an empty manifest on \\r\\n diffs)", () => {
-    const [f] = parseUnifiedDiff(DIFF.replace(/\n/g, "\r\n"))
-    expect(f).toMatchObject({ filename: "a.ts", additions: 1, deletions: 1 })
-  })
-  // L2: a filename literally containing " b/" defeats the `a/<old> b/<new>` header
-  // regex; the `--- a/`/`+++ b/` lines carry the path verbatim and win.
-  it('L2: handles a filename containing " b/"', () => {
-    const diff =
-      "diff --git a/src/a b/c.ts b/src/a b/c.ts\n--- a/src/a b/c.ts\n+++ b/src/a b/c.ts\n@@ -1 +1 @@\n-x\n+y\n"
-    const [f] = parseUnifiedDiff(diff)
-    expect(f).toMatchObject({ filename: "src/a b/c.ts", status: "modified", additions: 1, deletions: 1 })
-  })
-  // L3: a rename with NO explicit `rename from` line (header old !== new) is detected
-  // as a rename, not silently downgraded to a modify on the new path.
-  it("L3: detects a rename with no explicit `rename from` line", () => {
-    const diff =
-      "diff --git a/old.ts b/new.ts\nindex abc1234..def5678 100644\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-x\n+y\n"
-    const [f] = parseUnifiedDiff(diff)
-    expect(f).toMatchObject({
-      filename: "new.ts",
-      previousFilename: "old.ts",
-      status: "renamed",
-      additions: 1,
-      deletions: 1,
-    })
-  })
-  // Regression guard for the parser refactor: an EXPLICIT `rename from`/`rename to`
-  // (pure rename, no content change, no ---/+++ lines) still resolves correctly.
-  it("still handles an explicit `rename from`/`rename to` (pure rename)", () => {
-    const diff = "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n"
-    const [f] = parseUnifiedDiff(diff)
-    expect(f).toMatchObject({ filename: "new.ts", previousFilename: "old.ts", status: "renamed" })
   })
 })

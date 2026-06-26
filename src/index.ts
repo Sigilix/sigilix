@@ -45,6 +45,7 @@ import { handleGraphMetricsRoute } from "@/src/lib/metrics-graph-route"
 import { handleGraphExpansionMetricsRoute } from "@/src/lib/metrics-graph-expansion-route"
 import { handleGraphExpansionAbMetricsRoute } from "@/src/lib/metrics-graph-expansion-ab-route"
 import { handleFpRateMetricsRoute } from "@/src/lib/metrics-fp-rate-route"
+import { handleTenantUsageMetricsRoute } from "@/src/lib/metrics-tenant-usage-route"
 import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
 import {
   handleAdminIndexRoute,
@@ -66,7 +67,15 @@ import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
-import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig, resolveTenantCap } from "@/src/features/tenancy"
+import {
+  admitTenant,
+  releaseTenant,
+  MAX_DEFERS,
+  resolveFairnessConfig,
+  resolveTenantCap,
+  checkShadowQuota,
+  resolveQuotaMode,
+} from "@/src/features/tenancy"
 import { getProviderCooldownRemainingMs } from "@/src/shared/adapters/model/provider-cooldown-client"
 import {
   resolveCooldownMode,
@@ -206,6 +215,11 @@ export default {
       return handleFpRateMetricsRoute(request, env)
     }
 
+    // SIG-543 PR D Task 5: authenticated per-tenant usage rollup from D1.
+    if (request.method === "GET" && url.pathname === "/metrics/tenant-usage") {
+      return handleTenantUsageMetricsRoute(request, env)
+    }
+
     // SIG-184 PR 5b: authenticated read of rolling runner-evidence presence
     // telemetry (adoption + the verified/pending/absent breakdown).
     if (request.method === "GET" && url.pathname === "/metrics/runner-evidence") {
@@ -235,7 +249,7 @@ export default {
     // engine server-side (dryRun → nothing posted) + returns the DryRunReview.
     // Inert (503) until OPENCLAW_SIGILIX_API_KEY is set.
     if (request.method === "POST" && url.pathname === "/v1/review") {
-      return handleReviewApiRoute(request, env)
+      return handleReviewApiRoute(request, env, ctx)
     }
 
     // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},
@@ -454,6 +468,7 @@ export default {
     // "shadow" measures the desired decision but always proceeds; "enforce"
     // actually defers denied jobs. Default off (the binding/flags ship dark).
     const { mode } = resolveFairnessConfig(env)
+    const quotaMode = resolveQuotaMode(env)
     for (const message of batch.messages) {
       const job = message.body
       // SIG-455 Task 6 (PR B): provider-cooldown read-before-fire. For eligible
@@ -554,6 +569,16 @@ export default {
           }
           if (res.granted) lease = { tenantId, leaseId }
         }
+      }
+      // SIG-543: shadow quota measurement. Independent of fairness (own gate, no
+      // runId requirement). Awaited directly per the queue-consumer rule: a Queue
+      // consumer's ctx.waitUntil does NOT reliably extend the isolate lifetime
+      // (see reference_cloudflare_queue_consumer_waituntil) — use await instead.
+      // checkShadowQuota is fail-open (never throws) and does fast indexed D1
+      // reads; awaiting it adds negligible latency to a background job.
+      // Phase 1 never refuses — checkShadowQuota only logs.
+      if (job.type === "pr-review" && typeof job.installationId === "number" && quotaMode !== "off") {
+        await checkShadowQuota(env, job.installationId)
       }
       try {
         await dispatchJob(job, env, (promise) => ctx.waitUntil(promise))

@@ -6,8 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
-import { upsertTenantAndRepo, readTenantCap } from "@/src/features/tenancy/adapters/d1-tenant-store"
-import { resolveTenantCap } from "@/src/features/tenancy/adapters/resolve-tenant-cap"
+import { upsertTenantAndRepo, readTenantConfig } from "@/src/features/tenancy/adapters/d1-tenant-store"
 import type { Env } from "@/src/shared/types/env"
 
 const MIGRATION_SQL = readFileSync(
@@ -214,7 +213,7 @@ describe("upsertTenantAndRepo", () => {
   })
 })
 
-describe("readTenantCap", () => {
+describe("readTenantConfig", () => {
   let db: D1Database
 
   beforeEach(async () => {
@@ -222,58 +221,44 @@ describe("readTenantCap", () => {
     await db.exec(MIGRATION_SQL)
   })
 
-  it("returns null for a freshly-registered tenant (concurrency_cap not set)", async () => {
-    await upsertTenantAndRepo(makeEnv(db), {
-      installationId: 2,
-      repoId: 200,
-      fullName: "acme/core",
-      nowIso: "2026-01-01T00:00:00Z",
-    })
-
-    const cap = await readTenantCap(makeEnv(db), 2)
-    expect(cap).toBeNull()
-  })
-
-  it("env fallback: freshly-registered tenant (cap=NULL) → resolveTenantCap returns SIGILIX_TENANT_CONCURRENCY_CAP, not 2", async () => {
-    await upsertTenantAndRepo(makeEnv(db), {
-      installationId: 20,
-      repoId: 2000,
-      fullName: "acme/fallback-test",
-      nowIso: "2026-01-01T00:00:00Z",
-    })
-
-    const env = {
-      SIGILIX_PLATFORM_DB: db,
-      SIGILIX_TENANT_CONCURRENCY_CAP: "5",
-    } as unknown as Env
-
-    const effective = await resolveTenantCap(env, 20)
-    expect(effective).toBe(5) // env cap, NOT 2
-  })
-
-  it("returns an operator-set cap accurately", async () => {
+  it("returns {cap, dailyBudget} for a tenant with both fields set", async () => {
     await upsertTenantAndRepo(makeEnv(db), {
       installationId: 3,
       repoId: 300,
       fullName: "acme/api",
       nowIso: "2026-01-01T00:00:00Z",
     })
-    await db.prepare("UPDATE tenant SET concurrency_cap = ? WHERE installation_id = ?").bind(8, 3).run()
+    await db
+      .prepare("UPDATE tenant SET concurrency_cap = ?, daily_budget = ? WHERE installation_id = ?")
+      .bind(8, 1000, 3)
+      .run()
 
-    const cap = await readTenantCap(makeEnv(db), 3)
-    expect(cap).toBe(8)
+    const cfg = await readTenantConfig(makeEnv(db), 3)
+    expect(cfg).toEqual({ cap: 8, dailyBudget: 1000 })
   })
 
-  it("returns null for an unknown tenant", async () => {
-    const cap = await readTenantCap(makeEnv(db), 99999)
-    expect(cap).toBeNull()
+  it("returns {cap: null, dailyBudget: null} for a freshly-registered tenant (columns are NULL)", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 4,
+      repoId: 400,
+      fullName: "acme/fresh",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    const cfg = await readTenantConfig(makeEnv(db), 4)
+    expect(cfg).toEqual({ cap: null, dailyBudget: null })
+  })
+
+  it("returns null for an unknown (missing) tenant", async () => {
+    const cfg = await readTenantConfig(makeEnv(db), 99999)
+    expect(cfg).toBeNull()
   })
 
   it("binding absent — returns null without throwing", async () => {
-    await expect(readTenantCap(makeAbsentEnv(), 1)).resolves.toBeNull()
+    await expect(readTenantConfig(makeAbsentEnv(), 1)).resolves.toBeNull()
   })
 
   it("thrown query — returns null without throwing (fail-open)", async () => {
-    await expect(readTenantCap({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 1)).resolves.toBeNull()
+    await expect(readTenantConfig({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 1)).resolves.toBeNull()
   })
 })

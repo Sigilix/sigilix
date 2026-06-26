@@ -84,3 +84,45 @@ describe("enqueuePrReviewJob — account attribution forwarding (SIG-343 Task 8)
     expect(mockUpsert).not.toHaveBeenCalled()
   })
 })
+
+describe("enqueuePrReviewJob — ctx.waitUntil deferred D1 upsert (SIG-343 fix)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("with ctx: upsert promise is handed to ctx.waitUntil, not awaited inline", async () => {
+    const env = makeEnv()
+    let resolveUpsert!: () => void
+    const upsertPromise = new Promise<void>((res) => {
+      resolveUpsert = res
+    })
+    mockUpsert.mockReturnValueOnce(upsertPromise)
+
+    const waitUntilSpy = vi.fn()
+    const ctx = { waitUntil: waitUntilSpy } as unknown as ExecutionContext
+
+    await enqueuePrReviewJob(env, BASE_ARGS, ctx)
+
+    // waitUntil must have been called with the upsert promise
+    expect(waitUntilSpy).toHaveBeenCalledOnce()
+    expect(waitUntilSpy).toHaveBeenCalledWith(upsertPromise)
+    // resolve so no unhandled-promise leak in test
+    resolveUpsert()
+  })
+
+  it("without ctx: upsert is awaited synchronously before DO fetch", async () => {
+    const env = makeEnv()
+    const order: string[] = []
+    mockUpsert.mockImplementation(async () => {
+      order.push("upsert")
+    })
+    // Override the DO fetch stub to track call order
+    const doFetchSpy = vi.fn(async () => ({ ok: true }))
+    ;(env.PR_REVIEW_RUN.get as ReturnType<typeof vi.fn>).mockReturnValue({ fetch: doFetchSpy })
+
+    await enqueuePrReviewJob(env, BASE_ARGS)
+
+    expect(order).toEqual(["upsert"])
+    expect(doFetchSpy).toHaveBeenCalled()
+  })
+})

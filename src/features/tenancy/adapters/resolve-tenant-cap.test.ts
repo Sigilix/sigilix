@@ -82,13 +82,13 @@ describe("resolveTenantCap", () => {
     expect(cap).toBe(6)
   })
 
-  it("D1 has schema-default cap (2) → returns 2 even without env override", async () => {
+  it("freshly-registered tenant (cap=NULL) → falls back to env cap, not hard-coded 2", async () => {
     await upsertTenantAndRepo(
       { SIGILIX_PLATFORM_DB: db },
       { installationId: 2, repoId: 200, fullName: "acme/api", nowIso: "2026-01-01T00:00:00Z" },
     )
-    // concurrency_cap defaults to 2 in the schema
+    // concurrency_cap is NULL after registration; env cap is 10
     const cap = await resolveTenantCap(makeEnv(db, "10"), 2)
-    expect(cap).toBe(2) // schema DEFAULT, not the env value 10
+    expect(cap).toBe(10) // env cap, because D1 returned null
   })
 })

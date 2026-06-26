@@ -3,7 +3,7 @@
 CREATE TABLE tenant (
   installation_id  INTEGER PRIMARY KEY,
   tier             TEXT    NOT NULL DEFAULT 'default',
-  concurrency_cap  INTEGER NOT NULL DEFAULT 2,
+  concurrency_cap  INTEGER,
   daily_budget     INTEGER,
   account_login    TEXT,
   account_type     TEXT,

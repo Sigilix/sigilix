@@ -739,18 +739,22 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
           arrivedAtMs: Date.now(),
         }),
       )
-      const enq = await enqueuePrReviewJob(env, {
-        owner,
-        repo,
-        prNumber,
-        headSha,
-        baseSha,
-        installationId,
-        deliveryId: request.headers.get("x-github-delivery"),
-        ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
-        ...(payload.installation?.account?.login ? { accountLogin: payload.installation.account.login } : {}),
-        ...(payload.installation?.account?.type ? { accountType: payload.installation.account.type } : {}),
-      })
+      const enq = await enqueuePrReviewJob(
+        env,
+        {
+          owner,
+          repo,
+          prNumber,
+          headSha,
+          baseSha,
+          installationId,
+          deliveryId: request.headers.get("x-github-delivery"),
+          ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
+          ...(payload.installation?.account?.login ? { accountLogin: payload.installation.account.login } : {}),
+          ...(payload.installation?.account?.type ? { accountType: payload.installation.account.type } : {}),
+        },
+        ctx,
+      )
       if (!enq.ok) {
         return new Response("do enqueue failed\n", { status: 503 })
       }

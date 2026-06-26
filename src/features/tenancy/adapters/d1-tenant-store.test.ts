@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { upsertTenantAndRepo, readTenantCap } from "@/src/features/tenancy/adapters/d1-tenant-store"
+import { resolveTenantCap } from "@/src/features/tenancy/adapters/resolve-tenant-cap"
 import type { Env } from "@/src/shared/types/env"
 
 const MIGRATION_SQL = readFileSync(
@@ -56,9 +57,9 @@ describe("upsertTenantAndRepo", () => {
     const tenant = await db
       .prepare("SELECT installation_id, concurrency_cap FROM tenant WHERE installation_id = ?")
       .bind(1)
-      .first<{ installation_id: number; concurrency_cap: number }>()
+      .first<{ installation_id: number; concurrency_cap: number | null }>()
     expect(tenant?.installation_id).toBe(1)
-    expect(tenant?.concurrency_cap).toBe(2) // schema DEFAULT
+    expect(tenant?.concurrency_cap).toBeNull() // nullable — no schema DEFAULT
 
     const repo = await db
       .prepare("SELECT full_name, updated_at FROM repo WHERE repo_id = ?")
@@ -221,7 +222,7 @@ describe("readTenantCap", () => {
     await db.exec(MIGRATION_SQL)
   })
 
-  it("returns the schema-default concurrency_cap for a known tenant", async () => {
+  it("returns null for a freshly-registered tenant (concurrency_cap not set)", async () => {
     await upsertTenantAndRepo(makeEnv(db), {
       installationId: 2,
       repoId: 200,
@@ -230,7 +231,24 @@ describe("readTenantCap", () => {
     })
 
     const cap = await readTenantCap(makeEnv(db), 2)
-    expect(cap).toBe(2)
+    expect(cap).toBeNull()
+  })
+
+  it("env fallback: freshly-registered tenant (cap=NULL) → resolveTenantCap returns SIGILIX_TENANT_CONCURRENCY_CAP, not 2", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 20,
+      repoId: 2000,
+      fullName: "acme/fallback-test",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    const env = {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_TENANT_CONCURRENCY_CAP: "5",
+    } as unknown as Env
+
+    const effective = await resolveTenantCap(env, 20)
+    expect(effective).toBe(5) // env cap, NOT 2
   })
 
   it("returns an operator-set cap accurately", async () => {

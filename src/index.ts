@@ -573,6 +573,11 @@ export default {
       // SIG-543: shadow quota measurement. Independent of fairness (own gate, no
       // runId requirement) and deferred so the D1 read never blocks the review.
       // Phase 1 never refuses — checkShadowQuota only logs.
+      // NB: a Queue-consumer ctx.waitUntil does not reliably extend the isolate
+      // lifetime on its own (see reference_cloudflare_queue_consumer_waituntil),
+      // but the immediately-following `await dispatchJob` (a multi-second review)
+      // keeps the isolate alive far past this ~1ms D1 read; worst case is a
+      // dropped quota-shadow log line — never a review/recall impact.
       if (job.type === "pr-review" && typeof job.installationId === "number" && quotaMode !== "off") {
         ctx.waitUntil(checkShadowQuota(env, job.installationId))
       }

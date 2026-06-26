@@ -123,6 +123,18 @@ describe("handleTenantUsageMetricsRoute — installationId param", () => {
     expect(res.status).toBe(400)
     expect(((await res.json()) as { error: string }).error).toBe("invalid_installation_id")
   })
+
+  it("400 on Number()-coercible-but-not-strict-digit installationId (1e3, 0x10)", async () => {
+    const env = makeEnv()
+    for (const bad of ["1e3", "0x10", " 5 "]) {
+      const res = await handleTenantUsageMetricsRoute(
+        authed(`https://x/metrics/tenant-usage?installationId=${encodeURIComponent(bad)}`),
+        env,
+      )
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_installation_id")
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

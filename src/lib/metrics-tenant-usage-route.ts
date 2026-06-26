@@ -50,7 +50,9 @@ export async function handleTenantUsageMetricsRoute(request: Request, env: Env):
   let installationId: number | undefined
   const idRaw = params.get("installationId")
   if (idRaw !== null) {
-    const n = Number(idRaw)
+    // Strict digits only (mirrors the window parse) — reject "0x10"/"1e3"/" 5 "
+    // which Number() would otherwise coerce to a valid id.
+    const n = /^\d+$/.test(idRaw) ? Number(idRaw) : NaN
     if (!Number.isInteger(n) || n <= 0) {
       return json({ error: "invalid_installation_id" }, 400)
     }

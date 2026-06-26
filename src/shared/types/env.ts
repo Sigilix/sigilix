@@ -461,6 +461,12 @@ export interface Env {
   // within the global dashboard-registered queue cap.
   TENANT_CONCURRENCY: DurableObjectNamespace
 
+  // SIG-455 PR B: per-provider backpressure cooldown (SQLite DO storage). One
+  // instance per provider slug (idFromName(providerSlug)); tracks the
+  // cooldownUntil epoch for that provider. Flag-gated behind
+  // SIGILIX_PROVIDER_COOLDOWN_MODE.
+  PROVIDER_COOLDOWN: DurableObjectNamespace
+
   // SIG-156: shared-secret bearer token for the privileged admin endpoints
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.

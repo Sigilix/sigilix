@@ -680,3 +680,8 @@ export { RunnerReceiptDO } from "./do/runner-receipt"
 // storage). Registered via the [[durable_objects.bindings]] TENANT_CONCURRENCY
 // entry + the sig-455-tenant-concurrency-v1 new_classes migration.
 export { TenantConcurrencyDO } from "@/src/do/tenant-concurrency"
+
+// SIG-455 PR B: ProviderCooldownDO — per-provider backpressure cooldown (SQLite
+// DO storage). Registered via the [[durable_objects.bindings]] PROVIDER_COOLDOWN
+// entry + the sig-455-provider-cooldown-v1 new_sqlite_classes migration.
+export { ProviderCooldownDO } from "@/src/do/provider-cooldown"

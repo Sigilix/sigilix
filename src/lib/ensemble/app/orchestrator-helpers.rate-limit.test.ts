@@ -23,6 +23,17 @@ function makeEnv(mode: string | undefined): Pick<Env, "SIGILIX_PROVIDER_COOLDOWN
   }
 }
 
+/** Fake background-runner: collects the pinned promise so tests can await it. */
+function makeBackgroundWaitUntil(): { fn: (p: Promise<void>) => void; calls: Promise<void>[] } {
+  const calls: Promise<void>[] = []
+  return {
+    fn: (p: Promise<void>) => {
+      calls.push(p)
+    },
+    calls,
+  }
+}
+
 describe("applyCooldownFromPhase (SIG-455 Task 5)", () => {
   beforeEach(() => {
     mockSetProviderCooldown.mockReset()
@@ -33,39 +44,51 @@ describe("applyCooldownFromPhase (SIG-455 Task 5)", () => {
 
   it("mode=shadow + positive providerRateLimitMs → setProviderCooldown called with that ms", () => {
     const env = makeEnv("shadow") as unknown as Env
-    applyCooldownFromPhase(env, 7000)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, 7000, bg.fn)
     expect(mockSetProviderCooldown).toHaveBeenCalledOnce()
     expect(mockSetProviderCooldown).toHaveBeenCalledWith(env, 7000)
+    expect(bg.calls).toHaveLength(1)
   })
 
   it("mode=enforce + positive providerRateLimitMs → setProviderCooldown called", () => {
     const env = makeEnv("enforce") as unknown as Env
-    applyCooldownFromPhase(env, 9000)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, 9000, bg.fn)
     expect(mockSetProviderCooldown).toHaveBeenCalledOnce()
     expect(mockSetProviderCooldown).toHaveBeenCalledWith(env, 9000)
+    expect(bg.calls).toHaveLength(1)
   })
 
   it("mode=off → setProviderCooldown NOT called even with a positive ms", () => {
     const env = makeEnv("off") as unknown as Env
-    applyCooldownFromPhase(env, 7000)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, 7000, bg.fn)
     expect(mockSetProviderCooldown).not.toHaveBeenCalled()
+    expect(bg.calls).toHaveLength(0)
   })
 
   it("mode=shadow + providerRateLimitMs undefined → NOT called", () => {
     const env = makeEnv("shadow") as unknown as Env
-    applyCooldownFromPhase(env, undefined)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, undefined, bg.fn)
     expect(mockSetProviderCooldown).not.toHaveBeenCalled()
+    expect(bg.calls).toHaveLength(0)
   })
 
   it("mode=shadow + providerRateLimitMs === 0 → NOT called", () => {
     const env = makeEnv("shadow") as unknown as Env
-    applyCooldownFromPhase(env, 0)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, 0, bg.fn)
     expect(mockSetProviderCooldown).not.toHaveBeenCalled()
+    expect(bg.calls).toHaveLength(0)
   })
 
   it("mode=undefined (default off) → NOT called", () => {
     const env = makeEnv(undefined) as unknown as Env
-    applyCooldownFromPhase(env, 7000)
+    const bg = makeBackgroundWaitUntil()
+    applyCooldownFromPhase(env, 7000, bg.fn)
     expect(mockSetProviderCooldown).not.toHaveBeenCalled()
+    expect(bg.calls).toHaveLength(0)
   })
 })

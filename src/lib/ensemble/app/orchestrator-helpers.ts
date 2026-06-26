@@ -319,14 +319,22 @@ export async function maybeEmptyDeltaSkip(
 
 // ─── SIG-455 (PR B Task 5): provider cooldown set-on-429 ─────────────────────
 
+type BackgroundWaitUntil = (promise: Promise<void>) => void
+
 /**
  * Fire-and-forget: if cooldown mode is shadow or enforce AND a positive
  * `providerRateLimitMs` was seen this run, write the cooldown to the shared DO.
  * Off mode is a no-op. Fail-open — any DO error is swallowed.
+ * The promise is pinned to the Worker lifetime via `backgroundWaitUntil` when
+ * provided (prevents the runtime from cutting it off before the DO write lands).
  */
-export function applyCooldownFromPhase(env: Env, providerRateLimitMs: number | undefined): void {
+export function applyCooldownFromPhase(
+  env: Env,
+  providerRateLimitMs: number | undefined,
+  backgroundWaitUntil?: BackgroundWaitUntil,
+): void {
   const mode = resolveCooldownMode(env)
   if (mode === "off" || !providerRateLimitMs || providerRateLimitMs <= 0) return
-  void setProviderCooldown(env, providerRateLimitMs).catch(() => {})
+  backgroundWaitUntil?.(setProviderCooldown(env, providerRateLimitMs).catch(() => {}))
   console.log(JSON.stringify({ event: "provider-cooldown-set", retryAfterMs: providerRateLimitMs, mode }))
 }

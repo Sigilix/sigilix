@@ -604,7 +604,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     })
     if (specialistsPhase.kind === "exit") return specialistsPhase.result
-    applyCooldownFromPhase(args.env, specialistsPhase.providerRateLimitMs)
+    applyCooldownFromPhase(args.env, specialistsPhase.providerRateLimitMs, args.backgroundWaitUntil)
     const {
       succeeded,
       degradedCoverage,

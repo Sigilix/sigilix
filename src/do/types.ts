@@ -12,7 +12,10 @@ export type RunStateLifecycle = "idle" | "queued" | "running" | "done" | "failed
 // SIG-329: `liveness` is the running-attempt heartbeat-gap alarm, set at
 // /pickup and re-armed on every /heartbeat. `watchdog` remains the
 // queued-but-not-picked-up backstop (set at /enqueue + retry-requeue).
-export type AlarmKind = "retry" | "watchdog" | "liveness"
+// SIG-455: `defer` re-sends a FRESH queue message (NEVER message.retry) for a
+// fairness-deferred run and re-arms the watchdog — `attempts` is NOT
+// incremented (a defer is a fairness wait, not a failure retry).
+export type AlarmKind = "retry" | "watchdog" | "liveness" | "defer"
 
 /** Spec §4.2 — single source of truth for a PR's review-run state. */
 export interface RunState {
@@ -109,6 +112,14 @@ export interface RunState {
    * reads in that case.
    */
   repoId?: number
+  /**
+   * SIG-455: number of times this run was re-enqueued by a fairness defer (the
+   * webhook consumer denied per-tenant admission and called /defer). Forwarded
+   * onto the re-sent queue message so the consumer bypasses admission once it
+   * reaches MAX_DEFERS (anti-starvation). A defer is NOT a retry — `attempts`
+   * is unchanged across defers. Undefined / absent means 0.
+   */
+  deferCount?: number
   /** SIG-169: latest sticky review-status snapshot accepted by the DO. */
   reviewStatus?: ReviewStatusSnapshot
   /** Monotonic sequence for same-rank review status updates. */

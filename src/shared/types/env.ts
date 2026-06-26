@@ -455,6 +455,12 @@ export interface Env {
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace
 
+  // SIG-455: per-tenant concurrency gate (KV-backed DO storage). One instance
+  // per tenant (idFromName(tenantKey)); gates pr-review fan-out to at most
+  // SIGILIX_TENANT_CONCURRENCY_CAP concurrent reviews per tenant. Operates
+  // within the global dashboard-registered queue cap.
+  TENANT_CONCURRENCY: DurableObjectNamespace
+
   // SIG-156: shared-secret bearer token for the privileged admin endpoints
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.
@@ -873,4 +879,14 @@ export interface Env {
   // Recommended rollout order: "synth" first, then "security,tests",
   // then "performance", then "logic". See docs/ops/shadow-bakeoff.md.
   SHADOW_BAKEOFF_ROLES?: string
+
+  // SIG-455: per-tenant fairness gate feature flags.
+  //   SIGILIX_FAIRNESS_MODE             "off" | "shadow" | "enforce" (default "shadow").
+  //                                     "off"     — gate fully bypassed, no telemetry.
+  //                                     "shadow"  — gate runs + telemeters, reviews pass.
+  //                                     "enforce" — deferred reviews are re-enqueued.
+  //   SIGILIX_TENANT_CONCURRENCY_CAP    integer string; per-tenant concurrent-review cap.
+  //                                     Default 2. Operates within the global queue cap.
+  SIGILIX_FAIRNESS_MODE?: string
+  SIGILIX_TENANT_CONCURRENCY_CAP?: string
 }

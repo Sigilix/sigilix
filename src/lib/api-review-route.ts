@@ -40,6 +40,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireBearerToken } from "./auth-bearer"
+import { admitTenant, releaseTenant, resolveFairnessConfig } from "@/src/features/tenancy"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
@@ -184,13 +185,27 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  // Per-mode: cheap validation → daily ceiling → build the engine args. Both modes are
-  // dryRun (a CLI review returns JSON, never posts) + forceFullCoverage (single-shot:
-  // avoid the SIG-459 empty-delta skip). Cheap validation (400/413/422/503) happens
-  // BEFORE the ceiling so it doesn't consume budget; the ceiling runs BEFORE any model
-  // spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a probe
-  // that mints an installation token + hits GitHub still counts against the ceiling.
-  let args: EnsembleHandlerArgs
+  // SIG-455: per-tenant fairness gate — Mode B ONLY. Mode A uses a shared API key and the
+  // caller asserts owner/repo, so keying the semaphore on owner/repo is spoofable; the
+  // daily ceiling (admitUnderDailyCeiling) is Mode A's sole guard. Mode B resolves a real
+  // installationId via resolveInstallation (not spoofable), so the fairness gate is safe.
+  // "off" disables admission entirely; "shadow" measures but never blocks; "enforce" returns
+  // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
+  const { mode: fairnessMode, cap: fairnessCap } = resolveFairnessConfig(env)
+  // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
+  let lease: { tenantId: string; leaseId: string } | undefined
+
+  // Per-mode: cheap validation → daily ceiling → (Mode B only) fairness gate → build the
+  // engine args. Both modes are dryRun (a CLI review returns JSON, never posts) +
+  // forceFullCoverage (single-shot: avoid the SIG-459 empty-delta skip). Cheap validation
+  // (400/413/422/503) happens BEFORE the ceiling so it doesn't consume budget; the ceiling
+  // runs BEFORE any model spend OR GitHub-touching work (the grounded buildClient +
+  // getPullRequest) so a probe that mints an installation token + hits GitHub still counts
+  // against the ceiling. The Mode B fairness gate runs AFTER the ceiling (independent).
+  let args: EnsembleHandlerArgs | undefined
+  // Mode B: captures a buildClient/getPullRequest failure without returning early so the
+  // unified try/finally below always fires releaseTenant (SIG-455 Task 6 lease-leak fix).
+  let prBuildError: unknown
   // The diff we already have on each path → the per-finding code-context slice for the
   // `--rich` panel (display evidence; attached to the result below, never gates anything).
   let contextDiff: string | undefined
@@ -230,43 +245,90 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
     // GitHub counts against the budget (no free installation enumeration).
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    // Fairness gate for Mode B: tenantId is the resolved installationId. Gate AFTER
+    // resolveInstallation + ceiling, BEFORE buildClient (avoids spending the GitHub
+    // App token budget on an over-cap request).
+    if (fairnessMode !== "off") {
+      const tenantId = String(lookup.installationId)
+      const leaseId = crypto.randomUUID()
+      const admit = await admitTenant({ env, tenantId, leaseId, cap: fairnessCap })
+      console.log(
+        JSON.stringify({
+          event: "fairness-decision",
+          surface: "v1review",
+          tenantId,
+          desired: admit.granted ? "GRANT" : "DENY",
+          mode: fairnessMode,
+        }),
+      )
+      if (!admit.granted && fairnessMode === "enforce") {
+        return new Response(JSON.stringify({ error: "tenant_busy" }), {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": String(Math.ceil(admit.retryAfterMs / 1000)),
+          },
+        })
+      }
+      if (admit.granted) lease = { tenantId, leaseId }
+    }
     const groundedEnv = groundedReviewEnv(env) // REAL bindings (retrieval live), review-memory off, no repoId.
-    let client: GitHubClient
-    let headSha: string
+    let client: GitHubClient | undefined
+    let headSha: string | undefined
     try {
       client = await buildClient(groundedEnv, lookup.installationId)
       // headSha is optional from a hosted CLI (no token) — read it from the PR when absent.
       headSha = parsed.headSha ?? (await client.getPullRequest(parsed.owner, parsed.repo, parsed.prNumber)).head.sha
     } catch (err) {
-      // Couldn't auth as the installation or read the PR (bad creds / PR not found / GitHub down).
-      return json({ error: "pr_unavailable", detail: err instanceof Error ? err.message : String(err) }, 502)
+      // Couldn't auth as the installation or read the PR — capture without returning so the
+      // unified try/finally below always runs releaseTenant (SIG-455 Task 6 lease-leak fix).
+      prBuildError = err
     }
-    // Best-effort code-context source for the rich panel (display-only; never 502 on it).
-    try {
-      contextDiff = await client.getPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber)
-    } catch {
-      /* code context is best-effort — leave undefined */
-    }
-    args = {
-      owner: parsed.owner,
-      repo: parsed.repo,
-      prNumber: parsed.prNumber,
-      headSha,
-      installationId: lookup.installationId,
-      env: groundedEnv,
-      githubClient: client, // built here to resolve headSha → inject so the orchestrator doesn't rebuild the CLIENT
-      dryRun: true,
-      forceFullCoverage: true,
+    if (!prBuildError) {
+      // Best-effort code-context source for the rich panel (display-only; never 502 on it).
+      try {
+        contextDiff = await client!.getPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber)
+      } catch {
+        /* code context is best-effort — leave undefined */
+      }
+      args = {
+        owner: parsed.owner,
+        repo: parsed.repo,
+        prNumber: parsed.prNumber,
+        headSha: headSha!,
+        installationId: lookup.installationId,
+        env: groundedEnv,
+        githubClient: client!, // built here to resolve headSha → inject so the orchestrator doesn't rebuild the CLIENT
+        dryRun: true,
+        forceFullCoverage: true,
+      }
     }
   }
 
   let result
   try {
-    result = await handlePrReviewEnsemble(args)
+    // Mode B: if buildClient/getPullRequest failed, return 502 from inside this try block
+    // so the finally always fires and releaseTenant is called. A return inside a try block
+    // always triggers finally — unlike a return that exits the function before the try is
+    // entered, which was the pre-fix behavior that leaked the lease (SIG-455 Task 6).
+    if (prBuildError !== undefined) {
+      return json(
+        {
+          error: "pr_unavailable",
+          detail: prBuildError instanceof Error ? prBuildError.message : String(prBuildError),
+        },
+        502,
+      )
+    }
+    result = await handlePrReviewEnsemble(args!)
   } catch (err) {
     // The orchestrator normally catches internally and returns status "errored";
     // a thrown error is still an engine failure → 500, never a clean pass.
     return json({ error: "review_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
+  } finally {
+    // Release the per-tenant slot on both success and throw so the semaphore is
+    // never leaked by an ensemble error. releaseTenant swallows all errors internally.
+    if (lease) await releaseTenant(env, lease.tenantId, lease.leaseId)
   }
 
   // RECALL-SAFETY: an engine failure (errored OR a no-verdict bail like a total model

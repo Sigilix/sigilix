@@ -192,6 +192,12 @@ class_name = "VerificationMetricsDO"
 name = "GRAPH_EXPANSION_METRICS_DO"
 class_name = "GraphExpansionMetricsDO"
 
+# SIG-455: per-tenant concurrency gate. One DO instance per tenant
+# (idFromName(tenantKey)). Flag-gated behind SIGILIX_FAIRNESS_MODE.
+[[durable_objects.bindings]]
+name = "TENANT_CONCURRENCY"
+class_name = "TenantConcurrencyDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -247,6 +253,15 @@ new_sqlite_classes = ["GraphExpansionMetricsDO"]
 tag = "sig-107-tool-metrics-v1"
 new_sqlite_classes = ["RunnerToolMetricsDO"]
 
+# SIG-455: TenantConcurrencyDO — new DO classes must be SQLite-backed
+# (new_sqlite_classes); Cloudflare no longer allows newly-created KV-backed DO
+# namespaces (only the grandfathered PrReviewRunDO above uses new_classes). The
+# classic ctx.storage.get/put/setAlarm API the DO uses is identical on SQLite-
+# backed DOs, so no DO code changes. Forward-only.
+[[migrations]]
+tag = "sig-455-tenant-concurrency-v1"
+new_sqlite_classes = ["TenantConcurrencyDO"]
+
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
 #   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # numeric; clamped [1, 10], default 3
@@ -286,6 +301,14 @@ new_sqlite_classes = ["RunnerToolMetricsDO"]
 # directly (informed by format-compatibility curl-tests against
 # Ollama Cloud); the bake-off no longer has a current target.
 SHADOW_BAKEOFF_ROLES = ""
+
+# SIG-455: per-tenant fairness gate. "off" | "shadow" (default) | "enforce".
+# "shadow" runs the gate + telemeters but lets every review through — dark
+# by default until the fairness DO is exercised in prod. "enforce" re-enqueues
+# over-cap reviews with an incremented deferCount. SIGILIX_TENANT_CONCURRENCY_CAP
+# is the integer per-tenant concurrent-review ceiling (default 2 in code).
+SIGILIX_FAIRNESS_MODE = "shadow"
+SIGILIX_TENANT_CONCURRENCY_CAP = "2"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

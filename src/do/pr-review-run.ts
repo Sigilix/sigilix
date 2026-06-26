@@ -46,6 +46,7 @@ import {
   pruneHistoryStorage,
 } from "./pr-review-run-internals"
 import { handleStatusProgress } from "./pr-review-status-route"
+import { handleDeferRequest, runDeferAlarm } from "./pr-review-run-defer"
 export {
   decideEnqueueAction,
   decidePickupAction,
@@ -81,6 +82,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/cancel") {
       return this.handleCancel()
     }
+    if (request.method === "POST" && url.pathname === "/defer") return handleDeferRequest(this.ctx, this.env, request)
     if (request.method === "GET" && url.pathname === "/status") {
       return this.handleStatus()
     }
@@ -692,7 +694,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       await this.handleWatchdogAlarm(state)
     } else if (kind === "liveness") {
       await this.handleLivenessAlarm(state)
-    }
+    } else if (kind === "defer") await runDeferAlarm(this.ctx, this.env, state)
   }
 
   private async handleRetryAlarm(state: RunState): Promise<void> {

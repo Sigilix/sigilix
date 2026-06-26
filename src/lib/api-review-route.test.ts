@@ -246,8 +246,13 @@ describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
     const kv = kvMock(null)
     const e = groundedEnv({ OPENCLAW_GITHUB_INSTALLATION_MAP: "{}", OPENCLAW_STATE: kv })
     expect(
-      (await handleReviewApiRoute(req({ mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "s" }), e, noopCtx))
-        .status,
+      (
+        await handleReviewApiRoute(
+          req({ mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "s" }),
+          e,
+          noopCtx,
+        )
+      ).status,
     ).toBe(422)
     expect(kv.put).not.toHaveBeenCalled()
   })

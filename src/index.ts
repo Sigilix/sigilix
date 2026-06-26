@@ -45,6 +45,7 @@ import { handleGraphMetricsRoute } from "@/src/lib/metrics-graph-route"
 import { handleGraphExpansionMetricsRoute } from "@/src/lib/metrics-graph-expansion-route"
 import { handleGraphExpansionAbMetricsRoute } from "@/src/lib/metrics-graph-expansion-ab-route"
 import { handleFpRateMetricsRoute } from "@/src/lib/metrics-fp-rate-route"
+import { handleTenantUsageMetricsRoute } from "@/src/lib/metrics-tenant-usage-route"
 import { handleRunnerIngestRoute } from "@/src/lib/runner-ingest-route"
 import {
   handleAdminIndexRoute,
@@ -212,6 +213,11 @@ export default {
     // based false-positive rate (the "floor" metric), computed per repo.
     if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
       return handleFpRateMetricsRoute(request, env)
+    }
+
+    // SIG-543 PR D Task 5: authenticated per-tenant usage rollup from D1.
+    if (request.method === "GET" && url.pathname === "/metrics/tenant-usage") {
+      return handleTenantUsageMetricsRoute(request, env)
     }
 
     // SIG-184 PR 5b: authenticated read of rolling runner-evidence presence

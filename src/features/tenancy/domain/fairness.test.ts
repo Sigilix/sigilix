@@ -7,8 +7,10 @@ import {
   findExpiredLeaseIds,
   extendLease,
   computeBackoffMs,
+  BASE_BACKOFF_MS,
   LEASE_TTL_MS,
   MAX_BACKOFF_MS,
+  type FairnessState,
 } from "@/src/features/tenancy/domain/fairness"
 
 const NOW = 1_000_000
@@ -33,11 +35,17 @@ describe("decideAcquire", () => {
   })
 
   it("is idempotent for a re-presented leaseId (no double count, deny streak reset)", () => {
-    let s = decideAcquire({ state: emptyState(), leaseId: "a", cap: 1, nowMs: NOW, rand: 0 }).state
-    // 'a' over cap=1 would deny a new id, but re-presenting 'a' itself is a no-op grant
+    // Build state that already holds a lease for "a" AND has a non-zero deny streak —
+    // so the idempotent path actually clears the streak rather than deleting an absent key.
+    const s: FairnessState = {
+      schemaVersion: 1,
+      leases: [{ leaseId: "a", acquiredAtMs: NOW, expiresAtMs: NOW + LEASE_TTL_MS }],
+      denyCounts: { a: 3 },
+    }
     const r = decideAcquire({ state: s, leaseId: "a", cap: 1, nowMs: NOW, rand: 0 })
     expect(r.granted).toBe(true)
-    expect(r.state.leases).toHaveLength(1)
+    expect(r.state.leases).toHaveLength(1) // no double-count
+    expect(r.state.denyCounts["a"]).toBeUndefined() // streak actually cleared
   })
 
   it("escalates backoff per consecutive deny and resets on grant", () => {
@@ -59,7 +67,7 @@ describe("computeBackoffMs", () => {
   it("caps the base and applies jitter in [0.5x, 1.5x)", () => {
     expect(computeBackoffMs(99, 0)).toBe(Math.round(MAX_BACKOFF_MS * 0.5))
     expect(computeBackoffMs(99, 0.999)).toBeLessThan(MAX_BACKOFF_MS * 1.5)
-    expect(computeBackoffMs(1, 0)).toBeGreaterThan(0)
+    expect(computeBackoffMs(1, 0)).toBe(Math.round(BASE_BACKOFF_MS * 0.5))
   })
 })
 
@@ -78,6 +86,7 @@ describe("release / expiry", () => {
   it("findExpiredLeaseIds returns only leases past their TTL", () => {
     const s = decideAcquire({ state: emptyState(), leaseId: "a", cap: 2, nowMs: NOW, rand: 0 }).state
     expect(findExpiredLeaseIds(s, NOW + LEASE_TTL_MS - 1)).toEqual([])
+    expect(findExpiredLeaseIds(s, NOW + LEASE_TTL_MS)).toEqual([]) // exact boundary: not yet expired
     expect(findExpiredLeaseIds(s, NOW + LEASE_TTL_MS + 1)).toEqual(["a"])
   })
 

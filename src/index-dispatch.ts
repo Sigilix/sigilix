@@ -332,10 +332,6 @@ export async function dispatchJob(
             checkRunId: job.checkRunId,
           })
           if (rateLimitSkipped) return
-          // Task 7 forward-ref: rateLimit.footer is threaded into finalStatusUpdate
-          // in the next task. Referencing it here keeps the binding alive for Task 7
-          // without changing the runtime path.
-          void rateLimit
           // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
           // created the customer-visible check (the new fast path —
           // visible to the user within ~1–2s of push), the dispatcher
@@ -380,6 +376,7 @@ export async function dispatchJob(
                 repo: job.repo,
                 prNumber: job.prNumber,
                 ...(result.reviewMeta !== undefined ? { reviewMeta: result.reviewMeta } : {}),
+                ...(rateLimit.mode === "enforce" && rateLimit.footer ? { rateLimitFooter: rateLimit.footer } : {}),
               })
               if (statusUpdate !== null) statusReporter?.report(statusUpdate)
               conclusion = blocked ? "blocked" : result.reviewMeta?.surface === "comment" ? "failure" : "success"
@@ -392,6 +389,7 @@ export async function dispatchJob(
               repo: job.repo,
               prNumber: job.prNumber,
               ...(result.reviewMeta !== undefined ? { reviewMeta: result.reviewMeta } : {}),
+              ...(rateLimit.mode === "enforce" && rateLimit.footer ? { rateLimitFooter: rateLimit.footer } : {}),
             })
             if (statusUpdate !== null) statusReporter?.report(statusUpdate)
             if (result.status === "stale_head") {

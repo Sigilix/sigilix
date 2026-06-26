@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { checkShadowQuota } from "@/src/features/tenancy/adapters/check-shadow-quota"
+import * as quotaDomain from "@/src/features/tenancy/domain/quota"
 import type { Env } from "@/src/shared/types/env"
 
 const MIGRATION_SQL = readFileSync(
@@ -112,10 +113,11 @@ function recentIso(hoursAgo = 1): string {
 // ─── log helpers ─────────────────────────────────────────────────────────────
 
 let logSpy: ReturnType<typeof vi.spyOn>
+let warnSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
-  vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
 })
 
 afterEach(() => {
@@ -316,6 +318,24 @@ describe("checkShadowQuota", () => {
       SIGILIX_TENANT_QUOTA_MODE: "shadow",
     }
     await expect(checkShadowQuota(env, 8)).resolves.toBeUndefined()
+  })
+
+  // SIG-543 Finding #3 — outer catch now emits a structured console.warn.
+  it("unexpected throw inside try body → resolves void + emits quota-check-failed warn", async () => {
+    // Spy on resolveQuotaMode (synchronous, first call in the try block) so the
+    // exception escapes directly to the outer catch without being absorbed by an
+    // inner adapter guard.  afterEach restores the spy via vi.restoreAllMocks().
+    vi.spyOn(quotaDomain, "resolveQuotaMode").mockImplementationOnce(() => {
+      throw new Error("injected error")
+    })
+
+    await expect(checkShadowQuota(makeEnv(db, "shadow"), 10)).resolves.toBeUndefined()
+
+    // The outer catch must emit exactly one structured warn with the right event key.
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    const call = warnSpy.mock.calls[0]?.[0] as string
+    const payload = JSON.parse(call) as Record<string, unknown>
+    expect(payload).toMatchObject({ event: "quota-check-failed", err: "injected error" })
   })
 
   // ── absent SIGILIX_PLATFORM_DB binding ───────────────────────────────────────

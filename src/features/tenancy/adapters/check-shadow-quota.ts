@@ -83,7 +83,9 @@ export async function checkShadowQuota(
         }),
       )
     }
-  } catch {
-    // Best-effort: swallow all errors so the caller is never blocked.
+  } catch (error) {
+    console.warn(
+      JSON.stringify({ event: "quota-check-failed", err: error instanceof Error ? error.message : String(error) }),
+    )
   }
 }

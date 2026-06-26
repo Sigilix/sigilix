@@ -901,4 +901,8 @@ export interface Env {
   //   "shadow"  — cooldown state tracked + telemetered, no request blocking.
   //   "enforce" — requests are held/rejected when a provider is in cooldown.
   SIGILIX_PROVIDER_COOLDOWN_MODE?: string
+
+  // SIG-343 PR C: platform DB (tenant/repo/usage_ledger) — optional so a deploy that
+  // hasn't provisioned/migrated D1 stays metering-off (dark).
+  SIGILIX_PLATFORM_DB?: D1Database
 }

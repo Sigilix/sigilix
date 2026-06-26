@@ -40,7 +40,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireBearerToken } from "./auth-bearer"
-import { admitTenant, releaseTenant, resolveFairnessConfig } from "@/src/features/tenancy"
+import { admitTenant, releaseTenant, resolveFairnessConfig, resolveTenantCap } from "@/src/features/tenancy"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
@@ -193,7 +193,7 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // installationId via resolveInstallation (not spoofable), so the fairness gate is safe.
   // "off" disables admission entirely; "shadow" measures but never blocks; "enforce" returns
   // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
-  const { mode: fairnessMode, cap: fairnessCap } = resolveFairnessConfig(env)
+  const { mode: fairnessMode } = resolveFairnessConfig(env)
   // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
   let lease: { tenantId: string; leaseId: string } | undefined
 
@@ -268,7 +268,12 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     if (fairnessMode !== "off") {
       const tenantId = String(lookup.installationId)
       const leaseId = crypto.randomUUID()
-      const admit = await admitTenant({ env, tenantId, leaseId, cap: fairnessCap })
+      const admit = await admitTenant({
+        env,
+        tenantId,
+        leaseId,
+        cap: await resolveTenantCap(env, lookup.installationId),
+      })
       console.log(
         JSON.stringify({
           event: "fairness-decision",

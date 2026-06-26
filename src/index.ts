@@ -66,7 +66,7 @@ import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
-import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig } from "@/src/features/tenancy"
+import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig, resolveTenantCap } from "@/src/features/tenancy"
 import { getProviderCooldownRemainingMs } from "@/src/shared/adapters/model/provider-cooldown-client"
 import {
   resolveCooldownMode,
@@ -453,7 +453,7 @@ export default {
     // SIG-455: per-tenant fairness mode. "off" disables admission entirely;
     // "shadow" measures the desired decision but always proceeds; "enforce"
     // actually defers denied jobs. Default off (the binding/flags ship dark).
-    const { mode, cap } = resolveFairnessConfig(env)
+    const { mode } = resolveFairnessConfig(env)
     for (const message of batch.messages) {
       const job = message.body
       // SIG-455 Task 6 (PR B): provider-cooldown read-before-fire. For eligible
@@ -517,7 +517,12 @@ export default {
         if (!bypass) {
           const tenantId = String(job.installationId)
           const leaseId = crypto.randomUUID()
-          const res = await admitTenant({ env, tenantId, leaseId, cap })
+          const res = await admitTenant({
+            env,
+            tenantId,
+            leaseId,
+            cap: await resolveTenantCap(env, job.installationId),
+          })
           console.log(
             JSON.stringify({
               event: "fairness-decision",

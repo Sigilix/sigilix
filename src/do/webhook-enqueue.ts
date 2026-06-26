@@ -9,6 +9,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "./types"
 import { buildPausedKey, buildIgnoredKey } from "@/src/lib/pr-lifecycle-commands"
+import { upsertTenantAndRepo } from "@/src/features/tenancy"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -35,6 +36,10 @@ export interface PrReviewEnqueueArgs {
    * transfer-proof keyspace.
    */
   repoId?: number
+  /** SIG-343 Task 8: GitHub App account login (org or user name). */
+  accountLogin?: string
+  /** SIG-343 Task 8: GitHub App account type ('Organization' | 'User'). */
+  accountType?: string
 }
 
 // SIG-98 note on slash-command reruns + the pause/ignore gate:
@@ -74,7 +79,11 @@ function instanceName(owner: string, repo: string, prNumber: number): string {
  * branch. Returns `{ok: false, route: "do", ...}` when
  * the DO call fails (caller should respond 503).
  */
-export async function enqueuePrReviewJob(env: Env, args: PrReviewEnqueueArgs): Promise<PrReviewEnqueueResult> {
+export async function enqueuePrReviewJob(
+  env: Env,
+  args: PrReviewEnqueueArgs,
+  ctx?: ExecutionContext,
+): Promise<PrReviewEnqueueResult> {
   // SIG-98 — pause/ignore gate. Skip the enqueue entirely when a
   // per-PR pause (24h TTL) or ignore (no TTL) flag is set in KV.
   // Every caller of this function is an AUTOMATIC trigger (webhook
@@ -114,6 +123,23 @@ export async function enqueuePrReviewJob(env: Env, args: PrReviewEnqueueArgs): P
       }),
     )
     return { ok: true, route: "skipped-paused" }
+  }
+
+  // SIG-343: lazily register the tenant + repo in the platform DB (best-effort,
+  // fail-open — upsertTenantAndRepo never throws and no-ops when D1 is unbound).
+  // Deferred via ctx.waitUntil when a context is provided so the D1 write does
+  // not block the webhook response; falls back to a blocking await otherwise.
+  if (typeof args.repoId === "number") {
+    const upsertP = upsertTenantAndRepo(env, {
+      installationId: args.installationId,
+      repoId: args.repoId,
+      fullName: `${args.owner}/${args.repo}`,
+      nowIso: new Date().toISOString(),
+      ...(args.accountLogin !== undefined ? { accountLogin: args.accountLogin } : {}),
+      ...(args.accountType !== undefined ? { accountType: args.accountType } : {}),
+    })
+    if (ctx) ctx.waitUntil(upsertP)
+    else await upsertP
   }
 
   const body: EnqueueRequest = {

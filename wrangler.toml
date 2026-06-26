@@ -97,6 +97,16 @@ index_name = "boreas-agent-memory"
 # database_name = "sigilix-lexical-index"
 # database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
 
+# SIG-343 PR C: platform store (tenant registry + repo registry + usage ledger).
+# Applied via `wrangler d1 migrations apply sigilix-platform` (NOT auto on deploy).
+# Binding is optional in code (SIGILIX_PLATFORM_DB?) so a deploy that hasn't
+# provisioned/migrated this DB stays metering-off (dark) with no Worker crash.
+[[d1_databases]]
+binding = "SIGILIX_PLATFORM_DB"
+database_name = "sigilix-platform"
+database_id = "3b840a0e-e1b0-4cc7-9b8e-f06f7b4981b0"
+migrations_dir = "migrations"
+
 # Cloudflare Workers AI binding — used for embedding the issue/comment
 # body at query time. Keeps the embedding model identical between
 # index time (CLI/CI script also calls @cf/baai/bge-base-en-v1.5 via

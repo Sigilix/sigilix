@@ -23,6 +23,8 @@ interface MakeEnvArgs {
    * return null.
    */
   kvState?: Record<string, string>
+  /** SIG-343: optional platform DB binding for lazy tenant+repo registration tests. */
+  platformDb?: D1Database
 }
 
 function makeEnv(args: MakeEnvArgs = {}): {
@@ -75,6 +77,7 @@ function makeEnv(args: MakeEnvArgs = {}): {
         kv.delete(key)
       },
     } as unknown as KVNamespace,
+    ...(args.platformDb !== undefined ? { SIGILIX_PLATFORM_DB: args.platformDb } : {}),
   } as unknown as Env
   return { env, doCalls, queueSend, idFromName, kv }
 }
@@ -263,5 +266,59 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
     expect(result).toEqual({ ok: true, route: "do" })
     expect(doCalls).toHaveLength(1)
     expect(queueSend).not.toHaveBeenCalled()
+  })
+})
+
+// SIG-343 — helper to build a minimal D1 spy for platform-DB tests.
+function makeD1Spy(opts: { batchRejects?: boolean } = {}): {
+  db: D1Database
+  batchMock: ReturnType<typeof vi.fn>
+  bindMock: ReturnType<typeof vi.fn>
+} {
+  const batchMock = opts.batchRejects
+    ? vi.fn().mockRejectedValue(new Error("D1 unavailable"))
+    : vi.fn().mockResolvedValue([])
+  const bindMock = vi.fn(() => ({}))
+  const prepareMock = vi.fn(() => ({ bind: bindMock }))
+  return {
+    db: { prepare: prepareMock, batch: batchMock } as unknown as D1Database,
+    batchMock,
+    bindMock,
+  }
+}
+
+describe("enqueuePrReviewJob — SIG-343 lazy tenant+repo registration", () => {
+  it("calls upsertTenantAndRepo with correct args when repoId is provided; enqueue proceeds", async () => {
+    const { db, batchMock, bindMock } = makeD1Spy()
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    const result = await enqueuePrReviewJob(env, { ...baseArgs, repoId: 42 })
+    expect(result).toEqual({ ok: true, route: "do" })
+    expect(doCalls).toHaveLength(1)
+    expect(batchMock).toHaveBeenCalledOnce()
+    // tenant bind: (installationId, accountLogin, accountType, created_at, updated_at)
+    expect(bindMock).toHaveBeenCalledWith(99, null, null, expect.any(String), expect.any(String))
+    // repo bind: (repoId, installationId, fullName, updated_at)
+    expect(bindMock).toHaveBeenCalledWith(42, 99, "Sigilix/sigilix", expect.any(String))
+  })
+
+  it("skips upsertTenantAndRepo when repoId is undefined; enqueue unaffected", async () => {
+    const { db, batchMock } = makeD1Spy()
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    const result = await enqueuePrReviewJob(env, baseArgs) // no repoId
+    expect(result).toEqual({ ok: true, route: "do" })
+    expect(doCalls).toHaveLength(1)
+    expect(batchMock).not.toHaveBeenCalled()
+  })
+
+  it("returns enqueue result unchanged when D1 batch throws (fail-open)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { db, batchMock } = makeD1Spy({ batchRejects: true })
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    const result = await enqueuePrReviewJob(env, { ...baseArgs, repoId: 42 })
+    expect(result).toEqual({ ok: true, route: "do" })
+    expect(doCalls).toHaveLength(1)
+    expect(batchMock).toHaveBeenCalledOnce()
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 })

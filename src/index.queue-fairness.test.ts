@@ -6,9 +6,14 @@
 // covers every SIGILIX_FAIRNESS_MODE branch + the fail-open guarantees.
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { readFileSync } from "node:fs"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { MAX_DEFERS } from "@/src/features/tenancy"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { upsertTenantAndRepo } from "@/src/features/tenancy/adapters/d1-tenant-store"
+
+const MIGRATION_SQL = readFileSync(new URL("../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 
 // Mock the dispatcher so the consumer's "did the review run?" decision is
 // observable without executing the real (heavy) review pipeline. index.ts also
@@ -187,5 +192,52 @@ describe("queue() fairness admission", () => {
     await runQueue(env, message)
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
     expect(message.ack).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── D1 cap wiring ────────────────────────────────────────────
+// SIG-343 PR C Task 6: verify that resolveTenantCap is wired at the
+// queue() admitTenant call site — cap comes from D1 when available,
+// falls back to env when the tenant row is missing.
+
+/** Extract the cap value from the first /acquire fetch body. */
+function acquireCapFromStub(tenant: ReturnType<typeof makeNamespaceStub>): number | undefined {
+  const call = tenant.fetchSpy.mock.calls.find((c) => typeof c[0] === "string" && (c[0] as string).includes("/acquire"))
+  if (!call) return undefined
+  const init = call[1] as RequestInit
+  return (JSON.parse(init.body as string) as { cap?: number }).cap
+}
+
+describe("queue() fairness admission — D1 cap wiring (SIG-343 PR C Task 6)", () => {
+  it("D1 tenant cap → admitTenant called with D1 cap, not env cap", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    await upsertTenantAndRepo(
+      { SIGILIX_PLATFORM_DB: db },
+      { installationId: 42, repoId: 420, fullName: "acme/core", nowIso: "2026-01-01T00:00:00Z" },
+    )
+    // Operator-set cap of 7; env cap is 2 — the D1 value should win
+    await db.prepare("UPDATE tenant SET concurrency_cap = ? WHERE installation_id = ?").bind(7, 42).run()
+
+    const { env, tenant } = buildEnv({ mode: "enforce", acquire: granted })
+    const envWithDb = { ...env, SIGILIX_PLATFORM_DB: db, SIGILIX_TENANT_CONCURRENCY_CAP: "2" } as unknown as Env
+    const message = makeMessage(makeJob({ installationId: 42 }))
+    await runQueue(envWithDb, message)
+
+    expect(acquireCapFromStub(tenant)).toBe(7)
+    expect(dispatchJobMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("tenant missing from D1 → admitTenant called with env-default cap", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    // No row for installationId 99 → falls back to env cap
+
+    const { env, tenant } = buildEnv({ mode: "enforce", acquire: granted, cap: "3" })
+    const envWithDb = { ...env, SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const message = makeMessage(makeJob({ installationId: 99 }))
+    await runQueue(envWithDb, message)
+
+    expect(acquireCapFromStub(tenant)).toBe(3)
   })
 })

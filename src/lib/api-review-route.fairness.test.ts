@@ -6,6 +6,9 @@
 // the server (not spoofable), so per-tenant concurrency limits are safe to enforce.
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { upsertTenantAndRepo } from "@/src/features/tenancy/adapters/d1-tenant-store"
 
 vi.mock("@/src/lib/ensemble/app/orchestrator", () => ({ handlePrReviewEnsemble: vi.fn() }))
 // Mode B resolves the installation's headSha via a real GitHub client — mock it
@@ -194,5 +197,62 @@ describe("handleReviewApiRoute — daily ceiling and fairness are independent", 
     expect(res.status).toBe(429)
     expect(((await res.json()) as { error?: string }).error).toBe("daily_limit_exceeded")
     expect(mockAdmit).not.toHaveBeenCalled()
+  })
+})
+
+// ─── D1 cap wiring ────────────────────────────────────────────
+// SIG-343 PR C Task 6: verify that resolveTenantCap is wired at the
+// POST /v1/review Mode B admitTenant call site — cap comes from D1 when
+// available, falls back to env when the tenant row is missing.
+
+const MIGRATION_SQL_ROUTE = readFileSync(
+  new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
+  "utf8",
+)
+
+describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
+  beforeEach(() => {
+    // admitTenant already reset in outer beforeEach; keep grant as default for these tests.
+    mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
+    mockRelease.mockResolvedValue(undefined)
+    mockEngine.mockResolvedValue(okResult)
+  })
+
+  it("D1 has operator-set cap → admitTenant called with D1 cap, not env cap", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_ROUTE)
+    // Installation 42 comes from the OPENCLAW_GITHUB_INSTALLATION_MAP fixture '{"o/r":"42"}'
+    await upsertTenantAndRepo(
+      { SIGILIX_PLATFORM_DB: db },
+      { installationId: 42, repoId: 420, fullName: "o/r", nowIso: "2026-01-01T00:00:00Z" },
+    )
+    // Operator-set cap of 9; env cap is 2 — D1 value should win
+    await db.prepare("UPDATE tenant SET concurrency_cap = ? WHERE installation_id = ?").bind(9, 42).run()
+
+    const e = groundedEnv({
+      SIGILIX_FAIRNESS_MODE: "enforce",
+      SIGILIX_TENANT_CONCURRENCY_CAP: "2",
+      SIGILIX_PLATFORM_DB: db,
+    })
+    await handleReviewApiRoute(req(groundedBody), e)
+
+    expect(mockAdmit).toHaveBeenCalledTimes(1)
+    expect(mockAdmit.mock.calls[0]?.[0]?.cap).toBe(9)
+  })
+
+  it("tenant missing from D1 → admitTenant called with env-default cap", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_ROUTE)
+    // No row for installationId 42 → falls back to SIGILIX_TENANT_CONCURRENCY_CAP
+
+    const e = groundedEnv({
+      SIGILIX_FAIRNESS_MODE: "enforce",
+      SIGILIX_TENANT_CONCURRENCY_CAP: "5",
+      SIGILIX_PLATFORM_DB: db,
+    })
+    await handleReviewApiRoute(req(groundedBody), e)
+
+    expect(mockAdmit).toHaveBeenCalledTimes(1)
+    expect(mockAdmit.mock.calls[0]?.[0]?.cap).toBe(5)
   })
 })

@@ -17,11 +17,16 @@ vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({
   })),
 }))
 // Tenancy primitives mocked so the tests drive the decision directly without
-// needing a real Durable Object binding.
-vi.mock("@/src/features/tenancy", () => ({
-  admitTenant: vi.fn(),
-  releaseTenant: vi.fn(),
-}))
+// needing a real Durable Object binding. resolveFairnessConfig is pure so we
+// use the real implementation; only the DO-backed adapters need stubs.
+vi.mock("@/src/features/tenancy", async (importActual) => {
+  const actual = await importActual()
+  return {
+    ...(actual as object),
+    admitTenant: vi.fn(),
+    releaseTenant: vi.fn(),
+  }
+})
 
 import { handleReviewApiRoute } from "./api-review-route"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"

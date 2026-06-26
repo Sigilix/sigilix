@@ -66,7 +66,7 @@ import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
-import { admitTenant, releaseTenant, MAX_DEFERS } from "@/src/features/tenancy"
+import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig } from "@/src/features/tenancy"
 
 // SIG-318 / SIG-376 (Tier-1 8/8): entry-module decomposition. The webhook
 // handlers + the queue dispatcher + the shared mention/capture layer were
@@ -446,11 +446,7 @@ export default {
     // SIG-455: per-tenant fairness mode. "off" disables admission entirely;
     // "shadow" measures the desired decision but always proceeds; "enforce"
     // actually defers denied jobs. Default off (the binding/flags ship dark).
-    const mode =
-      env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
-    // cap is floored at 1; the disable lever is SIGILIX_FAIRNESS_MODE=off, not cap=0
-    const parsedCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10)
-    const cap = Number.isInteger(parsedCap) && parsedCap > 0 ? parsedCap : 2
+    const { mode, cap } = resolveFairnessConfig(env)
     for (const message of batch.messages) {
       const job = message.body
       // Fairness only applies to DO-routed pr-review runs: a string runId is

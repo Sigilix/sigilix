@@ -14,3 +14,5 @@ export {
 export type { FairnessState, Lease, AcquireResult } from "./domain/fairness"
 export { admitTenant, releaseTenant } from "./adapters/concurrency-client"
 export type { AdmitResult } from "./adapters/concurrency-client"
+export { resolveFairnessConfig } from "./domain/config"
+export type { FairnessConfig } from "./domain/config"

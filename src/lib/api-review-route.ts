@@ -40,7 +40,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireBearerToken } from "./auth-bearer"
-import { admitTenant, releaseTenant } from "@/src/features/tenancy"
+import { admitTenant, releaseTenant, resolveFairnessConfig } from "@/src/features/tenancy"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
@@ -191,11 +191,7 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // installationId via resolveInstallation (not spoofable), so the fairness gate is safe.
   // "off" disables admission entirely; "shadow" measures but never blocks; "enforce" returns
   // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
-  const fairnessMode =
-    env.SIGILIX_FAIRNESS_MODE === "enforce" ? "enforce" : env.SIGILIX_FAIRNESS_MODE === "shadow" ? "shadow" : "off"
-  // cap is floored at 1; the disable lever is SIGILIX_FAIRNESS_MODE=off, not cap=0
-  const parsedCap = Number.parseInt(env.SIGILIX_TENANT_CONCURRENCY_CAP ?? "", 10)
-  const fairnessCap = Number.isInteger(parsedCap) && parsedCap > 0 ? parsedCap : 2
+  const { mode: fairnessMode, cap: fairnessCap } = resolveFairnessConfig(env)
   // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
   let lease: { tenantId: string; leaseId: string } | undefined
 

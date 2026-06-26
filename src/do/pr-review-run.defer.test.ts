@@ -291,6 +291,42 @@ describe("PrReviewRunDO /defer — request body validation (Fix A)", () => {
     )
     expect(res.status).toBe(400)
   })
+
+  it("400 when body is null (non-object JSON)", async () => {
+    const { instance } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify(null),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("400 when body is a non-object (string)", async () => {
+    const { instance } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify("str"),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("400 when backoffMs is negative", async () => {
+    const { instance, runId } = await setupQueuedRun()
+    const res = await instance.fetch(
+      new Request("https://do.internal/defer", {
+        method: "POST",
+        body: JSON.stringify({ runId, backoffMs: -1 }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
 })
 
 describe("PrReviewRunDO defer alarm — watchdogDeadlineAt refreshed on re-arm (Fix B)", () => {

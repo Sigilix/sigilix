@@ -30,9 +30,18 @@ export async function handleDeferRequest(ctx: DurableObjectState, env: Env, requ
   } catch {
     return jsonResponse(400, { error: "invalid_json" })
   }
-  const { runId, backoffMs } = (body ?? {}) as { runId?: unknown; backoffMs?: unknown }
-  if (typeof runId !== "string" || runId.length === 0 || typeof backoffMs !== "number" || !Number.isFinite(backoffMs)) {
-    return jsonResponse(400, { error: "runId (non-empty string) and backoffMs (finite number) are required" })
+  if (typeof body !== "object" || body === null) {
+    return jsonResponse(400, { error: "invalid_body" })
+  }
+  const { runId, backoffMs } = body as { runId?: unknown; backoffMs?: unknown }
+  if (
+    typeof runId !== "string" ||
+    runId.length === 0 ||
+    !(typeof backoffMs === "number" && Number.isFinite(backoffMs) && backoffMs >= 0)
+  ) {
+    return jsonResponse(400, {
+      error: "runId (non-empty string) and backoffMs (finite non-negative number) are required",
+    })
   }
   const state = await ctx.storage.get<RunState>(STATE_KEY)
   if (!state || state.runId !== runId || state.state !== "queued") {

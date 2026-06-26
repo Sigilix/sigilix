@@ -159,4 +159,19 @@ describe("appendUsage", () => {
     // INSERT OR IGNORE: first row wins on all columns
     expect(row?.author_login).toBe("alice")
   })
+
+  it("NaN tokens — skipped, no row inserted, does not throw", async () => {
+    await expect(appendUsage(makeEnv(db), { ...BASE_ARGS, tokens: NaN })).resolves.toBeUndefined()
+    expect(await rowCount(db)).toBe(0)
+  })
+
+  it("NaN modelCalls — skipped, no row inserted, does not throw", async () => {
+    await expect(appendUsage(makeEnv(db), { ...BASE_ARGS, modelCalls: NaN })).resolves.toBeUndefined()
+    expect(await rowCount(db)).toBe(0)
+  })
+
+  it("finite modelCalls and tokens still write a row (regression guard)", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, modelCalls: 3, tokens: 1500 })
+    expect(await rowCount(db)).toBe(1)
+  })
 })

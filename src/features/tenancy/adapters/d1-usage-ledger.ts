@@ -12,9 +12,11 @@ import type { Env } from "@/src/shared/types/env"
 
 /**
  * Append a single usage row.  Silently skips rows with missing identity
- * (non-finite installationId / repoId / prNumber, or empty headSha) and
- * deduplicates on the `UNIQUE(installation_id, repo_id, pr_number, head_sha)`
- * constraint via INSERT OR IGNORE (first-write-wins on all metric + author columns).
+ * (non-finite installationId / repoId / prNumber, or empty headSha) AND rows
+ * with non-finite metric values (non-finite modelCalls / tokens — e.g. NaN
+ * from a malformed tokenUsageByModel reduce).  Deduplicates on the
+ * `UNIQUE(installation_id, repo_id, pr_number, head_sha)` constraint via
+ * INSERT OR IGNORE (first-write-wins on all metric + author columns).
  *
  * `authorLogin` is supplementary attribution — NOT part of the identity key.
  *
@@ -38,7 +40,9 @@ export async function appendUsage(
     !Number.isFinite(args.installationId) ||
     !Number.isFinite(args.repoId) ||
     !Number.isFinite(args.prNumber) ||
-    args.headSha === ""
+    args.headSha === "" ||
+    !Number.isFinite(args.modelCalls) ||
+    !Number.isFinite(args.tokens)
   ) {
     return
   }

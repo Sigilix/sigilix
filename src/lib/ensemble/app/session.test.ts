@@ -222,6 +222,29 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
     expect(await usageLedgerRowCount(db)).toBe(0)
   })
 
+  it("partially malformed tokenUsageByModel (undefined field) — finite tokens written, good entries summed, undefined clamped to 0", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({
+      installationId: 10,
+      repoId: 200,
+      tokenUsageByModel: {
+        good: { inputTokens: 100, outputTokens: 50 },
+        bad: { inputTokens: undefined, outputTokens: 5 } as unknown as { inputTokens: number; outputTokens: number },
+      } as unknown as FinalizeTelemetry["tokenUsageByModel"],
+    })
+
+    const res = await finalize(tel, env, "posted", null)
+
+    // finalize still returns its normal posted result
+    expect(res.status).toBe("posted")
+
+    // good: 100+50=150; bad: 0(undefined→0)+5=5; total=155
+    const row = await db.prepare("SELECT tokens FROM usage_ledger LIMIT 1").first<{ tokens: number }>()
+    expect(row).not.toBeNull()
+    expect(Number.isFinite(row?.tokens)).toBe(true)
+    expect(row?.tokens).toBe(155)
+  })
+
   it("existing isDryRunEngineFailure tests are unaffected by the new mocks (finalize is not involved in those tests)", () => {
     // Smoke-check: the pure isDryRunEngineFailure function still resolves correctly
     // after the module-level vi.mock additions above.

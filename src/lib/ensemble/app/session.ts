@@ -253,7 +253,13 @@ export async function finalize<Tel extends FinalizeTelemetry>(
   // or non-prod telemetry constructors that omit installationId/repoId.
   if (typeof telemetry.installationId === "number" && typeof telemetry.repoId === "number") {
     try {
-      const tokens = Object.values(telemetry.tokenUsageByModel).reduce((n, m) => n + m.inputTokens + m.outputTokens, 0)
+      const tokens = Object.values(telemetry.tokenUsageByModel).reduce(
+        (n, m) =>
+          n +
+          (Number.isFinite(m.inputTokens) ? m.inputTokens : 0) +
+          (Number.isFinite(m.outputTokens) ? m.outputTokens : 0),
+        0,
+      )
       await appendUsage(env, {
         installationId: telemetry.installationId,
         repoId: telemetry.repoId,
@@ -264,7 +270,11 @@ export async function finalize<Tel extends FinalizeTelemetry>(
         authorLogin: telemetry.authorLogin ?? null,
         nowIso: new Date().toISOString(),
       })
-    } catch {}
+    } catch (error) {
+      console.warn(
+        JSON.stringify({ event: "usage-meter-failed", err: error instanceof Error ? error.message : String(error) }),
+      )
+    }
   }
   // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
   // because finalize() is the single choke point every exit path funnels

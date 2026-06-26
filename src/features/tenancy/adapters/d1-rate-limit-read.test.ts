@@ -180,7 +180,7 @@ describe("readRollingReviewCount", () => {
     expect(result.windowRowsAscMs).toHaveLength(0)
   })
 
-  it("LIMIT caps returned rows — count is bounded by limit (caller sets limit = cap+burst+1)", async () => {
+  it("count is the TRUE total; windowRowsAscMs is bounded by limit (caller sets limit = cap+burst+1)", async () => {
     // Seed 10 rows for alice
     for (let i = 1; i <= 10; i++) {
       await insertUsage(db, {
@@ -193,7 +193,7 @@ describe("readRollingReviewCount", () => {
       })
     }
 
-    // limit=4 → count must be 4, not 10
+    // limit=4 → count must be 10 (TRUE total), windowRowsAscMs bounded to 4
     const result = await readRollingReviewCount(makeEnv(db), {
       installationId: 1,
       authorLogin: "alice",
@@ -201,7 +201,7 @@ describe("readRollingReviewCount", () => {
       limit: 4,
     })
 
-    expect(result).toMatchObject({ ok: true, count: 4 })
+    expect(result).toMatchObject({ ok: true, count: 10 })
     if (!result.ok) return
     expect(result.windowRowsAscMs).toHaveLength(4)
   })

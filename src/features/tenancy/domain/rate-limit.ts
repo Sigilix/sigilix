@@ -48,11 +48,15 @@ export const DEFAULT_RATE_LIMIT_CAP = 3
 
 /**
  * Burst allowance: the number of reviews above `cap` a tenant may consume
- * before the gate fires. A burst of 1 means `used < cap + 1` must hold
- * (`used <= cap`) to be allowed — in practice the burst softens the hard
- * edge without meaningfully raising abuse risk.
+ * before the gate fires.
+ *
+ * Set to 0 (literal cap): a review is metered at finalize() AFTER it runs,
+ * so at admission `used` reflects prior reviews only. With burst=1 the cap+1-th
+ * review (used=cap < cap+1) would be admitted, giving an effective cap+1/hr.
+ * burst=0 → allow when `used < cap + 0`, enforcing a literal cap/hr (reviews
+ * at used=0…cap-1 admitted; used=cap denied).
  */
-export const RATE_LIMIT_BURST = 1
+export const RATE_LIMIT_BURST = 0
 
 // ─── resolveRateLimitCap ─────────────────────────────────────────────────────
 

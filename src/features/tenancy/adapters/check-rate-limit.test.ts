@@ -165,9 +165,9 @@ describe("checkRateLimit", () => {
 
   // ── shadow mode ───────────────────────────────────────────────────────────────
 
-  it("mode=shadow, used UNDER cap+burst (used=3) → allowed:true, rate-limit-ok", async () => {
-    // cap=3, burst=1; used=3 → 3 < 3+1=4 → allowed
-    for (let i = 0; i < 3; i++) {
+  it("mode=shadow, used UNDER cap+burst (used=2) → allowed:true, rate-limit-ok", async () => {
+    // cap=3, burst=0; used=2 → 2 < 3+0=3 → allowed
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 10, "alice", i, recentIso(0.5))
     }
     const decision = await checkRateLimit(makeEnv(db, "shadow"), {
@@ -176,16 +176,16 @@ describe("checkRateLimit", () => {
       nowMs: Date.now(),
     })
     expect(decision.allowed).toBe(true)
-    expect(decision.used).toBe(3)
+    expect(decision.used).toBe(2)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     const ok = eventsByName("rate-limit-ok")
     expect(ok).toHaveLength(1)
-    expect(ok[0]).toMatchObject({ event: "rate-limit-ok", installationId: 10, mode: "shadow", used: 3, cap: 3 })
+    expect(ok[0]).toMatchObject({ event: "rate-limit-ok", installationId: 10, mode: "shadow", used: 2, cap: 3 })
   })
 
-  it("mode=shadow, used OVER cap+burst (used=4) → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
-    // cap=3, burst=1; used=4 → 4 < 4 = false → over limit; shadow still allows
-    for (let i = 0; i < 4; i++) {
+  it("mode=shadow, used OVER cap+burst (used=3) → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
+    // cap=3, burst=0; used=3 → 3 < 3+0=3 = false → over limit; shadow still allows
+    for (let i = 0; i < 3; i++) {
       await insertReview(db, 11, "bob", i, recentIso(0.5))
     }
     const nowMs = Date.now()
@@ -196,21 +196,22 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(true)
     expect(decision.mode).toBe("shadow")
-    expect(decision.used).toBe(4)
+    expect(decision.used).toBe(3)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.resetMs).toBeGreaterThan(0)
-    expect(decision.footer).toContain("4 of 3 reviews used")
+    expect(decision.footer).toContain("3 of 3 reviews used")
     expect(decision.footer).toContain("resets in")
     const wouldSkip = eventsByName("rate-limit-would-skip")
     expect(wouldSkip).toHaveLength(1)
-    expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 4, cap: 3 })
+    expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 3, cap: 3 })
     expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBeGreaterThan(0)
   })
 
   // ── enforce mode ──────────────────────────────────────────────────────────────
 
-  it("mode=enforce, used UNDER cap+burst (used=3) → allowed:true", async () => {
-    for (let i = 0; i < 3; i++) {
+  it("mode=enforce, used UNDER cap+burst (used=2) → allowed:true", async () => {
+    // cap=3, burst=0; used=2 → 2 < 3+0=3 → allowed
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 20, "charlie", i, recentIso(0.5))
     }
     const decision = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -223,8 +224,9 @@ describe("checkRateLimit", () => {
     expect(eventsByName("rate-limit-skip")).toHaveLength(0)
   })
 
-  it("mode=enforce, used OVER cap+burst (used=4) → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
-    for (let i = 0; i < 4; i++) {
+  it("mode=enforce, used OVER cap+burst (used=3) → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
+    // cap=3, burst=0; used=3 → 3 < 3+0=3 = false → denied
+    for (let i = 0; i < 3; i++) {
       await insertReview(db, 21, "dave", i, recentIso(0.5))
     }
     const nowMs = Date.now()
@@ -235,14 +237,14 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(false)
     expect(decision.mode).toBe("enforce")
-    expect(decision.used).toBe(4)
+    expect(decision.used).toBe(3)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.resetMs).toBeGreaterThan(0)
-    expect(decision.footer).toContain("4 of 3 reviews used")
+    expect(decision.footer).toContain("3 of 3 reviews used")
     expect(decision.footer).toContain("resets in")
     const skip = eventsByName("rate-limit-skip")
     expect(skip).toHaveLength(1)
-    expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 4, cap: 3 })
+    expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 3, cap: 3 })
     expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBeGreaterThan(0)
   })
 
@@ -264,29 +266,29 @@ describe("checkRateLimit", () => {
 
   // ── cap + burst boundary ──────────────────────────────────────────────────────
 
-  it("cap=3 burst=1 boundary: used=3 → allowed; used=4 → denied (enforce)", async () => {
-    // Part A: used=3 → 3 < cap+burst=4 → allowed
-    for (let i = 0; i < 3; i++) {
+  it("cap=3 burst=0 boundary: used=2 → allowed; used=3 → denied (enforce)", async () => {
+    // Part A: used=2 → 2 < cap+burst=3+0=3 → allowed
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 40, "frank", i, recentIso(0.5))
     }
-    const d3 = await checkRateLimit(makeEnv(db, "enforce"), {
+    const d2 = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 40,
       authorLogin: "frank",
       nowMs: Date.now(),
     })
-    expect(d3.allowed).toBe(true)
-    expect(d3.used).toBe(3)
+    expect(d2.allowed).toBe(true)
+    expect(d2.used).toBe(2)
 
-    // Part B: used=4 → 4 < 4 = false → denied
-    for (let i = 0; i < 4; i++) {
+    // Part B: used=3 → 3 < 3 = false → denied
+    for (let i = 0; i < 3; i++) {
       await insertReview(db, 41, "frank", i, recentIso(0.5))
     }
-    const d4 = await checkRateLimit(makeEnv(db, "enforce"), {
+    const d3 = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 41,
       authorLogin: "frank",
       nowMs: Date.now(),
     })
-    expect(d4.allowed).toBe(false)
-    expect(d4.used).toBe(4)
+    expect(d3.allowed).toBe(false)
+    expect(d3.used).toBe(3)
   })
 })

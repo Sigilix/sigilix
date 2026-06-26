@@ -31,7 +31,19 @@ describe("admitTenant", () => {
   it("FAILS OPEN on a non-200 (granted=true)", async () => {
     const env = envWith(async () => new Response("nope", { status: 500 }))
     const r = await admitTenant({ env, tenantId: "42", leaseId: "l1", cap: 2 })
-    expect(r.granted).toBe(true)
+    expect(r).toEqual({ granted: true, retryAfterMs: 0 })
+  })
+
+  it("FAILS OPEN on a malformed/missing-fields body (granted=true)", async () => {
+    const env = envWith(async () => new Response(JSON.stringify({}), { status: 200 }))
+    const r = await admitTenant({ env, tenantId: "42", leaseId: "l1", cap: 2 })
+    expect(r).toEqual({ granted: true, retryAfterMs: 0 })
+  })
+
+  it("FAILS OPEN when body fails .json() (granted=true)", async () => {
+    const env = envWith(async () => new Response("not json", { status: 200 }))
+    const r = await admitTenant({ env, tenantId: "42", leaseId: "l1", cap: 2 })
+    expect(r).toEqual({ granted: true, retryAfterMs: 0 })
   })
 
   it("releaseTenant never throws", async () => {

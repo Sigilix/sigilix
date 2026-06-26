@@ -9,6 +9,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "./types"
 import { buildPausedKey, buildIgnoredKey } from "@/src/lib/pr-lifecycle-commands"
+import { upsertTenantAndRepo } from "@/src/features/tenancy"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -114,6 +115,17 @@ export async function enqueuePrReviewJob(env: Env, args: PrReviewEnqueueArgs): P
       }),
     )
     return { ok: true, route: "skipped-paused" }
+  }
+
+  // SIG-343: lazily register the tenant + repo in the platform DB (best-effort,
+  // fail-open — upsertTenantAndRepo never throws and no-ops when D1 is unbound).
+  if (typeof args.repoId === "number") {
+    await upsertTenantAndRepo(env, {
+      installationId: args.installationId,
+      repoId: args.repoId,
+      fullName: `${args.owner}/${args.repo}`,
+      nowIso: new Date().toISOString(),
+    })
   }
 
   const body: EnqueueRequest = {

@@ -292,6 +292,8 @@ export interface SpecialistRunResult {
   modelUsed: string
   /** Total model invocations across primary retries + fallback. */
   attemptsUsed: number
+  /** SIG-455 (PR B Task 5): max Retry-After ms seen across all attempts; absent when no 429. */
+  providerRateLimitMs?: number
 }
 
 /**
@@ -533,6 +535,8 @@ export async function runWithRetryAndFallback<T>(args: {
   elapsedMs: number
   modelUsed: string
   attemptsUsed: number
+  /** SIG-455 (PR B Task 5): max Retry-After ms seen across all attempts; absent when none. */
+  providerRateLimitMs?: number
 }> {
   const { config, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel, startedAt } = args
   const perAttemptCap = args.perAttemptTimeoutMs ?? config.perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS
@@ -540,6 +544,7 @@ export async function runWithRetryAndFallback<T>(args: {
   let attemptsUsed = 0
   let lastFailureReason: string | undefined
   let lastFailureRaw: string | undefined
+  let maxRateLimitMs = 0 // SIG-455: max Retry-After ms seen across primary + fallback attempts
   // SIG-460: providers that failed mid-stream on a prior attempt OF THIS RUN. Spread as
   // `provider: { ignore: [...] }` into subsequent attempts so a retry steers off the
   // dead provider (OpenRouter auto-failover only covers request-time errors). Local to
@@ -616,10 +621,13 @@ export async function runWithRetryAndFallback<T>(args: {
       ...(outcome.toolResultTokens !== undefined ? { toolResultTokens: outcome.toolResultTokens } : {}),
     })
     if (outcome.verdict !== null) {
-      return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.primary, attemptsUsed }
+      const elapsedMs = Date.now() - startedAt
+      const r = maxRateLimitMs > 0 ? { providerRateLimitMs: maxRateLimitMs } : {}
+      return { verdict: outcome.verdict, elapsedMs, modelUsed: config.primary, attemptsUsed, ...r }
     }
     lastFailureReason = outcome.failureReason
     lastFailureRaw = outcome.failureRawAnswer
+    if ((outcome.providerRateLimitMs ?? 0) > maxRateLimitMs) maxRateLimitMs = outcome.providerRateLimitMs!
     // SIG-460: if the failure named an upstream provider (mid-stream 500), exclude it
     // from the remaining attempts so the retry can't re-pick the same dead provider.
     const failedProvider = parseFailedProvider(outcome.failureReason)
@@ -698,26 +706,33 @@ export async function runWithRetryAndFallback<T>(args: {
       ...(outcome.toolCallsMade !== undefined ? { toolCallsMade: outcome.toolCallsMade } : {}),
       ...(outcome.toolResultTokens !== undefined ? { toolResultTokens: outcome.toolResultTokens } : {}),
     })
+    if ((outcome.providerRateLimitMs ?? 0) > maxRateLimitMs) maxRateLimitMs = outcome.providerRateLimitMs!
     if (outcome.verdict !== null) {
-      return { verdict: outcome.verdict, elapsedMs: Date.now() - startedAt, modelUsed: config.fallback, attemptsUsed }
+      const elapsedMs = Date.now() - startedAt
+      const r = maxRateLimitMs > 0 ? { providerRateLimitMs: maxRateLimitMs } : {}
+      return { verdict: outcome.verdict, elapsedMs, modelUsed: config.fallback, attemptsUsed, ...r }
     }
     // Fallback also failed. Use ITS failure as the reason (more recent + relevant).
-    return wrapFailure(
+    const wfFb = wrapFailure<T>(
       `fallback_failed: ${outcome.failureReason ?? "unknown"}`,
       outcome.failureRawAnswer,
       config.fallback,
       attemptsUsed,
       startedAt,
     )
+    if (maxRateLimitMs > 0) wfFb.providerRateLimitMs = maxRateLimitMs
+    return wfFb
   }
 
-  return wrapFailure(
+  const wfEx = wrapFailure<T>(
     lastFailureReason ?? "exhausted_no_fallback",
     lastFailureRaw,
     config.primary,
     attemptsUsed,
     startedAt,
   )
+  if (maxRateLimitMs > 0) wfEx.providerRateLimitMs = maxRateLimitMs
+  return wfEx
 }
 
 async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
@@ -795,6 +810,8 @@ interface SynthesizerRunOutput {
   elapsedMs: number
   modelUsed: string
   attemptsUsed: number
+  /** SIG-455 (PR B Task 5): max Retry-After ms seen across synth attempts; absent when none. */
+  providerRateLimitMs?: number
 }
 
 /**
@@ -947,6 +964,7 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
       elapsedMs: outcome.elapsedMs,
       modelUsed: outcome.modelUsed,
       attemptsUsed: outcome.attemptsUsed,
+      ...(outcome.providerRateLimitMs ? { providerRateLimitMs: outcome.providerRateLimitMs } : {}),
     }
   }
 
@@ -977,5 +995,6 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
   }
   if (failureReason) result.failureReason = failureReason
   if (outcome.failureRawAnswer) result.failureRawAnswer = outcome.failureRawAnswer
+  if (outcome.providerRateLimitMs) result.providerRateLimitMs = outcome.providerRateLimitMs
   return result
 }

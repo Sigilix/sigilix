@@ -198,6 +198,13 @@ class_name = "GraphExpansionMetricsDO"
 name = "TENANT_CONCURRENCY"
 class_name = "TenantConcurrencyDO"
 
+# SIG-455 PR B: per-provider backpressure cooldown. One DO instance per
+# provider slug (idFromName(providerSlug)). Flag-gated behind
+# SIGILIX_PROVIDER_COOLDOWN_MODE.
+[[durable_objects.bindings]]
+name = "PROVIDER_COOLDOWN"
+class_name = "ProviderCooldownDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -262,6 +269,13 @@ new_sqlite_classes = ["RunnerToolMetricsDO"]
 tag = "sig-455-tenant-concurrency-v1"
 new_sqlite_classes = ["TenantConcurrencyDO"]
 
+# SIG-455 PR B: ProviderCooldownDO — SQLite-backed (new_sqlite_classes). No
+# alarm needed; read-on-demand with Math.max(0, cooldownUntil - Date.now()).
+# Forward-only.
+[[migrations]]
+tag = "sig-455-provider-cooldown-v1"
+new_sqlite_classes = ["ProviderCooldownDO"]
+
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
 #   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # numeric; clamped [1, 10], default 3
@@ -309,6 +323,8 @@ SHADOW_BAKEOFF_ROLES = ""
 # is the integer per-tenant concurrent-review ceiling (default 2 in code).
 SIGILIX_FAIRNESS_MODE = "shadow"
 SIGILIX_TENANT_CONCURRENCY_CAP = "2"
+# SIG-455 PR B: provider backpressure cooldown mode. "off" (default) | "shadow" | "enforce".
+SIGILIX_PROVIDER_COOLDOWN_MODE = "shadow"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

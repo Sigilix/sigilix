@@ -34,6 +34,7 @@ import {
   runBailWithSkipNotice,
   maybeEmptyDeltaSkip,
   dryRunResult,
+  applyCooldownFromPhase,
 } from "./orchestrator-helpers"
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
@@ -565,8 +566,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // fanout telemetry, the ARC-277 coverage gate, the synth-bypass / synthesizer
     // path (+ retry ladder), and the recall floors live in ensemble/app/specialists
     // (which delegates synth to ensemble/app/synthesize + the floors to recall-
-    // floors). It mutates `telemetry` + `shadowState` by reference; its skip-notice
-    // bails return the `exit` arm, forwarded here.
+    // floors); mutates `telemetry`+`shadowState` by ref; skip-notice bails → `exit`, forwarded here.
     const specialistsPhase = await runSpecialistsAndSynthesize({
       env,
       owner,
@@ -604,6 +604,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       ...(args.backgroundWaitUntil !== undefined ? { backgroundWaitUntil: args.backgroundWaitUntil } : {}),
     })
     if (specialistsPhase.kind === "exit") return specialistsPhase.result
+    applyCooldownFromPhase(args.env, specialistsPhase.providerRateLimitMs, args.backgroundWaitUntil)
     const {
       succeeded,
       degradedCoverage,

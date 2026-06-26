@@ -19,6 +19,8 @@
 import type { Env } from "@/src/shared/types/env"
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import type { GitHubClient } from "@/src/shared/adapters/github"
+import { setProviderCooldown } from "@/src/shared/adapters/model/provider-cooldown-client"
+import { resolveCooldownMode } from "@/src/lib/ensemble/domain/backpressure"
 import { createAstCache, type AstCache } from "@/src/features/ast-rules"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
@@ -313,4 +315,27 @@ export async function maybeEmptyDeltaSkip(
   // commands) must remain — a "Skipped · 0 findings" terminal would clobber it and
   // mislead (the prior findings are still live + blocking).
   return finalize(telemetry, env, "skipped", cache)
+}
+
+// ─── SIG-455 (PR B Task 5): provider cooldown set-on-429 ─────────────────────
+
+type BackgroundWaitUntil = (promise: Promise<void>) => void
+
+/**
+ * Fire-and-forget: if cooldown mode is shadow or enforce AND a positive
+ * `providerRateLimitMs` was seen this run, write the cooldown to the shared DO.
+ * Off mode is a no-op. Fail-open — any DO error is swallowed.
+ * The promise is pinned to the Worker lifetime via `backgroundWaitUntil` when
+ * provided (prevents the runtime from cutting it off before the DO write lands).
+ */
+export function applyCooldownFromPhase(
+  env: Env,
+  providerRateLimitMs: number | undefined,
+  backgroundWaitUntil?: BackgroundWaitUntil,
+): void {
+  const mode = resolveCooldownMode(env)
+  if (mode === "off" || !providerRateLimitMs || providerRateLimitMs <= 0) return
+  const pending = setProviderCooldown(env, providerRateLimitMs).catch(() => {})
+  if (backgroundWaitUntil) backgroundWaitUntil(pending)
+  console.log(JSON.stringify({ event: "provider-cooldown-set", retryAfterMs: providerRateLimitMs, mode }))
 }

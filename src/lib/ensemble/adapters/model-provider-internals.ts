@@ -18,6 +18,8 @@ export interface RetryFailureResult<T> {
   elapsedMs: number
   modelUsed: string
   attemptsUsed: number
+  /** SIG-455 (PR B Task 5): max Retry-After ms seen across all attempts; absent when no 429. */
+  providerRateLimitMs?: number
 }
 
 // SIG-287: relocated from model-provider.ts to keep that adapter <=1k lines

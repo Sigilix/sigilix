@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { chat } from "@/src/shared/adapters/model/openrouter-chat"
 import { isPermanentFailure } from "@/src/lib/ensemble/adapters/model-provider-internals"
+import { ProviderRateLimitError, isProviderRateLimit } from "@/src/shared/adapters/model/provider-errors"
 import type { ChatArgs } from "@/src/shared/ports/model"
 
 function sseStream(frames: string[]): ReadableStream<Uint8Array> {
@@ -19,6 +20,20 @@ function mockFetch(frames: string[], opts?: { ok?: boolean; status?: number }): 
   return vi.fn(
     async () => ({ ok, status, body: ok ? sseStream(frames) : null, text: async () => "boom" }) as unknown as Response,
   )
+}
+
+/** Error-response mock that includes a real `headers.get` so rate-limit parsing works. */
+function mockFetchError(status: number, retryAfterHeader?: string): ReturnType<typeof vi.fn> {
+  return vi.fn(async () => {
+    const headersMap = new Map<string, string>()
+    if (retryAfterHeader !== undefined) headersMap.set("retry-after", retryAfterHeader)
+    return {
+      ok: false,
+      status,
+      headers: { get: (name: string): string | null => headersMap.get(name.toLowerCase()) ?? null },
+      text: async () => `${status} error body`,
+    } as unknown as Response
+  })
 }
 
 const base: ChatArgs = {
@@ -289,5 +304,40 @@ describe("openrouter-chat", () => {
       tools: [{ type: "function", function: { name: "noop", description: "d", parameters: { type: "object" } } }],
     })
     expect(result.usage?.costUsd).toBeUndefined()
+  })
+
+  // ─── SIG-455 (PR B Task 2): ProviderRateLimitError on 429/503 ───────────
+
+  it("429 with Retry-After: 5 → throws ProviderRateLimitError with retryAfterMs===5000", async () => {
+    vi.stubGlobal("fetch", mockFetchError(429, "5"))
+    const err = await chat(base).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(isProviderRateLimit(err)).toBe(true)
+    expect((err as ProviderRateLimitError).retryAfterMs).toBe(5000)
+    expect((err as ProviderRateLimitError).message).toMatch(/OpenRouter HTTP 429/)
+  })
+
+  it("503 with no Retry-After header → throws ProviderRateLimitError with retryAfterMs===20000 (default)", async () => {
+    vi.stubGlobal("fetch", mockFetchError(503))
+    const err = await chat(base).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(isProviderRateLimit(err)).toBe(true)
+    expect((err as ProviderRateLimitError).retryAfterMs).toBe(20_000)
+    expect((err as ProviderRateLimitError).message).toMatch(/OpenRouter HTTP 503/)
+  })
+
+  it("500 → plain Error (NOT ProviderRateLimitError), message still OpenRouter HTTP 500", async () => {
+    vi.stubGlobal("fetch", mockFetchError(500))
+    const err = await chat(base).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect(isProviderRateLimit(err)).toBe(false)
+    expect((err as Error).message).toMatch(/OpenRouter HTTP 500/)
   })
 })

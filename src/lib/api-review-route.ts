@@ -48,6 +48,8 @@ import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { diffReviewClient } from "./api-review-diff-client"
+import { getProviderCooldownRemainingMs } from "@/src/shared/adapters/model/provider-cooldown-client"
+import { resolveCooldownMode } from "@/src/lib/ensemble/domain/backpressure"
 
 const MAX_DIFF_BYTES = 1_500_000 // reject oversized diffs (cost/abuse guard) → 413
 // Whole-envelope cap, enforced as the stream is read (BEFORE JSON.parse) so an
@@ -245,6 +247,21 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
     // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
     // GitHub counts against the budget (no free installation enumeration).
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
+    // SIG-455 Task 6 (PR B): provider-cooldown read-before-fire for Mode B.
+    // Synchronous path: 429 + Retry-After. The CLI caller MUST honor Retry-After — we do
+    // not re-enqueue a sync request (GLM sign-off #3). Fail-open: 0 on fault → proceed.
+    // shadow/off → skip entirely.
+    const cooldownMode = resolveCooldownMode(env)
+    if (cooldownMode === "enforce") {
+      const remaining = await getProviderCooldownRemainingMs(env)
+      if (remaining > 0) {
+        console.log(JSON.stringify({ event: "provider-cooldown-honored", surface: "v1review", remainingMs: remaining }))
+        return new Response(JSON.stringify({ error: "provider_busy" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": String(Math.ceil(remaining / 1000)) },
+        })
+      }
+    }
     // Fairness gate for Mode B: tenantId is the resolved installationId. Gate AFTER
     // resolveInstallation + ceiling, BEFORE buildClient (avoids spending the GitHub
     // App token budget on an over-cap request).

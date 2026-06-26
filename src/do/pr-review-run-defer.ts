@@ -59,9 +59,11 @@ export async function handleDeferRequest(ctx: DurableObjectState, env: Env, requ
  * `defer` alarm fire — re-send the pr-review job (attempt UNCHANGED, deferCount
  * forwarded) and re-arm the watchdog. Modelled on `handleRetryAlarm` but does
  * NOT increment attempts: a defer is a fairness wait, not a failure retry.
+ * Guard: no-op on any non-queued state (running/done/failed/idle) — a defer alarm
+ * should only re-send a still-queued run; a running run has already been picked up.
  */
 export async function runDeferAlarm(ctx: DurableObjectState, env: Env, state: RunState): Promise<void> {
-  if (state.state === "done" || state.state === "failed") return
+  if (state.state !== "queued") return
   const config = resolveDoConfig(env)
   await env.OPENCLAW_JOBS.send({
     type: "pr-review",

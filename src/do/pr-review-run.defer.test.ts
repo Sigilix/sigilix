@@ -162,6 +162,29 @@ describe("PrReviewRunDO /defer — queued run", () => {
   })
 })
 
+describe("PrReviewRunDO defer alarm — non-queued state is a no-op", () => {
+  // runDeferAlarm now guards on `state.state !== "queued"` — any non-queued state
+  // (running/done/failed/idle) causes an immediate return with no queue send and no
+  // state mutation. This covers the race where a defer alarm fires after the run was
+  // already picked up (state=running).
+  it("defer alarm fires on a running state → no OPENCLAW_JOBS.send, no state change", async () => {
+    const { instance, state, queue, runId } = await setupQueuedRun()
+    // Schedule a defer alarm (sets alarmKind=defer on the stored state).
+    await postJson(instance, "/defer", { runId, backoffMs: 30_000 })
+    // Race: run is picked up before the alarm fires → transition to running.
+    // Keep alarmKind=defer to route the alarm() call to runDeferAlarm.
+    const cur = state.store.get("state") as RunState
+    const runningState: RunState = { ...cur, state: "running", consumerId: "consumer-A", alarmKind: "defer" }
+    state.store.set("state", runningState)
+
+    await instance.alarm()
+
+    expect(queue.sent.length).toBe(0) // no OPENCLAW_JOBS.send
+    const after = state.store.get("state") as RunState
+    expect(after.state).toBe("running") // no state mutation
+  })
+})
+
 describe("PrReviewRunDO defer alarm fire", () => {
   it("re-sends ONE pr-review message with deferCount incremented + attempt UNCHANGED, then re-arms watchdog", async () => {
     const { instance, state, queue, runId } = await setupQueuedRun()

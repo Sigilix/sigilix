@@ -1,7 +1,9 @@
 // SIG-455 Task 6 — tenant fairness gate for POST /v1/review.
-// Tests that the same admitTenant/releaseTenant primitive (Task 4) is wired
-// into the hosted route so the CLI surface shares per-tenant concurrency
-// fairness with the webhook queue path (Task 5).
+// Mode A (diff): semaphore is bypassed entirely — owner/repo is asserted by the caller
+// with a shared key and is therefore spoofable; admitTenant must never be called on
+// the diff path. admitUnderDailyCeiling remains Mode A's sole guard.
+// Mode B (grounded): the fairness semaphore IS wired — installationId is resolved by
+// the server (not spoofable), so per-tenant concurrency limits are safe to enforce.
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
@@ -75,64 +77,32 @@ beforeEach(() => {
 })
 
 describe("handleReviewApiRoute — tenant fairness, Mode A (diff)", () => {
-  it("enforce + DENY → 429 with Retry-After header, ensemble NOT called", async () => {
-    mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
-    expect(res.status).toBe(429)
-    expect(res.headers.get("retry-after")).toBe("5")
-    const body = (await res.json()) as { error?: string }
-    expect(body.error).toBe("tenant_busy")
-    expect(mockEngine).not.toHaveBeenCalled()
-  })
+  // Mode A bypasses the per-tenant semaphore entirely — the shared bearer key + asserted
+  // owner/repo is spoofable, so admitTenant must never be called regardless of
+  // SIGILIX_FAIRNESS_MODE. The daily ceiling (admitUnderDailyCeiling) is the only gate.
 
-  it("enforce + GRANT → ensemble runs and releaseTenant called in finally", async () => {
-    mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
+  it("enforce + would-deny → still runs; admitTenant NOT called (semaphore bypassed for Mode A)", async () => {
+    mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
     const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
     const res = await handleReviewApiRoute(req(diffBody), e)
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
-    // releaseTenant must be called with the owner/repo tenantId
-    expect(mockRelease).toHaveBeenCalledWith(expect.anything(), "o/r", expect.any(String))
-  })
-
-  it("enforce + GRANT → releaseTenant is called even when ensemble throws (finally)", async () => {
-    mockAdmit.mockResolvedValue({ granted: true, retryAfterMs: 0 })
-    mockEngine.mockRejectedValue(new Error("model down"))
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
-    expect(res.status).toBe(500)
-    expect(mockRelease).toHaveBeenCalled()
-  })
-
-  it("shadow + DENY → ensemble STILL runs (measurement only, no block)", async () => {
-    mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "shadow" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
-    expect(res.status).toBe(200)
-    expect(mockEngine).toHaveBeenCalled()
-  })
-
-  it("shadow + DENY → releaseTenant NOT called (no lease acquired on a shadow deny)", async () => {
-    mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "shadow" })
-    await handleReviewApiRoute(req(diffBody), e)
+    expect(mockAdmit).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
   })
 
-  it("mode=off → admitTenant never called", async () => {
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "off" })
+  it("shadow mode → admitTenant NOT called (Mode A is semaphore-free in all fairness modes)", async () => {
+    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "shadow" })
     await handleReviewApiRoute(req(diffBody), e)
     expect(mockAdmit).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
   })
 
-  it("retryAfterMs rounds UP to the nearest second in the Retry-After header", async () => {
-    mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 1001 })
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
-    expect(res.status).toBe(429)
-    expect(res.headers.get("retry-after")).toBe("2")
+  it("mode=off → admitTenant NOT called", async () => {
+    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "off" })
+    await handleReviewApiRoute(req(diffBody), e)
+    expect(mockAdmit).not.toHaveBeenCalled()
+    expect(mockRelease).not.toHaveBeenCalled()
   })
 })
 
@@ -210,12 +180,14 @@ describe("handleReviewApiRoute — daily ceiling and fairness are independent", 
     expect(mockAdmit).not.toHaveBeenCalled()
   })
 
-  it("fairness 429 and daily ceiling 429 are distinct errors (both present → ceiling wins)", async () => {
-    // Ceiling is hit first, fairness deny is never evaluated
+  it("Mode B: fairness 429 and daily ceiling 429 are distinct — ceiling fires first (admitTenant not reached)", async () => {
+    // In Mode B both ceiling AND fairness would deny; ceiling fires first so admitTenant
+    // is never called and the error is daily_limit_exceeded, not tenant_busy.
     mockAdmit.mockResolvedValue({ granted: false, retryAfterMs: 5000 })
-    const e = makeEnv({ SIGILIX_FAIRNESS_MODE: "enforce", OPENCLAW_STATE: kvMock("200") })
-    const res = await handleReviewApiRoute(req(diffBody), e)
+    const e = groundedEnv({ SIGILIX_FAIRNESS_MODE: "enforce", OPENCLAW_STATE: kvMock("200") })
+    const res = await handleReviewApiRoute(req(groundedBody), e)
     expect(res.status).toBe(429)
     expect(((await res.json()) as { error?: string }).error).toBe("daily_limit_exceeded")
+    expect(mockAdmit).not.toHaveBeenCalled()
   })
 })

@@ -185,7 +185,10 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  // SIG-455: per-tenant fairness gate — same primitive as the webhook queue path (Task 5).
+  // SIG-455: per-tenant fairness gate — Mode B ONLY. Mode A uses a shared API key and the
+  // caller asserts owner/repo, so keying the semaphore on owner/repo is spoofable; the
+  // daily ceiling (admitUnderDailyCeiling) is Mode A's sole guard. Mode B resolves a real
+  // installationId via resolveInstallation (not spoofable), so the fairness gate is safe.
   // "off" disables admission entirely; "shadow" measures but never blocks; "enforce" returns
   // 429 on denial. Complementary to admitUnderDailyCeiling (global cost ceiling, kept as-is).
   const fairnessMode =
@@ -194,13 +197,13 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
   // Holds the granted lease so releaseTenant can be called in finally after the ensemble.
   let lease: { tenantId: string; leaseId: string } | undefined
 
-  // Per-mode: cheap validation → daily ceiling → fairness gate → build the engine args.
-  // Both modes are dryRun (a CLI review returns JSON, never posts) + forceFullCoverage
-  // (single-shot: avoid the SIG-459 empty-delta skip). Cheap validation (400/413/422/503)
-  // happens BEFORE the ceiling so it doesn't consume budget; the ceiling runs BEFORE any
-  // model spend OR GitHub-touching work (the grounded buildClient + getPullRequest) so a
-  // probe that mints an installation token + hits GitHub still counts against the ceiling.
-  // The fairness gate runs AFTER the ceiling (both guards are independent).
+  // Per-mode: cheap validation → daily ceiling → (Mode B only) fairness gate → build the
+  // engine args. Both modes are dryRun (a CLI review returns JSON, never posts) +
+  // forceFullCoverage (single-shot: avoid the SIG-459 empty-delta skip). Cheap validation
+  // (400/413/422/503) happens BEFORE the ceiling so it doesn't consume budget; the ceiling
+  // runs BEFORE any model spend OR GitHub-touching work (the grounded buildClient +
+  // getPullRequest) so a probe that mints an installation token + hits GitHub still counts
+  // against the ceiling. The Mode B fairness gate runs AFTER the ceiling (independent).
   let args: EnsembleHandlerArgs | undefined
   // Mode B: captures a buildClient/getPullRequest failure without returning early so the
   // unified try/finally below always fires releaseTenant (SIG-455 Task 6 lease-leak fix).
@@ -213,31 +216,6 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
       return json({ error: "diff_too_large", detail: `diff exceeds ${MAX_DIFF_BYTES} bytes` }, 413)
     }
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
-    // Fairness gate for Mode A: tenantId is the asserted owner/repo (lowercased).
-    if (fairnessMode !== "off") {
-      const tenantId = `${parsed.owner}/${parsed.repo}`.toLowerCase()
-      const leaseId = crypto.randomUUID()
-      const admit = await admitTenant({ env, tenantId, leaseId, cap: fairnessCap })
-      console.log(
-        JSON.stringify({
-          event: "fairness-decision",
-          surface: "v1review",
-          tenantId,
-          desired: admit.granted ? "GRANT" : "DENY",
-          mode: fairnessMode,
-        }),
-      )
-      if (!admit.granted && fairnessMode === "enforce") {
-        return new Response(JSON.stringify({ error: "tenant_busy" }), {
-          status: 429,
-          headers: {
-            "content-type": "application/json",
-            "retry-after": String(Math.ceil(admit.retryAfterMs / 1000)),
-          },
-        })
-      }
-      if (admit.granted) lease = { tenantId, leaseId }
-    }
     contextDiff = parsed.diff
     args = {
       owner: parsed.owner,

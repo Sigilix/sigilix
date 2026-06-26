@@ -23,7 +23,16 @@ export class TenantConcurrencyDO extends DurableObject<Env> {
   }
 
   private async handleAcquire(request: Request): Promise<Response> {
-    const { leaseId, cap } = (await request.json()) as { leaseId: string; cap: number }
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return json(400, { error: "invalid json" })
+    }
+    const { leaseId, cap } = body as { leaseId: unknown; cap: unknown }
+    if (typeof leaseId !== "string" || typeof cap !== "number") {
+      return json(400, { error: "leaseId (string) and cap (number) required" })
+    }
     const result = decideAcquire({ state: await this.load(), leaseId, cap, nowMs: Date.now(), rand: Math.random() })
     await this.ctx.storage.put(STATE_KEY, result.state)
     if (result.state.leases.length > 0 && (await this.ctx.storage.getAlarm()) === null) {
@@ -33,8 +42,19 @@ export class TenantConcurrencyDO extends DurableObject<Env> {
   }
 
   private async handleRelease(request: Request): Promise<Response> {
-    const { leaseId } = (await request.json()) as { leaseId: string }
-    await this.ctx.storage.put(STATE_KEY, release(await this.load(), leaseId))
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return json(400, { error: "invalid json" })
+    }
+    const { leaseId } = body as { leaseId: unknown }
+    if (typeof leaseId !== "string") {
+      return json(400, { error: "leaseId (string) and cap (number) required" })
+    }
+    const state = release(await this.load(), leaseId)
+    await this.ctx.storage.put(STATE_KEY, state)
+    if (state.leases.length === 0) await this.ctx.storage.deleteAlarm()
     return json(200, { ok: true })
   }
 

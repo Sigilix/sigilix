@@ -58,4 +58,31 @@ describe("TenantConcurrencyDO", () => {
     await do_.fetch(post("/acquire", { leaseId: "a", cap: 2 }))
     expect(getAlarm()).not.toBeNull()
   })
+
+  it("alarm() reaps expired leases", async () => {
+    const { ctx } = makeState()
+    await ctx.storage.put("fairness", {
+      schemaVersion: 1,
+      leases: [{ leaseId: "old", acquiredAtMs: 0, expiresAtMs: 1 }],
+      denyCounts: {},
+    })
+    const do_ = new TenantConcurrencyDO(ctx as unknown as DurableObjectState, {} as Env)
+    await do_.alarm()
+    const state = await ctx.storage.get<{ leases: unknown[] }>("fairness")
+    expect(state?.leases.length).toBe(0)
+  })
+
+  it("returns 400 when /acquire body is missing fields", async () => {
+    const { ctx } = makeState()
+    const do_ = new TenantConcurrencyDO(ctx as unknown as DurableObjectState, {} as Env)
+    const res = await do_.fetch(post("/acquire", {}))
+    expect(res.status).toBe(400)
+  })
+
+  it("returns 400 when /release body is missing leaseId", async () => {
+    const { ctx } = makeState()
+    const do_ = new TenantConcurrencyDO(ctx as unknown as DurableObjectState, {} as Env)
+    const res = await do_.fetch(post("/release", {}))
+    expect(res.status).toBe(400)
+  })
 })

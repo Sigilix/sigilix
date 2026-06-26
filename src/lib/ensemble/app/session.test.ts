@@ -184,6 +184,44 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
     await expect(finalize(tel, env, "posted", null)).resolves.toMatchObject({ status: "posted" })
   })
 
+  it("finalize threads authorLogin into the usage_ledger row", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({ installationId: 10, repoId: 200, authorLogin: "torvalds" })
+
+    await finalize(tel, env, "posted", null)
+
+    const row = await db
+      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null }>()
+    expect(row?.author_login).toBe("torvalds")
+  })
+
+  it("finalize writes NULL author_login when authorLogin is absent from telemetry", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({ installationId: 10, repoId: 200 }) // no authorLogin
+
+    await finalize(tel, env, "posted", null)
+
+    const row = await db
+      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null }>()
+    expect(row?.author_login).toBeNull()
+  })
+
+  it("malformed tokenUsageByModel does not throw out of finalize (fail-open try/catch)", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({
+      installationId: 10,
+      repoId: 200,
+      tokenUsageByModel: { broken: null } as unknown as FinalizeTelemetry["tokenUsageByModel"],
+    })
+
+    // Must not throw — the outer try/catch in finalize swallows reduce errors
+    await expect(finalize(tel, env, "posted", null)).resolves.toMatchObject({ status: "posted" })
+    // No row written when reduce fails
+    expect(await usageLedgerRowCount(db)).toBe(0)
+  })
+
   it("existing isDryRunEngineFailure tests are unaffected by the new mocks (finalize is not involved in those tests)", () => {
     // Smoke-check: the pure isDryRunEngineFailure function still resolves correctly
     // after the module-level vi.mock additions above.

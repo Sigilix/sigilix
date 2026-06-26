@@ -200,6 +200,10 @@ export interface FinalizeTelemetry {
   installationId?: number
   /** SIG-343: GitHub repo id — paired with `installationId` for usage metering. */
   repoId?: number
+  /** SIG-343 Task 8: PR author login captured from getPullRequest meta.
+   *  Forwarded to appendUsage for per-developer attribution. Optional — absent
+   *  on early-bail / headless paths that skip getPullRequest. */
+  authorLogin?: string
   retrievalCacheStats: RetrievalCacheStats | null
   tokenUsageByModel: TokenUsageByModel
   specialistVerdicts: ReadonlyArray<{ attemptsUsed?: number }>
@@ -248,16 +252,19 @@ export async function finalize<Tel extends FinalizeTelemetry>(
   // Guard explicitly so we never issue a pointless call on headless/CLI dry-runs
   // or non-prod telemetry constructors that omit installationId/repoId.
   if (typeof telemetry.installationId === "number" && typeof telemetry.repoId === "number") {
-    const tokens = Object.values(telemetry.tokenUsageByModel).reduce((n, m) => n + m.inputTokens + m.outputTokens, 0)
-    await appendUsage(env, {
-      installationId: telemetry.installationId,
-      repoId: telemetry.repoId,
-      prNumber: telemetry.prNumber,
-      headSha: telemetry.headSha,
-      modelCalls: callsUsed,
-      tokens,
-      nowIso: new Date().toISOString(),
-    }).catch(() => {})
+    try {
+      const tokens = Object.values(telemetry.tokenUsageByModel).reduce((n, m) => n + m.inputTokens + m.outputTokens, 0)
+      await appendUsage(env, {
+        installationId: telemetry.installationId,
+        repoId: telemetry.repoId,
+        prNumber: telemetry.prNumber,
+        headSha: telemetry.headSha,
+        modelCalls: callsUsed,
+        tokens,
+        authorLogin: telemetry.authorLogin ?? null,
+        nowIso: new Date().toISOString(),
+      })
+    } catch {}
   }
   // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
   // because finalize() is the single choke point every exit path funnels

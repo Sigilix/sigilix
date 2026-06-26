@@ -748,6 +748,8 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         installationId,
         deliveryId: request.headers.get("x-github-delivery"),
         ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
+        ...(payload.installation?.account?.login ? { accountLogin: payload.installation.account.login } : {}),
+        ...(payload.installation?.account?.type ? { accountType: payload.installation.account.type } : {}),
       })
       if (!enq.ok) {
         return new Response("do enqueue failed\n", { status: 503 })

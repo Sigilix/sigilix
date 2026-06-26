@@ -36,6 +36,10 @@ export interface PrReviewEnqueueArgs {
    * transfer-proof keyspace.
    */
   repoId?: number
+  /** SIG-343 Task 8: GitHub App account login (org or user name). */
+  accountLogin?: string
+  /** SIG-343 Task 8: GitHub App account type ('Organization' | 'User'). */
+  accountType?: string
 }
 
 // SIG-98 note on slash-command reruns + the pause/ignore gate:
@@ -125,6 +129,8 @@ export async function enqueuePrReviewJob(env: Env, args: PrReviewEnqueueArgs): P
       repoId: args.repoId,
       fullName: `${args.owner}/${args.repo}`,
       nowIso: new Date().toISOString(),
+      ...(args.accountLogin !== undefined ? { accountLogin: args.accountLogin } : {}),
+      ...(args.accountType !== undefined ? { accountType: args.accountType } : {}),
     })
   }
 

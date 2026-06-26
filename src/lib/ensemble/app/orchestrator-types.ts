@@ -483,6 +483,10 @@ export interface EnsembleTelemetry {
   installationId?: number
   /** SIG-343: GitHub repo id, paired with `installationId` for usage metering. */
   repoId?: number
+  /** SIG-343 Task 8: GitHub login of the PR author — captured from getPullRequest
+   *  meta and forwarded to appendUsage for per-developer attribution. Optional so
+   *  early-bail paths and headless/CLI dry-runs that skip getPullRequest are unaffected. */
+  authorLogin?: string
 }
 
 export type EnsembleResult = EnsembleResultBase<EnsembleTelemetry>

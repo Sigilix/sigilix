@@ -194,6 +194,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
+    if (meta.user?.login) telemetry.authorLogin = meta.user.login // SIG-343 Task 8: per-developer attribution
     if (meta.head?.sha && meta.head.sha !== headSha && !args.dryRun) {
       // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` — the dispatcher
       // short-circuits Phase 3 on `stale_head`; leaving it true overcounts saves.
@@ -983,7 +984,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 // OPTIONAL — it supplies the `createAstCache()` default the domain core requires)
 // moved to the `./orchestrator-helpers` leaf; re-exported above so the public
 // surface is byte-identical.
-
 // ─── telemetry / result binding ──────────────────────────────────────────
 
 // SIG-318 (PR 12h): the orchestrator-private `EnsembleTelemetry` run-record interface

@@ -1,4 +1,4 @@
-// SIG-343 PR C Task 3 — d1-usage-ledger unit tests.
+// SIG-343 PR C Task 3 + Task 8 — d1-usage-ledger unit tests.
 //
 // Schema is owned by the migration; the shim applies it in beforeEach.
 
@@ -128,5 +128,35 @@ describe("appendUsage", () => {
 
   it("thrown query — no-op, never throws (fail-open)", async () => {
     await expect(appendUsage({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, BASE_ARGS)).resolves.toBeUndefined()
+  })
+
+  it("stores author_login when provided", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "octocat" })
+
+    const row = await db
+      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null }>()
+    expect(row?.author_login).toBe("octocat")
+  })
+
+  it("stores NULL author_login when omitted", async () => {
+    await appendUsage(makeEnv(db), BASE_ARGS)
+
+    const row = await db
+      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null }>()
+    expect(row?.author_login).toBeNull()
+  })
+
+  it("duplicate dedupe is unchanged when authorLogin differs (first-write-wins)", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "alice" })
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "bob" })
+
+    expect(await rowCount(db)).toBe(1)
+    const row = await db
+      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null }>()
+    // INSERT OR IGNORE: first row wins on all columns
+    expect(row?.author_login).toBe("alice")
   })
 })

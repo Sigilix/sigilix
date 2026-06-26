@@ -5,6 +5,8 @@ CREATE TABLE tenant (
   tier             TEXT    NOT NULL DEFAULT 'default',
   concurrency_cap  INTEGER NOT NULL DEFAULT 2,
   daily_budget     INTEGER,
+  account_login    TEXT,
+  account_type     TEXT,
   created_at       TEXT    NOT NULL,
   updated_at       TEXT    NOT NULL
 );
@@ -23,6 +25,7 @@ CREATE TABLE usage_ledger (
   head_sha         TEXT    NOT NULL,
   model_calls      INTEGER NOT NULL,
   tokens           INTEGER NOT NULL,
+  author_login     TEXT,
   created_at       TEXT    NOT NULL,
   UNIQUE(installation_id, repo_id, pr_number, head_sha)
 );

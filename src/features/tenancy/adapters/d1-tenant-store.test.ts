@@ -1,4 +1,4 @@
-// SIG-343 PR C Task 2 — d1-tenant-store unit tests.
+// SIG-343 PR C Task 2 + Task 8 — d1-tenant-store unit tests.
 //
 // Schema is owned by the migration; no ensureSchema here.
 // The shim's exec() applies the migration SQL before each test.
@@ -88,7 +88,7 @@ describe("upsertTenantAndRepo", () => {
       nowIso: "2026-06-01T00:00:00Z",
     })
 
-    // INSERT OR IGNORE must have left concurrency_cap alone
+    // COALESCE upsert must have left concurrency_cap alone (untouched by DO UPDATE)
     const tenant = await db
       .prepare("SELECT concurrency_cap FROM tenant WHERE installation_id = ?")
       .bind(1)
@@ -131,6 +131,85 @@ describe("upsertTenantAndRepo", () => {
         },
       ),
     ).resolves.toBeUndefined()
+  })
+
+  it("first insert stores account_login and account_type", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 10,
+      repoId: 1000,
+      fullName: "acme/repo",
+      nowIso: "2026-01-01T00:00:00Z",
+      accountLogin: "acme-org",
+      accountType: "Organization",
+    })
+
+    const tenant = await db
+      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
+      .bind(10)
+      .first<{ account_login: string; account_type: string }>()
+    expect(tenant?.account_login).toBe("acme-org")
+    expect(tenant?.account_type).toBe("Organization")
+  })
+
+  it("re-upsert with changed accountLogin updates account_login but preserves operator-set concurrency_cap", async () => {
+    // First insert
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 11,
+      repoId: 1100,
+      fullName: "beta/repo",
+      nowIso: "2026-01-01T00:00:00Z",
+      accountLogin: "beta-old",
+      accountType: "Organization",
+    })
+
+    // Operator tunes the cap
+    await db.prepare("UPDATE tenant SET concurrency_cap = ? WHERE installation_id = ?").bind(7, 11).run()
+
+    // Re-upsert with a renamed account login
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 11,
+      repoId: 1100,
+      fullName: "beta/repo",
+      nowIso: "2026-06-01T00:00:00Z",
+      accountLogin: "beta-new",
+      accountType: "Organization",
+    })
+
+    const tenant = await db
+      .prepare("SELECT account_login, concurrency_cap FROM tenant WHERE installation_id = ?")
+      .bind(11)
+      .first<{ account_login: string; concurrency_cap: number }>()
+    // COALESCE upsert refreshes the login
+    expect(tenant?.account_login).toBe("beta-new")
+    // operator-tuned cap is preserved
+    expect(tenant?.concurrency_cap).toBe(7)
+  })
+
+  it("re-upsert with undefined accountLogin does NOT overwrite stored login (COALESCE)", async () => {
+    // First insert with a known login
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 12,
+      repoId: 1200,
+      fullName: "gamma/repo",
+      nowIso: "2026-01-01T00:00:00Z",
+      accountLogin: "gamma-org",
+      accountType: "Organization",
+    })
+
+    // Re-upsert without accountLogin (e.g. from a stale-head requeue that omits it)
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 12,
+      repoId: 1200,
+      fullName: "gamma/repo",
+      nowIso: "2026-06-01T00:00:00Z",
+    })
+
+    const tenant = await db
+      .prepare("SELECT account_login FROM tenant WHERE installation_id = ?")
+      .bind(12)
+      .first<{ account_login: string }>()
+    // COALESCE(NULL, existing) must preserve the existing login
+    expect(tenant?.account_login).toBe("gamma-org")
   })
 })
 

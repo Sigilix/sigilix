@@ -38,6 +38,7 @@ import type { ReviewStatusProof } from "@/src/lib/pr-review-status-render"
 import type { SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import { emitReviewSlo, computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
 import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
+import { appendUsage } from "@/src/features/tenancy"
 
 // ARC-250: `stale_head` is split out from `skipped` so the dispatcher
 // can short-circuit the Phase 3 fallback. Falling through to Phase 3
@@ -192,6 +193,13 @@ export interface FinalizeTelemetry {
   headSha: string
   startMs: number
   totalMs: number
+  /** SIG-343: GitHub App installation id — present on prod orchestrator runs,
+   *  absent on headless/CLI dry-runs and non-prod telemetry constructors that
+   *  do not meter usage. `finalize()` guards on both fields before calling
+   *  `appendUsage`, so omitting them simply skips the ledger row. */
+  installationId?: number
+  /** SIG-343: GitHub repo id — paired with `installationId` for usage metering. */
+  repoId?: number
   retrievalCacheStats: RetrievalCacheStats | null
   tokenUsageByModel: TokenUsageByModel
   specialistVerdicts: ReadonlyArray<{ attemptsUsed?: number }>
@@ -235,6 +243,22 @@ export async function finalize<Tel extends FinalizeTelemetry>(
     callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
   }
   await incrementDailyBudget(env, callsUsed).catch(() => {})
+  // SIG-343: meter one usage row per review (best-effort, fail-open — appendUsage
+  // never throws and no-ops without the binding or on incomplete identity).
+  // Guard explicitly so we never issue a pointless call on headless/CLI dry-runs
+  // or non-prod telemetry constructors that omit installationId/repoId.
+  if (typeof telemetry.installationId === "number" && typeof telemetry.repoId === "number") {
+    const tokens = Object.values(telemetry.tokenUsageByModel).reduce((n, m) => n + m.inputTokens + m.outputTokens, 0)
+    await appendUsage(env, {
+      installationId: telemetry.installationId,
+      repoId: telemetry.repoId,
+      prNumber: telemetry.prNumber,
+      headSha: telemetry.headSha,
+      modelCalls: callsUsed,
+      tokens,
+      nowIso: new Date().toISOString(),
+    }).catch(() => {})
+  }
   // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
   // because finalize() is the single choke point every exit path funnels
   // through (success, stale-head, errored, skip-notice) and `totalMs` +

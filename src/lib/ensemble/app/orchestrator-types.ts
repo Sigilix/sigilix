@@ -477,6 +477,12 @@ export interface EnsembleTelemetry {
   graphExpansionAb?: { arm: "treatment" | "control" }
   startMs: number
   totalMs: number
+  /** SIG-343: GitHub App installation id threaded from `EnsembleHandlerArgs`
+   *  so `finalize()` can meter one usage row per review. Absent on early-bail
+   *  paths that never call `finalize` with a real session (no metering needed). */
+  installationId?: number
+  /** SIG-343: GitHub repo id, paired with `installationId` for usage metering. */
+  repoId?: number
 }
 
 export type EnsembleResult = EnsembleResultBase<EnsembleTelemetry>

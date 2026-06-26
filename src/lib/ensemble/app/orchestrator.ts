@@ -164,7 +164,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     tokenUsageByModel,
     startMs,
   })
-
+  Object.assign(telemetry, { installationId, ...(args.repoId !== undefined ? { repoId: args.repoId } : {}) }) // SIG-343
   try {
     const client = args.githubClient ?? (await buildClient(env, installationId)) // SIG-304: injectable for CLI
     clientForFetchSummary = client

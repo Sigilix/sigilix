@@ -53,6 +53,13 @@ function makeBrokenDb(): D1Database {
 // ─── seed helpers ─────────────────────────────────────────────────────────────
 
 /**
+ * Fixed epoch ms — pinned so every time-dependent test uses the same reference
+ * point, eliminating Date.now() drift between insertReview() and checkRateLimit().
+ * Chosen as a round number well inside the valid Date range.
+ */
+const NOW = 1_750_000_000_000
+
+/**
  * Insert one review row for (installationId, authorLogin).
  * `idx` differentiates rows to satisfy the UNIQUE(installation_id, repo_id, pr_number, head_sha) constraint.
  */
@@ -73,9 +80,9 @@ async function insertReview(
     .run()
 }
 
-/** ISO timestamp `hoursAgo` hours before now — guaranteed inside the 1-hour window. */
+/** ISO timestamp `hoursAgo` hours before NOW — deterministic, no Date.now() drift. */
 function recentIso(hoursAgo = 0.5): string {
-  return new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString()
+  return new Date(NOW - hoursAgo * 60 * 60 * 1000).toISOString()
 }
 
 // ─── console spies ────────────────────────────────────────────────────────────
@@ -113,13 +120,13 @@ describe("checkRateLimit", () => {
   // ── mode = off ────────────────────────────────────────────────────────────────
 
   it("mode=off → allowed:true, empty footer, zero console events (no D1 read)", async () => {
-    // No DB provided — if D1 were touched, step 6 would log rate-limit-read-failed.
-    // Absence of that event (combined with allowed:true) proves the off-path
-    // short-circuits before any I/O.
-    const decision = await checkRateLimit(makeEnv(undefined, "off"), {
+    // Tripwire: a broken DB (prepare throws) is passed so that if D1 is ever
+    // touched in this path, console.warn fires and the warnSpy assertion below
+    // catches it — proving mode=off short-circuits before any I/O.
+    const decision = await checkRateLimit(makeEnv(makeBrokenDb(), "off"), {
       installationId: 1,
       authorLogin: "alice",
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
     expect(decision.footer).toBe("")
@@ -130,11 +137,11 @@ describe("checkRateLimit", () => {
   // ── bypass ────────────────────────────────────────────────────────────────────
 
   it("bypassReason present → allowed:true, rate-limit-bypass logged, no D1 read", async () => {
-    // No DB provided — if D1 were touched, rate-limit-read-failed would appear.
-    const decision = await checkRateLimit(makeEnv(undefined, "enforce"), {
+    // Tripwire: broken DB ensures any D1 touch would fire console.warn.
+    const decision = await checkRateLimit(makeEnv(makeBrokenDb(), "enforce"), {
       installationId: 2,
       authorLogin: "alice",
-      nowMs: Date.now(),
+      nowMs: NOW,
       bypassReason: "manual-rerun",
     })
     expect(decision.allowed).toBe(true)
@@ -146,21 +153,24 @@ describe("checkRateLimit", () => {
       bypassReason: "manual-rerun",
     })
     expect(eventsByName("rate-limit-read-failed")).toHaveLength(0)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   // ── no author ─────────────────────────────────────────────────────────────────
 
   it("authorLogin undefined → allowed:true, rate-limit-no-author logged", async () => {
-    const decision = await checkRateLimit(makeEnv(undefined, "shadow"), {
+    // Tripwire: broken DB ensures any D1 touch would fire console.warn.
+    const decision = await checkRateLimit(makeEnv(makeBrokenDb(), "shadow"), {
       installationId: 3,
       authorLogin: undefined,
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
     const noAuthor = eventsByName("rate-limit-no-author")
     expect(noAuthor).toHaveLength(1)
     expect(noAuthor[0]).toMatchObject({ event: "rate-limit-no-author", installationId: 3 })
     expect(eventsByName("rate-limit-read-failed")).toHaveLength(0)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   // ── shadow mode ───────────────────────────────────────────────────────────────
@@ -173,7 +183,7 @@ describe("checkRateLimit", () => {
     const decision = await checkRateLimit(makeEnv(db, "shadow"), {
       installationId: 10,
       authorLogin: "alice",
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
     expect(decision.used).toBe(2)
@@ -188,23 +198,23 @@ describe("checkRateLimit", () => {
     for (let i = 0; i < 3; i++) {
       await insertReview(db, 11, "bob", i, recentIso(0.5))
     }
-    const nowMs = Date.now()
+    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+3600000-NOW = 1800000
     const decision = await checkRateLimit(makeEnv(db, "shadow"), {
       installationId: 11,
       authorLogin: "bob",
-      nowMs,
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
     expect(decision.mode).toBe("shadow")
     expect(decision.used).toBe(3)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
-    expect(decision.resetMs).toBeGreaterThan(0)
+    expect(decision.resetMs).toBe(1_800_000)
     expect(decision.footer).toContain("3 of 3 reviews used")
     expect(decision.footer).toContain("resets in")
     const wouldSkip = eventsByName("rate-limit-would-skip")
     expect(wouldSkip).toHaveLength(1)
     expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 3, cap: 3 })
-    expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBeGreaterThan(0)
+    expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(1_800_000)
   })
 
   // ── enforce mode ──────────────────────────────────────────────────────────────
@@ -217,7 +227,7 @@ describe("checkRateLimit", () => {
     const decision = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 20,
       authorLogin: "charlie",
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
     expect(eventsByName("rate-limit-ok")).toHaveLength(1)
@@ -229,23 +239,23 @@ describe("checkRateLimit", () => {
     for (let i = 0; i < 3; i++) {
       await insertReview(db, 21, "dave", i, recentIso(0.5))
     }
-    const nowMs = Date.now()
+    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+3600000-NOW = 1800000
     const decision = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 21,
       authorLogin: "dave",
-      nowMs,
+      nowMs: NOW,
     })
     expect(decision.allowed).toBe(false)
     expect(decision.mode).toBe("enforce")
     expect(decision.used).toBe(3)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
-    expect(decision.resetMs).toBeGreaterThan(0)
+    expect(decision.resetMs).toBe(1_800_000)
     expect(decision.footer).toContain("3 of 3 reviews used")
     expect(decision.footer).toContain("resets in")
     const skip = eventsByName("rate-limit-skip")
     expect(skip).toHaveLength(1)
     expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 3, cap: 3 })
-    expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBeGreaterThan(0)
+    expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(1_800_000)
   })
 
   // ── D1 fault ──────────────────────────────────────────────────────────────────
@@ -255,7 +265,7 @@ describe("checkRateLimit", () => {
       checkRateLimit(makeEnv(makeBrokenDb(), "enforce"), {
         installationId: 30,
         authorLogin: "eve",
-        nowMs: Date.now(),
+        nowMs: NOW,
       }),
     ).resolves.toMatchObject({ allowed: true })
 
@@ -274,7 +284,7 @@ describe("checkRateLimit", () => {
     const d2 = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 40,
       authorLogin: "frank",
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(d2.allowed).toBe(true)
     expect(d2.used).toBe(2)
@@ -286,9 +296,42 @@ describe("checkRateLimit", () => {
     const d3 = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 41,
       authorLogin: "frank",
-      nowMs: Date.now(),
+      nowMs: NOW,
     })
     expect(d3.allowed).toBe(false)
     expect(d3.used).toBe(3)
+  })
+
+  // ── tier seam ─────────────────────────────────────────────────────────────────
+
+  it("tier=pro → cap=5; used=4 → allowed, used=5 → denied (enforce)", async () => {
+    // Exercises resolveRateLimitCap("pro") = 5 through the full orchestrator path.
+    // Part A: 4 reviews under the pro cap → allowed.
+    for (let i = 0; i < 4; i++) {
+      await insertReview(db, 50, "grace", i, recentIso(0.5))
+    }
+    const d4 = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 50,
+      authorLogin: "grace",
+      nowMs: NOW,
+      tier: "pro",
+    })
+    expect(d4.cap).toBe(5)
+    expect(d4.allowed).toBe(true)
+    expect(d4.used).toBe(4)
+
+    // Part B: 5 reviews at the pro cap → denied (5 < 5 = false).
+    for (let i = 0; i < 5; i++) {
+      await insertReview(db, 51, "grace", i, recentIso(0.5))
+    }
+    const d5 = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 51,
+      authorLogin: "grace",
+      nowMs: NOW,
+      tier: "pro",
+    })
+    expect(d5.cap).toBe(5)
+    expect(d5.allowed).toBe(false)
+    expect(d5.used).toBe(5)
   })
 })

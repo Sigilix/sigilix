@@ -76,7 +76,8 @@ export class D1DatabaseShim {
       if (s.isSelect) {
         out.push(await s.all<T>())
       } else {
-        out.push((await s.run()) as unknown as D1Result<T>)
+        const runResult = await s.run()
+        out.push({ ...runResult, results: [] as T[] } as D1Result<T>)
       }
     }
     return out

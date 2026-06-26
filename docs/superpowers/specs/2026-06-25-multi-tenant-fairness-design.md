@@ -48,7 +48,7 @@ That visible degradation in front of a customer is the believability risk this s
 
 | Decision | Rationale | Source |
 |---|---|---|
-| Admission gate **at the consumer boundary** in `src/index.ts queue()`, before `dispatchJob` | Only layer that can orchestrate ack/dispatch; legacy/no-`runId` messages must still flow | Codex |
+| Admission via a shared **`admitTenant()`** helper, called from **both** the queue consumer (`src/index.ts queue()`, before `dispatchJob`) and the hosted `/v1/review` route (§4.5) | Only layer that can orchestrate ack/dispatch; a single primitive keeps fairness identical across every surface that runs the ensemble | Codex + founder (cross-product) |
 | On deny, **never `message.retry()`** — the per-PR DO **re-`send()`s** a fresh job | `message.retry()` increments the retry counter; a denied burst hits `max_retries=3` and Cloudflare **silently drops the review** | GLM |
 | Deny path calls **`PrReviewRunDO./defer`** (re-arm watchdog + schedule DO re-send) | The per-PR DO is armed at *enqueue* time (`pr-review-run.ts:212-220`), before the consumer runs; a naive consumer-side delay would let the 20-min watchdog **false-fail** a run that was only waiting its turn | Codex (the block-on) |
 | Hot coordination → **Durable Objects**; D1 → **registry + cold aggregates only** | D1 is read-replica SQLite, poor for hot/contended writes; DOs are strongly consistent & cheap (~10ms) | GLM |
@@ -138,6 +138,31 @@ migrations/                        # D1 schema migrations (PR C onward) — see 
 - `domain/` is pure (no `Env`, IO, or clock) so the fairness algorithm is unit-tested in isolation with
   a fake clock — same pattern the metrics DOs use (SQLite shim in `test-shims/`).
 - All cross-dir imports `@/...`; feature consumed only via its barrel; files ≤1000 lines.
+
+### 4.5 Surfaces & cross-product hookup
+
+The tenant primitives are **product-agnostic** — they key on a `tenantId` that each surface resolves
+however it can, so every product running on our OpenRouter account shares **one** fairness model, **one**
+cooldown, and **one** usage ledger. `admitTenant({ tenantId, leaseId, env, mode })` (a thin helper over
+`TenantConcurrencyDO`) has **two call sites in this arc**: the webhook queue consumer and the hosted
+`/v1/review` route. New surfaces hook the same primitives — no rebuild.
+
+| Surface | Entry | `tenantId` | Per-tenant semaphore | Cooldown (PR B) | Metering (PR C) |
+|---|---|---|---|---|---|
+| GitHub PR review | webhook → queue | `installationId` (verified) | ✅ | ✅ | ✅ |
+| `sigilix review` CLI — **Mode B** grounded (`--repo/--pr`) | `POST /v1/review` | `installationId` via `resolveInstallation` | ✅ | ✅ | ✅ |
+| `sigilix review` CLI — **Mode A** diff (`--uncommitted`) | `POST /v1/review` | asserted `owner/repo` (best-effort; single shared key today) | best-effort, **plus** the existing `admitUnderDailyCeiling` hard guard | ✅ | ✅ |
+| Empyrean agent grounding | `POST /v1/context` | `installationId` when resolvable | n/a (no ensemble to gate) | ✅ | optional usage row |
+| Linear / CI triage, overviews | queue | `installationId` | optional (same DO) | ✅ | ✅ |
+
+Notes:
+- The cooldown (PR B) lives in the **model adapter**, so it shields *every* model call across *every*
+  surface automatically — no per-surface wiring.
+- `admitUnderDailyCeiling` (`api-review-route.ts:68`) **stays** as a complementary global cost guard on
+  `/v1/review`; it is orthogonal to per-tenant fairness, not replaced by it.
+- The CLI uses one shared API key today, so per-customer fairness on the CLI sharpens once per-customer
+  keys land (SIG-243); until then Mode A is one logical tenant. We do **not** fabricate a tenant identity
+  it doesn't have — Mode A leans on the daily ceiling + the account-wide cooldown.
 
 ## 5. Fairness algorithm (DeepSeek-verified)
 
@@ -260,10 +285,15 @@ CREATE INDEX idx_usage_tenant_time ON usage_ledger(installation_id, created_at);
 ## 10. PR breakdown
 
 - **PR A — Tenant fairness (SIG-455; the reliability win, ships alone).** `TenantConcurrencyDO` + lease/reaper;
-  consumer admission in `src/index.ts queue()`; `PrReviewRunDO./defer` + DO re-send; cap from env;
-  `SIGILIX_FAIRNESS_MODE` (shadow default); pin `max_concurrency` in wrangler.toml; **no D1**.
+  a shared **`admitTenant()`** helper wired at **two call sites** — the queue consumer (`src/index.ts queue()`,
+  webhook, `tenantId=installationId`) and the hosted **`/v1/review`** route (Mode B `tenantId=installationId`
+  via `resolveInstallation`; Mode A best-effort `owner/repo`, keeping `admitUnderDailyCeiling`); on deny in the
+  queue path → `PrReviewRunDO./defer` + DO re-send (the `/v1/review` path returns 429-with-Retry-After since
+  it's synchronous, no re-send); cap from env; `SIGILIX_FAIRNESS_MODE` (shadow default); pin `max_concurrency`
+  in wrangler.toml; **no D1**.
   Tests: denial happens before `/pickup`; release on success/throw/blocked-pickup; lease idempotency;
-  reaper reclaim only when per-PR DO inactive; deferred run not watchdog-failed; fail-open on DO error.
+  reaper reclaim only when per-PR DO inactive; deferred run not watchdog-failed; **`/v1/review` Mode B
+  acquires/releases the same DO + still honors the daily ceiling**; fail-open on DO error (both call sites).
 - **PR B — Provider backpressure (SIG-455).** Typed `ProviderRateLimitError` carrying `Retry-After` in the model
   adapter; jittered backoff policy; `ProviderCooldownDO`; retry-layer separation (§6).
 - **PR C — D1 foundation + metering (SIG-343).** `wrangler d1 create` + binding + `migrations/0001`; `tenant`/`repo`

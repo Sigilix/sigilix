@@ -18,6 +18,17 @@ export { resolveFairnessConfig } from "./domain/config"
 export type { FairnessConfig } from "./domain/config"
 export { resolveQuotaMode, computeWouldExceed } from "./domain/quota"
 export type { QuotaMode } from "./domain/quota"
+export {
+  resolveRateLimitMode,
+  resolveRateLimitCap,
+  decideRateLimit,
+  computeResetMs,
+  formatUsageFooter,
+  RATE_LIMIT_WINDOW_MS,
+  DEFAULT_RATE_LIMIT_CAP,
+  RATE_LIMIT_BURST,
+} from "./domain/rate-limit"
+export type { RateLimitMode } from "./domain/rate-limit"
 export { upsertTenantAndRepo, readTenantConfig } from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"
 export { appendUsage } from "./adapters/d1-usage-ledger"

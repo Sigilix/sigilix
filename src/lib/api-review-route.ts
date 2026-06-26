@@ -40,7 +40,14 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireBearerToken } from "./auth-bearer"
-import { admitTenant, releaseTenant, resolveFairnessConfig, resolveTenantCap } from "@/src/features/tenancy"
+import {
+  admitTenant,
+  releaseTenant,
+  resolveFairnessConfig,
+  resolveTenantCap,
+  checkShadowQuota,
+  resolveQuotaMode,
+} from "@/src/features/tenancy"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
 import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
@@ -168,7 +175,7 @@ function parseBody(raw: unknown): ReviewApiBody | string {
  * checked from the header BEFORE the body is read so an unauthenticated caller can't
  * force a large body buffer.
  */
-export async function handleReviewApiRoute(request: Request, env: Env): Promise<Response> {
+export async function handleReviewApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const token = env.OPENCLAW_SIGILIX_API_KEY
   if (!token) return json({ error: "review_endpoint_not_configured" }, 503)
   if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
@@ -293,6 +300,11 @@ export async function handleReviewApiRoute(request: Request, env: Env): Promise<
         })
       }
       if (admit.granted) lease = { tenantId, leaseId }
+    }
+    // SIG-543: shadow quota measurement (Mode B only — real installationId). Deferred;
+    // independent of fairness; never blocks or refuses. Mode A (installationId 0) is skipped.
+    if (resolveQuotaMode(env) !== "off") {
+      ctx.waitUntil(checkShadowQuota(env, lookup.installationId))
     }
     const groundedEnv = groundedReviewEnv(env) // REAL bindings (retrieval live), review-memory off, no repoId.
     let client: GitHubClient | undefined

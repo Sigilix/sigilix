@@ -20,6 +20,7 @@ vi.mock("@/src/features/tenancy", async (importActual) => {
     ...(actual as object),
     admitTenant: vi.fn(),
     releaseTenant: vi.fn(),
+    checkShadowQuota: vi.fn(async () => {}),
   }
 })
 
@@ -66,6 +67,9 @@ function req(body: unknown): Request {
 const diffBody = { owner: "o", repo: "r", prNumber: 1, headSha: "abc123", diff: DIFF }
 const groundedBody = { mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "abc123" }
 
+/** Noop ExecutionContext stub — ctx.waitUntil is a no-op spy for these tests. */
+const noopCtx = { waitUntil: vi.fn() } as unknown as ExecutionContext
+
 beforeEach(() => {
   mockEngine.mockReset()
   mockAdmit.mockReset()
@@ -82,7 +86,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
     const REMAINING = 15_000
     getCooldownMock.mockResolvedValue(REMAINING)
     const e = groundedEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(res.status).toBe(429)
     const retryAfter = res.headers.get("retry-after")
@@ -95,7 +99,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
   it("enforce + remaining>0 → Retry-After rounds up (ceiling math)", async () => {
     getCooldownMock.mockResolvedValue(5_500)
     const e = groundedEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(res.status).toBe(429)
     expect(res.headers.get("retry-after")).toBe("6") // ceil(5500/1000) = 6
@@ -104,7 +108,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
   it("shadow + remaining>0 → skip entirely: no cooldown read, ensemble runs", async () => {
     getCooldownMock.mockResolvedValue(15_000)
     const e = groundedEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "shadow" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     // shadow → entire cooldown check skipped
     expect(getCooldownMock).not.toHaveBeenCalled()
@@ -115,7 +119,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
   it("off → no cooldown read at all, ensemble runs", async () => {
     getCooldownMock.mockResolvedValue(15_000)
     const e = groundedEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "off" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(getCooldownMock).not.toHaveBeenCalled()
     expect(res.status).toBe(200)
@@ -125,7 +129,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
   it("enforce + remaining=0 → no cooldown: ensemble runs", async () => {
     getCooldownMock.mockResolvedValue(0)
     const e = groundedEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()
@@ -137,7 +141,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode B (grounded)", (
       SIGILIX_PROVIDER_COOLDOWN_MODE: "enforce",
       SIGILIX_FAIRNESS_MODE: "enforce",
     })
-    const res = await handleReviewApiRoute(req(groundedBody), e)
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
 
     expect(res.status).toBe(429)
     expect(((await res.json()) as { error?: string }).error).toBe("provider_busy")
@@ -151,7 +155,7 @@ describe("handleReviewApiRoute — provider-cooldown gate, Mode A (diff)", () =>
   it("enforce + remaining>0 → Mode A UNAFFECTED: ensemble runs (cooldown check is Mode B only)", async () => {
     getCooldownMock.mockResolvedValue(30_000)
     const e = baseEnv({ SIGILIX_PROVIDER_COOLDOWN_MODE: "enforce" })
-    const res = await handleReviewApiRoute(req(diffBody), e)
+    const res = await handleReviewApiRoute(req(diffBody), e, noopCtx)
 
     expect(res.status).toBe(200)
     expect(mockEngine).toHaveBeenCalled()

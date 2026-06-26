@@ -56,7 +56,7 @@ describe.skipIf(!OR_KEY)("SIG-492 — POST /v1/review Mode A live (diff-client c
       OPENCLAW_SIGILIX_API_KEY: TOKEN,
     } as unknown as Env
 
-    const res = await handleReviewApiRoute(reviewRequest(DIFF), env)
+    const res = await handleReviewApiRoute(reviewRequest(DIFF), env, { waitUntil: () => {} } as unknown as ExecutionContext)
 
     // A missing-method throw on the injected client would surface as 500 (review_failed);
     // 200 with a verdict proves the cast is sound on the real engine path.

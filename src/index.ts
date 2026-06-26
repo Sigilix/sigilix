@@ -66,7 +66,15 @@ import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
-import { admitTenant, releaseTenant, MAX_DEFERS, resolveFairnessConfig, resolveTenantCap } from "@/src/features/tenancy"
+import {
+  admitTenant,
+  releaseTenant,
+  MAX_DEFERS,
+  resolveFairnessConfig,
+  resolveTenantCap,
+  checkShadowQuota,
+  resolveQuotaMode,
+} from "@/src/features/tenancy"
 import { getProviderCooldownRemainingMs } from "@/src/shared/adapters/model/provider-cooldown-client"
 import {
   resolveCooldownMode,
@@ -235,7 +243,7 @@ export default {
     // engine server-side (dryRun → nothing posted) + returns the DryRunReview.
     // Inert (503) until OPENCLAW_SIGILIX_API_KEY is set.
     if (request.method === "POST" && url.pathname === "/v1/review") {
-      return handleReviewApiRoute(request, env)
+      return handleReviewApiRoute(request, env, ctx)
     }
 
     // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},
@@ -454,6 +462,7 @@ export default {
     // "shadow" measures the desired decision but always proceeds; "enforce"
     // actually defers denied jobs. Default off (the binding/flags ship dark).
     const { mode } = resolveFairnessConfig(env)
+    const quotaMode = resolveQuotaMode(env)
     for (const message of batch.messages) {
       const job = message.body
       // SIG-455 Task 6 (PR B): provider-cooldown read-before-fire. For eligible
@@ -554,6 +563,12 @@ export default {
           }
           if (res.granted) lease = { tenantId, leaseId }
         }
+      }
+      // SIG-543: shadow quota measurement. Independent of fairness (own gate, no
+      // runId requirement) and deferred so the D1 read never blocks the review.
+      // Phase 1 never refuses — checkShadowQuota only logs.
+      if (job.type === "pr-review" && typeof job.installationId === "number" && quotaMode !== "off") {
+        ctx.waitUntil(checkShadowQuota(env, job.installationId))
       }
       try {
         await dispatchJob(job, env, (promise) => ctx.waitUntil(promise))

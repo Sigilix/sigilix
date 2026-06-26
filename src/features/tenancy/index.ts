@@ -36,3 +36,5 @@ export { readTenantUsageSince, readUsageRollupSince } from "./adapters/d1-usage-
 export type { TenantUsageRow } from "./adapters/d1-usage-read"
 export { checkShadowQuota } from "./adapters/check-shadow-quota"
 export { readRollingReviewCount } from "./adapters/d1-rate-limit-read"
+export { checkRateLimit } from "./adapters/check-rate-limit"
+export type { RateLimitDecision } from "./adapters/check-rate-limit"

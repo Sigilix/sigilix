@@ -12,3 +12,5 @@ export {
   MAX_DEFERS,
 } from "./domain/fairness"
 export type { FairnessState, Lease, AcquireResult } from "./domain/fairness"
+export { admitTenant, releaseTenant } from "./adapters/concurrency-client"
+export type { AdmitResult } from "./adapters/concurrency-client"

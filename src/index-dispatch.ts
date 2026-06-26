@@ -53,6 +53,7 @@ import {
 import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
 import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
+import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
 
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
@@ -316,6 +317,25 @@ export async function dispatchJob(
             }
             return
           }
+          // SIG-38: per-developer rate-limit gate (logic extracted to
+          // index-dispatch-rate-limit-gate.ts to keep this file under the 1000-line budget).
+          // Placement: AFTER sensitive-repo skip; BEFORE `const checkRun` so the check
+          // run is never created for a rate-limited job. `rateLimit` stays in scope so
+          // Task 7 can thread `rateLimit.footer` into `finalStatusUpdate`.
+          const { skipped: rateLimitSkipped, rateLimit } = await runRateLimitGate(env, {
+            installationId: job.installationId,
+            authorLogin: job.authorLogin,
+            bypassClosedSkip: job.bypassClosedSkip,
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            checkRunId: job.checkRunId,
+          })
+          if (rateLimitSkipped) return
+          // Task 7 forward-ref: rateLimit.footer is threaded into finalStatusUpdate
+          // in the next task. Referencing it here keeps the binding alive for Task 7
+          // without changing the runtime path.
+          void rateLimit
           // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
           // created the customer-visible check (the new fast path —
           // visible to the user within ~1–2s of push), the dispatcher

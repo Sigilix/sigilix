@@ -889,4 +889,10 @@ export interface Env {
   //                                     Default 2. Operates within the global queue cap.
   SIGILIX_FAIRNESS_MODE?: string
   SIGILIX_TENANT_CONCURRENCY_CAP?: string
+
+  // SIG-455 PR B: provider backpressure cooldown mode.
+  //   "off"     (default / unset / unknown) — cooldown logic fully bypassed.
+  //   "shadow"  — cooldown state tracked + telemetered, no request blocking.
+  //   "enforce" — requests are held/rejected when a provider is in cooldown.
+  SIGILIX_PROVIDER_COOLDOWN_MODE?: string
 }

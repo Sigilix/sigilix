@@ -618,3 +618,8 @@ export { GraphExpansionMetricsDO } from "./do/graph-expansion-metrics"
 // receipt (SQLite). Registered via the [[durable_objects.bindings]]
 // RUNNER_RECEIPT_DO entry + the sig-184-v1 new_sqlite_classes migration.
 export { RunnerReceiptDO } from "./do/runner-receipt"
+
+// SIG-455: TenantConcurrencyDO — per-tenant concurrency gate (KV-backed DO
+// storage). Registered via the [[durable_objects.bindings]] TENANT_CONCURRENCY
+// entry + the sig-455-tenant-concurrency-v1 new_classes migration.
+export { TenantConcurrencyDO } from "@/src/do/tenant-concurrency"

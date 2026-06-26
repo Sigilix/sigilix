@@ -157,6 +157,12 @@ export type JobMessage =
        * `enqueuedAtMs`.
        */
       attempt?: number
+      /**
+       * SIG-455: number of fairness defers so far. The consumer bypasses
+       * admission once this hits MAX_DEFERS (anti-starvation). Absent on
+       * webhook-originated jobs (treated as 0 by the gate).
+       */
+      deferCount?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that

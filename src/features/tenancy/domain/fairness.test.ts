@@ -93,6 +93,6 @@ describe("release / expiry", () => {
   it("extendLease pushes the TTL forward", () => {
     const s = decideAcquire({ state: emptyState(), leaseId: "a", cap: 2, nowMs: NOW, rand: 0 }).state
     const e = extendLease(s, "a", NOW + 5)
-    expect(e.leases[0].expiresAtMs).toBe(NOW + 5 + LEASE_TTL_MS)
+    expect(e.leases[0]!.expiresAtMs).toBe(NOW + 5 + LEASE_TTL_MS)
   })
 })

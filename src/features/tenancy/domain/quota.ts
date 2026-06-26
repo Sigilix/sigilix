@@ -30,7 +30,7 @@ export type QuotaMode = "off" | "shadow" | "enforce"
  * with `"shadow"` as the fallthrough instead of `"off"`).
  */
 export function resolveQuotaMode(env: Pick<Env, "SIGILIX_TENANT_QUOTA_MODE">): QuotaMode {
-  const v = env.SIGILIX_TENANT_QUOTA_MODE
+  const v = env.SIGILIX_TENANT_QUOTA_MODE?.trim().toLowerCase()
   if (v === "enforce") return "enforce"
   if (v === "off") return "off"
   return "shadow"

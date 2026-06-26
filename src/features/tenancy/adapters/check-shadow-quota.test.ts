@@ -148,6 +148,19 @@ describe("checkShadowQuota", () => {
     expect(logSpy).not.toHaveBeenCalled()
   })
 
+  // ── installationId guard ──────────────────────────────────────────────────────
+
+  it("installationId=0 (Mode A) → NO console output, no throw, no D1 query", async () => {
+    // Mode A passes installationId:0; the guard must short-circuit before any D1 read.
+    await expect(checkShadowQuota(makeEnv(db, "shadow"), 0)).resolves.toBeUndefined()
+    expect(logSpy).not.toHaveBeenCalled()
+  })
+
+  it("installationId negative → NO console output, no throw", async () => {
+    await expect(checkShadowQuota(makeEnv(db, "shadow"), -1)).resolves.toBeUndefined()
+    expect(logSpy).not.toHaveBeenCalled()
+  })
+
   // ── mode = shadow ─────────────────────────────────────────────────────────────
 
   it("mode=shadow, usage OVER budget → exactly one quota-shadow event with wouldExceed:true; no quota-would-refuse", async () => {

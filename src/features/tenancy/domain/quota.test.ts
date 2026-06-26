@@ -27,6 +27,24 @@ describe("resolveQuotaMode", () => {
   it('returns "enforce" when SIGILIX_TENANT_QUOTA_MODE is "enforce"', () => {
     expect(resolveQuotaMode({ SIGILIX_TENANT_QUOTA_MODE: "enforce" })).toBe("enforce")
   })
+
+  // ── whitespace / case normalisation ──────────────────────────────────────────
+
+  it('trims leading/trailing whitespace: " enforce " → "enforce"', () => {
+    expect(resolveQuotaMode({ SIGILIX_TENANT_QUOTA_MODE: " enforce " })).toBe("enforce")
+  })
+
+  it('case-folds: "SHADOW" → "shadow"', () => {
+    expect(resolveQuotaMode({ SIGILIX_TENANT_QUOTA_MODE: "SHADOW" })).toBe("shadow")
+  })
+
+  it('whitespace-only value "  " → default "shadow"', () => {
+    expect(resolveQuotaMode({ SIGILIX_TENANT_QUOTA_MODE: "  " })).toBe("shadow")
+  })
+
+  it('unknown value "bogus" → default "shadow"', () => {
+    expect(resolveQuotaMode({ SIGILIX_TENANT_QUOTA_MODE: "bogus" })).toBe("shadow")
+  })
 })
 
 // ─── computeWouldExceed ──────────────────────────────────────────────────────

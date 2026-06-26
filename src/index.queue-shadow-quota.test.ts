@@ -1,7 +1,9 @@
 // SIG-543 Task 4 — queue() shadow-quota admission wire tests.
 //
-// The queue consumer fires checkShadowQuota via ctx.waitUntil for every
-// pr-review job that has a numeric installationId and quotaMode !== "off".
+// The queue consumer directly `await`s checkShadowQuota for every pr-review job
+// that has a numeric installationId and quotaMode !== "off".  ctx.waitUntil is
+// NOT used for this call (a Queue consumer's ctx.waitUntil does not reliably
+// extend the isolate lifetime — see reference_cloudflare_queue_consumer_waituntil).
 // This is INDEPENDENT of fairness (no runId required, no fairnessMode check)
 // and NEVER blocks or refuses the review (Phase 1 observation-only).
 
@@ -77,11 +79,10 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
   it("pr-review + numeric installationId + quotaMode=shadow → checkShadowQuota invoked AND dispatch runs", async () => {
     const env = makeEnv({ SIGILIX_TENANT_QUOTA_MODE: "shadow" })
     const message = makeMessage(makeJob())
-    const { run, ctx } = runQueue(env, message)
+    const { run } = runQueue(env, message)
     await run
 
-    // quota check was fired via waitUntil
-    expect(ctx.waitUntil).toHaveBeenCalled()
+    // quota check was directly awaited (not via waitUntil)
     expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
     // review still dispatched — never blocks
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
@@ -91,11 +92,10 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
   it("fires when SIGILIX_FAIRNESS_MODE=off (independent of fairness)", async () => {
     const env = makeEnv({ SIGILIX_TENANT_QUOTA_MODE: "shadow", SIGILIX_FAIRNESS_MODE: "off" })
     const message = makeMessage(makeJob())
-    const { run, ctx } = runQueue(env, message)
+    const { run } = runQueue(env, message)
     await run
 
     expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
-    expect(ctx.waitUntil).toHaveBeenCalled()
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 
@@ -104,11 +104,10 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     const job = makeJob()
     delete (job as { runId?: string }).runId
     const message = makeMessage(job)
-    const { run, ctx } = runQueue(env, message)
+    const { run } = runQueue(env, message)
     await run
 
     expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
-    expect(ctx.waitUntil).toHaveBeenCalled()
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 
@@ -127,11 +126,10 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     // resolveQuotaMode falls through to "shadow" when the flag is absent
     const env = makeEnv({}) // no SIGILIX_TENANT_QUOTA_MODE
     const message = makeMessage(makeJob())
-    const { run, ctx } = runQueue(env, message)
+    const { run } = runQueue(env, message)
     await run
 
     expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
-    expect(ctx.waitUntil).toHaveBeenCalled()
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 

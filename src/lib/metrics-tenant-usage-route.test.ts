@@ -288,12 +288,33 @@ describe("handleTenantUsageMetricsRoute — data / rollup", () => {
     expect(body.tenants[0]!.installationId).toBe(1)
   })
 
-  it("200 with tenants:[] when SIGILIX_PLATFORM_DB is absent (fail-open)", async () => {
-    // No db passed → binding absent
+  it("200 with tenants:[] when SIGILIX_PLATFORM_DB is absent (binding absent = legitimately empty, not a fault)", async () => {
+    // No db passed → binding absent → readUsageRollupSince returns {ok:true, tenants:[]}
     const env = makeEnv(undefined)
     const res = await handleTenantUsageMetricsRoute(authed("https://x/metrics/tenant-usage"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as { tenants: unknown[] }
     expect(body.tenants).toEqual([])
+  })
+
+  it("503 usage_read_unavailable when D1 throws (fault is distinguishable from genuine-empty)", async () => {
+    // Broken DB → readUsageRollupSince returns {ok:false} → route must NOT return 200
+    const brokenDb: D1Database = {
+      prepare() {
+        throw new Error("simulated D1 error")
+      },
+      batch() {
+        return Promise.reject(new Error("simulated D1 error"))
+      },
+      exec() {
+        return Promise.reject(new Error("simulated D1 error"))
+      },
+    } as unknown as D1Database
+
+    const env = makeEnv(brokenDb)
+    const res = await handleTenantUsageMetricsRoute(authed("https://x/metrics/tenant-usage"), env)
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe("usage_read_unavailable")
   })
 })

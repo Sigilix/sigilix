@@ -3,7 +3,9 @@
 //
 // Auth mirrors /metrics/fp-rate (same OPENCLAW_VALIDATION_METRICS_TOKEN bearer
 // contract). Reading is done via readUsageRollupSince — fail-open by design;
-// if the D1 binding is absent the response is 200 + empty tenants array.
+// if the D1 binding is absent the response is 200 + empty tenants array (dark =
+// legitimately empty). A D1 fault (ok:false) returns 503 usage_read_unavailable,
+// distinguishable from a genuine-empty response.
 //
 // Window parameter (`?window=<days>`) matches fp-rate's name and uses the same
 // DEFAULT_WINDOW_DAYS / MAX_WINDOW_DAYS constants. Out-of-range values are
@@ -60,6 +62,7 @@ export async function handleTenantUsageMetricsRoute(request: Request, env: Env):
   }
 
   const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString()
-  const tenants = await readUsageRollupSince(env, sinceIso, installationId)
-  return json({ window_days: windowDays, tenants }, 200)
+  const r = await readUsageRollupSince(env, sinceIso, installationId)
+  if (!r.ok) return json({ error: "usage_read_unavailable" }, 503)
+  return json({ window_days: windowDays, tenants: r.tenants }, 200)
 }

@@ -202,10 +202,12 @@ describe("readUsageRollupSince", () => {
       createdAt: "2026-06-01T00:00:00.000Z",
     })
 
-    const rows = await readUsageRollupSince(makeEnv(db), "2026-01-01T00:00:00.000Z")
-    expect(rows).toHaveLength(2)
+    const result = await readUsageRollupSince(makeEnv(db), "2026-01-01T00:00:00.000Z")
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.tenants).toHaveLength(2)
 
-    const row1 = rows.find((r) => r.installationId === 1)!
+    const row1 = result.tenants.find((r) => r.installationId === 1)!
     expect(row1).toMatchObject({
       installationId: 1,
       modelCalls: 8,
@@ -215,7 +217,7 @@ describe("readUsageRollupSince", () => {
       accountType: "Organization",
     })
 
-    const row2 = rows.find((r) => r.installationId === 2)!
+    const row2 = result.tenants.find((r) => r.installationId === 2)!
     expect(row2).toMatchObject({
       installationId: 2,
       modelCalls: 2,
@@ -249,9 +251,11 @@ describe("readUsageRollupSince", () => {
       createdAt: "2026-06-01T00:00:00.000Z",
     })
 
-    const rows = await readUsageRollupSince(makeEnv(db), "2026-01-01T00:00:00.000Z", 1)
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.installationId).toBe(1)
+    const result = await readUsageRollupSince(makeEnv(db), "2026-01-01T00:00:00.000Z", 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.tenants).toHaveLength(1)
+    expect(result.tenants[0]!.installationId).toBe(1)
   })
 
   it("excludes rows older than sinceIso", async () => {
@@ -278,18 +282,22 @@ describe("readUsageRollupSince", () => {
       createdAt: "2026-06-01T00:00:00.000Z",
     })
 
-    const rows = await readUsageRollupSince(makeEnv(db), "2026-06-01T00:00:00.000Z")
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ installationId: 1, modelCalls: 1, tokens: 50, reviews: 1 })
+    const result = await readUsageRollupSince(makeEnv(db), "2026-06-01T00:00:00.000Z")
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.tenants).toHaveLength(1)
+    expect(result.tenants[0]).toMatchObject({ installationId: 1, modelCalls: 1, tokens: 50, reviews: 1 })
   })
 
-  it("binding absent → []", async () => {
-    const rows = await readUsageRollupSince(makeAbsentEnv(), "2026-01-01T00:00:00.000Z")
-    expect(rows).toEqual([])
+  it("binding absent → {ok:true, tenants:[]} (dark = legitimately empty, not a fault)", async () => {
+    const result = await readUsageRollupSince(makeAbsentEnv(), "2026-01-01T00:00:00.000Z")
+    expect(result).toEqual({ ok: true, tenants: [] })
   })
 
-  it("thrown D1 → [] (fail-open)", async () => {
-    const rows = await readUsageRollupSince({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, "2026-01-01T00:00:00.000Z")
-    expect(rows).toEqual([])
+  it("thrown D1 → {ok:false} — distinguishable from genuine-empty", async () => {
+    const result = await readUsageRollupSince({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, "2026-01-01T00:00:00.000Z")
+    expect(result).toEqual({ ok: false })
+    // Must NOT look like success — callers must not treat a D1 fault as "no tenants"
+    expect(result).not.toMatchObject({ ok: true })
   })
 })

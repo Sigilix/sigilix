@@ -75,7 +75,13 @@ export async function readTenantUsageSince(
  *
  * When `installationId` is provided, the result is narrowed to that tenant.
  *
- * Returns `[]` when the binding is absent or a D1 error occurs (fail-open).
+ * Returns `{ ok: true, tenants: [] }` when the binding is absent (dark →
+ * legitimately empty; indistinguishable from a new deployment with no usage).
+ *
+ * Returns `{ ok: true, tenants }` on a successful query (may be empty).
+ *
+ * Returns `{ ok: false }` when a D1 error occurs — callers MUST treat this as
+ * a fault, NOT as "no tenants".
  *
  * FAILS OPEN — never throws.
  */
@@ -83,8 +89,8 @@ export async function readUsageRollupSince(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   sinceIso: string,
   installationId?: number,
-): Promise<TenantUsageRow[]> {
-  if (!env.SIGILIX_PLATFORM_DB) return []
+): Promise<{ ok: true; tenants: TenantUsageRow[] } | { ok: false }> {
+  if (!env.SIGILIX_PLATFORM_DB) return { ok: true, tenants: [] }
   const db = env.SIGILIX_PLATFORM_DB
   try {
     const hasFilter = installationId !== undefined
@@ -114,7 +120,7 @@ export async function readUsageRollupSince(
 
     const { results } = await stmt.all<RawRow>()
 
-    return results.map((r) => ({
+    const tenants = results.map((r) => ({
       installationId: Number(r.installationId),
       modelCalls: Number(r.modelCalls) || 0,
       tokens: Number(r.tokens) || 0,
@@ -122,15 +128,14 @@ export async function readUsageRollupSince(
       accountLogin: typeof r.accountLogin === "string" ? r.accountLogin : null,
       accountType: typeof r.accountType === "string" ? r.accountType : null,
     }))
+    return { ok: true, tenants }
   } catch (error) {
     console.warn(
       JSON.stringify({
         event: "d1-usage-rollup-read-failed",
-        sinceIso,
-        installationId,
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    return []
+    return { ok: false }
   }
 }

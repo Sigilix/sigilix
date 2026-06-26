@@ -37,24 +37,28 @@ export async function checkShadowQuota(
     const mode = resolveQuotaMode(env)
     if (mode === "off") return
 
-    // 2. Read per-tenant config.  No daily_budget → tenant is not quota-tracked.
+    // 2. Defensive no-op for invalid/Mode-A installationIds (0, negative, non-integer).
+    //    Mode A uses installationId:0; a non-positive integer must never be queried.
+    if (!Number.isInteger(installationId) || installationId <= 0) return
+
+    // 3. Read per-tenant config.  No daily_budget → tenant is not quota-tracked.
     const cfg = await readTenantConfig(env, installationId)
     if (cfg?.dailyBudget == null) return
 
-    // 3. Rolling 24-hour window.
+    // 4. Rolling 24-hour window.
     const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
     const usage = await readTenantUsageSince(env, installationId, sinceIso)
 
-    // 4. Read fault — emit a fault event and bail; never emit a fake quota state.
+    // 5. Read fault — emit a fault event and bail; never emit a fake quota state.
     if (!usage.ok) {
       console.log(JSON.stringify({ event: "quota-read-failed", installationId, mode }))
       return
     }
 
-    // 5. Budget check.
+    // 6. Budget check.
     const wouldExceed = computeWouldExceed(usage.modelCalls, cfg.dailyBudget)
 
-    // 6. Shadow telemetry — always emitted when usage is readable and budget is set.
+    // 7. Shadow telemetry — always emitted when usage is readable and budget is set.
     console.log(
       JSON.stringify({
         event: "quota-shadow",
@@ -68,7 +72,7 @@ export async function checkShadowQuota(
       }),
     )
 
-    // 7. Forward-compat enforcement signal (phase 1 never actually refuses).
+    // 8. Forward-compat enforcement signal (phase 1 never actually refuses).
     if (mode === "enforce" && wouldExceed) {
       console.log(
         JSON.stringify({

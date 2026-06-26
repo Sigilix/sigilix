@@ -12,6 +12,7 @@
 
 import { chat } from "@/src/shared/adapters/model"
 import type { ChatArgs, ChatMessage, ChatResult } from "@/src/shared/ports/model"
+import { isProviderRateLimit } from "@/src/shared/adapters/model/provider-errors"
 import {
   runSpecialistToolConversation,
   type SpecialistRuntimeTool,
@@ -60,6 +61,9 @@ export interface AttemptChatResult<T> {
   perCallInputTokens?: Array<number | undefined>
   toolCallsMade?: number
   toolResultTokens?: number
+  // SIG-455 (PR B Task 5): the Retry-After delay (ms) when the provider returned
+  // a 429/503. Absent when the failure was not a provider rate-limit.
+  providerRateLimitMs?: number
 }
 
 export async function attemptChat<T>(args: AttemptChatArgs<T>): Promise<AttemptChatResult<T>> {
@@ -145,6 +149,7 @@ export async function attemptChat<T>(args: AttemptChatArgs<T>): Promise<AttemptC
     return {
       verdict: null,
       failureReason: e instanceof Error ? e.message : String(e),
+      ...(isProviderRateLimit(e) ? { providerRateLimitMs: e.retryAfterMs } : {}),
     }
   }
 }

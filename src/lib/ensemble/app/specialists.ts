@@ -154,6 +154,7 @@ export type SpecialistsPhaseResult<R> =
       securityManifest: SecurityManifest
       invariantLensAmendmentWork?: Promise<InvariantLensApplyResult>
       multiBatchReviewUnion?: EnforcedReviewUnion
+      providerRateLimitMs?: number // SIG-455 (PR B Task 5): max Retry-After ms across all specialist + synth runs
     }
 
 export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Promise<SpecialistsPhaseResult<R>> {
@@ -967,11 +968,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
   })
   if (synthPhase.kind === "exit") return { kind: "exit", result: synthPhase.result }
 
-  // SIG-318 (PR 12c): the recall floors (SIG-317 truncation recovery / SIG-351
-  // source floor / SIG-287 degraded floor / SIG-317-step-6 AST-emit floor)
-  // moved to ensemble/app/recall-floors. They take the NON-NULL synth verdict +
-  // provenance the synth phase produced and return the (still non-null)
-  // effective pair the adjudicate phase downstream consumes.
+  // SIG-318 (PR 12c): recall floors (truncation/source/degraded/AST) — see ensemble/app/recall-floors.
   const { effectiveSynthVerdict, effectiveSynthProvenance } = applyRecallFloors({
     owner,
     repo,
@@ -984,6 +981,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     astResult,
     degradedCoverage,
   })
+  const rls = specialistResults.map((r) => (r.status === "fulfilled" ? (r.value.providerRateLimitMs ?? 0) : 0))
+  const maxRl = Math.max(0, synthPhase.providerRateLimitMs ?? 0, ...rls)
   return {
     kind: "ok" as const,
     succeeded: verdictsForSynth,
@@ -996,5 +995,6 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     securityManifest: securityManifestForValidation,
     ...(multiBatchReviewUnion !== undefined ? { multiBatchReviewUnion } : {}),
     ...(invariantLensAmendmentWork !== undefined ? { invariantLensAmendmentWork } : {}),
+    ...(maxRl > 0 ? { providerRateLimitMs: maxRl } : {}),
   }
 }

@@ -178,6 +178,8 @@ export type SynthesizePhaseResult<R> =
       synthVerdict: PrReviewVerdict
       synthProvenance: SynthesizerProvenance
       shadowMemoriesForPhase3: ReviewMemoryFinding[]
+      /** SIG-455 (PR B Task 5): max Retry-After ms seen during the synth run, if any. */
+      providerRateLimitMs?: number
     }
 
 export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<SynthesizePhaseResult<R>> {
@@ -787,6 +789,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     synthVerdict: synthOutput.verdict,
     synthProvenance: synthOutput.provenance,
     shadowMemoriesForPhase3,
+    ...(synthOutput.providerRateLimitMs ? { providerRateLimitMs: synthOutput.providerRateLimitMs } : {}),
   }
 }
 

@@ -28,4 +28,18 @@ describe("resolveSlackScope", () => {
   it("fails closed on malformed scope JSON", () => {
     expect(resolveSlackScope({ SIGILIX_SLACK_SCOPE_MAP: "{nope", OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL }, { teamId: "T1", channelId: "C1" }).ok).toBe(false)
   })
+  it("DROPS a repo whose installation id is '0' → no-installation", () => {
+    const install = JSON.stringify({ "sigilix/sigilix": "0" })
+    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"] } })
+    expect(resolveSlackScope({ SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: install }, { teamId: "T1", channelId: "C1" })).toEqual({ ok: false, reason: "no-installation" })
+  })
+  it("returns parse-error (not throw) when repos is not an array", () => {
+    const map = JSON.stringify({ "T1:C1": { repos: 42 } })
+    expect(() => resolveSlackScope({ SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL }, { teamId: "T1", channelId: "C1" })).not.toThrow()
+    expect(resolveSlackScope({ SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL }, { teamId: "T1", channelId: "C1" })).toEqual({ ok: false, reason: "parse-error" })
+  })
+  it("fails closed → no-installation when OPENCLAW_GITHUB_INSTALLATION_MAP is malformed JSON", () => {
+    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"] } })
+    expect(resolveSlackScope({ SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: "{nope" }, { teamId: "T1", channelId: "C1" })).toEqual({ ok: false, reason: "no-installation" })
+  })
 })

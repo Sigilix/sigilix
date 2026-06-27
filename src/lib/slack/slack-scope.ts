@@ -36,11 +36,19 @@ export function resolveSlackScope(
     return { ok: false, reason: "parse-error" }
   }
 
-  // Look up the channel config.
+  // Look up the channel config — prototype-safe.
   const key = `${args.teamId}:${args.channelId}`
+  if (!Object.hasOwn(scopeMap, key)) {
+    return { ok: false, reason: "no-config" }
+  }
   const channelCfg = scopeMap[key]
   if (channelCfg === undefined || channelCfg === null) {
     return { ok: false, reason: "no-config" }
+  }
+
+  // Guard non-array repos — fail closed instead of throwing.
+  if (!Array.isArray(channelCfg.repos)) {
+    return { ok: false, reason: "parse-error" }
   }
 
   // Step 2: parse the installation map — fail-closed to {} on bad JSON.
@@ -52,21 +60,23 @@ export function resolveSlackScope(
   }
 
   // For each configured repo, require an EXACT "owner/repo" key in installMap.
-  // Split on the FIRST "/" only; drop repos that fail lookup or produce NaN.
+  // Split on the FIRST "/" only; drop repos that fail lookup or produce a non-positive id.
   const repos: SlackScope["repos"] = []
-  for (const ownerRepo of channelCfg.repos ?? []) {
+  for (const ownerRepo of channelCfg.repos) {
     const slashIdx = ownerRepo.indexOf("/")
     if (slashIdx === -1) continue
 
     const owner = ownerRepo.slice(0, slashIdx)
     const repo = ownerRepo.slice(slashIdx + 1)
 
-    // EXACT key lookup — no owner-only fallback.
+    // EXACT key lookup — no owner-only fallback. Prototype-safe.
+    if (!Object.hasOwn(installMap, ownerRepo)) continue
     const rawId = installMap[ownerRepo]
     if (rawId === undefined || rawId === null) continue
 
     const installationId = Number(rawId)
-    if (Number.isNaN(installationId)) continue
+    // Drop zero, negative, NaN, or Infinity — must be a finite positive integer.
+    if (!Number.isFinite(installationId) || installationId <= 0) continue
 
     repos.push({ owner, repo, installationId })
   }

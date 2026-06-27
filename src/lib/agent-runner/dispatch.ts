@@ -79,6 +79,16 @@ interface TaskPacket {
   caps: AgentRunTaskInput["caps"]
 }
 
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Returns the AgentRunnerContainer stub for the given runId.
+ * Centralises the cast from the raw DO binding so callers stay clean.
+ */
+function agentRunnerStub(env: Env, runId: string) {
+  return getContainer(env.AGENT_RUNNER as unknown as DurableObjectNamespace<AgentRunnerContainer>, runId)
+}
+
 // ── dispatch ──────────────────────────────────────────────────────────────────
 
 /**
@@ -129,16 +139,15 @@ export async function dispatchAgentRun(
     }
 
     // Send the task packet to the container.
-    await getContainer(
-      env.AGENT_RUNNER as unknown as DurableObjectNamespace<AgentRunnerContainer>,
-      runId,
-    ).fetch(
+    const response = await agentRunnerStub(env, runId).fetch(
       new Request("https://agent-runner.internal/", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(packet),
       }),
     )
+
+    if (!response.ok) throw new Error(`container responded ${response.status}`)
 
     return { runId, dispatched: true }
   } catch (err) {
@@ -172,10 +181,7 @@ export async function dispatchAgentRun(
  */
 export async function getAgentRunStatus(env: Env, runId: string): Promise<AgentRunRecord | null> {
   try {
-    const stub = getContainer(
-      env.AGENT_RUNNER as unknown as DurableObjectNamespace<AgentRunnerContainer>,
-      runId,
-    )
+    const stub = agentRunnerStub(env, runId)
     return await stub.getRunRecord()
   } catch {
     return null

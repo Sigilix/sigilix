@@ -228,6 +228,15 @@ describe("dispatchAgentRun", () => {
     expect(result).toEqual({ runId: "run-abc", dispatched: false })
   })
 
+  it("container fetch returns non-ok (5xx) → dispatched:false, no throw-out", async () => {
+    const stub = makeStub(() => Promise.resolve(new Response("err", { status: 500 })))
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+  })
+
   it("dispatch failure logs agent-runner-dispatch-failed (without token or key)", async () => {
     mockGetInstallationToken.mockRejectedValue(new Error("network error"))
 

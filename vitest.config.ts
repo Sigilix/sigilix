@@ -85,6 +85,11 @@ export default new WebAssembly.Module(__bytes);`
       // class with the surface tests need. Production builds via
       // wrangler ignore the alias.
       "cloudflare:workers": path.resolve(__dirname, "./src/test-shims/cloudflare-workers-shim.ts"),
+      // SIG-545 B1: the `@cloudflare/containers` package's `Container` base
+      // extends the Workers DurableObject and crashes on import in Node/vitest.
+      // src/index.ts statically exports AgentRunnerContainer (extends Container),
+      // so without this shim every worker-entry-importing test fails to load.
+      "@cloudflare/containers": path.resolve(__dirname, "./src/test-shims/cloudflare-containers-shim.ts"),
     },
   },
 })

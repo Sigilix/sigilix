@@ -213,15 +213,16 @@ export async function listIndexedRepos(
  */
 export function resolveLinearTeamForRepo(mapJson: string | undefined, owner: string, repo: string): string | null {
   if (!mapJson) return null
-  let map: Record<string, unknown>
+  let map: unknown
   try {
-    map = JSON.parse(mapJson) as Record<string, unknown>
+    map = JSON.parse(mapJson)
   } catch {
     return null
   }
-  const exact = map[`${owner}/${repo}`]
+  if (map === null || typeof map !== "object" || Array.isArray(map)) return null
+  const exact = (map as Record<string, unknown>)[`${owner}/${repo}`]
   if (typeof exact === "string" && exact) return exact
-  const byOwner = map[owner]
+  const byOwner = (map as Record<string, unknown>)[owner]
   return typeof byOwner === "string" && byOwner ? byOwner : null
 }
 

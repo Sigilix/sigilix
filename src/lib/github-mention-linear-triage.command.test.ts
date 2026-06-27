@@ -185,4 +185,17 @@ describe("handleLinearTriageCommand — direct unit tests", () => {
     expect((result as { handled: true; reply: string }).reply).toContain("No Linear team")
     expect(createIssueMock).not.toHaveBeenCalled()
   })
+
+  it("(h) Linear action fails (createIssue rejects) → error reply, no dedupe written", async () => {
+    createIssueMock.mockRejectedValueOnce(new Error("Linear API error"))
+    const kv = makeKv()
+    const env = makeEnv("on", TEAM_MAP, kv)
+    const putSpy = kv.put as ReturnType<typeof vi.fn>
+    const result = await handleLinearTriageCommand(baseArgs({ env }))
+    expect(result).toEqual({
+      handled: true,
+      reply: "I couldn't create the Linear issue just now — please try again.",
+    })
+    expect(putSpy).not.toHaveBeenCalled()
+  })
 })

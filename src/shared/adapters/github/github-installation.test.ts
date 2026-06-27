@@ -306,4 +306,24 @@ describe("resolveLinearTeamForRepo", () => {
     expect(resolveLinearTeamForRepo(undefined, "sigilix", "sigilix")).toBeNull()
     expect(resolveLinearTeamForRepo("{nope", "sigilix", "sigilix")).toBeNull()
   })
+  it('fails closed to null on JSON primitive "null" (no throw)', () => {
+    expect(() => resolveLinearTeamForRepo("null", "o", "r")).not.toThrow()
+    expect(resolveLinearTeamForRepo("null", "o", "r")).toBeNull()
+  })
+  it('fails closed to null on JSON primitive "true" (no throw)', () => {
+    expect(() => resolveLinearTeamForRepo("true", "o", "r")).not.toThrow()
+    expect(resolveLinearTeamForRepo("true", "o", "r")).toBeNull()
+  })
+  it('fails closed to null on JSON primitive "false" (no throw)', () => {
+    expect(() => resolveLinearTeamForRepo("false", "o", "r")).not.toThrow()
+    expect(resolveLinearTeamForRepo("false", "o", "r")).toBeNull()
+  })
+  it('fails closed to null on JSON primitive "42" (no throw)', () => {
+    expect(() => resolveLinearTeamForRepo("42", "o", "r")).not.toThrow()
+    expect(resolveLinearTeamForRepo("42", "o", "r")).toBeNull()
+  })
+  it("fails closed to null on JSON array '[\"x\"]' (no throw)", () => {
+    expect(() => resolveLinearTeamForRepo('["x"]', "o", "r")).not.toThrow()
+    expect(resolveLinearTeamForRepo('["x"]', "o", "r")).toBeNull()
+  })
 })

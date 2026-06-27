@@ -95,6 +95,8 @@ import {
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
+import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { handleSlackInstall, handleSlackOAuthCallback } from "@/src/lib/slack/slack-install"
 
 // Re-export the relocated public symbols so the entry module's export
 // surface is byte-for-byte unchanged for every importer + test pin.
@@ -352,6 +354,17 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/github/webhook") {
       return handleGitHubWebhook(request, env, ctx)
+    }
+
+    // SIG-196: Sigilix Slack agent routes (dark behind SIGILIX_SLACK_MODE).
+    if (request.method === "POST" && url.pathname === "/slack/events") {
+      return handleSlackRequest(request, env, ctx)
+    }
+    if (request.method === "GET" && url.pathname === "/slack/install") {
+      return handleSlackInstall(request, env)
+    }
+    if (request.method === "GET" && url.pathname === "/slack/oauth/callback") {
+      return handleSlackOAuthCallback(request, env)
     }
 
     // ─── Phase 5 user OAuth (ARC-163) ────────────────────────────

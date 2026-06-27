@@ -983,7 +983,7 @@ function buildGhAgentInitialUserMessage(ctx: GhAgentInitialMessageCtx): string {
   return lines.join("\n")
 }
 
-async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
+export async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY must be configured")
   }

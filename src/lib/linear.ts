@@ -342,6 +342,45 @@ export class LinearClient {
     return ids
   }
 
+  /**
+   * Create a new Linear issue and return its id, identifier, and URL.
+   * Used by the Slack agent thread→issue flow (SIG-196).
+   * `description` is optional — omitted from the mutation input when not provided.
+   */
+  async createIssue(input: {
+    teamId: string
+    title: string
+    description?: string
+  }): Promise<{ id: string; identifier: string; url: string }> {
+    const mutation = /* GraphQL */ `
+      mutation IssueCreate($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            id
+            identifier
+            url
+          }
+        }
+      }
+    `
+    const vars: { teamId: string; title: string; description?: string } = {
+      teamId: input.teamId,
+      title: input.title,
+    }
+    if (typeof input.description === "string") vars.description = input.description
+
+    const data = await this.gql<{
+      issueCreate: { success: boolean; issue: { id: string; identifier: string; url: string } | null }
+    }>(mutation, { input: vars })
+
+    if (!data.issueCreate.success || !data.issueCreate.issue) {
+      throw new Error(`issueCreate returned success=false for "${input.title}"`)
+    }
+    const { id, identifier, url } = data.issueCreate.issue
+    return { id, identifier, url }
+  }
+
   /** Create a new issue label scoped to a team. Returns the new label ID. */
   private async createLabel(teamId: string, name: string): Promise<string> {
     const mutation = /* GraphQL */ `

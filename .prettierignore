@@ -1,5 +1,7 @@
 # Generated / vendored / data — never format.
 node_modules
+# container/ is a separate Node sub-project with its own tooling; excluded from root formatting.
+container
 dist
 .wrangler
 coverage

@@ -56,6 +56,11 @@ import {
   releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
 } from "./github-mention-dismiss"
+import {
+  parseLinearTriageCommand,
+  resolveGithubLinearTriageMode,
+  runLinearTriageAction,
+} from "@/src/lib/github-mention-linear-triage"
 // Re-export the dismiss subsystem's public surface so every existing
 // importer of `./github-mention` (notably the test file) is unchanged
 // after the SIG-376 4/8 relocation into `./github-mention-dismiss`.
@@ -391,6 +396,52 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         }),
       )
     }
+    return
+  }
+
+  // ── SIG-545 A: @sigilix make a linear triage ──────────────────────────
+  const triageCommand = explicit ? parseLinearTriageCommand(question) : null
+  if (triageCommand?.matched && resolveGithubLinearTriageMode(env) !== "off") {
+    const mode = resolveGithubLinearTriageMode(env)
+    if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
+      since("linear-triage-unauthorized", { login: sourceComment.author })
+      return
+    }
+    if (mode === "shadow") {
+      console.log(JSON.stringify({ event: "github-linear-triage-would-create", owner, repo, prNumber }))
+      return
+    }
+    const dedupeKey = `linear-triage:${commentId}`
+    const prior = await env.OPENCLAW_STATE.get(dedupeKey)
+    let reply: string
+    if (prior) {
+      const pipeIdx = prior.indexOf("|")
+      const ident = pipeIdx >= 0 ? prior.slice(0, pipeIdx) : prior
+      const url = pipeIdx >= 0 ? prior.slice(pipeIdx + 1) : ""
+      reply = `Already created **${ident}** for this comment: ${url}`
+    } else {
+      const pr = await client.getPullRequest(owner, repo, prNumber)
+      const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`
+      const result = await runLinearTriageAction(env, {
+        owner,
+        repo,
+        prNumber,
+        title: pr.title,
+        body: pr.body ?? "",
+        author: sourceComment.author,
+        prUrl,
+      })
+      if (result.kind === "created") {
+        await env.OPENCLAW_STATE.put(dedupeKey, `${result.identifier}|${result.url}`, { expirationTtl: 86400 })
+        reply = `Created **${result.identifier}**${result.triaged ? " — triaged" : ""}: ${result.url}`
+      } else if (result.kind === "no-team") {
+        reply = "No Linear team is configured for this repo — an admin can set `OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP`."
+      } else {
+        reply = "I couldn't create the Linear issue just now — please try again."
+      }
+    }
+    await postReply({ client, owner, repo, prNumber, surface, threadRootId: args.threadRootId ?? commentId, body: reply })
+    since("linear-triage-done")
     return
   }
 

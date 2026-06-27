@@ -7,8 +7,7 @@
 //   surface = "issue"           → POST /repos/{o}/{r}/issues/{n}/comments
 //   surface = "review-comment"  → POST /repos/{o}/{r}/pulls/{n}/comments/{id}/replies
 //
-// Idempotency: KV-keyed on the source comment ID with a 30-day TTL so
-// re-deliveries of the same Comment.create event don't double-reply.
+// Idempotency: KV-keyed on comment ID (30-day TTL); re-deliveries don't double-reply.
 
 import { generate } from "@/src/shared/adapters/model"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -56,9 +55,7 @@ import {
   releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
 } from "./github-mention-dismiss"
-// Re-export the dismiss subsystem's public surface so every existing
-// importer of `./github-mention` (notably the test file) is unchanged
-// after the SIG-376 4/8 relocation into `./github-mention-dismiss`.
+import { handleLinearTriageCommand } from "@/src/lib/github-mention-linear-triage"
 export {
   type ReviewDismissDedupeRecord,
   type ReviewDismissResult,
@@ -183,11 +180,6 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
   const explicit = bodyMentionsBot(sourceComment.body, triggers)
 
-  // Implicit-thread: only relevant when there's no explicit mention,
-  // and only on review-comment surface (top-level issue_comment has
-  // no chain structure — see comment in src/lib/mention.ts:arcIn-
-  // ThreadAbove). Reuses the paginated listPullRequestReviewComments
-  // result later by passing it to fetchThread, so we don't refetch.
   let implicit = false
   let cachedReviewComments: ReviewComment[] | null = null
   if (!explicit && surface === "review-comment") {
@@ -199,12 +191,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     return
   }
 
-  // Eye-emoji "ack". Posts a 👀 reaction on the source comment so the
-  // asker knows Sigilix saw the message before the LLM call returns
-  // (Ollama Turbo is 30-90s typical). Best-effort — if the reaction
-  // call fails for any reason we still proceed with the actual reply.
-  // Fires NOW so the user sees it within ~1s of webhook delivery,
-  // before the PR/diff fetch + Ollama call.
+  // Eye-emoji 👀 ack: best-effort, non-fatal; lets asker know we're working.
   const addReaction =
     surface === "issue" ? client.addReactionToIssueComment.bind(client) : client.addReactionToReviewComment.bind(client)
   await addReaction(owner, repo, commentId, "eyes").catch((error: unknown) => {
@@ -394,10 +381,36 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     return
   }
 
-  // Stage 2 — heavy fanout. Now that we know we're going to reply,
-  // fetch PR meta + diff + thread context in parallel. Reuse the
-  // review-comment list from the implicit-thread check if we have
-  // it (avoids re-paginating).
+  if (explicit) {
+    const triageOutcome = await handleLinearTriageCommand({
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      commentId,
+      authorLogin: sourceComment.author,
+      authorAssociation: sourceComment.authorAssociation,
+      question,
+    })
+    if (triageOutcome.handled) {
+      if (triageOutcome.reply)
+        await postReply({
+          client,
+          owner,
+          repo,
+          prNumber,
+          surface,
+          threadRootId: args.threadRootId ?? commentId,
+          body: triageOutcome.reply,
+        })
+      since("linear-triage-done")
+      return
+    }
+  }
+
+  // Stage 2 — heavy fanout: PR meta + diff + thread context in parallel.
+  // Reuses the cached review-comment list from the implicit-thread check.
   const [meta, diff, thread] = await Promise.all([
     client.getPullRequest(owner, repo, prNumber),
     client.getPullRequestDiff(owner, repo, prNumber),
@@ -405,13 +418,8 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   ])
   since("github-fetched", { threadCount: thread.length })
 
-  // Codebase retrieval scoped to the repo. SIG-132: the Vectorize
-  // namespace is `<owner>/<repo>` lowercased (multi-tenant isolation),
-  // built via indexNamespace(). teamKeyToNamespace() lowercases as a
-  // fallback, but we pass the fully-formed namespace here. Soft-fails to
-  // empty when retrieval errors or the repo isn't indexed — the prompt
-  // instructs the model to abstain rather than fabricate when chunks are
-  // empty.
+  // Codebase retrieval scoped to the repo namespace (SIG-132). Soft-fails
+  // to empty when the repo isn't indexed — model abstains rather than fabricates.
   const retrievalText = `${meta.title}\n\n${question}`
   const chunks = await retrieveChunks({
     text: retrievalText,
@@ -603,12 +611,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     const inlineAnchor = extractAnchor(sourceComment)
     const originalFindingBody = findOriginalFindingBody(thread)
     if (inlineAnchor && inlineAnchor.line !== null && originalFindingBody !== null) {
-      // `meta.head?.sha` (PR HEAD at the moment the concession was decided)
-      // is the audit-trail field; cast-narrow to string with a safe fallback.
       const prHeadSha = typeof meta.head?.sha === "string" ? meta.head.sha : ""
-      // SIG-217: lift the render-time fingerprint + severity off the original
-      // finding comment so the withdrawal can suppress content-equivalent
-      // re-fires (and flag severity-escalation attempts) on later pushes.
       const contentFingerprint = parseFindingFingerprint(originalFindingBody)
       const dismissedScore = parseFindingSeverity(originalFindingBody)
       await writeWithdrawal({
@@ -624,9 +627,6 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         ...(contentFingerprint ? { contentFingerprint } : {}),
         ...(dismissedScore !== undefined ? { score: dismissedScore } : {}),
       })
-      // SIG-147: record the dismissal as a per-repo outcome so a
-      // repeatedly-dismissed PATTERN gets suppressed in future reviews.
-      // Pattern-keyed on the same fingerprint; best-effort, never blocks.
       if (contentFingerprint) {
         await recordOutcome(env, {
           repoId: `${owner}/${repo}`,

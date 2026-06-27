@@ -918,6 +918,13 @@ export interface Env {
   // hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
 
+  // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command.
+  //   OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE  "off" (default/unknown) | "shadow" | "on".
+  //   OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP  JSON {"owner/repo":"<linearTeamId>","owner":"<linearTeamId>"}
+  //                                         (the Linear team UUID; exact owner/repo then owner fallback).
+  OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE?: string
+  OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP?: string
+
   // SIG-196: Sigilix Slack agent. Secrets via `wrangler secret`; mode via [vars].
   //   SIGILIX_SLACK_MODE      "off" (default/unknown) | "shadow" | "on".
   //   SIGILIX_SLACK_SCOPE_MAP  JSON {"<teamId>:<channelId>":{"repos":["owner/repo"],"linearTeam":"<LINEAR_TEAM_ID>"}}

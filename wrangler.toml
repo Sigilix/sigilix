@@ -1095,6 +1095,11 @@ OPENCLAW_LOGIC_INPUT_COMPOSITION = "shadow"
 # Cache TTL 60s in the Worker so updates take effect on the next request.
 OPENCLAW_GATE = "shadow"
 
+# SIG-196: Sigilix Slack agent mode. "off" (default) | "shadow" | "on".
+# Secrets (SLACK_SIGNING_SECRET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET,
+# SLACK_BOT_TOKEN) go through `wrangler secret put`; they are never in [vars].
+SIGILIX_SLACK_MODE = "off"
+
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to
 # this same script (HTTP 11004 — "Queue already has a consumer"), and

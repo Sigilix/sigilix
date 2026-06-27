@@ -917,4 +917,16 @@ export interface Env {
   // SIG-343 PR C: platform DB (tenant/repo/usage_ledger) — optional so a deploy that
   // hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
+
+  // SIG-196: Sigilix Slack agent. Secrets via `wrangler secret`; mode via [vars].
+  //   SIGILIX_SLACK_MODE      "off" (default/unknown) | "shadow" | "on".
+  //   SIGILIX_SLACK_SCOPE_MAP  JSON {"<teamId>:<channelId>":{"repos":["owner/repo"],"linearTeam":"<LINEAR_TEAM_ID>"}}
+  //                            repos must be EXACT owner/repo entries present in OPENCLAW_GITHUB_INSTALLATION_MAP;
+  //                            linearTeam is the Linear team UUID (NOT the team key). Lightweight beta store; SIG-193 later.
+  SLACK_SIGNING_SECRET?: string
+  SLACK_CLIENT_ID?: string
+  SLACK_CLIENT_SECRET?: string
+  SLACK_BOT_TOKEN?: string
+  SIGILIX_SLACK_MODE?: string
+  SIGILIX_SLACK_SCOPE_MAP?: string
 }

@@ -7,6 +7,8 @@
 //
 // Security: the token-exchange response body is NEVER logged. Only neutral
 // status strings appear in console.error to prevent accidental token leakage.
+// CSRF: the install flow uses a KV-backed nonce (state) with a 10-minute TTL;
+// the callback verifies and immediately deletes the nonce to prevent replays.
 
 import type { Env } from "@/src/shared/types/env"
 
@@ -17,6 +19,8 @@ export interface SlackInstall {
 }
 
 const KV_PREFIX = "slack-install:"
+const STATE_KV_PREFIX = "slack-oauth-state:"
+const DEFAULT_SCOPES = "app_mentions:read,chat:write,channels:history,groups:history"
 
 /** Write a Slack install record to KV. Key: `slack-install:<teamId>`. */
 export async function putSlackInstall(env: Pick<Env, "OPENCLAW_STATE">, install: SlackInstall): Promise<void> {
@@ -42,13 +46,59 @@ export async function getSlackBotToken(
   return env.SLACK_BOT_TOKEN ?? null
 }
 
-/** Handle GET /slack/oauth/callback — exchange the Slack OAuth v2 code for a
- *  bot token, persist the install, and redirect to the installed confirmation
- *  page. Returns neutral 502 on any exchange failure to avoid leaking details.
+/** Generate a CSRF-proof Slack OAuth v2 authorize URL.
+ *  Stores a CSPRNG nonce in KV under `slack-oauth-state:<state>` with a
+ *  10-minute TTL. The callback must verify and delete the nonce before
+ *  proceeding with the code exchange. */
+export async function buildSlackAuthorizeUrl(
+  env: Pick<Env, "OPENCLAW_STATE" | "SLACK_CLIENT_ID" | "OPENCLAW_BASE_URL">,
+  args?: { scopes?: string },
+): Promise<string> {
+  const state = crypto.randomUUID()
+  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, "1", { expirationTtl: 600 })
+  const base = env.OPENCLAW_BASE_URL ?? "https://app.sigilix.ai"
+  const redirectUri = `${base}/slack/oauth/callback`
+  const scopes = args?.scopes ?? DEFAULT_SCOPES
+  return (
+    `https://slack.com/oauth/v2/authorize` +
+    `?client_id=${encodeURIComponent(env.SLACK_CLIENT_ID ?? "")}` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${encodeURIComponent(state)}`
+  )
+}
+
+/** Handle GET /slack/install — redirect the user to Slack's OAuth consent screen.
+ *  A fresh CSRF nonce is generated and stored in KV on every request. */
+export async function handleSlackInstall(_request: Request, env: Env): Promise<Response> {
+  const authorizeUrl = await buildSlackAuthorizeUrl(env)
+  return new Response(null, {
+    status: 302,
+    headers: { location: authorizeUrl },
+  })
+}
+
+/** Handle GET /slack/oauth/callback — verify CSRF state, exchange the Slack
+ *  OAuth v2 code for a bot token, persist the install, and redirect to the
+ *  installed confirmation page. Returns neutral 502 on any exchange failure to
+ *  avoid leaking details.
  *
  *  NEVER logs the token-exchange response body or the bot token. */
 export async function handleSlackOAuthCallback(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
+
+  // CSRF state verification — must happen before the code exchange.
+  const state = url.searchParams.get("state")
+  if (!state) {
+    return new Response("missing state\n", { status: 400 })
+  }
+  const stateValue = await env.OPENCLAW_STATE.get(`${STATE_KV_PREFIX}${state}`)
+  if (stateValue === null) {
+    return new Response("invalid or expired state\n", { status: 400 })
+  }
+  // Delete immediately to prevent replay attacks.
+  await env.OPENCLAW_STATE.delete(`${STATE_KV_PREFIX}${state}`)
+
   const code = url.searchParams.get("code")
   if (!code) {
     return new Response("missing code\n", { status: 400 })

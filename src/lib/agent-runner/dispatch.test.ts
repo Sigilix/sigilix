@@ -264,9 +264,7 @@ describe("dispatchAgentRun", () => {
       tokens: 1000,
       stoppedReason: "done",
     }
-    const stub = makeStub(
-      () => Promise.resolve(new Response(JSON.stringify(runResult), { status: 200 })),
-    )
+    const stub = makeStub(() => Promise.resolve(new Response(JSON.stringify(runResult), { status: 200 })))
     mockGetContainer.mockReturnValue(stub)
     mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
 

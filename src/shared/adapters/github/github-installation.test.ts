@@ -4,6 +4,7 @@ import {
   listTeamRepoMappings,
   parseTeamGithubRepo,
   resolveInstallation,
+  resolveLinearTeamForRepo,
 } from "@/src/shared/adapters/github/github-installation"
 
 describe("resolveInstallation", () => {
@@ -287,5 +288,22 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     expect(result.length).toBe(1500)
     expect(result[0]).toBe("acme/repo-0000")
     expect(result[1499]).toBe("acme/repo-1499")
+  })
+})
+
+describe("resolveLinearTeamForRepo", () => {
+  const MAP = JSON.stringify({ "sigilix/sigilix": "team-uuid-1", sigilix: "team-uuid-owner" })
+  it("exact owner/repo wins", () => {
+    expect(resolveLinearTeamForRepo(MAP, "sigilix", "sigilix")).toBe("team-uuid-1")
+  })
+  it("falls back to owner-level", () => {
+    expect(resolveLinearTeamForRepo(MAP, "sigilix", "other-repo")).toBe("team-uuid-owner")
+  })
+  it("returns null when no match", () => {
+    expect(resolveLinearTeamForRepo(MAP, "acme", "widgets")).toBeNull()
+  })
+  it("fails closed to null on undefined/malformed JSON", () => {
+    expect(resolveLinearTeamForRepo(undefined, "sigilix", "sigilix")).toBeNull()
+    expect(resolveLinearTeamForRepo("{nope", "sigilix", "sigilix")).toBeNull()
   })
 })

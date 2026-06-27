@@ -207,6 +207,25 @@ export async function listIndexedRepos(
 }
 
 /**
+ * SIG-545 A: Resolve the Linear team UUID for a GitHub owner/repo pair.
+ * Lookup order: exact `owner/repo` key, then owner-only fallback.
+ * Fails closed to null on undefined or malformed JSON (no throw).
+ */
+export function resolveLinearTeamForRepo(mapJson: string | undefined, owner: string, repo: string): string | null {
+  if (!mapJson) return null
+  let map: Record<string, unknown>
+  try {
+    map = JSON.parse(mapJson) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const exact = map[`${owner}/${repo}`]
+  if (typeof exact === "string" && exact) return exact
+  const byOwner = map[owner]
+  return typeof byOwner === "string" && byOwner ? byOwner : null
+}
+
+/**
  * Resolve the team-key → {owner, repo} mapping for the current Linear
  * team. Used by mention-reply.ts to power the `inferRepo()` callback
  * passed into extractPullRequestRefs.

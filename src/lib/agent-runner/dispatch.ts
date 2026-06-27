@@ -109,7 +109,9 @@ export async function dispatchAgentRun(
 
   // ── Dark gate ───────────────────────────────────────────────────────────────
   if (resolveAgentRunnerMode(env) !== "on") {
-    console.log(JSON.stringify({ event: "agent-runner-skipped", runId, mode: env.OPENCLAW_AGENT_RUNNER_MODE ?? "unset" }))
+    console.log(
+      JSON.stringify({ event: "agent-runner-skipped", runId, mode: env.OPENCLAW_AGENT_RUNNER_MODE ?? "unset" }),
+    )
     return { runId, dispatched: false }
   }
 

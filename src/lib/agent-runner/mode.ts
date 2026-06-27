@@ -21,9 +21,7 @@ export type AgentRunnerMode = "off" | "on"
  * Any other value — including unset, "ON", whitespace variants, or
  * unknown strings — defaults to "off" (fail-closed).
  */
-export function resolveAgentRunnerMode(
-  env: Pick<Env, "OPENCLAW_AGENT_RUNNER_MODE">,
-): AgentRunnerMode {
+export function resolveAgentRunnerMode(env: Pick<Env, "OPENCLAW_AGENT_RUNNER_MODE">): AgentRunnerMode {
   if (env.OPENCLAW_AGENT_RUNNER_MODE === "on") return "on"
   return "off"
 }

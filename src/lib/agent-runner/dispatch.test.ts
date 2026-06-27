@@ -200,10 +200,7 @@ describe("dispatchAgentRun", () => {
   it("dark path logs agent-runner-skipped event (no token)", async () => {
     await dispatchAgentRun(makeEnv("off"), SAMPLE_INPUT)
 
-    const allOutput = [
-      ...spyLog.mock.calls.flat().map(String),
-      ...spyWarn.mock.calls.flat().map(String),
-    ].join("\n")
+    const allOutput = [...spyLog.mock.calls.flat().map(String), ...spyWarn.mock.calls.flat().map(String)].join("\n")
 
     expect(allOutput).toContain("agent-runner-skipped")
     expect(allOutput).not.toContain(STUB_TOKEN)

@@ -180,8 +180,9 @@ const TOOLS = [
 // ── Path guard ────────────────────────────────────────────────────────────────
 
 /**
- * Resolve `rel` against `dir` and verify it stays inside `dir`.
- * Returns the absolute path, or null if the path escapes.
+ * Lexical path guard (cheap, no I/O): resolve `rel` against `dir` and verify
+ * it stays inside `dir`.  Returns the absolute path, or null if it escapes.
+ * Used as the first gate by safeResolve.
  */
 function guardPath(dir: string, rel: string): string | null {
   const abs = path.resolve(dir, rel);
@@ -190,10 +191,104 @@ function guardPath(dir: string, rel: string): string | null {
   return abs;
 }
 
+/**
+ * Realpath-hardened path resolver.
+ *
+ * First applies a cheap lexical check (guardPath), then verifies that the
+ * path — or its nearest existing ancestor — resolves (via fs.realpath) inside
+ * the realpath of `dir`.  This prevents symlink traversal escapes.
+ *
+ * mode "read"  — walks up from `abs` to the nearest existing ancestor and
+ *                realpaths it.  Rejects if the ancestor escapes OR if realpath
+ *                throws on a dangling symlink (symlink exists but target does
+ *                not).
+ * mode "write" — walks up from path.dirname(abs) to find the nearest existing
+ *                ancestor, verifies it resolves inside the sandbox.  Also
+ *                rejects if the final path component already exists as a
+ *                symlink that resolves outside.
+ *
+ * Returns the safe absolute path (lexically resolved) or null on rejection.
+ */
+async function safeResolve(
+  dir: string,
+  rel: string,
+  mode: "read" | "write" = "read",
+): Promise<string | null> {
+  // 1. Lexical guard — cheap, no I/O
+  const abs = guardPath(dir, rel);
+  if (abs === null) return null;
+
+  // 2. Compute the real sandbox root
+  let realDir: string;
+  try {
+    realDir = await fs.realpath(dir);
+  } catch {
+    return null;
+  }
+  const realBase = realDir.endsWith(path.sep) ? realDir : realDir + path.sep;
+  const insideSandbox = (p: string): boolean =>
+    p === realDir || p.startsWith(realBase);
+
+  /**
+   * Walk up from `start`, realpathing each candidate until we find an existing
+   * entry.  Returns the realpath of the nearest existing ancestor, or null if
+   * a dangling symlink is encountered or we reach the filesystem root.
+   */
+  async function nearestRealpath(start: string): Promise<string | null> {
+    let check = start;
+    while (true) {
+      try {
+        return await fs.realpath(check);
+      } catch {
+        // Distinguish "dangling symlink" from "path does not exist"
+        try {
+          await fs.lstat(check);
+          // lstat succeeded but realpath failed → dangling symlink → reject
+          return null;
+        } catch {
+          // lstat also failed → path truly does not exist → walk up
+          const parent = path.dirname(check);
+          if (parent === check) return null; // reached filesystem root
+          check = parent;
+        }
+      }
+    }
+  }
+
+  if (mode === "write") {
+    // Verify the nearest existing ancestor of the parent directory is inside.
+    const parentReal = await nearestRealpath(path.dirname(abs));
+    if (parentReal === null || !insideSandbox(parentReal)) return null;
+
+    // If the final component already exists as a symlink, verify its target.
+    try {
+      const lstat = await fs.lstat(abs);
+      if (lstat.isSymbolicLink()) {
+        try {
+          const realFinal = await fs.realpath(abs);
+          if (!insideSandbox(realFinal)) return null;
+        } catch {
+          // Dangling symlink on the write target — reject
+          return null;
+        }
+      }
+    } catch {
+      // Final component does not exist yet — fine for a new file
+    }
+
+    return abs;
+  } else {
+    // Read mode: verify the nearest existing ancestor of abs is inside.
+    const ancestorReal = await nearestRealpath(abs);
+    if (ancestorReal === null || !insideSandbox(ancestorReal)) return null;
+    return abs;
+  }
+}
+
 // ── Tool executors ────────────────────────────────────────────────────────────
 
 async function execListFiles(dir: string, subpath: string): Promise<string> {
-  const target = guardPath(dir, subpath);
+  const target = await safeResolve(dir, subpath, "read");
   if (target === null) return "error: path escapes repo dir";
   try {
     const entries = await fs.readdir(target);
@@ -204,7 +299,7 @@ async function execListFiles(dir: string, subpath: string): Promise<string> {
 }
 
 async function execReadFile(dir: string, filePath: string): Promise<string> {
-  const abs = guardPath(dir, filePath);
+  const abs = await safeResolve(dir, filePath, "read");
   if (abs === null) return "error: path escapes repo dir";
   try {
     const content = await fs.readFile(abs, "utf8");
@@ -222,7 +317,7 @@ async function execWriteFile(
   filePath: string,
   content: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const abs = guardPath(dir, filePath);
+  const abs = await safeResolve(dir, filePath, "write");
   if (abs === null) return { ok: false, error: "path escapes repo dir" };
   try {
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -238,17 +333,28 @@ async function execRunCmd(
   dir: string,
   cmd: string,
   args: string[],
+  deadline: number,
 ): Promise<string> {
+  // Fix: use Object.hasOwn to avoid prototype-chain key collisions
+  // (e.g. cmd="__proto__" would otherwise look up Object.prototype)
+  if (!Object.hasOwn(ALLOWED_EXECUTABLES, cmd)) {
+    return `error: executable '${cmd}' is not allow-listed`;
+  }
   const allowed = ALLOWED_EXECUTABLES[cmd];
-  if (!allowed) return `error: executable '${cmd}' is not allow-listed`;
 
   const subCmd = args[0] ?? "";
   if (!allowed.has(subCmd)) {
     return `error: sub-command '${subCmd}' is not allow-listed for '${cmd}'`;
   }
 
+  // Clamp the per-command timeout so it never exceeds the remaining loop budget
+  const remaining = Math.max(0, Math.min(60_000, deadline - Date.now()));
+  if (remaining === 0) {
+    return "error: timed out";
+  }
+
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd: dir, timeout: 60_000 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd: dir, timeout: remaining }, (err, stdout, stderr) => {
       const combined = (stdout + "\n" + stderr).trim();
       const capped =
         combined.length > CMD_OUTPUT_CAP
@@ -398,7 +504,7 @@ export async function runEditLoop(args: EditLoopArgs): Promise<EditLoopResult> {
           const cmdArgs = Array.isArray(parsed.args)
             ? (parsed.args as unknown[]).map(String)
             : [];
-          result = await execRunCmd(dir, cmd, cmdArgs);
+          result = await execRunCmd(dir, cmd, cmdArgs, deadline);
         } else {
           result = `error: unknown tool '${name}'`;
         }

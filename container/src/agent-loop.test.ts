@@ -210,6 +210,94 @@ describe("runEditLoop", () => {
     expect(result.stoppedReason).toBe("done");
   });
 
+  // ── symlink traversal guard (Fix 1) ─────────────────────────────────────────
+
+  it("rejects read_file through a symlink inside the sandbox that points outside", async () => {
+    // Plant a symlink inside tmpDir pointing to the OS temp root (outside sandbox)
+    const linkPath = path.join(tmpDir, "escape-link");
+    await fs.symlink(os.tmpdir(), linkPath);
+
+    stubFetch(
+      // Model tries to read through the symlink
+      toolCallResponse("tc-1", "read_file", { path: "escape-link/some-secret" }),
+      // After rejection, model calls done
+      doneResponse(),
+    );
+
+    const result = await runEditLoop(makeArgs({ dir: tmpDir }));
+
+    // The loop must continue (not crash) after the rejected read
+    expect(result.stoppedReason).toBe("done");
+    expect(result.changed).toBe(false);
+  });
+
+  it("rejects write_file when the parent directory component is a symlink escaping the sandbox", async () => {
+    // Create a real directory outside the sandbox
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "sigilix-outside-"));
+    try {
+      // Plant a symlink inside tmpDir whose realpath is outside
+      const linkPath = path.join(tmpDir, "escaped-parent");
+      await fs.symlink(outsideDir, linkPath);
+
+      stubFetch(
+        // Model tries to write through the escaped parent
+        toolCallResponse("tc-1", "write_file", {
+          path: "escaped-parent/newfile.txt",
+          content: "pwned",
+        }),
+        doneResponse(),
+      );
+
+      const result = await runEditLoop(makeArgs({ dir: tmpDir }));
+
+      // The loop must continue after the rejected write
+      expect(result.stoppedReason).toBe("done");
+      // write was rejected — changed must remain false
+      expect(result.changed).toBe(false);
+
+      // Confirm the file was NOT created inside the outside directory
+      const attackedFile = path.join(outsideDir, "newfile.txt");
+      const exists = await fs
+        .access(attackedFile)
+        .then(() => true)
+        .catch(() => false);
+      expect(exists).toBe(false);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── prototype-safe allow-list (Fix 3) ────────────────────────────────────────
+
+  it('rejects run_cmd with cmd="__proto__" cleanly — no TypeError, loop continues', async () => {
+    // Before the fix, ALLOWED_EXECUTABLES["__proto__"] returned Object.prototype
+    // (truthy), then allowed.has(subCmd) threw TypeError: allowed.has is not a function.
+    // The outer catch would have set stoppedReason:"error". With the fix, Object.hasOwn
+    // returns false and we get a clean reject message; the loop continues to done.
+    stubFetch(
+      toolCallResponse("tc-1", "run_cmd", { cmd: "__proto__", args: ["test"] }),
+      doneResponse(),
+    );
+
+    const result = await runEditLoop(makeArgs({ dir: tmpDir }));
+
+    expect(result.stoppedReason).toBe("done"); // not "error"
+    expect(result.changed).toBe(false);
+  });
+
+  it('rejects run_cmd with cmd="constructor" cleanly — no TypeError, loop continues', async () => {
+    // "constructor" is another prototype chain key that would resolve to Function
+    stubFetch(
+      toolCallResponse("tc-1", "run_cmd", { cmd: "constructor", args: ["test"] }),
+      doneResponse(),
+    );
+
+    const result = await runEditLoop(makeArgs({ dir: tmpDir }));
+
+    expect(result.stoppedReason).toBe("done"); // not "error"
+    expect(result.changed).toBe(false);
+  });
+
   // ── run_cmd allow-list ──────────────────────────────────────────────────────
 
   it("rejects a non-allow-listed executable in run_cmd", async () => {

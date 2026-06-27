@@ -201,7 +201,7 @@ async function runDeferredWork(
         channelId,
         slackUserId,
         intent: result.action.kind,
-        mode: "shadow",
+        mode,
       }),
     )
   }
@@ -215,6 +215,10 @@ async function runDeferredWork(
       slackUserId,
       intent: result.action.kind,
       mode,
+      allowed: dec.allowed,
+      repo: scopeResult.scope.repos[0]
+        ? `${scopeResult.scope.repos[0].owner}/${scopeResult.scope.repos[0].repo}`
+        : null,
     }),
   )
 }

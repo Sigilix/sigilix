@@ -283,6 +283,7 @@ describe("handleSlackRequest", () => {
 
     expect(res.status).toBe(200)
     // No deferred work should be scheduled after a duplicate event.
+    expect(ctx.waitUntil).not.toHaveBeenCalled()
     await ctx.flush()
     expect(runSlackAgent).not.toHaveBeenCalled()
     expect(postSlackMessage).not.toHaveBeenCalled()

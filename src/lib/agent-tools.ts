@@ -37,7 +37,7 @@ const READ_FILE_LOOP_BUDGET_KEY = "read_file_lines:bytes_used"
 
 export interface AgentToolsContext {
   env: Env
-  surface: "linear-mention" | "github-mention"
+  surface: "linear-mention" | "github-mention" | "slack-mention"
   /** GitHub-only: present when surface = "github-mention", or when the
    *  Linear team-repo mapping resolves a repo for the asker's team.
    *  Drives `allowedRepo` enforcement on `fetch_pr` / `read_file_lines`. */

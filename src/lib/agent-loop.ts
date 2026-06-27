@@ -87,7 +87,7 @@ export interface LinearMentionRetrievalTelemetry extends LinearMentionRetrievalC
 export interface AgentLoopTelemetryRecordInput {
   schemaVersion: 2
   model: string
-  surface: "linear-mention" | "github-mention"
+  surface: "linear-mention" | "github-mention" | "slack-mention"
   commentId: string
   prNumber?: number
   agentInitialUserMessage: string
@@ -125,7 +125,7 @@ export interface AgentLoopArgs {
   model: string
   apiKey: string
   env: Env
-  surface: "linear-mention" | "github-mention"
+  surface: "linear-mention" | "github-mention" | "slack-mention"
   commentId: string
   prNumber?: number
   systemPrompt: string

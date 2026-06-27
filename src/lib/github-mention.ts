@@ -7,8 +7,7 @@
 //   surface = "issue"           → POST /repos/{o}/{r}/issues/{n}/comments
 //   surface = "review-comment"  → POST /repos/{o}/{r}/pulls/{n}/comments/{id}/replies
 //
-// Idempotency: KV-keyed on the source comment ID with a 30-day TTL so
-// re-deliveries of the same Comment.create event don't double-reply.
+// Idempotency: KV-keyed on comment ID (30-day TTL); re-deliveries don't double-reply.
 
 import { generate } from "@/src/shared/adapters/model"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -56,11 +55,7 @@ import {
   releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
 } from "./github-mention-dismiss"
-import {
-  parseLinearTriageCommand,
-  resolveGithubLinearTriageMode,
-  runLinearTriageAction,
-} from "@/src/lib/github-mention-linear-triage"
+import { handleLinearTriageCommand } from "@/src/lib/github-mention-linear-triage"
 // Re-export the dismiss subsystem's public surface so every existing
 // importer of `./github-mention` (notably the test file) is unchanged
 // after the SIG-376 4/8 relocation into `./github-mention-dismiss`.
@@ -399,56 +394,17 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     return
   }
 
-  // ── SIG-545 A: @sigilix make a linear triage ──────────────────────────
-  const triageCommand = explicit ? parseLinearTriageCommand(question) : null
-  if (triageCommand?.matched && resolveGithubLinearTriageMode(env) !== "off") {
-    const mode = resolveGithubLinearTriageMode(env)
-    if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
-      since("linear-triage-unauthorized", { login: sourceComment.author })
+  if (explicit) {
+    const triageOutcome = await handleLinearTriageCommand({ env, client, owner, repo, prNumber, commentId, authorLogin: sourceComment.author, authorAssociation: sourceComment.authorAssociation, question })
+    if (triageOutcome.handled) {
+      if (triageOutcome.reply) await postReply({ client, owner, repo, prNumber, surface, threadRootId: args.threadRootId ?? commentId, body: triageOutcome.reply })
+      since("linear-triage-done")
       return
     }
-    if (mode === "shadow") {
-      console.log(JSON.stringify({ event: "github-linear-triage-would-create", owner, repo, prNumber }))
-      return
-    }
-    const dedupeKey = `linear-triage:${commentId}`
-    const prior = await env.OPENCLAW_STATE.get(dedupeKey)
-    let reply: string
-    if (prior) {
-      const pipeIdx = prior.indexOf("|")
-      const ident = pipeIdx >= 0 ? prior.slice(0, pipeIdx) : prior
-      const url = pipeIdx >= 0 ? prior.slice(pipeIdx + 1) : ""
-      reply = `Already created **${ident}** for this comment: ${url}`
-    } else {
-      const pr = await client.getPullRequest(owner, repo, prNumber)
-      const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`
-      const result = await runLinearTriageAction(env, {
-        owner,
-        repo,
-        prNumber,
-        title: pr.title,
-        body: pr.body ?? "",
-        author: sourceComment.author,
-        prUrl,
-      })
-      if (result.kind === "created") {
-        await env.OPENCLAW_STATE.put(dedupeKey, `${result.identifier}|${result.url}`, { expirationTtl: 86400 })
-        reply = `Created **${result.identifier}**${result.triaged ? " — triaged" : ""}: ${result.url}`
-      } else if (result.kind === "no-team") {
-        reply = "No Linear team is configured for this repo — an admin can set `OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP`."
-      } else {
-        reply = "I couldn't create the Linear issue just now — please try again."
-      }
-    }
-    await postReply({ client, owner, repo, prNumber, surface, threadRootId: args.threadRootId ?? commentId, body: reply })
-    since("linear-triage-done")
-    return
   }
 
-  // Stage 2 — heavy fanout. Now that we know we're going to reply,
-  // fetch PR meta + diff + thread context in parallel. Reuse the
-  // review-comment list from the implicit-thread check if we have
-  // it (avoids re-paginating).
+  // Stage 2 — heavy fanout: PR meta + diff + thread context in parallel.
+  // Reuses the cached review-comment list from the implicit-thread check.
   const [meta, diff, thread] = await Promise.all([
     client.getPullRequest(owner, repo, prNumber),
     client.getPullRequestDiff(owner, repo, prNumber),
@@ -456,13 +412,8 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   ])
   since("github-fetched", { threadCount: thread.length })
 
-  // Codebase retrieval scoped to the repo. SIG-132: the Vectorize
-  // namespace is `<owner>/<repo>` lowercased (multi-tenant isolation),
-  // built via indexNamespace(). teamKeyToNamespace() lowercases as a
-  // fallback, but we pass the fully-formed namespace here. Soft-fails to
-  // empty when retrieval errors or the repo isn't indexed — the prompt
-  // instructs the model to abstain rather than fabricate when chunks are
-  // empty.
+  // Codebase retrieval scoped to the repo namespace (SIG-132). Soft-fails
+  // to empty when the repo isn't indexed — model abstains rather than fabricates.
   const retrievalText = `${meta.title}\n\n${question}`
   const chunks = await retrieveChunks({
     text: retrievalText,

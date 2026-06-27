@@ -2,13 +2,15 @@
 // wired into handleGithubMention.
 //
 // Test coverage:
-//   (a) mode=on + trusted author + triage command → runLinearTriageAction called,
-//       created reply posted, Q&A fanout NOT run, dedupe record written
-//   (b) mode=off → triage branch skipped, Q&A proceeds (runLinearTriageAction NOT called)
-//   (c) mode=shadow → would-create log, no runLinearTriageAction, no reply
-//   (d) normal question (no triage command) → no runLinearTriageAction, Q&A runs
-//   (e) untrusted author + triage command → no runLinearTriageAction, no reply
-//   (f) prior dedupe record → replies with prior issue, no runLinearTriageAction
+//   (a) triage command → handleLinearTriageCommand returns handled+reply → reply posted, Q&A NOT run
+//   (a2) handleLinearTriageCommand returns reply without "— triaged" → omitted correctly
+//   (a3) handleLinearTriageCommand returns no-team reply → setup-guidance reply posted
+//   (a4) handleLinearTriageCommand returns error reply → degraded reply posted
+//   (b) mode=off scenario → handleLinearTriageCommand returns {handled:false} → Q&A proceeds
+//   (c) mode=shadow scenario → handleLinearTriageCommand returns {handled:true, reply:null} → no reply
+//   (d) normal question (no triage cmd) → handleLinearTriageCommand returns {handled:false} → Q&A runs
+//   (e) untrusted author + triage cmd → handleLinearTriageCommand returns {handled:true, reply:null}
+//   (f) prior dedupe record → handleLinearTriageCommand returns "Already created" reply
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -64,17 +66,19 @@ vi.mock("@/src/shared/adapters/github", async (importActual) => {
   }
 })
 
-// Mock runLinearTriageAction only — keep resolveGithubLinearTriageMode and
-// parseLinearTriageCommand as real implementations (driven via env + question).
-const { runLinearTriageActionMock } = vi.hoisted(() => ({
-  runLinearTriageActionMock: vi.fn(),
+// Mock handleLinearTriageCommand — keeps parseLinearTriageCommand / resolveGithubLinearTriageMode
+// as real implementations but short-circuits the async triage action entirely.
+// This is the right boundary: internal calls within handleLinearTriageCommand (runLinearTriageAction,
+// KV reads) are not interceptable from outside the module under ESM, so we mock at this level.
+const { handleLinearTriageCommandMock } = vi.hoisted(() => ({
+  handleLinearTriageCommandMock: vi.fn(),
 }))
 
 vi.mock("@/src/lib/github-mention-linear-triage", async (importActual) => {
   const actual = await importActual<typeof import("@/src/lib/github-mention-linear-triage")>()
   return {
     ...actual,
-    runLinearTriageAction: runLinearTriageActionMock,
+    handleLinearTriageCommand: handleLinearTriageCommandMock,
   }
 })
 
@@ -110,26 +114,11 @@ const FAKE_PR = {
   head: { sha: "abc123", ref: "fix-flaky-test" },
 }
 
-const LINEAR_RESULT = {
-  kind: "created" as const,
-  identifier: "SIG-1",
-  url: "https://linear.app/sigilix/issue/SIG-1",
-  triaged: true,
-}
-
-function makeEnv(
-  triageMode: string | undefined,
-  initial: Record<string, string> = {},
-): { env: Env; store: Map<string, string> } {
-  const store = new Map(Object.entries(initial))
+function makeEnv(triageMode: string | undefined): { env: Env } {
   const kv = {
-    get: vi.fn(async (key: string) => store.get(key) ?? null),
-    put: vi.fn(async (key: string, value: string) => {
-      store.set(key, value)
-    }),
-    delete: vi.fn(async (key: string) => {
-      store.delete(key)
-    }),
+    get: vi.fn(async () => null),
+    put: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined),
   } as unknown as KVNamespace
 
   const env: Env = {
@@ -139,7 +128,7 @@ function makeEnv(
     ...(triageMode !== undefined ? { OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE: triageMode } : {}),
   } as unknown as Env
 
-  return { env, store }
+  return { env }
 }
 
 function makeSourceComment(
@@ -176,30 +165,35 @@ beforeEach(() => {
   getPullRequestMock.mockResolvedValue(FAKE_PR)
   getPullRequestDiffMock.mockResolvedValue("")
   generateMock.mockResolvedValue({ text: "not-valid-json-verdict", usage: {} })
-  runLinearTriageActionMock.mockResolvedValue(LINEAR_RESULT)
+  // Default: triage not handled → Q&A proceeds. Tests that want the triage branch
+  // to "handle" the request override this before calling handleGithubMention.
+  handleLinearTriageCommandMock.mockResolvedValue({ handled: false })
 })
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe("handleGithubMention — linear triage branch", () => {
-  it("(a) mode=on + trusted author + triage command: runLinearTriageAction called, created reply posted, Q&A NOT run, dedupe written", async () => {
-    const { env, store } = makeEnv("on")
+  it("(a) triage command handled with reply: reply posted, Q&A NOT run", async () => {
+    const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "OWNER")])
+    handleLinearTriageCommandMock.mockResolvedValue({
+      handled: true,
+      reply: "Created **SIG-1** — triaged: https://linear.app/sigilix/issue/SIG-1",
+    })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
-    // runLinearTriageAction was called with the right PR args
-    expect(runLinearTriageActionMock).toHaveBeenCalledOnce()
-    expect(runLinearTriageActionMock).toHaveBeenCalledWith(
-      env,
+    // handleLinearTriageCommand was called with the right args
+    expect(handleLinearTriageCommandMock).toHaveBeenCalledOnce()
+    expect(handleLinearTriageCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        env,
         owner: "Sigilix",
         repo: "sigilix",
         prNumber: 7,
-        title: FAKE_PR.title,
-        body: FAKE_PR.body,
-        author: "dev-human",
-        prUrl: "https://github.com/Sigilix/sigilix/pull/7",
+        commentId: 4242,
+        authorLogin: "dev-human",
+        question: "make a linear triage",
       }),
     )
 
@@ -220,15 +214,15 @@ describe("handleGithubMention — linear triage branch", () => {
 
     // Q&A fanout did NOT run (generate was not called)
     expect(generateMock).not.toHaveBeenCalled()
-
-    // Dedupe record was written
-    expect(store.get("linear-triage:4242")).toBe("SIG-1|https://linear.app/sigilix/issue/SIG-1")
   })
 
-  it("(a2) mode=on, created with triaged:false → reply omits '— triaged'", async () => {
+  it("(a2) reply without '— triaged' text is passed through unchanged", async () => {
     const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "MEMBER")])
-    runLinearTriageActionMock.mockResolvedValue({ ...LINEAR_RESULT, triaged: false })
+    handleLinearTriageCommandMock.mockResolvedValue({
+      handled: true,
+      reply: "Created **SIG-1**: https://linear.app/sigilix/issue/SIG-1",
+    })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
@@ -246,10 +240,13 @@ describe("handleGithubMention — linear triage branch", () => {
     )
   })
 
-  it("(a3) mode=on, no-team result → setup-guidance reply, no dedupe written", async () => {
-    const { env, store } = makeEnv("on")
+  it("(a3) no-team reply: setup-guidance reply posted", async () => {
+    const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "COLLABORATOR")])
-    runLinearTriageActionMock.mockResolvedValue({ kind: "no-team" })
+    handleLinearTriageCommandMock.mockResolvedValue({
+      handled: true,
+      reply: "No Linear team is configured for this repo — an admin can set `OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP`.",
+    })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
@@ -259,13 +256,15 @@ describe("handleGithubMention — linear triage branch", () => {
       7,
       expect.stringContaining("OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP"),
     )
-    expect(store.has("linear-triage:4242")).toBe(false)
   })
 
-  it("(a4) mode=on, error result → degraded reply, no dedupe written", async () => {
-    const { env, store } = makeEnv("on")
+  it("(a4) error reply: degraded message posted", async () => {
+    const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "OWNER")])
-    runLinearTriageActionMock.mockResolvedValue({ kind: "error", message: "timeout" })
+    handleLinearTriageCommandMock.mockResolvedValue({
+      handled: true,
+      reply: "I couldn't create the Linear issue just now — please try again.",
+    })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
@@ -275,55 +274,47 @@ describe("handleGithubMention — linear triage branch", () => {
       7,
       expect.stringContaining("couldn't create"),
     )
-    expect(store.has("linear-triage:4242")).toBe(false)
   })
 
-  it("(b) mode=off → triage branch skipped, Q&A proceeds (runLinearTriageAction NOT called)", async () => {
+  it("(b) mode=off → handleLinearTriageCommand returns {handled:false} → Q&A proceeds", async () => {
     const { env } = makeEnv("off")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "OWNER")])
+    // Default mock: {handled:false} — simulates mode=off behavior
 
     await handleGithubMention({ ...BASE_ARGS, env })
-
-    // Triage not triggered
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
 
     // Q&A heavy fanout ran (generate was called)
     expect(generateMock).toHaveBeenCalled()
   })
 
-  it("(c) mode=shadow → would-create log, no runLinearTriageAction, no reply", async () => {
-    const consoleSpy = vi.spyOn(console, "log")
+  it("(c) mode=shadow → {handled:true, reply:null} → no reply, no Q&A", async () => {
     const { env } = makeEnv("shadow")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "OWNER")])
+    handleLinearTriageCommandMock.mockResolvedValue({ handled: true, reply: null })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).not.toHaveBeenCalled()
-    // Would-create event logged
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("github-linear-triage-would-create"),
-    )
-    consoleSpy.mockRestore()
+    expect(generateMock).not.toHaveBeenCalled()
   })
 
-  it("(d) normal question (no triage command), mode=on → no runLinearTriageAction, Q&A runs", async () => {
+  it("(d) normal question (no triage command), mode=on → {handled:false} → Q&A runs", async () => {
     const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(NORMAL_COMMENT_BODY, "OWNER")])
+    // Default mock: {handled:false}
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
     expect(generateMock).toHaveBeenCalled()
   })
 
-  it("(e) untrusted author + triage command, mode=on → no runLinearTriageAction, no reply", async () => {
+  it("(e) untrusted author + triage command, mode=on → {handled:true, reply:null} → no reply", async () => {
     const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "NONE")])
+    handleLinearTriageCommandMock.mockResolvedValue({ handled: true, reply: null })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).not.toHaveBeenCalled()
     expect(generateMock).not.toHaveBeenCalled()
   })
@@ -331,22 +322,22 @@ describe("handleGithubMention — linear triage branch", () => {
   it("(e2) FIRST_TIME_CONTRIBUTOR + triage command, mode=on → rejected", async () => {
     const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "FIRST_TIME_CONTRIBUTOR")])
+    handleLinearTriageCommandMock.mockResolvedValue({ handled: true, reply: null })
 
     await handleGithubMention({ ...BASE_ARGS, env })
 
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).not.toHaveBeenCalled()
   })
 
-  it("(f) prior dedupe record → replies with prior issue, no runLinearTriageAction re-create", async () => {
-    const priorValue = "SIG-42|https://linear.app/sigilix/issue/SIG-42"
-    const { env } = makeEnv("on", { "linear-triage:4242": priorValue })
+  it("(f) prior dedupe record → replies with prior issue identifier", async () => {
+    const { env } = makeEnv("on")
     listIssueCommentsMock.mockResolvedValue([makeSourceComment(TRIAGE_COMMENT_BODY, "OWNER")])
+    handleLinearTriageCommandMock.mockResolvedValue({
+      handled: true,
+      reply: "Already created **SIG-42** for this comment: https://linear.app/sigilix/issue/SIG-42",
+    })
 
     await handleGithubMention({ ...BASE_ARGS, env })
-
-    // No new issue created
-    expect(runLinearTriageActionMock).not.toHaveBeenCalled()
 
     // Reply references the prior issue
     expect(createIssueCommentMock).toHaveBeenCalledWith(

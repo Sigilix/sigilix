@@ -7,12 +7,7 @@ export type SlackIntent = { kind: "qa" } | { kind: "linear-triage" }
 
 /** Keywords that indicate the user wants a Linear triage issue created.
  *  Matched case-insensitively against the normalised mention text. */
-const TRIAGE_PATTERNS: RegExp[] = [
-  /make a linear triage/i,
-  /create a linear issue/i,
-  /triage this/i,
-  /linear triage/i,
-]
+const TRIAGE_PATTERNS: RegExp[] = [/make a linear triage/i, /create a linear issue/i, /triage this/i, /linear triage/i]
 
 /**
  * Detect the user's intent from the stripped mention text.

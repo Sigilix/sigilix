@@ -51,13 +51,9 @@ const encoder = new TextEncoder()
 
 async function sign(ts: string, body: string, secret: string): Promise<string> {
   const basestring = `v0:${ts}:${body}`
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  )
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(basestring))
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -307,9 +303,7 @@ describe("handleSlackRequest", () => {
 
     expect(runSlackAgent).toHaveBeenCalledTimes(1)
     expect(postSlackMessage).toHaveBeenCalledTimes(1)
-    expect(postSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Agent reply", botToken: BOT_TOKEN }),
-    )
+    expect(postSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "Agent reply", botToken: BOT_TOKEN }))
     // Rate-limit action must be recorded in on mode.
     expect(recordSlackAction).toHaveBeenCalledTimes(1)
   })

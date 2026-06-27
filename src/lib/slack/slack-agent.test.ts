@@ -60,7 +60,9 @@ vi.mock("@/src/lib/github-mention", () => ({
           return { answer: o.answer, confidence: 5, abstain: false, verdict: "answer" }
         }
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
     return null
   }),
 }))
@@ -152,9 +154,7 @@ describe("runSlackAgent — qa path", () => {
     const loopArgs = runAgentLoopMock.mock.calls[0]![0] as Record<string, unknown>
     expect(loopArgs.surface).toBe("slack-mention")
 
-    const github = loopArgs.tools !== undefined
-      ? (loopArgs as { surface: string }).surface
-      : null
+    const github = loopArgs.tools !== undefined ? (loopArgs as { surface: string }).surface : null
     expect(github).toBe("slack-mention")
   })
 

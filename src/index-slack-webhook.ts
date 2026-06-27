@@ -121,12 +121,7 @@ async function runDeferredWork(
   const rawText = typeof event.text === "string" ? event.text : ""
   // Strip the leading <@BOTID> mention so the agent sees the clean ask.
   const mentionText = rawText.replace(/^<@[A-Z0-9]+>\s*/i, "")
-  const threadTs =
-    typeof event.thread_ts === "string"
-      ? event.thread_ts
-      : typeof event.ts === "string"
-        ? event.ts
-        : ""
+  const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : typeof event.ts === "string" ? event.ts : ""
 
   // ── Scope check ─────────────────────────────────────────────────────────────
   const scopeResult = resolveSlackScope(env, { teamId, channelId })
@@ -141,9 +136,7 @@ async function runDeferredWork(
         text: "Sigilix is not connected to a repo for this channel — ask an admin to configure access.",
       })
     }
-    console.log(
-      JSON.stringify({ event: "slack-scope-denied", teamId, channelId, reason: scopeResult.reason, mode }),
-    )
+    console.log(JSON.stringify({ event: "slack-scope-denied", teamId, channelId, reason: scopeResult.reason, mode }))
     return
   }
 

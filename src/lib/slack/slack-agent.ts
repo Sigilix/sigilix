@@ -142,17 +142,15 @@ async function runQa(
     if (verdict && verdict.answer) {
       reply = formatSigilixReply(verdict.answer)
     } else {
-      reply = formatSigilixReply(
-        "_I couldn't parse a grounded answer. Try rephrasing your question._",
-        { provenance: "degraded" },
-      )
+      reply = formatSigilixReply("_I couldn't parse a grounded answer. Try rephrasing your question._", {
+        provenance: "degraded",
+      })
     }
   } else {
     // Fallback is explicitly degraded — never reads as authoritative.
-    reply = formatSigilixReply(
-      "_I wasn't able to ground an answer for this right now. Try again in a moment._",
-      { provenance: "degraded" },
-    )
+    reply = formatSigilixReply("_I wasn't able to ground an answer for this right now. Try again in a moment._", {
+      provenance: "degraded",
+    })
   }
 
   // Memory capture — non-fatal.
@@ -212,9 +210,7 @@ async function runLinearTriage(
     })
   })
 
-  const reply = formatSigilixReply(
-    `Created Linear issue: *<${issue.url}|${issue.identifier}>* — ${title}`,
-  )
+  const reply = formatSigilixReply(`Created Linear issue: *<${issue.url}|${issue.identifier}>* — ${title}`)
 
   // Memory capture — non-fatal.
   const captureContent = `linear-triage: ${title} → ${issue.identifier} (${issue.url})`
@@ -237,16 +233,10 @@ function buildInitialUserMessage(ctx: SlackMentionContext, recalled: string[]): 
   }
 
   if (recalled.length > 0) {
-    lines.push(
-      "[Relevant prior context (Sigilix memory)]",
-      recalled.join("\n---\n"),
-      "",
-    )
+    lines.push("[Relevant prior context (Sigilix memory)]", recalled.join("\n---\n"), "")
   }
 
-  lines.push(
-    "Use your tools to gather codebase context. Final answer is the JSON shape defined by the system prompt.",
-  )
+  lines.push("Use your tools to gather codebase context. Final answer is the JSON shape defined by the system prompt.")
   return lines.join("\n")
 }
 

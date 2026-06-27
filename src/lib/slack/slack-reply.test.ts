@@ -28,8 +28,8 @@ describe("detectSlackIntent", () => {
     [""],
     ["summarize this PR for me"],
     ["what changed in the last release?"],
-    ["triage"],           // bare word without "this" or "linear" prefix
-    ["create an issue"],  // not the exact Linear phrase
+    ["triage"], // bare word without "this" or "linear" prefix
+    ["create an issue"], // not the exact Linear phrase
   ])("returns qa for: %s", (text) => {
     expect(detectSlackIntent(text)).toEqual({ kind: "qa" })
   })

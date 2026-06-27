@@ -9,7 +9,8 @@ describe("parseLinearTriageCommand", () => {
       "can you create a linear issue from this PR",
       "triage this into linear",
       "make a linear ticket",
-    ]) expect(parseLinearTriageCommand(q).matched).toBe(true)
+    ])
+      expect(parseLinearTriageCommand(q).matched).toBe(true)
   })
   it("does NOT match normal questions or other commands", () => {
     for (const q of [
@@ -17,6 +18,7 @@ describe("parseLinearTriageCommand", () => {
       "dismiss too-minor",
       "summary",
       "what would a linear triage look like here?", // not a directive
-    ]) expect(parseLinearTriageCommand(q).matched).toBe(false)
+    ])
+      expect(parseLinearTriageCommand(q).matched).toBe(false)
   })
 })

@@ -50,7 +50,10 @@ export class Container<EnvT = unknown> {
 // A stub container instance handle. Tests that drive `getContainer` mock the
 // package; this stand-in returns a benign handle so an un-mocked call doesn't
 // crash at import or call time.
-export function getContainer(_namespace: unknown, _idName?: string): {
+export function getContainer(
+  _namespace: unknown,
+  _idName?: string,
+): {
   fetch(request: Request): Promise<Response>
   getRunRecord(): Promise<null>
 } {

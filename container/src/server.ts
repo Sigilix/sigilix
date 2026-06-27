@@ -62,19 +62,39 @@ export interface RunResult {
   stoppedReason: StoppedReason;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Replace every non-empty secret value in `text` with "***".
+ * Iterates all provided secrets so a single call covers every sensitive field.
+ */
+function redactSecrets(text: string, secrets: string[]): string {
+  let result = text;
+  for (const secret of secrets) {
+    if (secret) {
+      result = result.split(secret).join("***");
+    }
+  }
+  return result;
+}
+
 // ── Orchestration (unit-testable without a live HTTP server) ──────────────────
 
 export async function runTask(packet: TaskPacket): Promise<RunResult> {
   const { runId, repo, ticket, grounding, model, caps } = packet;
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "sigilix-run-"));
-
+  // Declared outside try so the finally block can guard on it.
+  let tmpDir: string | undefined;
   let modelCalls = 0;
   let tokens = 0;
   // Default to "error" — updated once the edit loop completes.
   let loopStoppedReason: StoppedReason = "error";
 
   try {
+    // Create the temp dir inside try so an mkdtemp failure returns
+    // { status: "error" } instead of propagating a raw throw out of runTask.
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "sigilix-run-"));
+
     const repoUrl = `https://github.com/${repo.owner}/${repo.name}.git`;
     const branchName = `sigilix/${ticket.identifier}`;
 
@@ -159,10 +179,8 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
     };
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
-    // Redact the installation token from any surfaced error message.
-    const safeMsg = repo.installationToken
-      ? rawMsg.split(repo.installationToken).join("***")
-      : rawMsg;
+    // Redact all secrets from any surfaced error message.
+    const safeMsg = redactSecrets(rawMsg, [repo.installationToken, model.key]);
 
     return {
       runId,
@@ -173,12 +191,17 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
       stoppedReason: loopStoppedReason,
     };
   } finally {
-    // Always clean up the temp dir, success or failure.
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    // Clean up the temp dir only if it was successfully created.
+    if (tmpDir !== undefined) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   }
 }
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
+
+/** Maximum accepted request-body size. Prevents memory exhaustion from huge payloads. */
+const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Readiness probe
@@ -191,7 +214,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // Task dispatch
   if (req.method === "POST" && req.url === "/") {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     for await (const chunk of req) {
+      totalBytes += (chunk as Buffer).length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "request body too large" }));
+        return;
+      }
       chunks.push(chunk as Buffer);
     }
     const rawBody = Buffer.concat(chunks).toString("utf8");

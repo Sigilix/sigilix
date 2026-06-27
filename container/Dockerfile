@@ -3,7 +3,7 @@
 #
 # Build strategy: compile TypeScript with tsc inside the image so the runtime
 # only needs Node.js built-ins (no devDependencies at runtime).
-FROM node:22-slim
+FROM --platform=linux/amd64 node:22-slim
 
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 

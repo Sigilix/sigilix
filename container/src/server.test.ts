@@ -313,6 +313,31 @@ describe("runTask", () => {
     expect(result.error).toContain("***");
   });
 
+  it("redacts model.key from error messages", async () => {
+    const MODEL_KEY = "sk-model-key-never-log";
+    // Simulate an OpenRouter error that echoes the key back in the message.
+    mocks.cloneRepo.mockRejectedValueOnce(
+      new Error(`API request failed: Authorization key=${MODEL_KEY} rejected`),
+    );
+
+    const result = await runTask(makePacket());
+
+    expect(result.status).toBe("error");
+    expect(result.error).not.toContain(MODEL_KEY);
+    expect(result.error).toContain("***");
+  });
+
+  it("returns status 'error' (does NOT throw) when mkdtemp fails, and does NOT call rm", async () => {
+    mocks.mkdtemp.mockRejectedValueOnce(new Error("EACCES: permission denied, mkdtemp"));
+
+    const result = await runTask(makePacket());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("EACCES");
+    // tmpDir was never created — rm must not be called (would crash on undefined).
+    expect(mocks.rm).not.toHaveBeenCalled();
+  });
+
   it("cleans up the temp dir even when a stage throws", async () => {
     mocks.cloneRepo.mockRejectedValueOnce(new Error("network error"));
 

@@ -33,14 +33,14 @@ const mockGetInstallationToken = vi.mocked(getInstallationToken)
 // getContainer is mocked via vi.mock — treat it as a generic spy.
 // We avoid inferring its generic return type (DurableObjectStub<Container>)
 // so we can return plain test stubs without fighting the Rpc.Provider machinery.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 const mockGetContainer = vi.mocked(getContainer) as unknown as MockInstance<(...args: any[]) => ContainerStub>
 
 // ── ContainerStub: test double for the DO stub ────────────────────────────────
 // Reflects the surface dispatchAgentRun + getAgentRunStatus actually use:
 //   .fetch(req)      — send the task packet
 //   .getRunRecord()  — read the durable run record
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type SpyFn = MockInstance<(...args: any[]) => any>
 interface ContainerStub {
   fetch: SpyFn

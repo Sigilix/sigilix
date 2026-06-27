@@ -45,7 +45,8 @@ export async function getSlackBotToken(
   if (raw !== null) {
     try {
       const record = JSON.parse(raw) as SlackInstall
-      return record.botToken
+      if (record && typeof record.botToken === "string" && record.botToken) return record.botToken
+      // Malformed record (missing/empty token) — fall through to env fallback.
     } catch {
       // Malformed KV record — fall through to env fallback.
     }

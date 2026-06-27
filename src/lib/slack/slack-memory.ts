@@ -55,13 +55,8 @@ export async function recallSlackMemory(
   try {
     const { userId, repoId } = slackScopeIds(scope)
     const hits = await queryMemoryIds(env, { userId, repoId, query, topK: topK ?? 5 })
-    const contents: string[] = []
-    for (const hit of hits) {
-      const rec = await readRecord(env, userId, repoId, hit.id)
-      if (rec !== null) {
-        contents.push(rec.content)
-      }
-    }
+    const records = await Promise.all(hits.map((hit) => readRecord(env, userId, repoId, hit.id)))
+    const contents = records.filter((rec) => rec !== null).map((rec) => rec.content)
     return contents
   } catch {
     return []

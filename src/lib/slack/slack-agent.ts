@@ -58,17 +58,10 @@ export interface SlackAgentResult {
  */
 export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise<SlackAgentResult> {
   const { scope } = ctx
-  const primary = scope.repos[0]
-
-  // primary must exist (scope resolver guarantees repos.length >= 1 for ok:true)
-  if (!primary) {
-    return {
-      reply: formatSigilixReply(
-        "I'm not configured with a repo for this channel. Ask your workspace admin to set up the Sigilix scope map.",
-      ),
-      action: { kind: "qa" },
-    }
-  }
+  // scope resolver guarantees repos.length >= 1 for ok:true — throw as an invariant
+  // rather than returning a qa success-shape on a caller contract violation.
+  const [primary] = scope.repos
+  if (!primary) throw new Error("runSlackAgent requires a scoped repo")
 
   const memScope: SlackMemoryScope = {
     teamId: scope.teamId,

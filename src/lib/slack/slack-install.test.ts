@@ -83,6 +83,23 @@ describe("putSlackInstall / getSlackBotToken", () => {
     await putSlackInstall(env, { teamId: "T456", botToken: "xoxb-kv", installedAt: 2000 })
     expect(await getSlackBotToken(env, "T456")).toBe("xoxb-kv")
   })
+
+  it("falls back to env token when KV record has a missing botToken field (malformed record)", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, { SLACK_BOT_TOKEN: "xoxb-env-fallback" })
+    // Manually write a malformed record (no botToken field) to KV.
+    kv._store.set("slack-install:TMALFORMED", JSON.stringify({ teamId: "TMALFORMED", installedAt: 1000 }))
+    const token = await getSlackBotToken(env, "TMALFORMED")
+    expect(token).toBe("xoxb-env-fallback")
+  })
+
+  it("falls back to env token when KV record has an empty-string botToken", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, { SLACK_BOT_TOKEN: "xoxb-env-fallback" })
+    kv._store.set("slack-install:TEMPTY", JSON.stringify({ teamId: "TEMPTY", botToken: "", installedAt: 1000 }))
+    const token = await getSlackBotToken(env, "TEMPTY")
+    expect(token).toBe("xoxb-env-fallback")
+  })
 })
 
 // ─── buildSlackAuthorizeUrl ──────────────────────────────────────────────────

@@ -332,6 +332,26 @@ describe("handleSlackRequest", () => {
     )
   })
 
+  // ── (f2) shadow + scope-denied → no post, structured log only ──────────────
+
+  it("(f2) shadow + unscoped channel → runSlackAgent NOT called; postSlackMessage NOT called", async () => {
+    scopeDenied()
+    const kv = makeFakeKV()
+    const env = makeEnv("shadow", kv)
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+
+    expect(res.status).toBe(200)
+
+    await ctx.flush()
+
+    expect(runSlackAgent).not.toHaveBeenCalled()
+    // In shadow mode, scope-denied must NOT post to Slack — structured log only.
+    expect(postSlackMessage).not.toHaveBeenCalled()
+  })
+
   // ── (g) shadow → agent called, NO post, NO record ──────────────────────────
 
   it("(g) shadow → runSlackAgent called but postSlackMessage and recordSlackAction NOT called", async () => {

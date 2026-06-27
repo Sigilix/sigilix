@@ -314,6 +314,21 @@ describe("runSlackAgent — null linearTeam", () => {
   })
 })
 
+describe("runSlackAgent — invariant guard (empty repos)", () => {
+  it("throws when scope.repos is empty (invariant violation, not a qa reply)", async () => {
+    const env = makeEnv()
+    const ctx = makeCtx({
+      scope: {
+        teamId: "T001",
+        channelId: "C001",
+        repos: [], // violates the scope-resolver contract
+        linearTeam: null,
+      },
+    })
+    await expect(runSlackAgent(env, ctx)).rejects.toThrow("runSlackAgent requires a scoped repo")
+  })
+})
+
 describe("runSlackAgent — capture non-fatal", () => {
   it("does not throw when captureSlackMemory throws", async () => {
     captureSlackMemoryMock.mockRejectedValue(new Error("KV write failed"))

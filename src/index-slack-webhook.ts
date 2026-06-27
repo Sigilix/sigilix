@@ -71,6 +71,12 @@ export async function handleSlackRequest(request: Request, env: Env, ctx: Execut
   // ── app_mention idempotency ───────────────────────────────────────────────────
   // Claim a KV key for each unique event_id before scheduling work. A duplicate
   // event_id returns 200 immediately without scheduling anything (Slack retry-safe).
+  //
+  // NOTE (accepted race / SIG follow-up): Cloudflare KV has no compare-and-set,
+  // so a true-concurrent double-delivery could theoretically race past the GET
+  // before either PUT lands. In practice the threat is bounded: we ack <3 s, so
+  // Slack's retry queue is sequential and the existing claim catches it. An
+  // atomic D1 unique-constraint claim is the tracked hardening before `on` GA.
   if (body?.type === "event_callback") {
     const ev = body.event as Record<string, unknown> | undefined
     if (ev?.type === "app_mention") {
@@ -126,15 +132,17 @@ async function runDeferredWork(
   // ── Scope check ─────────────────────────────────────────────────────────────
   const scopeResult = resolveSlackScope(env, { teamId, channelId })
   if (!scopeResult.ok) {
-    // Best-effort: try to post a "not connected" message via the bot token.
-    const botToken = await getSlackBotToken(env, teamId)
-    if (botToken && channelId) {
-      await postSlackMessage({
-        botToken,
-        channel: channelId,
-        threadTs,
-        text: "Sigilix is not connected to a repo for this channel — ask an admin to configure access.",
-      })
+    if (mode === "on") {
+      // Best-effort: try to post a "not connected" message via the bot token.
+      const botToken = await getSlackBotToken(env, teamId)
+      if (botToken && channelId) {
+        await postSlackMessage({
+          botToken,
+          channel: channelId,
+          threadTs,
+          text: "Sigilix is not connected to a repo for this channel — ask an admin to configure access.",
+        })
+      }
     }
     console.log(JSON.stringify({ event: "slack-scope-denied", teamId, channelId, reason: scopeResult.reason, mode }))
     return

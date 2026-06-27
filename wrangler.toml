@@ -215,6 +215,24 @@ class_name = "TenantConcurrencyDO"
 name = "PROVIDER_COOLDOWN"
 class_name = "ProviderCooldownDO"
 
+# SIG-545 B1: agent-runner Container DO (dark; gated by OPENCLAW_AGENT_RUNNER_MODE).
+# One DO instance per runId (idFromName(runId)). The Container is configured here
+# but never dispatched to until the mode flag is flipped. The real Dockerfile and
+# dispatch logic arrive in later tasks (B2/B3/B4).
+[[durable_objects.bindings]]
+name = "AGENT_RUNNER"
+class_name = "AgentRunnerContainer"
+
+# SIG-545 B1: Cloudflare Container binding for AgentRunnerContainer.
+# instance_type "standard-1" = ½ vCPU, 4 GiB RAM, 8 GB disk (upgradeable
+# to standard-2 for heavy repos). max_instances kept low for the dark rollout;
+# bump once the feature is live and load is validated.
+[[containers]]
+class_name = "AgentRunnerContainer"
+image = "./container/Dockerfile"
+instance_type = "standard-1"
+max_instances = 3
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -285,6 +303,15 @@ new_sqlite_classes = ["TenantConcurrencyDO"]
 [[migrations]]
 tag = "sig-455-provider-cooldown-v1"
 new_sqlite_classes = ["ProviderCooldownDO"]
+
+# SIG-545 B1: AgentRunnerContainer — Cloudflare Container backed by a SQLite DO
+# (new_sqlite_classes; holds the AgentRunRecord run-state per runId). Forward-only.
+# ⚠️ A new-DO migration requires a one-time non-versioned `wrangler deploy`; a
+# subsequent `wrangler versions upload` will err 10211 — do NOT skip the first
+# plain deploy.
+[[migrations]]
+tag = "sig-545-agent-runner-v1"
+new_sqlite_classes = ["AgentRunnerContainer"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

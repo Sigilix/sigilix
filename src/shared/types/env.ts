@@ -936,4 +936,15 @@ export interface Env {
   SLACK_BOT_TOKEN?: string
   SIGILIX_SLACK_MODE?: string
   SIGILIX_SLACK_SCOPE_MAP?: string
+
+  // SIG-545 B1: hosted agent-runner (Cloudflare Container, dark by default).
+  //   AGENT_RUNNER                   — DO namespace; one instance per runId.
+  //                                    Backed by the AgentRunnerContainer class
+  //                                    (src/do/agent-runner-container.ts).
+  //   OPENCLAW_AGENT_RUNNER_MODE     — "off" (default/unset) | "on". Only the
+  //                                    exact string "on" enables dispatch; any
+  //                                    other value keeps the container configured
+  //                                    but never invoked (fail-closed).
+  AGENT_RUNNER: DurableObjectNamespace
+  OPENCLAW_AGENT_RUNNER_MODE?: string
 }

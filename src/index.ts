@@ -780,3 +780,9 @@ export { TenantConcurrencyDO } from "@/src/do/tenant-concurrency"
 // DO storage). Registered via the [[durable_objects.bindings]] PROVIDER_COOLDOWN
 // entry + the sig-455-provider-cooldown-v1 new_sqlite_classes migration.
 export { ProviderCooldownDO } from "@/src/do/provider-cooldown"
+
+// SIG-545 B1: AgentRunnerContainer — Cloudflare Container (dark; gated by
+// OPENCLAW_AGENT_RUNNER_MODE). Registered via [[containers]] (class_name
+// AgentRunnerContainer) + [[durable_objects.bindings]] (AGENT_RUNNER) +
+// the sig-545-agent-runner-v1 new_sqlite_classes migration in wrangler.toml.
+export { AgentRunnerContainer } from "@/src/do/agent-runner-container"

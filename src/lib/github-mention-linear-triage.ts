@@ -7,7 +7,9 @@ import type { GitHubClient } from "@/src/shared/adapters/github"
 import { isAuthorAllowedForReviewDismiss } from "./github-mention-dismiss"
 
 export type GithubLinearTriageMode = "off" | "shadow" | "on"
-export function resolveGithubLinearTriageMode(env: Pick<Env, "OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE">): GithubLinearTriageMode {
+export function resolveGithubLinearTriageMode(
+  env: Pick<Env, "OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE">,
+): GithubLinearTriageMode {
   const v = env.OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE
   return v === "shadow" || v === "on" ? v : "off"
 }
@@ -118,7 +120,10 @@ export async function handleLinearTriageCommand(args: {
   })
   if (result.kind === "created") {
     await env.OPENCLAW_STATE.put(dedupeKey, `${result.identifier}|${result.url}`, { expirationTtl: 86400 })
-    return { handled: true, reply: `Created **${result.identifier}**${result.triaged ? " — triaged" : ""}: ${result.url}` }
+    return {
+      handled: true,
+      reply: `Created **${result.identifier}**${result.triaged ? " — triaged" : ""}: ${result.url}`,
+    }
   } else if (result.kind === "no-team") {
     return {
       handled: true,

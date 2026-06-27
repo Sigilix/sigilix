@@ -131,11 +131,7 @@ function makeEnv(triageMode: string | undefined): { env: Env } {
   return { env }
 }
 
-function makeSourceComment(
-  body: string,
-  authorAssociation: string,
-  id = 4242,
-): Record<string, unknown> {
+function makeSourceComment(body: string, authorAssociation: string, id = 4242): Record<string, unknown> {
   return {
     id,
     body,
@@ -199,12 +195,7 @@ describe("handleGithubMention — linear triage branch", () => {
 
     // Reply posted with the created issue identifier
     expect(createIssueCommentMock).toHaveBeenCalledOnce()
-    expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      7,
-      expect.stringContaining("**SIG-1**"),
-    )
+    expect(createIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 7, expect.stringContaining("**SIG-1**"))
     expect(createIssueCommentMock).toHaveBeenCalledWith(
       "Sigilix",
       "sigilix",
@@ -232,12 +223,7 @@ describe("handleGithubMention — linear triage branch", () => {
       7,
       expect.not.stringContaining("— triaged"),
     )
-    expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      7,
-      expect.stringContaining("**SIG-1**"),
-    )
+    expect(createIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 7, expect.stringContaining("**SIG-1**"))
   })
 
   it("(a3) no-team reply: setup-guidance reply posted", async () => {
@@ -340,12 +326,7 @@ describe("handleGithubMention — linear triage branch", () => {
     await handleGithubMention({ ...BASE_ARGS, env })
 
     // Reply references the prior issue
-    expect(createIssueCommentMock).toHaveBeenCalledWith(
-      "Sigilix",
-      "sigilix",
-      7,
-      expect.stringContaining("**SIG-42**"),
-    )
+    expect(createIssueCommentMock).toHaveBeenCalledWith("Sigilix", "sigilix", 7, expect.stringContaining("**SIG-42**"))
     expect(createIssueCommentMock).toHaveBeenCalledWith(
       "Sigilix",
       "sigilix",

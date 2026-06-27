@@ -151,6 +151,33 @@ export async function dispatchAgentRun(
 
     if (!response.ok) throw new Error(`container responded ${response.status}`)
 
+    // Parse the container's RunResult and persist it to the DO record so
+    // getAgentRunStatus returns the real outcome instead of null forever.
+    try {
+      const result = (await response.json()) as {
+        status?: string
+        prUrl?: string
+        error?: string
+      }
+      await agentRunnerStub(env, runId).setRunRecord({
+        runId,
+        status: (result.status as AgentRunRecord["status"]) ?? "error",
+        ...(result.prUrl !== undefined ? { prUrl: result.prUrl } : {}),
+        ...(result.error !== undefined ? { error: result.error } : {}),
+      })
+    } catch (persistErr) {
+      // A malformed response body or a DO storage hiccup must not fail the dispatch.
+      // Log the event for observability without including any secrets.
+      console.warn(
+        JSON.stringify({
+          event: "agent-runner-status-persist-failed",
+          runId,
+          error: persistErr instanceof Error ? persistErr.message : String(persistErr),
+          // installationToken and model.key intentionally excluded
+        }),
+      )
+    }
+
     return { runId, dispatched: true }
   } catch (err) {
     // Log failure without any secrets. The error message is included so

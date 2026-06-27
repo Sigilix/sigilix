@@ -38,13 +38,15 @@ const mockGetContainer = vi.mocked(getContainer) as unknown as MockInstance<(...
 
 // ── ContainerStub: test double for the DO stub ────────────────────────────────
 // Reflects the surface dispatchAgentRun + getAgentRunStatus actually use:
-//   .fetch(req)      — send the task packet
-//   .getRunRecord()  — read the durable run record
+//   .fetch(req)         — send the task packet
+//   .getRunRecord()     — read the durable run record
+//   .setRunRecord(r)    — persist the durable run record
 
 type SpyFn = MockInstance<(...args: any[]) => any>
 interface ContainerStub {
   fetch: SpyFn
   getRunRecord: SpyFn
+  setRunRecord: SpyFn
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -85,6 +87,7 @@ function makeStub(
   return {
     fetch: vi.fn(fetchImpl ?? (() => Promise.resolve(new Response('{"status":"started"}', { status: 200 })))),
     getRunRecord: vi.fn(getRunRecordImpl ?? (() => Promise.resolve(null))),
+    setRunRecord: vi.fn(() => Promise.resolve(undefined)),
   }
 }
 
@@ -249,6 +252,54 @@ describe("dispatchAgentRun", () => {
     expect(allOutput).not.toContain(STUB_TOKEN)
     expect(allOutput).not.toContain(SAMPLE_INPUT.model.key)
   })
+
+  // ── (f) status persist — container response parsed + setRunRecord called ─────
+
+  it('mode "on": parses the container RunResult and calls setRunRecord with the mapped record', async () => {
+    const runResult = {
+      runId: "run-abc",
+      status: "opened",
+      prUrl: "https://github.com/Sigilix/sigilix/pull/7",
+      modelCalls: 5,
+      tokens: 1000,
+      stoppedReason: "done",
+    }
+    const stub = makeStub(
+      () => Promise.resolve(new Response(JSON.stringify(runResult), { status: 200 })),
+    )
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    expect(result).toEqual({ runId: "run-abc", dispatched: true })
+    expect(stub.setRunRecord).toHaveBeenCalledWith({
+      runId: "run-abc",
+      status: "opened",
+      prUrl: "https://github.com/Sigilix/sigilix/pull/7",
+    })
+  })
+
+  it('mode "on": setRunRecord failure logs agent-runner-status-persist-failed but still returns dispatched:true', async () => {
+    const stub = makeStub()
+    stub.setRunRecord.mockRejectedValue(new Error("DO storage unavailable"))
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    expect(result).toEqual({ runId: "run-abc", dispatched: true })
+
+    const allOutput = [
+      ...spyLog.mock.calls.flat().map(String),
+      ...spyWarn.mock.calls.flat().map(String),
+      ...spyError.mock.calls.flat().map(String),
+    ].join("\n")
+
+    expect(allOutput).toContain("agent-runner-status-persist-failed")
+    expect(allOutput).not.toContain(STUB_TOKEN)
+    expect(allOutput).not.toContain(SAMPLE_INPUT.model.key)
+  })
 })
 
 describe("getAgentRunStatus", () => {
@@ -294,5 +345,30 @@ describe("getAgentRunStatus", () => {
     const env = makeEnv()
     const record = await getAgentRunStatus(env, "run-abc")
     expect(record).toBeNull()
+  })
+
+  it("returns the record that dispatchAgentRun persisted via setRunRecord", async () => {
+    const prUrl = "https://github.com/Sigilix/sigilix/pull/7"
+    const runResult = { runId: "run-abc", status: "opened", prUrl, modelCalls: 5, tokens: 1000, stoppedReason: "done" }
+    const persistedRecord: AgentRunRecord = { runId: "run-abc", status: "opened", prUrl }
+
+    const stub = makeStub(
+      () => Promise.resolve(new Response(JSON.stringify(runResult), { status: 200 })),
+      () => Promise.resolve(persistedRecord),
+    )
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    // dispatchAgentRun parses the container response and calls setRunRecord
+    await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+    expect(stub.setRunRecord).toHaveBeenCalledWith({
+      runId: "run-abc",
+      status: "opened",
+      prUrl,
+    })
+
+    // getAgentRunStatus reads via getRunRecord — returns the persisted outcome
+    const record = await getAgentRunStatus(makeEnv("on"), "run-abc")
+    expect(record).toEqual(persistedRecord)
   })
 })

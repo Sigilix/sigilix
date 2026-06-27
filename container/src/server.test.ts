@@ -256,6 +256,55 @@ describe("runTask", () => {
     expect(mocks.pushBranch).not.toHaveBeenCalled();
   });
 
+  // ── no-change via commitAll ──────────────────────────────────────────────────
+
+  it("returns status 'no-change' when loop reports changed but commitAll finds a clean tree", async () => {
+    mocks.runEditLoop.mockResolvedValue({
+      changed: true,
+      modelCalls: 3,
+      tokens: 600,
+      stoppedReason: "done",
+    });
+    mocks.commitAll.mockResolvedValue({ committed: false });
+
+    const result = await runTask(makePacket());
+
+    expect(result.status).toBe("no-change");
+    expect(result.prUrl).toBeUndefined();
+    expect(result.modelCalls).toBe(3);
+    expect(result.tokens).toBe(600);
+    expect(result.stoppedReason).toBe("done");
+  });
+
+  it("does NOT call pushBranch or openPullRequest when commitAll returns committed:false", async () => {
+    mocks.runEditLoop.mockResolvedValue({
+      changed: true,
+      modelCalls: 2,
+      tokens: 400,
+      stoppedReason: "done",
+    });
+    mocks.commitAll.mockResolvedValue({ committed: false });
+
+    await runTask(makePacket());
+
+    expect(mocks.pushBranch).not.toHaveBeenCalled();
+    expect(mocks.openPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the temp dir when commitAll returns committed:false", async () => {
+    mocks.runEditLoop.mockResolvedValue({
+      changed: true,
+      modelCalls: 1,
+      tokens: 200,
+      stoppedReason: "done",
+    });
+    mocks.commitAll.mockResolvedValue({ committed: false });
+
+    await runTask(makePacket());
+
+    expect(mocks.rm).toHaveBeenCalledWith(FAKE_TMP_DIR, { recursive: true, force: true });
+  });
+
   it("cleans up the temp dir in the no-change path", async () => {
     mocks.runEditLoop.mockResolvedValue({
       changed: false,

@@ -140,7 +140,19 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
 
     // 4. Commit all changes.
     const commitMsg = `${ticket.identifier}: ${ticket.title}\n\nImplemented by Sigilix from ${ticket.url}`;
-    await commitAll(tmpDir, commitMsg, { name: "Sigilix", email: "agent@sigilix.ai" });
+    const { committed } = await commitAll(tmpDir, commitMsg, { name: "Sigilix", email: "agent@sigilix.ai" });
+
+    if (!committed) {
+      // The loop reported changed=true (e.g. a byte-identical write) but the
+      // working tree was actually clean — skip push and PR to avoid a GitHub 422.
+      return {
+        runId,
+        status: "no-change",
+        modelCalls,
+        tokens,
+        stoppedReason: loopResult.stoppedReason,
+      };
+    }
 
     // 5. Push the feature branch.
     await pushBranch({

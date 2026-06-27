@@ -269,6 +269,76 @@ describe("handleSlackOAuthCallback", () => {
     expect(res.status).toBe(302)
     expect(res.headers.get("location")).toBe("https://app.sigilix.ai/slack/installed")
   })
+
+  // ── New OAuth-correctness tests ──
+
+  it("includes redirect_uri in the token-exchange form body", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://app.sigilix.ai",
+    })
+    const state = seedState(kv)
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-new", team: { id: "T999" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    await handleSlackOAuthCallback(callbackReq({ code: "code123", state }), env)
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = new URLSearchParams(init.body as string)
+    expect(body.get("redirect_uri")).toBe("https://app.sigilix.ai/slack/oauth/callback")
+  })
+
+  it("returns 502 (not a throw) when KV nonce delete fails", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://app.sigilix.ai",
+    })
+    const state = seedState(kv)
+    kv.delete.mockRejectedValueOnce(new Error("KV unavailable"))
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state }), env)
+    expect(res.status).toBe(502)
+  })
+
+  it("returns 502 (not a throw) when KV put (install persist) fails", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://app.sigilix.ai",
+    })
+    const state = seedState(kv)
+    kv.put.mockRejectedValueOnce(new Error("KV unavailable"))
+    mockSlackFetch({ ok: true, body: { ok: true, access_token: "xoxb-new", team: { id: "T999" } } })
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state }), env)
+    expect(res.status).toBe(502)
+  })
+
+  it("returns 400 and preserves the nonce when code is missing but state is valid", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://app.sigilix.ai",
+    })
+    const state = seedState(kv)
+
+    const res = await handleSlackOAuthCallback(callbackReq({ state }), env)
+
+    expect(res.status).toBe(400)
+    // Nonce must NOT be consumed — the state key must still be in KV.
+    expect(kv._store.has(`slack-oauth-state:${state}`)).toBe(true)
+    expect(kv.delete).not.toHaveBeenCalled()
+  })
 })
 
 // ─── handleSlackInstall ──────────────────────────────────────────────────────
@@ -289,5 +359,14 @@ describe("handleSlackInstall", () => {
     // A nonce was stored in KV.
     const hasStateKey = [...kv._store.keys()].some((k) => k.startsWith("slack-oauth-state:"))
     expect(hasStateKey).toBe(true)
+  })
+
+  it("returns 503 when SLACK_CLIENT_ID is unset", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv) // no SLACK_CLIENT_ID
+
+    const res = await handleSlackInstall(new Request("https://app.sigilix.ai/slack/install"), env)
+
+    expect(res.status).toBe(503)
   })
 })

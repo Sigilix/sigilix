@@ -11,12 +11,13 @@ WORKDIR /app
 
 # Install all deps (including devDeps for the compile step) before copying src
 # so Docker can cache this layer when only source files change.
-COPY package*.json tsconfig.json ./
+COPY package*.json tsconfig.json tsconfig.build.json ./
 RUN npm ci
 
-# Compile TypeScript → dist/
+# Compile TypeScript → dist/ (tsconfig.build.json excludes *.test.ts so the
+# image ships only runtime files — no tests, no vitest refs after the prune).
 COPY src ./src
-RUN npx tsc
+RUN npx tsc -p tsconfig.build.json
 
 # Prune devDependencies — the compiled JS only uses Node built-ins at runtime.
 RUN npm prune --omit=dev

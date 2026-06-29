@@ -185,6 +185,7 @@ async function runDeferredWork(
     scope: scopeResult.scope,
     slackUserId,
     channelId,
+    threadTs,
     threadText,
     mentionText,
   })

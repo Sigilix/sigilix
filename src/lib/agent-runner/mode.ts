@@ -48,3 +48,20 @@ export function resolveAgentRunnerEngine(env: Pick<Env, "OPENCLAW_AGENT_RUNNER_E
   if (env.OPENCLAW_AGENT_RUNNER_ENGINE === "full") return "full"
   return "minimal"
 }
+
+/**
+ * Resolve the SIG-545 B3 Linear-assignment trigger mode from the environment.
+ *
+ * "off" (default/unset/unknown) — assigning a Linear issue to the Sigilix agent
+ *   user is inert; no agent run is dispatched. Worker behavior is unchanged.
+ * "on" — an Issue.update that assigns the issue to OPENCLAW_LINEAR_AGENT_USER_ID
+ *   dispatches the agent-runner (on the SAFE minimal engine) to implement it.
+ *
+ * Case-sensitive and fail-closed: only the exact string "on" arms the trigger;
+ * anything else — unset, "ON", whitespace variants, unknown — defaults to "off".
+ * Mirrors `resolveAgentRunnerMode`.
+ */
+export function resolveLinearAgentRunMode(env: Pick<Env, "OPENCLAW_LINEAR_AGENT_RUN_MODE">): AgentRunnerMode {
+  if (env.OPENCLAW_LINEAR_AGENT_RUN_MODE === "on") return "on"
+  return "off"
+}

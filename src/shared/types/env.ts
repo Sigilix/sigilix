@@ -957,8 +957,19 @@ export interface Env {
   //                                    origin). Unset → grounding is omitted (the
   //                                    full agent runs blind, graceful). Paired with
   //                                    OPENCLAW_SIGILIX_API_KEY as the bearer.
+  //   OPENCLAW_LINEAR_AGENT_RUN_MODE — "off" (default/unset) | "on" (SIG-545 B3).
+  //                                    Only the exact string "on" arms the
+  //                                    Linear-assignment trigger that dispatches the
+  //                                    agent-runner on a SAFE minimal engine when an
+  //                                    issue is assigned to the Sigilix agent user.
+  //                                    Fail-closed to "off".
+  //   OPENCLAW_LINEAR_AGENT_USER_ID  — (SIG-545 B3) the Linear user id of the Sigilix
+  //                                    agent. An Issue.update assigning THIS user is
+  //                                    the trigger; unset → trigger inert.
   AGENT_RUNNER: DurableObjectNamespace
   OPENCLAW_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
+  OPENCLAW_LINEAR_AGENT_RUN_MODE?: string
+  OPENCLAW_LINEAR_AGENT_USER_ID?: string
 }

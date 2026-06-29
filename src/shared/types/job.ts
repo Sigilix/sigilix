@@ -469,3 +469,7 @@ export type JobMessage =
       installationId: number
     }
   | { type: "corpus-issue-upsert"; linearIssueId: string }
+  // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user. The
+  // consumer (`runLinearAgentRun`) resolves the repo + installation and
+  // dispatches the agent-runner on the SAFE minimal engine to implement it.
+  | { type: "linear-agent-run"; issueId: string }

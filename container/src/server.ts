@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { cloneRepo, createBranch, commitAll, pushBranch } from "./git.js";
 import { runEditLoop } from "./agent-loop.js";
 import type { StoppedReason } from "./agent-loop.js";
+import { runCliAgent } from "./cli-agent.js";
 import { openPullRequest } from "./github-pr.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -54,6 +55,20 @@ export interface TaskPacket {
     maxModelCalls: number;
     maxTokens: number;
     timeoutMs: number;
+  };
+  /**
+   * Which engine implements the task (SIG-545 B2). "minimal" (default) = the
+   * bounded 5-tool edit loop; "full" = the Sigilix CLI agent run headless.
+   */
+  engine?: "minimal" | "full";
+  /**
+   * Grounding endpoint for the full CLI agent's sigilix-grounding plugin.
+   * Ignored by the minimal engine. Keys NEVER logged.
+   */
+  sigilix?: {
+    endpoint?: string;
+    apiKey?: string;
+    repoSlug?: string;
   };
 }
 
@@ -114,8 +129,10 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
     // 2. Check out the feature branch.
     await createBranch(tmpDir, branchName);
 
-    // 3. Run the minimal GLM edit loop.
-    const loopResult = await runEditLoop({
+    // 3. Run the selected engine: the minimal 5-tool GLM loop (default), or the
+    //    full Sigilix CLI agent when packet.engine === "full" (SIG-545 B2).
+    //    Both return the same EditLoopResult contract.
+    const editArgs = {
       dir: tmpDir,
       ticket: {
         identifier: ticket.identifier,
@@ -126,11 +143,33 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
       ...(grounding !== undefined ? { grounding } : {}),
       model,
       caps,
-    });
+    };
+    const loopResult =
+      packet.engine === "full"
+        ? await runCliAgent({
+            ...editArgs,
+            ...(packet.sigilix !== undefined ? { sigilix: packet.sigilix } : {}),
+          })
+        : await runEditLoop(editArgs);
 
     modelCalls = loopResult.modelCalls;
     tokens = loopResult.tokens;
     loopStoppedReason = loopResult.stoppedReason;
+
+    // For the full CLI agent, only open a PR on a clean completion. A SIGKILLed
+    // (timeout) or errored run can leave a half-applied edit in the tree, so a
+    // non-"done" stop must NOT become a PR from incomplete/broken work. The
+    // minimal loop's writes are discrete and model-driven, so it keeps the
+    // changed-based behavior (a partial-but-valid edit is still mergeable).
+    if (packet.engine === "full" && loopResult.stoppedReason !== "done") {
+      return {
+        runId,
+        status: "no-change",
+        modelCalls,
+        tokens,
+        stoppedReason: loopResult.stoppedReason,
+      };
+    }
 
     if (!loopResult.changed) {
       // No files were modified — don't open a spurious PR.

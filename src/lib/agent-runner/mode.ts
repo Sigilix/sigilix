@@ -25,3 +25,26 @@ export function resolveAgentRunnerMode(env: Pick<Env, "OPENCLAW_AGENT_RUNNER_MOD
   if (env.OPENCLAW_AGENT_RUNNER_MODE === "on") return "on"
   return "off"
 }
+
+/**
+ * Which in-container engine implements a task (SIG-545 B2).
+ *
+ * "minimal" (default/unset/unknown) — the bounded 5-tool GLM edit loop
+ *   (container/src/agent-loop.ts). The proven, tightly-sandboxed B1 engine.
+ * "full" — the full Sigilix CLI agent run headless in the container
+ *   (container/src/cli-agent.ts). Richer (real tools + grounding plugin) but a
+ *   wider attack surface; gated to trusted input until the security pass + B4.
+ */
+export type AgentRunnerEngine = "minimal" | "full"
+
+/**
+ * Resolve the default agent-runner engine from the environment.
+ *
+ * Case-sensitive and fail-closed: only the exact string "full" selects the
+ * full CLI agent; anything else — unset, "FULL", unknown — defaults to the
+ * minimal loop. A per-run packet value may override this (trusted-repo gate).
+ */
+export function resolveAgentRunnerEngine(env: Pick<Env, "OPENCLAW_AGENT_RUNNER_ENGINE">): AgentRunnerEngine {
+  if (env.OPENCLAW_AGENT_RUNNER_ENGINE === "full") return "full"
+  return "minimal"
+}

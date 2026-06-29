@@ -172,6 +172,37 @@ describe("handleAdminAgentRunRoute — provider-key allow-list", () => {
   })
 })
 
+describe("handleAdminAgentRunRoute — engine selector (SIG-545 B2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockDispatch.mockResolvedValue({ runId: "r1", dispatched: true })
+  })
+
+  function engineArg(): unknown {
+    return (mockDispatch.mock.calls[0]![1] as { engine?: unknown }).engine
+  }
+
+  it('defaults engine to "minimal" when the body omits it (env unset)', async () => {
+    await handleAdminAgentRunRoute(postReq(VALID_BODY), makeEnv())
+    expect(engineArg()).toBe("minimal")
+  })
+
+  it('forwards engine "full" from the body (admin is trusted)', async () => {
+    await handleAdminAgentRunRoute(postReq({ ...VALID_BODY, engine: "full" }), makeEnv())
+    expect(engineArg()).toBe("full")
+  })
+
+  it("ignores a garbage engine value and falls back to the env default", async () => {
+    await handleAdminAgentRunRoute(postReq({ ...VALID_BODY, engine: "bogus" }), makeEnv())
+    expect(engineArg()).toBe("minimal")
+  })
+
+  it('honors the env default OPENCLAW_AGENT_RUNNER_ENGINE="full" when the body omits engine', async () => {
+    await handleAdminAgentRunRoute(postReq(VALID_BODY), makeEnv({ OPENCLAW_AGENT_RUNNER_ENGINE: "full" }))
+    expect(engineArg()).toBe("full")
+  })
+})
+
 describe("handleAdminAgentStatusRoute", () => {
   beforeEach(() => vi.clearAllMocks())
 

@@ -46,6 +46,24 @@ vi.mock("@/src/lib/linear-agent-run", () => ({
   dispatchTicketImplementation: dispatchTicketImplementationMock,
 }))
 
+// B3c offer state: mock the KV-backed accessors so each test drives the pending
+// offer + asserts set/clear; keep the real classifyOfferReply (the regex is the SUT
+// of slack-implement-offer.test.ts and routes confirm/revise here).
+const { getImplementOfferMock, setImplementOfferMock, clearImplementOfferMock } = vi.hoisted(() => ({
+  getImplementOfferMock: vi.fn(async () => null as { plan: string; title: string } | null),
+  setImplementOfferMock: vi.fn(async () => {}),
+  clearImplementOfferMock: vi.fn(async () => {}),
+}))
+vi.mock("@/src/lib/slack/slack-implement-offer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/lib/slack/slack-implement-offer")>()
+  return {
+    ...actual,
+    getImplementOffer: getImplementOfferMock,
+    setImplementOffer: setImplementOfferMock,
+    clearImplementOffer: clearImplementOfferMock,
+  }
+})
+
 const { triageIssueMock } = vi.hoisted(() => ({
   triageIssueMock: vi.fn(async () => undefined),
 }))
@@ -53,12 +71,11 @@ vi.mock("@/src/lib/triage", () => ({
   triageIssue: triageIssueMock,
 }))
 
-const { buildClientMock } = vi.hoisted(() => ({
+const { buildClientMock, parseGithubMentionResponseMock } = vi.hoisted(() => ({
   buildClientMock: vi.fn(async () => ({ getFileContent: vi.fn() })),
-}))
-vi.mock("@/src/lib/github-mention", () => ({
-  buildClient: buildClientMock,
-  parseGithubMentionResponse: vi.fn((text: string) => {
+  // Hoisted so a test can drive abstain via mockReturnValueOnce; the default
+  // parses the answer with abstain:false.
+  parseGithubMentionResponseMock: vi.fn((text: string) => {
     try {
       const obj = JSON.parse(text) as unknown
       if (obj && typeof obj === "object" && !Array.isArray(obj)) {
@@ -72,6 +89,10 @@ vi.mock("@/src/lib/github-mention", () => ({
     }
     return null
   }),
+}))
+vi.mock("@/src/lib/github-mention", () => ({
+  buildClient: buildClientMock,
+  parseGithubMentionResponse: parseGithubMentionResponseMock,
 }))
 
 vi.mock("@/src/lib/agent-tools", () => ({
@@ -123,6 +144,16 @@ function makeEnv(): Env {
   } as Env
 }
 
+// B3c ships DARK behind OPENCLAW_LINEAR_AGENT_RUN_MODE. The offer UX (and the
+// pending-offer follow-up routing) only runs with the mode "on"; makeEnv leaves it
+// unset (off) so the qa/triage/implement tests above exercise byte-identical
+// behavior. Tests that drive the offer flow use this variant.
+function makeEnvRunnerOn(): Env {
+  const env = makeEnv()
+  env.OPENCLAW_LINEAR_AGENT_RUN_MODE = "on"
+  return env
+}
+
 function makeCtx(overrides: Partial<SlackMentionContext> = {}): SlackMentionContext {
   return {
     scope: {
@@ -133,6 +164,7 @@ function makeCtx(overrides: Partial<SlackMentionContext> = {}): SlackMentionCont
     },
     slackUserId: "U001",
     channelId: "C001",
+    threadTs: "1700000000.000100",
     threadText: "thread context goes here",
     mentionText: "how does the auth flow work?",
     ...overrides,
@@ -149,6 +181,10 @@ beforeEach(() => {
     answer: { answer: "The auth flow uses JWT tokens.", confidence: 5, abstain: false, verdict: "answer" },
     stats: { toolTurns: 1, totalMs: 500, toolCallCount: 2 },
   })
+  // Default: no pending offer → qa/triage/implement routing is byte-identical.
+  getImplementOfferMock.mockResolvedValue(null)
+  setImplementOfferMock.mockResolvedValue(undefined)
+  clearImplementOfferMock.mockResolvedValue(undefined)
 })
 
 describe("runSlackAgent — qa path", () => {
@@ -437,5 +473,305 @@ describe("runSlackAgent — capture non-fatal", () => {
     const ctx = makeCtx({ mentionText: "triage this" })
     // Should not throw — issue is already created, triage failure is non-fatal
     await expect(runSlackAgent(env, ctx)).resolves.toBeDefined()
+  })
+})
+
+// ─── B3c: offer generation (qa path) ────────────────────────────────────────────
+
+describe("runSlackAgent — B3c offer generation", () => {
+  it("appends an offer block + stores the offer when the model emits one", async () => {
+    // The offer-classifier single-shot step returns an implementable offer.
+    generateMock.mockResolvedValueOnce({
+      text: '{"shouldOffer":true,"title":"Add fetch retry","plan":"1. add retry wrapper\\n2. wire it in\\n3. add a test"}',
+      usage: { promptTokens: 1, completionTokens: 1 },
+    })
+
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "we should retry failed fetches" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.reply).toContain("The auth flow uses JWT tokens.")
+    expect(result.reply).toContain("I can open a PR for this")
+    expect(result.reply).toContain("add retry wrapper")
+    expect(result.reply).toContain("@Sigilix yes")
+    expect(result.action.kind).toBe("implement-offer")
+
+    // The offer is remembered for the thread.
+    expect(setImplementOfferMock).toHaveBeenCalledTimes(1)
+    const setArgs = setImplementOfferMock.mock.calls[0] as unknown[]
+    expect(setArgs[1]).toBe("C001")
+    expect(setArgs[2]).toBe("1700000000.000100")
+    expect(setArgs[3]).toMatchObject({ title: "Add fetch retry" })
+  })
+
+  it("returns a normal qa reply + stores nothing when the model declines to offer", async () => {
+    // Default generateMock returns the triage JSON (no shouldOffer) → no offer.
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx()
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.reply).toContain("The auth flow uses JWT tokens.")
+    expect(result.reply).not.toContain("I can open a PR for this")
+    expect(result.action.kind).toBe("qa")
+    expect(setImplementOfferMock).not.toHaveBeenCalled()
+  })
+
+  it("does not offer on a degraded (loop ok:false) answer", async () => {
+    runAgentLoopMock.mockResolvedValue({ ok: false, reason: "chat_error" })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx()
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.reply).toContain("degraded")
+    expect(result.action.kind).toBe("qa")
+    expect(setImplementOfferMock).not.toHaveBeenCalled()
+    // No offer-classifier call on a degraded answer.
+    expect(generateMock).not.toHaveBeenCalled()
+  })
+
+  it("is fully inert with the runner mode OFF: plain qa reply, no offer, no extra model call", async () => {
+    // Same input the model WOULD offer on — but the runner mode is off (makeEnv
+    // leaves OPENCLAW_LINEAR_AGENT_RUN_MODE unset), so B3c never engages and the
+    // offer single-shot generate() is never reached.
+    const env = makeEnv()
+    const ctx = makeCtx({ mentionText: "we should retry failed fetches" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.reply).toContain("The auth flow uses JWT tokens.")
+    expect(result.reply).not.toContain("I can open a PR for this")
+    expect(result.action.kind).toBe("qa")
+    // No offer state, and critically NO extra offer-classifier generate() call.
+    expect(setImplementOfferMock).not.toHaveBeenCalled()
+    expect(generateMock).not.toHaveBeenCalled()
+  })
+
+  it("does NOT offer when the grounded verdict abstains (mode on)", async () => {
+    // Mode is on, but the answer is an abstain ("I don't know") → never offer a PR.
+    parseGithubMentionResponseMock.mockReturnValueOnce({
+      answer: "I'm not sure how the auth flow works.",
+      confidence: 2,
+      abstain: true,
+      verdict: "answer",
+    })
+
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "we should retry failed fetches" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.reply).toContain("I'm not sure how the auth flow works.")
+    expect(result.reply).not.toContain("I can open a PR for this")
+    expect(result.action.kind).toBe("qa")
+    // The offer single-shot must be skipped on an abstain.
+    expect(generateMock).not.toHaveBeenCalled()
+    expect(setImplementOfferMock).not.toHaveBeenCalled()
+  })
+})
+
+// ─── B3c: follow-up confirm ─────────────────────────────────────────────────────
+
+describe("runSlackAgent — B3c confirm", () => {
+  it("affirmative → creates a self-assigned ticket, dispatches, clears the offer", async () => {
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "the agreed plan", title: "the agreed title" })
+    const env = makeEnvRunnerOn()
+    env.OPENCLAW_LINEAR_AGENT_USER_ID = "agent-user-uuid"
+    const ctx = makeCtx({ mentionText: "yes" })
+    const result = await runSlackAgent(env, ctx)
+
+    // Ticket created with the offer's title/plan, self-assigned.
+    expect(createIssueMock).toHaveBeenCalledOnce()
+    const issueArgs = (createIssueMock.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+    expect(issueArgs.teamId).toBe("team-uuid-1")
+    expect(issueArgs.title).toBe("the agreed title")
+    expect(issueArgs.description).toBe("the agreed plan")
+    expect(issueArgs.assigneeId).toBe("agent-user-uuid")
+
+    // Runner dispatched on the scoped repo with the agreed plan as the body.
+    expect(dispatchTicketImplementationMock).toHaveBeenCalledOnce()
+    const dispatchArgs = (dispatchTicketImplementationMock.mock.calls[0] as unknown[])[1] as Record<string, unknown>
+    expect(dispatchArgs.owner).toBe("sigilix")
+    expect(dispatchArgs.repo).toBe("sigilix")
+    expect(dispatchArgs.dedupeId).toBe("issue-id-1")
+    expect(dispatchArgs.ticket).toMatchObject({ body: "the agreed plan", title: "the agreed title" })
+
+    expect(result.reply).toContain("On it")
+    expect(result.action.kind).toBe("implement-confirm")
+    if (result.action.kind === "implement-confirm") {
+      expect(result.action.dispatched).toBe(true)
+      expect(result.action.identifier).toBe("SIG-42")
+    }
+
+    // Offer cleared; the revise loop never runs on a confirm.
+    expect(clearImplementOfferMock).toHaveBeenCalledTimes(1)
+    expect(runAgentLoopMock).not.toHaveBeenCalled()
+  })
+
+  it("affirmative + dark dispatch → reply degrades to 'queued'", async () => {
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "p", title: "t" })
+    dispatchTicketImplementationMock.mockResolvedValueOnce({ dispatched: false })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "go ahead" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(createIssueMock).toHaveBeenCalledOnce()
+    expect(result.reply).toContain("queued")
+    expect(result.action.kind).toBe("implement-confirm")
+    if (result.action.kind === "implement-confirm") expect(result.action.dispatched).toBe(false)
+  })
+
+  it("affirmative but no linearTeam → not-configured reply, no create/dispatch, offer cleared", async () => {
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "p", title: "t" })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({
+      mentionText: "do it",
+      scope: {
+        teamId: "T001",
+        channelId: "C001",
+        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        linearTeam: null,
+      },
+    })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(createIssueMock).not.toHaveBeenCalled()
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+    expect(result.reply).toContain("not configured")
+    expect(result.action.kind).toBe("qa")
+    expect(clearImplementOfferMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── B3c: follow-up routing is dark when the runner mode is OFF ──────────────────
+
+describe("runSlackAgent — B3c follow-up gated off", () => {
+  it("with the mode OFF, the pending-offer KV is never read: 'yes' falls through to qa", async () => {
+    // The mode being off means the precedence check never runs — getImplementOffer
+    // is not even consulted, so a "yes" routes to plain qa (no confirm, no dispatch)
+    // exactly as it did before B3c.
+    const env = makeEnv()
+    const ctx = makeCtx({ mentionText: "yes" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(getImplementOfferMock).not.toHaveBeenCalled()
+    expect(clearImplementOfferMock).not.toHaveBeenCalled()
+    expect(createIssueMock).not.toHaveBeenCalled()
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+    expect(result.action.kind).toBe("qa")
+  })
+})
+
+// ─── B3c: follow-up decline ─────────────────────────────────────────────────────
+
+describe("runSlackAgent — B3c decline", () => {
+  it.each(["no", "never mind", "cancel"])(
+    "%j → clears the offer, no dispatch, no re-plan, action=implement-decline",
+    async (text) => {
+      getImplementOfferMock.mockResolvedValueOnce({ plan: "old plan", title: "old title" })
+      const env = makeEnvRunnerOn()
+      const ctx = makeCtx({ mentionText: text })
+      const result = await runSlackAgent(env, ctx)
+
+      // Offer dropped; nothing created or dispatched; no re-plan loop.
+      expect(clearImplementOfferMock).toHaveBeenCalledTimes(1)
+      expect(createIssueMock).not.toHaveBeenCalled()
+      expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+      expect(runAgentLoopMock).not.toHaveBeenCalled()
+      expect(setImplementOfferMock).not.toHaveBeenCalled()
+
+      expect(result.action.kind).toBe("implement-decline")
+      expect(result.reply).toContain("I'll leave it")
+    },
+  )
+})
+
+// ─── B3c: follow-up revise ──────────────────────────────────────────────────────
+
+describe("runSlackAgent — B3c revise", () => {
+  it("counter-proposal → re-plans, updates the stored offer, does NOT dispatch", async () => {
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "old plan", title: "old title" })
+    runAgentLoopMock.mockResolvedValueOnce({
+      ok: true,
+      answer: { reply: "good call — I'll use a queue", plan: "1. add queue\n2. consumer", title: "Use a queue" },
+      stats: { toolTurns: 1, totalMs: 500, toolCallCount: 1 },
+    })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "do it this way instead — use a queue" })
+    const result = await runSlackAgent(env, ctx)
+
+    // Grounded re-plan loop ran; no ticket created, no dispatch.
+    expect(runAgentLoopMock).toHaveBeenCalledOnce()
+    expect(createIssueMock).not.toHaveBeenCalled()
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+
+    // The stored offer is updated to the revised plan/title.
+    expect(setImplementOfferMock).toHaveBeenCalledTimes(1)
+    const setArgs = setImplementOfferMock.mock.calls[0] as unknown[]
+    expect(setArgs[3]).toEqual({ plan: "1. add queue\n2. consumer", title: "Use a queue" })
+
+    expect(result.reply).toContain("good call")
+    expect(result.reply).toContain("@Sigilix yes")
+    expect(result.action.kind).toBe("implement-revise")
+    expect(clearImplementOfferMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps the prior plan when the re-plan loop fails to parse", async () => {
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "old plan", title: "old title" })
+    runAgentLoopMock.mockResolvedValueOnce({ ok: false, reason: "chat_error" })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "tweak it: rename the flag" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(setImplementOfferMock).toHaveBeenCalledTimes(1)
+    const setArgs = setImplementOfferMock.mock.calls[0] as unknown[]
+    expect(setArgs[3]).toEqual({ plan: "old plan", title: "old title" })
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+    // Degraded — must not claim an update that didn't happen.
+    expect(result.reply).toContain("degraded")
+    expect(result.reply).toContain("unchanged")
+    expect(result.reply).not.toContain("Updated the plan")
+    expect(result.action.kind).toBe("implement-revise")
+  })
+
+  it("does NOT claim 'Updated the plan' on an ok-but-empty re-plan (plan unchanged)", async () => {
+    // loop ok:true but the model returns no reply AND no new plan → newPlan falls
+    // back to the old plan. Must read as unchanged, never as an update.
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "old plan", title: "old title" })
+    runAgentLoopMock.mockResolvedValueOnce({
+      ok: true,
+      answer: { reply: "", plan: "", title: "" },
+      stats: { toolTurns: 1, totalMs: 1, toolCallCount: 0 },
+    })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "tweak it: rename the flag" })
+    const result = await runSlackAgent(env, ctx)
+
+    // The offer is persisted unchanged (fallback to the prior plan/title).
+    expect(setImplementOfferMock).toHaveBeenCalledTimes(1)
+    const setArgs = setImplementOfferMock.mock.calls[0] as unknown[]
+    expect(setArgs[3]).toEqual({ plan: "old plan", title: "old title" })
+
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+    expect(result.reply).not.toContain("Updated the plan")
+    expect(result.reply).toContain("unchanged")
+    expect(result.action.kind).toBe("implement-revise")
+  })
+
+  it("a pending offer takes precedence over a fresh implement-shaped follow-up", async () => {
+    // "implement this" would normally route to runImplement; a pending offer wins
+    // and (not being affirmative) routes to revise — detectSlackIntent is bypassed.
+    getImplementOfferMock.mockResolvedValueOnce({ plan: "old plan", title: "old title" })
+    runAgentLoopMock.mockResolvedValueOnce({
+      ok: true,
+      answer: { reply: "sure", plan: "revised plan", title: "revised title" },
+      stats: { toolTurns: 1, totalMs: 1, toolCallCount: 0 },
+    })
+    const env = makeEnvRunnerOn()
+    const ctx = makeCtx({ mentionText: "implement this" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(result.action.kind).toBe("implement-revise")
+    expect(runAgentLoopMock).toHaveBeenCalledOnce()
+    // The B3b implement path (create + immediate dispatch) must NOT run.
+    expect(createIssueMock).not.toHaveBeenCalled()
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
   })
 })

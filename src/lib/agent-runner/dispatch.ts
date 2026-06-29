@@ -90,9 +90,36 @@ interface TaskPacket {
   caps: AgentRunTaskInput["caps"]
   /** Selected engine; always resolved to a concrete value before dispatch. */
   engine: AgentRunnerEngine
+  /**
+   * Grounding wiring for the full CLI agent's sigilix-grounding plugin, resolved
+   * from the Worker env at dispatch (NOT from the caller). Omitted when the
+   * endpoint or bearer is unset (the full agent then runs blind — graceful).
+   * apiKey is NEVER logged. The minimal engine ignores this.
+   */
+  sigilix?: {
+    endpoint: string
+    apiKey: string
+    repoSlug: string
+  }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Resolve the grounding config for the container's sigilix-grounding plugin from
+ * the Worker env. Returns undefined unless BOTH the grounding endpoint (the
+ * Worker's own /v1 base) and the shared agent bearer are set. apiKey NEVER logged.
+ */
+function resolveGroundingConfig(
+  env: Pick<Env, "OPENCLAW_AGENT_GROUNDING_ENDPOINT" | "OPENCLAW_SIGILIX_API_KEY">,
+  owner: string,
+  repo: string,
+): TaskPacket["sigilix"] {
+  const endpoint = env.OPENCLAW_AGENT_GROUNDING_ENDPOINT
+  const apiKey = env.OPENCLAW_SIGILIX_API_KEY
+  if (!endpoint || !apiKey) return undefined
+  return { endpoint, apiKey, repoSlug: `${owner}/${repo}` }
+}
 
 /**
  * Returns the AgentRunnerContainer stub for the given runId.
@@ -139,6 +166,9 @@ export async function dispatchAgentRun(
       installationId: input.installationId,
     })
 
+    // Grounding config for the full CLI agent (omitted unless env-configured).
+    const groundingConfig = resolveGroundingConfig(env, input.owner, input.repo)
+
     const packet: TaskPacket = {
       runId,
       repo: {
@@ -151,6 +181,7 @@ export async function dispatchAgentRun(
       grounding: input.grounding,
       model: input.model, // model.key is never logged
       engine: input.engine ?? "minimal",
+      ...(groundingConfig !== undefined ? { sigilix: groundingConfig } : {}),
       caps: input.caps,
     }
 

@@ -949,7 +949,16 @@ export interface Env {
   //                                    B2). Selects the in-container engine: the
   //                                    bounded 5-tool loop vs the full CLI agent.
   //                                    Fail-closed to "minimal".
+  //   OPENCLAW_AGENT_GROUNDING_ENDPOINT — (SIG-545 B2) the Worker's OWN public base
+  //                                    URL (e.g. https://sigilix.<sub>.workers.dev)
+  //                                    that the container's sigilix-grounding plugin
+  //                                    calls for /v1/context + /v1/memory. NOT
+  //                                    OPENCLAW_BASE_URL (that's the OAuth/marketing
+  //                                    origin). Unset → grounding is omitted (the
+  //                                    full agent runs blind, graceful). Paired with
+  //                                    OPENCLAW_SIGILIX_API_KEY as the bearer.
   AGENT_RUNNER: DurableObjectNamespace
   OPENCLAW_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
+  OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
 }

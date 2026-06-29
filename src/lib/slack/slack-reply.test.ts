@@ -6,6 +6,35 @@ import { detectSlackIntent, formatSigilixReply } from "@/src/lib/slack/slack-rep
 // ─── detectSlackIntent ────────────────────────────────────────────────────────
 
 describe("detectSlackIntent", () => {
+  // implement trigger phrases (SIG-545 B3b) — IMPERATIVE only, checked FIRST.
+  it.each([
+    ["implement this"],
+    ["@sigilix implement this please"],
+    ["IMPLEMENT THIS"],
+    ["build this"],
+    ["ship this"],
+    ["implement it"],
+    ["make this for us"],
+    ["do this for us"],
+    ["open a PR for this"],
+    ["open a pull request for it"],
+  ])("returns implement for: %s", (text) => {
+    expect(detectSlackIntent(text)).toEqual({ kind: "implement" })
+  })
+
+  // Questions are NEVER the side-effectful implement path — they fall to qa, where
+  // the offer/confirm flow (B3c) handles them (Sigilix answers + offers to do it).
+  it.each([
+    ["can you build this?"],
+    ["can you implement this"],
+    ["can you do this"],
+    ["can you ship this for me"],
+    ["how would you implement this?"],
+    ["should we build this?"],
+  ])("returns qa (not implement) for the question: %s", (text) => {
+    expect(detectSlackIntent(text)).toEqual({ kind: "qa" })
+  })
+
   // linear-triage trigger phrases
   it.each([
     ["make a linear triage"],

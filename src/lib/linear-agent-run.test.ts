@@ -27,7 +27,7 @@ vi.mock("@/src/lib/agent-runner/dispatch", () => ({
   dispatchAgentRun: vi.fn(),
 }))
 
-import { runLinearAgentRun } from "@/src/lib/linear-agent-run"
+import { runLinearAgentRun, dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { LinearClient, buildLinearAuth, type LinearIssue } from "@/src/lib/linear"
 import { dispatchAgentRun, type AgentRunTaskInput } from "@/src/lib/agent-runner/dispatch"
 import type { Env } from "@/src/shared/types/env"
@@ -246,5 +246,102 @@ describe("runLinearAgentRun", () => {
     mockGetIssue.mockRejectedValue(new Error("Linear unreachable"))
     await expect(runLinearAgentRun(ISSUE_ID, makeEnv())).resolves.toBeUndefined()
     expect(spyError.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-failed")
+  })
+})
+
+// ── dispatchTicketImplementation (SIG-545 B3b shared core) ──────────────────────
+
+describe("dispatchTicketImplementation", () => {
+  let spyLog: MockInstance
+  let spyWarn: MockInstance
+  let spyError: MockInstance
+
+  const TICKET = {
+    identifier: "SIG-545",
+    title: "Implement the thing",
+    body: "Do the thing carefully",
+    url: "https://linear.app/sigilix/issue/SIG-545",
+  }
+  const DEDUPE_ID = "issue-uuid-1"
+  const DEDUPE_KEY = `linear-agent-run:${DEDUPE_ID}`
+
+  function args() {
+    return { owner: "Sigilix", repo: "sigilix", installationId: 99, ticket: TICKET, dedupeId: DEDUPE_ID }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    spyLog = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    spyWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    spyError = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true })
+  })
+
+  afterEach(() => {
+    spyLog.mockRestore()
+    spyWarn.mockRestore()
+    spyError.mockRestore()
+  })
+
+  it("happy path → dispatched:true + correct minimal-engine AgentRunTaskInput + sets the marker", async () => {
+    const kv = makeKv()
+    const result = await dispatchTicketImplementation(makeEnv({ OPENCLAW_STATE: kv }), args())
+
+    expect(result).toEqual({ dispatched: true })
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    const input = mockDispatchAgentRun.mock.calls[0]![1] as AgentRunTaskInput
+    expect(input.owner).toBe("Sigilix")
+    expect(input.repo).toBe("sigilix")
+    expect(input.baseBranch).toBe("main")
+    expect(input.installationId).toBe(99)
+    expect(input.engine).toBe("minimal")
+    expect(input.model.id).toBe("glm-5.2:cloud")
+    expect(input.model.baseUrl).toBe("https://ollama.com/v1")
+    expect(input.model.key).toBe(OLLAMA_KEY)
+    expect(input.ticket).toEqual(TICKET)
+    expect(input.caps).toEqual({ maxModelCalls: 12, maxTokens: 800_000, timeoutMs: 600_000 })
+    expect(kv.put).toHaveBeenCalledWith(DEDUPE_KEY, "1", { expirationTtl: 3600 })
+  })
+
+  it("dedupes when the marker is already present (no dispatch)", async () => {
+    const kv = makeKv({ [DEDUPE_KEY]: "1" })
+    const result = await dispatchTicketImplementation(makeEnv({ OPENCLAW_STATE: kv }), args())
+
+    expect(result).toEqual({ dispatched: false })
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-deduped")
+  })
+
+  it("returns dispatched:false (no dispatch, no marker) when OLLAMA_API_KEY is unset", async () => {
+    const kv = makeKv()
+    const result = await dispatchTicketImplementation(
+      makeEnv({ OPENCLAW_STATE: kv, OLLAMA_API_KEY: undefined }),
+      args(),
+    )
+
+    expect(result).toEqual({ dispatched: false })
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(kv.put).not.toHaveBeenCalled()
+    expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-no-model-key")
+  })
+
+  it("releases the marker when dispatch reports dispatched:false", async () => {
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: false })
+    const kv = makeKv()
+    const result = await dispatchTicketImplementation(makeEnv({ OPENCLAW_STATE: kv }), args())
+
+    expect(result).toEqual({ dispatched: false })
+    expect(kv.delete).toHaveBeenCalledWith(DEDUPE_KEY)
+    expect(kv.store.has(DEDUPE_KEY)).toBe(false)
+  })
+
+  it("never logs the model key", async () => {
+    await dispatchTicketImplementation(makeEnv(), args())
+    const allOutput = [
+      ...spyLog.mock.calls.flat().map(String),
+      ...spyWarn.mock.calls.flat().map(String),
+      ...spyError.mock.calls.flat().map(String),
+    ].join("\n")
+    expect(allOutput).not.toContain(OLLAMA_KEY)
   })
 })

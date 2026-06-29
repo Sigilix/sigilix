@@ -1,7 +1,9 @@
-// SIG-545 B3: queue consumer for the Linear-assignment trigger. When an issue
-// is assigned to the Sigilix agent user (webhook gate in index-webhooks.ts), this
-// resolves the target GitHub repo + installation and dispatches the agent-runner
-// to implement it and open a PR.
+// SIG-545 B3 / B3b: shared agent-run dispatch core for BOTH the Linear-assignment
+// webhook trigger (B3) and the Slack "implement this" intent (B3b). When an issue
+// is assigned to the Sigilix agent user (webhook gate in index-webhooks.ts) OR a
+// user asks Sigilix in Slack to implement something, the work converges on
+// `dispatchTicketImplementation`: it resolves the runner model + per-ticket
+// idempotency and dispatches the agent-runner to implement it and open a PR.
 //
 // SAFE by construction: the run ALWAYS uses the minimal in-container engine
 // (`engine: "minimal"`) because this path takes untrusted free-tier input — never
@@ -9,8 +11,9 @@
 // is "on" (dispatchAgentRun's own gate); the webhook trigger is independently gated
 // by OPENCLAW_LINEAR_AGENT_RUN_MODE.
 //
-// FAIL-SAFE: the whole body is wrapped so a fault is logged + swallowed — the queue
-// consumer relies on this never throwing. NEVER logs model.key / tokens / secrets.
+// FAIL-SAFE: every body is wrapped so a fault is logged + swallowed — the queue
+// consumer + the Slack path both rely on this never throwing. NEVER logs model.key /
+// tokens / secrets.
 
 import type { Env } from "@/src/shared/types/env"
 import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
@@ -25,25 +28,131 @@ const DEFAULT_MODEL_ID = "glm-5.2:cloud"
  * Per-ticket idempotency window. BEST-EFFORT dedupe (the KV get→put is not atomic
  * and KV is eventually consistent ~60s cross-POP, so two jobs inside that window
  * can still both dispatch): it strongly reduces — but does not strictly prevent —
- * duplicate PRs from a webhook retry (Linear redelivers on 5xx) or the Slack path
- * self-assigning (which ALSO fires the assignment webhook). Strict exactly-once at
- * GA = back this with a Durable Object / D1 unique-insert (atomic compare-and-set).
- * The marker is released on a non-dispatch so a transient failure isn't permanently
- * suppressed.
+ * duplicate PRs when the SAME issue is driven more than once. The realistic cases:
+ * a webhook retry (Linear redelivers the assignment `Issue.update` on a 5xx), or the
+ * same issue id reaching BOTH entry points (the Slack path dispatching directly AND a
+ * later assignment-`Issue.update` webhook for that issue also calling runLinearAgentRun
+ * — both key the marker on the issue id). NOTE: creating an issue pre-assigned to the
+ * agent emits `Issue.create` (handled by the triage branch), NOT the assignment
+ * `Issue.update` trigger, so the Slack create itself does not re-enter this path.
+ * Strict exactly-once at GA = back this with a Durable Object / D1 unique-insert
+ * (atomic compare-and-set). The marker is released on a non-dispatch so a transient
+ * failure isn't permanently suppressed.
  */
 const AGENT_RUN_DEDUPE_TTL_SECONDS = 3600
 
 /**
- * Implement a Linear issue assigned to the Sigilix agent: resolve the repo +
- * installation, then dispatch the agent-runner on the minimal engine and post a
- * best-effort Linear ack. Never throws — every fault is logged + swallowed.
+ * Shared core used by BOTH the Linear-assignment webhook (`runLinearAgentRun`) and
+ * the Slack "implement this" intent (`runImplement`). Owns the per-ticket
+ * idempotency, the minimal-engine model build, and the agent-runner dispatch so the
+ * two entry points can never drift on safety (engine, caps, model, dedupe).
+ *
+ * - Per-ticket idempotency: a KV marker `linear-agent-run:${dedupeId}` (1h TTL),
+ *   released on a non-dispatch + defensively in the catch so a transient failure
+ *   isn't permanently suppressed.
+ * - Minimal engine ALWAYS (untrusted free-tier input — never "full").
+ * - NEVER logs model.key. NEVER throws — fail-safe to `{ dispatched: false }`.
  */
-export async function runLinearAgentRun(issueId: string, env: Env): Promise<void> {
+export async function dispatchTicketImplementation(
+  env: Env,
+  args: {
+    owner: string
+    repo: string
+    installationId: number
+    ticket: { identifier: string; title: string; body: string; url: string }
+    dedupeId: string
+  },
+): Promise<{ dispatched: boolean }> {
   // Declared outside the try so the catch can release the marker if a fault occurs
   // AFTER it was set but before dispatch was confirmed (defends a future edit that
   // throws post-set; today dispatchAgentRun is fail-safe and never throws).
-  const dedupeKey = `linear-agent-run:${issueId}`
+  const dedupeKey = `linear-agent-run:${args.dedupeId}`
   let markerSet = false
+  try {
+    // Build the runner model — default to Ollama Turbo (the free minimal engine).
+    // model.key is NEVER logged. Checked before the marker so a missing key never
+    // burns the idempotency window.
+    const key = env.OLLAMA_API_KEY
+    if (!key) {
+      console.warn(
+        JSON.stringify({
+          event: "linear-agent-run-no-model-key",
+          identifier: args.ticket.identifier,
+          owner: args.owner,
+          repo: args.repo,
+        }),
+      )
+      return { dispatched: false }
+    }
+    const model = { id: DEFAULT_MODEL_ID, key, baseUrl: OLLAMA_TURBO_BASE }
+
+    // Per-ticket idempotency (check-and-set) — best-effort dedupe of webhook retries
+    // + a cross-path double-drive of the same issue id (see the AGENT_RUN_DEDUPE caveat
+    // above). The dedupeId is the issue id for both callers, logged as `issueId` to
+    // keep the B3 event shape.
+    if (await env.OPENCLAW_STATE.get(dedupeKey)) {
+      console.log(
+        JSON.stringify({
+          event: "linear-agent-run-deduped",
+          issueId: args.dedupeId,
+          identifier: args.ticket.identifier,
+        }),
+      )
+      return { dispatched: false }
+    }
+    await env.OPENCLAW_STATE.put(dedupeKey, "1", { expirationTtl: AGENT_RUN_DEDUPE_TTL_SECONDS })
+    markerSet = true
+
+    const result = await dispatchAgentRun(env, {
+      runId: crypto.randomUUID(),
+      owner: args.owner,
+      repo: args.repo,
+      baseBranch: "main",
+      installationId: args.installationId,
+      ticket: args.ticket,
+      // ALWAYS minimal — this path takes untrusted free-tier input. Never "full".
+      engine: "minimal",
+      model,
+      caps: { maxModelCalls: 12, maxTokens: 800_000, timeoutMs: 600_000 },
+    })
+
+    if (!result.dispatched) {
+      // No-op/failed dispatch (runner dark, token mint failed, container fault) —
+      // release the idempotency marker so a later retry isn't permanently suppressed.
+      await env.OPENCLAW_STATE.delete(dedupeKey)
+      markerSet = false
+    }
+    return { dispatched: result.dispatched }
+  } catch (err) {
+    // Defensive: a fault after the marker was set (but before a confirmed dispatch)
+    // must not suppress the ticket for the whole TTL — release it. Best-effort.
+    if (markerSet) {
+      try {
+        await env.OPENCLAW_STATE.delete(dedupeKey)
+      } catch {
+        // best-effort
+      }
+    }
+    // Both callers rely on this never throwing out. Log without secrets.
+    console.error(
+      JSON.stringify({
+        event: "linear-agent-run-dispatch-failed",
+        issueId: args.dedupeId,
+        identifier: args.ticket.identifier,
+        error: err instanceof Error ? err.message : String(err),
+        // model.key / installation token intentionally excluded
+      }),
+    )
+    return { dispatched: false }
+  }
+}
+
+/**
+ * Implement a Linear issue assigned to the Sigilix agent: resolve the repo +
+ * installation, then dispatch the agent-runner (via `dispatchTicketImplementation`)
+ * and post a best-effort Linear ack. Never throws — every fault is logged + swallowed.
+ */
+export async function runLinearAgentRun(issueId: string, env: Env): Promise<void> {
   try {
     const linear = new LinearClient(await buildLinearAuth(env))
     const issue = await linear.getIssue(issueId)
@@ -80,36 +189,9 @@ export async function runLinearAgentRun(issueId: string, env: Env): Promise<void
       return
     }
 
-    // Build the runner model — default to Ollama Turbo (the free minimal engine).
-    // model.key is NEVER logged.
-    const key = env.OLLAMA_API_KEY
-    if (!key) {
-      console.warn(
-        JSON.stringify({
-          event: "linear-agent-run-no-model-key",
-          identifier: issue.identifier,
-          owner: mapping.owner,
-          repo: mapping.repo,
-        }),
-      )
-      return
-    }
-    const model = { id: DEFAULT_MODEL_ID, key, baseUrl: OLLAMA_TURBO_BASE }
-
-    // Per-ticket idempotency (check-and-set) — best-effort dedupe of webhook retries
-    // + the Slack self-assign double-fire (see the AGENT_RUN_DEDUPE caveat above).
-    if (await env.OPENCLAW_STATE.get(dedupeKey)) {
-      console.log(JSON.stringify({ event: "linear-agent-run-deduped", issueId, identifier: issue.identifier }))
-      return
-    }
-    await env.OPENCLAW_STATE.put(dedupeKey, "1", { expirationTtl: AGENT_RUN_DEDUPE_TTL_SECONDS })
-    markerSet = true
-
-    const result = await dispatchAgentRun(env, {
-      runId: crypto.randomUUID(),
+    const { dispatched } = await dispatchTicketImplementation(env, {
       owner: mapping.owner,
       repo: mapping.repo,
-      baseBranch: "main",
       installationId: inst.installationId,
       ticket: {
         identifier: issue.identifier,
@@ -117,13 +199,10 @@ export async function runLinearAgentRun(issueId: string, env: Env): Promise<void
         body: issue.description ?? "",
         url: issue.url,
       },
-      // ALWAYS minimal — this path takes untrusted free-tier input. Never "full".
-      engine: "minimal",
-      model,
-      caps: { maxModelCalls: 12, maxTokens: 800_000, timeoutMs: 600_000 },
+      dedupeId: issue.id,
     })
 
-    if (result.dispatched) {
+    if (dispatched) {
       // Best-effort ack — a failed comment must never fail the run.
       try {
         await linear.createComment(issue.id, "🛠️ On it — Sigilix is implementing this and will open a PR shortly.")
@@ -146,22 +225,8 @@ export async function runLinearAgentRun(issueId: string, env: Env): Promise<void
           // model.key intentionally excluded
         }),
       )
-    } else {
-      // No-op/failed dispatch (runner dark, token mint failed, container fault) —
-      // release the idempotency marker so a later retry isn't permanently suppressed.
-      await env.OPENCLAW_STATE.delete(dedupeKey)
-      markerSet = false
     }
   } catch (err) {
-    // Defensive: a fault after the marker was set (but before a confirmed dispatch)
-    // must not suppress the issue for the whole TTL — release it. Best-effort.
-    if (markerSet) {
-      try {
-        await env.OPENCLAW_STATE.delete(dedupeKey)
-      } catch {
-        // best-effort
-      }
-    }
     // The queue consumer relies on this never throwing out. Log without secrets.
     console.error(
       JSON.stringify({

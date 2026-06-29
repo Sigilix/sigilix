@@ -65,6 +65,42 @@ describe("LinearClient.createIssue", () => {
     expect(postedBody.variables.input).not.toHaveProperty("description")
   })
 
+  it("includes assigneeId in the mutation input when provided (SIG-545 B3b)", async () => {
+    stubFetch({
+      data: {
+        issueCreate: {
+          success: true,
+          issue: { id: "issue-uuid", identifier: "SIG-3", url: "https://linear.app/team/issue/SIG-3" },
+        },
+      },
+    })
+
+    await client.createIssue({ teamId: "team-uuid", title: "Assigned issue", assigneeId: "agent-user-uuid" })
+
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const postedBody = JSON.parse(init.body as string) as { variables: { input: Record<string, unknown> } }
+    expect(postedBody.variables.input.assigneeId).toBe("agent-user-uuid")
+  })
+
+  it("omits assigneeId from variables when not provided", async () => {
+    stubFetch({
+      data: {
+        issueCreate: {
+          success: true,
+          issue: { id: "issue-uuid", identifier: "SIG-4", url: "https://linear.app/team/issue/SIG-4" },
+        },
+      },
+    })
+
+    await client.createIssue({ teamId: "team-uuid", title: "Unassigned issue" })
+
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const postedBody = JSON.parse(init.body as string) as { variables: { input: Record<string, unknown> } }
+    expect(postedBody.variables.input).not.toHaveProperty("assigneeId")
+  })
+
   it("returns { id, identifier, url } on a successful response", async () => {
     stubFetch({
       data: {

@@ -346,11 +346,15 @@ export class LinearClient {
    * Create a new Linear issue and return its id, identifier, and URL.
    * Used by the Slack agent thread→issue flow (SIG-196).
    * `description` is optional — omitted from the mutation input when not provided.
+   * `assigneeId` is optional (SIG-545 B3b) — when provided (e.g. the Sigilix agent
+   * user, so the Slack "implement this" flow self-assigns), it's included in the
+   * mutation input; omitted when undefined.
    */
   async createIssue(input: {
     teamId: string
     title: string
     description?: string
+    assigneeId?: string
   }): Promise<{ id: string; identifier: string; url: string }> {
     const mutation = /* GraphQL */ `
       mutation IssueCreate($input: IssueCreateInput!) {
@@ -364,11 +368,12 @@ export class LinearClient {
         }
       }
     `
-    const vars: { teamId: string; title: string; description?: string } = {
+    const vars: { teamId: string; title: string; description?: string; assigneeId?: string } = {
       teamId: input.teamId,
       title: input.title,
     }
     if (typeof input.description === "string") vars.description = input.description
+    if (typeof input.assigneeId === "string") vars.assigneeId = input.assigneeId
 
     const data = await this.gql<{
       issueCreate: { success: boolean; issue: { id: string; identifier: string; url: string } | null }

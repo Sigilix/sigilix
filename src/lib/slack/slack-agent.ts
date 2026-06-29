@@ -12,6 +12,7 @@ import { createAgentTools } from "@/src/lib/agent-tools"
 import { makeKvTelemetrySink } from "@/src/lib/agent-telemetry-kv"
 import { buildClient, parseGithubMentionResponse } from "@/src/lib/github-mention"
 import { buildLinearAuth, LinearClient } from "@/src/lib/linear"
+import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { triageIssue } from "@/src/lib/triage"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
 import type { SlackMemoryScope } from "@/src/lib/slack/slack-memory"
@@ -47,7 +48,10 @@ export interface SlackMentionContext {
 
 export interface SlackAgentResult {
   reply: string
-  action: { kind: "qa" } | { kind: "linear-triage"; issueUrl: string; identifier: string }
+  action:
+    | { kind: "qa" }
+    | { kind: "linear-triage"; issueUrl: string; identifier: string }
+    | { kind: "implement"; issueUrl: string; identifier: string; dispatched: boolean }
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -69,6 +73,10 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
   }
 
   const intent = detectSlackIntent(ctx.mentionText)
+
+  if (intent.kind === "implement") {
+    return runImplement(env, ctx, memScope, primary)
+  }
 
   if (intent.kind === "linear-triage") {
     return runLinearTriage(env, ctx, memScope, primary)
@@ -170,20 +178,7 @@ async function runLinearTriage(
     return { reply, action: { kind: "qa" } }
   }
 
-  const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-
-  // Summarize the thread into a Linear issue title + description.
-  const summarizePrompt = buildTriageSummarizePrompt(ctx.mentionText, ctx.threadText)
-  const { text: summaryText } = await generate({
-    model,
-    prompt: summarizePrompt,
-    apiKey: env.OLLAMA_API_KEY,
-    format: TRIAGE_SUMMARIZE_SCHEMA as unknown as Record<string, unknown>,
-  })
-
-  const summary = parseTriageSummary(summaryText)
-  const title = summary?.title ?? ctx.mentionText.slice(0, 100)
-  const description = summary?.description
+  const { title, description } = await summarizeThreadToIssue(env, ctx)
 
   // Create the Linear issue.
   const auth = await buildLinearAuth(env)
@@ -215,7 +210,99 @@ async function runLinearTriage(
   }
 }
 
+// ─── Implement path (SIG-545 B3b) ──────────────────────────────────────────────
+
+/**
+ * The PRIMARY free-tier flow: when a user asks Sigilix in Slack to implement /
+ * build something, create a Linear ticket SELF-ASSIGNED to the Sigilix agent user,
+ * then dispatch the agent-runner (minimal engine) to implement it + open a PR.
+ *
+ * SHIPS DARK: dispatch is gated by the runner mode (dispatchTicketImplementation →
+ * dispatchAgentRun's own gate). With the runner off, the ticket is still created and
+ * the reply degrades to the same "created ticket" form as triage — so a dark deploy
+ * still does something useful.
+ */
+async function runImplement(
+  env: Env,
+  ctx: SlackMentionContext,
+  memScope: SlackMemoryScope,
+  primary: SlackScope["repos"][number],
+): Promise<SlackAgentResult> {
+  const { scope } = ctx
+
+  if (!scope.linearTeam) {
+    const reply = formatSigilixReply(
+      "_Linear is not configured for this channel, so I can't open a ticket to implement this. Ask your workspace admin to add a `linearTeam` to the Sigilix scope map._",
+    )
+    return { reply, action: { kind: "qa" } }
+  }
+
+  // Summarize the thread into a Linear issue title + description (same step as triage).
+  const { title, description } = await summarizeThreadToIssue(env, ctx)
+
+  // Create the Linear issue, self-assigned to the Sigilix agent user so the free-tier
+  // user never has to assign it by hand. assigneeId is omitted when the env is unset.
+  const auth = await buildLinearAuth(env)
+  const linear = new LinearClient(auth)
+  const issue = await linear.createIssue({
+    teamId: scope.linearTeam,
+    title,
+    ...(description ? { description } : {}),
+    ...(env.OPENCLAW_LINEAR_AGENT_USER_ID ? { assigneeId: env.OPENCLAW_LINEAR_AGENT_USER_ID } : {}),
+  })
+
+  // Dispatch the agent-runner on the minimal engine (shares idempotency + model +
+  // dispatch with the B3 webhook path). Dark unless the runner mode is "on".
+  const { dispatched } = await dispatchTicketImplementation(env, {
+    owner: primary.owner,
+    repo: primary.repo,
+    installationId: primary.installationId,
+    ticket: { identifier: issue.identifier, title, body: description ?? "", url: issue.url },
+    dedupeId: issue.id,
+  })
+
+  const reply = dispatched
+    ? formatSigilixReply(
+        `🛠️ Created <${issue.url}|${issue.identifier}> — Sigilix is implementing it; a PR is on the way.`,
+      )
+    : formatSigilixReply(`Created Linear issue: *<${issue.url}|${issue.identifier}>* — ${title}`)
+
+  // Memory capture — non-fatal.
+  const captureContent = `implement: ${title} → ${issue.identifier} (${issue.url}) dispatched=${dispatched}`
+  await captureSlackMemory(env, memScope, { kind: "task_state", content: captureContent }).catch(() => {})
+
+  return {
+    reply,
+    action: { kind: "implement", issueUrl: issue.url, identifier: issue.identifier, dispatched },
+  }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Summarize the Slack thread into a Linear issue `{ title, description }` via the
+ * model. Shared by the triage + implement paths so the LLM-call shape never drifts.
+ * Falls back to the (truncated) mention text as the title when the model output
+ * can't be parsed.
+ */
+async function summarizeThreadToIssue(
+  env: Env,
+  ctx: SlackMentionContext,
+): Promise<{ title: string; description: string | undefined }> {
+  const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+  const summarizePrompt = buildTriageSummarizePrompt(ctx.mentionText, ctx.threadText)
+  const { text: summaryText } = await generate({
+    model,
+    prompt: summarizePrompt,
+    apiKey: env.OLLAMA_API_KEY,
+    format: TRIAGE_SUMMARIZE_SCHEMA as unknown as Record<string, unknown>,
+  })
+
+  const summary = parseTriageSummary(summaryText)
+  const title = summary?.title ?? ctx.mentionText.slice(0, 100)
+  const description = summary?.description
+  return { title, description }
+}
 
 function buildInitialUserMessage(ctx: SlackMentionContext, recalled: string[]): string {
   const lines: string[] = []

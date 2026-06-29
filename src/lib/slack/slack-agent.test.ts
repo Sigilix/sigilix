@@ -39,6 +39,13 @@ vi.mock("@/src/lib/linear", () => ({
   buildLinearAuth: vi.fn(async () => ({ apiKey: "fake-linear-key" })),
 }))
 
+const { dispatchTicketImplementationMock } = vi.hoisted(() => ({
+  dispatchTicketImplementationMock: vi.fn(async () => ({ dispatched: true })),
+}))
+vi.mock("@/src/lib/linear-agent-run", () => ({
+  dispatchTicketImplementation: dispatchTicketImplementationMock,
+}))
+
 const { triageIssueMock } = vi.hoisted(() => ({
   triageIssueMock: vi.fn(async () => undefined),
 }))
@@ -290,6 +297,91 @@ describe("runSlackAgent — linear-triage path", () => {
     await runSlackAgent(env, ctx)
 
     expect(runAgentLoopMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("runSlackAgent — implement path (SIG-545 B3b)", () => {
+  it("creates a self-assigned Linear issue + dispatches the runner + replies dispatched", async () => {
+    const env = makeEnv()
+    env.OPENCLAW_LINEAR_AGENT_USER_ID = "agent-user-uuid"
+    const ctx = makeCtx({ mentionText: "implement this" })
+    const result = await runSlackAgent(env, ctx)
+
+    // Issue created with the team + the agent assigneeId.
+    expect(createIssueMock).toHaveBeenCalledOnce()
+    const issueArgs = (createIssueMock.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+    expect(issueArgs.teamId).toBe("team-uuid-1")
+    expect(issueArgs.assigneeId).toBe("agent-user-uuid")
+
+    // Runner dispatched on the scoped repo, keyed off the new issue id.
+    expect(dispatchTicketImplementationMock).toHaveBeenCalledOnce()
+    const dispatchArgs = (dispatchTicketImplementationMock.mock.calls[0] as unknown[])[1] as Record<string, unknown>
+    expect(dispatchArgs.owner).toBe("sigilix")
+    expect(dispatchArgs.repo).toBe("sigilix")
+    expect(dispatchArgs.installationId).toBe(111)
+    expect(dispatchArgs.dedupeId).toBe("issue-id-1")
+
+    expect(result.reply).toContain("implementing it")
+    expect(result.action.kind).toBe("implement")
+    if (result.action.kind === "implement") {
+      expect(result.action.dispatched).toBe(true)
+      expect(result.action.identifier).toBe("SIG-42")
+      expect(result.action.issueUrl).toBe("https://linear.app/test/issue/SIG-42")
+    }
+
+    // qa loop never runs on the implement path.
+    expect(runAgentLoopMock).not.toHaveBeenCalled()
+  })
+
+  it("omits assigneeId when OPENCLAW_LINEAR_AGENT_USER_ID is unset", async () => {
+    const env = makeEnv()
+    const ctx = makeCtx({ mentionText: "build this" })
+    await runSlackAgent(env, ctx)
+
+    const issueArgs = (createIssueMock.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+    expect(issueArgs).not.toHaveProperty("assigneeId")
+  })
+
+  it("replies with the created-ticket form (dark) when dispatch is not dispatched", async () => {
+    dispatchTicketImplementationMock.mockResolvedValueOnce({ dispatched: false })
+    const env = makeEnv()
+    const ctx = makeCtx({ mentionText: "implement this" })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(createIssueMock).toHaveBeenCalledOnce()
+    expect(result.reply).toContain("Created Linear issue")
+    expect(result.action.kind).toBe("implement")
+    if (result.action.kind === "implement") expect(result.action.dispatched).toBe(false)
+  })
+
+  it("does NOT create or dispatch when linearTeam is null (replies Linear not configured)", async () => {
+    const env = makeEnv()
+    const ctx = makeCtx({
+      mentionText: "implement this",
+      scope: {
+        teamId: "T001",
+        channelId: "C001",
+        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        linearTeam: null,
+      },
+    })
+    const result = await runSlackAgent(env, ctx)
+
+    expect(createIssueMock).not.toHaveBeenCalled()
+    expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+    expect(result.reply).toContain("not configured")
+    expect(result.action.kind).toBe("qa")
+  })
+
+  it("captures memory after implement", async () => {
+    const env = makeEnv()
+    const ctx = makeCtx({ mentionText: "implement this" })
+    await runSlackAgent(env, ctx)
+
+    expect(captureSlackMemoryMock).toHaveBeenCalledOnce()
+    const captureArgs = (captureSlackMemoryMock.mock.calls[0] as unknown[])[2] as Record<string, unknown>
+    expect(captureArgs.kind).toBe("task_state")
+    expect(captureArgs.content).toContain("SIG-42")
   })
 })
 

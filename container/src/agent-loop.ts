@@ -1,8 +1,10 @@
 /**
  * Minimal in-container GLM-5.2 edit-loop.
  *
- * Calls a model via OpenRouter chat-completions in a bounded tool-use loop.
- * Tools operate within a sandboxed repo dir; paths that escape are rejected.
+ * Calls a model via an OpenAI-compatible chat-completions endpoint (OpenRouter
+ * by default, or Ollama Turbo when model.baseUrl is "https://ollama.com/v1") in
+ * a bounded tool-use loop. Tools operate within a sandboxed repo dir; paths that
+ * escape are rejected.
  *
  * TOKEN SAFETY: model.key is placed only in the Authorization header and is
  * never written to any log, error message, or tool result.

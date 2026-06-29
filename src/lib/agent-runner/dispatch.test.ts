@@ -181,6 +181,39 @@ describe("dispatchAgentRun", () => {
     expect(body.grounding).toBe("some grounding context")
   })
 
+  // ── (b2) model.baseUrl threading (Ollama-Turbo vs OpenRouter default) ────────
+
+  it('mode "on": forwards model.baseUrl into the task packet when present', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const input: AgentRunTaskInput = {
+      ...SAMPLE_INPUT,
+      model: { id: "glm-5.2:cloud", key: "sk-ollama-secret-key", baseUrl: "https://ollama.com/v1" },
+    }
+    await dispatchAgentRun(makeEnv("on"), input)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    const model = body.model as Record<string, unknown>
+    expect(model.id).toBe("glm-5.2:cloud")
+    expect(model.baseUrl).toBe("https://ollama.com/v1")
+  })
+
+  it('mode "on": omits baseUrl from the packet when absent (container applies the OpenRouter default)', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    const model = body.model as Record<string, unknown>
+    expect(model.baseUrl).toBeUndefined()
+  })
+
   // ── (c) secrets never appear in console output ───────────────────────────────
 
   it("minted token and model.key never appear in any console output", async () => {

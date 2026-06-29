@@ -44,6 +44,11 @@ export interface TaskPacket {
     id: string;
     /** Model API key — never logged. */
     key: string;
+    /**
+     * OpenAI-compatible chat-completions base URL. Defaults to OpenRouter in
+     * the edit loop; set to "https://ollama.com/v1" to run on Ollama Turbo.
+     */
+    baseUrl?: string;
   };
   caps: {
     maxModelCalls: number;

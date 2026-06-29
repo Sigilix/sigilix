@@ -70,15 +70,18 @@ const SAMPLE_INPUT: AgentRunTaskInput = {
   caps: { maxModelCalls: 20, maxTokens: 1_500_000, timeoutMs: 1_200_000 },
 }
 
-function makeEnv(mode?: string): Env {
+function makeEnv(mode?: string, extra?: Record<string, unknown>): Env {
   return {
     OPENCLAW_AGENT_RUNNER_MODE: mode,
     OPENCLAW_STATE: {} as KVNamespace,
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-pem-key",
     AGENT_RUNNER: {} as DurableObjectNamespace,
+    ...extra,
   } as unknown as Env
 }
+
+const GROUNDING_API_KEY = "sk-sigilix-grounding-secret"
 
 function makeStub(
   fetchImpl?: () => Promise<Response>,
@@ -238,6 +241,87 @@ describe("dispatchAgentRun", () => {
     const req = stub.fetch.mock.calls[0]![0]!
     const body = (await req.json()) as Record<string, unknown>
     expect(body.engine).toBe("full")
+  })
+
+  // ── (b4) grounding wiring (SIG-545 B2) — resolved from env, not the caller ───
+
+  it('mode "on": packet has NO sigilix block when grounding env is unset', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.sigilix).toBeUndefined()
+  })
+
+  it('mode "on": builds sigilix {endpoint, apiKey, repoSlug} from env when both are set', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const env = makeEnv("on", {
+      OPENCLAW_AGENT_GROUNDING_ENDPOINT: "https://sigilix.example.workers.dev",
+      OPENCLAW_SIGILIX_API_KEY: GROUNDING_API_KEY,
+    })
+    await dispatchAgentRun(env, SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.sigilix).toEqual({
+      endpoint: "https://sigilix.example.workers.dev",
+      apiKey: GROUNDING_API_KEY,
+      repoSlug: "Sigilix/sigilix",
+    })
+  })
+
+  it('mode "on": omits sigilix when only the endpoint is set (no bearer)', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const env = makeEnv("on", { OPENCLAW_AGENT_GROUNDING_ENDPOINT: "https://sigilix.example.workers.dev" })
+    await dispatchAgentRun(env, SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.sigilix).toBeUndefined()
+  })
+
+  it('mode "on": omits sigilix when only the bearer is set (no endpoint) — the prod-likely partial state', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    // OPENCLAW_SIGILIX_API_KEY is already set in prod for /v1/review; the grounding
+    // endpoint may not be set yet — must fail closed (no half-wired grounding).
+    const env = makeEnv("on", { OPENCLAW_SIGILIX_API_KEY: GROUNDING_API_KEY })
+    await dispatchAgentRun(env, SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.sigilix).toBeUndefined()
+  })
+
+  it("the grounding apiKey never appears in any console output", async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const env = makeEnv("on", {
+      OPENCLAW_AGENT_GROUNDING_ENDPOINT: "https://sigilix.example.workers.dev",
+      OPENCLAW_SIGILIX_API_KEY: GROUNDING_API_KEY,
+    })
+    await dispatchAgentRun(env, SAMPLE_INPUT)
+
+    const allOutput = [
+      ...spyLog.mock.calls.flat().map(String),
+      ...spyWarn.mock.calls.flat().map(String),
+      ...spyError.mock.calls.flat().map(String),
+    ].join("\n")
+    expect(allOutput).not.toContain(GROUNDING_API_KEY)
   })
 
   // ── (c) secrets never appear in console output ───────────────────────────────

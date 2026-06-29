@@ -137,6 +137,8 @@ export default tseslint.config(
       // Local-only handoff briefs + research scratch (gitignored, but
       // present in dev checkouts).
       ".claude/**",
+      // Separate Node sub-project — has its own tooling and tsconfig.
+      "container/**",
     ],
   },
 )

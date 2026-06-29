@@ -46,13 +46,18 @@ export interface AgentRunTaskInput {
   grounding?: string
   /**
    * Model to run inside the container.
-   * id  — e.g. "z-ai/glm-5.2" (slash → OpenRouter routing)
-   * key — Sigilix's OpenRouter API key or a BYO portal key.
+   * id      — e.g. "z-ai/glm-5.2" (OpenRouter) or "glm-5.2:cloud" (Ollama Turbo).
+   * key     — the API key for the chosen provider (OpenRouter, BYO portal, or Ollama Turbo).
+   * baseUrl — OpenAI-compatible chat-completions base; defaults to OpenRouter in the
+   *           container. Set to "https://ollama.com/v1" to run on Ollama Turbo.
+   *           This is scoped to the agent-runner ONLY — it does not affect the
+   *           PR-review ensemble's model routing.
    * NEVER logged.
    */
   model: {
     id: string
     key: string
+    baseUrl?: string
   }
   /** Resource caps enforced inside the container */
   caps: {

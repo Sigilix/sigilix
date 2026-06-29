@@ -56,6 +56,7 @@ import {
   handleAdminPurgeStaleIndexesRoute,
 } from "@/src/lib/admin-index-route"
 import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-retrieval-probe-route"
+import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib/agent-runner/admin-agent-run-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
@@ -342,6 +343,14 @@ export default {
     // Supports ?dryRun=true. Idempotent re-runs.
     if (request.method === "POST" && url.pathname === "/admin/migrate-review-memory-to-repo-id") {
       return handleAdminMigrateReviewMemoryToRepoIdRoute(request, env)
+    }
+
+    // SIG-545 B1 proof harness: admin-gated manual agent-runner dispatch + status.
+    if (request.method === "POST" && url.pathname === "/admin/agent-run") {
+      return handleAdminAgentRunRoute(request, env)
+    }
+    if (request.method === "GET" && url.pathname === "/admin/agent-run-status") {
+      return handleAdminAgentStatusRoute(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/linear/webhook") {

@@ -11,6 +11,7 @@ import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { triageIssue } from "@/src/lib/triage"
+import { runLinearAgentRun } from "@/src/lib/linear-agent-run"
 import { handleMention } from "@/src/lib/mention-reply"
 import { renderSlashCommandAck, type SlashCommand } from "@/src/lib/slash-commands"
 import { handlePrOverview } from "@/src/lib/triage-pr-overview"
@@ -974,6 +975,10 @@ export async function dispatchJob(
     case "corpus-issue-upsert":
       // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
       return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
+    case "linear-agent-run":
+      // SIG-545 B3: a Linear issue assigned to the Sigilix agent → dispatch the
+      // agent-runner on the SAFE minimal engine to implement it + open a PR.
+      return runLinearAgentRun(job.issueId, env)
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at

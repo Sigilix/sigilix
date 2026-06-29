@@ -11,6 +11,7 @@ import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
 import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
+import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 
 export interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
@@ -52,6 +53,16 @@ export interface LinearWebhookPayload {
      *  ancestor is Sigilix-authored. Linear's Comment.create webhook
      *  populates `issueId` directly. */
     issueId?: string
+    /** SIG-545 B3: the issue's CURRENT assignee user id (null when
+     *  unassigned). On an Issue.update assigning the Sigilix agent user,
+     *  this equals OPENCLAW_LINEAR_AGENT_USER_ID — the assignment trigger. */
+    assigneeId?: string | null
+    /** SIG-545 B3: Linear sends `updatedFrom` on `update` actions with the
+     *  PREVIOUS values of the fields that changed this update. We only treat
+     *  an assignment as a trigger when `assigneeId` actually changed this
+     *  update (its own key is present here) so the run doesn't re-fire on
+     *  unrelated updates while the issue is already assigned to the agent. */
+    updatedFrom?: { assigneeId?: string | null; [k: string]: unknown }
   }
   webhookTimestamp: number
 }
@@ -93,6 +104,33 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
         )
       }),
     )
+  }
+
+  // SIG-545 B3: Issue.update assigning the issue to the Sigilix agent user →
+  // dispatch the agent-runner (on the SAFE minimal engine) to implement it.
+  // DARK + fail-closed: fires ONLY when ALL hold —
+  //   (1) OPENCLAW_LINEAR_AGENT_RUN_MODE === "on",
+  //   (2) OPENCLAW_LINEAR_AGENT_USER_ID is set,
+  //   (3) the NEW assignee equals that user id, AND
+  //   (4) the assignee actually CHANGED this update (Linear includes
+  //       `updatedFrom.assigneeId` only when assignee was among the changed
+  //       fields) — so it doesn't re-fire on unrelated updates while the issue
+  //       is already assigned to the agent.
+  // Placed after the corpus-upsert block (which fire-and-forgets on any Issue
+  // update) and independent of the Issue.create branch below.
+  if (payload.type === "Issue" && payload.action === "update") {
+    const agentUserId = env.OPENCLAW_LINEAR_AGENT_USER_ID
+    const updatedFrom = payload.data.updatedFrom
+    if (
+      resolveLinearAgentRunMode(env) === "on" &&
+      agentUserId &&
+      payload.data.assigneeId === agentUserId &&
+      updatedFrom !== undefined &&
+      Object.prototype.hasOwnProperty.call(updatedFrom, "assigneeId")
+    ) {
+      await env.OPENCLAW_JOBS.send({ type: "linear-agent-run", issueId: payload.data.id })
+      return new Response("queued\n", { status: 202 })
+    }
   }
 
   // Issue.create → enqueue full triage pipeline.

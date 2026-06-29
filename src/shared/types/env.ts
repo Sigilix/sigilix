@@ -945,6 +945,11 @@ export interface Env {
   //                                    exact string "on" enables dispatch; any
   //                                    other value keeps the container configured
   //                                    but never invoked (fail-closed).
+  //   OPENCLAW_AGENT_RUNNER_ENGINE   — "minimal" (default/unset) | "full" (SIG-545
+  //                                    B2). Selects the in-container engine: the
+  //                                    bounded 5-tool loop vs the full CLI agent.
+  //                                    Fail-closed to "minimal".
   AGENT_RUNNER: DurableObjectNamespace
   OPENCLAW_AGENT_RUNNER_MODE?: string
+  OPENCLAW_AGENT_RUNNER_ENGINE?: string
 }

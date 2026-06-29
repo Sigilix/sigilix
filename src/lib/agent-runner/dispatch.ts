@@ -15,7 +15,7 @@
 
 import { getContainer } from "@cloudflare/containers"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import { resolveAgentRunnerMode } from "@/src/lib/agent-runner/mode"
+import { resolveAgentRunnerMode, type AgentRunnerEngine } from "@/src/lib/agent-runner/mode"
 import type { AgentRunnerContainer, AgentRunRecord } from "@/src/do/agent-runner-container"
 import type { Env } from "@/src/shared/types/env"
 
@@ -65,6 +65,12 @@ export interface AgentRunTaskInput {
     maxTokens: number
     timeoutMs: number
   }
+  /**
+   * Which in-container engine runs the task (SIG-545 B2). Defaults to "minimal"
+   * (the bounded 5-tool loop) when absent. "full" runs the Sigilix CLI agent —
+   * gated to trusted callers (the admin route / trusted-repo allow-list).
+   */
+  engine?: AgentRunnerEngine
 }
 
 // ── Internal: task-packet shape sent over the wire ────────────────────────────
@@ -82,6 +88,8 @@ interface TaskPacket {
   grounding: string | undefined
   model: AgentRunTaskInput["model"] // key NEVER logged
   caps: AgentRunTaskInput["caps"]
+  /** Selected engine; always resolved to a concrete value before dispatch. */
+  engine: AgentRunnerEngine
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -142,6 +150,7 @@ export async function dispatchAgentRun(
       ticket: input.ticket,
       grounding: input.grounding,
       model: input.model, // model.key is never logged
+      engine: input.engine ?? "minimal",
       caps: input.caps,
     }
 

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   commitAll: vi.fn(),
   pushBranch: vi.fn(),
   runEditLoop: vi.fn(),
+  runCliAgent: vi.fn(),
   openPullRequest: vi.fn(),
 }));
 
@@ -30,6 +31,10 @@ vi.mock("./git.js", () => ({
 
 vi.mock("./agent-loop.js", () => ({
   runEditLoop: mocks.runEditLoop,
+}));
+
+vi.mock("./cli-agent.js", () => ({
+  runCliAgent: mocks.runCliAgent,
 }));
 
 vi.mock("./github-pr.js", () => ({
@@ -82,6 +87,7 @@ beforeEach(() => {
   mocks.createBranch.mockResolvedValue(undefined);
   mocks.commitAll.mockResolvedValue({ committed: true });
   mocks.pushBranch.mockResolvedValue(undefined);
+  mocks.runCliAgent.mockResolvedValue({ changed: false, modelCalls: 0, tokens: 0, stoppedReason: "done" });
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -409,5 +415,49 @@ describe("runTask", () => {
     expect(result.status).toBe("error");
     expect(result.error).toContain("422");
     expect(mocks.rm).toHaveBeenCalledWith(FAKE_TMP_DIR, { recursive: true, force: true });
+  });
+
+  // ── engine switch (SIG-545 B2) ────────────────────────────────────────────────
+
+  it("default engine (unset) runs the minimal loop, NOT the CLI agent", async () => {
+    mocks.runEditLoop.mockResolvedValue({ changed: false, modelCalls: 1, tokens: 10, stoppedReason: "done" });
+
+    await runTask(makePacket());
+
+    expect(mocks.runEditLoop).toHaveBeenCalledOnce();
+    expect(mocks.runCliAgent).not.toHaveBeenCalled();
+  });
+
+  it('engine "minimal" runs the minimal loop, NOT the CLI agent', async () => {
+    mocks.runEditLoop.mockResolvedValue({ changed: false, modelCalls: 1, tokens: 10, stoppedReason: "done" });
+
+    await runTask(makePacket({ engine: "minimal" }));
+
+    expect(mocks.runEditLoop).toHaveBeenCalledOnce();
+    expect(mocks.runCliAgent).not.toHaveBeenCalled();
+  });
+
+  it('engine "full" runs the CLI agent, NOT the minimal loop, and forwards sigilix grounding', async () => {
+    mocks.runCliAgent.mockResolvedValue({ changed: true, modelCalls: 3, tokens: 0, stoppedReason: "done" });
+    mocks.openPullRequest.mockResolvedValue({ url: "https://github.com/acme/my-service/pull/7", number: 7 });
+
+    const sigilix = { endpoint: "https://w.dev", apiKey: "sk-g", repoSlug: "acme/my-service" };
+    const result = await runTask(makePacket({ engine: "full", sigilix }));
+
+    expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    expect(mocks.runEditLoop).not.toHaveBeenCalled();
+    expect(mocks.runCliAgent.mock.calls[0]![0]).toMatchObject({ sigilix });
+    expect(result.status).toBe("opened");
+  });
+
+  it('engine "full": a non-"done" stop (timeout) does NOT open a PR even with changes', async () => {
+    // A SIGKILLed CLI run can leave a half-applied edit (changed:true) — must not become a PR.
+    mocks.runCliAgent.mockResolvedValue({ changed: true, modelCalls: 2, tokens: 0, stoppedReason: "timeout" });
+
+    const result = await runTask(makePacket({ engine: "full" }));
+
+    expect(result.status).toBe("no-change");
+    expect(mocks.commitAll).not.toHaveBeenCalled();
+    expect(mocks.openPullRequest).not.toHaveBeenCalled();
   });
 });

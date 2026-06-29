@@ -214,6 +214,32 @@ describe("dispatchAgentRun", () => {
     expect(model.baseUrl).toBeUndefined()
   })
 
+  // ── (b3) engine selector (SIG-545 B2) ───────────────────────────────────────
+
+  it('mode "on": defaults the packet engine to "minimal" when the input omits it', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.engine).toBe("minimal")
+  })
+
+  it('mode "on": forwards engine "full" into the packet', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    await dispatchAgentRun(makeEnv("on"), { ...SAMPLE_INPUT, engine: "full" })
+
+    const req = stub.fetch.mock.calls[0]![0]!
+    const body = (await req.json()) as Record<string, unknown>
+    expect(body.engine).toBe("full")
+  })
+
   // ── (c) secrets never appear in console output ───────────────────────────────
 
   it("minted token and model.key never appear in any console output", async () => {

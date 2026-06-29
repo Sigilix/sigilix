@@ -4,12 +4,14 @@
 // are sourced server-side and NEVER returned/logged.
 import { requireBearerToken } from "@/src/lib/auth-bearer"
 import { dispatchAgentRun, getAgentRunStatus } from "@/src/lib/agent-runner/dispatch"
+import { resolveAgentRunnerEngine } from "@/src/lib/agent-runner/mode"
 import type { Env } from "@/src/shared/types/env"
 
 /** POST /admin/agent-run — dispatch one agent-runner task. Body:
  *  { owner, repo, installationId, baseBranch?, ticket?:{identifier,title,body,url},
- *    runId?, caps?, model?:{ id?, baseUrl? } }
- *  model defaults to Ollama Turbo (glm-5.2:cloud @ https://ollama.com/v1). */
+ *    runId?, caps?, model?:{ id?, baseUrl? }, engine?: "minimal"|"full" }
+ *  model defaults to Ollama Turbo (glm-5.2:cloud @ https://ollama.com/v1);
+ *  engine defaults to the env (OPENCLAW_AGENT_RUNNER_ENGINE, fail-closed to minimal). */
 export async function handleAdminAgentRunRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_ADMIN_TOKEN
   if (!token) return new Response("admin token not configured\n", { status: 503 })
@@ -62,6 +64,8 @@ export async function handleAdminAgentRunRoute(request: Request, env: Env): Prom
   const ticketIn = (body.ticket ?? {}) as Record<string, unknown>
   const capsIn = (body.caps ?? {}) as Record<string, unknown>
   const grounding = typeof body.grounding === "string" ? body.grounding : undefined
+  // Engine: explicit body value (admin is trusted) or the env default (fail-closed to minimal).
+  const engine = body.engine === "full" || body.engine === "minimal" ? body.engine : resolveAgentRunnerEngine(env)
 
   const result = await dispatchAgentRun(env, {
     runId: typeof body.runId === "string" ? body.runId : crypto.randomUUID(),
@@ -77,6 +81,7 @@ export async function handleAdminAgentRunRoute(request: Request, env: Env): Prom
     },
     ...(grounding !== undefined ? { grounding } : {}),
     model: { id: modelId, key, baseUrl },
+    engine,
     caps: {
       maxModelCalls: typeof capsIn.maxModelCalls === "number" ? capsIn.maxModelCalls : 12,
       maxTokens: typeof capsIn.maxTokens === "number" ? capsIn.maxTokens : 800_000,

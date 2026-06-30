@@ -537,7 +537,7 @@ export function buildComparisonSource(buggyExpr: string, fixedExpr: string): str
   // object (Promise/generator/Map/Set/Date/RegExp/class instance) is branded opaque so two
   // different opaque values can't FALSELY "agree" via a `"{}"` collapse.
   return (
-    `function canon(v){if(v===null||typeof v!=="object")return JSON.stringify(v);` +
+    `function canon(v){if(typeof v==="function"){opaque=true;return "__OPAQUE__";}if(v===null||typeof v!=="object")return JSON.stringify(v);` +
     `if(Array.isArray(v))return "["+v.map(canon).join(",")+"]";` +
     `var proto=Object.getPrototypeOf(v);if(proto!==Object.prototype&&proto!==null){opaque=true;return "__OPAQUE__";}` +
     `var ks=Object.keys(v).sort();return "{"+ks.map(function(k){return JSON.stringify(k)+":"+canon(v[k]);}).join(",")+"}";}` +

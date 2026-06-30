@@ -4,7 +4,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
 import { estimateToPoints, severityToPriority, LinearClient, buildLinearAgentClient } from "@/src/lib/linear"
-import { LINEAR_AGENT_TOKEN_KEY } from "@/src/lib/linear-agent-oauth"
+import { __resetBrokerClientCacheForTests } from "@/src/lib/linear-token-broker-client"
+import type { BrokerTokenResult } from "@/src/do/linear-token-broker"
 import type { Env } from "@/src/shared/types/env"
 
 describe("severityToPriority", () => {
@@ -130,24 +131,59 @@ describe("LinearClient.createAgentActivity", () => {
   })
 })
 
-// ─── buildLinearAgentClient ─────────────────────────────────────────────────
+// ─── buildLinearAgentClient (SIG-144 slice 2: broker-backed) ────────────────
 describe("buildLinearAgentClient", () => {
-  function makeKv(seed?: Record<string, string>) {
-    const store = new Map<string, string>(Object.entries(seed ?? {}))
-    return { get: vi.fn(async (k: string) => store.get(k) ?? null) }
-  }
-  function makeEnv(kv: ReturnType<typeof makeKv>): Pick<Env, "OPENCLAW_STATE"> {
-    return { OPENCLAW_STATE: kv as unknown as KVNamespace }
+  // Minimal fake LINEAR_TOKEN_BROKER DO stub — mirrors repo-graph-client.test.ts /
+  // provider-cooldown-client.test.ts: a hand-built namespace exposing only
+  // idFromName/get, returning a stub whose getValidToken is the test's mock.
+  function makeEnv(getValidToken: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>): Env {
+    return {
+      LINEAR_TOKEN_BROKER: {
+        idFromName: (n: string) => ({ toString: () => n }),
+        get: () => ({ getValidToken }),
+      },
+    } as unknown as Env
   }
 
-  it("returns a LinearClient when an agent token is stored", async () => {
-    const env = makeEnv(makeKv({ [LINEAR_AGENT_TOKEN_KEY]: JSON.stringify({ accessToken: "tok", installedAt: 1 }) }))
+  beforeEach(() => {
+    // The broker client's isolate-level read cache is module-level (persists
+    // across tests in this file) — reset it so one test's cached token can't
+    // leak into the next.
+    __resetBrokerClientCacheForTests()
+    // The broker client logs a neutral breadcrumb on the no-token/RPC-error
+    // paths — silence it here (asserted in linear-token-broker-client.test.ts).
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("returns a LinearClient when the broker reports a valid token", async () => {
+    const env = makeEnv(async () => ({ ok: true, accessToken: "tok" }))
     const client = await buildLinearAgentClient(env)
     expect(client).toBeInstanceOf(LinearClient)
   })
 
-  it("returns null when no agent token is installed", async () => {
-    const client = await buildLinearAgentClient(makeEnv(makeKv()))
+  it("returns null when the broker reports not-installed", async () => {
+    const env = makeEnv(async () => ({ ok: false, reason: "not-installed" }))
+    const client = await buildLinearAgentClient(env)
     expect(client).toBeNull()
+  })
+
+  it("returns null (never throws) when the broker DO call itself throws", async () => {
+    const env = makeEnv(async () => {
+      throw new Error("DO unreachable")
+    })
+    await expect(buildLinearAgentClient(env)).resolves.toBeNull()
+  })
+
+  it("calls getValidToken with readOnly: true — this hot path must never trigger a refresh", async () => {
+    let captured: { readOnly: boolean } | undefined
+    const env = makeEnv(async (args) => {
+      captured = args
+      return { ok: true, accessToken: "tok" }
+    })
+    await buildLinearAgentClient(env)
+    expect(captured).toEqual({ readOnly: true })
   })
 })

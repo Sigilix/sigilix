@@ -22,6 +22,7 @@
 //     logged. Only neutral status strings reach console on error.
 
 import type { Env } from "@/src/shared/types/env"
+import { installAgentTokenToBroker } from "@/src/lib/linear-token-broker-client"
 
 const TOKEN_ENDPOINT = "https://api.linear.app/oauth/token"
 const AUTHORIZE_ENDPOINT = "https://linear.app/oauth/authorize"
@@ -372,12 +373,31 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
     return text("Sigilix install failed while saving the install. Please try again.", 502)
   }
 
+  // SIG-144 slice 2: bootstrap the LinearTokenBroker DO with the same record so
+  // buildLinearAgentClient (which now reads through the broker, not KV) sees a
+  // fresh install immediately. Best-effort / additive — KV (above) stays this
+  // callback's source of truth and the install already succeeded, so a broker
+  // bootstrap fault must NOT fail the response; it only means the broker stays
+  // not-installed until the next successful install. `installAgentTokenToBroker`
+  // itself never throws, but the call is still guarded here — defense in depth
+  // for the one response in this flow that must always reach the user.
+  let brokerInstalled = false
+  try {
+    brokerInstalled = await installAgentTokenToBroker(env, record)
+  } catch {
+    // fall through — brokerInstalled stays false, logged below
+  }
+  if (!brokerInstalled) {
+    console.warn(JSON.stringify({ event: "linear-agent-broker-install-failed" }))
+  }
+
   console.log(
     JSON.stringify({
       event: "linear-agent-installed",
       scopePresent: !!record.scope,
       hasExpiry: typeof record.expiresAt === "number",
       hasRefresh: !!record.refreshToken,
+      brokerInstalled,
       // access_token / refresh_token / code / client_secret intentionally excluded
     }),
   )

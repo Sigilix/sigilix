@@ -14,10 +14,15 @@
 // in-flight POST globally — the cross-isolate gap is closed because there is exactly
 // one isolate for the agent token.
 //
-// INERT in this slice: the class exists, compiles, deploys, and is tested, but
-// NOTHING calls it yet — buildLinearAgentClient / buildLinearAuth / the webhooks
-// still read the KV-backed token (linear-agent-oauth.ts) unchanged. A later slice
-// cuts callers over to this broker.
+// Slice 1 (this class) was INERT — it existed, compiled, deployed, and was tested,
+// but nothing called it. Slice 2 (src/lib/linear-token-broker-client.ts) cuts
+// `buildLinearAgentClient` (linear.ts) over to read through this broker (readOnly,
+// never refreshing from the hot ACK path) and bootstraps it on install/re-install
+// (`handleLinearOAuthCallback`). The agent-activity RUN path itself stays gated by
+// `OPENCLAW_LINEAR_AGENT_RUN_MODE` — orthogonal to this DO. `buildLinearAuth` and
+// the rest of the webhooks still use the unrelated client_credentials / KV paths.
+// A later slice removes the now-superseded KV-backed `getValidAgentToken` and adds
+// the 401-retry path that calls `forceRefreshViaBroker`.
 //
 // SECURITY: token + refresh-token material is NEVER logged. Every emit/alert here
 // carries only neutral booleans (hasRefresh/hasExpiry/scopePresent) and failure

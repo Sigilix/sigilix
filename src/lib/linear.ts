@@ -6,7 +6,7 @@
 // project-level field write.
 
 import { getAppActorToken } from "./linear-oauth"
-import { getValidAgentToken, type AgentTokenEnv } from "./linear-agent-oauth"
+import { getValidAgentTokenViaBroker, type LinearTokenBrokerEnv } from "@/src/lib/linear-token-broker-client"
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 
@@ -62,13 +62,16 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
  * lives on the authorization-code token, not the client_credentials token. Callers
  * treat null as "agent not installed → skip the activity post" (fail-safe).
  *
- * Uses `getValidAgentToken`, which refreshes the stored token when it is at/near
- * its 24h expiry — agent activities always go out on a fresh token. A null return
- * (not installed, or a refresh failure with no still-valid token) keeps the
- * existing fail-safe: skip the post, never fall back to a human key.
+ * SIG-144 slice 2: reads the token via `getValidAgentTokenViaBroker` (the
+ * LinearTokenBroker DO), NOT the KV-backed `getValidAgentToken` this used before.
+ * `readOnly: true` is deliberate — this is the hot ACK / agent-activity path, so
+ * it must NEVER trigger a refresh itself; the broker's own alarm keeps the token
+ * fresh, and a later slice adds a 401-retry path that forces one. A null return
+ * (not installed, or the broker reports a hard refresh failure) keeps the
+ * existing fail-safe: skip the post, never throw, never fall back to a human key.
  */
-export async function buildLinearAgentClient(env: AgentTokenEnv): Promise<LinearClient | null> {
-  const token = await getValidAgentToken(env)
+export async function buildLinearAgentClient(env: LinearTokenBrokerEnv): Promise<LinearClient | null> {
+  const token = await getValidAgentTokenViaBroker(env, { readOnly: true })
   if (!token) return null
   return new LinearClient({ oauthToken: token })
 }

@@ -16,6 +16,18 @@
 // Fetch is stubbed via vi.spyOn(globalThis, "fetch"), following slack-install.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
+
+// SIG-144 slice 2: handleLinearOAuthCallback now ALSO bootstraps the
+// LinearTokenBroker DO via installAgentTokenToBroker. Mocked here (rather than
+// built out as a real DO stub) the same way linear-agent-run.test.ts mocks
+// buildLinearAgentClient — this file tests handleLinearOAuthCallback's OWN
+// orchestration (it calls the helper with the right record, and a broker
+// failure never breaks the response), not the broker client's own mapping
+// logic (covered in linear-token-broker-client.test.ts).
+vi.mock("@/src/lib/linear-token-broker-client", () => ({
+  installAgentTokenToBroker: vi.fn(),
+}))
+
 import {
   handleLinearOAuthCallback,
   handleLinearInstall,
@@ -26,7 +38,18 @@ import {
   LINEAR_AGENT_TOKEN_KEY,
   type LinearAgentTokenRecord,
 } from "@/src/lib/linear-agent-oauth"
+import { installAgentTokenToBroker } from "@/src/lib/linear-token-broker-client"
 import type { Env } from "@/src/shared/types/env"
+
+const mockInstallAgentTokenToBroker = vi.mocked(installAgentTokenToBroker)
+
+// Default to success so the ~70 pre-existing callback tests below (which don't
+// care about the broker bootstrap) see no warning noise; the dedicated tests
+// in "handleLinearOAuthCallback — broker bootstrap (SIG-144 slice 2)" override
+// this per-case.
+beforeEach(() => {
+  mockInstallAgentTokenToBroker.mockReset().mockResolvedValue(true)
+})
 
 // ─── Map-backed fake KVNamespace ────────────────────────────────────────────
 function makeFakeKV() {
@@ -175,6 +198,10 @@ describe("handleLinearOAuthCallback", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks()
+    // restoreAllMocks above clears the module-level broker mock's implementation;
+    // re-stub it so the callback's bootstrap step stays a no-op success (these
+    // tests assert the OAuth/KV behavior, not the broker bootstrap).
+    mockInstallAgentTokenToBroker.mockResolvedValue(true)
     spyLog = vi.spyOn(console, "log").mockImplementation(() => undefined)
     spyWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     spyError = vi.spyOn(console, "error").mockImplementation(() => undefined)
@@ -457,10 +484,69 @@ describe("handleLinearOAuthCallback", () => {
   })
 })
 
+// ─── handleLinearOAuthCallback — broker bootstrap (SIG-144 slice 2) ─────────
+describe("handleLinearOAuthCallback — broker bootstrap (SIG-144 slice 2)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    mockInstallAgentTokenToBroker.mockReset().mockResolvedValue(true)
+  })
+
+  it("calls installAgentTokenToBroker with the SAME record persisted to KV", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    mockTokenFetch({
+      access_token: "lin_agent_xyz",
+      refresh_token: "lin_refresh_1",
+      expires_in: 3600,
+      scope: "app:assignable",
+    })
+    const env = makeEnv(kv)
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), env)
+
+    expect(res.status).toBe(200)
+    expect(mockInstallAgentTokenToBroker).toHaveBeenCalledTimes(1)
+    const [calledEnv, calledRecord] = mockInstallAgentTokenToBroker.mock.calls[0]!
+    expect(calledEnv).toBe(env)
+    expect(calledRecord).toEqual(readStoredRecord(kv))
+  })
+
+  it("a broker bootstrap failure does NOT fail the response — KV remains the source of truth this slice", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    mockTokenFetch({ access_token: "lin_agent_xyz", expires_in: 3600 })
+    mockInstallAgentTokenToBroker.mockResolvedValue(false)
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(200)
+    expect(await getLinearAgentToken(kv as unknown as KVNamespace)).toBe("lin_agent_xyz")
+    expect(mockInstallAgentTokenToBroker).toHaveBeenCalledTimes(1)
+  })
+
+  it("a broker bootstrap THROW does NOT fail the response either (defense in depth)", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    mockTokenFetch({ access_token: "lin_agent_xyz", expires_in: 3600 })
+    mockInstallAgentTokenToBroker.mockRejectedValue(new Error("DO unreachable"))
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(200)
+    expect(await getLinearAgentToken(kv as unknown as KVNamespace)).toBe("lin_agent_xyz")
+  })
+})
+
 // ─── dedicated agent-app credentials ─────────────────────────────────────────
 describe("agent-specific OAuth credentials (OPENCLAW_LINEAR_AGENT_CLIENT_*)", () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    // restoreAllMocks clears the module-level broker mock; re-stub it so the two
+    // callback cases below don't emit a spurious broker-install-failed warning.
+    mockInstallAgentTokenToBroker.mockResolvedValue(true)
   })
   afterEach(() => {
     vi.restoreAllMocks()

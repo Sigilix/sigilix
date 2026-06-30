@@ -117,6 +117,17 @@ describe("LinearClient.createAgentActivity", () => {
     const client = new LinearClient({ oauthToken: "agent-token-abc" })
     await expect(client.createAgentActivity("session-4", "x", "thought")).rejects.toThrow(/success=false/)
   })
+
+  it("forwards opts.signal to the underlying fetch (bounded ack)", async () => {
+    mockGqlOk({ agentActivityCreate: { success: true } })
+    const client = new LinearClient({ oauthToken: "agent-token-abc" })
+    const signal = AbortSignal.timeout(2000)
+
+    await client.createAgentActivity("session-5", "On it", "thought", { signal })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.signal).toBe(signal)
+  })
 })
 
 // ─── buildLinearAgentClient ─────────────────────────────────────────────────

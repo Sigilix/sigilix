@@ -523,8 +523,17 @@ export class LinearClient {
    * `content` maps to Linear's `AgentActivityContentInput`: body-bearing kinds
    * (thought/response/elicitation/error) send `content.body`; an `action` sends
    * `content.action`.
+   *
+   * `opts.signal` bounds the underlying GraphQL call — the webhook ACK passes an
+   * `AbortSignal.timeout(...)` so an un-timed call can't overrun Linear's webhook
+   * ack window (which would trigger a redelivery → duplicate runs). SIG-225 pattern.
    */
-  async createAgentActivity(sessionId: string, content: string, type: AgentActivityType): Promise<void> {
+  async createAgentActivity(
+    sessionId: string,
+    content: string,
+    type: AgentActivityType,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void> {
     const mutation = /* GraphQL */ `
       mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
         agentActivityCreate(input: $input) {
@@ -534,9 +543,11 @@ export class LinearClient {
     `
     const activityContent: Record<string, unknown> =
       type === "action" ? { type, action: content } : { type, body: content }
-    const data = await this.gql<{ agentActivityCreate: { success: boolean } }>(mutation, {
-      input: { agentSessionId: sessionId, content: activityContent },
-    })
+    const data = await this.gql<{ agentActivityCreate: { success: boolean } }>(
+      mutation,
+      { input: { agentSessionId: sessionId, content: activityContent } },
+      opts?.signal,
+    )
     if (!data.agentActivityCreate.success) {
       throw new Error(`agentActivityCreate returned success=false (type=${type})`)
     }

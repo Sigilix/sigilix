@@ -381,6 +381,11 @@ async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: 
  * Post the immediate ACK `thought` activity into an AgentSession. Best-effort — a
  * missing agent token or a Linear API fault is logged + swallowed (the run is still
  * enqueued; a missing ack must never lose the work).
+ *
+ * The GraphQL call is bounded with a ~2s `AbortSignal.timeout` (the SIG-225 pattern)
+ * so it can never block past Linear's webhook ack window — an indefinite hang would
+ * miss the ack deadline and cause Linear to redeliver, fanning out duplicate runs. An
+ * AbortError lands in the catch below and falls into the same best-effort path.
  */
 async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
   try {
@@ -389,7 +394,9 @@ async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
       console.warn(JSON.stringify({ event: "linear-agent-ack-no-token", sessionId }))
       return
     }
-    await agent.createAgentActivity(sessionId, "On it — Sigilix is picking this up.", "thought")
+    await agent.createAgentActivity(sessionId, "On it — Sigilix is picking this up.", "thought", {
+      signal: AbortSignal.timeout(2000),
+    })
   } catch (err) {
     console.warn(
       JSON.stringify({

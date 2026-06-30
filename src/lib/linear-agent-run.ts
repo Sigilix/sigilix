@@ -154,8 +154,9 @@ export async function dispatchTicketImplementation(
  *
  * `sessionId` is the AgentSession id when the trigger was an `AgentSessionEvent`
  * (a real agent delegation / @-mention). When present, the dispatch ack is posted as
- * a Linear agent `response` activity into that session; when absent (the interim
- * assignee path), the legacy issue comment ack is used instead.
+ * a NON-terminal Linear agent `action` activity into that session (the turn stays open
+ * until the container opens the PR); when absent (the interim assignee path), the
+ * legacy issue comment ack is used instead.
  */
 export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
   try {
@@ -209,15 +210,19 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
 
     if (dispatched) {
       // Best-effort ack — a failed ack must never fail the run.
-      //   - AgentSessionEvent path (sessionId present): post a Linear agent
-      //     `response` activity into the session (the agent's visible turn).
+      //   - AgentSessionEvent path (sessionId present): post a NON-terminal Linear
+      //     agent `action` activity so the session turn STAYS OPEN until the PR
+      //     lands. A terminal `response` here would complete the agent turn at
+      //     dispatch time — before the container has actually opened the PR.
       //   - interim assignee path (no sessionId): the legacy issue comment ack.
+      // TODO(follow-up): thread sessionId → AgentRunTaskInput → container so the
+      // container posts the terminal `response` with the real PR URL when the PR lands.
       const ackText = "🛠️ On it — Sigilix is implementing this and will open a PR shortly."
       try {
         if (sessionId) {
           const agent = await buildLinearAgentClient(env)
           if (agent) {
-            await agent.createAgentActivity(sessionId, ackText, "response")
+            await agent.createAgentActivity(sessionId, ackText, "action")
           } else {
             console.warn(JSON.stringify({ event: "linear-agent-run-ack-no-token", issueId, sessionId }))
           }

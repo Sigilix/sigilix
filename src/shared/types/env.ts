@@ -994,4 +994,7 @@ export interface Env {
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
   OPENCLAW_LINEAR_AGENT_RUN_MODE?: string
   OPENCLAW_LINEAR_AGENT_USER_ID?: string
+  // Install hardening: when SET, the actor=app OAuth callback only accepts installs
+  // from this Linear organization id; UNSET → install allowed + a warning is logged.
+  OPENCLAW_LINEAR_ALLOWED_ORG_ID?: string
 }

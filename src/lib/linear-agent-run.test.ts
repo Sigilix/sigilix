@@ -152,12 +152,15 @@ describe("runLinearAgentRun", () => {
     expect(mockCreateComment.mock.calls[0]![0]).toBe(ISSUE_ID)
   })
 
-  it("AgentSession path (sessionId present) → posts a `response` agent activity, NOT a comment", async () => {
+  it("AgentSession path (sessionId present) → posts a NON-terminal `action` activity, NOT a comment", async () => {
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
     expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
     expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    expect(mockCreateAgentActivity).toHaveBeenCalledWith("agent-session-1", expect.any(String), "response")
+    // NON-terminal `action` — a terminal `response` would close the session turn at
+    // dispatch time, before the container has opened the PR.
+    expect(mockCreateAgentActivity).toHaveBeenCalledWith("agent-session-1", expect.any(String), "action")
+    expect(mockCreateAgentActivity).not.toHaveBeenCalledWith("agent-session-1", expect.any(String), "response")
     // No plain comment ack on the agent-session path.
     expect(mockCreateComment).not.toHaveBeenCalled()
   })

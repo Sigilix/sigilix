@@ -87,8 +87,26 @@ describe("handleLinearWebhook — AgentSessionEvent trigger", () => {
     const res = await handleLinearWebhook(sessionRequest(eventBody("created")), env, makeCtx())
 
     expect(res.status).toBe(202)
-    expect(mockCreateAgentActivity).toHaveBeenCalledWith(SESSION_ID, expect.any(String), "thought")
+    // ACK is bounded with an AbortSignal.timeout so it can't overrun Linear's ack
+    // window (un-timed → redelivery → duplicate runs). SIG-225 pattern.
+    expect(mockCreateAgentActivity).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+      "thought",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
     expect(send).toHaveBeenCalledOnce()
+    expect(send).toHaveBeenCalledWith({ type: "linear-agent-run", issueId: ISSUE_ID, sessionId: SESSION_ID })
+  })
+
+  it("(a2) a thrown ack (e.g. AbortError on timeout) is swallowed → still enqueues (202)", async () => {
+    mockCreateAgentActivity.mockRejectedValueOnce(
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
+    )
+    const { env, send } = makeEnv()
+    const res = await handleLinearWebhook(sessionRequest(eventBody("created")), env, makeCtx())
+
+    expect(res.status).toBe(202)
     expect(send).toHaveBeenCalledWith({ type: "linear-agent-run", issueId: ISSUE_ID, sessionId: SESSION_ID })
   })
 

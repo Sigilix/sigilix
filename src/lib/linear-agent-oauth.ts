@@ -208,21 +208,56 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
     code,
   })
 
-  let res: Response
-  try {
-    res = await fetch(TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    })
-  } catch {
-    console.error("linear oauth callback: network error during token exchange")
+  const MAX_ATTEMPTS = 3
+  let res: Response | null = null
+  let lastNetworkError = false
+  let attemptsUsed = 0
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    attemptsUsed = attempt
+    try {
+      res = await fetch(TOKEN_ENDPOINT, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+        signal: AbortSignal.timeout(8000),
+      })
+      lastNetworkError = false
+      // Do not retry 4xx — deterministic client error.
+      if (res.status < 500) break
+      // 5xx — retryable. On the final attempt fall through to the failure handler.
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => setTimeout(resolve, attempt * 400))
+      }
+    } catch {
+      lastNetworkError = true
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => setTimeout(resolve, attempt * 400))
+        continue
+      }
+    }
+  }
+
+  if (res === null || lastNetworkError) {
+    console.error("linear oauth callback: network error during token exchange", { attempts: attemptsUsed })
     return text("Sigilix install failed during token exchange. Please try again.", 502)
   }
 
   if (!res.ok) {
-    // Status only — never the body (it can echo the code).
-    console.error("linear oauth callback: non-2xx from token endpoint", { status: res.status })
+    // Body is Linear's error JSON (e.g. {"error":"...","error_description":"..."}).
+    // It does NOT contain the submitted code — safe to log truncated for diagnosis.
+    // Never log the body of a success response (it contains access_token).
+    let errorBody = ""
+    try {
+      const raw = await res.text()
+      errorBody = raw.slice(0, 300)
+    } catch {
+      // ignore — best-effort
+    }
+    console.error("linear oauth callback: non-2xx from token endpoint", {
+      status: res.status,
+      attempts: attemptsUsed,
+      body: errorBody,
+    })
     return text("Sigilix install failed during token exchange. Please try again.", 502)
   }
 

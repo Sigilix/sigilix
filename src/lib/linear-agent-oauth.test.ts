@@ -304,12 +304,104 @@ describe("handleLinearOAuthCallback", () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it("returns 502 (not a throw) on a network error during token exchange", async () => {
+  it("returns 502 (not a throw) on a network error during token exchange (all 3 attempts rejected)", async () => {
     const kv = makeFakeKV()
     const state = seedState(kv)
-    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network down"))
+    vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockRejectedValueOnce(new Error("network down"))
     const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
     expect(res.status).toBe(502)
+  })
+
+  // ── token exchange retry logic ───────────────────────────────────────────────
+
+  it("503 then 200: succeeds after retry (fetch called more than once)", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "service_unavailable" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "lin_agent_retry_ok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(200)
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1)
+    expect(await getLinearAgentToken(kv as unknown as KVNamespace)).toBe("lin_agent_retry_ok")
+  })
+
+  it("503 on all attempts: final failure (502 to caller), error body logged server-side, code never logged", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    const errorBody = JSON.stringify({ error: "service_unavailable", error_description: "Linear is down" })
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(502)
+    // Body logged server-side for diagnosis — use JSON.stringify to inspect nested objects.
+    const loggedJson = JSON.stringify(spyError.mock.calls)
+    expect(loggedJson).toContain("service_unavailable")
+    // code must never appear in any log output.
+    expect(loggedJson).not.toContain("the-code")
+    // Caller-facing message stays generic.
+    expect(await res.text()).toContain("Sigilix install failed during token exchange")
+  })
+
+  it("400: no retry (single attempt — deterministic client error)", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "invalid_client" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(502)
+    expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+
+  it("success path: access_token body is never logged even when retries occurred", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "service_unavailable" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "lin_agent_SECRET_RETRY" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+
+    await handleLinearOAuthCallback(callbackReq({ code: "SECRET_CODE_RETRY", state }), makeEnv(kv))
+
+    const allOutput = [...spyLog.mock.calls.flat().map(String), ...spyError.mock.calls.flat().map(String)].join("\n")
+    expect(allOutput).not.toContain("lin_agent_SECRET_RETRY")
+    expect(allOutput).not.toContain("SECRET_CODE_RETRY")
+    expect(allOutput).not.toContain("client-secret-shh")
   })
 
   // ── workspace allowlist (OPENCLAW_LINEAR_ALLOWED_ORG_ID) ────────────────────

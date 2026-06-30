@@ -31,6 +31,9 @@ export const VERTEX_MODEL = "qwen/qwen3-next-80b-a3b-instruct-maas"
 /** Forced Vertex model id for the Pyroeis route — same gateway/SA/token mint, different model. */
 export const PYROEIS_MODEL = "google/gemma-4-26b-a4b-it-maas"
 
+/** Forced Vertex model id for the Astraeus route — same gateway/SA/token mint, different model. */
+export const ASTRAEUS_MODEL = "zai-org/glm-5-maas"
+
 /** OAuth scope requested at both STS exchange and SA impersonation. */
 export const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 

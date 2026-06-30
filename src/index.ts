@@ -31,6 +31,7 @@ import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleBoreasApiRoute } from "@/src/lib/boreas-gateway/api-boreas-route"
 import { handlePyroeisApiRoute } from "@/src/lib/boreas-gateway/api-pyroeis-route"
+import { handleAstraeusApiRoute } from "@/src/lib/boreas-gateway/api-astraeus-route"
 import { handleJwksRoute, handleOpenidConfigurationRoute } from "@/src/lib/boreas-gateway/well-known-routes"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
@@ -281,6 +282,13 @@ export default {
     // + static-bearer auth + server-side SA-token mint + model forcing.
     if (request.method === "POST" && url.pathname === "/v1/pyroeis/chat/completions") {
       return handlePyroeisApiRoute(request, env, ctx)
+    }
+
+    // SIG-545: Astraeus CLI gateway — same keyless-WIF Vertex proxy as Boreas above,
+    // forcing a different model (GLM-5.2 serverless MaaS). Same 503-until-configured
+    // + static-bearer auth + server-side SA-token mint + model forcing.
+    if (request.method === "POST" && url.pathname === "/v1/astraeus/chat/completions") {
+      return handleAstraeusApiRoute(request, env, ctx)
     }
 
     // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},

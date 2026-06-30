@@ -479,17 +479,17 @@ export interface Env {
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace
 
-  // SIG-455: per-tenant concurrency gate (KV-backed DO storage). One instance
-  // per tenant (idFromName(tenantKey)); gates pr-review fan-out to at most
-  // SIGILIX_TENANT_CONCURRENCY_CAP concurrent reviews per tenant. Operates
-  // within the global dashboard-registered queue cap.
+  // SIG-455: per-tenant concurrency gate (KV-backed DO storage). One instance per
+  // tenant; gates pr-review fan-out to SIGILIX_TENANT_CONCURRENCY_CAP per tenant.
   TENANT_CONCURRENCY: DurableObjectNamespace
 
   // SIG-455 PR B: per-provider backpressure cooldown (SQLite DO storage). One
-  // instance per provider slug (idFromName(providerSlug)); tracks the
-  // cooldownUntil epoch for that provider. Flag-gated behind
-  // SIGILIX_PROVIDER_COOLDOWN_MODE.
+  // instance per provider slug; flag-gated behind SIGILIX_PROVIDER_COOLDOWN_MODE.
   PROVIDER_COOLDOWN: DurableObjectNamespace
+
+  // SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
+  // token lifecycle + serializes refresh across isolates. Singleton; INERT this slice.
+  LINEAR_TOKEN_BROKER: DurableObjectNamespace
 
   // SIG-156: shared-secret bearer token for the privileged admin endpoints
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those

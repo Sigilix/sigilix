@@ -86,17 +86,38 @@ function linearRedirectUri(env: Pick<Env, "OPENCLAW_GATEWAY_ISSUER">, requestUrl
   return `${base}/linear/oauth/callback`
 }
 
+/** Resolve the OAuth credentials for the agent install (authorization_code flow).
+ *  Prefers the dedicated agent-app credentials; falls back to the shared
+ *  LINEAR_OAUTH_CLIENT_* pair so existing deployments need no new secrets. */
+function resolveAgentOAuthCreds(
+  env: Pick<
+    Env,
+    | "LINEAR_OAUTH_CLIENT_ID"
+    | "LINEAR_OAUTH_CLIENT_SECRET"
+    | "OPENCLAW_LINEAR_AGENT_CLIENT_ID"
+    | "OPENCLAW_LINEAR_AGENT_CLIENT_SECRET"
+  >,
+): { clientId: string | undefined; clientSecret: string | undefined } {
+  return {
+    clientId: env.OPENCLAW_LINEAR_AGENT_CLIENT_ID ?? env.LINEAR_OAUTH_CLIENT_ID,
+    clientSecret: env.OPENCLAW_LINEAR_AGENT_CLIENT_SECRET ?? env.LINEAR_OAUTH_CLIENT_SECRET,
+  }
+}
+
 /** Build the actor=app authorize URL + persist a CSRF nonce in KV (10-min TTL).
  *  The callback verifies and deletes the nonce before exchanging the code. */
 export async function buildLinearAuthorizeUrl(
-  env: Pick<Env, "OPENCLAW_STATE" | "LINEAR_OAUTH_CLIENT_ID" | "OPENCLAW_GATEWAY_ISSUER">,
+  env: Pick<
+    Env,
+    "OPENCLAW_STATE" | "LINEAR_OAUTH_CLIENT_ID" | "OPENCLAW_LINEAR_AGENT_CLIENT_ID" | "OPENCLAW_GATEWAY_ISSUER"
+  >,
   requestUrl: URL,
 ): Promise<string> {
   const state = crypto.randomUUID()
   await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, "1", { expirationTtl: STATE_TTL_SECONDS })
   const params = new URLSearchParams({
     response_type: "code",
-    client_id: env.LINEAR_OAUTH_CLIENT_ID ?? "",
+    client_id: env.OPENCLAW_LINEAR_AGENT_CLIENT_ID ?? env.LINEAR_OAUTH_CLIENT_ID ?? "",
     redirect_uri: linearRedirectUri(env, requestUrl),
     scope: DEFAULT_INSTALL_SCOPES,
     actor: "app",
@@ -108,10 +129,11 @@ export async function buildLinearAuthorizeUrl(
 /**
  * GET /linear/install — the founder's one-click agent-install entry. Mints a CSRF
  * nonce, stores it in KV, and 302-redirects to Linear's actor=app consent screen.
- * Returns 503 when LINEAR_OAUTH_CLIENT_ID is unset (Linear OAuth not configured).
+ * Returns 503 when no agent-install client_id is configured.
  */
 export async function handleLinearInstall(request: Request, env: Env): Promise<Response> {
-  if (!env.LINEAR_OAUTH_CLIENT_ID) {
+  const { clientId } = resolveAgentOAuthCreds(env)
+  if (!clientId) {
     return text("Linear OAuth is not configured.", 503)
   }
   const authorizeUrl = await buildLinearAuthorizeUrl(env, new URL(request.url))
@@ -158,7 +180,8 @@ async function fetchOrganizationId(accessToken: string): Promise<string | null> 
  * NEVER logs the code, the client secret, or the access token.
  */
 export async function handleLinearOAuthCallback(request: Request, env: Env): Promise<Response> {
-  if (!env.LINEAR_OAUTH_CLIENT_ID || !env.LINEAR_OAUTH_CLIENT_SECRET) {
+  const { clientId, clientSecret } = resolveAgentOAuthCreds(env)
+  if (!clientId || !clientSecret) {
     return text("Linear OAuth is not configured.", 503)
   }
 
@@ -202,43 +225,25 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   const redirectUri = linearRedirectUri(env, url)
   const body = new URLSearchParams({
     grant_type: "authorization_code",
-    client_id: env.LINEAR_OAUTH_CLIENT_ID,
-    client_secret: env.LINEAR_OAUTH_CLIENT_SECRET,
+    client_id: clientId,
+    client_secret: clientSecret,
     redirect_uri: redirectUri,
     code,
   })
 
-  const MAX_ATTEMPTS = 3
-  let res: Response | null = null
-  let lastNetworkError = false
-  let attemptsUsed = 0
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    attemptsUsed = attempt
-    try {
-      res = await fetch(TOKEN_ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body,
-        signal: AbortSignal.timeout(8000),
-      })
-      lastNetworkError = false
-      // Do not retry 4xx — deterministic client error.
-      if (res.status < 500) break
-      // 5xx — retryable. On the final attempt fall through to the failure handler.
-      if (attempt < MAX_ATTEMPTS) {
-        await new Promise<void>((resolve) => setTimeout(resolve, attempt * 400))
-      }
-    } catch {
-      lastNetworkError = true
-      if (attempt < MAX_ATTEMPTS) {
-        await new Promise<void>((resolve) => setTimeout(resolve, attempt * 400))
-        continue
-      }
-    }
-  }
-
-  if (res === null || lastNetworkError) {
-    console.error("linear oauth callback: network error during token exchange", { attempts: attemptsUsed })
+  // Single attempt only — authorization codes are single-use; retrying a consumed
+  // code causes `invalid_grant` and poisons the install. Keep the AbortSignal for
+  // a hard upper bound on hang time.
+  let res: Response
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch {
+    console.error("linear oauth callback: network error during token exchange")
     return text("Sigilix install failed during token exchange. Please try again.", 502)
   }
 
@@ -255,7 +260,6 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
     }
     console.error("linear oauth callback: non-2xx from token endpoint", {
       status: res.status,
-      attempts: attemptsUsed,
       body: errorBody,
     })
     return text("Sigilix install failed during token exchange. Please try again.", 502)

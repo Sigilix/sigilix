@@ -7,8 +7,11 @@
 // token persist + 200, redirect_uri PINNED to OPENCLAW_GATEWAY_ISSUER (fallback to the
 // request origin), grant params, non-2xx / invalid-JSON / missing-access_token 502, KV
 // persist failure 502, the workspace allowlist (reject mismatch 403, allow + warn when
-// unset, allow on match), the /linear/install nonce + authorize-URL params, and —
-// critically — that the code / client_secret / access token are NEVER logged.
+// unset, allow on match), the /linear/install nonce + authorize-URL params,
+// dedicated agent-app credentials (OPENCLAW_LINEAR_AGENT_CLIENT_ID/SECRET with fallback
+// to LINEAR_OAUTH_CLIENT_*), single-attempt token exchange (no retry — reusing a
+// consumed code causes invalid_grant), and — critically — that the code / client_secret
+// / access token are NEVER logged.
 //
 // Fetch is stubbed via vi.spyOn(globalThis, "fetch"), following slack-install.test.ts.
 
@@ -304,51 +307,24 @@ describe("handleLinearOAuthCallback", () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it("returns 502 (not a throw) on a network error during token exchange (all 3 attempts rejected)", async () => {
+  it("returns 502 (not a throw) on a network error during token exchange (single attempt)", async () => {
     const kv = makeFakeKV()
     const state = seedState(kv)
-    vi.spyOn(globalThis, "fetch")
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockRejectedValueOnce(new Error("network down"))
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network down"))
     const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
     expect(res.status).toBe(502)
+    // Single attempt only — authorization codes are single-use; no retry.
+    expect(fetchSpy).toHaveBeenCalledOnce()
   })
 
-  // ── token exchange retry logic ───────────────────────────────────────────────
+  // ── single-attempt token exchange ────────────────────────────────────────────
 
-  it("503 then 200: succeeds after retry (fetch called more than once)", async () => {
-    const kv = makeFakeKV()
-    const state = seedState(kv)
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: "service_unavailable" }), {
-          status: 503,
-          headers: { "content-type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ access_token: "lin_agent_retry_ok" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      )
-
-    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
-
-    expect(res.status).toBe(200)
-    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1)
-    expect(await getLinearAgentToken(kv as unknown as KVNamespace)).toBe("lin_agent_retry_ok")
-  })
-
-  it("503 on all attempts: final failure (502 to caller), error body logged server-side, code never logged", async () => {
+  it("503: single attempt — 502 to caller, body logged server-side, NO second fetch", async () => {
     const kv = makeFakeKV()
     const state = seedState(kv)
     const errorBody = JSON.stringify({ error: "service_unavailable", error_description: "Linear is down" })
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(errorBody, { status: 503, headers: { "content-type": "application/json" } }))
 
     const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
@@ -361,6 +337,8 @@ describe("handleLinearOAuthCallback", () => {
     expect(loggedJson).not.toContain("the-code")
     // Caller-facing message stays generic.
     expect(await res.text()).toContain("Sigilix install failed during token exchange")
+    // Authorization codes are single-use — no retry on 5xx.
+    expect(fetchSpy).toHaveBeenCalledOnce()
   })
 
   it("400: no retry (single attempt — deterministic client error)", async () => {
@@ -379,28 +357,16 @@ describe("handleLinearOAuthCallback", () => {
     expect(fetchSpy).toHaveBeenCalledOnce()
   })
 
-  it("success path: access_token body is never logged even when retries occurred", async () => {
+  it("success path: access_token body is never logged (single-attempt exchange)", async () => {
     const kv = makeFakeKV()
     const state = seedState(kv)
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: "service_unavailable" }), {
-          status: 503,
-          headers: { "content-type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ access_token: "lin_agent_SECRET_RETRY" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      )
+    mockTokenFetch({ access_token: "lin_agent_SECRET_SINGLE" })
 
-    await handleLinearOAuthCallback(callbackReq({ code: "SECRET_CODE_RETRY", state }), makeEnv(kv))
+    await handleLinearOAuthCallback(callbackReq({ code: "SECRET_CODE_SINGLE", state }), makeEnv(kv))
 
     const allOutput = [...spyLog.mock.calls.flat().map(String), ...spyError.mock.calls.flat().map(String)].join("\n")
-    expect(allOutput).not.toContain("lin_agent_SECRET_RETRY")
-    expect(allOutput).not.toContain("SECRET_CODE_RETRY")
+    expect(allOutput).not.toContain("lin_agent_SECRET_SINGLE")
+    expect(allOutput).not.toContain("SECRET_CODE_SINGLE")
     expect(allOutput).not.toContain("client-secret-shh")
   })
 
@@ -457,5 +423,95 @@ describe("handleLinearOAuthCallback", () => {
     expect(allOutput).not.toContain("lin_agent_SECRET_TOKEN")
     expect(allOutput).not.toContain("SECRET_CODE_42")
     expect(allOutput).not.toContain("client-secret-shh")
+  })
+})
+
+// ─── dedicated agent-app credentials ─────────────────────────────────────────
+describe("agent-specific OAuth credentials (OPENCLAW_LINEAR_AGENT_CLIENT_*)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("handleLinearInstall: authorize URL uses OPENCLAW_LINEAR_AGENT_CLIENT_ID when set", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      OPENCLAW_LINEAR_AGENT_CLIENT_ID: "agent-app-id",
+      OPENCLAW_GATEWAY_ISSUER: CALLBACK_ORIGIN,
+    })
+    const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
+    expect(res.status).toBe(302)
+    const loc = new URL(res.headers.get("location") ?? "")
+    expect(loc.searchParams.get("client_id")).toBe("agent-app-id")
+  })
+
+  it("handleLinearInstall: falls back to LINEAR_OAUTH_CLIENT_ID when agent cred unset", async () => {
+    const kv = makeFakeKV()
+    // makeEnv defaults: LINEAR_OAUTH_CLIENT_ID = "client-id-123", no agent cred
+    const env = makeEnv(kv, { OPENCLAW_GATEWAY_ISSUER: CALLBACK_ORIGIN })
+    const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
+    expect(res.status).toBe(302)
+    const loc = new URL(res.headers.get("location") ?? "")
+    expect(loc.searchParams.get("client_id")).toBe("client-id-123")
+  })
+
+  it("handleLinearInstall: returns 503 when neither agent nor shared client_id is set", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      LINEAR_OAUTH_CLIENT_ID: undefined,
+      OPENCLAW_LINEAR_AGENT_CLIENT_ID: undefined,
+    })
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
+    expect(res.status).toBe(503)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("callback: token exchange uses OPENCLAW_LINEAR_AGENT_CLIENT_ID/SECRET when both are set", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    const fetchSpy = mockTokenFetch({ access_token: "lin_agent_xyz" })
+    const env = makeEnv(kv, {
+      OPENCLAW_LINEAR_AGENT_CLIENT_ID: "agent-app-id",
+      OPENCLAW_LINEAR_AGENT_CLIENT_SECRET: "agent-app-secret",
+    })
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), env)
+
+    expect(res.status).toBe(200)
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const form = new URLSearchParams(init.body as string)
+    expect(form.get("client_id")).toBe("agent-app-id")
+    expect(form.get("client_secret")).toBe("agent-app-secret")
+  })
+
+  it("callback: falls back to LINEAR_OAUTH_CLIENT_ID/SECRET when agent creds are unset", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    // makeEnv defaults: LINEAR_OAUTH_CLIENT_ID/SECRET set, no agent creds
+    const fetchSpy = mockTokenFetch({ access_token: "lin_agent_xyz" })
+
+    await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const form = new URLSearchParams(init.body as string)
+    expect(form.get("client_id")).toBe("client-id-123")
+    expect(form.get("client_secret")).toBe("client-secret-shh")
+  })
+
+  it("callback: returns 503 when neither agent nor shared credentials are configured", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      LINEAR_OAUTH_CLIENT_ID: undefined,
+      LINEAR_OAUTH_CLIENT_SECRET: undefined,
+      OPENCLAW_LINEAR_AGENT_CLIENT_ID: undefined,
+      OPENCLAW_LINEAR_AGENT_CLIENT_SECRET: undefined,
+    })
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "c", state: "s" }), env)
+    expect(res.status).toBe(503)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

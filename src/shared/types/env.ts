@@ -46,6 +46,8 @@ export interface Env {
   OPENROUTER_API_KEY?: string
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
+  OPENCLAW_LINEAR_AGENT_CLIENT_ID?: string // dedicated agent-app OAuth; falls back to LINEAR_OAUTH_CLIENT_ID
+  OPENCLAW_LINEAR_AGENT_CLIENT_SECRET?: string // dedicated agent-app OAuth; falls back to LINEAR_OAUTH_CLIENT_SECRET
   GITHUB_APP_ID?: string
   GITHUB_PRIVATE_KEY?: string
   GITHUB_WEBHOOK_SECRET?: string
@@ -869,7 +871,6 @@ export interface Env {
   //               truncation lands in a follow-up PR informed by
   //               shadow data.
   OPENCLAW_LOGIC_PROMPT_BUDGET?: string
-
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via
@@ -877,7 +878,6 @@ export interface Env {
   // producer (ARC-234) AND consumer (ARC-235) deploy. Any other value
   // (including unset) keeps indexing disabled.
   OPENCLAW_INDEXER_ENABLED?: string
-
   // SIG-413: PR-head-branch full-index enqueue. DEFAULT OFF — only "on" enables
   // (anything else, including unset, keeps it off). The review path retrieves from
   // the MAIN namespace + the SIG-129 in-memory branch overlay, so the persistent

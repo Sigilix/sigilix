@@ -101,6 +101,36 @@ describe("comparePairInSandbox — SKIPPED (couldn't be run soundly)", () => {
     expect(res.verdict).toBe("skipped")
     expect(res.detail).toBe("array-ctor-rewrite")
   })
+
+  // ── ASYNC GUARD ───────────────────────────────────────────────────────────
+  // An async fn returns a Promise; `canon(Promise)` is "{}" on BOTH sides, so without the
+  // guard two DIFFERENT async behaviors would falsely "agree" → a spurious `preserved`. The
+  // gate must turn every async/Promise-returning pair into `skipped`, NEVER preserved/changed.
+  it("an async pure fn → skipped (NOT a false preserved via canon-equated promises)", async () => {
+    const res = await comparePairInSandbox(`async x => x + 1`, `async x => x + 1`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("async-fn")
+  })
+
+  it("a genuinely-CHANGED async fn must NOT report preserved → skipped", async () => {
+    const res = await comparePairInSandbox(`async x => x + 1`, `async x => x + 2`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("async-fn")
+    // The load-bearing assertion: a real async behavior change is NEVER "preserved".
+    expect(res.verdict).not.toBe("preserved")
+  })
+
+  it("an async function DECLARATION is also caught (source-side async flag) → skipped", async () => {
+    const res = await comparePairInSandbox(`async function f(n){return n}`, `async function f(n){return n+1}`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("async-fn")
+  })
+
+  it("an ORDINARY fn that RETURNS a promise → skipped (runtime thenable, no async keyword)", async () => {
+    const res = await comparePairInSandbox(`x => Promise.resolve(x + 1)`, `x => Promise.resolve(x + 2)`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("async-result")
+  })
 })
 
 describe("comparePairInSandbox — never throws + reports elapsed", () => {

@@ -23,9 +23,13 @@
 // AFTER snippet is a correct fix, and `preserved` does NOT prove the snippets are equal on
 // EVERY possible input — only on the battery we exercised. Anything we could not run
 // soundly (a guest throw/timeout/oom on either side, a flaky/non-deterministic tally,
-// non-liftable / non-pure code, an arity mismatch, an empty/over-large battery, or a
-// behavior-preserving array-constructor idiom rewrite that diverges only on an
-// out-of-domain length) → `skipped`, never a false changed/preserved.
+// non-liftable / non-pure code, an ASYNC / Promise-returning function — its result is a
+// Promise, and `canon` keys EVERY promise as `"{}"`, so two DIFFERENT async behaviors would
+// FALSELY "agree" into a spurious `preserved`; async/thenable-returning fns are therefore
+// rejected, detected BOTH from the `async` keyword (source) AND from a Promise/thenable
+// runtime result — an arity mismatch, an empty/over-large battery, or a behavior-preserving
+// array-constructor idiom rewrite that diverges only on an out-of-domain length) →
+// `skipped`, never a false changed/preserved.
 //
 // ── THE BATTERY (type-aware) ────────────────────────────────────────────────
 // Each parameter is swept over an IN-TYPE pool derived from its TS annotation (a `number`
@@ -46,10 +50,14 @@ import { runInSandbox, type SandboxCaps, type SandboxResult } from "./sandbox-ru
 export type ParamType = "number" | "string" | "boolean" | "array" | "any"
 
 /** A liftable function pulled from a cited snippet: an EXPRESSION text usable as a
- *  value (a declaration is wrapped so it yields the function), plus its param types. */
+ *  value (a declaration is wrapped so it yields the function), plus its param types.
+ *  `isAsync` flags an `async` function (read from the AST `async` flag, robust to
+ *  formatting) — an async fn returns a Promise that can't be soundly value-compared, so
+ *  the kernel rejects it (see {@link compareLiftedPair}). */
 export interface LiftedFunction {
   expr: string
   paramTypes: ParamType[]
+  isAsync: boolean
 }
 
 /** Per-run sandbox caps. A pure-function battery is BYTECODE, so the opcode-cycle
@@ -322,7 +330,9 @@ export function liftFunction(candidates: readonly string[]): LiftedFunction | nu
     const name = fnNode.type === "FunctionDeclaration" ? fnNode?.id?.name : undefined
     const expr = typeof name === "string" && name.length > 0 ? `(()=>{${text};return ${name};})()` : `(${text})`
     // Param types read from the (un-stripped) AST node — drives the type-aware battery.
-    return { expr, paramTypes: paramTypesOf(fnNode) }
+    // `isAsync` from the AST `async` flag — rejected by the kernel (a Promise result can't
+    // be soundly value-compared); robust to formatting, unlike a literal-keyword scan.
+    return { expr, paramTypes: paramTypesOf(fnNode), isAsync: fnNode?.async === true }
   }
   return null
 }
@@ -483,8 +493,15 @@ export function isArrayCtorOnlyRewrite(buggyExpr: string, fixedExpr: string): bo
  * tallying agree/diverge. Each call gets a DEEP-CLONED copy of its args (so a function
  * that mutates an array argument can't poison the other side's call or a later tuple).
  * A return value is keyed `"V:"+canon(out)`; a throw is keyed `"E:"+name`, so
- * "both throw the same error" counts as AGREE (not a spurious divergence). The last
- * expression is the `{agree,diverge,sample}` object → `runInSandbox` dumps it.
+ * "both throw the same error" counts as AGREE (not a spurious divergence).
+ *
+ * ASYNC GUARD (runtime side): a Promise/thenable result has NO own enumerable keys, so
+ * `canon` keys it `"{}"` on BOTH sides — two DIFFERENT async behaviors would FALSELY "agree"
+ * into a spurious `preserved`. So each result is thenable-checked; the FIRST thenable sets
+ * `thenable:true` and aborts the tally, and the host maps that to `skipped` (never a false
+ * preserved/changed). This catches an ORDINARY function that RETURNS a promise (the
+ * `async`-keyword case is also rejected source-side, before we ever run). The last
+ * expression is the `{agree,diverge,sample,thenable}` object → `runInSandbox` dumps it.
  */
 export function buildComparisonSource(buggyExpr: string, fixedExpr: string): string {
   // `canon` is an ORDER-INSENSITIVE-for-object-keys serializer: object keys are sorted
@@ -495,35 +512,41 @@ export function buildComparisonSource(buggyExpr: string, fixedExpr: string): str
     `function canon(v){if(v===null||typeof v!=="object")return JSON.stringify(v);` +
     `if(Array.isArray(v))return "["+v.map(canon).join(",")+"]";` +
     `var ks=Object.keys(v).sort();return "{"+ks.map(function(k){return JSON.stringify(k)+":"+canon(v[k]);}).join(",")+"}";}` +
+    `function isThenable(v){return v!==null&&(typeof v==="object"||typeof v==="function")&&typeof v.then==="function";}` +
+    `var thenable=false;` +
+    `function keyOf(fn,args){try{var out=fn.apply(null,args);if(isThenable(out)){thenable=true;return "__ASYNC__";}return "V:"+canon(out);}catch(e){return "E:"+((e&&e.name)?e.name:"err");}}` +
     `const __B__=${buggyExpr};` +
     `const __F__=${fixedExpr};` +
     `const A=__INPUT__.battery;` +
     `let agree=0,diverge=0,sample=null;` +
     `for(let i=0;i<A.length;i++){` +
-    `var bk,fk;` +
-    `try{bk="V:"+canon(__B__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){bk="E:"+((e&&e.name)?e.name:"err");}` +
-    `try{fk="V:"+canon(__F__.apply(null,JSON.parse(JSON.stringify(A[i]))));}catch(e){fk="E:"+((e&&e.name)?e.name:"err");}` +
+    `var bk=keyOf(__B__,JSON.parse(JSON.stringify(A[i])));` +
+    `var fk=keyOf(__F__,JSON.parse(JSON.stringify(A[i])));` +
+    `if(thenable){break;}` +
     `if(bk===fk){agree++;}else{diverge++;if(sample===null){sample={i:i,buggy:bk,fixed:fk};}}` +
     `}` +
-    `({agree:agree,diverge:diverge,sample:sample})`
+    `({agree:agree,diverge:diverge,sample:sample,thenable:thenable})`
   )
 }
 
 /** The agree/diverge tally parsed from a sandbox run, or null when the guest didn't
- *  return a clean tally (timed-out / threw / oom / malformed). */
+ *  return a clean tally (timed-out / threw / oom / malformed). `thenable` is true when the
+ *  guest observed a Promise/thenable result on ≥1 input (an async result that can't be
+ *  soundly value-compared → the host maps it to `skipped`, see {@link compareLiftedPair}). */
 export interface Tally {
   agree: number
   diverge: number
   sample: unknown
+  thenable: boolean
 }
 
 export function parseTally(res: SandboxResult): Tally | null {
   if (res.status !== "ok") return null
   const v = res.value
   if (v === null || typeof v !== "object") return null
-  const o = v as { agree?: unknown; diverge?: unknown; sample?: unknown }
+  const o = v as { agree?: unknown; diverge?: unknown; sample?: unknown; thenable?: unknown }
   if (typeof o.agree !== "number" || typeof o.diverge !== "number") return null
-  return { agree: o.agree, diverge: o.diverge, sample: o.sample ?? null }
+  return { agree: o.agree, diverge: o.diverge, sample: o.sample ?? null, thenable: o.thenable === true }
 }
 
 /** Stable string key for a divergence sample (for the determinism re-run compare). */
@@ -546,8 +569,9 @@ export function sampleKey(sample: unknown): string {
  *   - `agreed`    — every battery input produced equal output (diverge === 0). The fix is
  *                   a no-op on the (type-correct) battery.
  *   - `skipped`   — nothing soundly runnable (non-liftable, arity, empty/no-tally,
- *                   array-ctor idiom rewrite, flaky/non-deterministic). `detail` is a
- *                   stable machine-readable tag.
+ *                   array-ctor idiom rewrite, flaky/non-deterministic, or an async /
+ *                   Promise-returning fn whose result can't be value-compared). `detail`
+ *                   is a stable machine-readable tag.
  */
 export type PairComparison =
   | { kind: "diverged"; detail: string; agree: number; diverge: number; sample: Tally["sample"] }
@@ -575,6 +599,14 @@ export async function compareLiftedPair(pair: LiftedPair, caps: SandboxCaps): Pr
   if (arity < 1 || arity > MAX_ARITY) {
     return { kind: "skipped", detail: `arity-out-of-range:${arity}` }
   }
+  // ASYNC GUARD (source side): an `async` function returns a Promise, whose `canon` is "{}"
+  // on BOTH sides → a real async behavior change would FALSELY "preserve". An async edit
+  // can't be soundly value-compared, so reject it HERE (before the battery + the two sandbox
+  // runs). Read from the AST `async` flag (robust to formatting); the runtime thenable check
+  // after the first run also catches an ORDINARY fn that RETURNS a promise (no `async` kw).
+  if (buggy.isAsync || fixed.isAsync) {
+    return { kind: "skipped", detail: "async-fn" }
+  }
   // A behavior-preserving array-constructor IDIOM rewrite diverges only on an out-of-domain
   // length (or untyped coercion inputs) — a constructor-domain artifact, not a substantive
   // change. Detect it at the lifted-expression level and bail BEFORE the battery (also saves
@@ -596,6 +628,13 @@ export async function compareLiftedPair(pair: LiftedPair, caps: SandboxCaps): Pr
     // A guest throw/timeout/oom on EITHER side (or a malformed tally) means we couldn't
     // run the comparison soundly → skipped, never a false agreed/diverged.
     return { kind: "skipped", detail: "guest-no-tally" }
+  }
+  // ASYNC GUARD (runtime side): the guest observed a Promise/thenable result on ≥1 input —
+  // its value can't be soundly compared (`canon` equates every promise as "{}"), so skip
+  // rather than emit a spurious preserved/changed. Catches an ordinary fn returning a
+  // promise (no `async` keyword for the source-side gate above to see).
+  if (first.thenable) {
+    return { kind: "skipped", detail: "async-result" }
   }
   if (first.diverge < 1) {
     // Every input produced equal output → behavior PRESERVED on this battery (the

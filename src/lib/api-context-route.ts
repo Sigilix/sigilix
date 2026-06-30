@@ -24,7 +24,7 @@ import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { gatherAgentContext } from "./agent-context"
 import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
-import { enqueueIndexJobsForRepos, isIndexerEnabled } from "./index-producer"
+import { enqueueIndexJobsForRepos, isIndexerEnabled, type EnqueueIndexJobsResult } from "./index-producer"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 
 // Queries are short (a turn's intent), so the body is tiny — cap well below the diff routes.
@@ -161,7 +161,10 @@ async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
  * #146: the App is installed but this turn grounded nothing. Read the index manifest to tell
  * "indexed, the query just didn't match" (→ grounded, no heal) from "no usable index yet"
  * (→ indexing, self-heal). Soft-fails to "indexing" — a manifest-read blip must never throw
- * into the route. A valid manifest means the index is built; missing/invalid means it isn't.
+ * into the route. A valid manifest with `chunkCount > 0` means the index is built AND usable;
+ * missing / invalid / a zero-chunk manifest (an index run that completed without upserting
+ * anything) all mean it isn't — those must fall through to self-heal too, or a repo whose only
+ * index attempt produced zero chunks gets stuck reporting "grounded" forever.
  */
 async function resolveInstalledStatus(
   env: Env,
@@ -171,16 +174,16 @@ async function resolveInstalledStatus(
   repoId: number | null,
 ): Promise<ContextStatus> {
   if (!env.OPENCLAW_STATE) return "indexing"
-  let manifestKind: "ok" | "absent"
   try {
     const manifest = await readRepoIndexManifest(env, owner, repo)
-    manifestKind = manifest.kind === "ok" ? "ok" : "absent"
+    // Index already built with usable chunks — the repo is grounded, this query just matched
+    // nothing. Don't heal.
+    if (manifest.kind === "ok" && manifest.manifest.chunkCount > 0) return "grounded"
   } catch {
     return "indexing"
   }
-  // Index already built — the repo is grounded, this query just matched nothing. Don't heal.
-  if (manifestKind === "ok") return "grounded"
-  // No usable index yet → indexing. Self-heal best-effort (guarded against enqueue storms).
+  // No usable index yet (missing / invalid / zero-chunk manifest) → indexing. Self-heal
+  // best-effort (guarded against enqueue storms).
   await maybeEnqueueOnDemandIndex(env, owner, repo, installationId, repoId)
   return "indexing"
 }
@@ -204,15 +207,14 @@ async function maybeEnqueueOnDemandIndex(
   } catch {
     return // can't read the guard → don't risk a storm
   }
-  let succeeded = 0
+  let result: EnqueueIndexJobsResult
   try {
-    const result = await enqueueIndexJobsForRepos({
+    result = await enqueueIndexJobsForRepos({
       env,
       installationId,
       repositories: [{ full_name: `${owner}/${repo}`, ...(repoId !== null ? { id: repoId } : {}) }],
       reason: "on-demand-context-miss",
     })
-    succeeded = result.succeeded
   } catch (err) {
     console.warn(
       JSON.stringify({
@@ -224,8 +226,13 @@ async function maybeEnqueueOnDemandIndex(
     )
     return
   }
-  // Only mark when the enqueue actually landed, so a failed attempt retries on the next call.
-  if (succeeded > 0) {
+  // Mark on a successful enqueue OR a correctly-skipped sensitive repo — both are terminal
+  // outcomes for this repo. Without the sensitive case, a denylisted repo polling /v1/context
+  // (which never gets an index, so the manifest check above never flips to "grounded") would
+  // re-attempt — and re-skip — the enqueue on every single call forever, an unbounded
+  // skip-sensitive log storm. A genuine per-repo enqueue FAILURE is the only case that should
+  // retry on the next call.
+  if (result.succeeded > 0 || result.sensitiveSkipped > 0) {
     try {
       await env.OPENCLAW_STATE.put(markerKey, new Date().toISOString(), {
         expirationTtl: INDEX_ENQUEUE_MARKER_TTL_SECONDS,
@@ -275,11 +282,18 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
     })
 
     // #146: a distinguishable status alongside the (backward-compatible) context payload.
-    //   context non-null            → grounded (we returned grounding).
-    //   installed, but nothing yet  → indexing if no usable index (self-heals), else grounded.
-    //   not installed               → not-connected (can't ground; nothing to index).
+    //   chunkCount > 0               → grounded (actual code retrieval landed this turn).
+    //   installed, but no chunks yet → indexing if no usable index (self-heals), else grounded.
+    //   not installed                → not-connected (can't ground; nothing to index).
+    //
+    // Deliberately NOT `result.context !== null`: `gatherAgentContext` returns a non-null
+    // context when the repo has review learnings even with ZERO code chunks (learnings are
+    // keyed by repoId, independent of code indexing) — classifying THAT as "grounded" would
+    // permanently mask a never-code-indexed repo and self-heal would never fire. `chunkCount`
+    // is the actual-code-retrieval signal; mirror the same chunkCount > 0 contract the admin
+    // retrieval probe route (`admin-linear-retrieval-probe-route.ts`) already uses.
     let status: ContextStatus
-    if (result.context !== null) {
+    if (result.telemetry.chunkCount > 0) {
       status = "grounded"
     } else if (installationId === null) {
       status = "not-connected"

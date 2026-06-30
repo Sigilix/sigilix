@@ -210,11 +210,28 @@ describe("handleAgentContextRoute — #146 status + self-heal", () => {
     return ((await res.json()) as { status: string }).status
   }
 
-  it("status=grounded when chunks are present (context non-null)", async () => {
+  it("status=grounded when chunks are present (chunkCount > 0)", async () => {
     const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
     expect(res.status).toBe(200)
     expect(await statusOf(res)).toBe("grounded")
     expect(mockEnqueue).not.toHaveBeenCalled() // grounded never self-heals
+  })
+
+  it("P1: status=indexing (NOT grounded) when context is non-null from learnings alone but chunkCount is 0, and self-heals exactly once", async () => {
+    // gatherAgentContext returns a non-null `context` (the learnings block) even with zero
+    // code chunks — learnings are keyed by repoId, independent of code indexing. Classifying
+    // that as "grounded" would permanently mask a never-code-indexed repo.
+    mockGather.mockResolvedValue({
+      context: "# Team conventions & past decisions\n- some rule",
+      telemetry: { ...okResult.telemetry, chunkCount: 0, contextChars: 42 },
+    } as never)
+    mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { status: string; context: string | null }
+    expect(body.status).toBe("indexing")
+    expect(body.context).not.toBeNull() // context payload is unchanged — only `status` differs
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
   })
 
   it("status=not-connected when no installation, and does NOT enqueue", async () => {
@@ -243,12 +260,23 @@ describe("handleAgentContextRoute — #146 status + self-heal", () => {
     )
   })
 
-  it("status=grounded (no enqueue) when installed AND a manifest already exists", async () => {
+  it("status=grounded (no enqueue) when installed AND a manifest with chunks already exists", async () => {
     mockGather.mockResolvedValue(nullGather as never)
-    mockReadManifest.mockResolvedValue({ kind: "ok", manifest: {} } as never)
+    mockReadManifest.mockResolvedValue({ kind: "ok", manifest: { chunkCount: 5 } } as never)
     const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
     expect(await statusOf(res)).toBe("grounded") // index exists; the query just matched nothing
     expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("P1: status=indexing (and self-heals) when the manifest is ok but chunkCount is 0", async () => {
+    // A manifest can exist (kind: "ok") from an index run that completed without upserting any
+    // chunks (e.g. an empty repo). That manifest is NOT usable for grounding — it must fall
+    // through to self-heal, not get stuck reporting "grounded" forever.
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "ok", manifest: { chunkCount: 0 } } as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(await statusOf(res)).toBe("indexing")
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
   })
 
   it("storm guard: a second call while the marker is fresh does NOT re-enqueue", async () => {
@@ -268,5 +296,42 @@ describe("handleAgentContextRoute — #146 status + self-heal", () => {
     const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
     expect(await statusOf(res)).toBe("indexing") // still distinguishable for the CLI
     expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("P2: soft-fails to status=indexing (does not throw) when the manifest read rejects", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockRejectedValue(new Error("KV unavailable"))
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(res.status).toBe(200) // never throws into a 500 on a manifest-read blip
+    expect(await statusOf(res)).toBe("indexing")
+    // Conservative soft-fail: an unreadable manifest is "unknown", not "confirmed unindexed",
+    // so the route reports indexing without ALSO attempting an enqueue it can't justify yet.
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("P3: writes the storm-guard marker even when the enqueue was skipped for sensitivity, so a second poll does not re-attempt", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 0, perRepoFailed: 0, sensitiveSkipped: 1 } as never)
+    const sharedEnv = appEnv({ OPENCLAW_STATE: makeKv() }) // one KV, shared across both calls
+    const first = await handleAgentContextRoute(req(validBody), sharedEnv)
+    const second = await handleAgentContextRoute(req(validBody), sharedEnv)
+    expect(await statusOf(first)).toBe("indexing")
+    expect(await statusOf(second)).toBe("indexing")
+    // Without the P3 fix this would be called twice — once per poll, forever, since
+    // succeeded stays 0 for every attempt on a sensitive-denylisted repo.
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
+  })
+
+  it("P3 (control): a genuine per-repo enqueue FAILURE does NOT write the marker, so the next poll retries", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 0, perRepoFailed: 1, sensitiveSkipped: 0 } as never)
+    const sharedEnv = appEnv({ OPENCLAW_STATE: makeKv() })
+    const first = await handleAgentContextRoute(req(validBody), sharedEnv)
+    const second = await handleAgentContextRoute(req(validBody), sharedEnv)
+    expect(await statusOf(first)).toBe("indexing")
+    expect(await statusOf(second)).toBe("indexing")
+    expect(mockEnqueue).toHaveBeenCalledTimes(2) // no marker written ⇒ retries every poll
   })
 })

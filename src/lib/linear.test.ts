@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
 import { estimateToPoints, severityToPriority, LinearClient, buildLinearAgentClient } from "@/src/lib/linear"
-import { __resetBrokerClientCacheForTests } from "@/src/lib/linear-token-broker-client"
+import { getValidAgentTokenViaBroker, __resetBrokerClientCacheForTests } from "@/src/lib/linear-token-broker-client"
 import type { BrokerTokenResult } from "@/src/do/linear-token-broker"
 import type { Env } from "@/src/shared/types/env"
 
@@ -135,12 +135,21 @@ describe("LinearClient.createAgentActivity", () => {
 describe("buildLinearAgentClient", () => {
   // Minimal fake LINEAR_TOKEN_BROKER DO stub — mirrors repo-graph-client.test.ts /
   // provider-cooldown-client.test.ts: a hand-built namespace exposing only
-  // idFromName/get, returning a stub whose getValidToken is the test's mock.
-  function makeEnv(getValidToken: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>): Env {
+  // idFromName/get, returning a stub whose getValidToken (and, for the SIG-144
+  // slice 3 401-retry tests, forceRefresh) are the test's mocks. `forceRefresh`
+  // defaults to a not-installed failure so existing one-arg callers are unaffected.
+  function makeEnv(
+    getValidToken: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>,
+    forceRefresh?: () => Promise<BrokerTokenResult>,
+  ): Env {
     return {
       LINEAR_TOKEN_BROKER: {
         idFromName: (n: string) => ({ toString: () => n }),
-        get: () => ({ getValidToken }),
+        get: () => ({
+          getValidToken,
+          forceRefresh:
+            forceRefresh ?? (async (): Promise<BrokerTokenResult> => ({ ok: false, reason: "not-installed" })),
+        }),
       },
     } as unknown as Env
   }
@@ -185,5 +194,146 @@ describe("buildLinearAgentClient", () => {
     })
     await buildLinearAgentClient(env)
     expect(captured).toEqual({ readOnly: true })
+  })
+
+  // ── SIG-144 slice 3: the broker-agent client's 401-retry wiring ──
+  it("wires onUnauthorized to forceRefreshViaBroker: a 401 forces a broker refresh, rebuilds the header, retries once, and warms the isolate cache", async () => {
+    let getValidTokenCalls = 0
+    let forceRefreshCalls = 0
+    const env = makeEnv(
+      async () => {
+        getValidTokenCalls++
+        return { ok: true, accessToken: "stale-token" }
+      },
+      async () => {
+        forceRefreshCalls++
+        return { ok: true, accessToken: "fresh-token" }
+      },
+    )
+
+    const client = await buildLinearAgentClient(env)
+    expect(client).not.toBeNull()
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ errors: [{ message: "Unauthorized" }] }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { agentActivityCreate: { success: true } } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+
+    await client!.createAgentActivity("session-x", "On it", "thought")
+
+    expect(forceRefreshCalls).toBe(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [, secondInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect((secondInit.headers as Record<string, string>).authorization).toBe("Bearer fresh-token")
+
+    // forceRefreshViaBroker (slice 2) already warms the isolate read cache with the
+    // forced token — a subsequent readOnly broker read must be served from cache,
+    // not re-hit the DO, and must reflect the NEW token, not the stale one.
+    const callsBefore = getValidTokenCalls
+    const again = await getValidAgentTokenViaBroker(env, { readOnly: true })
+    expect(again).toBe("fresh-token")
+    expect(getValidTokenCalls).toBe(callsBefore)
+  })
+})
+
+// ─── LinearClient — 401-retry via the onUnauthorized hook (SIG-144 slice 3) ─
+describe("LinearClient — 401-retry via onUnauthorized hook", () => {
+  function response(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("401 once: calls onUnauthorized, rebuilds the Authorization header, retries once, and succeeds", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(401, { errors: [{ message: "Unauthorized" }] }))
+      .mockResolvedValueOnce(response(200, { data: { agentActivityCreate: { success: true } } }))
+    const onUnauthorized = vi.fn(async () => "fresh-token")
+    const client = new LinearClient({ oauthToken: "stale-token" }, { onUnauthorized })
+
+    await client.createAgentActivity("session-1", "On it", "thought")
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [, firstInit] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect((firstInit.headers as Record<string, string>).authorization).toBe("Bearer stale-token")
+    const [, secondInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect((secondInit.headers as Record<string, string>).authorization).toBe("Bearer fresh-token")
+  })
+
+  it("401 twice: refreshes once, retries once, the retry still 401s → fails loudly, no loop (exactly one retry)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(401, { errors: [{ message: "Unauthorized" }] }))
+      .mockResolvedValueOnce(response(401, { errors: [{ message: "Unauthorized" }] }))
+    const onUnauthorized = vi.fn(async () => "fresh-token")
+    const client = new LinearClient({ oauthToken: "stale-token" }, { onUnauthorized })
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    await expect(client.createAgentActivity("session-2", "On it", "thought")).rejects.toThrow(/Linear HTTP 401/)
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1) // never called again — no loop
+    expect(fetchSpy).toHaveBeenCalledTimes(2) // exactly one retry attempt, not more
+    const logged = errorSpy.mock.calls.flat().map(String).join("\n")
+    expect(logged).toContain("linear-gql-401-retry-failed")
+    expect(logged).not.toMatch(/fresh-token|stale-token/) // no token material
+  })
+
+  it("onUnauthorized returns null (broker forceRefresh failed): fails loudly with no second fetch call", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(401, { errors: [{ message: "Unauthorized" }] }))
+    const onUnauthorized = vi.fn(async () => null)
+    const client = new LinearClient({ oauthToken: "stale-token" }, { onUnauthorized })
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    await expect(client.createAgentActivity("session-3", "On it", "thought")).rejects.toThrow(/Linear HTTP 401/)
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(1) // no fresh token → no retry attempted
+    const logged = errorSpy.mock.calls.flat().map(String).join("\n")
+    expect(logged).toContain("linear-gql-401-refresh-failed")
+    expect(logged).not.toContain("stale-token")
+  })
+
+  it("a non-401 error is unchanged: no refresh hook call, no retry, error propagates as before", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("internal error", { status: 500 }))
+    const onUnauthorized = vi.fn(async () => "fresh-token")
+    const client = new LinearClient({ oauthToken: "stale-token" }, { onUnauthorized })
+
+    await expect(client.createAgentActivity("session-4", "On it", "thought")).rejects.toThrow(/Linear HTTP 500/)
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it("the client_credentials/human path (no onUnauthorized hook) gets NO retry on 401 — unchanged behavior", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(401, { errors: [{ message: "Unauthorized" }] }))
+    // Matches buildLinearAuth's construction: `new LinearClient(auth)`, no options.
+    const client = new LinearClient({ apiKey: "human-api-key" })
+
+    await expect(client.createAgentActivity("session-5", "On it", "thought")).rejects.toThrow(/Linear HTTP 401/)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1) // single attempt — no retry plumbing engaged
   })
 })

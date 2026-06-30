@@ -6,7 +6,11 @@
 // project-level field write.
 
 import { getAppActorToken } from "./linear-oauth"
-import { getValidAgentTokenViaBroker, type LinearTokenBrokerEnv } from "@/src/lib/linear-token-broker-client"
+import {
+  getValidAgentTokenViaBroker,
+  forceRefreshViaBroker,
+  type LinearTokenBrokerEnv,
+} from "@/src/lib/linear-token-broker-client"
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 
@@ -66,14 +70,24 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
  * LinearTokenBroker DO), NOT the KV-backed `getValidAgentToken` this used before.
  * `readOnly: true` is deliberate — this is the hot ACK / agent-activity path, so
  * it must NEVER trigger a refresh itself; the broker's own alarm keeps the token
- * fresh, and a later slice adds a 401-retry path that forces one. A null return
- * (not installed, or the broker reports a hard refresh failure) keeps the
- * existing fail-safe: skip the post, never throw, never fall back to a human key.
+ * fresh. A null return (not installed, or the broker reports a hard refresh
+ * failure) keeps the existing fail-safe: skip the post, never throw, never fall
+ * back to a human key.
+ *
+ * SIG-144 slice 3: wires the `onUnauthorized` refresh+retry hook — the ONLY
+ * client variant that gets it. `forceRefreshViaBroker(env)` is captured in the
+ * closure here, so the generic `LinearClient.gql()` never imports the broker;
+ * the broker dependency flows in through this one call site (clean-arch — see
+ * `LinearClientOptions` on `linear.ts`). A token still served from the readOnly
+ * cache can be stale relative to Linear (e.g. the broker's proactive-refresh
+ * alarm hasn't fired yet); the hook is what recovers from that without the
+ * caller (ackAgentSession, the agent-run ack) having to know anything about
+ * the broker.
  */
 export async function buildLinearAgentClient(env: LinearTokenBrokerEnv): Promise<LinearClient | null> {
   const token = await getValidAgentTokenViaBroker(env, { readOnly: true })
   if (!token) return null
-  return new LinearClient({ oauthToken: token })
+  return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(env) })
 }
 
 export interface LinearIssue {
@@ -122,14 +136,37 @@ interface IssueLabel {
 
 export type LinearAuth = { apiKey: string } | { oauthToken: string }
 
-export class LinearClient {
-  private readonly authHeader: string
+/**
+ * SIG-144 slice 3: optional behavior hooks for `LinearClient`. `onUnauthorized`
+ * is the broker-agent-token 401-retry hook — set ONLY by `buildLinearAgentClient`.
+ * The `client_credentials` / human-`LINEAR_API_KEY` path (`buildLinearAuth`)
+ * never sets it, so that path's existing re-mint behavior is unchanged.
+ *
+ * Keeping this as a plain callback (rather than importing the broker client
+ * here) is the clean-arch seam: `linear.ts` stays ignorant of the broker DO —
+ * the broker dependency flows in from the call site that builds the hook.
+ */
+export interface LinearClientOptions {
+  /**
+   * Called when a GraphQL request comes back 401. Must return a fresh access
+   * token to retry the SAME request once with a rebuilt Authorization header,
+   * or `null` if no fresh token could be obtained — in which case the 401 is
+   * surfaced as a loud, structured failure (no token material logged) and the
+   * call is NOT retried again.
+   */
+  onUnauthorized?: () => Promise<string | null>
+}
 
-  constructor(auth: LinearAuth) {
+export class LinearClient {
+  private authHeader: string
+  private readonly onUnauthorized: (() => Promise<string | null>) | undefined
+
+  constructor(auth: LinearAuth, options?: LinearClientOptions) {
     // Personal API keys go through as the raw header value (Linear's docs).
     // OAuth access tokens use the standard Bearer prefix. Mixing them up
     // produces a 401 on every call, which is the expected mode failure.
     this.authHeader = "oauthToken" in auth ? `Bearer ${auth.oauthToken}` : auth.apiKey
+    this.onUnauthorized = options?.onUnauthorized
   }
 
   /**
@@ -560,7 +597,18 @@ export class LinearClient {
     }
   }
 
-  private async gql<T>(query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  /**
+   * SIG-144 slice 3: `isRetry` bounds the 401-refresh-retry to exactly ONE
+   * attempt — it is only ever set `true` by this method's own recursive call
+   * below, never by an external caller, so there is no path to a second retry
+   * or a loop. Every other call site keeps the implicit `isRetry = false`.
+   */
+  private async gql<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    signal?: AbortSignal,
+    isRetry = false,
+  ): Promise<T> {
     const init: RequestInit = {
       method: "POST",
       headers: {
@@ -574,8 +622,34 @@ export class LinearClient {
     // existing zero-signal call sites unchanged.
     if (signal) init.signal = signal
     const res = await fetch(LINEAR_GRAPHQL, init)
+
+    // SIG-144 slice 3: scoped 401-retry for the broker-backed agent client ONLY.
+    // `this.onUnauthorized` is set exclusively by `buildLinearAgentClient` — the
+    // client_credentials / human-`LINEAR_API_KEY` path (`buildLinearAuth`) never
+    // sets it, so that path falls straight through to the unchanged `!res.ok`
+    // throw below, exactly as before this slice. `!isRetry` is what caps this at
+    // one attempt: the recursive call passes `isRetry = true`, so a second 401
+    // (or any later 401 from a later call) never re-enters this branch.
+    if (res.status === 401 && this.onUnauthorized && !isRetry) {
+      const freshToken = await this.onUnauthorized()
+      if (freshToken) {
+        this.authHeader = `Bearer ${freshToken}`
+        return this.gql<T>(query, variables, signal, true)
+      }
+      // The broker could not mint a fresh token (forceRefresh failed). Fail
+      // loudly with a neutral breadcrumb — NEVER the token/header — and fall
+      // through to the generic 401 throw below; no further retry is attempted.
+      console.error(JSON.stringify({ event: "linear-gql-401-refresh-failed" }))
+    }
+
     if (!res.ok) {
       const text = await res.text()
+      if (res.status === 401 && isRetry) {
+        // The retried request — with the freshly-refreshed token — STILL came
+        // back 401. Loud neutral breadcrumb (no token material); the caller's
+        // thrown error is the only further signal, never a second retry.
+        console.error(JSON.stringify({ event: "linear-gql-401-retry-failed" }))
+      }
       throw new Error(`Linear HTTP ${res.status}: ${text.slice(0, 500)}`)
     }
     const json = (await res.json()) as { data?: T; errors?: Array<{ message: string }> }

@@ -1,5 +1,5 @@
 // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command. Dark by default.
-import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
+import { buildLinearClient } from "@/src/lib/linear"
 import { triageIssue } from "@/src/lib/triage"
 import { resolveLinearTeamForRepo } from "@/src/shared/adapters/github/github-installation"
 import type { Env } from "@/src/shared/types/env"
@@ -34,7 +34,7 @@ export type LinearTriageResult =
  * Returns `{kind:"no-team"}` when no Linear team is mapped for the repo.
  * Returns `{kind:"created", triaged}` after a successful createIssue — triage
  * failures are absorbed (triaged:false) because the issue already exists.
- * Returns `{kind:"error"}` when buildLinearAuth or createIssue throws.
+ * Returns `{kind:"error"}` when buildLinearClient or createIssue throws.
  */
 export async function runLinearTriageAction(
   env: Env,
@@ -54,7 +54,7 @@ export async function runLinearTriageAction(
   const description = `${args.body}\n\n— filed by @${args.author} via Sigilix from ${args.prUrl}`
 
   try {
-    const lc = new LinearClient(await buildLinearAuth(env))
+    const lc = await buildLinearClient(env)
     const issue = await lc.createIssue({ teamId, title: args.title, description })
     let triaged = true
     try {

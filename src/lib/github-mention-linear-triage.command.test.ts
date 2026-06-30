@@ -29,6 +29,14 @@ vi.mock("@/src/lib/linear", async (importActual) => {
     ...actual,
     LinearClient: FakeLinearClient,
     buildLinearAuth: buildLinearAuthMock,
+    // SIG-144 slice 4: handleLinearTriageCommand's runLinearTriageAction now
+    // builds its client via buildLinearClient. Spreading `...actual` would
+    // otherwise leave the REAL buildLinearClient in place, which calls the
+    // REAL buildLinearAuth/LinearClient internally (mock overrides don't
+    // propagate into the actual module's own internal references) — so this
+    // must be overridden explicitly, returning the same FakeLinearClient the
+    // rest of this suite already asserts against.
+    buildLinearClient: vi.fn(async () => new FakeLinearClient()),
   }
 })
 

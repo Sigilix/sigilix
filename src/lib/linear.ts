@@ -26,9 +26,37 @@ const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 export type AgentActivityType = "thought" | "action" | "response" | "elicitation" | "error"
 
 /**
- * Build the Linear auth credential. Prefers OAuth `client_credentials`
- * (so comments post under the Sigilix bot identity, not a human owner)
- * and falls back to a personal API key when OAuth isn't configured.
+ * SIG-144 slice 4: resolve the Linear-unification cutover mode for
+ * `buildLinearAuth` / `buildLinearClient`. Case-sensitive and fail-closed,
+ * mirrors `resolveLinearAgentRunMode` (src/lib/agent-runner/mode.ts) — only
+ * the exact string "on" routes auth through the broker agent token; unset,
+ * "ON", whitespace variants, or any unknown value default to "off", which
+ * keeps `buildLinearAuth` byte-identical to its pre-slice-4 behavior.
+ */
+export type LinearUnifiedMode = "off" | "on"
+
+export function resolveLinearUnifiedMode(env: Pick<LinearAuthEnv, "OPENCLAW_LINEAR_UNIFIED">): LinearUnifiedMode {
+  return env.OPENCLAW_LINEAR_UNIFIED === "on" ? "on" : "off"
+}
+
+/**
+ * Build the Linear auth credential.
+ *
+ * Default (OPENCLAW_LINEAR_UNIFIED off/unset — see `resolveLinearUnifiedMode`):
+ * prefers OAuth `client_credentials` (so comments post under the Sigilix bot
+ * identity, not a human owner) and falls back to a personal API key when
+ * OAuth isn't configured. Byte-identical to the pre-SIG-144-slice-4 behavior.
+ *
+ * SIG-144 slice 4 (OPENCLAW_LINEAR_UNIFIED "on"): returns the AGENT token via
+ * `getValidAgentTokenViaBroker` (`readOnly: false` — this is the active
+ * triage/mutation path, not the 10s-ACK hot path that `buildLinearAgentClient`
+ * serves, so the broker is allowed to refresh a near-expiry token here)
+ * instead of the client_credentials / human-key choice above. When the
+ * broker returns no token — not installed, or a hard refresh failure — this
+ * THROWS a loud, neutral error rather than falling through to the
+ * `LINEAR_API_KEY` human fallback below: post-cutover, silently mutating
+ * Linear under a human identity would hide a broken agent install. The
+ * thrown message never carries token material.
  *
  * Extracted from `triage.ts` + `mention-reply.ts` when SIG-225's
  * webhook-side thread-walk became the 3rd call site that needed it.
@@ -45,9 +73,32 @@ export interface LinearAuthEnv {
    *  API-key fallback path never touches it. Optional here so a
    *  caller that knows it's API-key-only can pass a minimal env. */
   OPENCLAW_STATE?: KVNamespace
+  /** SIG-144 slice 4 — see `resolveLinearUnifiedMode`. Default/unset → "off",
+   *  the unchanged client_credentials/human-key path. */
+  OPENCLAW_LINEAR_UNIFIED?: string
+  /** Only read when OPENCLAW_LINEAR_UNIFIED is "on" — `buildLinearAuth` reads
+   *  the agent token from this DO via `getValidAgentTokenViaBroker`. The
+   *  flag-off path never touches it; optional here so an API-key-only caller
+   *  can keep passing a minimal env (mirrors the OPENCLAW_STATE convention
+   *  above). A missing binding while unified is "on" is treated exactly like
+   *  a broker miss — `buildLinearAuth` throws rather than guessing. */
+  LINEAR_TOKEN_BROKER?: DurableObjectNamespace
 }
 
 export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
+  if (resolveLinearUnifiedMode(env) === "on") {
+    const token = env.LINEAR_TOKEN_BROKER
+      ? await getValidAgentTokenViaBroker({ LINEAR_TOKEN_BROKER: env.LINEAR_TOKEN_BROKER }, { readOnly: false })
+      : null
+    if (!token) {
+      throw new Error(
+        "buildLinearAuth: OPENCLAW_LINEAR_UNIFIED is on but no agent token is available " +
+          "(broker not installed, a hard refresh failure, or LINEAR_TOKEN_BROKER unbound) — " +
+          "refusing to fall back to the human LINEAR_API_KEY",
+      )
+    }
+    return { oauthToken: token }
+  }
   if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
     if (!env.OPENCLAW_STATE) {
       throw new Error("buildLinearAuth: OAuth client_credentials configured but OPENCLAW_STATE KV binding is missing")
@@ -56,6 +107,34 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
     return { oauthToken: token }
   }
   return { apiKey: env.LINEAR_API_KEY }
+}
+
+/**
+ * Build a fully-constructed `LinearClient` from `buildLinearAuth`'s credential
+ * choice — the single helper every `buildLinearAuth` call site should use
+ * (SIG-144 slice 4). Exists so the ~7 callers don't each have to know whether
+ * the unified-mode 401-retry hook applies; this is the one place that decides.
+ *
+ * Default (unified off): identical to the pre-slice-4 call-site pattern,
+ * `new LinearClient(await buildLinearAuth(env))` — no `onUnauthorized` hook,
+ * zero behavior change.
+ *
+ * Unified on: the credential IS the broker agent token (or `buildLinearAuth`
+ * already threw — see above), so the returned client also carries
+ * `onUnauthorized: () => forceRefreshViaBroker(env)`, mirroring
+ * `buildLinearAgentClient`'s slice-3 wiring — a 401 on this path refreshes
+ * through the broker and retries once instead of failing the whole call.
+ * `forceRefreshViaBroker` is captured in the closure here, same clean-arch
+ * seam as `buildLinearAgentClient`: the generic `LinearClient` never imports
+ * the broker.
+ */
+export async function buildLinearClient(env: LinearAuthEnv): Promise<LinearClient> {
+  const auth = await buildLinearAuth(env)
+  if (resolveLinearUnifiedMode(env) === "on" && env.LINEAR_TOKEN_BROKER) {
+    const brokerEnv = { LINEAR_TOKEN_BROKER: env.LINEAR_TOKEN_BROKER }
+    return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv) })
+  }
+  return new LinearClient(auth)
 }
 
 /**

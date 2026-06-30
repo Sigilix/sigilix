@@ -1002,4 +1002,20 @@ export interface Env {
   // Install hardening: when SET, the actor=app OAuth callback only accepts installs
   // from this Linear organization id; UNSET → install allowed + a warning is logged.
   OPENCLAW_LINEAR_ALLOWED_ORG_ID?: string
+
+  // SIG-144 (Linear unification cutover, slice 4): flag-gates `buildLinearAuth`'s
+  // credential choice (src/lib/linear.ts).
+  //   "off" (default/unset/unknown) — buildLinearAuth is byte-identical to its
+  //     pre-slice-4 behavior: client_credentials app-actor token, falling back to
+  //     the human LINEAR_API_KEY when OAuth isn't configured.
+  //   "on" — buildLinearAuth returns the AGENT token via the LinearTokenBroker DO
+  //     (getValidAgentTokenViaBroker, readOnly:false — the active triage/mutation
+  //     path, not the 10s-ACK path, so a near-expiry token may be refreshed) and
+  //     the LinearClient it backs carries the onUnauthorized broker-refresh-retry
+  //     hook. When on and the broker returns no token (not installed, or a hard
+  //     refresh failure), buildLinearAuth THROWS rather than falling back to
+  //     LINEAR_API_KEY — post-cutover, silently mutating Linear under a human
+  //     identity would hide a broken agent install.
+  // Fail-closed to "off" (see resolveLinearUnifiedMode in linear.ts).
+  OPENCLAW_LINEAR_UNIFIED?: string
 }

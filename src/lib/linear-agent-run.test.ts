@@ -23,19 +23,29 @@ vi.mock("@/src/lib/linear", () => ({
   LinearClient: vi.fn(),
   buildLinearAuth: vi.fn(),
   buildLinearAgentClient: vi.fn(),
+  // SIG-144 slice 4: runLinearAgentRun now builds its client via
+  // buildLinearClient instead of `new LinearClient(await buildLinearAuth(env))`.
+  buildLinearClient: vi.fn(),
 }))
 vi.mock("@/src/lib/agent-runner/dispatch", () => ({
   dispatchAgentRun: vi.fn(),
 }))
 
 import { runLinearAgentRun, dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
-import { LinearClient, buildLinearAuth, buildLinearAgentClient, type LinearIssue } from "@/src/lib/linear"
+import {
+  LinearClient,
+  buildLinearAuth,
+  buildLinearAgentClient,
+  buildLinearClient,
+  type LinearIssue,
+} from "@/src/lib/linear"
 import { dispatchAgentRun, type AgentRunTaskInput } from "@/src/lib/agent-runner/dispatch"
 import type { Env } from "@/src/shared/types/env"
 
 // ── typed mock handles ────────────────────────────────────────────────────────
 const mockBuildLinearAuth = vi.mocked(buildLinearAuth)
 const mockBuildLinearAgentClient = vi.mocked(buildLinearAgentClient)
+const mockBuildLinearClient = vi.mocked(buildLinearClient)
 const mockDispatchAgentRun = vi.mocked(dispatchAgentRun)
 const MockLinearClient = vi.mocked(LinearClient)
 
@@ -108,6 +118,10 @@ describe("runLinearAgentRun", () => {
     MockLinearClient.mockImplementation(
       () => ({ getIssue: mockGetIssue, createComment: mockCreateComment }) as unknown as LinearClient,
     )
+    mockBuildLinearClient.mockResolvedValue({
+      getIssue: mockGetIssue,
+      createComment: mockCreateComment,
+    } as unknown as LinearClient)
     mockCreateAgentActivity = vi.fn<(sessionId: string, content: string, type: string) => Promise<void>>(() =>
       Promise.resolve(undefined),
     )

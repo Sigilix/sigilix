@@ -29,6 +29,10 @@ vi.mock("@/src/lib/linear", () => ({
     createIssue: mockCreateIssue,
   })),
   buildLinearAuth: mockBuildLinearAuth,
+  // SIG-144 slice 4: runLinearTriageAction now builds its client via
+  // buildLinearClient (the single helper that also wires the unified-mode
+  // 401-retry hook) instead of `new LinearClient(await buildLinearAuth(env))`.
+  buildLinearClient: vi.fn(async () => ({ createIssue: mockCreateIssue })),
 }))
 
 const { mockTriageIssue } = vi.hoisted(() => ({

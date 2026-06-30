@@ -11,7 +11,7 @@ import { runAgentLoop } from "@/src/lib/agent-loop"
 import { createAgentTools } from "@/src/lib/agent-tools"
 import { makeKvTelemetrySink } from "@/src/lib/agent-telemetry-kv"
 import { buildClient, parseGithubMentionResponse } from "@/src/lib/github-mention"
-import { buildLinearAuth, LinearClient } from "@/src/lib/linear"
+import { buildLinearClient } from "@/src/lib/linear"
 import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { triageIssue } from "@/src/lib/triage"
@@ -256,8 +256,7 @@ async function runLinearTriage(
   const { title, description } = await summarizeThreadToIssue(env, ctx)
 
   // Create the Linear issue.
-  const auth = await buildLinearAuth(env)
-  const linear = new LinearClient(auth)
+  const linear = await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title,
@@ -317,8 +316,7 @@ async function runImplement(
 
   // Create the Linear issue, self-assigned to the Sigilix agent user so the free-tier
   // user never has to assign it by hand. assigneeId is omitted when the env is unset.
-  const auth = await buildLinearAuth(env)
-  const linear = new LinearClient(auth)
+  const linear = await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title,
@@ -408,8 +406,7 @@ async function runOfferConfirm(
 
   // Create the ticket self-assigned to the Sigilix agent user (assigneeId omitted
   // when the env is unset), body = the agreed plan.
-  const auth = await buildLinearAuth(env)
-  const linear = new LinearClient(auth)
+  const linear = await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title: offer.title,

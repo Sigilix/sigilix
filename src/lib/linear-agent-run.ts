@@ -16,7 +16,7 @@
 // tokens / secrets.
 
 import type { Env } from "@/src/shared/types/env"
-import { LinearClient, buildLinearAuth, buildLinearAgentClient } from "@/src/lib/linear"
+import { buildLinearClient, buildLinearAgentClient } from "@/src/lib/linear"
 import { dispatchAgentRun } from "@/src/lib/agent-runner/dispatch"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 
@@ -160,7 +160,7 @@ export async function dispatchTicketImplementation(
  */
 export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
   try {
-    const linear = new LinearClient(await buildLinearAuth(env))
+    const linear = await buildLinearClient(env)
     const issue = await linear.getIssue(issueId)
     if (!issue) {
       console.warn(JSON.stringify({ event: "linear-agent-run-issue-not-found", issueId }))

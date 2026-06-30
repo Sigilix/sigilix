@@ -31,10 +31,18 @@ vi.mock("@/src/lib/linear", () => ({
     getCommentWithIssue: mockGetCommentWithIssue,
     createComment: mockCreateComment,
   })),
+  // SIG-144 slice 4: handleMention now builds its client via buildLinearClient.
+  buildLinearClient: vi.fn(async () => ({
+    getCommentWithIssue: mockGetCommentWithIssue,
+    createComment: mockCreateComment,
+  })),
 }))
 
 import { handleMention } from "@/src/lib/mention-reply"
+import { buildLinearClient } from "@/src/lib/linear"
 import type { Env } from "@/src/shared/types/env"
+
+const mockBuildLinearClient = vi.mocked(buildLinearClient)
 
 function manifest(owner: string, repo: string): string {
   return JSON.stringify({
@@ -213,5 +221,45 @@ describe("handleMention — SIG-207 retrieval proof", () => {
       expect.stringContaining("src/lib/mention-reply.ts"),
       undefined,
     )
+  })
+})
+
+// ── SIG-144 slice 4 spot-check: the REAL caller (handleMention) under
+// unified mode, through the REAL buildLinearAuth/buildLinearClient — not the
+// FakeLinearClient the suite above uses. Proves the production wiring.
+describe("handleMention — SIG-144 slice 4 spot-check (real buildLinearAuth/buildLinearClient under unified mode)", () => {
+  it("OPENCLAW_LINEAR_UNIFIED=on routes handleMention's Linear calls through the broker agent token, never the human LINEAR_API_KEY", async () => {
+    const { env } = makeEnv()
+    env.OPENCLAW_LINEAR_UNIFIED = "on"
+    env.LINEAR_API_KEY = "human-key-must-never-be-used"
+    env.LINEAR_TOKEN_BROKER = {
+      idFromName: (n: string) => ({ toString: () => n }),
+      get: () => ({
+        getValidToken: async () => ({ ok: true, accessToken: "agent-token-xyz" }),
+        forceRefresh: async () => ({ ok: false, reason: "not-installed" }),
+      }),
+    } as unknown as Env["LINEAR_TOKEN_BROKER"]
+
+    const actual = await vi.importActual<typeof import("@/src/lib/linear")>("@/src/lib/linear")
+    mockBuildLinearClient.mockImplementationOnce(actual.buildLinearClient)
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { comment: null } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    // comment:null short-circuits handleMention right after
+    // getCommentWithIssue (before retrieval / model call / reply post) — the
+    // minimal real path that still proves buildLinearAuth picked the broker
+    // token.
+    await handleMention("comment-missing", env)
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const authHeader = (init.headers as Record<string, string>).authorization
+    expect(authHeader).toBe("Bearer agent-token-xyz")
+    expect(authHeader).not.toContain("human-key-must-never-be-used")
   })
 })

@@ -8,7 +8,7 @@
 // scan is the fallback for cold-cache scenarios.
 
 import { generate } from "@/src/shared/adapters/model"
-import { LinearClient, buildLinearAuth } from "./linear"
+import { buildLinearClient } from "./linear"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
@@ -269,7 +269,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  const linear = new LinearClient(await buildLinearAuth(env))
+  const linear = await buildLinearClient(env)
   const data = await linear.getCommentWithIssue(commentId)
   log("comment-fetched")
   if (!data) {

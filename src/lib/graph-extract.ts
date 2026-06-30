@@ -26,6 +26,7 @@ import {
   type GraphSymbol,
   type FileEdgeKind,
   type FileEdgeRaw,
+  type CallKind,
   type CallEdge,
   type FileGraph,
 } from "./graph-extract-types"
@@ -244,9 +245,10 @@ function extractJsTsFileGraph(path: string, content: string, astCache?: AstCache
   })
 
   // Pass 4: collect call edges (best-effort, raw — callerSymbolId/calleeSymbolId
-  // resolved in Task 5 inside the DO). Only tracks `CallExpression` nodes whose
-  // callee is a plain `Identifier` — member calls (`obj.method()`) and computed
-  // calls are intentionally dropped (prefer missing over false positives).
+  // resolved in Task 5 inside the DO). Two call shapes are captured:
+  //  - `CallExpression` with a plain `Identifier` callee (`foo()`), and
+  //  - non-computed member calls (`obj.method()` / `this.method()`) — SIG-132.
+  // Computed member calls (`obj[expr]()`) have no static name and are dropped.
   //
   // Resolution order: local function name wins over an imported binding with the
   // same name (same_file takes precedence). This matches static scoping: a local
@@ -259,41 +261,81 @@ function extractJsTsFileGraph(path: string, content: string, astCache?: AstCache
       .filter((e) => e.edgeKind === "import" && e.importedName !== null && e.localName != null)
       .map((e) => e.localName as string),
   )
-  // NOTE: same_file calls are matched against function declarations only. Calls to
-  // arrow-function consts (kind "variable", e.g. `const f = () => {}`) are NOT captured
-  // here — a known recall gap, deferred pending Phase 2 shadow telemetry. Prefer-missing
-  // over false: widening to "variable" risks false edges for non-callable consts.
-  const localFns = new Set(symbols.filter((s) => s.kind === "function").map((s) => s.name))
+
+  // SIG-132: arrow-const / function-expression callees (`const f = () => {}`,
+  // `const g = function () {}`). These bind a callable to a `variable` symbol,
+  // so the prior function-declaration-only set missed every `f()` call to them.
+  // Collected straight from the AST (not the symbol table) so BOTH exported and
+  // local consts count — the DO resolves callee_symbol_id only for the ones that
+  // are real (exported) symbols; local consts stay NULL (prefer-missing).
+  const callableVars = new Set<string>()
+  walkAst(ast, {
+    VariableDeclarator(node: AstNode) {
+      const initType = node.init?.type
+      if (initType !== "ArrowFunctionExpression" && initType !== "FunctionExpression") return
+      if (node.id?.type !== "Identifier") return
+      const n: unknown = node.id.name
+      if (typeof n === "string" && n.length > 0) callableVars.add(n)
+    },
+  })
+
+  // same_file identifier callees: local function declarations ∪ callable consts.
+  const localFns = new Set<string>([
+    ...symbols.filter((s) => s.kind === "function").map((s) => s.name),
+    ...callableVars,
+  ])
+
+  // SIG-132: member-call callees resolve by the PROPERTY name against same-file
+  // METHOD symbols. Two guards keep the prefer-missing-over-false stance:
+  //  1. METHOD symbols only (not top-level functions) — so a `function run(){}`
+  //     is never matched by an unrelated `x.run()`.
+  //  2. Receiver-anchored to `this`/`super` only (enforced in the CallExpression
+  //     visitor) — a bare-identifier receiver (`api.fetchData()`, `console.log()`)
+  //     is not resolvable without type info, and matching on the property name
+  //     alone would emit a FALSE same_file edge whenever an external object
+  //     happens to share a method name with a same-file method. `this`/`super`
+  //     unambiguously denote the enclosing class, so a property that IS a
+  //     same-file method is a real same-file call. Cross-object member calls stay
+  //     dropped — a recall gap by design, consistent with the best-effort
+  //     extractor (resolving them would need type inference we don't have).
+  const methodNames = new Set(symbols.filter((s) => s.kind === "method").map((s) => s.name))
 
   const callEdges: CallEdge[] = []
+  const pushCall = (name: string, kind: CallKind, node: AstNode): void => {
+    const s = node.loc.start
+    callEdges.push({
+      sourcePath: path,
+      callerSymbolId: null,
+      calleeSymbolId: null,
+      calleeName: name,
+      callKind: kind,
+      startLine: s.line,
+      startCol: s.column,
+    })
+  }
+
   walkAst(ast, {
     CallExpression(node: AstNode) {
-      if (node.callee?.type !== "Identifier") return
-      const name: string = node.callee.name as string
-      if (!name) return
-      const s = node.loc.start
-      if (localFns.has(name)) {
-        callEdges.push({
-          sourcePath: path,
-          callerSymbolId: null,
-          calleeSymbolId: null,
-          calleeName: name,
-          callKind: "same_file",
-          startLine: s.line,
-          startCol: s.column,
-        })
-      } else if (importedNames.has(name)) {
-        callEdges.push({
-          sourcePath: path,
-          callerSymbolId: null,
-          calleeSymbolId: null,
-          calleeName: name,
-          callKind: "imported_binding",
-          startLine: s.line,
-          startCol: s.column,
-        })
+      const callee = node.callee
+      if (callee?.type === "Identifier") {
+        const name: string = callee.name as string
+        if (!name) return
+        if (localFns.has(name)) pushCall(name, "same_file", node)
+        else if (importedNames.has(name)) pushCall(name, "imported_binding", node)
+        // Unknown free identifier — skip (prefer missing over false positive)
+      } else if (callee?.type === "MemberExpression" && callee.computed !== true) {
+        // `this.method()` / `super.method()` — receiver-anchored, non-computed
+        // property only. A bare-identifier receiver (`api.fetchData()`) is
+        // unresolvable without type info and is dropped (prefer missing over a
+        // false edge to a same-named same-file method).
+        const objType = callee.object?.type
+        if (objType !== "ThisExpression" && objType !== "Super") return
+        const prop = callee.property
+        const name: unknown = prop?.type === "Identifier" ? prop.name : undefined
+        if (typeof name === "string" && name.length > 0 && methodNames.has(name)) {
+          pushCall(name, "same_file", node)
+        }
       }
-      // Unknown free identifier — skip (prefer missing over false positive)
     },
   })
 

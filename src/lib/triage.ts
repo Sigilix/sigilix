@@ -14,6 +14,7 @@ import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
 import type { Env } from "@/src/shared/types/env"
 import { ISSUE_TRIAGE_PROMPT } from "@/src/prompts/issue-triage"
+import { checkTriageRateLimit, appendTriageUsage } from "@/src/features/tenancy"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
@@ -55,6 +56,39 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   if (!issue) {
     console.warn("issue not found", { issueId })
     return
+  }
+
+  // SIG-38 free-launch caps: per-team rolling-window Linear-triage cap.
+  // Mirrors the PR-review rate-limit gate's placement (after the entity is
+  // resolved, before any costly retrieval/model work) but is independently
+  // metered against `triage_usage_ledger` — hitting the PR-review cap never
+  // consumes the triage budget and vice versa. Shadow mode (the default)
+  // never blocks; enforce posts a visible notice and skips, mirroring
+  // runRateLimitGate's "never a silent drop" contract.
+  const rateLimit = await checkTriageRateLimit(env, { teamId: issue.team?.id, nowMs: Date.now() })
+  if (!rateLimit.allowed) {
+    const mins = Math.max(1, Math.ceil(rateLimit.resetMs / 60000))
+    try {
+      const commentId = await linear.createComment(
+        issue.id,
+        `**Sigilix · Rate limit reached** — ${rateLimit.used} of ${rateLimit.cap} Linear issues triaged in the past 5h. Next triage slot in ~${mins}m.`,
+      )
+      await markBotAuthoredComment(env.OPENCLAW_STATE, commentId)
+      console.log(
+        JSON.stringify({ event: "triage-rate-limit-skip-applied", issueId, used: rateLimit.used, cap: rateLimit.cap }),
+      )
+      return
+    } catch (err) {
+      // Comment post FAILED → FAIL-OPEN: fall through and run triage anyway
+      // (never silently drop — matches runRateLimitGate's fail-open contract).
+      console.warn(
+        JSON.stringify({
+          event: "triage-rate-limit-comment-failed",
+          issueId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
+    }
   }
 
   // Idempotency guard — Linear retries webhooks on 5xx, and we want re-runs
@@ -120,6 +154,14 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   await markBotAuthoredComment(env.OPENCLAW_STATE, commentId)
   await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
   since("comment-posted")
+
+  // SIG-38 free-launch caps: meter one triage row per distinct issue
+  // (best-effort, fail-open — appendTriageUsage never throws and no-ops
+  // without the binding or on missing identity). Mirrors SIG-343's
+  // post-completion `appendUsage` timing for PR reviews.
+  if (issue.team?.id) {
+    await appendTriageUsage(env, { teamId: issue.team.id, issueId: issue.id, nowIso: new Date().toISOString() })
+  }
 
   // Apply priority + estimate + labels + rewritten description on the issue
   // itself. Best-effort — a single field failure shouldn't block the comment,

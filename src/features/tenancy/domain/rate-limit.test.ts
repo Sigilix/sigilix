@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   DEFAULT_RATE_LIMIT_CAP,
+  DEFAULT_TRIAGE_RATE_LIMIT_CAP,
   RATE_LIMIT_WINDOW_MS,
+  TRIAGE_RATE_LIMIT_WINDOW_MS,
   computeResetMs,
   decideRateLimit,
   formatUsageFooter,
@@ -48,16 +50,16 @@ describe("resolveRateLimitMode", () => {
 // ─── resolveRateLimitCap ─────────────────────────────────────────────────────
 
 describe("resolveRateLimitCap", () => {
-  it('returns 3 for "oss"', () => {
-    expect(resolveRateLimitCap("oss")).toBe(3)
+  it('returns 2 for "oss"', () => {
+    expect(resolveRateLimitCap("oss")).toBe(2)
   })
 
-  it('returns 3 for "cli"', () => {
-    expect(resolveRateLimitCap("cli")).toBe(3)
+  it('returns 2 for "cli"', () => {
+    expect(resolveRateLimitCap("cli")).toBe(2)
   })
 
-  it('returns 3 for "free"', () => {
-    expect(resolveRateLimitCap("free")).toBe(3)
+  it('returns 2 for "free"', () => {
+    expect(resolveRateLimitCap("free")).toBe(2)
   })
 
   it('returns 5 for "pro"', () => {
@@ -156,20 +158,44 @@ describe("computeResetMs", () => {
 
 describe("formatUsageFooter", () => {
   it("omits the reset clause when resetMs is 0 (under cap)", () => {
-    expect(formatUsageFooter(2, 3, 0)).toBe("_Sigilix · 2 of 3 reviews used in past 1h_")
+    expect(formatUsageFooter(2, 3, 0)).toBe("_Sigilix · 2 of 3 reviews used in past 5h_")
   })
 
   it("includes the reset clause with ceiled minutes when resetMs > 0", () => {
     // 90_000 ms = 1.5 min → ceil = 2m
-    expect(formatUsageFooter(4, 3, 90_000)).toBe("_Sigilix · 4 of 3 reviews used in past 1h · resets in 2m_")
+    expect(formatUsageFooter(4, 3, 90_000)).toBe("_Sigilix · 4 of 3 reviews used in past 5h · resets in 2m_")
   })
 
   it("floors the reset minute to 1 even for tiny resetMs", () => {
     // 1 ms → ceil(1/60000) = 1 → floored to max(1, 1) = 1
-    expect(formatUsageFooter(4, 3, 1)).toBe("_Sigilix · 4 of 3 reviews used in past 1h · resets in 1m_")
+    expect(formatUsageFooter(4, 3, 1)).toBe("_Sigilix · 4 of 3 reviews used in past 5h · resets in 1m_")
   })
 
   it("renders exact minute boundaries correctly (60 000 ms = 1m)", () => {
-    expect(formatUsageFooter(5, 3, 60_000)).toBe("_Sigilix · 5 of 3 reviews used in past 1h · resets in 1m_")
+    expect(formatUsageFooter(5, 3, 60_000)).toBe("_Sigilix · 5 of 3 reviews used in past 5h · resets in 1m_")
+  })
+})
+
+// ─── Linear-triage window/cap constants (SIG-38 free-launch caps) ───────────
+
+describe("triage rate-limit constants", () => {
+  it("TRIAGE_RATE_LIMIT_WINDOW_MS is a 5-hour window", () => {
+    expect(TRIAGE_RATE_LIMIT_WINDOW_MS).toBe(5 * 60 * 60 * 1000)
+  })
+
+  it("DEFAULT_TRIAGE_RATE_LIMIT_CAP is 3 (upper end of the 2-3 free-tier range)", () => {
+    expect(DEFAULT_TRIAGE_RATE_LIMIT_CAP).toBe(3)
+  })
+
+  it("both PR-review and Linear-triage windows equal 5h today", () => {
+    // Note: this only confirms the CURRENT values match, not that the two
+    // constants are independent bindings — a runtime equality check can't
+    // distinguish "two separate `export const`s that happen to be equal"
+    // from "one aliased to the other". That independence is a source-level
+    // property (see rate-limit.ts: two separate `export const` statements,
+    // each retunable without touching the other) verified by reading the
+    // source, not by this test.
+    expect(RATE_LIMIT_WINDOW_MS).toBe(5 * 60 * 60 * 1000)
+    expect(TRIAGE_RATE_LIMIT_WINDOW_MS).toBe(5 * 60 * 60 * 1000)
   })
 })

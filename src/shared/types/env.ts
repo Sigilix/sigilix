@@ -941,8 +941,8 @@ export interface Env {
   //   "enforce" — reviews are rejected when a tenant exceeds their rolling-window cap.
   SIGILIX_RATE_LIMIT_MODE?: string
 
-  // SIG-343 PR C: platform DB (tenant/repo/usage_ledger) — optional so a deploy that
-  // hasn't provisioned/migrated D1 stays metering-off (dark).
+  // SIG-343 PR C: platform DB — tenant/repo/usage_ledger + (SIG-38) triage_usage_ledger.
+  // Optional so a deploy that hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
 
   // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command.

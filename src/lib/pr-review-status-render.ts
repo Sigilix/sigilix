@@ -72,7 +72,7 @@ export interface ReviewStatusSnapshot {
   manage?: string
   /**
    * SIG-38 Task 7: per-developer usage footer (`_Sigilix · N of M reviews used
-   * in past 1h[· resets in Xm]_`), already formatted by `formatUsageFooter`.
+   * in past 5h[· resets in Xm]_`), already formatted by `formatUsageFooter`.
    * Rendered as the last `> <sub>…</sub>` line in the terminal footer block.
    * ENFORCE-ONLY: only passed in enforce mode; shadow and off stay dark.
    * Display-only — never gates anything.

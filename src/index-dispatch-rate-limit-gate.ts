@@ -71,7 +71,7 @@ export async function runRateLimitGate(
         args.owner,
         args.repo,
         args.prNumber,
-        `**Sigilix · Rate limit reached** — ${rateLimit.used} of ${rateLimit.cap} reviews used in the past hour. Next review slot in ~${mins}m.`,
+        `**Sigilix · Rate limit reached** — ${rateLimit.used} of ${rateLimit.cap} reviews used in the past 5h. Next review slot in ~${mins}m.`,
       )
       posted = true
     } catch (err) {

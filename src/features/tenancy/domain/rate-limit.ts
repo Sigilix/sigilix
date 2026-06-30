@@ -40,11 +40,17 @@ export function resolveRateLimitMode(env: Pick<Env, "SIGILIX_RATE_LIMIT_MODE">):
 
 // ─── Window constants ─────────────────────────────────────────────────────────
 
-/** Rolling window duration (1 hour in ms). */
-export const RATE_LIMIT_WINDOW_MS = 3_600_000
+/**
+ * Rolling window duration (5 hours in ms).
+ *
+ * Free-launch retune (2026-06-30): SIG-38 originally shipped at 1h/cap-3 (the
+ * "CodeRabbit way" steer). The free-tier spec is 5h window / 1-2 reviews per
+ * developer; `DEFAULT_RATE_LIMIT_CAP` below is the upper end (2) of that range.
+ */
+export const RATE_LIMIT_WINDOW_MS = 18_000_000
 
 /** Default per-window review cap (free / OSS / CLI tier). */
-export const DEFAULT_RATE_LIMIT_CAP = 3
+export const DEFAULT_RATE_LIMIT_CAP = 2
 
 /**
  * Burst allowance: the number of reviews above `cap` a tenant may consume
@@ -57,6 +63,21 @@ export const DEFAULT_RATE_LIMIT_CAP = 3
  * at used=0…cap-1 admitted; used=cap denied).
  */
 export const RATE_LIMIT_BURST = 0
+
+// ─── Linear-triage window/cap constants ──────────────────────────────────────
+//
+// Free-launch caps (2026-06-26): Linear triage gets its OWN rolling-window
+// cap, counted via a SEPARATE ledger (`triage_usage_ledger`, independent of
+// the PR-review `usage_ledger`) so hitting one cap never consumes the other's
+// budget. The window happens to equal `RATE_LIMIT_WINDOW_MS` today (both 5h),
+// but the two are deliberately separate named constants — tuning one must
+// never silently retune the other.
+
+/** Rolling window duration for the Linear-triage cap (5 hours in ms). */
+export const TRIAGE_RATE_LIMIT_WINDOW_MS = 18_000_000
+
+/** Default per-window Linear-triage cap (free tier — the upper end of the 2-3 range). */
+export const DEFAULT_TRIAGE_RATE_LIMIT_CAP = 3
 
 // ─── resolveRateLimitCap ─────────────────────────────────────────────────────
 
@@ -77,7 +98,7 @@ export function resolveRateLimitCap(tier?: string | null): number {
     case "oss":
     case "cli":
     case "free":
-      return 3
+      return 2
     case "pro":
       return 5
     case "pro_plus":
@@ -151,10 +172,10 @@ export function computeResetMs(
  * Render the per-tenant usage footer appended to review bodies.
  *
  * Format (under cap — no reset clause):
- *   `_Sigilix · 2 of 3 reviews used in past 1h_`
+ *   `_Sigilix · 2 of 3 reviews used in past 5h_`
  *
  * Format (over cap — with reset clause):
- *   `_Sigilix · 4 of 3 reviews used in past 1h · resets in 23m_`
+ *   `_Sigilix · 4 of 3 reviews used in past 5h · resets in 23m_`
  *
  * The reset countdown is ceiled to whole minutes with a floor of 1m so the
  * line never reads "resets in 0m". The italic underscore wrapping matches the
@@ -162,7 +183,7 @@ export function computeResetMs(
  * (review-body.ts ~line 223).
  */
 export function formatUsageFooter(used: number, cap: number, resetMs: number): string {
-  const usagePart = `_Sigilix · ${used} of ${cap} reviews used in past 1h`
+  const usagePart = `_Sigilix · ${used} of ${cap} reviews used in past 5h`
   if (resetMs <= 0) return `${usagePart}_`
   const m = Math.max(1, Math.ceil(resetMs / 60_000))
   return `${usagePart} · resets in ${m}m_`

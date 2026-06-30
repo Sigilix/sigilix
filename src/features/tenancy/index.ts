@@ -27,6 +27,8 @@ export {
   RATE_LIMIT_WINDOW_MS,
   DEFAULT_RATE_LIMIT_CAP,
   RATE_LIMIT_BURST,
+  TRIAGE_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_TRIAGE_RATE_LIMIT_CAP,
 } from "./domain/rate-limit"
 export type { RateLimitMode } from "./domain/rate-limit"
 export { upsertTenantAndRepo, readTenantConfig } from "./adapters/d1-tenant-store"
@@ -38,3 +40,7 @@ export { checkShadowQuota } from "./adapters/check-shadow-quota"
 export { readRollingReviewCount } from "./adapters/d1-rate-limit-read"
 export { checkRateLimit } from "./adapters/check-rate-limit"
 export type { RateLimitDecision } from "./adapters/check-rate-limit"
+export { appendTriageUsage } from "./adapters/d1-triage-usage-ledger"
+export { readRollingTriageCount } from "./adapters/d1-triage-rate-limit-read"
+export { checkTriageRateLimit } from "./adapters/check-triage-rate-limit"
+export type { TriageRateLimitDecision } from "./adapters/check-triage-rate-limit"

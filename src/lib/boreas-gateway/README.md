@@ -1,8 +1,9 @@
 # boreas-gateway (SIG-545)
 
 An authenticated Worker gateway that proxies CLI requests to **Google Vertex AI**
-(Boreas → `qwen/qwen3-next-80b-a3b-instruct-maas`, Pyroeis → `google/gemma-4-26b-a4b-it-maas`;
-project `sigilix-496118`, location `global`) using **keyless Workload Identity Federation** — no service-account key
+(Boreas → `qwen/qwen3-next-80b-a3b-instruct-maas`, Pyroeis → `google/gemma-4-26b-a4b-it-maas`,
+Astraeus → `zai-org/glm-5-maas`; project `sigilix-496118`, location `global`) using **keyless
+Workload Identity Federation** — no service-account key
 ever exists (org policy `disableServiceAccountKeyCreation` blocks them). Users hit
 the Sigilix Worker with the shared `SIGILIX_API_KEY`; the Worker mints GCP creds
 server-side. Users never touch GCP.
@@ -51,6 +52,10 @@ server-side. Users never touch GCP.
   Pyroeis model (`google/gemma-4-26b-a4b-it-maas` — Gemma 4 26B serverless MaaS), counter key
   `pyroeis:count:<day>`, and `OPENCLAW_PYROEIS_DAILY_LIMIT`. Same project / SA / WIF token
   mint as Boreas — only the forced model and the metering counter/limit differ.
+- `api-astraeus-route.ts` — `POST /v1/astraeus/chat/completions`. The same wrapper pinning the
+  Astraeus model (`zai-org/glm-5-maas` — GLM-5.2 serverless MaaS), counter key
+  `astraeus:count:<day>`, and `OPENCLAW_ASTRAEUS_DAILY_LIMIT`. Same project / SA / WIF token
+  mint as Boreas/Pyroeis — only the forced model and the metering counter/limit differ.
 
 ## Assertion JWT (the WIF subject token)
 
@@ -69,6 +74,8 @@ server-side. Users never touch GCP.
 - `OPENCLAW_BOREAS_DAILY_LIMIT` — coarse endpoint-wide daily request ceiling for the Boreas
   route (numeric; unset → a built-in default). Over the limit → 429.
 - `OPENCLAW_PYROEIS_DAILY_LIMIT` — the same ceiling for the Pyroeis route (numeric; unset →
+  a built-in default). Over the limit → 429.
+- `OPENCLAW_ASTRAEUS_DAILY_LIMIT` — the same ceiling for the Astraeus route (numeric; unset →
   a built-in default). Over the limit → 429.
 
 The founder-run GCP setup (enable APIs, create the pool + OIDC provider against the

@@ -373,6 +373,11 @@ export interface Env {
   // (`pyroeis:count:<YYYY-MM-DD>`), unset → a built-in default, 429 once the day hits it.
   OPENCLAW_PYROEIS_DAILY_LIMIT?: string
 
+  // SIG-545: coarse daily request ceiling for POST /v1/astraeus/chat/completions. Same
+  // shape as OPENCLAW_BOREAS_DAILY_LIMIT above — a global KV counter
+  // (`astraeus:count:<YYYY-MM-DD>`), unset → a built-in default, 429 once the day hits it.
+  OPENCLAW_ASTRAEUS_DAILY_LIMIT?: string
+
   // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
   // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in
   // default. A global KV counter (`v1verify:count:<YYYY-MM-DD>`), not per-key metering —

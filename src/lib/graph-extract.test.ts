@@ -225,4 +225,65 @@ describe("extractFileGraph — call edges", () => {
     expect(fEdge?.callKind).toBe("imported_binding")
     expect(dEdge?.callKind).toBe("imported_binding")
   })
+
+  // SIG-132: previously arrow-const / function-expression callees produced NO
+  // call edge (only `kind === "function"` symbols were same_file callees), so a
+  // call to a `const f = () => {}` was invisible to the call graph.
+  it("SIG-132: arrow-const and function-expression callees produce same_file edges", () => {
+    const src = [
+      "export const target = () => 1",
+      "const helperFx = function () { return 2 }",
+      "export function run() {",
+      "  target()",
+      "  helperFx()",
+      "}",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/arrow.ts", src)
+    const callees = callEdges.map((c) => ({ name: c.calleeName, kind: c.callKind }))
+
+    expect(callees).toContainEqual({ name: "target", kind: "same_file" })
+    expect(callees).toContainEqual({ name: "helperFx", kind: "same_file" })
+  })
+
+  // SIG-132: a `this.method()` call to a same-file method symbol was dropped
+  // entirely; now it produces a same_file edge keyed on the property name so the
+  // DO can resolve callee_symbol_id to the method.
+  it("SIG-132: this.method() to a same-file method produces a same_file edge", () => {
+    const src = ["class Service {", "  fetchData() { return 1 }", "  run() { return this.fetchData() }", "}"].join("\n")
+
+    const { callEdges } = extractFileGraph("src/svc.ts", src)
+    const edge = callEdges.find((c) => c.calleeName === "fetchData")
+
+    expect(edge).toBeDefined()
+    expect(edge?.callKind).toBe("same_file")
+  })
+
+  // SIG-132 recall-safety: a member call whose property is NOT a same-file
+  // symbol (e.g. `console.log`, an external `obj.method()`) stays dropped —
+  // prefer missing over false. (Pins the prior "drops ambiguous obj.method()".)
+  it("SIG-132: member calls with no same-file method match stay dropped", () => {
+    const src = ["export function go() { console.log('hi'); other.compute() }"].join("\n")
+
+    const { callEdges } = extractFileGraph("src/ext-member.ts", src)
+    expect(callEdges.find((c) => c.calleeName === "log")).toBeUndefined()
+    expect(callEdges.find((c) => c.calleeName === "compute")).toBeUndefined()
+  })
+
+  // SIG-132 recall-safety (receiver guard): a member call on an EXTERNAL receiver
+  // must NOT link to a same-file method that merely shares the property name. The
+  // receiver is not the enclosing class, so this is a different `fetchData`.
+  // Matching on the name alone would re-introduce the over-reporting this fix is
+  // meant to remove — prefer missing over false.
+  it("SIG-132: member call on an external receiver is dropped despite a same-named same-file method", () => {
+    const src = [
+      "class Service {",
+      "  fetchData() { return 1 }",
+      "}",
+      "export function run(api) { return api.fetchData() }",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/recv.ts", src)
+    expect(callEdges.find((c) => c.calleeName === "fetchData")).toBeUndefined()
+  })
 })

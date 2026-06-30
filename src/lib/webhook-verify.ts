@@ -7,8 +7,24 @@
 
 const encoder = new TextEncoder()
 
-export async function verifyLinearWebhook(rawBody: string, signature: string, secret: string): Promise<boolean> {
-  if (!signature || !secret) return false
+export async function verifyLinearWebhook(
+  rawBody: string,
+  signature: string,
+  secret: string,
+  agentSecret?: string,
+): Promise<boolean> {
+  if (!signature) return false
+
+  // SIG-144 cutover: accept a body signed by EITHER the legacy triage app's secret
+  // (primary) OR the agent app's secret. Each comparison is constant-time; when
+  // agentSecret is undefined this is byte-identical to the legacy single-secret check.
+  if (await verifyOne(rawBody, signature, secret)) return true
+  if (agentSecret && (await verifyOne(rawBody, signature, agentSecret))) return true
+  return false
+}
+
+async function verifyOne(rawBody: string, signature: string, secret: string): Promise<boolean> {
+  if (!secret) return false
 
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
     "sign",

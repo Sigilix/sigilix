@@ -6,7 +6,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
-import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
+import { LinearClient, buildLinearAuth, buildLinearAgentClient } from "@/src/lib/linear"
 import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
 import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
@@ -67,6 +67,33 @@ export interface LinearWebhookPayload {
   webhookTimestamp: number
 }
 
+/**
+ * Linear `AgentSessionEvent` webhook — the CANONICAL agent trigger. Once Sigilix is a
+ * real Linear agent, delegating an issue to it (or @-mentioning it) sets the agent as
+ * DELEGATE and fires this event; the legacy `Issue.update` assignee diff is the interim
+ * fallback only. Distinct payload shape from `LinearWebhookPayload` (no `data`).
+ *
+ *   - action "created":  the session was opened (delegation / @-mention). The agent
+ *     must ACK within ~10s, then do the work.
+ *   - action "prompted": the user added a follow-up prompt to an existing session.
+ *
+ * `agentSession.issue.id` is the issue the session is anchored to (used to resolve the
+ * repo + dispatch the run). Fields beyond what we read are intentionally omitted.
+ */
+export interface LinearAgentSessionWebhook {
+  type: "AgentSessionEvent"
+  action: "created" | "prompted" | string
+  agentSession?: {
+    id?: string
+    issue?: { id?: string } | null
+  } | null
+}
+
+/** Narrow a parsed Linear webhook body to the AgentSessionEvent shape. */
+function isAgentSessionWebhook(raw: unknown): raw is LinearAgentSessionWebhook {
+  return typeof raw === "object" && raw !== null && (raw as { type?: unknown }).type === "AgentSessionEvent"
+}
+
 export async function handleLinearWebhook(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   const rawBody = await request.text()
   const signature = request.headers.get("linear-signature") ?? ""
@@ -76,12 +103,22 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
     return new Response("invalid signature\n", { status: 401 })
   }
 
-  let payload: LinearWebhookPayload
+  let raw: unknown
   try {
-    payload = JSON.parse(rawBody) as LinearWebhookPayload
+    raw = JSON.parse(rawBody)
   } catch {
     return new Response("invalid json\n", { status: 400 })
   }
+
+  // SIG-545 (agent): AgentSessionEvent is the CANONICAL agent trigger — once Sigilix
+  // is a real Linear agent, delegating/@-mentioning it fires this event (not an
+  // Issue.update assignee diff). Handled BEFORE the legacy Issue/Comment dispatch
+  // because it carries a different payload shape (no `data`).
+  if (isAgentSessionWebhook(raw)) {
+    return handleAgentSessionEvent(raw, env)
+  }
+
+  const payload = raw as LinearWebhookPayload
 
   // SIG-44: any Issue create/update refreshes the issue: multi-corpus
   // namespace (flag-gated, fire-and-forget). Placed before the create→triage
@@ -294,6 +331,81 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
   }
 
   return new Response("skipped\n", { status: 200 })
+}
+
+/**
+ * Handle a Linear `AgentSessionEvent` — the real agent trigger.
+ *
+ * Gated on `resolveLinearAgentRunMode(env) === "on"` (same flag as the interim
+ * assignee path) so the agent runtime ships dark until flipped.
+ *
+ *   - "created":  delegation / @-mention. ACK immediately (a Linear agent `thought`
+ *     activity, expected within ~10s) then enqueue the existing `linear-agent-run`
+ *     job (carrying the sessionId so the run posts its `response` into the session).
+ *   - "prompted": a follow-up turn on an existing session — ACK + re-enqueue.
+ *
+ * The ack is best-effort and awaited (a single fast GraphQL call, well within the ack
+ * window); a failed ack never blocks the enqueue. Returns 202 once the run is queued.
+ */
+async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: Env): Promise<Response> {
+  if (resolveLinearAgentRunMode(env) !== "on") {
+    return new Response("agent run mode off\n", { status: 200 })
+  }
+
+  const sessionId = payload.agentSession?.id
+  if (!sessionId) {
+    console.warn(JSON.stringify({ event: "linear-agent-session-no-session-id", action: payload.action }))
+    return new Response("missing agent session id\n", { status: 200 })
+  }
+
+  if (payload.action !== "created" && payload.action !== "prompted") {
+    return new Response("ignored\n", { status: 200 })
+  }
+
+  // ACK within ~10s — a Linear agent `thought` activity. Best-effort; never blocks
+  // the enqueue.
+  await ackAgentSession(env, sessionId)
+
+  const issueId = payload.agentSession?.issue?.id
+  if (!issueId) {
+    console.warn(JSON.stringify({ event: "linear-agent-session-no-issue", action: payload.action }))
+    return new Response("no issue\n", { status: 200 })
+  }
+
+  await env.OPENCLAW_JOBS.send({ type: "linear-agent-run", issueId, sessionId })
+  console.log(JSON.stringify({ event: "linear-agent-session-queued", action: payload.action }))
+  return new Response("queued\n", { status: 202 })
+}
+
+/**
+ * Post the immediate ACK `thought` activity into an AgentSession. Best-effort — a
+ * missing agent token or a Linear API fault is logged + swallowed (the run is still
+ * enqueued; a missing ack must never lose the work).
+ *
+ * The GraphQL call is bounded with a ~2s `AbortSignal.timeout` (the SIG-225 pattern)
+ * so it can never block past Linear's webhook ack window — an indefinite hang would
+ * miss the ack deadline and cause Linear to redeliver, fanning out duplicate runs. An
+ * AbortError lands in the catch below and falls into the same best-effort path.
+ */
+async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
+  try {
+    const agent = await buildLinearAgentClient(env)
+    if (!agent) {
+      console.warn(JSON.stringify({ event: "linear-agent-ack-no-token", sessionId }))
+      return
+    }
+    await agent.createAgentActivity(sessionId, "On it — Sigilix is picking this up.", "thought", {
+      signal: AbortSignal.timeout(2000),
+    })
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-ack-failed",
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
 }
 
 export async function handleManualTrigger(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {

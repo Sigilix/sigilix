@@ -469,7 +469,11 @@ export type JobMessage =
       installationId: number
     }
   | { type: "corpus-issue-upsert"; linearIssueId: string }
-  // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user. The
-  // consumer (`runLinearAgentRun`) resolves the repo + installation and
-  // dispatches the agent-runner on the SAFE minimal engine to implement it.
-  | { type: "linear-agent-run"; issueId: string }
+  // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user (interim
+  // assignee path) OR an AgentSessionEvent delegated/mentioned the agent. The
+  // consumer (`runLinearAgentRun`) resolves the repo + installation and dispatches
+  // the agent-runner on the SAFE minimal engine to implement it. `sessionId` is the
+  // AgentSession id when the trigger was an AgentSessionEvent — present → the run
+  // posts a Linear agent `response` activity into that session instead of a plain
+  // comment ack; absent (the assignee path) → the legacy comment ack.
+  | { type: "linear-agent-run"; issueId: string; sessionId?: string }

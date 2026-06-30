@@ -5,9 +5,22 @@
 // every call is an explicit issue or comment update rather than a
 // project-level field write.
 
+import type { Env } from "@/src/shared/types/env"
 import { getAppActorToken } from "./linear-oauth"
+import { getLinearAgentToken } from "./linear-agent-oauth"
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
+
+/**
+ * Linear AgentActivity content kind (Agents API). Posted into an AgentSession to
+ * drive the agent's visible turn:
+ *   - "thought"      — internal reasoning surfaced as an italic note (the ACK).
+ *   - "action"       — a tool/step the agent took.
+ *   - "response"     — the agent's final answer; completes the session turn.
+ *   - "elicitation"  — a question back to the user.
+ *   - "error"        — a surfaced failure.
+ */
+export type AgentActivityType = "thought" | "action" | "response" | "elicitation" | "error"
 
 /**
  * Build the Linear auth credential. Prefers OAuth `client_credentials`
@@ -40,6 +53,20 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
     return { oauthToken: token }
   }
   return { apiKey: env.LINEAR_API_KEY }
+}
+
+/**
+ * Build a LinearClient authenticated with the stored AGENT token (the actor=app
+ * install token from the OAuth callback), or null when no agent token is installed.
+ *
+ * Use this — NOT `buildLinearAuth` — for agent-activity posts: the agent capability
+ * lives on the authorization-code token, not the client_credentials token. Callers
+ * treat null as "agent not installed → skip the activity post" (fail-safe).
+ */
+export async function buildLinearAgentClient(env: Pick<Env, "OPENCLAW_STATE">): Promise<LinearClient | null> {
+  const token = await getLinearAgentToken(env.OPENCLAW_STATE)
+  if (!token) return null
+  return new LinearClient({ oauthToken: token })
 }
 
 export interface LinearIssue {
@@ -479,6 +506,51 @@ export class LinearClient {
       }
     `
     await this.gql(mutation, { id: commentId, input: { body } })
+  }
+
+  /**
+   * Post an agent activity into an AgentSession (Linear Agents API). This is how a
+   * real Linear AGENT drives its turn — the ACK (`thought`), progress (`action`),
+   * the final answer (`response`), a question (`elicitation`), or a failure
+   * (`error`). Posting `response`/`error` completes the session turn; the others
+   * keep it active.
+   *
+   * The client MUST be constructed with the AGENT access token (the actor=app
+   * authorization-code token the OAuth callback stored) — the client_credentials
+   * app-actor token does NOT carry the agent capability. Use `buildLinearAgentClient`
+   * to construct a correctly-authed client.
+   *
+   * `content` maps to Linear's `AgentActivityContentInput`: body-bearing kinds
+   * (thought/response/elicitation/error) send `content.body`; an `action` sends
+   * `content.action`.
+   *
+   * `opts.signal` bounds the underlying GraphQL call — the webhook ACK passes an
+   * `AbortSignal.timeout(...)` so an un-timed call can't overrun Linear's webhook
+   * ack window (which would trigger a redelivery → duplicate runs). SIG-225 pattern.
+   */
+  async createAgentActivity(
+    sessionId: string,
+    content: string,
+    type: AgentActivityType,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void> {
+    const mutation = /* GraphQL */ `
+      mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+        agentActivityCreate(input: $input) {
+          success
+        }
+      }
+    `
+    const activityContent: Record<string, unknown> =
+      type === "action" ? { type, action: content } : { type, body: content }
+    const data = await this.gql<{ agentActivityCreate: { success: boolean } }>(
+      mutation,
+      { input: { agentSessionId: sessionId, content: activityContent } },
+      opts?.signal,
+    )
+    if (!data.agentActivityCreate.success) {
+      throw new Error(`agentActivityCreate returned success=false (type=${type})`)
+    }
   }
 
   private async gql<T>(query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {

@@ -976,9 +976,11 @@ export async function dispatchJob(
       // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
       return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
     case "linear-agent-run":
-      // SIG-545 B3: a Linear issue assigned to the Sigilix agent → dispatch the
-      // agent-runner on the SAFE minimal engine to implement it + open a PR.
-      return runLinearAgentRun(job.issueId, env)
+      // SIG-545 B3: a Linear issue assigned to the Sigilix agent OR an
+      // AgentSessionEvent (delegate/@-mention) → dispatch the agent-runner on the
+      // SAFE minimal engine to implement it + open a PR. `sessionId` (when the
+      // trigger was an AgentSessionEvent) routes the ack to a Linear agent activity.
+      return runLinearAgentRun(job.issueId, env, job.sessionId)
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at

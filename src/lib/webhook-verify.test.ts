@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
 
 const SECRET = "test-secret-do-not-use-in-prod"
+const AGENT_SECRET = "agent-secret-do-not-use-in-prod"
 const encoder = new TextEncoder()
 
 async function sign(body: string, secret: string): Promise<string> {
@@ -56,5 +57,31 @@ describe("verifyLinearWebhook", () => {
 
   it("rejects signatures of wrong length", async () => {
     expect(await verifyLinearWebhook("body", "deadbeef", SECRET)).toBe(false)
+  })
+
+  // SIG-144 dual-secret cutover: the 4-arg form accepts EITHER the primary secret
+  // or the agent-app secret; the 3-arg form stays byte-identical (agent secret unset).
+  it("accepts a body signed with the primary secret when an agent secret is also configured", async () => {
+    const body = JSON.stringify({ action: "create", type: "Issue", data: { id: "abc" } })
+    const sig = await sign(body, SECRET)
+    expect(await verifyLinearWebhook(body, sig, SECRET, AGENT_SECRET)).toBe(true)
+  })
+
+  it("accepts a body signed with the agent secret when an agent secret is configured", async () => {
+    const body = JSON.stringify({ action: "create", type: "Issue", data: { id: "abc" } })
+    const sig = await sign(body, AGENT_SECRET)
+    expect(await verifyLinearWebhook(body, sig, SECRET, AGENT_SECRET)).toBe(true)
+  })
+
+  it("rejects a signature that matches neither the primary nor the agent secret", async () => {
+    const body = "{}"
+    const sig = await sign(body, "third-unrelated-secret")
+    expect(await verifyLinearWebhook(body, sig, SECRET, AGENT_SECRET)).toBe(false)
+  })
+
+  it("rejects an agent-secret-signed body when the agent secret arg is omitted (legacy-only invariant)", async () => {
+    const body = "{}"
+    const sig = await sign(body, AGENT_SECRET)
+    expect(await verifyLinearWebhook(body, sig, SECRET)).toBe(false)
   })
 })

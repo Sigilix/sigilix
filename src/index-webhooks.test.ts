@@ -129,4 +129,18 @@ describe("handleLinearWebhook — SIG-545 B3 assignment trigger", () => {
     expect(res.status).toBe(401)
     expect(send).not.toHaveBeenCalled()
   })
+
+  // SIG-144 dual-secret cutover: the handler threads env.OPENCLAW_LINEAR_AGENT_WEBHOOK_SECRET
+  // into the 4th argument of verifyLinearWebhook (mocked here) so verification accepts either secret.
+  it("threads OPENCLAW_LINEAR_AGENT_WEBHOOK_SECRET into the verify call as the 4th arg", async () => {
+    const { env } = makeEnv({ OPENCLAW_LINEAR_AGENT_WEBHOOK_SECRET: "agent-webhook-secret" })
+    await handleLinearWebhook(assignmentRequest(ASSIGN_TO_AGENT), env, makeCtx())
+
+    expect(verifyLinearWebhook).toHaveBeenCalledWith(
+      JSON.stringify(ASSIGN_TO_AGENT),
+      "sig",
+      "secret",
+      "agent-webhook-secret",
+    )
+  })
 })

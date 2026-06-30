@@ -98,7 +98,12 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
   const rawBody = await request.text()
   const signature = request.headers.get("linear-signature") ?? ""
 
-  const verified = await verifyLinearWebhook(rawBody, signature, env.LINEAR_WEBHOOK_SECRET)
+  const verified = await verifyLinearWebhook(
+    rawBody,
+    signature,
+    env.LINEAR_WEBHOOK_SECRET,
+    env.OPENCLAW_LINEAR_AGENT_WEBHOOK_SECRET,
+  )
   if (!verified) {
     return new Response("invalid signature\n", { status: 401 })
   }

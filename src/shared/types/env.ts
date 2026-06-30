@@ -34,6 +34,11 @@ export interface Env {
   OPENCLAW_JOBS: Queue<JobMessage>
   LINEAR_API_KEY: string
   LINEAR_WEBHOOK_SECRET: string
+  // SIG-144 (Linear unification cutover): the NEW agent-app's webhook signing secret.
+  // During the cutover an inbound webhook may be HMAC-signed with EITHER LINEAR_WEBHOOK_SECRET
+  // (legacy triage app) OR this one (agent app), so verification accepts either. Optional —
+  // unset preserves legacy-only behavior (only LINEAR_WEBHOOK_SECRET is accepted).
+  OPENCLAW_LINEAR_AGENT_WEBHOOK_SECRET?: string
   // SIG-406: OLLAMA_API_KEY is now LEGACY — it serves non-review command paths
   // (`/api/chat`, @-mention agent loop, indexer) and local eval testing (a `:cloud`
   // model override routes to Ollama Turbo). The review ensemble runs on OpenRouter.

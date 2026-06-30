@@ -215,6 +215,14 @@ class_name = "TenantConcurrencyDO"
 name = "PROVIDER_COOLDOWN"
 class_name = "ProviderCooldownDO"
 
+# SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
+# token lifecycle + serializes refresh across isolates. Singleton DO instance
+# (idFromName("linear-agent")). INERT this slice — bound + deployable, but no caller
+# yet (buildLinearAgentClient / buildLinearAuth / webhooks still use the KV path).
+[[durable_objects.bindings]]
+name = "LINEAR_TOKEN_BROKER"
+class_name = "LinearTokenBroker"
+
 # SIG-545 B1: agent-runner Container DO (dark; gated by OPENCLAW_AGENT_RUNNER_MODE).
 # One DO instance per runId (idFromName(runId)). The Container is configured here
 # but never dispatched to until the mode flag is flipped. The real Dockerfile and
@@ -312,6 +320,17 @@ new_sqlite_classes = ["ProviderCooldownDO"]
 [[migrations]]
 tag = "sig-545-agent-runner-v1"
 new_sqlite_classes = ["AgentRunnerContainer"]
+
+# SIG-144 (Linear unification slice 1): LinearTokenBroker — SQLite-backed
+# (new_sqlite_classes; Cloudflare no longer allows newly-created KV-backed DO
+# namespaces). The classic ctx.storage.get/put/setAlarm API the DO uses is identical
+# on SQLite-backed DOs, so no DO code changes. INERT this slice; forward-only.
+# ⚠️ A new-DO migration requires a one-time non-versioned `wrangler deploy`; a
+# subsequent `wrangler versions upload` will err 10211 — do NOT skip the first
+# plain deploy.
+[[migrations]]
+tag = "sig-144-linear-token-broker-v1"
+new_sqlite_classes = ["LinearTokenBroker"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

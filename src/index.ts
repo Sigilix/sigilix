@@ -837,3 +837,10 @@ export { ProviderCooldownDO } from "@/src/do/provider-cooldown"
 // AgentRunnerContainer) + [[durable_objects.bindings]] (AGENT_RUNNER) +
 // the sig-545-agent-runner-v1 new_sqlite_classes migration in wrangler.toml.
 export { AgentRunnerContainer } from "@/src/do/agent-runner-container"
+
+// SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
+// token lifecycle + serializes refresh across isolates. Registered via the
+// [[durable_objects.bindings]] LINEAR_TOKEN_BROKER entry + the
+// sig-144-linear-token-broker-v1 new_sqlite_classes migration in wrangler.toml.
+// INERT — no caller in this slice.
+export { LinearTokenBroker } from "@/src/do/linear-token-broker"

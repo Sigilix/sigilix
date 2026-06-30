@@ -68,14 +68,16 @@ export type AgentTokenEnv = Pick<
 >
 
 /** Refresh ahead of expiry by this margin (10 min) so an in-flight agent
- *  activity never races a hard expiry. Generous for clock skew. */
-const REFRESH_BUFFER_MS = 10 * 60 * 1000
+ *  activity never races a hard expiry. Generous for clock skew. Exported so the
+ *  LinearTokenBroker DO uses the same headroom as the KV-backed path. */
+export const REFRESH_BUFFER_MS = 10 * 60 * 1000
 
 /** Fallback access-token lifetime used ONLY when a refresh response omits
  *  `expires_in` (Linear actor=app tokens are 24h). Without it the refreshed
  *  record would carry no `expiresAt`, which permanently disables proactive
- *  refresh — the token would then silently ride until it 401s. */
-const FALLBACK_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
+ *  refresh — the token would then silently ride until it 401s. Exported so the
+ *  LinearTokenBroker DO computes the same default expiry. */
+export const FALLBACK_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 /** Persist the agent token record under LINEAR_AGENT_TOKEN_KEY. */
 export async function putLinearAgentToken(kv: KVNamespace, record: LinearAgentTokenRecord): Promise<void> {
@@ -135,8 +137,10 @@ function linearRedirectUri(env: Pick<Env, "OPENCLAW_GATEWAY_ISSUER">, requestUrl
 
 /** Resolve the OAuth credentials for the agent install (authorization_code flow).
  *  Prefers the dedicated agent-app credentials; falls back to the shared
- *  LINEAR_OAUTH_CLIENT_* pair so existing deployments need no new secrets. */
-function resolveAgentOAuthCreds(
+ *  LINEAR_OAUTH_CLIENT_* pair so existing deployments need no new secrets.
+ *  Exported so the LinearTokenBroker DO resolves creds from its worker env the
+ *  same way. */
+export function resolveAgentOAuthCreds(
   env: Pick<
     Env,
     | "LINEAR_OAUTH_CLIENT_ID"
@@ -381,17 +385,77 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   return htmlPage("Sigilix agent installed — you can close this tab.")
 }
 
+/** Discriminated result of the refresh_token grant POST to Linear's token
+ *  endpoint. Pure transport outcome — the caller owns persistence + telemetry, so
+ *  the failure arm carries NO token material and this helper never logs. */
+export type AgentTokenRefreshResult =
+  | { ok: true; accessToken: string; refreshToken?: string; expiresIn?: number; scope?: string }
+  | { ok: false; reason: "network" | "non-2xx" | "invalid-json" | "missing-access-token"; status?: number }
+
+/**
+ * Perform the refresh_token grant POST and parse the response — the shared
+ * token-exchange transport reused by both `refreshAgentToken` (KV-backed) and the
+ * `LinearTokenBroker` Durable Object (DO-storage-backed). It does NOT read or
+ * persist any record and does NOT log: the caller owns persistence and telemetry.
+ *
+ * SINGLE attempt, no retry: refresh tokens are single-use, so retrying risks
+ * double-rotation and invalidating the freshly-issued token. 15s AbortSignal upper
+ * bound (mirrors the install callback). On a non-2xx the body is NOT read (it can
+ * carry token material); the status code is surfaced instead.
+ */
+export async function performAgentTokenRefresh(
+  refreshToken: string,
+  creds: { clientId: string; clientSecret: string },
+): Promise<AgentTokenRefreshResult> {
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
+  })
+
+  let res: Response
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch {
+    return { ok: false, reason: "network" }
+  }
+
+  // Status only — the response body can carry token material, so it is never read here.
+  if (!res.ok) return { ok: false, reason: "non-2xx", status: res.status }
+
+  let json: TokenResponse
+  try {
+    json = (await res.json()) as TokenResponse
+  } catch {
+    return { ok: false, reason: "invalid-json" }
+  }
+
+  if (!json.access_token) return { ok: false, reason: "missing-access-token" }
+
+  const out: AgentTokenRefreshResult = { ok: true, accessToken: json.access_token }
+  // Rotation: surface the NEW refresh token when present; the caller falls back to
+  // the old one only when the response omits one (Linear always rotates).
+  if (typeof json.refresh_token === "string" && json.refresh_token) out.refreshToken = json.refresh_token
+  if (typeof json.expires_in === "number") out.expiresIn = json.expires_in
+  if (typeof json.scope === "string") out.scope = json.scope
+  return out
+}
+
 /**
  * Refresh the stored agent access token using the rotating refresh token.
  *
  * actor=app authorization_code tokens are 24h access tokens carrying a rotating
  * refresh_token; this exchanges that refresh token for a NEW access token AND a
  * NEW refresh token (Linear rotates on every refresh — the new refresh token MUST
- * be persisted or the next refresh fails).
- *
- * SINGLE attempt, no retry: refresh tokens are single-use, so retrying risks
- * double-rotation and invalidating the freshly-issued token. Mirrors the 15s
- * AbortSignal upper bound the install callback uses.
+ * be persisted or the next refresh fails). The POST itself lives in the shared
+ * `performAgentTokenRefresh`; this function owns the KV read, the rotation-record
+ * write, and the neutral telemetry.
  *
  * Returns the new access token on success, or null on ANY failure (no stored
  * refresh token, missing creds, non-2xx, network/JSON error, missing access_token,
@@ -405,58 +469,32 @@ export async function refreshAgentToken(env: AgentTokenEnv): Promise<string | nu
   const { clientId, clientSecret } = resolveAgentOAuthCreds(env)
   if (!clientId || !clientSecret) return null
 
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: existing.refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-  })
-
-  let res: Response
-  try {
-    res = await fetch(TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-      signal: AbortSignal.timeout(15000),
-    })
-  } catch {
-    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "network" }))
-    return null
-  }
-
-  if (!res.ok) {
-    // Status only — the response body can carry token material, so it is never logged.
-    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", status: res.status }))
-    return null
-  }
-
-  let json: TokenResponse
-  try {
-    json = (await res.json()) as TokenResponse
-  } catch {
-    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "invalid-json" }))
-    return null
-  }
-
-  if (!json.access_token) {
-    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "missing-access-token" }))
+  const result = await performAgentTokenRefresh(existing.refreshToken, { clientId, clientSecret })
+  if (!result.ok) {
+    // Preserve the prior neutral telemetry shape: a non-2xx logs the status only;
+    // the others log a reason. NEVER logs token material.
+    console.error(
+      JSON.stringify(
+        result.reason === "non-2xx"
+          ? { event: "linear-agent-refresh-failed", status: result.status }
+          : { event: "linear-agent-refresh-failed", reason: result.reason },
+      ),
+    )
     return null
   }
 
   const next: LinearAgentTokenRecord = {
-    accessToken: json.access_token,
+    accessToken: result.accessToken,
     // Rotation: persist the NEW refresh token; fall back to the old one only when
     // the response omits one (Linear always rotates, but stay defensive).
-    refreshToken:
-      typeof json.refresh_token === "string" && json.refresh_token ? json.refresh_token : existing.refreshToken,
+    refreshToken: result.refreshToken ?? existing.refreshToken,
     installedAt: existing.installedAt,
   }
-  if (typeof json.scope === "string") next.scope = json.scope
+  if (typeof result.scope === "string") next.scope = result.scope
   else if (existing.scope) next.scope = existing.scope
   // Always record an expiry so proactive refresh keeps working; default to the
   // known 24h lifetime if the response omits expires_in (it never should).
-  next.expiresAt = Date.now() + (typeof json.expires_in === "number" ? json.expires_in * 1000 : FALLBACK_TOKEN_TTL_MS)
+  next.expiresAt = Date.now() + (typeof result.expiresIn === "number" ? result.expiresIn * 1000 : FALLBACK_TOKEN_TTL_MS)
 
   try {
     await putLinearAgentToken(env.OPENCLAW_STATE, next)

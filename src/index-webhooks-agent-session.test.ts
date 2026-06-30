@@ -96,6 +96,10 @@ describe("handleLinearWebhook — AgentSessionEvent trigger", () => {
       "thought",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
+    // SIG-145: the ACK builds its client with allowRefresh:false so a stale-token 401
+    // can't trigger a blocking broker forceRefresh that the AbortSignal doesn't bound
+    // (which would overrun the ack window). The token read stays on the cached readOnly path.
+    expect(buildLinearAgentClient).toHaveBeenCalledWith(env, { allowRefresh: false })
     expect(send).toHaveBeenCalledOnce()
     expect(send).toHaveBeenCalledWith({ type: "linear-agent-run", issueId: ISSUE_ID, sessionId: SESSION_ID })
   })

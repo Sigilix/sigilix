@@ -253,6 +253,40 @@ describe("buildLinearAgentClient", () => {
     expect(again).toBe("fresh-token")
     expect(getValidTokenCalls).toBe(callsBefore)
   })
+
+  // ── SIG-145: allowRefresh:false (the webhook ACK hot path) ──
+  it("allowRefresh:false → still reads readOnly, but a 401 does NOT force a broker refresh or retry (the ACK must stay bounded)", async () => {
+    let forceRefreshCalls = 0
+    let captured: { readOnly: boolean } | undefined
+    const env = makeEnv(
+      async (args) => {
+        captured = args
+        return { ok: true, accessToken: "stale-token" }
+      },
+      async () => {
+        forceRefreshCalls++
+        return { ok: true, accessToken: "fresh-token" }
+      },
+    )
+
+    const client = await buildLinearAgentClient(env, { allowRefresh: false })
+    expect(client).not.toBeNull()
+    // The token READ is still the cached readOnly path (one DO read, never a refresh POST).
+    expect(captured).toEqual({ readOnly: true })
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ errors: [{ message: "Unauthorized" }] }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    // A 401 surfaces (no onUnauthorized hook) — NOT a blocking forceRefresh that could
+    // overrun Linear's ~10s ack window. Exactly ONE fetch, ZERO broker refreshes.
+    await expect(client!.createAgentActivity("session-x", "On it", "thought")).rejects.toThrow()
+    expect(forceRefreshCalls).toBe(0)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ─── LinearClient — 401-retry via the onUnauthorized hook (SIG-144 slice 3) ─

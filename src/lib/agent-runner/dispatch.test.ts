@@ -146,7 +146,9 @@ describe("dispatchAgentRun", () => {
     const env = makeEnv("on")
     const result = await dispatchAgentRun(env, SAMPLE_INPUT)
 
-    expect(result).toEqual({ runId: "run-abc", dispatched: true })
+    // SIG-145: the parsed container outcome is surfaced to the caller (the default
+    // stub responds {"status":"started"}).
+    expect(result).toEqual({ runId: "run-abc", dispatched: true, outcome: { status: "started" } })
     expect(mockGetInstallationToken).toHaveBeenCalledOnce()
     expect(mockGetInstallationToken).toHaveBeenCalledWith({
       kv: env.OPENCLAW_STATE,
@@ -413,7 +415,13 @@ describe("dispatchAgentRun", () => {
 
     const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
 
-    expect(result).toEqual({ runId: "run-abc", dispatched: true })
+    // SIG-145: the same parsed outcome persisted to the DO is also handed back so the
+    // caller can post the terminal Linear agent-session activity with the PR link.
+    expect(result).toEqual({
+      runId: "run-abc",
+      dispatched: true,
+      outcome: { status: "opened", prUrl: "https://github.com/Sigilix/sigilix/pull/7" },
+    })
     expect(stub.setRunRecord).toHaveBeenCalledWith({
       runId: "run-abc",
       status: "opened",
@@ -429,7 +437,9 @@ describe("dispatchAgentRun", () => {
 
     const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
 
-    expect(result).toEqual({ runId: "run-abc", dispatched: true })
+    // The outcome was parsed before the DO persist threw, so it's still surfaced
+    // (the caller can post the completion even when the DO write failed).
+    expect(result).toEqual({ runId: "run-abc", dispatched: true, outcome: { status: "started" } })
 
     const allOutput = [
       ...spyLog.mock.calls.flat().map(String),
@@ -440,6 +450,18 @@ describe("dispatchAgentRun", () => {
     expect(allOutput).toContain("agent-runner-status-persist-failed")
     expect(allOutput).not.toContain(STUB_TOKEN)
     expect(allOutput).not.toContain(SAMPLE_INPUT.model.key)
+  })
+
+  it('mode "on": a malformed (non-JSON) container body → dispatched:true with NO outcome (caller falls back)', async () => {
+    const stub = makeStub(() => Promise.resolve(new Response("not json", { status: 200 })))
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+
+    const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    // The run completed (HTTP 200) but the body couldn't be parsed — surface no outcome
+    // so the caller posts a neutral resolving activity rather than a wrong one.
+    expect(result).toEqual({ runId: "run-abc", dispatched: true })
   })
 })
 

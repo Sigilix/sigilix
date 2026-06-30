@@ -166,23 +166,95 @@ describe("runLinearAgentRun", () => {
     expect(mockCreateComment.mock.calls[0]![0]).toBe(ISSUE_ID)
   })
 
-  it("AgentSession path (sessionId present) → posts a NON-terminal `action` activity, NOT a comment", async () => {
+  // ── SIG-145: AgentSession completion post (resolves the "Working" spinner) ──
+
+  it("AgentSession path: run opened a PR → posts a TERMINAL `response` activity with the PR link, NOT a comment", async () => {
+    const prUrl = "https://github.com/Sigilix/sigilix/pull/9"
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true, outcome: { status: "opened", prUrl } })
+
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
     expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
     expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    // NON-terminal `action` — a terminal `response` would close the session turn at
-    // dispatch time, before the container has opened the PR.
-    expect(mockCreateAgentActivity).toHaveBeenCalledWith("agent-session-1", expect.any(String), "action")
-    expect(mockCreateAgentActivity).not.toHaveBeenCalledWith("agent-session-1", expect.any(String), "response")
+    // Terminal `response` — this is what leaves the session out of "Working". The PR
+    // URL is included so the user gets the link without leaving the session.
+    const [sid, body, type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(sid).toBe("agent-session-1")
+    expect(type).toBe("response")
+    expect(body).toContain(prUrl)
     // No plain comment ack on the agent-session path.
     expect(mockCreateComment).not.toHaveBeenCalled()
   })
 
-  it("AgentSession path swallows an activity-post failure (never throws; still dispatched)", async () => {
+  it("AgentSession path: a no-change run posts a terminal `response` (resolves; no PR link)", async () => {
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true, outcome: { status: "no-change" } })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    const [, body, type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(type).toBe("response")
+    expect(String(body)).not.toContain("http")
+  })
+
+  it("AgentSession path: a dispatched run with an unexpected non-error status resolves as a neutral `response`, NOT an error", async () => {
+    // The container contract is opened|no-change|error post-completion; a stray `started`
+    // must still resolve the session, and must NOT read as the misleading "couldn't complete".
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true, outcome: { status: "started" } })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(type).toBe("response")
+  })
+
+  it("AgentSession path: a container run FAILURE posts a terminal `error` activity (resolves, never hangs)", async () => {
+    mockDispatchAgentRun.mockResolvedValue({
+      runId: "run-1",
+      dispatched: true,
+      outcome: { status: "error", error: "container blew up" },
+    })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(type).toBe("error")
+  })
+
+  it("AgentSession path: a non-deduped non-dispatch (e.g. container fault) still posts a terminal `error` so the session resolves", async () => {
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: false })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(type).toBe("error")
+  })
+
+  it("AgentSession path: a DEDUPE does NOT post any activity (a concurrent run owns the session)", async () => {
+    const kv = makeKv({ "linear-agent-run:issue-uuid-1": "1" })
+    await runLinearAgentRun(ISSUE_ID, makeEnv({ OPENCLAW_STATE: kv }), "agent-session-1")
+
+    // Deduped → dispatchAgentRun never runs AND no terminal activity is posted here:
+    // resolving the session would prematurely close the live run that owns it.
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(mockCreateComment).not.toHaveBeenCalled()
+  })
+
+  it("AgentSession path swallows a completion-post failure (never throws; still dispatched)", async () => {
     mockCreateAgentActivity.mockRejectedValue(new Error("Linear API down"))
     await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
     expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+  })
+
+  it("AgentSession path: a null agent client (no token) skips the post + logs, never throws", async () => {
+    mockBuildLinearAgentClient.mockResolvedValue(null)
+    await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-ack-no-token")
   })
 
   it('engine is ALWAYS "minimal" (untrusted input path — never "full")', async () => {
@@ -345,11 +417,13 @@ describe("dispatchTicketImplementation", () => {
     expect(kv.put).toHaveBeenCalledWith(DEDUPE_KEY, "1", { expirationTtl: 3600 })
   })
 
-  it("dedupes when the marker is already present (no dispatch)", async () => {
+  it("dedupes when the marker is already present (no dispatch) and flags deduped:true", async () => {
     const kv = makeKv({ [DEDUPE_KEY]: "1" })
     const result = await dispatchTicketImplementation(makeEnv({ OPENCLAW_STATE: kv }), args())
 
-    expect(result).toEqual({ dispatched: false })
+    // SIG-145: `deduped:true` tells the AgentSession caller NOT to resolve the session —
+    // a concurrent/earlier run owns it.
+    expect(result).toEqual({ dispatched: false, deduped: true })
     expect(mockDispatchAgentRun).not.toHaveBeenCalled()
     expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-deduped")
   })

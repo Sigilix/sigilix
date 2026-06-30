@@ -391,10 +391,17 @@ async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: 
  * so it can never block past Linear's webhook ack window — an indefinite hang would
  * miss the ack deadline and cause Linear to redeliver, fanning out duplicate runs. An
  * AbortError lands in the catch below and falls into the same best-effort path.
+ *
+ * SIG-145: the client is built with `allowRefresh: false` so a stale-token 401 on
+ * this hot path can NOT trigger a blocking broker `forceRefresh` (a DO RPC that the
+ * `AbortSignal.timeout(2000)` does NOT bound) — which would overrun the ack window.
+ * The token read stays on the cached `readOnly` path (one DO read, no refresh POST).
+ * The ACK is best-effort: a genuine miss just skips here; the background run still
+ * posts the real terminal completion into the session.
  */
 async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
   try {
-    const agent = await buildLinearAgentClient(env)
+    const agent = await buildLinearAgentClient(env, { allowRefresh: false })
     if (!agent) {
       console.warn(JSON.stringify({ event: "linear-agent-ack-no-token", sessionId }))
       return

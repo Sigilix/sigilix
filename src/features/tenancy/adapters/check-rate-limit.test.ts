@@ -175,9 +175,9 @@ describe("checkRateLimit", () => {
 
   // ── shadow mode ───────────────────────────────────────────────────────────────
 
-  it("mode=shadow, used UNDER cap+burst (used=2) → allowed:true, rate-limit-ok", async () => {
-    // cap=3, burst=0; used=2 → 2 < 3+0=3 → allowed
-    for (let i = 0; i < 2; i++) {
+  it("mode=shadow, used UNDER cap+burst (used=1) → allowed:true, rate-limit-ok", async () => {
+    // cap=2, burst=0; used=1 → 1 < 2+0=2 → allowed
+    for (let i = 0; i < 1; i++) {
       await insertReview(db, 10, "alice", i, recentIso(0.5))
     }
     const decision = await checkRateLimit(makeEnv(db, "shadow"), {
@@ -186,19 +186,19 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
     })
     expect(decision.allowed).toBe(true)
-    expect(decision.used).toBe(2)
+    expect(decision.used).toBe(1)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     const ok = eventsByName("rate-limit-ok")
     expect(ok).toHaveLength(1)
-    expect(ok[0]).toMatchObject({ event: "rate-limit-ok", installationId: 10, mode: "shadow", used: 2, cap: 3 })
+    expect(ok[0]).toMatchObject({ event: "rate-limit-ok", installationId: 10, mode: "shadow", used: 1, cap: 2 })
   })
 
-  it("mode=shadow, used OVER cap+burst (used=3) → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
-    // cap=3, burst=0; used=3 → 3 < 3+0=3 = false → over limit; shadow still allows
-    for (let i = 0; i < 3; i++) {
+  it("mode=shadow, used OVER cap+burst (used=2) → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
+    // cap=2, burst=0; used=2 → 2 < 2+0=2 = false → over limit; shadow still allows
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 11, "bob", i, recentIso(0.5))
     }
-    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+3600000-NOW = 1800000
+    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+18000000-NOW = 16200000
     const decision = await checkRateLimit(makeEnv(db, "shadow"), {
       installationId: 11,
       authorLogin: "bob",
@@ -206,22 +206,22 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(true)
     expect(decision.mode).toBe("shadow")
-    expect(decision.used).toBe(3)
+    expect(decision.used).toBe(2)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
-    expect(decision.resetMs).toBe(1_800_000)
-    expect(decision.footer).toContain("3 of 3 reviews used")
+    expect(decision.resetMs).toBe(16_200_000)
+    expect(decision.footer).toContain("2 of 2 reviews used")
     expect(decision.footer).toContain("resets in")
     const wouldSkip = eventsByName("rate-limit-would-skip")
     expect(wouldSkip).toHaveLength(1)
-    expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 3, cap: 3 })
-    expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(1_800_000)
+    expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 2, cap: 2 })
+    expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(16_200_000)
   })
 
   // ── enforce mode ──────────────────────────────────────────────────────────────
 
-  it("mode=enforce, used UNDER cap+burst (used=2) → allowed:true", async () => {
-    // cap=3, burst=0; used=2 → 2 < 3+0=3 → allowed
-    for (let i = 0; i < 2; i++) {
+  it("mode=enforce, used UNDER cap+burst (used=1) → allowed:true", async () => {
+    // cap=2, burst=0; used=1 → 1 < 2+0=2 → allowed
+    for (let i = 0; i < 1; i++) {
       await insertReview(db, 20, "charlie", i, recentIso(0.5))
     }
     const decision = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -234,12 +234,12 @@ describe("checkRateLimit", () => {
     expect(eventsByName("rate-limit-skip")).toHaveLength(0)
   })
 
-  it("mode=enforce, used OVER cap+burst (used=3) → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
-    // cap=3, burst=0; used=3 → 3 < 3+0=3 = false → denied
-    for (let i = 0; i < 3; i++) {
+  it("mode=enforce, used OVER cap+burst (used=2) → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
+    // cap=2, burst=0; used=2 → 2 < 2+0=2 = false → denied
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 21, "dave", i, recentIso(0.5))
     }
-    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+3600000-NOW = 1800000
+    // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+18000000-NOW = 16200000
     const decision = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 21,
       authorLogin: "dave",
@@ -247,15 +247,15 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(false)
     expect(decision.mode).toBe("enforce")
-    expect(decision.used).toBe(3)
+    expect(decision.used).toBe(2)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
-    expect(decision.resetMs).toBe(1_800_000)
-    expect(decision.footer).toContain("3 of 3 reviews used")
+    expect(decision.resetMs).toBe(16_200_000)
+    expect(decision.footer).toContain("2 of 2 reviews used")
     expect(decision.footer).toContain("resets in")
     const skip = eventsByName("rate-limit-skip")
     expect(skip).toHaveLength(1)
-    expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 3, cap: 3 })
-    expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(1_800_000)
+    expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 2, cap: 2 })
+    expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(16_200_000)
   })
 
   // ── D1 fault ──────────────────────────────────────────────────────────────────
@@ -276,9 +276,9 @@ describe("checkRateLimit", () => {
 
   // ── cap + burst boundary ──────────────────────────────────────────────────────
 
-  it("cap=3 burst=0 boundary: used=2 → allowed; used=3 → denied (enforce)", async () => {
-    // Part A: used=2 → 2 < cap+burst=3+0=3 → allowed
-    for (let i = 0; i < 2; i++) {
+  it("cap=2 burst=0 boundary: used=1 → allowed; used=2 → denied (enforce)", async () => {
+    // Part A: used=1 → 1 < cap+burst=2+0=2 → allowed
+    for (let i = 0; i < 1; i++) {
       await insertReview(db, 40, "frank", i, recentIso(0.5))
     }
     const d2 = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -287,10 +287,10 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
     })
     expect(d2.allowed).toBe(true)
-    expect(d2.used).toBe(2)
+    expect(d2.used).toBe(1)
 
-    // Part B: used=3 → 3 < 3 = false → denied
-    for (let i = 0; i < 3; i++) {
+    // Part B: used=2 → 2 < 2 = false → denied
+    for (let i = 0; i < 2; i++) {
       await insertReview(db, 41, "frank", i, recentIso(0.5))
     }
     const d3 = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -299,7 +299,34 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
     })
     expect(d3.allowed).toBe(false)
-    expect(d3.used).toBe(3)
+    expect(d3.used).toBe(2)
+  })
+
+  // ── window roll (5h retune) ───────────────────────────────────────────────────
+
+  it("a review just OUTSIDE the 5h window does not count; one just INSIDE does (window rolls correctly)", async () => {
+    // Review at 5h + 1s old — strictly outside the 5h window — must not count.
+    await insertReview(db, 60, "grace", 0, recentIso(5 + 1 / 3600))
+    const outside = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 60,
+      authorLogin: "grace",
+      nowMs: NOW,
+    })
+    expect(outside.used).toBe(0)
+    expect(outside.allowed).toBe(true)
+
+    // A second review at 5h - 1s old — just inside the window — must count
+    // (used=1, still under cap=2 → allowed). The first row stays excluded
+    // (it ages out at exactly 5h), so this proves the window boundary itself
+    // rolls correctly, independent of the cap boundary covered above.
+    await insertReview(db, 60, "grace", 1, recentIso(5 - 1 / 3600))
+    const inside = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 60,
+      authorLogin: "grace",
+      nowMs: NOW,
+    })
+    expect(inside.used).toBe(1)
+    expect(inside.allowed).toBe(true)
   })
 
   // ── tier seam ─────────────────────────────────────────────────────────────────

@@ -372,6 +372,16 @@ new_sqlite_classes = ["LinearTokenBroker"]
 # Ollama Cloud); the bake-off no longer has a current target.
 SHADOW_BAKEOFF_ROLES = ""
 
+# SIG-144: unify the two Linear OAuth apps into one. "on" routes all Linear API
+# calls through the single agent-app token (throws rather than falling back to
+# the human LINEAR_API_KEY). Off/unset = legacy client_credentials path.
+OPENCLAW_LINEAR_UNIFIED = "on"
+
+# SIG-545: Linear agent run mode. "on" lets an AgentSessionEvent (an issue
+# assigned/delegated to the Sigilix agent) trigger the agent-runner to implement
+# the ticket and open a PR. Off/unset = triage-only.
+OPENCLAW_LINEAR_AGENT_RUN_MODE = "on"
+
 # SIG-455: per-tenant fairness gate. "off" | "shadow" (default) | "enforce".
 # "shadow" runs the gate + telemeters but lets every review through — dark
 # by default until the fairness DO is exercised in prod. "enforce" re-enqueues

@@ -29,6 +29,8 @@ import {
 } from "@/src/lib/recall-alarm"
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
+import { handleBoreasApiRoute } from "@/src/lib/boreas-gateway/api-boreas-route"
+import { handleJwksRoute, handleOpenidConfigurationRoute } from "@/src/lib/boreas-gateway/well-known-routes"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
 import { handleBlastRadiusApiRoute } from "@/src/lib/api-blast-radius-route"
@@ -166,6 +168,16 @@ export default {
       })
     }
 
+    // SIG-545: UNAUTHENTICATED OIDC discovery for the Boreas CLI gateway — GCP's
+    // Workload-Identity-Federation provider fetches these to verify the gateway's
+    // self-signed assertion JWTs. JWKS serves only the public signing key.
+    if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
+      return handleJwksRoute(env)
+    }
+    if (request.method === "GET" && url.pathname === "/.well-known/openid-configuration") {
+      return handleOpenidConfigurationRoute(env)
+    }
+
     // SIG-119: authenticated read of rolling validator shadow telemetry.
     if (request.method === "GET" && url.pathname === "/metrics/validation") {
       return handleValidationMetricsRoute(request, env)
@@ -253,6 +265,13 @@ export default {
     // Inert (503) until OPENCLAW_SIGILIX_API_KEY is set.
     if (request.method === "POST" && url.pathname === "/v1/review") {
       return handleReviewApiRoute(request, env, ctx)
+    }
+
+    // SIG-545: Boreas CLI gateway — authenticated proxy to Vertex AI (keyless WIF).
+    // Static-bearer auth; mints/reuses a Vertex SA token server-side + forces the model.
+    // Inert (503) until OPENCLAW_SIGILIX_API_KEY AND OPENCLAW_GATEWAY_ISSUER are set.
+    if (request.method === "POST" && url.pathname === "/v1/boreas/chat/completions") {
+      return handleBoreasApiRoute(request, env, ctx)
     }
 
     // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},

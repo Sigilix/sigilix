@@ -38,6 +38,8 @@ export type IndexJobReason =
   | "push"
   | "pull-request"
   | "merged-pr"
+  /** #146: a /v1/context call found the repo installed but unindexed — auto-heal on miss. */
+  | "on-demand-context-miss"
 
 export interface InstallRepoEntry {
   /** May be `null` / missing when GitHub's webhook payload omits the field. */

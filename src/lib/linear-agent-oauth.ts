@@ -43,12 +43,39 @@ const DEFAULT_INSTALL_SCOPES = "read,write,comments:create,issues:create,app:ass
  *  visibility; only `accessToken` is required to post agent activities. */
 export interface LinearAgentTokenRecord {
   accessToken: string
+  /** The rotating refresh token (actor=app authorization_code tokens return one).
+   *  Used by `refreshAgentToken` to mint a fresh 24h access token; rotated (and
+   *  re-persisted) on every successful refresh. NEVER logged. */
+  refreshToken?: string
   /** Space/comma-separated scopes Linear granted (e.g. "app:assignable app:mentionable"). */
   scope?: string
   /** ms epoch when the token expires, when Linear returns `expires_in`. */
   expiresAt?: number
   installedAt: number
 }
+
+/** Env slice the token-refresh path needs: the state KV (to read/persist the
+ *  record) plus the OAuth creds (`resolveAgentOAuthCreds`). The credential
+ *  fields are all optional on `Env`, so a caller passing only `OPENCLAW_STATE`
+ *  still satisfies this type. */
+export type AgentTokenEnv = Pick<
+  Env,
+  | "OPENCLAW_STATE"
+  | "LINEAR_OAUTH_CLIENT_ID"
+  | "LINEAR_OAUTH_CLIENT_SECRET"
+  | "OPENCLAW_LINEAR_AGENT_CLIENT_ID"
+  | "OPENCLAW_LINEAR_AGENT_CLIENT_SECRET"
+>
+
+/** Refresh ahead of expiry by this margin (10 min) so an in-flight agent
+ *  activity never races a hard expiry. Generous for clock skew. */
+const REFRESH_BUFFER_MS = 10 * 60 * 1000
+
+/** Fallback access-token lifetime used ONLY when a refresh response omits
+ *  `expires_in` (Linear actor=app tokens are 24h). Without it the refreshed
+ *  record would carry no `expiresAt`, which permanently disables proactive
+ *  refresh — the token would then silently ride until it 401s. */
+const FALLBACK_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 /** Persist the agent token record under LINEAR_AGENT_TOKEN_KEY. */
 export async function putLinearAgentToken(kv: KVNamespace, record: LinearAgentTokenRecord): Promise<void> {
@@ -70,11 +97,31 @@ export async function getLinearAgentToken(kv: KVNamespace): Promise<string | nul
   return null
 }
 
+/** Read + parse the FULL stored agent token record (accessToken + refreshToken +
+ *  scope + expiresAt), or null when none is installed / malformed. The refresh
+ *  path needs the whole record, not just the access token. */
+async function readAgentTokenRecord(kv: KVNamespace): Promise<LinearAgentTokenRecord | null> {
+  const raw = await kv.get(LINEAR_AGENT_TOKEN_KEY)
+  if (raw === null) return null
+  try {
+    const record = JSON.parse(raw) as LinearAgentTokenRecord
+    if (record && typeof record.accessToken === "string" && record.accessToken) {
+      return record
+    }
+  } catch {
+    // Malformed record — treat as not-installed.
+  }
+  return null
+}
+
 interface TokenResponse {
   access_token?: string
   token_type?: string
   expires_in?: number
   scope?: string
+  /** Rotating refresh token returned with actor=app authorization_code (and
+   *  refresh_token) grants. Linear issues a NEW one on every refresh. */
+  refresh_token?: string
 }
 
 /** Compute the OAuth redirect URI. PINNED to OPENCLAW_GATEWAY_ISSUER (the worker
@@ -308,6 +355,9 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
     accessToken: json.access_token,
     installedAt: Date.now(),
   }
+  // Capture the rotating refresh token so a later background refresh can mint a
+  // fresh access token without a re-install. NEVER logged.
+  if (typeof json.refresh_token === "string" && json.refresh_token) record.refreshToken = json.refresh_token
   if (typeof json.scope === "string") record.scope = json.scope
   if (typeof json.expires_in === "number") record.expiresAt = Date.now() + json.expires_in * 1000
 
@@ -323,11 +373,146 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
       event: "linear-agent-installed",
       scopePresent: !!record.scope,
       hasExpiry: typeof record.expiresAt === "number",
-      // access_token / code / client_secret intentionally excluded
+      hasRefresh: !!record.refreshToken,
+      // access_token / refresh_token / code / client_secret intentionally excluded
     }),
   )
 
   return htmlPage("Sigilix agent installed — you can close this tab.")
+}
+
+/**
+ * Refresh the stored agent access token using the rotating refresh token.
+ *
+ * actor=app authorization_code tokens are 24h access tokens carrying a rotating
+ * refresh_token; this exchanges that refresh token for a NEW access token AND a
+ * NEW refresh token (Linear rotates on every refresh — the new refresh token MUST
+ * be persisted or the next refresh fails).
+ *
+ * SINGLE attempt, no retry: refresh tokens are single-use, so retrying risks
+ * double-rotation and invalidating the freshly-issued token. Mirrors the 15s
+ * AbortSignal upper bound the install callback uses.
+ *
+ * Returns the new access token on success, or null on ANY failure (no stored
+ * refresh token, missing creds, non-2xx, network/JSON error, missing access_token,
+ * persist failure). A failed refresh NEVER corrupts the existing stored record.
+ * NEVER logs tokens or the refresh response body.
+ */
+export async function refreshAgentToken(env: AgentTokenEnv): Promise<string | null> {
+  const existing = await readAgentTokenRecord(env.OPENCLAW_STATE)
+  if (!existing || !existing.refreshToken) return null
+
+  const { clientId, clientSecret } = resolveAgentOAuthCreds(env)
+  if (!clientId || !clientSecret) return null
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: existing.refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+  })
+
+  let res: Response
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch {
+    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "network" }))
+    return null
+  }
+
+  if (!res.ok) {
+    // Status only — the response body can carry token material, so it is never logged.
+    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", status: res.status }))
+    return null
+  }
+
+  let json: TokenResponse
+  try {
+    json = (await res.json()) as TokenResponse
+  } catch {
+    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "invalid-json" }))
+    return null
+  }
+
+  if (!json.access_token) {
+    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "missing-access-token" }))
+    return null
+  }
+
+  const next: LinearAgentTokenRecord = {
+    accessToken: json.access_token,
+    // Rotation: persist the NEW refresh token; fall back to the old one only when
+    // the response omits one (Linear always rotates, but stay defensive).
+    refreshToken:
+      typeof json.refresh_token === "string" && json.refresh_token ? json.refresh_token : existing.refreshToken,
+    installedAt: existing.installedAt,
+  }
+  if (typeof json.scope === "string") next.scope = json.scope
+  else if (existing.scope) next.scope = existing.scope
+  // Always record an expiry so proactive refresh keeps working; default to the
+  // known 24h lifetime if the response omits expires_in (it never should).
+  next.expiresAt = Date.now() + (typeof json.expires_in === "number" ? json.expires_in * 1000 : FALLBACK_TOKEN_TTL_MS)
+
+  try {
+    await putLinearAgentToken(env.OPENCLAW_STATE, next)
+  } catch {
+    console.error(JSON.stringify({ event: "linear-agent-refresh-failed", reason: "persist" }))
+    return null
+  }
+
+  return next.accessToken
+}
+
+// WITHIN-ISOLATE single-flight: concurrent getValidAgentToken refreshes in one
+// isolate dedupe to a single in-flight POST (a refresh token is single-use, so
+// parallel refreshes would double-rotate). This is best-effort — it collapses the
+// common concurrent burst, but a narrow read-then-check window (and the
+// cross-isolate case entirely) can still issue a second refresh. Linear's ~30-min
+// refresh-token consume grace bounds the blast radius of such a rare double-rotation
+// (the prior token stays valid; no token-family revocation). Full read+decide+rotate
+// serialization via a Durable Object lock is a deliberate FOLLOW-UP for the
+// high-traffic path and is OUT OF SCOPE here — the agent-activity path is low-volume
+// and single-workspace (one LINEAR_AGENT_TOKEN_KEY).
+let refreshInFlight: Promise<string | null> | null = null
+
+/**
+ * Return a valid agent access token, refreshing it when it is at/near expiry.
+ *
+ * - No stored record → null (agent not installed).
+ * - No recorded `expiresAt` (legacy install) → return the cached token as-is
+ *   (we can't know its freshness; do not force a refresh).
+ * - More than REFRESH_BUFFER_MS from expiry → return the cached token.
+ * - Otherwise refresh (single-flight within this isolate). If the refresh FAILS
+ *   but the stored token is not yet hard-expired, fall back to it rather than
+ *   disabling the agent inside the refresh headroom (fail-safe / availability).
+ *
+ * `getLinearAgentToken` is kept as-is for callers that only need the raw stored
+ * token without the freshness guarantee.
+ */
+export async function getValidAgentToken(env: AgentTokenEnv): Promise<string | null> {
+  const record = await readAgentTokenRecord(env.OPENCLAW_STATE)
+  if (!record) return null
+  if (typeof record.expiresAt !== "number") return record.accessToken
+  if (Date.now() < record.expiresAt - REFRESH_BUFFER_MS) return record.accessToken
+
+  // At/near expiry — refresh, deduped within this isolate. The leader (the call
+  // that created the promise) clears the slot in its finally; joiners share it.
+  const inFlight = refreshInFlight ?? (refreshInFlight = refreshAgentToken(env))
+  let refreshed: string | null
+  try {
+    refreshed = await inFlight
+  } finally {
+    if (refreshInFlight === inFlight) refreshInFlight = null
+  }
+  if (refreshed) return refreshed
+  // Refresh failed (transient). `record.expiresAt` is a number here (guarded
+  // above); use the stored token while it is still valid, else give up (null).
+  return Date.now() < record.expiresAt ? record.accessToken : null
 }
 
 function text(message: string, status: number): Response {

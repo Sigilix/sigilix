@@ -5,9 +5,8 @@
 // every call is an explicit issue or comment update rather than a
 // project-level field write.
 
-import type { Env } from "@/src/shared/types/env"
 import { getAppActorToken } from "./linear-oauth"
-import { getLinearAgentToken } from "./linear-agent-oauth"
+import { getValidAgentToken, type AgentTokenEnv } from "./linear-agent-oauth"
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 
@@ -62,9 +61,14 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
  * Use this — NOT `buildLinearAuth` — for agent-activity posts: the agent capability
  * lives on the authorization-code token, not the client_credentials token. Callers
  * treat null as "agent not installed → skip the activity post" (fail-safe).
+ *
+ * Uses `getValidAgentToken`, which refreshes the stored token when it is at/near
+ * its 24h expiry — agent activities always go out on a fresh token. A null return
+ * (not installed, or a refresh failure with no still-valid token) keeps the
+ * existing fail-safe: skip the post, never fall back to a human key.
  */
-export async function buildLinearAgentClient(env: Pick<Env, "OPENCLAW_STATE">): Promise<LinearClient | null> {
-  const token = await getLinearAgentToken(env.OPENCLAW_STATE)
+export async function buildLinearAgentClient(env: AgentTokenEnv): Promise<LinearClient | null> {
+  const token = await getValidAgentToken(env)
   if (!token) return null
   return new LinearClient({ oauthToken: token })
 }

@@ -21,7 +21,10 @@ import {
   handleLinearInstall,
   getLinearAgentToken,
   putLinearAgentToken,
+  refreshAgentToken,
+  getValidAgentToken,
   LINEAR_AGENT_TOKEN_KEY,
+  type LinearAgentTokenRecord,
 } from "@/src/lib/linear-agent-oauth"
 import type { Env } from "@/src/shared/types/env"
 
@@ -61,6 +64,12 @@ function callbackReq(params: Record<string, string> = {}): Request {
 function seedState(kv: FakeKV, state = "nonce-1"): string {
   kv._store.set(`linear-oauth-state:${state}`, "1")
   return state
+}
+
+/** Read + parse the stored agent token record straight from the fake KV. */
+function readStoredRecord(kv: FakeKV): LinearAgentTokenRecord | null {
+  const raw = kv._store.get(LINEAR_AGENT_TOKEN_KEY)
+  return raw ? (JSON.parse(raw) as LinearAgentTokenRecord) : null
 }
 
 function mockTokenFetch(body: unknown, status = 200): MockInstance {
@@ -236,6 +245,28 @@ describe("handleLinearOAuthCallback", () => {
     // Token persisted under the agent-token key.
     expect(await getLinearAgentToken(kv as unknown as KVNamespace)).toBe("lin_agent_xyz")
     expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+
+  it("captures the rotating refresh_token into the stored record (never logged)", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    mockTokenFetch({
+      access_token: "lin_agent_xyz",
+      refresh_token: "lin_refresh_SECRET_1",
+      expires_in: 86400,
+      scope: "app:assignable",
+    })
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(200)
+    const record = readStoredRecord(kv)
+    expect(record?.refreshToken).toBe("lin_refresh_SECRET_1")
+    // The refresh token must NEVER reach any log line.
+    const allOutput = [...spyLog.mock.calls.flat().map(String), ...spyError.mock.calls.flat().map(String)].join("\n")
+    expect(allOutput).toContain("linear-agent-installed")
+    expect(allOutput).toContain('"hasRefresh":true')
+    expect(allOutput).not.toContain("lin_refresh_SECRET_1")
   })
 
   it("sends grant_type, client creds, code + the request-origin redirect_uri when issuer unset", async () => {
@@ -513,5 +544,265 @@ describe("agent-specific OAuth credentials (OPENCLAW_LINEAR_AGENT_CLIENT_*)", ()
     const res = await handleLinearOAuthCallback(callbackReq({ code: "c", state: "s" }), env)
     expect(res.status).toBe(503)
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ─── refreshAgentToken (rotating refresh-token exchange) ─────────────────────
+describe("refreshAgentToken", () => {
+  let spyError: MockInstance
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    spyError = vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function seedRecord(kv: FakeKV, record: LinearAgentTokenRecord): void {
+    kv._store.set(LINEAR_AGENT_TOKEN_KEY, JSON.stringify(record))
+  }
+
+  it("returns null (no fetch) when there is no stored refresh token", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "old", installedAt: 1 }) // no refreshToken
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    expect(await refreshAgentToken(makeEnv(kv))).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("rotates: persists BOTH the new access + new refresh token and returns the new access", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "access-old",
+      refreshToken: "refresh-old",
+      scope: "app:assignable",
+      expiresAt: Date.now() + 1000,
+      installedAt: 42,
+    })
+    const fetchSpy = mockTokenFetch({
+      access_token: "access-new",
+      refresh_token: "refresh-new",
+      expires_in: 86400,
+      scope: "app:assignable,app:mentionable",
+    })
+
+    const result = await refreshAgentToken(makeEnv(kv))
+
+    expect(result).toBe("access-new")
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    // form-encoded grant_type=refresh_token with the stored refresh token + creds.
+    const [endpoint, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(endpoint).toBe("https://api.linear.app/oauth/token")
+    const form = new URLSearchParams(init.body as string)
+    expect(form.get("grant_type")).toBe("refresh_token")
+    expect(form.get("refresh_token")).toBe("refresh-old")
+    expect(form.get("client_id")).toBe("client-id-123")
+    expect(form.get("client_secret")).toBe("client-secret-shh")
+    // Rotation persisted: both values replaced, installedAt preserved.
+    const record = readStoredRecord(kv)
+    expect(record?.accessToken).toBe("access-new")
+    expect(record?.refreshToken).toBe("refresh-new")
+    expect(record?.scope).toBe("app:assignable,app:mentionable")
+    expect(record?.installedAt).toBe(42)
+  })
+
+  it("falls back to the OLD refresh token when the response omits a new one", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "access-old", refreshToken: "refresh-old", installedAt: 1 })
+    mockTokenFetch({ access_token: "access-new", expires_in: 86400 }) // no refresh_token
+
+    expect(await refreshAgentToken(makeEnv(kv))).toBe("access-new")
+    expect(readStoredRecord(kv)?.refreshToken).toBe("refresh-old")
+  })
+
+  it("returns null + logs + does NOT corrupt the stored record on a non-2xx response", async () => {
+    const kv = makeFakeKV()
+    const original: LinearAgentTokenRecord = {
+      accessToken: "access-old",
+      refreshToken: "refresh-old",
+      scope: "app:assignable",
+      expiresAt: 111,
+      installedAt: 7,
+    }
+    seedRecord(kv, original)
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+    )
+
+    expect(await refreshAgentToken(makeEnv(kv))).toBeNull()
+    // Loud, structured log — and no token material in it.
+    const logged = JSON.stringify(spyError.mock.calls)
+    expect(logged).toContain("linear-agent-refresh-failed")
+    expect(logged).not.toContain("refresh-old")
+    expect(logged).not.toContain("access-old")
+    // Stored record untouched by a failed refresh.
+    expect(readStoredRecord(kv)).toEqual(original)
+  })
+
+  it("returns null on a network error (single attempt — no retry)", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "access-old", refreshToken: "refresh-old", installedAt: 1 })
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network down"))
+
+    expect(await refreshAgentToken(makeEnv(kv))).toBeNull()
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(spyError.mock.calls)).toContain("linear-agent-refresh-failed")
+  })
+
+  it("returns null when the response is missing access_token (record not corrupted)", async () => {
+    const kv = makeFakeKV()
+    const original: LinearAgentTokenRecord = { accessToken: "access-old", refreshToken: "refresh-old", installedAt: 1 }
+    seedRecord(kv, original)
+    mockTokenFetch({ token_type: "Bearer" })
+
+    expect(await refreshAgentToken(makeEnv(kv))).toBeNull()
+    expect(readStoredRecord(kv)).toEqual(original)
+  })
+
+  it("returns null (no fetch) when OAuth creds are unset", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "access-old", refreshToken: "refresh-old", installedAt: 1 })
+    const env = makeEnv(kv, { LINEAR_OAUTH_CLIENT_ID: undefined, LINEAR_OAUTH_CLIENT_SECRET: undefined })
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    expect(await refreshAgentToken(env)).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("defaults expiresAt to 24h when the refresh response omits expires_in (keeps proactive refresh alive)", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "access-old", refreshToken: "refresh-old", installedAt: 1 })
+    const before = Date.now()
+    mockTokenFetch({ access_token: "access-new", refresh_token: "refresh-new" }) // no expires_in
+
+    expect(await refreshAgentToken(makeEnv(kv))).toBe("access-new")
+    const record = readStoredRecord(kv)
+    const dayMs = 24 * 60 * 60 * 1000
+    expect(record?.expiresAt).toBeGreaterThanOrEqual(before + dayMs)
+    expect(record?.expiresAt).toBeLessThanOrEqual(Date.now() + dayMs)
+  })
+})
+
+// ─── getValidAgentToken (freshness gate + within-isolate single-flight) ──────
+describe("getValidAgentToken", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function seedRecord(kv: FakeKV, record: LinearAgentTokenRecord): void {
+    kv._store.set(LINEAR_AGENT_TOKEN_KEY, JSON.stringify(record))
+  }
+
+  it("returns null when no agent token is installed", async () => {
+    const kv = makeFakeKV()
+    expect(await getValidAgentToken(makeEnv(kv))).toBeNull()
+  })
+
+  it("returns the cached token as-is when no expiry is recorded (legacy install, no fetch)", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, { accessToken: "legacy", refreshToken: "r", installedAt: 1 }) // no expiresAt
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    expect(await getValidAgentToken(makeEnv(kv))).toBe("legacy")
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("returns the cached token without refreshing when far from expiry (no fetch)", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "still-good",
+      refreshToken: "r",
+      expiresAt: Date.now() + 60 * 60 * 1000, // 1h out — well past the 10m buffer
+      installedAt: 1,
+    })
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    expect(await getValidAgentToken(makeEnv(kv))).toBe("still-good")
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("refreshes when within the buffer of expiry and returns + persists the new token", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "near-expiry",
+      refreshToken: "refresh-old",
+      expiresAt: Date.now() + 5 * 60 * 1000, // 5m out — inside the 10m buffer
+      installedAt: 1,
+    })
+    const fetchSpy = mockTokenFetch({ access_token: "fresh", refresh_token: "refresh-new", expires_in: 86400 })
+
+    expect(await getValidAgentToken(makeEnv(kv))).toBe("fresh")
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    expect(readStoredRecord(kv)?.accessToken).toBe("fresh")
+  })
+
+  it("refreshes when the token is already expired", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "expired",
+      refreshToken: "refresh-old",
+      expiresAt: Date.now() - 1000,
+      installedAt: 1,
+    })
+    const fetchSpy = mockTokenFetch({ access_token: "fresh", refresh_token: "refresh-new", expires_in: 86400 })
+
+    expect(await getValidAgentToken(makeEnv(kv))).toBe("fresh")
+    expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+
+  it("falls back to the still-valid cached token when a refresh inside the buffer FAILS", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "near-expiry-but-valid",
+      refreshToken: "refresh-old",
+      expiresAt: Date.now() + 5 * 60 * 1000, // inside the 10m buffer, not hard-expired
+      installedAt: 1,
+    })
+    // Refresh attempt fails (transient 503).
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("{}", { status: 503 }))
+
+    // Availability: a failed refresh must NOT discard a token that is still valid.
+    expect(await getValidAgentToken(makeEnv(kv))).toBe("near-expiry-but-valid")
+    // The stored record is untouched by the failed refresh.
+    expect(readStoredRecord(kv)?.accessToken).toBe("near-expiry-but-valid")
+    expect(readStoredRecord(kv)?.refreshToken).toBe("refresh-old")
+  })
+
+  it("returns null when a refresh fails AND the stored token is already hard-expired", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "expired",
+      refreshToken: "refresh-old",
+      expiresAt: Date.now() - 1000, // hard expired — no safe fallback
+      installedAt: 1,
+    })
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("{}", { status: 503 }))
+
+    expect(await getValidAgentToken(makeEnv(kv))).toBeNull()
+  })
+
+  it("single-flight: two concurrent expired calls trigger exactly ONE token POST", async () => {
+    const kv = makeFakeKV()
+    seedRecord(kv, {
+      accessToken: "expired",
+      refreshToken: "refresh-old",
+      expiresAt: Date.now() - 1000,
+      installedAt: 1,
+    })
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "fresh", refresh_token: "refresh-new", expires_in: 86400 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    const [a, b] = await Promise.all([getValidAgentToken(makeEnv(kv)), getValidAgentToken(makeEnv(kv))])
+
+    expect(a).toBe("fresh")
+    expect(b).toBe("fresh")
+    // Deduped within the isolate — only ONE refresh POST despite two concurrent calls.
+    expect(fetchSpy).toHaveBeenCalledOnce()
   })
 })

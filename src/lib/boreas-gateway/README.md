@@ -1,8 +1,8 @@
 # boreas-gateway (SIG-545)
 
 An authenticated Worker gateway that proxies CLI requests to **Google Vertex AI**
-(`qwen/qwen3-next-80b-a3b-instruct-maas`, project `sigilix-496118`, location
-`global`) using **keyless Workload Identity Federation** — no service-account key
+(Boreas → `qwen/qwen3-next-80b-a3b-instruct-maas`, Pyroeis → `google/gemma-4-26b-a4b-it-maas`;
+project `sigilix-496118`, location `global`) using **keyless Workload Identity Federation** — no service-account key
 ever exists (org policy `disableServiceAccountKeyCreation` blocks them). Users hit
 the Sigilix Worker with the shared `SIGILIX_API_KEY`; the Worker mints GCP creds
 server-side. Users never touch GCP.
@@ -35,14 +35,22 @@ server-side. Users never touch GCP.
   SA impersonation (`generateAccessToken`). The SA token is cached (KV + an
   in-isolate memo) and reused until `expireTime − 5min` (minus a small jitter); a
   per-isolate single-flight collapses concurrent refreshes into one mint.
-- `api-boreas-route.ts` — `POST /v1/boreas/chat/completions`. Validates the shared
-  bearer **first** (503 unset / 401 bad — before body read, token mint, or any GCP
-  call), then enforces a coarse daily KV ceiling (`OPENCLAW_BOREAS_DAILY_LIMIT`,
-  numeric; unset → a built-in default) that returns **429** once the day's count hits
-  the limit — checked before the token mint so an over-limit request bills no GCP. It
+- `vertex-chat-route.ts` — the **shared** authenticated Vertex chat proxy
+  (`handleVertexChatRoute`). Validates the shared bearer **first** (503 unset / 401 bad —
+  before body read, token mint, or any GCP call), then enforces a coarse daily KV ceiling
+  (numeric env var; unset → a built-in default) that returns **429** once the day's count
+  hits the limit — checked before the token mint so an over-limit request bills no GCP. It
   forces the model id and streams the Vertex response back transparently. A GCP/Vertex
-  failure → 502 with a **generic** detail (the GCP error body is logged server-side,
-  never returned to the caller).
+  failure → 502 with a **generic** detail (the GCP error body is logged server-side, never
+  returned to the caller). The forced model id + the daily-counter key/limit are the ONLY
+  per-route knobs (`VertexChatRouteConfig`); everything else is identical.
+- `api-boreas-route.ts` — `POST /v1/boreas/chat/completions`. A thin wrapper over
+  `handleVertexChatRoute` pinning the Boreas model (`qwen/qwen3-next-80b-a3b-instruct-maas`),
+  counter key `boreas:count:<day>`, and `OPENCLAW_BOREAS_DAILY_LIMIT`.
+- `api-pyroeis-route.ts` — `POST /v1/pyroeis/chat/completions`. The same wrapper pinning the
+  Pyroeis model (`google/gemma-4-26b-a4b-it-maas` — Gemma 4 26B serverless MaaS), counter key
+  `pyroeis:count:<day>`, and `OPENCLAW_PYROEIS_DAILY_LIMIT`. Same project / SA / WIF token
+  mint as Boreas — only the forced model and the metering counter/limit differ.
 
 ## Assertion JWT (the WIF subject token)
 
@@ -58,8 +66,10 @@ server-side. Users never touch GCP.
 - `OPENCLAW_SESSION_ENCRYPTION_KEY` — the AES-256 key (reused from auth-session) that
   encrypts the OIDC private JWK at rest. Unset → the gateway fails closed (JWKS 503,
   no token mint); it never persists the key as plaintext.
-- `OPENCLAW_BOREAS_DAILY_LIMIT` — coarse endpoint-wide daily request ceiling (numeric;
-  unset → a built-in default). Over the limit → 429.
+- `OPENCLAW_BOREAS_DAILY_LIMIT` — coarse endpoint-wide daily request ceiling for the Boreas
+  route (numeric; unset → a built-in default). Over the limit → 429.
+- `OPENCLAW_PYROEIS_DAILY_LIMIT` — the same ceiling for the Pyroeis route (numeric; unset →
+  a built-in default). Over the limit → 429.
 
 The founder-run GCP setup (enable APIs, create the pool + OIDC provider against the
 deployed issuer, grant `roles/iam.workloadIdentityUser`) is recorded in the SIG-545

@@ -30,6 +30,7 @@ import {
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
 import { handleBoreasApiRoute } from "@/src/lib/boreas-gateway/api-boreas-route"
+import { handlePyroeisApiRoute } from "@/src/lib/boreas-gateway/api-pyroeis-route"
 import { handleJwksRoute, handleOpenidConfigurationRoute } from "@/src/lib/boreas-gateway/well-known-routes"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
@@ -272,6 +273,13 @@ export default {
     // Inert (503) until OPENCLAW_SIGILIX_API_KEY AND OPENCLAW_GATEWAY_ISSUER are set.
     if (request.method === "POST" && url.pathname === "/v1/boreas/chat/completions") {
       return handleBoreasApiRoute(request, env, ctx)
+    }
+
+    // SIG-545: Pyroeis CLI gateway — same keyless-WIF Vertex proxy as Boreas above,
+    // forcing a different model (Gemma 4 26B serverless MaaS). Same 503-until-configured
+    // + static-bearer auth + server-side SA-token mint + model forcing.
+    if (request.method === "POST" && url.pathname === "/v1/pyroeis/chat/completions") {
+      return handlePyroeisApiRoute(request, env, ctx)
     }
 
     // SIG-494: grounded-retrieval for the Sigilix CLI agent — POSTs {owner, repo, query},

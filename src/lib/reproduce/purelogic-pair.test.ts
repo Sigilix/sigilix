@@ -131,6 +131,96 @@ describe("comparePairInSandbox — SKIPPED (couldn't be run soundly)", () => {
     expect(res.verdict).toBe("skipped")
     expect(res.detail).toBe("async-result")
   })
+
+  it("an async function EXPRESSION (`const f = async function`) → skipped (source async flag)", async () => {
+    const res = await comparePairInSandbox(
+      `const f = async function(x){return x+1}`,
+      `const f = async function(x){return x+2}`,
+    )
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("async-fn")
+    expect(res.verdict).not.toBe("preserved")
+  })
+
+  // ── GENERATOR GUARD ───────────────────────────────────────────────────────
+  // A `function*` returns a GENERATOR OBJECT whose data is NOT in own enumerable keys, so
+  // `canon` collapses it to "{}" on BOTH sides → two DIFFERENT generators would falsely
+  // "agree" into a spurious `preserved`. The source-side `generator` flag must skip it.
+  it("a genuinely-CHANGED sync generator must NOT report preserved → skipped:generator-fn", async () => {
+    const res = await comparePairInSandbox(`function* g(n){yield n}`, `function* g(n){yield n+1}`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("generator-fn")
+    // The load-bearing assertion: a real generator behavior change is NEVER "preserved".
+    expect(res.verdict).not.toBe("preserved")
+  })
+
+  // ── OPAQUE GUARD (non-plain object at depth) ───────────────────────────────
+  // `canon` only serializes a PLAIN data object/array faithfully; a Promise / generator
+  // object / Map / Set / Date / RegExp / class instance has its data OUTSIDE own enumerable
+  // keys, so two DIFFERENT opaque values would falsely "agree" via a "{}" collapse. `canon`
+  // brands any non-plain object opaque AT ANY DEPTH → the host maps it to `skipped`.
+  it("a Promise NESTED in a returned OBJECT → skipped:opaque-result (not a false preserved)", async () => {
+    const res = await comparePairInSandbox(
+      `x => ({ p: Promise.resolve(x + 1) })`,
+      `x => ({ p: Promise.resolve(x + 2) })`,
+    )
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("opaque-result")
+    expect(res.verdict).not.toBe("preserved")
+  })
+
+  it("a Promise NESTED in a returned ARRAY → skipped:opaque-result (not a false preserved)", async () => {
+    const res = await comparePairInSandbox(`x => [Promise.resolve(x + 1)]`, `x => [Promise.resolve(x + 2)]`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("opaque-result")
+    expect(res.verdict).not.toBe("preserved")
+  })
+
+  it("a Map return whose behavior changed → skipped:opaque-result (non-plain object)", async () => {
+    const res = await comparePairInSandbox(`x => new Map([[x, x]])`, `x => new Map([[x, x + 1]])`)
+    expect(res.verdict).toBe("skipped")
+    expect(res.detail).toBe("opaque-result")
+    expect(res.verdict).not.toBe("preserved")
+  })
+})
+
+// ── REGRESSION GUARD (the opaque branding must NOT over-skip plain data) ──────
+// The whole value of the oracle is verifying pure functions that return PLAIN data. The
+// opaque guard brands only NON-plain objects; plain objects, arrays, and primitives MUST
+// still canon faithfully and still produce real `changed` / `preserved` verdicts.
+describe("comparePairInSandbox — REGRESSION: plain data still verifies (not over-skipped)", () => {
+  it("a fn returning a changed PLAIN OBJECT → changed (not opaque-skipped)", async () => {
+    const res = await comparePairInSandbox(`x => ({ a: x })`, `x => ({ a: x + 1 })`)
+    expect(res.verdict).toBe("changed")
+    expect(res.detail).toContain("logic-divergence")
+    expect(res.sample).toBeDefined()
+  })
+
+  it("identical PLAIN-OBJECT fns → preserved (faithful canon, not opaque-skipped)", async () => {
+    const res = await comparePairInSandbox(`x => ({ a: x })`, `x => ({ a: x })`)
+    expect(res.verdict).toBe("preserved")
+    expect(res.detail).toBe("no-divergence-found")
+  })
+
+  it("a fn returning a changed ARRAY → changed (arrays canon faithfully)", async () => {
+    const res = await comparePairInSandbox(`(x: number) => [x]`, `(x: number) => [x + 1]`)
+    expect(res.verdict).toBe("changed")
+  })
+
+  it("identical ARRAY-returning fns → preserved", async () => {
+    const res = await comparePairInSandbox(`(x: number) => [x, x]`, `(x: number) => [x, x]`)
+    expect(res.verdict).toBe("preserved")
+  })
+
+  it("a NESTED plain object (object inside object) still canons faithfully → changed", async () => {
+    const res = await comparePairInSandbox(`x => ({ a: { b: x } })`, `x => ({ a: { b: x + 1 } })`)
+    expect(res.verdict).toBe("changed")
+  })
+
+  it("a fn returning a changed PRIMITIVE → changed (primitives unaffected)", async () => {
+    const res = await comparePairInSandbox(`(x: number) => x > 0`, `(x: number) => x >= 0`)
+    expect(res.verdict).toBe("changed")
+  })
 })
 
 describe("comparePairInSandbox — never throws + reports elapsed", () => {

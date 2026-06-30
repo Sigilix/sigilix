@@ -68,7 +68,8 @@ function rfc3339(ms: number): string {
 
 describe("signAssertionJwt", () => {
   it("emits a header with kid + claims (backdated iat, ~5min exp) verifiable against the public JWK", async () => {
-    const sk = await getOrCreateSigningKey(makeEnv().OPENCLAW_STATE)
+    const env = makeEnv()
+    const sk = await getOrCreateSigningKey(env.OPENCLAW_STATE, env.OPENCLAW_SESSION_ENCRYPTION_KEY)
     const jwt = await signAssertionJwt({ privateKey: sk.privateKey, kid: sk.kid, issuer: ISSUER, now: NOW_SEC })
 
     const [headerB64, payloadB64, sigB64] = jwt.split(".") as [string, string, string]

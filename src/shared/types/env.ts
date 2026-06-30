@@ -358,6 +358,14 @@ export interface Env {
   // `wrangler secret put OPENCLAW_GATEWAY_ISSUER https://<worker-origin>`.
   OPENCLAW_GATEWAY_ISSUER?: string
 
+  // SIG-545: coarse endpoint-wide daily request ceiling for POST
+  // /v1/boreas/chat/completions (cost/abuse guard — every admitted request mints a
+  // GCP token + bills a Vertex call). Numeric string; unset → a built-in default. A
+  // global KV counter (`boreas:count:<YYYY-MM-DD>`), not per-key metering — once the
+  // day's count hits the limit the endpoint returns 429. Mirrors
+  // OPENCLAW_SIGILIX_API_DAILY_LIMIT (the /v1/review ceiling above).
+  OPENCLAW_BOREAS_DAILY_LIMIT?: string
+
   // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
   // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in
   // default. A global KV counter (`v1verify:count:<YYYY-MM-DD>`), not per-key metering —

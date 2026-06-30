@@ -145,6 +145,44 @@ describe("handleBoreasApiRoute — proxy", () => {
     expect(f.mock.calls.some((c) => String(c[0]) === VERTEX_CHAT_COMPLETIONS_URL)).toBe(false)
   })
 
+  it("does NOT leak the GCP error body (SA email / pool / provider / project) on an STS failure", async () => {
+    // A realistic STS error body that names the federation identity.
+    const leaky =
+      "permission denied for pool sigilix-gateway-pool provider sigilix-worker-oidc " +
+      "sa sigilix-vertex@sigilix-496118.iam.gserviceaccount.com project 102681693225"
+    const f = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u === STS_TOKEN_URL) return new Response(leaky, { status: 403 })
+      throw new Error(`unexpected fetch: ${u}`)
+    })
+    vi.stubGlobal("fetch", f)
+    const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER })
+    const { ctx } = makeCtx()
+    const res = await handleBoreasApiRoute(post({ messages: [] }, `Bearer ${KEY}`), env, ctx)
+    expect(res.status).toBe(502)
+    const text = await res.text()
+    expect(text).not.toContain("sigilix-gateway-pool")
+    expect(text).not.toContain("sigilix-worker-oidc")
+    expect(text).not.toContain("sigilix-vertex@sigilix-496118.iam.gserviceaccount.com")
+    expect(text).not.toContain("102681693225")
+  })
+
+  it("429 over the daily ceiling — AFTER auth but BEFORE any GCP fetch", async () => {
+    const f = vi.fn()
+    vi.stubGlobal("fetch", f)
+    const store = new Map<string, string>()
+    const day = new Date().toISOString().slice(0, 10)
+    store.set(`boreas:count:${day}`, "5") // already at the limit
+    const env = makeEnv(
+      { OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER, OPENCLAW_BOREAS_DAILY_LIMIT: "5" },
+      store,
+    )
+    const { ctx } = makeCtx()
+    const res = await handleBoreasApiRoute(post({ messages: [] }, `Bearer ${KEY}`), env, ctx)
+    expect(res.status).toBe(429)
+    expect(f).not.toHaveBeenCalled() // no token mint, no Vertex call
+  })
+
   it("400 on a non-object JSON body", async () => {
     stubFullChain()
     const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER })

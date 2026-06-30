@@ -4,6 +4,12 @@
 
 import type { Env } from "@/src/shared/types/env"
 
+/**
+ * A valid AES-256 key for OPENCLAW_SESSION_ENCRYPTION_KEY: 43 base64url chars that
+ * decode to exactly 32 bytes (all-zero) — what auth-session.ts's importAesKey requires.
+ */
+export const TEST_ENCRYPTION_KEY = "A".repeat(43)
+
 /** A minimal in-memory KVNamespace over a Map. TTL/metadata are accepted + ignored. */
 export function inMemoryKv(store: Map<string, string> = new Map()): KVNamespace {
   return {
@@ -38,10 +44,13 @@ export function makeCtx(): { ctx: ExecutionContext; waits: Promise<unknown>[] } 
   return { ctx, waits }
 }
 
-/** Build an Env with an in-memory OPENCLAW_STATE, overridable per-field. */
+/** Build an Env with an in-memory OPENCLAW_STATE + a valid at-rest encryption key,
+ *  overridable per-field (pass `{ OPENCLAW_SESSION_ENCRYPTION_KEY: undefined }` to
+ *  exercise the fail-closed path). */
 export function makeEnv(over: Partial<Record<keyof Env, unknown>> = {}, store?: Map<string, string>): Env {
   return {
     OPENCLAW_STATE: inMemoryKv(store),
+    OPENCLAW_SESSION_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     ...over,
   } as unknown as Env
 }

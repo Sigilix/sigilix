@@ -24,32 +24,41 @@ import { VERTEX_CHAT_COMPLETIONS_URL, VERTEX_MODEL } from "./constants"
 // query routes) but still bounds an abusive buffer. Enforced as the stream is read.
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 const DAY_COUNTER_TTL_SECONDS = 2 * 24 * 60 * 60 // expire yesterday's counter (2-day window)
+const DEFAULT_DAILY_LIMIT = 200 // coarse endpoint-wide daily request ceiling (cost guard)
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
 /**
- * Best-effort daily request meter (the admitUnderDailyCeiling precedent, sans
- * ceiling — the gateway meters usage but doesn't cap it here). A single global KV
- * counter per day; a KV hiccup never blocks a request. Non-atomic (KV has no atomic
- * incr) — fine for a coarse usage signal.
+ * Coarse endpoint-wide daily ceiling (mirrors handleReviewApiRoute's
+ * admitUnderDailyCeiling). A single global KV counter per day — NOT per-key metering.
+ * Returns false (→ 429) once the day's count reaches the limit, otherwise increments
+ * and returns true. The limit is env-driven (OPENCLAW_BOREAS_DAILY_LIMIT, numeric;
+ * unset → DEFAULT_DAILY_LIMIT). Best-effort: a KV hiccup never blocks a request. The
+ * check+increment is non-atomic (KV has no atomic incr) — acceptable for a COARSE
+ * ceiling: a burst may slip a few past, but runaway GCP spend is still bounded.
  */
-async function meterBoreasRequest(env: Env): Promise<void> {
+async function admitUnderDailyCeiling(env: Env): Promise<boolean> {
+  const parsed = Number(env.OPENCLAW_BOREAS_DAILY_LIMIT)
+  const limit = Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_DAILY_LIMIT
   try {
     const day = new Date().toISOString().slice(0, 10)
     const key = `boreas:count:${day}`
-    const current = Number(await env.OPENCLAW_STATE?.get(key)) || 0
-    await env.OPENCLAW_STATE?.put(key, String(current + 1), { expirationTtl: DAY_COUNTER_TTL_SECONDS })
+    const current = Number(await env.OPENCLAW_STATE.get(key)) || 0
+    if (current >= limit) return false
+    await env.OPENCLAW_STATE.put(key, String(current + 1), { expirationTtl: DAY_COUNTER_TTL_SECONDS })
+    return true
   } catch {
-    // never block a request on a counter failure
+    return true // never block a request on a counter failure
   }
 }
 
 /**
  * POST /v1/boreas/chat/completions — see file header. 503 until keyed / issuer set;
- * 401 on a bad bearer; 400 on bad JSON / non-object body; 413 on an oversized body;
- * 502 on a GCP/Vertex failure; otherwise the Vertex response is passed through.
+ * 401 on a bad bearer; 429 over the daily ceiling; 400 on bad JSON / non-object body;
+ * 413 on an oversized body; 502 on a GCP/Vertex failure; otherwise the Vertex response
+ * is passed through.
  */
 export async function handleBoreasApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // AUTH FIRST — before body read, token mint, or any GCP call.
@@ -57,6 +66,11 @@ export async function handleBoreasApiRoute(request: Request, env: Env, ctx: Exec
   if (!token) return json({ error: "boreas_gateway_not_configured" }, 503)
   if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
   if (!env.OPENCLAW_GATEWAY_ISSUER) return json({ error: "boreas_gateway_not_configured" }, 503)
+
+  // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so
+  // an over-limit request never mints a GCP token or bills Vertex. The increment IS the
+  // meter (the `boreas:count:<day>` counter), so it now gates rather than just counting.
+  if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload
   // is aborted, never fully buffered; `null` = over the cap → 413.
@@ -77,14 +91,16 @@ export async function handleBoreasApiRoute(request: Request, env: Env, ctx: Exec
   const payload = { ...(raw as Record<string, unknown>), model: VERTEX_MODEL }
 
   // Mint/reuse the keyless Vertex SA token. A GCP failure → 502 (never a clean pass).
+  // The error is logged SERVER-SIDE for debugging but the caller-facing `detail` is
+  // generic — a GCP STS/IAM error body carries the project number / pool / provider /
+  // SA email, which must never reach a caller.
   let accessToken: string
   try {
     accessToken = await getVertexAccessToken(env, ctx)
   } catch (err) {
-    return json({ error: "boreas_upstream_error", detail: err instanceof Error ? err.message : String(err) }, 502)
+    console.error("boreas: vertex token mint failed", err)
+    return json({ error: "boreas_upstream_error", detail: "upstream token mint failed" }, 502)
   }
-
-  await meterBoreasRequest(env)
 
   let upstream: Response
   try {
@@ -94,7 +110,8 @@ export async function handleBoreasApiRoute(request: Request, env: Env, ctx: Exec
       body: JSON.stringify(payload),
     })
   } catch (err) {
-    return json({ error: "boreas_upstream_error", detail: err instanceof Error ? err.message : String(err) }, 502)
+    console.error("boreas: vertex chat-completions fetch failed", err)
+    return json({ error: "boreas_upstream_error", detail: "upstream request failed" }, 502)
   }
 
   // Passthrough: forwarding the upstream body streams transparently when the caller

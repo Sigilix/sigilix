@@ -15,6 +15,7 @@ describe("handleJwksRoute", () => {
     const env = makeEnv()
     const res = await handleJwksRoute(env)
     expect(res.status).toBe(200)
+    expect(res.headers.get("cache-control")).toMatch(/max-age=\d+/) // explicit short cache
     const text = await res.text()
     // Strong leak check: the private exponent must never appear in the JWKS body.
     expect(text.includes('"d"')).toBe(false)
@@ -32,6 +33,12 @@ describe("handleJwksRoute", () => {
     for (const f of ["d", "p", "q", "dp", "dq", "qi"]) {
       expect(f in jwk!).toBe(false)
     }
+  })
+
+  it("fails CLOSED (503) when OPENCLAW_SESSION_ENCRYPTION_KEY is unavailable", async () => {
+    const env = makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: undefined })
+    const res = await handleJwksRoute(env)
+    expect(res.status).toBe(503)
   })
 })
 

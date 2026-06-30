@@ -32,6 +32,18 @@ import {
 const REFRESH_BEFORE_MS = 5 * 60 * 1000
 /** Upper bound on the random refresh jitter (de-synchronizes a fleet's refreshes). */
 const MAX_REFRESH_JITTER_MS = 30 * 1000
+/**
+ * Refresh jitter computed ONCE per isolate (at module load), not per call. A stable
+ * per-isolate offset keeps a single isolate's refresh threshold consistent across
+ * calls while still de-synchronizing the fleet (each isolate draws its own value).
+ */
+const ISOLATE_REFRESH_JITTER_MS = Math.floor(Math.random() * MAX_REFRESH_JITTER_MS)
+/**
+ * Fallback cache lifetime when iamcredentials returns an unparseable expireTime —
+ * conservative (well under the requested 1h SA-token lifetime) so we keep caching
+ * instead of re-minting every request, yet never risk serving a token that may be dead.
+ */
+const FALLBACK_TOKEN_TTL_MS = 30 * 60 * 1000
 
 interface CachedVertexToken {
   accessToken: string
@@ -46,7 +58,7 @@ let pending: Promise<string> | null = null
 /** Test seam so timing + jitter are deterministic. */
 export interface VertexTokenOpts {
   now?: () => number
-  /** Fixed refresh jitter in ms (default: random 0..MAX_REFRESH_JITTER_MS). */
+  /** Fixed refresh jitter in ms (default: the per-isolate jitter drawn once at module load). */
   jitterMs?: number
 }
 
@@ -85,7 +97,7 @@ export async function signAssertionJwt(args: {
  */
 export async function getVertexAccessToken(env: Env, ctx: ExecutionContext, opts?: VertexTokenOpts): Promise<string> {
   const now = opts?.now ?? Date.now
-  const jitterMs = opts?.jitterMs ?? Math.floor(Math.random() * MAX_REFRESH_JITTER_MS)
+  const jitterMs = opts?.jitterMs ?? ISOLATE_REFRESH_JITTER_MS
   if (memo && isFresh(memo.expireMs, now(), jitterMs)) return memo.accessToken
   if (pending) return pending
   pending = refresh(env, ctx, now, jitterMs).finally(() => {
@@ -106,11 +118,14 @@ async function refresh(env: Env, ctx: ExecutionContext, now: () => number, jitte
   }
   const issuer = requireIssuer(env)
   const minted = await mint(env, issuer)
-  const expireMs = Date.parse(minted.expireTime)
+  // Fall back to a sane TTL on an unparseable expireTime — otherwise expireMs is NaN,
+  // isFresh() is always false, and we'd re-mint on every single request (no caching).
+  const parsedExpireMs = Date.parse(minted.expireTime)
+  const expireMs = Number.isFinite(parsedExpireMs) ? parsedExpireMs : now() + FALLBACK_TOKEN_TTL_MS
   memo = { accessToken: minted.accessToken, expireMs }
-  // Persist for other isolates; best-effort + non-blocking. A stale TTL floor keeps
-  // a non-finite expiry from writing a forever key.
-  const ttlSeconds = Number.isFinite(expireMs) ? Math.max(60, Math.floor((expireMs - now()) / 1000)) : 60
+  // Persist for other isolates; best-effort + non-blocking. expireMs is now always
+  // finite, so the KV TTL is too (floored at 60s).
+  const ttlSeconds = Math.max(60, Math.floor((expireMs - now()) / 1000))
   ctx.waitUntil(
     env.OPENCLAW_STATE.put(VERTEX_TOKEN_KV_KEY, JSON.stringify(minted), { expirationTtl: ttlSeconds }).catch(() => {}),
   )
@@ -141,7 +156,7 @@ async function readCachedToken(env: Env): Promise<CachedVertexToken | null> {
 
 /** Sign assertion → STS exchange → SA impersonation. Throws on any GCP failure. */
 async function mint(env: Env, issuer: string): Promise<CachedVertexToken> {
-  const { privateKey, kid } = await getOrCreateSigningKey(env.OPENCLAW_STATE)
+  const { privateKey, kid } = await getOrCreateSigningKey(env.OPENCLAW_STATE, env.OPENCLAW_SESSION_ENCRYPTION_KEY)
   const assertion = await signAssertionJwt({ privateKey, kid, issuer })
   const federated = await stsExchange(assertion)
   return impersonateServiceAccount(federated)
@@ -163,7 +178,11 @@ async function stsExchange(assertion: string): Promise<string> {
     body: form.toString(),
   })
   if (!res.ok) {
-    throw new Error(`STS token-exchange failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
+    // The GCP STS body carries the project number / pool / provider — log it SERVER-SIDE
+    // for debugging but NEVER let it propagate to the caller (the thrown error message,
+    // which the route surfaces, stays generic: status only).
+    console.error(`boreas: STS token-exchange failed: HTTP ${res.status}`, (await res.text()).slice(0, 300))
+    throw new Error(`STS token-exchange failed: HTTP ${res.status}`)
   }
   const json = (await res.json()) as { access_token?: string }
   if (typeof json.access_token !== "string" || json.access_token === "") {
@@ -180,7 +199,10 @@ async function impersonateServiceAccount(federated: string): Promise<CachedVerte
     body: JSON.stringify({ scope: [CLOUD_PLATFORM_SCOPE], lifetime: "3600s" }),
   })
   if (!res.ok) {
-    throw new Error(`generateAccessToken failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
+    // The GCP IAM body carries the SA email / project — log it SERVER-SIDE for
+    // debugging but NEVER let it propagate to the caller (thrown message = status only).
+    console.error(`boreas: generateAccessToken failed: HTTP ${res.status}`, (await res.text()).slice(0, 300))
+    throw new Error(`generateAccessToken failed: HTTP ${res.status}`)
   }
   const json = (await res.json()) as { accessToken?: string; expireTime?: string }
   if (typeof json.accessToken !== "string" || typeof json.expireTime !== "string") {

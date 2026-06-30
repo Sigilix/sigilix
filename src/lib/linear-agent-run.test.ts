@@ -22,24 +22,27 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockIn
 vi.mock("@/src/lib/linear", () => ({
   LinearClient: vi.fn(),
   buildLinearAuth: vi.fn(),
+  buildLinearAgentClient: vi.fn(),
 }))
 vi.mock("@/src/lib/agent-runner/dispatch", () => ({
   dispatchAgentRun: vi.fn(),
 }))
 
 import { runLinearAgentRun, dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
-import { LinearClient, buildLinearAuth, type LinearIssue } from "@/src/lib/linear"
+import { LinearClient, buildLinearAuth, buildLinearAgentClient, type LinearIssue } from "@/src/lib/linear"
 import { dispatchAgentRun, type AgentRunTaskInput } from "@/src/lib/agent-runner/dispatch"
 import type { Env } from "@/src/shared/types/env"
 
 // ── typed mock handles ────────────────────────────────────────────────────────
 const mockBuildLinearAuth = vi.mocked(buildLinearAuth)
+const mockBuildLinearAgentClient = vi.mocked(buildLinearAgentClient)
 const mockDispatchAgentRun = vi.mocked(dispatchAgentRun)
 const MockLinearClient = vi.mocked(LinearClient)
 
 // ── per-test instance method spies ──────────────────────────────────────────
 let mockGetIssue: Mock<(id: string) => Promise<LinearIssue | null>>
 let mockCreateComment: Mock<(issueId: string, body: string, parentId?: string) => Promise<string>>
+let mockCreateAgentActivity: Mock<(sessionId: string, content: string, type: string) => Promise<void>>
 
 // ── constants ─────────────────────────────────────────────────────────────────
 const OLLAMA_KEY = "sk-ollama-secret-key-do-not-log"
@@ -105,6 +108,12 @@ describe("runLinearAgentRun", () => {
     MockLinearClient.mockImplementation(
       () => ({ getIssue: mockGetIssue, createComment: mockCreateComment }) as unknown as LinearClient,
     )
+    mockCreateAgentActivity = vi.fn<(sessionId: string, content: string, type: string) => Promise<void>>(() =>
+      Promise.resolve(undefined),
+    )
+    mockBuildLinearAgentClient.mockResolvedValue({
+      createAgentActivity: mockCreateAgentActivity,
+    } as unknown as LinearClient)
     mockBuildLinearAuth.mockResolvedValue({ apiKey: "linear-key" })
     mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true })
   })
@@ -141,6 +150,22 @@ describe("runLinearAgentRun", () => {
     // Best-effort Linear ack on the issue.
     expect(mockCreateComment).toHaveBeenCalledOnce()
     expect(mockCreateComment.mock.calls[0]![0]).toBe(ISSUE_ID)
+  })
+
+  it("AgentSession path (sessionId present) → posts a `response` agent activity, NOT a comment", async () => {
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    expect(mockCreateAgentActivity).toHaveBeenCalledWith("agent-session-1", expect.any(String), "response")
+    // No plain comment ack on the agent-session path.
+    expect(mockCreateComment).not.toHaveBeenCalled()
+  })
+
+  it("AgentSession path swallows an activity-post failure (never throws; still dispatched)", async () => {
+    mockCreateAgentActivity.mockRejectedValue(new Error("Linear API down"))
+    await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
   })
 
   it('engine is ALWAYS "minimal" (untrusted input path — never "full")', async () => {

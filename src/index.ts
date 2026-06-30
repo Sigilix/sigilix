@@ -101,6 +101,7 @@ import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
 import { handleSlackInstall, handleSlackOAuthCallback } from "@/src/lib/slack/slack-install"
+import { handleLinearOAuthCallback } from "@/src/lib/linear-agent-oauth"
 
 // Re-export the relocated public symbols so the entry module's export
 // surface is byte-for-byte unchanged for every importer + test pin.
@@ -386,6 +387,13 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/linear/manual") {
       return handleManualTrigger(request, env, ctx)
+    }
+
+    // Linear AGENT install (actor=app) — the authorization-code callback. Exchanges
+    // the code for the agent access token + stores it in KV so Sigilix can post agent
+    // activities. Finalizes the install so Sigilix appears in the assignee/agent picker.
+    if (request.method === "GET" && url.pathname === "/linear/oauth/callback") {
+      return handleLinearOAuthCallback(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/github/webhook") {

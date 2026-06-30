@@ -16,7 +16,7 @@
 // tokens / secrets.
 
 import type { Env } from "@/src/shared/types/env"
-import { LinearClient, buildLinearAuth } from "@/src/lib/linear"
+import { LinearClient, buildLinearAuth, buildLinearAgentClient } from "@/src/lib/linear"
 import { dispatchAgentRun } from "@/src/lib/agent-runner/dispatch"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 
@@ -151,8 +151,13 @@ export async function dispatchTicketImplementation(
  * Implement a Linear issue assigned to the Sigilix agent: resolve the repo +
  * installation, then dispatch the agent-runner (via `dispatchTicketImplementation`)
  * and post a best-effort Linear ack. Never throws — every fault is logged + swallowed.
+ *
+ * `sessionId` is the AgentSession id when the trigger was an `AgentSessionEvent`
+ * (a real agent delegation / @-mention). When present, the dispatch ack is posted as
+ * a Linear agent `response` activity into that session; when absent (the interim
+ * assignee path), the legacy issue comment ack is used instead.
  */
-export async function runLinearAgentRun(issueId: string, env: Env): Promise<void> {
+export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
   try {
     const linear = new LinearClient(await buildLinearAuth(env))
     const issue = await linear.getIssue(issueId)
@@ -203,9 +208,22 @@ export async function runLinearAgentRun(issueId: string, env: Env): Promise<void
     })
 
     if (dispatched) {
-      // Best-effort ack — a failed comment must never fail the run.
+      // Best-effort ack — a failed ack must never fail the run.
+      //   - AgentSessionEvent path (sessionId present): post a Linear agent
+      //     `response` activity into the session (the agent's visible turn).
+      //   - interim assignee path (no sessionId): the legacy issue comment ack.
+      const ackText = "🛠️ On it — Sigilix is implementing this and will open a PR shortly."
       try {
-        await linear.createComment(issue.id, "🛠️ On it — Sigilix is implementing this and will open a PR shortly.")
+        if (sessionId) {
+          const agent = await buildLinearAgentClient(env)
+          if (agent) {
+            await agent.createAgentActivity(sessionId, ackText, "response")
+          } else {
+            console.warn(JSON.stringify({ event: "linear-agent-run-ack-no-token", issueId, sessionId }))
+          }
+        } else {
+          await linear.createComment(issue.id, ackText)
+        }
       } catch (err) {
         console.warn(
           JSON.stringify({

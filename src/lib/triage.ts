@@ -7,7 +7,7 @@
 // the PR-side worker which still has access to repo checkouts).
 
 import { generate } from "@/src/shared/adapters/model"
-import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
+import { buildLinearClient, estimateToPoints, severityToPriority } from "./linear"
 import { getMarker, setMarker } from "@/src/shared/util/dedupe"
 import { markBotAuthoredComment } from "./bot-authored-comments"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
@@ -48,7 +48,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   }
 
   since("start")
-  const linear = new LinearClient(await buildLinearAuth(env))
+  const linear = await buildLinearClient(env)
   since("auth-ready")
 
   const issue = await linear.getIssue(issueId)

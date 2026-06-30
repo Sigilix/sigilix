@@ -37,6 +37,9 @@ vi.mock("@/src/lib/linear", () => ({
     createIssue: createIssueMock,
   })),
   buildLinearAuth: vi.fn(async () => ({ apiKey: "fake-linear-key" })),
+  // SIG-144 slice 4: the triage/implement/offer-confirm paths now build their
+  // client via buildLinearClient instead of `new LinearClient(await buildLinearAuth(env))`.
+  buildLinearClient: vi.fn(async () => ({ createIssue: createIssueMock })),
 }))
 
 const { dispatchTicketImplementationMock } = vi.hoisted(() => ({

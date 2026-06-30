@@ -26,6 +26,7 @@ vi.mock("@/src/lib/linear", () => ({
   LinearClient: vi.fn(),
   buildLinearAuth: vi.fn(),
   buildLinearAgentClient: vi.fn(),
+  buildLinearClient: vi.fn(),
 }))
 
 import { handleLinearWebhook } from "@/src/index-webhooks"

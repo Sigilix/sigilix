@@ -12,7 +12,7 @@ import type { Env } from "@/src/shared/types/env"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { readReviewManifest } from "./review-manifest"
-import { buildLinearAuth, LinearClient } from "./linear"
+import { buildLinearClient } from "./linear"
 import { listTeamRepoMappings } from "@/src/shared/adapters/github/github-installation"
 import { upsertPrDoc, upsertIssueDoc, deriveVerdictLabel, type PrCorpusDoc } from "./multi-corpus"
 
@@ -139,7 +139,7 @@ export interface CorpusIssueUpsertJob {
  * repo — multi-corpus issue indexing only applies to Linear-linked repos.
  */
 export async function handleCorpusIssueUpsert(env: Env, job: CorpusIssueUpsertJob): Promise<void> {
-  const linear = new LinearClient(await buildLinearAuth(env))
+  const linear = await buildLinearClient(env)
   const issue = await linear.getIssue(job.linearIssueId)
   if (!issue) {
     console.warn(JSON.stringify({ event: "multicorpus-issue-not-found", id: job.linearIssueId }))

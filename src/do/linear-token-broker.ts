@@ -19,10 +19,12 @@
 // `buildLinearAgentClient` (linear.ts) over to read through this broker (readOnly,
 // never refreshing from the hot ACK path) and bootstraps it on install/re-install
 // (`handleLinearOAuthCallback`). The agent-activity RUN path itself stays gated by
-// `OPENCLAW_LINEAR_AGENT_RUN_MODE` — orthogonal to this DO. `buildLinearAuth` and
-// the rest of the webhooks still use the unrelated client_credentials / KV paths.
-// A later slice removes the now-superseded KV-backed `getValidAgentToken` and adds
-// the 401-retry path that calls `forceRefreshViaBroker`.
+// `OPENCLAW_LINEAR_AGENT_RUN_MODE` — orthogonal to this DO. Slice 3 added the
+// `onUnauthorized` 401-retry hook (`forceRefreshViaBroker`) to the broker-backed
+// client. Slice 4 flag-gates `buildLinearAuth` itself (OPENCLAW_LINEAR_UNIFIED,
+// default off) to route the client_credentials / human-LINEAR_API_KEY path's
+// callers through this same broker (readOnly:false) when on, with no fallback to
+// the human key on a broker miss — see `buildLinearAuth` / `buildLinearClient`.
 //
 // SECURITY: token + refresh-token material is NEVER logged. Every emit/alert here
 // carries only neutral booleans (hasRefresh/hasExpiry/scopePresent) and failure

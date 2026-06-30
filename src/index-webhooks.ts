@@ -6,7 +6,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { verifyLinearWebhook } from "@/src/lib/webhook-verify"
-import { LinearClient, buildLinearAuth, buildLinearAgentClient } from "@/src/lib/linear"
+import { buildLinearClient, buildLinearAgentClient } from "@/src/lib/linear"
 import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
 import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
@@ -267,7 +267,7 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
       // existing try-blocks and falls closed to "no mention" — same
       // path as any other GraphQL error.
       try {
-        const linear = new LinearClient(await buildLinearAuth(env))
+        const linear = await buildLinearClient(env)
         const comments = await linear.getCommentParents(issueId, {
           signal: AbortSignal.timeout(2000),
         })

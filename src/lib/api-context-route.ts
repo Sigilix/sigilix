@@ -10,6 +10,12 @@
 // blind. Graph symbol-body expansion needs the GitHub App (a file fetcher); when the App
 // is unconfigured / not installed / unavailable, we degrade to index-only rather than
 // erroring. Only an UNEXPECTED throw → 500.
+//
+// #146: the response also carries a DISTINGUISHABLE `status` ("grounded" | "indexing" |
+// "not-connected") alongside `context` (kept for older CLIs that ignore `status`) so the
+// CLI knows WHY it got null grounding. When the App is installed but the repo has no usable
+// index yet, the route ALSO self-heals — enqueuing one on-demand `index-repo` job, guarded
+// by a short-TTL per-repo KV marker so polling can't spam the queue.
 
 import type { Env } from "@/src/shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
@@ -18,11 +24,25 @@ import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { gatherAgentContext } from "./agent-context"
 import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
+import { enqueueIndexJobsForRepos, isIndexerEnabled } from "./index-producer"
+import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 
 // Queries are short (a turn's intent), so the body is tiny — cap well below the diff routes.
 const MAX_BODY_BYTES = 64 * 1024
 // Max team-learning rules to surface as negative memory (most-recent first).
 const MAX_LEARNINGS = 20
+
+// #146: a DISTINGUISHABLE status for the CLI so it never runs blind:
+//   grounded      — we returned grounding context (or the repo is already indexed).
+//   indexing      — the App IS installed but no usable index exists yet (auto-heal fired).
+//   not-connected — the GitHub App is not installed for this repo; nothing to index.
+type ContextStatus = "grounded" | "indexing" | "not-connected"
+
+// #146 storm guard: a short-TTL KV marker keyed per repo gates the on-demand re-index
+// enqueue so a CLI polling /v1/context while indexing runs can't spam the queue. The
+// consumer's freshness gate is the real de-dup; this just bounds the enqueue rate.
+const INDEX_ENQUEUE_MARKER_PREFIX = "agent-context-index-enqueue:"
+const INDEX_ENQUEUE_MARKER_TTL_SECONDS = 10 * 60 // 10 minutes
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -70,29 +90,40 @@ interface Grounding {
   fetchFileContent: (path: string) => Promise<string | null>
   /** GitHub repo id (the learnings keyspace key), or null when the App is unavailable. */
   repoId: number | null
+  /**
+   * #146: the resolved installation id when the GitHub App IS installed for this owner/repo,
+   * else null. This is the "connected vs not-connected" signal — it stays set even when the
+   * client build below fails (a transient API blip doesn't mean the App is uninstalled), so
+   * the route can still report `indexing` and self-heal.
+   */
+  installationId: number | null
 }
 
 /**
  * Resolve the GitHub-App grounding handles via ONE getRepository call: a best-effort file
  * fetcher (graph symbol-body expansion, pinned to default-branch HEAD) + the repo id (for
- * the learnings keyspace). Degrades to a null fetcher + null repoId when the App is
- * unconfigured / not installed / unavailable — never throws.
+ * the learnings keyspace) + the installation id (the connected signal). Degrades to a null
+ * fetcher + null repoId when the App is unconfigured / not installed / unavailable — never
+ * throws. `installationId` is null only when the App is unconfigured or not installed.
  */
 async function resolveGrounding(env: Env, owner: string, repo: string): Promise<Grounding> {
-  const none: Grounding = { fetchFileContent: async () => null, repoId: null }
+  const none: Grounding = { fetchFileContent: async () => null, repoId: null, installationId: null }
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return none
   const lookup = resolveInstallation(owner, repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
   if (!lookup.ok) return none
+  // The App IS installed for this repo. Keep the installation id even if the client build
+  // below throws — the repo is connected, only the live fetch degraded.
+  const { installationId } = lookup
   try {
-    const client = await buildClient(env, lookup.installationId)
+    const client = await buildClient(env, installationId)
     const repoMeta = await client.getRepository(owner, repo)
     const repoId = typeof repoMeta?.id === "number" ? repoMeta.id : null
     const defaultBranch = repoMeta?.default_branch ?? "main"
     const branch = await client.getBranch(owner, repo, defaultBranch).catch(() => null)
     const ref = branch?.headSha ?? defaultBranch
-    return { fetchFileContent: (path: string) => client.getFileContent(owner, repo, path, ref), repoId }
+    return { fetchFileContent: (path: string) => client.getFileContent(owner, repo, path, ref), repoId, installationId }
   } catch {
-    return none
+    return { fetchFileContent: async () => null, repoId: null, installationId }
   }
 }
 
@@ -127,9 +158,89 @@ async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
 }
 
 /**
- * POST /v1/context — see file header. Returns { context, telemetry }; `context` is null when
- * nothing could be grounded (the agent then proceeds blind). 503 until keyed; 401 on bad
- * bearer; 400/413 on a bad/oversized body; 500 only on an unexpected engine throw.
+ * #146: the App is installed but this turn grounded nothing. Read the index manifest to tell
+ * "indexed, the query just didn't match" (→ grounded, no heal) from "no usable index yet"
+ * (→ indexing, self-heal). Soft-fails to "indexing" — a manifest-read blip must never throw
+ * into the route. A valid manifest means the index is built; missing/invalid means it isn't.
+ */
+async function resolveInstalledStatus(
+  env: Env,
+  owner: string,
+  repo: string,
+  installationId: number,
+  repoId: number | null,
+): Promise<ContextStatus> {
+  if (!env.OPENCLAW_STATE) return "indexing"
+  let manifestKind: "ok" | "absent"
+  try {
+    const manifest = await readRepoIndexManifest(env, owner, repo)
+    manifestKind = manifest.kind === "ok" ? "ok" : "absent"
+  } catch {
+    return "indexing"
+  }
+  // Index already built — the repo is grounded, this query just matched nothing. Don't heal.
+  if (manifestKind === "ok") return "grounded"
+  // No usable index yet → indexing. Self-heal best-effort (guarded against enqueue storms).
+  await maybeEnqueueOnDemandIndex(env, owner, repo, installationId, repoId)
+  return "indexing"
+}
+
+/**
+ * #146 self-heal: enqueue ONE `index-repo` job for an installed-but-unindexed repo, guarded
+ * by a short-TTL per-repo KV marker so repeated /v1/context polls during indexing can't spam
+ * the queue. No-ops when the indexer flag is off (no consumer to run the job). Never throws.
+ */
+async function maybeEnqueueOnDemandIndex(
+  env: Env,
+  owner: string,
+  repo: string,
+  installationId: number,
+  repoId: number | null,
+): Promise<void> {
+  if (!isIndexerEnabled(env) || !env.OPENCLAW_STATE) return
+  const markerKey = `${INDEX_ENQUEUE_MARKER_PREFIX}${indexNamespace(owner, repo)}`
+  try {
+    if ((await env.OPENCLAW_STATE.get(markerKey)) !== null) return // a recent enqueue exists — storm guard
+  } catch {
+    return // can't read the guard → don't risk a storm
+  }
+  let succeeded = 0
+  try {
+    const result = await enqueueIndexJobsForRepos({
+      env,
+      installationId,
+      repositories: [{ full_name: `${owner}/${repo}`, ...(repoId !== null ? { id: repoId } : {}) }],
+      reason: "on-demand-context-miss",
+    })
+    succeeded = result.succeeded
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "agent-context-self-heal-enqueue-failed",
+        owner,
+        repo,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return
+  }
+  // Only mark when the enqueue actually landed, so a failed attempt retries on the next call.
+  if (succeeded > 0) {
+    try {
+      await env.OPENCLAW_STATE.put(markerKey, new Date().toISOString(), {
+        expirationTtl: INDEX_ENQUEUE_MARKER_TTL_SECONDS,
+      })
+    } catch {
+      // Marker is best-effort; the consumer's freshness gate is the real de-dup.
+    }
+  }
+}
+
+/**
+ * POST /v1/context — see file header. Returns { status, context, telemetry }; `context` is
+ * null when nothing could be grounded, and `status` distinguishes grounded / indexing /
+ * not-connected so the CLI never runs blind. 503 until keyed; 401 on bad bearer; 400/413 on
+ * a bad/oversized body; 500 only on an unexpected engine throw.
  */
 export async function handleAgentContextRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_SIGILIX_API_KEY
@@ -148,7 +259,7 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
-  const { fetchFileContent, repoId } = await resolveGrounding(env, parsed.owner, parsed.repo)
+  const { fetchFileContent, repoId, installationId } = await resolveGrounding(env, parsed.owner, parsed.repo)
   const learnings = repoId !== null ? await loadRepoLearnings(env, repoId) : []
 
   try {
@@ -162,7 +273,21 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
       ...(parsed.maxBytes !== undefined ? { maxBytes: parsed.maxBytes } : {}),
       ...(parsed.maxContextChars !== undefined ? { maxContextChars: parsed.maxContextChars } : {}),
     })
-    return json({ context: result.context, telemetry: result.telemetry }, 200)
+
+    // #146: a distinguishable status alongside the (backward-compatible) context payload.
+    //   context non-null            → grounded (we returned grounding).
+    //   installed, but nothing yet  → indexing if no usable index (self-heals), else grounded.
+    //   not installed               → not-connected (can't ground; nothing to index).
+    let status: ContextStatus
+    if (result.context !== null) {
+      status = "grounded"
+    } else if (installationId === null) {
+      status = "not-connected"
+    } else {
+      status = await resolveInstalledStatus(env, parsed.owner, parsed.repo, installationId, repoId)
+    }
+
+    return json({ status, context: result.context, telemetry: result.telemetry }, 200)
   } catch (err) {
     return json({ error: "context_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
   }

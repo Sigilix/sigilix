@@ -9,19 +9,41 @@ vi.mock("./agent-context", () => ({ gatherAgentContext: vi.fn() }))
 vi.mock("@/src/shared/adapters/github/github-installation", () => ({ resolveInstallation: vi.fn() }))
 vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({ buildClient: vi.fn() }))
 vi.mock("@/src/features/learnings", () => ({ loadLearnings: vi.fn() }))
+// #146: self-heal seams. `indexNamespace` is pure — keep the real impl so the marker key is real.
+vi.mock("./index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn(), isIndexerEnabled: vi.fn() }))
+vi.mock("./repo-index-manifest", () => ({
+  readRepoIndexManifest: vi.fn(),
+  indexNamespace: (owner: string, repo: string) => `${owner.toLowerCase()}/${repo.toLowerCase()}`,
+}))
 
 import { handleAgentContextRoute } from "./api-context-route"
 import { gatherAgentContext } from "./agent-context"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { loadLearnings } from "@/src/features/learnings"
+import { enqueueIndexJobsForRepos, isIndexerEnabled } from "./index-producer"
+import { readRepoIndexManifest } from "./repo-index-manifest"
 import type { Env } from "@/src/shared/types/env"
 
 const mockGather = vi.mocked(gatherAgentContext)
 const mockResolve = vi.mocked(resolveInstallation)
 const mockBuild = vi.mocked(buildClient)
 const mockLoadLearnings = vi.mocked(loadLearnings)
+const mockEnqueue = vi.mocked(enqueueIndexJobsForRepos)
+const mockIndexerEnabled = vi.mocked(isIndexerEnabled)
+const mockReadManifest = vi.mocked(readRepoIndexManifest)
 const TOKEN = "ctx-secret"
+
+/** A minimal in-memory KV so the storm-guard marker get/put behave like real KV. */
+function makeKv(): KVNamespace {
+  const store = new Map<string, string>()
+  return {
+    get: vi.fn(async (k: string) => store.get(k) ?? null),
+    put: vi.fn(async (k: string, v: string) => {
+      store.set(k, v)
+    }),
+  } as unknown as KVNamespace
+}
 
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
   ({ OPENCLAW_SIGILIX_API_KEY: key, ...extra }) as unknown as Env
@@ -77,6 +99,10 @@ beforeEach(() => {
   mockClient(async () => ({ headSha: "abc", treeSha: "t" }))
   mockGather.mockResolvedValue(okResult as never)
   mockLoadLearnings.mockResolvedValue(null) // default: no learnings
+  // #146 self-heal defaults: indexer on, no manifest yet, enqueue succeeds.
+  mockIndexerEnabled.mockReturnValue(true)
+  mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+  mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 } as never)
 })
 
 describe("handleAgentContextRoute — auth + validation", () => {
@@ -103,10 +129,10 @@ describe("handleAgentContextRoute — auth + validation", () => {
 })
 
 describe("handleAgentContextRoute — retrieval", () => {
-  it("200 with the packed context + telemetry", async () => {
+  it("200 with the packed context + telemetry + status:grounded", async () => {
     const res = await handleAgentContextRoute(req(validBody), appEnv())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ context: "GROUNDED", telemetry: okResult.telemetry })
+    expect(await res.json()).toEqual({ status: "grounded", context: "GROUNDED", telemetry: okResult.telemetry })
   })
   it("200 with null context when nothing grounded (honest, NOT an error)", async () => {
     mockGather.mockResolvedValue({
@@ -174,5 +200,73 @@ describe("handleAgentContextRoute — retrieval", () => {
     expect(res.status).toBe(200)
     expect(mockBuild).not.toHaveBeenCalled()
     expect(mockGather).toHaveBeenCalled()
+  })
+})
+
+describe("handleAgentContextRoute — #146 status + self-heal", () => {
+  const nullGather = { context: null, telemetry: { ...okResult.telemetry, chunkCount: 0, contextChars: 0 } }
+
+  async function statusOf(res: Response): Promise<string> {
+    return ((await res.json()) as { status: string }).status
+  }
+
+  it("status=grounded when chunks are present (context non-null)", async () => {
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(res.status).toBe(200)
+    expect(await statusOf(res)).toBe("grounded")
+    expect(mockEnqueue).not.toHaveBeenCalled() // grounded never self-heals
+  })
+
+  it("status=not-connected when no installation, and does NOT enqueue", async () => {
+    mockResolve.mockReturnValue({ ok: false } as never) // App not installed for owner/repo
+    mockGather.mockResolvedValue(nullGather as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(res.status).toBe(200)
+    expect(await statusOf(res)).toBe("not-connected")
+    expect(mockReadManifest).not.toHaveBeenCalled() // never reach the manifest read
+    expect(mockEnqueue).not.toHaveBeenCalled() // no App ⇒ nothing to index
+  })
+
+  it("status=indexing when installed but no manifest, and enqueues exactly ONE index job", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(res.status).toBe(200)
+    expect(await statusOf(res)).toBe("indexing")
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 42,
+        reason: "on-demand-context-miss",
+        repositories: [{ full_name: "o/r", id: 1 }], // repoId from getRepository threaded through
+      }),
+    )
+  })
+
+  it("status=grounded (no enqueue) when installed AND a manifest already exists", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "ok", manifest: {} } as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(await statusOf(res)).toBe("grounded") // index exists; the query just matched nothing
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("storm guard: a second call while the marker is fresh does NOT re-enqueue", async () => {
+    mockGather.mockResolvedValue(nullGather as never)
+    mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
+    const sharedEnv = appEnv({ OPENCLAW_STATE: makeKv() }) // one KV, shared across both calls
+    const first = await handleAgentContextRoute(req(validBody), sharedEnv)
+    const second = await handleAgentContextRoute(req(validBody), sharedEnv)
+    expect(await statusOf(first)).toBe("indexing")
+    expect(await statusOf(second)).toBe("indexing")
+    expect(mockEnqueue).toHaveBeenCalledTimes(1) // marker set by the first call gates the second
+  })
+
+  it("does not enqueue when the indexer flag is off (no consumer)", async () => {
+    mockIndexerEnabled.mockReturnValue(false)
+    mockGather.mockResolvedValue(nullGather as never)
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_STATE: makeKv() }))
+    expect(await statusOf(res)).toBe("indexing") // still distinguishable for the CLI
+    expect(mockEnqueue).not.toHaveBeenCalled()
   })
 })

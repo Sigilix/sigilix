@@ -387,7 +387,14 @@ export type JobMessage =
        */
       githubRepoId?: number
       installationId: number
-      reason: "install" | "install-repos-added" | "manual" | "push" | "pull-request" | "merged-pr"
+      reason:
+        | "install"
+        | "install-repos-added"
+        | "manual"
+        | "push"
+        | "pull-request"
+        | "merged-pr"
+        | "on-demand-context-miss"
       /**
        * SIG-35: when set, index this Git branch into branch-scoped
        * state instead of the default-branch compatibility namespace.

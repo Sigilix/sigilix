@@ -349,6 +349,15 @@ export interface Env {
   // per-key metering — once the day's count hits the limit the endpoint returns 429.
   OPENCLAW_SIGILIX_API_DAILY_LIMIT?: string
 
+  // SIG-545: the OIDC issuer URI for the Boreas CLI gateway — MUST be the exact
+  // worker origin (no trailing slash) the GCP Workload-Identity-Federation provider
+  // was created against. Used as the assertion JWT `iss` + to build the /.well-known
+  // discovery URLs. Unset → POST /v1/boreas/chat/completions and the
+  // openid-configuration doc are inert (503); the route mints no GCP token. Auth for
+  // the gateway reuses the shared OPENCLAW_SIGILIX_API_KEY bearer above. Set via
+  // `wrangler secret put OPENCLAW_GATEWAY_ISSUER https://<worker-origin>`.
+  OPENCLAW_GATEWAY_ISSUER?: string
+
   // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
   // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in
   // default. A global KV counter (`v1verify:count:<YYYY-MM-DD>`), not per-key metering —

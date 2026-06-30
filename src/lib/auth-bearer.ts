@@ -1,6 +1,12 @@
 // SIG-119: shared-secret bearer auth for machine-to-machine endpoints
 // (the dogwatch curling /metrics/validation). Distinct from the browser
 // session auth in auth-middleware.ts.
+//
+// #155 onboarding-backend FOUNDATION (slice 1 of 2): `extractBearerToken` and
+// `sha256Hex` are exported so api-key-resolver.ts can reuse the exact same
+// header-parsing and digest logic — one definition for "what counts as a
+// presented bearer token" and "how a token is hashed", no drift between the
+// shared-secret path and the per-installation api_key path.
 
 /**
  * Validate an `Authorization: Bearer <token>` header against `expectedToken`
@@ -14,20 +20,36 @@
 export async function requireBearerToken(request: Request, expectedToken: string): Promise<boolean> {
   if (!expectedToken) return false
 
-  const header = request.headers.get("authorization")
-  if (!header) return false
-
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-  const presented = match?.[1]
+  const presented = extractBearerToken(request)
   if (!presented) return false
 
   const [a, b] = await Promise.all([sha256(presented), sha256(expectedToken)])
   return timingSafeEqual(a, b)
 }
 
+/**
+ * Extract the raw token from an `Authorization: Bearer <token>` header.
+ * Returns null when the header is missing, malformed, or not the Bearer
+ * scheme. Case-insensitive on the scheme keyword.
+ */
+export function extractBearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization")
+  if (!header) return null
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
+  return match?.[1] ?? null
+}
+
 async function sha256(value: string): Promise<Uint8Array> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
   return new Uint8Array(digest)
+}
+
+/** SHA-256 digest of `value`, as a lowercase hex string (for D1 `key_hash` columns). */
+export async function sha256Hex(value: string): Promise<string> {
+  const bytes = await sha256(value)
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
 }
 
 /** Constant-time equality over two equal-length byte arrays. */

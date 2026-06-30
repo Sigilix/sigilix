@@ -67,6 +67,8 @@ import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
+import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
+import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
@@ -459,6 +461,30 @@ export default {
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       const sessionId = readCookie(request, SESSION_COOKIE_NAME)
       return handleLogout(request, env, sessionId)
+    }
+    // #155 onboarding-backend FOUNDATION (slice 1 of 2): the GitHub App Setup
+    // URL handler + the install-redirect kickoff that mints its CSRF nonce.
+    if (request.method === "GET" && url.pathname === "/auth/install-redirect") {
+      return handleInstallRedirect(request, env, ctx)
+    }
+    if (request.method === "GET" && url.pathname === "/setup") {
+      return handleSetupRoute(request, env, ctx)
+    }
+    // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
+    // mint/revoke per-installation API keys. NOT yet consumed by any
+    // existing endpoint (that swap is slice 2); resolveApiKey is inert.
+    if (request.method === "POST" && url.pathname === "/v1/keys") {
+      return handleCreateApiKeyRoute(request, env, ctx)
+    }
+    if (request.method === "DELETE" && url.pathname.startsWith("/v1/keys/")) {
+      const keyId = decodeURIComponent(url.pathname.slice("/v1/keys/".length))
+      if (!keyId) {
+        return new Response(JSON.stringify({ error: "missing key id" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return handleRevokeApiKeyRoute(request, env, keyId, ctx)
     }
     // ARC-190: GET /reviews/<owner>/<repo>/<prNumber> — public status
     // route for DO-tracked PR review runs. v1 unauth (read-only

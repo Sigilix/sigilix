@@ -241,6 +241,29 @@ export interface Env {
   // via `wrangler secret put OPENCLAW_ORG_MEMORY_APPLY on`.
   OPENCLAW_ORG_MEMORY_APPLY?: string
 
+  // Seat∪Org memory layering — Phase 3 (CLI read side). Three-state, DEFAULT
+  // OFF. This gates whether POST /v1/memory/query — the CLI's own seat-memory
+  // read — ALSO unions the caller-installation's ORG-scope corpus (the same
+  // corpus Phase 1/2 write and apply), independent of OPENCLAW_ORG_MEMORY_APPLY
+  // (the PR-review read side above — a different call site, its own flag):
+  //   - "off" (default / unset / any other value): the CLI's memory-query
+  //           response is seat-memory ONLY — byte-identical to before this
+  //           slice. No installation check, no `learnings:org:*` KV read.
+  //   - "shadow": ALSO loads the org-scope corpus for the caller's own
+  //           installation and LOGS the delta (`cli-org-memory-shadow`), but
+  //           the returned results stay seat-only (bake the signal, output
+  //           unchanged).
+  //   - "on": the returned results are seat ∪ org, deduped by id (a seat
+  //           memory wins any id collision) — a developer's fresh CLI session
+  //           inherits everything the team's PR reviews taught the org.
+  // ADDITIVE ONLY: never suppresses or reorders a seat-memory result, only
+  // appends more. Fail-soft: the LEGACY global key (no single installation to
+  // scope an org corpus to) or any org-store read error degrades to
+  // seat-memory-only — never blocks/delays the response, never throws.
+  // Parsed by resolveCliOrgMemoryMode (@/features/learnings). Operator flips
+  // via `wrangler secret put OPENCLAW_CLI_ORG_MEMORY on`.
+  OPENCLAW_CLI_ORG_MEMORY?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

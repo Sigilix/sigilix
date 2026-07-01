@@ -10,6 +10,8 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { appendLearning } from "@/src/features/learnings"
+import type { LearningEntry } from "@/src/features/learnings"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, scopeMemoryUserId } from "./agent-memory-route"
 import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { memoryNamespace } from "./retrieval"
@@ -441,5 +443,199 @@ describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
     const res = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "build tool" }, perTenant), env)
     expect(res.status).toBe(200)
     expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
+  })
+})
+
+// Seat∪Org memory layering — Phase 3 (CLI read side): POST /v1/memory/query
+// additionally unions the caller-installation's org-scope review learnings
+// when OPENCLAW_CLI_ORG_MEMORY is "shadow"/"on" (resolveCliOrgMemoryMode).
+// Default ("off", unset) MUST stay byte-identical to the seat-only behavior
+// pinned in the "POST /v1/memory/query — retrieve" describe above.
+describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () => {
+  const ORG_INSTALL_ID = 42
+
+  function orgEntry(id: string, over: Partial<LearningEntry> = {}): LearningEntry {
+    return {
+      id,
+      rule: `org-rule-${id}`,
+      polarity: "require",
+      category: null,
+      pathGlob: null,
+      scope: "org",
+      subjectId: String(ORG_INSTALL_ID),
+      source: { kind: "command", prNumber: 1, commentId: 1 },
+      createdTs: "2026-06-01T00:00:00.000Z",
+      appliedCount: 0,
+      ...over,
+    }
+  }
+
+  async function perTenantEnv(extra: Partial<Env> = {}): Promise<{ env: Env; token: string }> {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const token = "sigilix_live_cli_org_memory"
+    await insertApiKey(db, {
+      id: "key-cli",
+      keyHash: await sha256Hex(token),
+      installationId: ORG_INSTALL_ID,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    // No global key configured → force the per-tenant D1 path.
+    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: db, ...extra }), token }
+  }
+
+  const seatBody = { userId: "u1", repoId: "sigilix/boreas", kind: "decision" as const, content: "seat fact" }
+
+  it("flag OFF (default, unset) — org learnings exist but never surface, org KV key never read", async () => {
+    const { env, token } = await perTenantEnv()
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await appendLearning(env, "org", String(ORG_INSTALL_ID), orgEntry("a"))
+
+    const orgKey = `learnings:org:${ORG_INSTALL_ID}`
+    const getCalls: string[] = []
+    const loose = kv as unknown as { get: (k: string) => Promise<string | null> }
+    const realGet = loose.get.bind(loose)
+    loose.get = async (key: string) => {
+      getCalls.push(key)
+      return realGet(key)
+    }
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ id: string; content: string }> }
+    expect(out.results.length).toBe(1)
+    expect(out.results[0]?.content).toBe("seat fact")
+    expect(out.results.some((r) => r.id.startsWith("org:"))).toBe(false)
+    // The byte-identical-to-before-slice-3 property: no installation check, no
+    // `learnings:org:*` KV read at all when the flag is off.
+    expect(getCalls).not.toContain(orgKey)
+  })
+
+  it("flag OFF explicitly set — same seat-only behavior", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "off" })
+    await appendLearning(env, "org", String(ORG_INSTALL_ID), orgEntry("a"))
+    const res = await handleMemoryQueryRoute(
+      queryReq({ userId: "u1", repoId: "sigilix/boreas", query: "x" }, token),
+      env,
+    )
+    expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
+  })
+
+  it("flag SHADOW — loads + logs the org corpus but the returned results stay seat-only", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "shadow" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await appendLearning(env, "org", String(ORG_INSTALL_ID), orgEntry("a"))
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact"]) // seat-only, unchanged by shadow
+
+    const shadow = logSpy.mock.calls
+      .map((c) => JSON.parse(c[0] as string))
+      .find((e) => e.event === "cli-org-memory-shadow")
+    expect(shadow).toMatchObject({ installationId: ORG_INSTALL_ID, count: 1, ids: ["org:a"] })
+  })
+
+  it("flag ON — response is seat ∪ org, org rendered in the AgentMemoryQueryResult shape, seat first", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await appendLearning(
+      env,
+      "org",
+      String(ORG_INSTALL_ID),
+      orgEntry("a", { rule: "always use @/ imports", polarity: "require" }),
+    )
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<Record<string, unknown>> }
+    expect(out.results.length).toBe(2)
+    expect(out.results[0]).toMatchObject({ content: "seat fact", kind: "decision" })
+    expect(out.results[1]).toEqual({
+      id: "org:a",
+      kind: "preference",
+      content: "[required] always use @/ imports",
+      ts: "2026-06-01T00:00:00.000Z",
+      score: 1,
+    })
+  })
+
+  it("flag ON + no seat memory yet — response is org-only (a brand-new CLI session still inherits the org's rules)", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
+    await appendLearning(env, "org", String(ORG_INSTALL_ID), orgEntry("a"))
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(
+      queryReq({ userId: "u1", repoId: "sigilix/boreas", query: "x" }, token),
+      env,
+    )
+    const out = (await res.json()) as { results: Array<{ id: string }> }
+    expect(out.results.map((r) => r.id)).toEqual(["org:a"])
+  })
+
+  it("flag ON + the LEGACY global key — no single org to scope to, degrades to seat-only, no throw", async () => {
+    const env = makeEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" }) // legacy TOKEN → installationId -1
+    await handleMemoryWriteRoute(writeReq(seatBody), env)
+    // Seed the legacy sentinel's own "org" key too — must never surface even
+    // though it technically exists under that (nonsensical) subjectId.
+    await appendLearning(env, "org", String(LEGACY_TENANT_INSTALLATION_ID), orgEntry("a"))
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact"])
+  })
+
+  it("flag ON + an org-store read throwing — degrades to seat-only, logs, never throws", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    // Break the KV leg for the org key specifically (seat reads/writes above
+    // already completed through the working KV).
+    const orgKey = "learnings:org:42"
+    const loose = kv as unknown as { get: (k: string) => Promise<string | null> }
+    const realGet = loose.get.bind(loose)
+    loose.get = async (key: string) => {
+      if (key === orgKey) throw new Error("org kv down")
+      return realGet(key)
+    }
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact"]) // seat preserved, no throw
+    // loadLearnings' own soft-fail logs the KV read failure.
+    const failed = logSpy.mock.calls
+      .map((c) => JSON.parse(c[0] as string))
+      .find((e) => e.event === "learnings-load-failed")
+    expect(failed).toBeDefined()
+  })
+
+  it("flag ON — caps org additions and logs a truncation when the org corpus exceeds the budget", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    for (let i = 0; i < 25; i++) {
+      await appendLearning(
+        env,
+        "org",
+        String(ORG_INSTALL_ID),
+        orgEntry(`e${i}`, { createdTs: new Date(Date.parse("2026-06-01T00:00:00.000Z") + i * 1000).toISOString() }),
+      )
+    }
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    const out = (await res.json()) as { results: unknown[] }
+    expect(out.results.length).toBe(1 + 20) // 1 seat + MAX_ORG_MEMORY_ENTRIES (20)
+
+    const truncated = logSpy.mock.calls
+      .map((c) => JSON.parse(c[0] as string))
+      .find((e) => e.event === "cli-org-memory-truncated")
+    expect(truncated).toMatchObject({ installationId: ORG_INSTALL_ID, kept: 20 })
   })
 })

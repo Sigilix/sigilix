@@ -408,6 +408,21 @@ export function resolveLintersConfig(config: SigilixConfig | null): ResolvedLint
   return out
 }
 
+/**
+ * SIG-107: the linter/runner tool ids the repo config EXPLICITLY disabled
+ * (`linters.<id>.enabled === false`). Recall-safe by construction: it reads
+ * only explicit opt-out entries, so a catalog default-OFF tool (e.g.
+ * checkov/trivy/trufflehog) is NOT returned unless the repo turned it off.
+ * Consumed by the SARIF-evidence pipeline to drop findings a disabled tool
+ * produced — the wiring that makes `linters: { eslint: { enabled: false } }`
+ * take effect. Never drops findings the customer didn't opt out of.
+ */
+export function resolveDisabledLinterIds(config: SigilixConfig | null): LinterId[] {
+  const cfg = config?.linters
+  if (!cfg) return []
+  return LINTER_IDS.filter((id) => cfg[id]?.enabled === false)
+}
+
 export interface ResolvedSpecialistMcpTools {
   toolIds: McpToolId[]
 }

@@ -6,8 +6,23 @@
 
 import { describe, it, expect } from "vitest"
 import { runSarifEvidence, type ResolvedSarifConfig } from "@/src/features/sarif-evidence/app/runner"
+import { parseSigilixConfig, resolveDisabledLinterIds } from "@/src/lib/sigilix-config"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
+
+// SIG-107 audit fix: `linters` config was parsed + resolved but never
+// forwarded to the one place runner-tool findings become review findings
+// (here). This helper composes `disabledTools` the exact same way the
+// production call site does (`gather-graph.ts`): the SAME `resolveDisabledLinterIds`.
+const disabledToolsFor = (raw: string): string[] => resolveDisabledLinterIds(parseSigilixConfig(raw))
+
+// SIG-107 runner metadata (`run.tool.driver.properties`) — mirrors the
+// fixture in `sarif-evidence-runner-metadata.test.ts`.
+const runnerMetadata = (toolId: string): Record<string, unknown> => ({
+  sigilixSchemaVersion: 1,
+  sigilixToolId: toolId,
+  sigilixSource: "deterministic-tool",
+})
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }
 const PATH = ".sigilix/trivy.sarif.json"
@@ -263,6 +278,59 @@ describe("runSarifEvidence — config-driven filtering (Codex MAJOR #3 + Kimi MA
     expect(r.skipped).toBe(false)
     if (r.skipped) return
     expect(r.findings.length).toBe(0)
+  })
+
+  it("disabledTools (SIG-107 `linters` config) drops a disabled tool's findings end-to-end", async () => {
+    // Real customer-facing config text, parsed + resolved via the actual
+    // production functions (not a hand-built `disabledTools` array) — proves
+    // `linters: { eslint: { enabled: false } }` in a repo's sigilix.json
+    // actually takes effect on a real review, not just in the resolver's
+    // own unit tests. Explicit-only: nothing else (no default-OFF tool) leaks in.
+    const disabledTools = disabledToolsFor(JSON.stringify({ linters: { eslint: { enabled: false } } }))
+    expect(disabledTools).toEqual(["eslint"])
+
+    // Runner metadata (`sigilixToolId`) lives on `run.tool.driver.properties`,
+    // applied per RUN — so the two tools need two separate SARIF runs.
+    const report = JSON.stringify({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "ESLint", properties: runnerMetadata("eslint") } },
+          results: [
+            {
+              ruleId: "no-undef",
+              level: "error",
+              message: { text: "missing symbol" },
+              locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 1 } } }],
+            },
+          ],
+        },
+        {
+          tool: { driver: { name: "Ruff", properties: runnerMetadata("ruff") } },
+          results: [
+            {
+              ruleId: "PERF401",
+              level: "warning",
+              message: { text: "prefer list comprehension" },
+              locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.py" }, region: { startLine: 1 } } }],
+            },
+          ],
+        },
+      ],
+    })
+    const r = await runSarifEvidence({
+      env: fakeEnv,
+      client: fakeClient(report),
+      ...CTX,
+      diff: diffWithChange("src/a.ts", 1) + diffWithChange("src/a.py", 1),
+      config: { ...DEFAULT_CONFIG, disabledTools },
+    })
+    expect(r.skipped).toBe(false)
+    if (r.skipped) return
+    // eslint's finding is dropped — ruff's (not in `linters`) passes through.
+    expect(r.findings.find((f) => f.toolId === "eslint")).toBeUndefined()
+    expect(r.findings.find((f) => f.toolId === "ruff")).toBeDefined()
+    expect(r.telemetry.filteredOutByConfig).toBeGreaterThanOrEqual(1)
   })
 
   it("severityThreshold warning drops note-level findings", async () => {

@@ -16,6 +16,9 @@
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
+import { loadSigilixConfigSource } from "@/src/shared/adapters/config/load"
+import { parseSigilixConfigSource } from "@/src/shared/domain/config/parse"
+import { EMPTY_CONFIG, type SigilixConfig } from "@/src/shared/domain/config/types"
 
 const RAW_SNIPPET_MAX = 500
 const KV_TTL_SECONDS = 24 * 60 * 60 // 1 day
@@ -199,4 +202,38 @@ export async function postConfigErrorComment(args: PostConfigErrorCommentArgs): 
     )
     return { kind: "failed", err: msg }
   }
+}
+
+export interface LoadConfigWithVisibleParseErrorArgs {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}
+
+/**
+ * SIG-107 audit fix: load + parse the per-repo config and, on a
+ * PRESENT-but-malformed file, make the failure VISIBLE via the same
+ * idempotent PR comment `postConfigErrorComment` already posts on the
+ * slash-command dispatch path — instead of failing open in total silence.
+ * Still fails open: always resolves to `EMPTY_CONFIG` on any failure
+ * (absent file, fetch error, or parse error). Fire-and-forget on the
+ * comment post — never blocks or fails the caller.
+ */
+export async function loadSigilixConfigWithVisibleParseError(
+  args: LoadConfigWithVisibleParseErrorArgs,
+): Promise<SigilixConfig> {
+  const { env, client, owner, repo, prNumber, headSha } = args
+  const configSource = await loadSigilixConfigSource(client, owner, repo, headSha)
+  if (configSource === null) return EMPTY_CONFIG
+  const parsed = parseSigilixConfigSource(configSource)
+  if (parsed.ok) return parsed.config
+  console.warn(JSON.stringify({ event: "sigilix-config-parse-error", owner, repo, prNumber, reason: parsed.reason }))
+  postConfigErrorComment({ env, client, owner, repo, prNumber, headSha, reason: parsed.reason, raw: parsed.raw }).catch(
+    (err) =>
+      console.error(JSON.stringify({ event: "config-error-comment-bubbled", err: String(err), owner, repo, prNumber })),
+  )
+  return EMPTY_CONFIG
 }

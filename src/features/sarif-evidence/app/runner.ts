@@ -67,7 +67,7 @@ export interface RunnerTelemetry {
   filteredOutByDiff: number
   /** Findings dropped by path normalization. */
   filteredOutByPath: number
-  /** Findings dropped by config (disabledRules, disabledCategories, severityThreshold). */
+  /** Findings dropped by config (disabledRules, disabledCategories, disabledTools, severityThreshold). */
   filteredOutByConfig: number
   durationMs: number
   staleReport?: { ageHours: number }
@@ -79,6 +79,14 @@ export interface ResolvedSarifConfig {
   severityThreshold: "info" | "warning" | "error"
   disabledRules: string[]
   disabledCategories: SarifFindingCategory[]
+  /**
+   * SIG-107: runner-tool ids (`RunnerToolId`/`LinterId`) disabled via the
+   * per-repo `linters` config (`resolveLintersConfig`). A finding whose
+   * SIG-107 runner metadata carries one of these tool ids is dropped —
+   * this is the wiring that makes `linters: { eslint: { enabled: false } }`
+   * actually take effect. Optional/absent = nothing disabled.
+   */
+  disabledTools?: string[]
 }
 
 export interface RunSarifEvidenceArgs {
@@ -285,6 +293,7 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
   const minRank = SEVERITY_RANK[config.severityThreshold]
   const disabledRules = new Set(config.disabledRules)
   const disabledCategories = new Set(config.disabledCategories)
+  const disabledTools = new Set(config.disabledTools ?? [])
 
   const findings: SarifFinding[] = []
   let resultsConsidered = 0
@@ -327,12 +336,19 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
       })
       if (taxonomy.isSbom) continue // SBOM is metadata, not a finding
 
-      // Config-driven filter (disabledRules + disabledCategories)
+      // Config-driven filter (disabledRules + disabledCategories + disabledTools)
       if (result.ruleId && disabledRules.has(result.ruleId)) {
         filteredOutByConfig++
         continue
       }
       if (disabledCategories.has(taxonomy.category)) {
+        filteredOutByConfig++
+        continue
+      }
+      // SIG-107: per-repo `linters` config disables a runner tool entirely —
+      // drop findings whose SIG-107 runner metadata identifies them as
+      // produced by a disabled tool id.
+      if (taxonomy.toolId && disabledTools.has(taxonomy.toolId)) {
         filteredOutByConfig++
         continue
       }

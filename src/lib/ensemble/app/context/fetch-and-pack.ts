@@ -28,11 +28,11 @@ import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import type { PullRequestMeta, ListOpenPullsItem } from "@/src/shared/types/github"
 import {
-  loadSigilixConfig,
   resolvePathInstructionsForChangedPaths,
   resolveCostControlsConfig,
   type SigilixConfig,
 } from "@/src/lib/sigilix-config"
+import { loadSigilixConfigWithVisibleParseError } from "@/src/lib/sigilix-config-error-comment"
 import {
   buildAiInstructionGuidance,
   filterAiInstructionsForChangedPaths,
@@ -168,13 +168,11 @@ export async function fetchDiffAndConfig(a: FetchDiffAndConfigArgs): Promise<Fet
   }
   const fullDiff = diffSelection.diff
 
-  // ARC-174: per-repo `sigilix.json` config. Read at the PR head SHA
-  // so the guidance reflects whatever the PR author committed (lets
-  // them iterate on the rules in the same PR). Always resolves —
-  // missing or malformed config falls back to EMPTY_CONFIG. Loaded
-  // BEFORE the diff split so ARC-176 pathFilters can drop files
-  // before packing decides what to send to specialists.
-  const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+  // ARC-174: per-repo `sigilix.json` config, read at the PR head SHA. Always
+  // resolves — a malformed config now surfaces via a visible PR comment
+  // (SIG-107; see `loadSigilixConfigWithVisibleParseError`) but still falls
+  // back to EMPTY_CONFIG. Loaded BEFORE the diff split (ARC-176 pathFilters).
+  const sigilixConfig = await loadSigilixConfigWithVisibleParseError({ env, client, owner, repo, prNumber, headSha })
   const shouldLoadAiInstructions = shouldIngestAiInstructions(
     sigilixConfig.guidance,
     ensembleConfig.flags.ingestAiInstructions,

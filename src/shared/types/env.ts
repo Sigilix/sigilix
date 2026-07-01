@@ -201,6 +201,25 @@ export interface Env {
   // `wrangler secret put OPENCLAW_MEMORY_DECAY_MODE shadow`.
   OPENCLAW_MEMORY_DECAY_MODE?: string
 
+  // Seat∪Org memory layering — Phase 1 (write side only). Two-state, DEFAULT
+  // OFF:
+  //   - "off" (default / unset / any other value): the org-scope mirror write
+  //           never runs — no installation-id resolution, no extra KV write,
+  //           the repo-scope capture path is byte-identical to today.
+  //   - "on": every repo-scope learning capture (github-mention Q&A +
+  //           review-memory conversational capture) is ALSO mirrored into
+  //           `learnings:org:<installationId>` (installation id resolved via
+  //           OPENCLAW_GITHUB_INSTALLATION_MAP, same as the rest of the
+  //           GitHub-App tenant-resolution call sites). An unresolvable
+  //           installation silently skips the org write — it never blocks or
+  //           fails the (already-completed) repo-scope write.
+  // ADDITIVE + SHADOW-SAFE: nothing reads `learnings:org:*` yet (retrieval,
+  // suppression, and the Memory Gardener decay pass are untouched) — this
+  // flag only controls whether the corpus starts accumulating.
+  // Parsed by resolveOrgMemoryCaptureMode (@/features/learnings). Operator
+  // flips via `wrangler secret put OPENCLAW_ORG_MEMORY_CAPTURE on`.
+  OPENCLAW_ORG_MEMORY_CAPTURE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

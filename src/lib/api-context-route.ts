@@ -18,7 +18,7 @@
 // by a short-TTL per-repo KV marker so polling can't spam the queue.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireBearerToken } from "./auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -250,9 +250,23 @@ async function maybeEnqueueOnDemandIndex(
  * a bad/oversized body; 500 only on an unexpected engine throw.
  */
 export async function handleAgentContextRoute(request: Request, env: Env): Promise<Response> {
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "context_endpoint_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication).
+  //
+  // NOT threaded further: the grounding installationId below is resolved
+  // independently from the CLAIMED owner/repo via resolveGrounding ->
+  // resolveInstallation — the repo's registered GitHub App installation, not the
+  // caller's identity. Reconciling the two is a product decision for a follow-up
+  // slice, not an auth-swap concern.
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "context_endpoint_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
 
   let raw: unknown
   try {

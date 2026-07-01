@@ -3,6 +3,10 @@
 // is mocked (the real engine path is covered by the live CLI + e2e suites).
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { insertApiKey } from "@/src/lib/api-key-store"
+import { sha256Hex } from "@/src/lib/auth-bearer"
 
 vi.mock("@/src/lib/ensemble/app/orchestrator", () => ({ handlePrReviewEnsemble: vi.fn() }))
 // Mode B builds the real GitHub client in-route (to resolve headSha) — mock it so the
@@ -23,6 +27,18 @@ const mockBuildClient = vi.mocked(buildClient)
 const TOKEN = "test-secret-key"
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
   ({ OPENCLAW_SIGILIX_API_KEY: key, ...extra }) as unknown as Env
+const MIGRATION_SQL_API_KEY = readFileSync(
+  new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+/** Throws on any operation — simulates a genuine D1 outage/fault. */
+function makeBrokenDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error("simulated D1 error")
+    },
+  } as unknown as D1Database
+}
 /** A grounded-ready env: GitHub App configured + an installation map for o/r → 42. */
 const groundedEnv = (extra: Partial<Env> = {}): Env =>
   env(TOKEN, {
@@ -96,6 +112,39 @@ describe("handleReviewApiRoute — auth + validation", () => {
     const res = await handleReviewApiRoute(req(huge), env(TOKEN), noopCtx)
     expect(res.status).toBe(413)
     expect(((await res.json()) as { error?: string }).error).toBe("payload_too_large")
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  // #155 slice 2: the route now authenticates via resolveApiKey (D1 api_key lookup,
+  // falling back to the legacy global key). These pin the new invariants at the
+  // route level (resolveApiKey's own unit suite covers the resolver exhaustively).
+  it("200 with a valid per-tenant api_key — NO global key configured at all", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = "sigilix_live_review_test"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const res = await handleReviewApiRoute(
+      req(validBody, plaintext),
+      env(undefined, { SIGILIX_PLATFORM_DB: db }),
+      noopCtx,
+    )
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+  it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key", async () => {
+    const res = await handleReviewApiRoute(
+      req(validBody, TOKEN),
+      env(TOKEN, { SIGILIX_PLATFORM_DB: makeBrokenDb() }),
+      noopCtx,
+    )
+    expect(res.status).toBe(401)
     expect(mockEngine).not.toHaveBeenCalled()
   })
 })

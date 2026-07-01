@@ -4,6 +4,10 @@
 // covered by purelogic-pair.test.ts; here we pin the HTTP contract.
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { insertApiKey } from "@/src/lib/api-key-store"
+import { sha256Hex } from "@/src/lib/auth-bearer"
 
 vi.mock("@/src/lib/reproduce/purelogic-pair", () => ({ comparePairInSandbox: vi.fn() }))
 
@@ -25,6 +29,18 @@ function kvStub(): Env["OPENCLAW_STATE"] {
 
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
   ({ OPENCLAW_SIGILIX_API_KEY: key, OPENCLAW_STATE: kvStub(), ...extra }) as unknown as Env
+const MIGRATION_SQL_API_KEY = readFileSync(
+  new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+/** Throws on any operation — simulates a genuine D1 outage/fault. */
+function makeBrokenDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error("simulated D1 error")
+    },
+  } as unknown as D1Database
+}
 
 function req(body: unknown, token: string | null = TOKEN): Request {
   return new Request("https://api.sigilix.ai/v1/verify", {
@@ -76,6 +92,30 @@ describe("handleVerifyApiRoute — auth + validation", () => {
   it("400 on a missing owner", async () => {
     const { owner: _o, ...noOwner } = validBody
     expect((await handleVerifyApiRoute(req(noOwner), env(TOKEN))).status).toBe(400)
+  })
+
+  // #155 slice 2: the route now authenticates via resolveApiKey (D1 api_key lookup,
+  // falling back to the legacy global key). These pin the new invariants at the
+  // route level (resolveApiKey's own unit suite covers the resolver exhaustively).
+  it("200 with a valid per-tenant api_key — NO global key configured at all", async () => {
+    mockCompare.mockResolvedValue(changedResult)
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = "sigilix_live_verify_test"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const res = await handleVerifyApiRoute(req(validBody, plaintext), env(undefined, { SIGILIX_PLATFORM_DB: db }))
+    expect(res.status).toBe(200)
+  })
+  it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key", async () => {
+    const res = await handleVerifyApiRoute(req(validBody, TOKEN), env(TOKEN, { SIGILIX_PLATFORM_DB: makeBrokenDb() }))
+    expect(res.status).toBe(401)
+    expect(mockCompare).not.toHaveBeenCalled()
   })
 })
 

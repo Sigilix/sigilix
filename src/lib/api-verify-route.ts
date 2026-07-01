@@ -24,7 +24,7 @@
 // oversized body; 429 once the daily CPU ceiling is hit.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireBearerToken } from "./auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { comparePairInSandbox } from "@/src/lib/reproduce/purelogic-pair"
 
@@ -109,9 +109,19 @@ async function admitUnderDailyCeiling(env: Env): Promise<boolean> {
  * the daily ceiling is hit.
  */
 export async function handleVerifyApiRoute(request: Request, env: Env): Promise<Response> {
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "verify_endpoint_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication). No
+  // installationId is threaded further — this route has no per-tenant concept
+  // downstream (the sandbox compare is tenant-agnostic).
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "verify_endpoint_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload is
   // aborted, never fully buffered; `null` = over the cap → 413.

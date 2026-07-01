@@ -73,6 +73,19 @@ export interface AgentRunTaskInput {
   engine?: AgentRunnerEngine
 }
 
+/**
+ * SIG-145: the container's parsed run outcome, surfaced to the caller so it can
+ * post a terminal Linear agent-session activity (the PR link on success, a brief
+ * message on failure) instead of leaving the session stuck on "Working" forever.
+ * Mirrors the fields `dispatchAgentRun` already persists to the DO via
+ * `setRunRecord` — this is the SAME data, just also handed back to the caller.
+ */
+export interface AgentRunOutcome {
+  status: AgentRunRecord["status"]
+  prUrl?: string
+  error?: string
+}
+
 // ── Internal: task-packet shape sent over the wire ────────────────────────────
 
 /** Shape of the JSON body POSTed to the container's task-runner entrypoint. */
@@ -144,7 +157,7 @@ function agentRunnerStub(env: Env, runId: string) {
 export async function dispatchAgentRun(
   env: Env,
   input: AgentRunTaskInput,
-): Promise<{ runId: string; dispatched: boolean }> {
+): Promise<{ runId: string; dispatched: boolean; outcome?: AgentRunOutcome }> {
   const { runId } = input
 
   // ── Dark gate ───────────────────────────────────────────────────────────────
@@ -198,21 +211,29 @@ export async function dispatchAgentRun(
 
     // Parse the container's RunResult and persist it to the DO record so
     // getAgentRunStatus returns the real outcome instead of null forever.
+    // SIG-145: also hand the parsed outcome back to the caller (runLinearAgentRun)
+    // so it can post a terminal Linear agent-session activity (PR link / brief
+    // failure) — previously this was persisted to the DO and then discarded,
+    // which is why nothing ever told the AgentSession the run had finished.
+    let outcome: AgentRunOutcome | undefined
     try {
       const result = (await response.json()) as {
         status?: string
         prUrl?: string
         error?: string
       }
-      await agentRunnerStub(env, runId).setRunRecord({
-        runId,
+      outcome = {
         status: (result.status as AgentRunRecord["status"]) ?? "error",
         ...(result.prUrl !== undefined ? { prUrl: result.prUrl } : {}),
         ...(result.error !== undefined ? { error: result.error } : {}),
-      })
+      }
+      await agentRunnerStub(env, runId).setRunRecord({ runId, ...outcome })
     } catch (persistErr) {
       // A malformed response body or a DO storage hiccup must not fail the dispatch.
-      // Log the event for observability without including any secrets.
+      // Log the event for observability without including any secrets. If the JSON
+      // parse threw, `outcome` is still undefined (caller falls back to a generic
+      // completion); if only the DO `setRunRecord` threw, `outcome` is already parsed
+      // and is still surfaced below so the caller can post the real PR link.
       console.warn(
         JSON.stringify({
           event: "agent-runner-status-persist-failed",
@@ -223,7 +244,7 @@ export async function dispatchAgentRun(
       )
     }
 
-    return { runId, dispatched: true }
+    return { runId, dispatched: true, ...(outcome !== undefined ? { outcome } : {}) }
   } catch (err) {
     // Log failure without any secrets. The error message is included so
     // operators can distinguish network faults from GitHub API errors.

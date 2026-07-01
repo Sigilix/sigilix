@@ -16,9 +16,10 @@
 // tokens / secrets.
 
 import type { Env } from "@/src/shared/types/env"
-import { buildLinearClient, buildLinearAgentClient } from "@/src/lib/linear"
-import { dispatchAgentRun } from "@/src/lib/agent-runner/dispatch"
+import { buildLinearClient, buildLinearAgentClient, type AgentActivityType } from "@/src/lib/linear"
+import { dispatchAgentRun, type AgentRunOutcome } from "@/src/lib/agent-runner/dispatch"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 
 /** Ollama Turbo base — the free minimal-engine provider for the B3 trigger. */
 const OLLAMA_TURBO_BASE = "https://ollama.com/v1"
@@ -62,7 +63,7 @@ export async function dispatchTicketImplementation(
     ticket: { identifier: string; title: string; body: string; url: string }
     dedupeId: string
   },
-): Promise<{ dispatched: boolean }> {
+): Promise<{ dispatched: boolean; outcome?: AgentRunOutcome; deduped?: boolean }> {
   // Declared outside the try so the catch can release the marker if a fault occurs
   // AFTER it was set but before dispatch was confirmed (defends a future edit that
   // throws post-set; today dispatchAgentRun is fail-safe and never throws).
@@ -98,7 +99,11 @@ export async function dispatchTicketImplementation(
           identifier: args.ticket.identifier,
         }),
       )
-      return { dispatched: false }
+      // SIG-145: flag the dedupe so the AgentSession caller does NOT post a terminal
+      // activity — a concurrent/earlier run owns this issue's session and will resolve
+      // it. Resolving here (e.g. a webhook redelivery) would close the live session
+      // with a misleading result while the real run is still working.
+      return { dispatched: false, deduped: true }
     }
     await env.OPENCLAW_STATE.put(dedupeKey, "1", { expirationTtl: AGENT_RUN_DEDUPE_TTL_SECONDS })
     markerSet = true
@@ -122,7 +127,12 @@ export async function dispatchTicketImplementation(
       await env.OPENCLAW_STATE.delete(dedupeKey)
       markerSet = false
     }
-    return { dispatched: result.dispatched }
+    // SIG-145: surface the container's run outcome (PR link / failure) to the caller
+    // so `runLinearAgentRun` can post a TERMINAL Linear agent-session activity that
+    // resolves the session, instead of leaving it stuck on "Working" forever. A
+    // non-deduped non-dispatch (dark/no-key/container fault) reports no outcome — the
+    // caller posts a generic resolving activity for it.
+    return { dispatched: result.dispatched, ...(result.outcome !== undefined ? { outcome: result.outcome } : {}) }
   } catch (err) {
     // Defensive: a fault after the marker was set (but before a confirmed dispatch)
     // must not suppress the ticket for the whole TTL — release it. Best-effort.
@@ -150,16 +160,47 @@ export async function dispatchTicketImplementation(
 /**
  * Implement a Linear issue assigned to the Sigilix agent: resolve the repo +
  * installation, then dispatch the agent-runner (via `dispatchTicketImplementation`)
- * and post a best-effort Linear ack. Never throws — every fault is logged + swallowed.
+ * and post a best-effort Linear result. Never throws — every fault is logged + swallowed.
  *
- * `sessionId` is the AgentSession id when the trigger was an `AgentSessionEvent`
- * (a real agent delegation / @-mention). When present, the dispatch ack is posted as
- * a NON-terminal Linear agent `action` activity into that session (the turn stays open
- * until the container opens the PR); when absent (the interim assignee path), the
- * legacy issue comment ack is used instead.
+ * `sessionId` is the AgentSession id when the trigger was an `AgentSessionEvent` (a real
+ * agent delegation / @-mention, including the `prompted` follow-up turn — which re-enters
+ * here with the same sessionId). `dispatchTicketImplementation` → `dispatchAgentRun`
+ * AWAITS the container's full clone→edit→PR run, so by the time it returns the outcome
+ * already carries the real PR URL (or the failure). SIG-145: when a sessionId is present
+ * we post a TERMINAL Linear agent activity for that outcome — `response` with the PR link
+ * on success, `error` on failure — so the session resolves out of "Working" instead of
+ * hanging forever. Without it the session never left the spinner: the only activities ever
+ * posted were the webhook `thought` ACK and a non-terminal `action`. When no sessionId is
+ * present (the interim assignee path) the legacy issue comment ack is used instead.
+ *
+ * STOP/CANCEL (SIG-145): a user Stop marks the session cancelled (see linear-agent-cancel.ts);
+ * this run checks that flag at its checkpoints (pre-start, before dispatching the container,
+ * and before the terminal post) and aborts — it does not dispatch and does not post its own
+ * completion (the webhook's stop handler already posted the terminal "stopped" activity). It
+ * cannot interrupt an already-running container, so a stop that lands mid-container may still
+ * open the PR — but the session stays resolved as "stopped" because the run skips its "Done".
+ *
+ * KNOWN LIMITATION (the per-ticket idempotency window): the terminal post is SKIPPED on a
+ * dedupe (`deduped`) — correct for a webhook redelivery of THIS turn (a concurrent/earlier
+ * run owns + resolves the session). But the dedupe marker is keyed on the issue id with a
+ * 1h TTL, so a genuinely-new turn on the SAME issue inside that window (e.g. a `prompted`
+ * follow-up shortly after the first PR) also dedupes and is NOT re-posted — that session can
+ * still hang until the window expires. A precise fix needs a per-delivery idempotency key
+ * (so a redelivery is distinguishable from a new turn); tracked as a follow-up, deliberately
+ * NOT widened here because posting on every dedupe would reintroduce the redelivery
+ * double-resolve race this fix is careful to avoid.
  */
 export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
   try {
+    // Checkpoint 0 (stop): cancelled before we start any work → abort, post nothing. The
+    // webhook's stop handler already posted the terminal "stopped" activity. Best-effort:
+    // a KV miss fails open to "not cancelled" (the work proceeds; the webhook still
+    // resolved the session).
+    if (sessionId && (await isAgentSessionCancelled(env, sessionId))) {
+      console.log(JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "pre-start" }))
+      return
+    }
+
     const linear = await buildLinearClient(env)
     const issue = await linear.getIssue(issueId)
     if (!issue) {
@@ -195,7 +236,16 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       return
     }
 
-    const { dispatched } = await dispatchTicketImplementation(env, {
+    // Checkpoint 1 (stop): cancelled before dispatching the container → abort. Do NOT
+    // dispatch (don't open a PR); the webhook's stop handler already resolved the session.
+    if (sessionId && (await isAgentSessionCancelled(env, sessionId))) {
+      console.log(
+        JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "pre-dispatch" }),
+      )
+      return
+    }
+
+    const { dispatched, outcome, deduped } = await dispatchTicketImplementation(env, {
       owner: mapping.owner,
       repo: mapping.repo,
       installationId: inst.installationId,
@@ -208,27 +258,35 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       dedupeId: issue.id,
     })
 
-    if (dispatched) {
-      // Best-effort ack — a failed ack must never fail the run.
-      //   - AgentSessionEvent path (sessionId present): post a NON-terminal Linear
-      //     agent `action` activity so the session turn STAYS OPEN until the PR
-      //     lands. A terminal `response` here would complete the agent turn at
-      //     dispatch time — before the container has actually opened the PR.
-      //   - interim assignee path (no sessionId): the legacy issue comment ack.
-      // TODO(follow-up): thread sessionId → AgentRunTaskInput → container so the
-      // container posts the terminal `response` with the real PR URL when the PR lands.
-      const ackText = "🛠️ On it — Sigilix is implementing this and will open a PR shortly."
+    if (sessionId) {
+      // AgentSessionEvent path (SIG-145). Post a TERMINAL agent activity so the session
+      // resolves out of "Working" — the fix for the hang. SKIPPED when:
+      //   - deduped: a concurrent/earlier run owns + resolves this session (resolving here,
+      //     e.g. on a webhook redelivery, would prematurely close a still-working session); or
+      //   - cancelled (checkpoint 2): the user hit Stop and the webhook already posted the
+      //     terminal "stopped" activity — a "Done" post would override the user's cancel.
+      //     The container may have already opened a PR (a running container can't be
+      //     interrupted), but the session stays resolved as "stopped".
+      // Best-effort — a failed post never fails the run.
+      if (deduped) {
+        // concurrent/earlier run owns + resolves the session — see dispatchTicketImplementation.
+      } else if (await isAgentSessionCancelled(env, sessionId)) {
+        console.log(
+          JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "post-dispatch" }),
+        )
+      } else {
+        await postAgentSessionCompletion(env, {
+          issueId,
+          sessionId,
+          dispatched,
+          ...(outcome !== undefined ? { outcome } : {}),
+        })
+      }
+    } else if (dispatched) {
+      // Interim assignee path (no AgentSession): the legacy issue comment ack. A plain
+      // comment never "hangs", so this stays a single best-effort dispatch ack.
       try {
-        if (sessionId) {
-          const agent = await buildLinearAgentClient(env)
-          if (agent) {
-            await agent.createAgentActivity(sessionId, ackText, "action")
-          } else {
-            console.warn(JSON.stringify({ event: "linear-agent-run-ack-no-token", issueId, sessionId }))
-          }
-        } else {
-          await linear.createComment(issue.id, ackText)
-        }
+        await linear.createComment(issue.id, "🛠️ On it — Sigilix is implementing this and will open a PR shortly.")
       } catch (err) {
         console.warn(
           JSON.stringify({
@@ -238,6 +296,9 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
           }),
         )
       }
+    }
+
+    if (dispatched) {
       console.log(
         JSON.stringify({
           event: "linear-agent-run-dispatched",
@@ -259,5 +320,84 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
         // model.key / installation token intentionally excluded
       }),
     )
+  }
+}
+
+/**
+ * Post the TERMINAL Linear agent-session activity for a finished run so the session
+ * resolves out of "Working" (SIG-145). Best-effort: any fault — a missing agent token,
+ * a Linear API error, an `agentActivityCreate` failure — is logged + swallowed; it must
+ * never fail the run. NEVER logs token material; NEVER falls back to a human key (a null
+ * client just skips the post).
+ *
+ * The client is built with the DEFAULT refresh-on-401 path (NOT the webhook ACK's
+ * `allowRefresh:false`): this post is off the webhook hot path, so a stale token may
+ * self-heal via a refresh+retry. The token READ itself is still the cached `readOnly`
+ * path inside `buildLinearAgentClient`.
+ */
+async function postAgentSessionCompletion(
+  env: Env,
+  args: { issueId: string; sessionId: string; dispatched: boolean; outcome?: AgentRunOutcome },
+): Promise<void> {
+  const { type, text } = buildCompletionActivity(args.dispatched, args.outcome)
+  try {
+    const agent = await buildLinearAgentClient(env)
+    if (!agent) {
+      console.warn(
+        JSON.stringify({ event: "linear-agent-run-ack-no-token", issueId: args.issueId, sessionId: args.sessionId }),
+      )
+      return
+    }
+    await agent.createAgentActivity(args.sessionId, text, type)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-run-ack-failed",
+        issueId: args.issueId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+}
+
+/**
+ * Map a finished run's outcome to its terminal AgentSession activity (kind + body).
+ * Pure (no IO) so the choice is unit-testable in isolation. A `response` completes the
+ * turn with a result; an `error` STILL resolves the session — so every branch leaves the
+ * session out of "Working" rather than hanging.
+ *
+ * `dispatchAgentRun` awaits the container's full run, so a `dispatched` call already
+ * carries the real outcome. A non-`dispatched` call here is a genuine non-dedupe failure
+ * (the dedupe case is filtered out before this is reached) — runner dark or a container
+ * fault — and resolves as an `error`.
+ */
+function buildCompletionActivity(
+  dispatched: boolean,
+  outcome?: AgentRunOutcome,
+): { type: AgentActivityType; text: string } {
+  if (dispatched) {
+    if (outcome?.status === "opened") {
+      const link = outcome.prUrl ? `: ${outcome.prUrl}` : "."
+      return { type: "response", text: `✅ Done — opened a pull request${link}` }
+    }
+    if (outcome?.status === "no-change") {
+      return { type: "response", text: "✅ Done — no code changes were needed for this." }
+    }
+    // Dispatched and the container did NOT report a failure: an unparsed result
+    // (`outcome === undefined`), or any non-`error` status (e.g. an unexpected
+    // `started` the container shouldn't emit post-completion). The run did dispatch
+    // and the container responded, so resolve neutrally with a `response` — never the
+    // misleading "couldn't complete" error. Only a genuine `error` status falls through.
+    if (outcome?.status !== "error") {
+      return { type: "response", text: "✅ Sigilix finished this run — check the issue for the pull request." }
+    }
+  }
+  // Container reported `status: "error"`, OR a non-deduped non-dispatch (runner dark /
+  // container fault). A terminal `error` resolves the session instead of leaving it on
+  // "Working". The container's own error text is NOT echoed (defense-in-depth — it is
+  // already redacted container-side, but a generic message keeps secrets off Linear).
+  return {
+    type: "error",
+    text: "⚠️ Sigilix couldn't complete this run. Please try again, or check the issue for details.",
   }
 }

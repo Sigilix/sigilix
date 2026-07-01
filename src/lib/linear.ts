@@ -160,12 +160,28 @@ export async function buildLinearClient(env: LinearAuthEnv): Promise<LinearClien
  * `LinearClientOptions` on `linear.ts`). A token still served from the readOnly
  * cache can be stale relative to Linear (e.g. the broker's proactive-refresh
  * alarm hasn't fired yet); the hook is what recovers from that without the
- * caller (ackAgentSession, the agent-run ack) having to know anything about
- * the broker.
+ * caller (the agent-run completion post) having to know anything about the broker.
+ *
+ * SIG-145: `opts.allowRefresh` (default true) gates that 401-refresh hook. The
+ * webhook ACK path (`ackAgentSession`) passes `allowRefresh: false` so a stale-token
+ * 401 can NOT trigger a blocking broker `forceRefresh` — that refresh is a DO RPC
+ * NOT bounded by the ACK's `AbortSignal.timeout(2000)`, so on the ACK hot path it
+ * could overrun Linear's ~10s ack window and cause a redelivery → duplicate run. The
+ * ACK is best-effort anyway: a 401 there just skips (the background run still posts
+ * the real completion later). The background run leaves `allowRefresh` default-on so
+ * its terminal post self-heals a stale token via the refresh+retry. Either way the
+ * token READ stays `readOnly: true` (one DO read, never a refresh POST), and a null
+ * return keeps the fail-safe: skip the post, never throw, never use a human key.
  */
-export async function buildLinearAgentClient(env: LinearTokenBrokerEnv): Promise<LinearClient | null> {
+export async function buildLinearAgentClient(
+  env: LinearTokenBrokerEnv,
+  opts?: { allowRefresh?: boolean },
+): Promise<LinearClient | null> {
   const token = await getValidAgentTokenViaBroker(env, { readOnly: true })
   if (!token) return null
+  if (opts?.allowRefresh === false) {
+    return new LinearClient({ oauthToken: token })
+  }
   return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(env) })
 }
 

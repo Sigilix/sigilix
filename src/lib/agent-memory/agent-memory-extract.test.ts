@@ -285,6 +285,35 @@ describe("POST /v1/memory/extract — distill + store", () => {
   })
 })
 
+describe("POST /v1/memory/extract — SIG-494 tenant-scope isolation", () => {
+  it("stores distilled facts under the installation-prefixed namespace for a per-tenant key", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = "sigilix_live_extract_inst42"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
+    const res = await handleMemoryExtractRoute(
+      extractReq(exchangeBody, plaintext),
+      unkeyedEnv({ SIGILIX_PLATFORM_DB: db }),
+    )
+    expect(res.status).toBe(200)
+    // Confined to the caller's installation, not the raw body-asserted subject.
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:u1", "sigilix/boreas"))
+  })
+
+  it("the legacy global key stays un-prefixed (broad) — namespace unchanged", async () => {
+    mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
+    await handleMemoryExtractRoute(extractReq(exchangeBody), makeEnv()) // legacy TOKEN → installationId -1
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("u1", "sigilix/boreas"))
+  })
+})
+
 describe("POST /v1/memory/extract — soft-fail (never 500)", () => {
   it("no model api key → { stored: 0, facts: [] } (200), no store attempted", async () => {
     const res = await handleMemoryExtractRoute(extractReq(exchangeBody), noModelKeyEnv())

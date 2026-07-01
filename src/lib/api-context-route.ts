@@ -18,7 +18,7 @@
 // by a short-TTL per-repo KV marker so polling can't spam the queue.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { resolveApiKey, callerOwnsRepo } from "@/src/lib/api-key-resolver"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -247,7 +247,8 @@ async function maybeEnqueueOnDemandIndex(
  * POST /v1/context — see file header. Returns { status, context, telemetry }; `context` is
  * null when nothing could be grounded, and `status` distinguishes grounded / indexing /
  * not-connected so the CLI never runs blind. 503 until keyed; 401 on bad bearer; 400/413 on
- * a bad/oversized body; 500 only on an unexpected engine throw.
+ * a bad/oversized body; 403 when a per-tenant key's repo doesn't match its own installation
+ * (SIG-494); 500 only on an unexpected engine throw.
  */
 export async function handleAgentContextRoute(request: Request, env: Env): Promise<Response> {
   // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
@@ -258,15 +259,18 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
   // fail-open D1 default on purpose, because this gates authentication).
   //
-  // NOT threaded further: the grounding installationId below is resolved
-  // independently from the CLAIMED owner/repo via resolveGrounding ->
-  // resolveInstallation — the repo's registered GitHub App installation, not the
-  // caller's identity. Reconciling the two is a product decision for a follow-up
-  // slice, not an auth-swap concern.
+  // SIG-494: the caller's installationId IS threaded further now — callerOwnsRepo
+  // (below, once the body is parsed) reconciles it against the CLAIMED owner/repo's
+  // OWN resolved installation before resolveGrounding ever touches retrieval. Before
+  // this fix, the two were resolved independently and never compared: any valid
+  // per-tenant key could request grounded retrieval for ANY indexed repo on the
+  // platform (cross-tenant leak). The legacy global key is exempt by design (see
+  // callerOwnsRepo's header) — it stays broad.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "context_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
+  const caller = await resolveApiKey(request, env)
+  if (!caller) return json({ error: "unauthorized" }, 401)
 
   let raw: unknown
   try {
@@ -279,6 +283,13 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   }
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
+
+  // SIG-494: fail-closed tenant-scope gate — a real per-tenant key may only ground
+  // against the repo(s) its OWN installation owns. Must run BEFORE resolveGrounding
+  // so a mismatched/unresolvable repo never reaches retrieval.
+  if (!callerOwnsRepo(caller.installationId, parsed.owner, parsed.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)) {
+    return json({ error: "forbidden", detail: "api key is not scoped to this repo" }, 403)
+  }
 
   const { fetchFileContent, repoId, installationId } = await resolveGrounding(env, parsed.owner, parsed.repo)
   const learnings = repoId !== null ? await loadRepoLearnings(env, repoId) : []

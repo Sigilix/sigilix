@@ -260,6 +260,82 @@ describe("handleReviewApiRoute — Mode B (grounded)", () => {
   })
 })
 
+// SIG-494: Mode B used to be able to run a GROUNDED review against ANY indexed repo
+// with any valid key (the resolved caller installationId was discarded; `lookup` was
+// resolved independently from the body-claimed owner/repo and never reconciled).
+// These pin the fix.
+describe("handleReviewApiRoute — SIG-494 tenant-scope reconciliation (Mode B)", () => {
+  const groundedBody = { mode: "grounded", owner: "o", repo: "r", prNumber: 1, headSha: "abc123" }
+
+  async function keyedGroundedEnv(installationId: number, mapJson: string): Promise<Env> {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = `sigilix_live_review_${installationId}`
+    await insertApiKey(db, {
+      id: `key-${installationId}`,
+      keyHash: await sha256Hex(plaintext),
+      installationId,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    return env(undefined, {
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pk",
+      OPENCLAW_GITHUB_INSTALLATION_MAP: mapJson,
+      SIGILIX_PLATFORM_DB: db,
+    }) as Env
+  }
+  function tokenFor(installationId: number): string {
+    return `sigilix_live_review_${installationId}`
+  }
+
+  it("200 — a per-tenant key whose installation OWNS the requested repo", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const e = await keyedGroundedEnv(42, '{"o/r":"42"}')
+    const res = await handleReviewApiRoute(req(groundedBody, tokenFor(42)), e, noopCtx)
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+
+  it("403 — a per-tenant key requesting a repo in a DIFFERENT installation (the core leak, proven closed)", async () => {
+    const e = await keyedGroundedEnv(42, '{"o/r":"999"}') // o/r belongs to a DIFFERENT tenant's installation
+    const res = await handleReviewApiRoute(req(groundedBody, tokenFor(42)), e, noopCtx)
+    expect(res.status).toBe(403)
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("200 (unchanged, still broad) — the legacy global key is exempt from the per-repo gate", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const e = groundedEnv() // legacy TOKEN, OPENCLAW_GITHUB_INSTALLATION_MAP: '{"o/r":"42"}'
+    const res = await handleReviewApiRoute(req(groundedBody), e, noopCtx)
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+
+  it("Mode A is unaffected — a per-tenant key's OWN diff review still runs without any repo reconciliation", async () => {
+    // Mode A is genuinely ungrounded (no tenant's indexed code is ever touched), so the
+    // SIG-494 gate intentionally does not apply to it — this pins that it still works.
+    mockEngine.mockResolvedValue(okResult)
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = "sigilix_live_review_diffmode"
+    await insertApiKey(db, {
+      id: "key-diffmode",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const res = await handleReviewApiRoute(
+      req(validBody, plaintext),
+      env(undefined, { SIGILIX_PLATFORM_DB: db }),
+      noopCtx,
+    )
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+})
+
 describe("handleReviewApiRoute — daily ceiling (cost guard)", () => {
   it("429 once the day's counter has reached the limit (engine not called)", async () => {
     const e = env(TOKEN, { OPENCLAW_STATE: kvMock("200") }) // default limit is 200

@@ -71,7 +71,9 @@ function eventBody(action: string, overrides?: Record<string, unknown>): Record<
 }
 
 describe("handleLinearWebhook — AgentSessionEvent trigger", () => {
-  const mockCreateAgentActivity = vi.fn(() => Promise.resolve(undefined))
+  const mockCreateAgentActivity = vi.fn<
+    (sessionId: string, content: string, type: string, opts?: unknown) => Promise<void>
+  >(() => Promise.resolve(undefined))
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -174,5 +176,104 @@ describe("handleLinearWebhook — AgentSessionEvent trigger", () => {
 
     expect(res.status).toBe(401)
     expect(send).not.toHaveBeenCalled()
+  })
+
+  // ── SIG-145 (stop): a user Stop arrives as a `prompted` event with signal "stop" ──
+
+  it("(h) prompted + agentActivity.signal 'stop' → marks cancelled + posts terminal stopped `response`, does NOT enqueue (200)", async () => {
+    const put = vi.fn(() => Promise.resolve(undefined))
+    const get = vi.fn(() => Promise.resolve(null))
+    const { env, send } = makeEnv({ OPENCLAW_STATE: { put, get } as unknown as KVNamespace })
+
+    const res = await handleLinearWebhook(
+      sessionRequest(eventBody("prompted", { agentActivity: { signal: "stop" } })),
+      env,
+      makeCtx(),
+    )
+
+    expect(res.status).toBe(200)
+    // A stop is a control signal, NOT a new turn — no run is enqueued (handled before dedupe).
+    expect(send).not.toHaveBeenCalled()
+    // The session is marked cancelled (short-TTL marker) so an in-flight run aborts.
+    expect(put).toHaveBeenCalledWith(`linear-agent-cancel:${SESSION_ID}`, "1", { expirationTtl: 3600 })
+    // A TERMINAL `response` "stopped" activity resolves the session immediately. The stop
+    // post uses the same bounded/allowRefresh:false hot-path client as the ACK.
+    expect(buildLinearAgentClient).toHaveBeenCalledWith(env, { allowRefresh: false })
+    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
+    const [sid, body, type] = mockCreateAgentActivity.mock.calls[0]!
+    expect(sid).toBe(SESSION_ID)
+    expect(type).toBe("response")
+    expect(String(body)).toMatch(/stopped/i)
+  })
+
+  it("(h2) a normal prompted turn (no stop signal) still ACKs + enqueues (not treated as a stop)", async () => {
+    const { env, send } = makeEnv()
+    const res = await handleLinearWebhook(
+      sessionRequest(eventBody("prompted", { agentActivity: { body: "also handle X" } })),
+      env,
+      makeCtx(),
+    )
+
+    expect(res.status).toBe(202)
+    expect(send).toHaveBeenCalledWith({ type: "linear-agent-run", issueId: ISSUE_ID, sessionId: SESSION_ID })
+  })
+
+  it("(h3) a stop with the run mode OFF is a no-op (no cancel mark, no post, no enqueue)", async () => {
+    const put = vi.fn(() => Promise.resolve(undefined))
+    const { env, send } = makeEnv({
+      OPENCLAW_LINEAR_AGENT_RUN_MODE: "off",
+      OPENCLAW_STATE: { put, get: vi.fn(() => Promise.resolve(null)) } as unknown as KVNamespace,
+    })
+
+    const res = await handleLinearWebhook(
+      sessionRequest(eventBody("prompted", { agentActivity: { signal: "stop" } })),
+      env,
+      makeCtx(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(put).not.toHaveBeenCalled()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it("(h4) marks cancelled ONLY AFTER a successful 'stopped' post; a null-token post does NOT mark (avoids a hang)", async () => {
+    // No agent token → the stopped post is skipped → the cancel flag must NOT be set, so
+    // the in-flight run resolves the session itself instead of deferring to a post that
+    // never landed (P2b).
+    vi.mocked(buildLinearAgentClient).mockResolvedValue(null)
+    const put = vi.fn(() => Promise.resolve(undefined))
+    const { env } = makeEnv({
+      OPENCLAW_STATE: { put, get: vi.fn(() => Promise.resolve(null)) } as unknown as KVNamespace,
+    })
+
+    const res = await handleLinearWebhook(
+      sessionRequest(eventBody("prompted", { agentActivity: { signal: "stop" } })),
+      env,
+      makeCtx(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it("(h5) a non-stop turn CLEARS any stale cancel marker before enqueuing (a re-prompt on the same session is not cancelled)", async () => {
+    const del = vi.fn(() => Promise.resolve(undefined))
+    const { env, send } = makeEnv({
+      OPENCLAW_STATE: {
+        delete: del,
+        put: vi.fn(() => Promise.resolve(undefined)),
+        get: vi.fn(() => Promise.resolve(null)),
+      } as unknown as KVNamespace,
+    })
+
+    const res = await handleLinearWebhook(sessionRequest(eventBody("prompted")), env, makeCtx())
+
+    expect(res.status).toBe(202)
+    // A stale stop marker from a prior turn is cleared so this fresh turn's run doesn't
+    // abort at its first checkpoint and hang the session (P1).
+    expect(del).toHaveBeenCalledWith(`linear-agent-cancel:${SESSION_ID}`)
+    expect(send).toHaveBeenCalledWith({ type: "linear-agent-run", issueId: ISSUE_ID, sessionId: SESSION_ID })
   })
 })

@@ -12,6 +12,7 @@ import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
+import { markAgentSessionCancelled, clearAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 
 export interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
@@ -86,6 +87,18 @@ export interface LinearAgentSessionWebhook {
   agentSession?: {
     id?: string
     issue?: { id?: string } | null
+  } | null
+  /**
+   * SIG-145 (stop): present on `prompted` events. A user STOP is delivered as a
+   * `prompted` event whose `agentActivity.signal` is `"stop"` (NOT an `action:
+   * "stopped"`) — the agent must halt + post a terminal activity. `body` carries the
+   * follow-up prompt text on a normal (non-stop) prompted turn. Modeled loosely (the
+   * fields beyond signal/body aren't read here) and treated as a control signal that is
+   * checked BEFORE the ACK + the run dedupe/enqueue.
+   */
+  agentActivity?: {
+    signal?: string
+    body?: string
   } | null
 }
 
@@ -367,6 +380,18 @@ async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: 
     return new Response("ignored\n", { status: 200 })
   }
 
+  // SIG-145 (stop): a user STOP arrives as a `prompted` event carrying
+  // `agentActivity.signal: "stop"` (NOT an `action: "stopped"`). Handle it BEFORE the
+  // ACK and BEFORE the run dedupe/enqueue — a stop is a CONTROL signal, not a new turn,
+  // so it must never be swallowed by the per-ticket run dedupe. Mark the session
+  // cancelled (so an in-flight run aborts at its next checkpoint) and post a terminal
+  // "stopped" activity so the session resolves immediately. No run is enqueued.
+  if (payload.agentActivity?.signal === "stop") {
+    await handleAgentSessionStop(env, sessionId)
+    console.log(JSON.stringify({ event: "linear-agent-session-stopped", action: payload.action }))
+    return new Response("stopped\n", { status: 200 })
+  }
+
   // ACK within ~10s — a Linear agent `thought` activity. Best-effort; never blocks
   // the enqueue.
   await ackAgentSession(env, sessionId)
@@ -376,6 +401,13 @@ async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: 
     console.warn(JSON.stringify({ event: "linear-agent-session-no-issue", action: payload.action }))
     return new Response("no issue\n", { status: 200 })
   }
+
+  // SIG-145 (stop): clear any stale cancel marker BEFORE enqueuing this run. A Linear
+  // AgentSession is persistent — a follow-up prompt reuses the same sessionId — so a
+  // prior stop's marker (per-session, 1h TTL) would otherwise make THIS fresh non-stop
+  // turn abort at its first checkpoint and hang the session. Clearing here means every
+  // new turn starts un-cancelled; a mid-run stop simply re-marks it. Best-effort.
+  await clearAgentSessionCancelled(env, sessionId)
 
   await env.OPENCLAW_JOBS.send({ type: "linear-agent-run", issueId, sessionId })
   console.log(JSON.stringify({ event: "linear-agent-session-queued", action: payload.action }))
@@ -413,6 +445,64 @@ async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
     console.warn(
       JSON.stringify({
         event: "linear-agent-ack-failed",
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+}
+
+/**
+ * Handle a user STOP on an AgentSession (SIG-145). Ordered so the session NEVER hangs:
+ *
+ *  1. Post a TERMINAL `response` "stopped" activity so the session resolves to "stopped"
+ *     immediately instead of hanging on "Working" — even when no run is in flight (a stop
+ *     on an idle or already-finished session). Same hot-path constraints as the ACK:
+ *     bounded `AbortSignal.timeout(2000)` + `allowRefresh: false` so it can't overrun the
+ *     webhook ack window. A `null` agent client (no token) SKIPS — never the human key.
+ *  2. ONLY IF that "stopped" post SUCCEEDED, mark the session cancelled in KV so an
+ *     in-flight run aborts its remaining worker-side steps (`runLinearAgentRun` checkpoints)
+ *     and DEFERS its own terminal to this one. Gating the mark on a confirmed post is what
+ *     avoids a hang: if the "stopped" post fails, we do NOT set the cancel flag, so the run
+ *     completes normally and posts its OWN terminal (resolving as "done") rather than
+ *     deferring to a "stopped" that never landed. The cost is that a failed stop-post means
+ *     the run isn't aborted (it may open the PR) — an acceptable rare degradation vs a hang.
+ *     Marking cannot interrupt an already-running container, only the steps around it.
+ *
+ * Both steps are best-effort (logged + swallowed) — a failure never blocks the webhook
+ * response. NEVER falls back to the human key, NEVER logs token material.
+ */
+async function handleAgentSessionStop(env: Env, sessionId: string): Promise<void> {
+  let stoppedPosted = false
+  try {
+    const agent = await buildLinearAgentClient(env, { allowRefresh: false })
+    if (!agent) {
+      console.warn(JSON.stringify({ event: "linear-agent-stop-no-token", sessionId }))
+    } else {
+      await agent.createAgentActivity(sessionId, "🛑 Stopped — Sigilix halted this run at your request.", "response", {
+        signal: AbortSignal.timeout(2000),
+      })
+      stoppedPosted = true
+    }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-stop-failed",
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+
+  // Only cancel the run once the session is provably resolved as "stopped" — see the
+  // header. A failed post leaves the flag unset so the run resolves the session itself.
+  if (!stoppedPosted) return
+  try {
+    await markAgentSessionCancelled(env, sessionId)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-cancel-mark-failed",
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       }),

@@ -30,8 +30,14 @@ vi.mock("@/src/lib/linear", () => ({
 vi.mock("@/src/lib/agent-runner/dispatch", () => ({
   dispatchAgentRun: vi.fn(),
 }))
+// SIG-145 (stop): the cancel-flag reads are mocked so the run-path checkpoints can be
+// driven deterministically (default false = not cancelled; overridden per stop test).
+vi.mock("@/src/lib/linear-agent-cancel", () => ({
+  isAgentSessionCancelled: vi.fn(),
+}))
 
 import { runLinearAgentRun, dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
+import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 import {
   LinearClient,
   buildLinearAuth,
@@ -47,7 +53,16 @@ const mockBuildLinearAuth = vi.mocked(buildLinearAuth)
 const mockBuildLinearAgentClient = vi.mocked(buildLinearAgentClient)
 const mockBuildLinearClient = vi.mocked(buildLinearClient)
 const mockDispatchAgentRun = vi.mocked(dispatchAgentRun)
+const mockIsAgentSessionCancelled = vi.mocked(isAgentSessionCancelled)
 const MockLinearClient = vi.mocked(LinearClient)
+
+/** A recorded createAgentActivity call: (sessionId, content, type[, opts]). */
+type ActivityCall = [sessionId: string, content: string, type: string, ...rest: unknown[]]
+/** Terminal calls = the activities that RESOLVE the session (response/error). SIG-145
+ *  posts exactly one terminal per AgentSession run (or zero when deduped/cancelled). */
+function terminalActivityCalls(calls: ActivityCall[]): ActivityCall[] {
+  return calls.filter((c) => c[2] === "response" || c[2] === "error")
+}
 
 // ── per-test instance method spies ──────────────────────────────────────────
 let mockGetIssue: Mock<(id: string) => Promise<LinearIssue | null>>
@@ -130,6 +145,8 @@ describe("runLinearAgentRun", () => {
     } as unknown as LinearClient)
     mockBuildLinearAuth.mockResolvedValue({ apiKey: "linear-key" })
     mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true })
+    // Default: not cancelled — the run proceeds normally. Stop tests override per-call.
+    mockIsAgentSessionCancelled.mockResolvedValue(false)
   })
 
   afterEach(() => {
@@ -175,10 +192,10 @@ describe("runLinearAgentRun", () => {
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
     expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
-    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    // Terminal `response` — this is what leaves the session out of "Working". The PR
-    // URL is included so the user gets the link without leaving the session.
-    const [sid, body, type] = mockCreateAgentActivity.mock.calls[0]!
+    // Exactly ONE terminal activity — the `response` that leaves the session out of "Working".
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls)
+    expect(terminal).toHaveLength(1)
+    const [sid, body, type] = terminal[0]!
     expect(sid).toBe("agent-session-1")
     expect(type).toBe("response")
     expect(body).toContain(prUrl)
@@ -191,8 +208,9 @@ describe("runLinearAgentRun", () => {
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
-    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    const [, body, type] = mockCreateAgentActivity.mock.calls[0]!
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls)
+    expect(terminal).toHaveLength(1)
+    const [, body, type] = terminal[0]!
     expect(type).toBe("response")
     expect(String(body)).not.toContain("http")
   })
@@ -204,9 +222,9 @@ describe("runLinearAgentRun", () => {
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
-    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
-    expect(type).toBe("response")
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls)
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]![2]).toBe("response")
   })
 
   it("AgentSession path: a container run FAILURE posts a terminal `error` activity (resolves, never hangs)", async () => {
@@ -218,9 +236,9 @@ describe("runLinearAgentRun", () => {
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
-    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
-    expect(type).toBe("error")
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls)
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]![2]).toBe("error")
   })
 
   it("AgentSession path: a non-deduped non-dispatch (e.g. container fault) still posts a terminal `error` so the session resolves", async () => {
@@ -228,12 +246,12 @@ describe("runLinearAgentRun", () => {
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
-    expect(mockCreateAgentActivity).toHaveBeenCalledOnce()
-    const [, , type] = mockCreateAgentActivity.mock.calls[0]!
-    expect(type).toBe("error")
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls)
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]![2]).toBe("error")
   })
 
-  it("AgentSession path: a DEDUPE does NOT post any activity (a concurrent run owns the session)", async () => {
+  it("AgentSession path: a DEDUPE does NOT post any activity (a concurrent run owns + resolves the session)", async () => {
     const kv = makeKv({ "linear-agent-run:issue-uuid-1": "1" })
     await runLinearAgentRun(ISSUE_ID, makeEnv({ OPENCLAW_STATE: kv }), "agent-session-1")
 
@@ -255,6 +273,47 @@ describe("runLinearAgentRun", () => {
     await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
     expect(mockCreateAgentActivity).not.toHaveBeenCalled()
     expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-ack-no-token")
+  })
+
+  // ── SIG-145: stop/cancel checkpoints ──
+
+  it("stop before start (cancelled at checkpoint 0) → no dispatch, no activity posted at all", async () => {
+    mockIsAgentSessionCancelled.mockResolvedValue(true)
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-cancelled")
+  })
+
+  it("stop before dispatch (cancelled at checkpoint 1) → NO container dispatch, NO terminal post", async () => {
+    // checkpoint 0 sees not-cancelled, checkpoint 1 (pre-dispatch) sees cancelled.
+    mockIsAgentSessionCancelled.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-cancelled")
+  })
+
+  it("stop mid-run (cancelled at checkpoint 2, after dispatch) → does NOT post its own completion (webhook already resolved as stopped)", async () => {
+    // checkpoints 0 + 1 not-cancelled; the post-dispatch checkpoint sees cancelled.
+    mockIsAgentSessionCancelled.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    mockDispatchAgentRun.mockResolvedValue({
+      runId: "run-1",
+      dispatched: true,
+      outcome: { status: "opened", prUrl: "https://github.com/Sigilix/sigilix/pull/9" },
+    })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    // The container ran, but the run does NOT post a "Done" completion over the webhook's
+    // "stopped" resolution.
+    expect(terminalActivityCalls(mockCreateAgentActivity.mock.calls)).toHaveLength(0)
+    expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-cancelled")
   })
 
   it('engine is ALWAYS "minimal" (untrusted input path — never "full")', async () => {

@@ -19,6 +19,7 @@ import type { Env } from "@/src/shared/types/env"
 import { buildLinearClient, buildLinearAgentClient, type AgentActivityType } from "@/src/lib/linear"
 import { dispatchAgentRun, type AgentRunOutcome } from "@/src/lib/agent-runner/dispatch"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 
 /** Ollama Turbo base — the free minimal-engine provider for the B3 trigger. */
 const OLLAMA_TURBO_BASE = "https://ollama.com/v1"
@@ -172,6 +173,13 @@ export async function dispatchTicketImplementation(
  * posted were the webhook `thought` ACK and a non-terminal `action`. When no sessionId is
  * present (the interim assignee path) the legacy issue comment ack is used instead.
  *
+ * STOP/CANCEL (SIG-145): a user Stop marks the session cancelled (see linear-agent-cancel.ts);
+ * this run checks that flag at its checkpoints (pre-start, before dispatching the container,
+ * and before the terminal post) and aborts — it does not dispatch and does not post its own
+ * completion (the webhook's stop handler already posted the terminal "stopped" activity). It
+ * cannot interrupt an already-running container, so a stop that lands mid-container may still
+ * open the PR — but the session stays resolved as "stopped" because the run skips its "Done".
+ *
  * KNOWN LIMITATION (the per-ticket idempotency window): the terminal post is SKIPPED on a
  * dedupe (`deduped`) — correct for a webhook redelivery of THIS turn (a concurrent/earlier
  * run owns + resolves the session). But the dedupe marker is keyed on the issue id with a
@@ -184,6 +192,15 @@ export async function dispatchTicketImplementation(
  */
 export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
   try {
+    // Checkpoint 0 (stop): cancelled before we start any work → abort, post nothing. The
+    // webhook's stop handler already posted the terminal "stopped" activity. Best-effort:
+    // a KV miss fails open to "not cancelled" (the work proceeds; the webhook still
+    // resolved the session).
+    if (sessionId && (await isAgentSessionCancelled(env, sessionId))) {
+      console.log(JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "pre-start" }))
+      return
+    }
+
     const linear = await buildLinearClient(env)
     const issue = await linear.getIssue(issueId)
     if (!issue) {
@@ -219,6 +236,15 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       return
     }
 
+    // Checkpoint 1 (stop): cancelled before dispatching the container → abort. Do NOT
+    // dispatch (don't open a PR); the webhook's stop handler already resolved the session.
+    if (sessionId && (await isAgentSessionCancelled(env, sessionId))) {
+      console.log(
+        JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "pre-dispatch" }),
+      )
+      return
+    }
+
     const { dispatched, outcome, deduped } = await dispatchTicketImplementation(env, {
       owner: mapping.owner,
       repo: mapping.repo,
@@ -234,11 +260,21 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
 
     if (sessionId) {
       // AgentSessionEvent path (SIG-145). Post a TERMINAL agent activity so the session
-      // resolves out of "Working" — the fix for the hang. SKIPPED on a dedupe: a
-      // concurrent/earlier run owns this session and will resolve it (resolving here, e.g.
-      // on a webhook redelivery, would prematurely close a still-working session).
+      // resolves out of "Working" — the fix for the hang. SKIPPED when:
+      //   - deduped: a concurrent/earlier run owns + resolves this session (resolving here,
+      //     e.g. on a webhook redelivery, would prematurely close a still-working session); or
+      //   - cancelled (checkpoint 2): the user hit Stop and the webhook already posted the
+      //     terminal "stopped" activity — a "Done" post would override the user's cancel.
+      //     The container may have already opened a PR (a running container can't be
+      //     interrupted), but the session stays resolved as "stopped".
       // Best-effort — a failed post never fails the run.
-      if (!deduped) {
+      if (deduped) {
+        // concurrent/earlier run owns + resolves the session — see dispatchTicketImplementation.
+      } else if (await isAgentSessionCancelled(env, sessionId)) {
+        console.log(
+          JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "post-dispatch" }),
+        )
+      } else {
         await postAgentSessionCompletion(env, {
           issueId,
           sessionId,

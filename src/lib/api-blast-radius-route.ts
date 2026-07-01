@@ -16,7 +16,7 @@
 // on a bad bearer; 400 on bad JSON / missing|empty fields; 413 on an oversized body.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { resolveApiKey, callerOwnsRepo } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { blastRadiusByNamesFor } from "@/src/lib/repo-graph-client"
 
@@ -74,7 +74,8 @@ function parseBody(raw: unknown): BlastRadiusApiBody | ParseError {
 /**
  * POST /v1/blast-radius — see file header. Returns { callerPaths, importDependents } at
  * 200 (both empty when the repo isn't indexed — a graceful result, not an error). 503
- * until keyed; 401 on a bad bearer; 400 on bad JSON / missing|empty fields; 413 on an
+ * until keyed; 401 on a bad bearer; 400 on bad JSON / missing|empty fields; 403 when a
+ * per-tenant key's repo doesn't match its own installation (SIG-494); 413 on an
  * oversized body or an over-long array. A graph-client failure soft-fails to the empty
  * result at 200 — the route never returns a 500.
  */
@@ -85,13 +86,18 @@ export async function handleBlastRadiusApiRoute(request: Request, env: Env): Pro
   // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
   // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
   // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
-  // fail-open D1 default on purpose, because this gates authentication). No
-  // installationId is threaded further — the graph read below is keyed by
-  // owner/repo, not installationId.
+  // fail-open D1 default on purpose, because this gates authentication).
+  //
+  // SIG-494: the caller's installationId IS threaded further now (callerOwnsRepo,
+  // below, once the body is parsed) — the graph read is keyed by owner/repo, but
+  // without reconciling the caller's OWN installation against that owner/repo first,
+  // any valid per-tenant key could read the graph for ANY indexed repo (cross-tenant
+  // leak). The legacy global key is exempt by design (see callerOwnsRepo's header).
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "blast_radius_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
+  const caller = await resolveApiKey(request, env)
+  if (!caller) return json({ error: "unauthorized" }, 401)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload is
   // aborted, never fully buffered; `null` = over the cap → 413.
@@ -110,6 +116,12 @@ export async function handleBlastRadiusApiRoute(request: Request, env: Env): Pro
     // array inside a well-formed body → 413 (no message-prose sniffing).
     const error = parsed.status === 413 ? "payload_too_large" : "invalid_request"
     return json({ error, detail: parsed.detail }, parsed.status)
+  }
+
+  // SIG-494: fail-closed tenant-scope gate — a real per-tenant key may only query the
+  // graph for repo(s) its OWN installation owns. Must run BEFORE the graph read below.
+  if (!callerOwnsRepo(caller.installationId, parsed.owner, parsed.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)) {
+    return json({ error: "forbidden", detail: "api key is not scoped to this repo" }, 403)
   }
 
   // The graph read returns {callerPaths:[], importDependents:[]} for an un-indexed repo

@@ -25,7 +25,7 @@ import {
 import { modelApiKeys, selectConfigApiKey } from "@/src/lib/ensemble/adapters/model-provider-routing"
 import type { AgentMemoryKind } from "./types"
 import { ALL_AGENT_MEMORY_KINDS } from "./types"
-import { MAX_BODY_BYTES, canonicalTenantId, json, storeMemoryFact } from "./agent-memory-route"
+import { MAX_BODY_BYTES, canonicalTenantId, json, scopeMemoryUserId, storeMemoryFact } from "./agent-memory-route"
 
 // The model may surface a few facts per exchange, but most exchanges yield none —
 // the conservative prompt prefers empty over noise. Cap so a runaway response
@@ -222,14 +222,17 @@ export async function handleMemoryExtractRoute(request: Request, env: Env): Prom
   // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
   // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
   // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
-  // fail-open D1 default on purpose, because this gates authentication). No
-  // installationId is threaded further — see agent-memory-route.ts's
-  // handleMemoryWriteRoute comment (this store's tenant scope is the
-  // caller-asserted userId/repoId body fields, a different axis).
+  // fail-open D1 default on purpose, because this gates authentication).
+  //
+  // SIG-494: a real per-tenant key's subject is namespaced under
+  // `inst:<installationId>:` (scopeMemoryUserId below) before the distilled facts
+  // are stored, so extract can only write into its OWN installation's memory — see
+  // agent-memory-route.ts's handleMemoryWriteRoute comment. Legacy key stays broad.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
+  const caller = await resolveApiKey(request, env)
+  if (!caller) return json({ error: "unauthorized" }, 401)
 
   let raw: unknown
   try {
@@ -251,11 +254,13 @@ export async function handleMemoryExtractRoute(request: Request, env: Env): Prom
       assistantMessage: parsed.assistantMessage,
     })
 
+    // SIG-494: confine to the caller's installation namespace (legacy key → unchanged).
+    const userId = scopeMemoryUserId(parsed.userId, caller.installationId)
     const stored: StoredFactResult[] = []
     for (const fact of facts) {
       try {
         const result = await storeMemoryFact(env, {
-          userId: parsed.userId,
+          userId,
           repoId: parsed.repoId,
           kind: fact.kind,
           content: fact.content,

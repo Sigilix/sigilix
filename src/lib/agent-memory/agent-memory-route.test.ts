@@ -10,7 +10,8 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
-import { handleMemoryWriteRoute, handleMemoryQueryRoute } from "./agent-memory-route"
+import { handleMemoryWriteRoute, handleMemoryQueryRoute, scopeMemoryUserId } from "./agent-memory-route"
+import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { memoryNamespace } from "./retrieval"
 import type { Env } from "@/src/shared/types/env"
 
@@ -352,5 +353,93 @@ describe("POST /v1/memory/query — retrieve", () => {
     await handleMemoryWriteRoute(writeReq(writeBody), env)
     await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x", limit: 15 }), env)
     expect(idx.queryCalls[0]?.topK).toBe(15) // not the DEFAULT_TOP_K of 8
+  })
+})
+
+// SIG-494: the memory store is keyed by caller-asserted userId/repoId — before the
+// fix, any authenticated bearer could READ or (worse) POISON another tenant's memory
+// by naming its subject. A real per-tenant key's subject is now namespaced under
+// `inst:<installationId>:` so it is physically confined to its own installation; the
+// legacy global key stays un-prefixed (broad).
+describe("scopeMemoryUserId — SIG-494 unit", () => {
+  it("prefixes a real per-tenant key's subject with its installation id", () => {
+    expect(scopeMemoryUserId("u1", 42)).toBe("inst:42:u1")
+  })
+  it("leaves the LEGACY global key's subject un-prefixed (broad)", () => {
+    expect(scopeMemoryUserId("u1", LEGACY_TENANT_INSTALLATION_ID)).toBe("u1")
+  })
+  it("cannot be forged out of the caller's namespace — a spoofed inst: prefix is only ever nested under the real one", () => {
+    // A caller with a key for installation 7 who names `userId: "inst:42:victim"`
+    // still lands under inst:7:… , never inside installation 42's namespace.
+    expect(scopeMemoryUserId("inst:42:victim", 7)).toBe("inst:7:inst:42:victim")
+  })
+})
+
+describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
+  async function twoTenantEnv(): Promise<{ env: Env; tokenA: string; tokenB: string }> {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const tokenA = "sigilix_live_mem_inst42"
+    const tokenB = "sigilix_live_mem_inst999"
+    await insertApiKey(db, {
+      id: "key-a",
+      keyHash: await sha256Hex(tokenA),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await insertApiKey(db, {
+      id: "key-b",
+      keyHash: await sha256Hex(tokenB),
+      installationId: 999,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    // No global key configured → force the per-tenant D1 path for both bearers.
+    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: db }), tokenA, tokenB }
+  }
+
+  it("a per-tenant key CANNOT read another installation's memory written under the SAME userId/repoId (the read leak + write poison, closed)", async () => {
+    const { env, tokenA, tokenB } = await twoTenantEnv()
+    // Installation 42 writes a memory.
+    expect((await handleMemoryWriteRoute(writeReq(writeBody, tokenA), env)).status).toBe(200)
+    // Installation 999 queries the EXACT SAME userId/repoId — must see nothing.
+    const other = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "build tool" }, tokenB), env)
+    expect(other.status).toBe(200)
+    expect(((await other.json()) as { results: unknown[] }).results).toEqual([])
+    // Installation 42 (the owner) queries the same subject — sees its OWN memory.
+    const own = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "build tool" }, tokenA), env)
+    expect(((await own.json()) as { results: Array<{ content: string }> }).results.length).toBe(1)
+  })
+
+  it("upserts under the installation-prefixed namespace for a per-tenant key", async () => {
+    const { env, tokenA } = await twoTenantEnv()
+    await handleMemoryWriteRoute(writeReq(writeBody, tokenA), env)
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:u1", "sigilix/boreas"))
+  })
+
+  it("the legacy global key stays un-prefixed (broad) — namespace unchanged", async () => {
+    await handleMemoryWriteRoute(writeReq(writeBody), makeEnv()) // legacy TOKEN → installationId -1
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("u1", "sigilix/boreas"))
+  })
+
+  it("a per-tenant key cannot read a memory the LEGACY global key wrote at the same subject", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const perTenant = "sigilix_live_mem_inst7"
+    await insertApiKey(db, {
+      id: "key-7",
+      keyHash: await sha256Hex(perTenant),
+      installationId: 7,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: db }) // legacy TOKEN present + D1
+    // Legacy key writes under the raw (un-prefixed) userId.
+    await handleMemoryWriteRoute(writeReq(writeBody, TOKEN), env)
+    // A per-tenant key (installation 7) reads the same subject → sees nothing.
+    const res = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "build tool" }, perTenant), env)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
   })
 })

@@ -85,3 +85,32 @@ export function resolveOrgMemoryApplyMode(env: Pick<Env, "OPENCLAW_ORG_MEMORY_AP
   if (v === "shadow") return "shadow"
   return "off"
 }
+
+/**
+ * Seat∪Org memory layering — Phase 3 (CLI read side) rollout gate.
+ *
+ * Three-state, off-by-default (mirrors resolveOrgMemoryApplyMode's off/shadow/on
+ * shape — this is the CLI's OWN read side, POST /v1/memory/query, a different
+ * call site from the PR-review apply gate above, so it gets its own
+ * independent flag):
+ *   - `"off"`    — (default / unset / any other value) the CLI's memory-query
+ *                  response is seat-memory ONLY, byte-identical to before this
+ *                  slice: no installation check, no `learnings:org:*` KV read.
+ *   - `"shadow"` — ALSO loads the caller-installation's org-scope corpus and
+ *                  LOGS what it would add, but the returned results stay
+ *                  seat-only (bake the signal, output byte-unchanged).
+ *   - `"on"`     — the returned results are seat ∪ org, deduped by id (a seat
+ *                  memory wins any id collision) — a developer's fresh CLI
+ *                  session inherits everything the team's PR reviews taught
+ *                  the org.
+ *
+ * Pure: the only import is the `Env` TYPE (type-only, zero runtime cost).
+ */
+export type CliOrgMemoryMode = "off" | "shadow" | "on"
+
+export function resolveCliOrgMemoryMode(env: Pick<Env, "OPENCLAW_CLI_ORG_MEMORY">): CliOrgMemoryMode {
+  const v = env.OPENCLAW_CLI_ORG_MEMORY?.trim().toLowerCase()
+  if (v === "on") return "on"
+  if (v === "shadow") return "shadow"
+  return "off"
+}

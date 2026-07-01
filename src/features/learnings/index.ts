@@ -17,12 +17,13 @@ export { parseLearningsCommand } from "./domain/command"
 export { EPHEMERAL_MEMORY_TYPES, MEMORY_DECAY_WINDOW_DAYS, isMemoryDecayEligible } from "./domain/decay"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
 export {
+  resolveCliOrgMemoryMode,
   resolveLearningsMode,
   resolveMemoryDecayMode,
   resolveOrgMemoryApplyMode,
   resolveOrgMemoryCaptureMode,
 } from "./domain/mode"
-export type { MemoryDecayMode, OrgMemoryApplyMode, OrgMemoryCaptureMode } from "./domain/mode"
+export type { CliOrgMemoryMode, MemoryDecayMode, OrgMemoryApplyMode, OrgMemoryCaptureMode } from "./domain/mode"
 export {
   renderBoostedCategoriesForPrompt,
   renderConfirmReply,

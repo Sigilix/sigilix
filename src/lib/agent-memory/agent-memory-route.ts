@@ -15,11 +15,13 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { resolveApiKey, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { resolveCliOrgMemoryMode } from "@/src/features/learnings"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryQueryResult, AgentMemoryRecord } from "./types"
 import { ALL_AGENT_MEMORY_KINDS } from "./types"
 import { readHashId, readRecord, writeHashPointer, writeRecord } from "./storage"
 import { queryMemoryIds, upsertMemoryVector } from "./retrieval"
+import { loadOrgMemoryForCli, unionSeatAndOrgMemory } from "./agent-memory-org-union"
 
 // Memories are short (a decision / preference / task note), so the body is tiny —
 // the same cap the /v1/context turn-query route uses. Shared with the extract
@@ -258,6 +260,14 @@ function tsMs(ts: string): number {
  * 503 until keyed; 401 on a bad bearer; 400/413 on a bad/oversized body. SOFT:
  * any retrieval-path failure (embed / Vectorize / KV) → `{ results: [] }` (200),
  * NEVER 500; 500 only on an unexpected throw.
+ *
+ * Seat∪Org memory layering — Phase 3 (CLI read side, gated by
+ * OPENCLAW_CLI_ORG_MEMORY, see resolveCliOrgMemoryMode): when the flag is
+ * "on", these seat-memory results are additionally unioned with the caller
+ * installation's org-scope review learnings (deduped by id, seat wins a
+ * collision) — see agent-memory-org-union.ts. Default "off" is byte-identical
+ * to the seat-only response above; a failure anywhere in the org branch
+ * degrades to the seat-only response, never throws.
  */
 export async function handleMemoryQueryRoute(request: Request, env: Env): Promise<Response> {
   // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
@@ -328,7 +338,53 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
     }
 
     results.sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
-    return json({ results: results.slice(0, limit) }, 200)
+    const seatResults = results.slice(0, limit)
+
+    // Seat∪Org memory layering — Phase 3. Isolated in its own try/catch so an
+    // unexpected failure in the org branch can NEVER cost the caller its own
+    // already-computed seat-memory results (loadOrgMemoryForCli already fails
+    // soft internally — this is belt-and-suspenders around the mode/union logic
+    // itself).
+    try {
+      const mode = resolveCliOrgMemoryMode(env)
+      // OFF: seat-only, immediately — no installation check, no org KV read.
+      // This is the byte-identical-to-before path.
+      if (mode === "off") return json({ results: seatResults }, 200)
+
+      const org = await loadOrgMemoryForCli(env, caller.installationId)
+      if (org.truncated) {
+        emitTelemetry("cli-org-memory-truncated", {
+          installationId: caller.installationId,
+          kept: org.entries.length,
+        })
+      }
+
+      if (mode === "shadow") {
+        emitTelemetry("cli-org-memory-shadow", {
+          installationId: caller.installationId,
+          count: org.entries.length,
+          ids: org.entries.map((e) => e.id),
+        })
+        // Shadow NEVER changes the returned results — seat-only.
+        return json({ results: seatResults }, 200)
+      }
+
+      // ON: seat ∪ org, deduped by id (seat wins any collision), seat first.
+      const merged = unionSeatAndOrgMemory(seatResults, org.entries)
+      emitTelemetry("cli-org-memory-union", {
+        installationId: caller.installationId,
+        seatCount: seatResults.length,
+        orgCount: org.entries.length,
+        added: merged.length - seatResults.length,
+      })
+      return json({ results: merged }, 200)
+    } catch (err) {
+      emitTelemetry("cli-org-memory-union-failed", {
+        installationId: caller.installationId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+      return json({ results: seatResults }, 200)
+    }
   } catch (err) {
     // Defensive: the legs above are soft, so this only fires on a truly
     // unexpected throw. Still answer with empty results, not 500 — retrieval is

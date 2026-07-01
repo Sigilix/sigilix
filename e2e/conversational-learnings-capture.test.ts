@@ -121,6 +121,8 @@ function readLearnings(store: Map<string, string>): Array<{
   polarity: string
   authorLogin?: string
   source?: { kind?: string; commentId?: number }
+  type?: string
+  lifespanAnchor?: { kind: string; prNumber?: number; name?: string }
 }> {
   const stored = JSON.parse(store.get(`learnings:repo:${REPO_ID}`) ?? "{}") as {
     entries?: Array<{
@@ -128,6 +130,8 @@ function readLearnings(store: Map<string, string>): Array<{
       polarity: string
       authorLogin?: string
       source?: { kind?: string; commentId?: number }
+      type?: string
+      lifespanAnchor?: { kind: string; prNumber?: number; name?: string }
     }>
   }
   return stored.entries ?? []
@@ -194,6 +198,100 @@ describe("SIG-104 conversational learning capture surfaces", () => {
     })
     expect(store.has("learning-capture-seen:inline-reply:100")).toBe(true)
     expect(consoleLogSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain("learning-mutation-audit")
+  })
+
+  it("records the extractor's memory-type suggestion (durable_preference) with a durable anchor", async () => {
+    extractLearningMock.mockResolvedValue({ ...teachableLearning(), memoryType: "durable_preference" })
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeInlineClient({ confirmReplyId: 9_120 })
+
+    await captureReviewFeedback({
+      env,
+      client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
+      replyComment: {
+        id: 120,
+        body: "Always route database writes through service-layer helpers.",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+        authorLogin: "alice",
+      },
+      config: makeConfig(),
+      repoId: REPO_ID,
+    })
+
+    expect(readLearnings(store)[0]).toMatchObject({
+      rule: RULE,
+      type: "durable_preference",
+      lifespanAnchor: { kind: "durable" },
+    })
+  })
+
+  it("records an architectural_fact suggestion with a durable anchor", async () => {
+    extractLearningMock.mockResolvedValue({ ...teachableLearning(), memoryType: "architectural_fact" })
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeInlineClient({ confirmReplyId: 9_121 })
+
+    await captureReviewFeedback({
+      env,
+      client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
+      replyComment: {
+        id: 121,
+        body: "Authentication lives in src/auth.",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+        authorLogin: "alice",
+      },
+      config: makeConfig(),
+      repoId: REPO_ID,
+    })
+
+    expect(readLearnings(store)[0]).toMatchObject({
+      type: "architectural_fact",
+      lifespanAnchor: { kind: "durable" },
+    })
+  })
+
+  it("classifies a PR-thread dismissal (suppress, no suggestion) as transient feedback anchored to the PR", async () => {
+    extractLearningMock.mockResolvedValue({
+      rule: RULE,
+      polarity: "suppress",
+      category: "logic",
+      pathGlob: "src/**",
+    })
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeInlineClient({ confirmReplyId: 9_122 })
+
+    await captureReviewFeedback({
+      env,
+      client,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR,
+      replyComment: {
+        id: 122,
+        body: "false positive - do not flag direct db calls in src/**.",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+        authorLogin: "alice",
+      },
+      config: makeConfig(),
+      repoId: REPO_ID,
+    })
+
+    expect(readLearnings(store)[0]).toMatchObject({
+      polarity: "suppress",
+      type: "transient_feedback",
+      lifespanAnchor: { kind: "pr", prNumber: PR },
+    })
   })
 
   it("keeps dismissal capture firing on a false-positive inline reply while learning is additive", async () => {

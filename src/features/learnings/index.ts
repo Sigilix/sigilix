@@ -7,6 +7,8 @@ export {
 } from "./adapters/confirmation-map"
 export { extractLearning } from "./adapters/extractor-model"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
+export { classifyLearningMemory } from "./domain/classify"
+export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
 export { parseLearningsCommand } from "./domain/command"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
 export { resolveLearningsMode } from "./domain/mode"
@@ -33,8 +35,11 @@ export type {
   SuppressBasis,
   SuppressibleFinding,
 } from "./domain/suppress"
+export { LEARNING_MEMORY_TYPES } from "./domain/types"
 export type {
   LearningEntry,
+  LearningLifespanAnchor,
+  LearningMemoryType,
   LearningPolarity,
   LearningScope,
   LearningSource,

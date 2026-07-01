@@ -36,6 +36,15 @@ describe("buildExtractionPrompt", () => {
     expect(system).toContain("going forward")
     expect(user).toContain("Should we always use the service layer here?")
   })
+
+  it("asks the model to classify the 4-tier memory type", () => {
+    const { system } = buildExtractionPrompt({ surface: "inline-reply", replyText: "auth lives in src/auth." })
+    expect(system).toContain("memoryType")
+    expect(system).toContain("durable_preference")
+    expect(system).toContain("architectural_fact")
+    expect(system).toContain("ephemeral_project")
+    expect(system).toContain("transient_feedback")
+  })
 })
 
 describe("parseExtraction", () => {
@@ -55,6 +64,34 @@ describe("parseExtraction", () => {
       polarity: "require",
       category: "logic",
       pathGlob: "src/services/**",
+    })
+  })
+
+  it("includes a valid memoryType suggestion and ignores an unknown one", () => {
+    expect(
+      parseExtraction(
+        JSON.stringify({
+          remember: true,
+          rule: "auth lives in src/auth.",
+          memoryType: "architectural_fact",
+        }),
+      ),
+    ).toEqual({
+      rule: "auth lives in src/auth.",
+      polarity: "context",
+      category: null,
+      pathGlob: null,
+      memoryType: "architectural_fact",
+    })
+    // An unknown/garbage memoryType is dropped (advisory) — never rejects the extraction,
+    // and the returned shape stays free of the key.
+    expect(
+      parseExtraction(JSON.stringify({ remember: true, rule: "auth lives in src/auth.", memoryType: "nonsense" })),
+    ).toEqual({
+      rule: "auth lives in src/auth.",
+      polarity: "context",
+      category: null,
+      pathGlob: null,
     })
   })
 

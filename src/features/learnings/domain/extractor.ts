@@ -1,7 +1,7 @@
 import { FINDING_CATEGORIES, type FindingCategory } from "@/src/shared/domain/finding-category"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import { normalizeRule } from "./store-ops"
-import type { LearningPolarity } from "./types"
+import { LEARNING_MEMORY_TYPES, type LearningMemoryType, type LearningPolarity } from "./types"
 
 export type ExtractionSurface = "inline-reply" | "top-level" | "qa"
 
@@ -10,6 +10,8 @@ export type ExtractedLearning = {
   polarity: LearningPolarity
   category?: FindingCategory | null
   pathGlob?: string | null
+  /** The LLM's suggested 4-tier memory type. Advisory — a bad value is ignored, never rejects the extraction. */
+  memoryType?: LearningMemoryType | null
 }
 
 export function buildExtractionPrompt(args: {
@@ -20,7 +22,7 @@ export function buildExtractionPrompt(args: {
 }): { system: string; user: string } {
   const system = [
     "Given this developer message, is there a DURABLE, GENERALIZABLE repo-review preference worth remembering for future reviews?",
-    'Output STRICT JSON only: {"remember":boolean,"rule"?:string,"polarity"?:("suppress"|"require"|"context"),"category"?:string|null,"pathGlob"?:string|null}.',
+    'Output STRICT JSON only: {"remember":boolean,"rule"?:string,"polarity"?:("suppress"|"require"|"context"),"category"?:string|null,"pathGlob"?:string|null,"memoryType"?:("durable_preference"|"architectural_fact"|"ephemeral_project"|"transient_feedback"|null)}.',
     "",
     `Surface: ${args.surface}.`,
     surfacePolicy(args.surface),
@@ -35,6 +37,13 @@ export function buildExtractionPrompt(args: {
     "- A repo-wide suppress rule needs explicit blanket language such as repo-wide, across the repository, or in every review.",
     "- Without explicit blanket suppress language, scope suppress rules to the relevant pathGlob or category.",
     `Allowed categories: ${[...FINDING_CATEGORIES].join(", ")}.`,
+    "",
+    "Classify the memory type (memoryType), omit or null if unsure:",
+    '- "durable_preference": a lasting convention or preference (e.g. "always wrap DB calls in a service layer").',
+    '- "architectural_fact": a factual statement about how the codebase is structured (e.g. "auth lives in src/auth", "we use Zod for validation").',
+    '- "ephemeral_project": task or project state tied to this specific PR or branch, not a lasting rule.',
+    '- "transient_feedback": a one-off dismissal or correction of a specific finding on this PR.',
+    `Allowed memoryType values: ${[...LEARNING_MEMORY_TYPES].join(", ")}.`,
   ].join("\n")
 
   const user = [
@@ -74,11 +83,16 @@ export function parseExtraction(raw: string): ExtractedLearning | null {
     return null
   }
 
+  const memoryType = parseMemoryType(parsed.memoryType)
+
   return {
     rule,
     polarity,
     category,
     pathGlob,
+    // Only include when the model emitted a valid type — keeps the shape stable
+    // (no `memoryType: undefined`) so backward-compatible callers/tests are unaffected.
+    ...(memoryType !== null ? { memoryType } : {}),
   }
 }
 
@@ -125,6 +139,11 @@ function parseCategory(value: unknown): FindingCategory | null | undefined {
   if (value === undefined || value === null || value === "") return null
   if (typeof value !== "string") return undefined
   return (FINDING_CATEGORIES as ReadonlySet<string>).has(value) ? (value as FindingCategory) : undefined
+}
+
+function parseMemoryType(value: unknown): LearningMemoryType | null {
+  if (typeof value !== "string") return null
+  return (LEARNING_MEMORY_TYPES as ReadonlySet<string>).has(value) ? (value as LearningMemoryType) : null
 }
 
 function parseOptionalString(value: unknown): string | null | undefined {

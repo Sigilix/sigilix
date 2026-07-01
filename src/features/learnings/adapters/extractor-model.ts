@@ -8,6 +8,7 @@ import {
 import { buildExtractionPrompt, parseExtraction } from "@/src/features/learnings/domain/extractor"
 import type { ExtractedLearning, ExtractionSurface } from "@/src/features/learnings/domain/extractor"
 import { FINDING_CATEGORIES } from "@/src/shared/domain/finding-category"
+import { LEARNING_MEMORY_TYPES } from "@/src/features/learnings/domain/types"
 import type { Env } from "@/src/shared/types/env"
 
 export interface ExtractLearningArgs {
@@ -26,6 +27,7 @@ const LEARNING_EXTRACTION_SCHEMA = {
     polarity: { type: "string", enum: ["suppress", "require", "context"] },
     category: { enum: [...FINDING_CATEGORIES, null] },
     pathGlob: { anyOf: [{ type: "string" }, { type: "null" }] },
+    memoryType: { enum: [...LEARNING_MEMORY_TYPES, null] },
   },
   required: ["remember"],
 } as const

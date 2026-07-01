@@ -26,6 +26,7 @@ import {
   resolveCoverageConfig,
   resolvePerfBudgetsConfig,
   resolveSarifEvidenceConfig,
+  resolveDisabledLinterIds,
 } from "@/src/lib/sigilix-config"
 import { runAstRules } from "@/src/features/ast-rules"
 import { runDocsCoverageCheck, type DocsCoverageHit } from "@/src/lib/docs-coverage-check"
@@ -705,6 +706,9 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   // as authoritative facts alongside the other deterministic
   // blocks. SBOM (when present) goes to the synth prompt only.
   const sarifConfig = resolveSarifEvidenceConfig(sigilixConfig)
+  // SIG-107: tool ids the repo EXPLICITLY disabled via `linters` (recall-safe:
+  // never a default-OFF tool the customer didn't opt out of), filtered below.
+  const disabledTools = resolveDisabledLinterIds(sigilixConfig)
 
   // SIG-184 PR 3: runner-evidence consumption (flag-gated; off by default →
   // fully inert). In shadow/post we look up the VERIFIED receipt by the SIGNED
@@ -819,7 +823,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
     prNumber,
     headSha,
     diff,
-    config: sarifConfig,
+    config: { ...sarifConfig, disabledTools },
     // `post` + verified → scan the receipt's SARIF; else the repo-pull path.
     ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
   })

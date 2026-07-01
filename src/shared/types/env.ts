@@ -181,6 +181,26 @@ export interface Env {
   // prompts. Parsed by resolveLearningsMode (@/features/learnings).
   OPENCLAW_LEARNINGS_MODE?: string
 
+  // Memory Gardener — activity-aware decay pass (Phase-1 of the dynamic-memory
+  // moat), driven off the 6h cron. Three-state, DEFAULT OFF:
+  //   - "off" (default / unset / any other value): the decay pass is fully
+  //           inert — it returns immediately without a single KV read or GitHub
+  //           call, so prod is UNAFFECTED until an operator explicitly opts in.
+  //   - "shadow": scans ephemeral memories, resolves the anchoring PR's closure
+  //               time, and LOGS each would-reap (`memory-decay-shadow`) — bakes
+  //               the eligibility signal WITHOUT archiving anything.
+  //   - "enforce": ALSO tombstones each eligible ephemeral memory into the
+  //               `learnings-archive:` keyspace (archive-then-remove; never a
+  //               hard delete). Durable tiers (durable_preference /
+  //               architectural_fact) and legacy records are NEVER touched.
+  // Bounded per tick: it covers up to MAX_LEARNINGS_KEYS_PER_TICK `learnings:`
+  // keys (lexicographic, from the start — no cross-tick cursor) and a capped
+  // number of PR lookups; beyond those bounds the tail is deferred to a future
+  // paginating slice (logged via `memory-decay-tick-truncated`), not auto-retried.
+  // Parsed by resolveMemoryDecayMode (@/features/learnings). Operator flips via
+  // `wrangler secret put OPENCLAW_MEMORY_DECAY_MODE shadow`.
+  OPENCLAW_MEMORY_DECAY_MODE?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

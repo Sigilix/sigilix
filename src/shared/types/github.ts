@@ -32,6 +32,13 @@ export interface PullRequestMeta {
   state?: "open" | "closed"
   merged_at?: string | null
   /**
+   * ISO-8601 timestamp the PR was closed (set on close OR merge), or `null`
+   * while open. GitHub returns it on every `GET /repos/{o}/{r}/pulls/{n}`
+   * response; typed optional so partial mocks needn't set it. The Memory
+   * Gardener's decay clock (`now - closed_at`) reads it.
+   */
+  closed_at?: string | null
+  /**
    * SIG-184: the PR's test-merge commit (`refs/pull/N/merge`). `null` until
    * GitHub computes it (or unmergeable). The runner-evidence review-join binds a
    * receipt by requiring the OIDC-signed merge sha to equal this.

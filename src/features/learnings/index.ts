@@ -1,3 +1,5 @@
+export { archiveLearningEntries, loadArchivedLearnings } from "./adapters/archive"
+export type { ArchivedLearningEntry, ArchivedLearningStore } from "./adapters/archive"
 export { emitLearningAudit } from "./adapters/audit"
 export { hasRepoWriteAccess } from "./adapters/authz"
 export {
@@ -10,8 +12,10 @@ export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } fr
 export { classifyLearningMemory } from "./domain/classify"
 export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
 export { parseLearningsCommand } from "./domain/command"
+export { EPHEMERAL_MEMORY_TYPES, MEMORY_DECAY_WINDOW_DAYS, isMemoryDecayEligible } from "./domain/decay"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
-export { resolveLearningsMode } from "./domain/mode"
+export { resolveLearningsMode, resolveMemoryDecayMode } from "./domain/mode"
+export type { MemoryDecayMode } from "./domain/mode"
 export {
   renderBoostedCategoriesForPrompt,
   renderConfirmReply,
@@ -21,8 +25,10 @@ export {
 } from "./domain/render"
 export {
   computeLearningId,
+  learningsArchiveKey,
   learningsKey,
   normalizeRule,
+  parseLearningsKey,
   removeEntry,
   selectRelevantForPaths,
   upsertEntry,

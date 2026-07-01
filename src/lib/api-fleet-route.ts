@@ -12,7 +12,7 @@
 // 413 oversized body.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { extractFleetPattern } from "@/src/shared/domain/fleet-pattern"
 import { isEligible, renderFleetInsight } from "@/src/shared/domain/fleet-aggregate"
@@ -67,7 +67,8 @@ export async function handleFleetApiRoute(request: Request, env: Env): Promise<R
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "fleet_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
 
   let raw: unknown
   try {

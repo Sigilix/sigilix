@@ -112,6 +112,41 @@ export async function resolveApiKey(
   return null
 }
 
+/** Either the resolved caller, or the 401 Response the route should return as-is. */
+export type ApiTenantAuth = { response: Response } | { caller: ResolvedApiKey }
+
+/**
+ * #155 onboarding-backend slice 2 — the shared auth gate every hosted user-facing
+ * endpoint (`/v1/review`, `/v1/context`, `/v1/verify`, `/v1/blast-radius`, `/v1/fleet`,
+ * `/v1/memory*`, the Boreas/Pyroeis/Astraeus gateway routes) uses instead of
+ * hand-rolling its own `resolveApiKey` + null-check + 401. It is a thin wrapper —
+ * ALL the auth logic (D1 lookup, fail-closed-on-fault, legacy global-key fallback)
+ * still lives in {@link resolveApiKey} above; this only standardizes the null ->
+ * 401 branch so every route returns the identical `{ error: "unauthorized" }` JSON
+ * shape those routes already returned before this helper existed.
+ *
+ * A null resolution — missing/garbage bearer, a revoked key, OR a genuine D1 fault
+ * during the lookup (fail-closed, see resolveApiKey's header comment) — always
+ * yields the 401 branch here. There is no path from "resolution failed" to the
+ * caller branch: never a bypass.
+ */
+export async function requireApiTenant(
+  request: Request,
+  env: ResolverEnv,
+  ctx?: ExecutionContext,
+): Promise<ApiTenantAuth> {
+  const caller = await resolveApiKey(request, env, ctx)
+  if (!caller) {
+    return {
+      response: new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+    }
+  }
+  return { caller }
+}
+
 /**
  * SIG-494 — tenant-scope reconciliation gate for the GitHub-App-backed grounding/
  * retrieval routes (`/v1/context`, `/v1/blast-radius`, `/v1/review` Mode B). Every

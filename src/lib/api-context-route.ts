@@ -18,7 +18,7 @@
 // by a short-TTL per-repo KV marker so polling can't spam the queue.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey, callerOwnsRepo } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, callerOwnsRepo } from "@/src/lib/api-key-resolver"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -269,8 +269,9 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "context_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   let raw: unknown
   try {

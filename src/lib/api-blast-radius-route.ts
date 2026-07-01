@@ -16,7 +16,7 @@
 // on a bad bearer; 400 on bad JSON / missing|empty fields; 413 on an oversized body.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey, callerOwnsRepo } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, callerOwnsRepo } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { blastRadiusByNamesFor } from "@/src/lib/repo-graph-client"
 
@@ -96,8 +96,9 @@ export async function handleBlastRadiusApiRoute(request: Request, env: Env): Pro
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "blast_radius_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload is
   // aborted, never fully buffered; `null` = over the cap → 413.

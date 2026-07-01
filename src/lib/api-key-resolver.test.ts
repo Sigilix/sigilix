@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
-import { LEGACY_TENANT_INSTALLATION_ID, resolveApiKey } from "@/src/lib/api-key-resolver"
+import { LEGACY_TENANT_INSTALLATION_ID, resolveApiKey, requireApiTenant } from "@/src/lib/api-key-resolver"
 import { insertApiKey, revokeApiKeyById } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
 
@@ -160,5 +160,86 @@ describe("resolveApiKey", () => {
       .bind(keyHash)
       .first<{ last_used_at: string | null }>()
     expect(row?.last_used_at).not.toBeNull()
+  })
+})
+
+describe("requireApiTenant", () => {
+  let db: D1Database
+
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("the global key still resolves — dual-key transition, zero behavior change for existing callers", async () => {
+    const auth = await requireApiTenant(reqWith(`Bearer ${GLOBAL_KEY}`), {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("caller" in auth && auth.caller).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID })
+  })
+
+  it("an issued per-installation key resolves its own installationId", async () => {
+    const plaintext = "sigilix_live_requireapitenant"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 4242,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    const auth = await requireApiTenant(reqWith(`Bearer ${plaintext}`), {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("caller" in auth && auth.caller).toEqual({ installationId: 4242 })
+  })
+
+  it("a revoked key returns the 401 unauthorized Response, never the caller", async () => {
+    const plaintext = "sigilix_live_requireapitenant_revoked"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 9,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await revokeApiKeyById(db, "key-1", "2026-02-01T00:00:00Z")
+
+    const auth = await requireApiTenant(reqWith(`Bearer ${plaintext}`), {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("response" in auth).toBe(true)
+    if ("response" in auth) {
+      expect(auth.response.status).toBe(401)
+      expect(await auth.response.clone().json()).toEqual({ error: "unauthorized" })
+    }
+  })
+
+  it("garbage/missing bearer returns the 401 unauthorized Response", async () => {
+    const missing = await requireApiTenant(reqWith(), {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("response" in missing).toBe(true)
+    if ("response" in missing) expect(missing.response.status).toBe(401)
+
+    const garbage = await requireApiTenant(reqWith("Bearer totally-wrong"), {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("response" in garbage).toBe(true)
+    if ("response" in garbage) expect(garbage.response.status).toBe(401)
+  })
+
+  it("FAILS CLOSED on a genuine D1 fault — 401, never falls through to the global key even though the bearer IS valid", async () => {
+    const auth = await requireApiTenant(reqWith(`Bearer ${GLOBAL_KEY}`), {
+      SIGILIX_PLATFORM_DB: makeBrokenDb(),
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+    })
+    expect("response" in auth).toBe(true)
+    if ("response" in auth) expect(auth.response.status).toBe(401)
   })
 })

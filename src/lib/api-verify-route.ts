@@ -24,7 +24,7 @@
 // oversized body; 429 once the daily CPU ceiling is hit.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { comparePairInSandbox } from "@/src/lib/reproduce/purelogic-pair"
 
@@ -121,7 +121,8 @@ export async function handleVerifyApiRoute(request: Request, env: Env): Promise<
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "verify_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload is
   // aborted, never fully buffered; `null` = over the cap → 413.

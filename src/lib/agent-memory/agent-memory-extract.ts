@@ -14,7 +14,7 @@
 // body-cap / JSON / field-validation gates mirror the PUT + query routes exactly.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import {
@@ -231,8 +231,9 @@ export async function handleMemoryExtractRoute(request: Request, env: Env): Prom
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   let raw: unknown
   try {

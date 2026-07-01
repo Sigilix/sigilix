@@ -1,6 +1,7 @@
 import type { Env } from "@/src/shared/types/env"
 import {
   appendLearning,
+  classifyLearningMemory,
   computeLearningId,
   emitLearningAudit,
   extractLearning,
@@ -107,6 +108,12 @@ async function captureGithubMentionQaLearning(args: {
     await markLearningSeen(args.env, dedupeKey, fields)
     const learningId = await computeLearningId(rule)
     const createdTs = new Date().toISOString()
+    const { type, lifespanAnchor } = classifyLearningMemory({
+      sourceKind: "qa",
+      polarity: extracted.polarity,
+      prNumber: args.prNumber,
+      suggestedType: extracted.memoryType ?? null,
+    })
     const entry: LearningEntry = {
       id: learningId,
       rule,
@@ -119,6 +126,8 @@ async function captureGithubMentionQaLearning(args: {
       createdTs,
       appliedCount: 0,
       authorLogin: args.sourceComment.author,
+      type,
+      lifespanAnchor,
     }
 
     const appended = await appendLearning(args.env, "repo", subjectId, entry, Date.parse(createdTs))

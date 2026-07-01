@@ -39,7 +39,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
-import { resolveApiKey, callerOwnsInstallation } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, callerOwnsInstallation } from "@/src/lib/api-key-resolver"
 import {
   admitTenant,
   releaseTenant,
@@ -197,8 +197,9 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "review_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env, ctx)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env, ctx)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized
   // payload is aborted, never fully buffered; `null` = over the cap → 413.

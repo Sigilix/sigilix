@@ -21,7 +21,7 @@
 // NOTHING here logs or returns the SA token / the request body.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { getVertexAccessToken } from "./vertex-token"
 import { VERTEX_CHAT_COMPLETIONS_URL } from "./constants"
@@ -99,7 +99,8 @@ export async function handleVertexChatRoute(
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "boreas_gateway_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env, ctx))) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env, ctx)
+  if ("response" in auth) return auth.response
   if (!env.OPENCLAW_GATEWAY_ISSUER) return json({ error: "boreas_gateway_not_configured" }, 503)
 
   // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so

@@ -14,7 +14,7 @@
 //     leg degrades. 500 only on an unexpected throw.
 
 import type { Env } from "@/src/shared/types/env"
-import { resolveApiKey, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { resolveCliOrgMemoryMode } from "@/src/features/learnings"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryQueryResult, AgentMemoryRecord } from "./types"
@@ -190,8 +190,9 @@ export async function handleMemoryWriteRoute(request: Request, env: Env): Promis
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   let raw: unknown
   try {
@@ -285,8 +286,9 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
-  const caller = await resolveApiKey(request, env)
-  if (!caller) return json({ error: "unauthorized" }, 401)
+  const auth = await requireApiTenant(request, env)
+  if ("response" in auth) return auth.response
+  const caller = auth.caller
 
   let raw: unknown
   try {

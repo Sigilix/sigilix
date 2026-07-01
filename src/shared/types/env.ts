@@ -220,6 +220,27 @@ export interface Env {
   // flips via `wrangler secret put OPENCLAW_ORG_MEMORY_CAPTURE on`.
   OPENCLAW_ORG_MEMORY_CAPTURE?: string
 
+  // Seat∪Org memory layering — Phase 2 (apply/read side). Three-state, DEFAULT
+  // OFF. This gates whether PR review READS + unions the ORG-scope corpus that
+  // Phase 1's OPENCLAW_ORG_MEMORY_CAPTURE writes:
+  //   - "off" (default / unset / any other value): review reads repo-scope
+  //           learnings ONLY — byte-identical to before this slice. No
+  //           installation-id resolution, no `learnings:org:*` KV read.
+  //   - "shadow": review ALSO loads the org-scope corpus (installation id
+  //           resolved via OPENCLAW_GITHUB_INSTALLATION_MAP, same as the rest
+  //           of the GitHub-App tenant-resolution call sites) and LOGS the
+  //           delta — which org learnings WOULD widen the applied set — but the
+  //           APPLIED set stays repo-only (bake the signal, output unchanged).
+  //   - "on": the applied set is repo ∪ org, deduped by learning id (a repo
+  //           copy wins a collision — a learning mirrored repo→org shares its
+  //           id, so exactly one copy applies). An org-scope learning can then
+  //           shape the review for any repo under the installation.
+  // Fail-soft: an unresolvable installation or an org-store read error degrades
+  // to repo-only (never blocks/delays the review, never throws).
+  // Parsed by resolveOrgMemoryApplyMode (@/features/learnings). Operator flips
+  // via `wrangler secret put OPENCLAW_ORG_MEMORY_APPLY on`.
+  OPENCLAW_ORG_MEMORY_APPLY?: string
+
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark
   // enqueues short-circuit. Default (unset / any other value) = on.

@@ -17,7 +17,7 @@ import type { PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import {
   decideLearningSuppressions,
-  loadLearnings,
+  loadEffectiveLearnings,
   resolveLearningsMode,
   selectRelevantForPaths,
   type SuppressibleFinding,
@@ -62,8 +62,7 @@ export async function applyLearningSuppressions(args: ApplyLearningSuppressionsA
   if (mode === "off" || repoId === undefined) return kept
 
   try {
-    const store = await loadLearnings(env, "repo", String(repoId))
-    const entries = store?.entries ?? []
+    const entries = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
     if (entries.length === 0) return kept
     // Same relevance + budget gate the prompt injection uses, so the gate only
     // considers learnings that were eligible to shape this review.

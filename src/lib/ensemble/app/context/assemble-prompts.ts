@@ -70,7 +70,7 @@ import type { AdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
 import { computeAdversarialFramingBlocks } from "./adversarial-framing-context"
 import { buildSpecialistInitialMessage } from "@/src/prompts/pr-review-specialists"
 import {
-  loadLearnings,
+  loadEffectiveLearnings,
   renderBoostedCategoriesForPrompt,
   renderLearningsForPrompt,
   resolveLearningsMode,
@@ -747,8 +747,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   const learningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
   let learningsBlock = ""
   if (learningsMode !== "off" && repoId !== undefined) {
-    const learningsStore = await loadLearnings(env, "repo", String(repoId))
-    const candidateLearnings = learningsStore?.entries ?? []
+    const candidateLearnings = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
     // Select over the FULL PR path scope (changed + not-yet-reviewed) so the
     // SAME block is correct for both messageForRole (changed files) and the
     // spillover messageForBatchRole (filesNotReviewed) — else later batches miss

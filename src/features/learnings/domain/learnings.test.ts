@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   resolveLearningsMode,
   resolveMemoryDecayMode,
+  resolveOrgMemoryApplyMode,
   resolveOrgMemoryCaptureMode,
 } from "@/src/features/learnings/domain/mode"
 import {
@@ -128,6 +129,22 @@ describe("resolveOrgMemoryCaptureMode", () => {
     expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "on" })).toBe("on")
     // Trimmed + case-insensitive (mirrors resolveMemoryDecayMode).
     expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "  ON  " })).toBe("on")
+  })
+})
+
+describe("resolveOrgMemoryApplyMode", () => {
+  it("defaults to off (unset / unknown) and accepts on/shadow only", () => {
+    expect(resolveOrgMemoryApplyMode({})).toBe("off")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "" })).toBe("off")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "off" })).toBe("off")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "on" })).toBe("on")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "shadow" })).toBe("shadow")
+    // Unknown / garbage falls through to off (default-safe).
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "enforce" })).toBe("off")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "yes" })).toBe("off")
+    // Trimmed + case-insensitive (mirrors resolveMemoryDecayMode).
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "  On  " })).toBe("on")
+    expect(resolveOrgMemoryApplyMode({ OPENCLAW_ORG_MEMORY_APPLY: "  SHADOW " })).toBe("shadow")
   })
 })
 

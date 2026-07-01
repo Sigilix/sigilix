@@ -8,6 +8,7 @@ import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 import {
   appendLearning,
+  classifyLearningMemory,
   computeLearningId,
   emitLearningAudit,
   forgetLearning,
@@ -104,6 +105,7 @@ async function handleRememberLearningCommand(
 
   const learningId = await computeLearningId(rule)
   const createdTs = new Date().toISOString()
+  const { type, lifespanAnchor } = classifyLearningMemory({ sourceKind: "command", polarity: "context", prNumber })
   const entry: LearningEntry = {
     id: learningId,
     rule,
@@ -116,6 +118,8 @@ async function handleRememberLearningCommand(
     createdTs,
     appliedCount: 0,
     authorLogin: sourceComment.author,
+    type,
+    lifespanAnchor,
   }
 
   const appended = await appendLearning(env, "repo", subjectId, entry, Date.parse(createdTs))

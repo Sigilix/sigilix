@@ -38,6 +38,7 @@
 
 import { extractBearerToken, requireBearerToken, sha256Hex } from "@/src/lib/auth-bearer"
 import { touchApiKeyLastUsed } from "@/src/lib/api-key-store"
+import { resolveInstallation, type InstallationLookup } from "@/src/shared/adapters/github/github-installation"
 import type { Env } from "@/src/shared/types/env"
 
 /**
@@ -109,6 +110,50 @@ export async function resolveApiKey(
     return { installationId: LEGACY_TENANT_INSTALLATION_ID }
   }
   return null
+}
+
+/**
+ * SIG-494 — tenant-scope reconciliation gate for the GitHub-App-backed grounding/
+ * retrieval routes (`/v1/context`, `/v1/blast-radius`, `/v1/review` Mode B). Every
+ * one of those routes independently re-resolves an installation from a BODY-supplied
+ * owner/repo (`resolveInstallation`) to build the real GitHub client / run the
+ * retrieval — that resolution is correct on its own, but before this gate nothing
+ * checked it against the CALLER's own installationId (from {@link resolveApiKey}).
+ * Net effect of the bug: any valid per-tenant key could request grounded
+ * retrieval for ANY indexed repo on the platform, not just its own — a
+ * cross-tenant leak. This function is the fix: call it with the caller's
+ * resolved installationId and the repo's resolved installation lookup; a false
+ * result means the caller does not own that repo and the route MUST refuse
+ * (403) before touching retrieval.
+ *
+ * - LEGACY global key ({@link LEGACY_TENANT_INSTALLATION_ID}) — stays BROAD on
+ *   purpose. It is Sigilix-internal (never handed to an external tenant), so
+ *   restricting it to one installation would break existing internal callers
+ *   that legitimately span every installation. Always returns true.
+ * - A REAL per-tenant key — the repo's resolved installation must be the SAME
+ *   installation the key resolved to. A repo lookup that fails (`lookup.ok ===
+ *   false` — not installed / map missing / bad JSON) is NOT "no restriction" —
+ *   it fails closed to false, matching this repo's inverted-fail-closed
+ *   authentication convention (see the file header).
+ */
+export function callerOwnsInstallation(callerInstallationId: number, lookup: InstallationLookup): boolean {
+  if (callerInstallationId === LEGACY_TENANT_INSTALLATION_ID) return true
+  return lookup.ok && lookup.installationId === callerInstallationId
+}
+
+/**
+ * Convenience wrapper over {@link callerOwnsInstallation} for the (common) case
+ * where the caller hasn't already resolved the repo's installation itself — it
+ * runs the same `resolveInstallation` lookup every GitHub-App-backed route uses
+ * (against `env.OPENCLAW_GITHUB_INSTALLATION_MAP`) and reconciles it in one call.
+ */
+export function callerOwnsRepo(
+  callerInstallationId: number,
+  owner: string,
+  repo: string,
+  installationMapJson: string | undefined,
+): boolean {
+  return callerOwnsInstallation(callerInstallationId, resolveInstallation(owner, repo, installationMapJson))
 }
 
 function warnTouchFailed(error: unknown): void {

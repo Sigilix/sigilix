@@ -173,6 +173,57 @@ describe("handleAgentContextRoute — auth + validation", () => {
   })
 })
 
+// SIG-494: any valid key used to be able to request grounded retrieval for ANY indexed
+// repo (the resolved caller installationId was discarded; resolveGrounding independently
+// re-resolved the installation from the body-claimed owner/repo). These pin the fix —
+// a per-tenant key is now reconciled against the repo's OWN resolved installation.
+describe("handleAgentContextRoute — SIG-494 tenant-scope reconciliation", () => {
+  async function keyedEnv(installationId: number, extra: Partial<Env> = {}): Promise<Env> {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = `sigilix_live_ctx_${installationId}`
+    await insertApiKey(db, {
+      id: `key-${installationId}`,
+      keyHash: await sha256Hex(plaintext),
+      installationId,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    return env(undefined, { GITHUB_APP_ID: "1", GITHUB_PRIVATE_KEY: "pk", SIGILIX_PLATFORM_DB: db, ...extra }) as Env
+  }
+  function tokenFor(installationId: number): string {
+    return `sigilix_live_ctx_${installationId}`
+  }
+
+  it("200 — a per-tenant key whose installation OWNS the requested repo", async () => {
+    mockResolve.mockReturnValue({ ok: true, installationId: 42 } as never)
+    const res = await handleAgentContextRoute(req(validBody, tokenFor(42)), await keyedEnv(42))
+    expect(res.status).toBe(200)
+    expect(mockGather).toHaveBeenCalled()
+  })
+
+  it("403 — a per-tenant key requesting a repo in a DIFFERENT installation (the core leak, proven closed)", async () => {
+    mockResolve.mockReturnValue({ ok: true, installationId: 999 } as never) // o/r belongs to a DIFFERENT tenant
+    const res = await handleAgentContextRoute(req(validBody, tokenFor(42)), await keyedEnv(42))
+    expect(res.status).toBe(403)
+    expect(mockGather).not.toHaveBeenCalled()
+  })
+
+  it("403 — fail-closed when the requested repo doesn't resolve to any installation", async () => {
+    mockResolve.mockReturnValue({ ok: false } as never)
+    const res = await handleAgentContextRoute(req(validBody, tokenFor(42)), await keyedEnv(42))
+    expect(res.status).toBe(403)
+    expect(mockGather).not.toHaveBeenCalled()
+  })
+
+  it("200 (unchanged, still broad) — the legacy global key is exempt from the per-repo gate", async () => {
+    mockResolve.mockReturnValue({ ok: true, installationId: 999 } as never) // o/r resolves to a DIFFERENT installation
+    const res = await handleAgentContextRoute(req(validBody, TOKEN), appEnv())
+    expect(res.status).toBe(200)
+    expect(mockGather).toHaveBeenCalled()
+  })
+})
+
 describe("handleAgentContextRoute — retrieval", () => {
   it("200 with the packed context + telemetry + status:grounded", async () => {
     const res = await handleAgentContextRoute(req(validBody), appEnv())

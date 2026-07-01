@@ -42,6 +42,7 @@ import { parseFindingOutcomeMarkers } from "@/src/lib/pr-finding-markers"
 import type { DismissReason } from "@/src/lib/dismiss-reasons"
 import {
   appendLearning,
+  classifyLearningMemory,
   computeLearningId,
   emitLearningAudit,
   extractLearning,
@@ -292,6 +293,12 @@ async function captureConversationalLearning(args: {
     const learningId = await computeLearningId(rule)
     const createdTs = new Date().toISOString()
     const subjectId = String(args.repoId)
+    const { type, lifespanAnchor } = classifyLearningMemory({
+      sourceKind: args.sourceKind,
+      polarity: extracted.polarity,
+      prNumber: args.prNumber,
+      suggestedType: extracted.memoryType ?? null,
+    })
     const entry: LearningEntry = {
       id: learningId,
       rule,
@@ -304,6 +311,8 @@ async function captureConversationalLearning(args: {
       createdTs,
       appliedCount: 0,
       ...(args.authorLogin !== undefined ? { authorLogin: args.authorLogin } : {}),
+      type,
+      lifespanAnchor,
     }
     const appended = await appendLearning(args.env, "repo", subjectId, entry, Date.parse(createdTs))
     if (!appended) return

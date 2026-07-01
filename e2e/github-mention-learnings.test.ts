@@ -189,13 +189,23 @@ describe("handleGithubMention learnings commands", () => {
     await runReviewMention({ env, commentId: 500, repoId: REPO_ID })
 
     const stored = JSON.parse(store.get(`learnings:repo:${REPO_ID}`) ?? "{}") as {
-      entries?: Array<{ id: string; rule: string; authorLogin?: string; source?: { commentId?: number } }>
+      entries?: Array<{
+        id: string
+        rule: string
+        authorLogin?: string
+        source?: { commentId?: number }
+        type?: string
+        lifespanAnchor?: { kind: string }
+      }>
     }
     expect(stored.entries).toHaveLength(1)
     expect(stored.entries?.[0]).toMatchObject({
       rule,
       authorLogin: "alice",
       source: { commentId: 500 },
+      // A `@sigilix remember` command is classified as a durable preference.
+      type: "durable_preference",
+      lifespanAnchor: { kind: "durable" },
     })
     expect(replyToReviewCommentMock).toHaveBeenCalledWith(OWNER, REPO, PR, 500, renderConfirmReply(rule))
     const learningId = stored.entries?.[0]?.id

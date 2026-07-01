@@ -51,6 +51,10 @@ function entry(overrides: Partial<LearningEntry> = {}): LearningEntry {
     ...(overrides.lastAppliedTs !== undefined ? { lastAppliedTs: overrides.lastAppliedTs } : {}),
     appliedCount: overrides.appliedCount ?? 0,
     ...(overrides.authorLogin !== undefined ? { authorLogin: overrides.authorLogin } : {}),
+    // The taxonomy fields default to absent so the base fixture models an
+    // old-shape (pre-taxonomy) record; tests opt in via overrides.
+    ...(overrides.type !== undefined ? { type: overrides.type } : {}),
+    ...(overrides.lifespanAnchor !== undefined ? { lifespanAnchor: overrides.lifespanAnchor } : {}),
   }
 }
 
@@ -169,6 +173,35 @@ describe("store-ops", () => {
     )
     expect(selected.map((e) => e.id)).toEqual(["global", "api"])
   })
+
+  it("keeps id, eviction, and selection byte-identical regardless of the taxonomy fields (retention unchanged)", async () => {
+    // The content-addressed id is over the rule text only — the taxonomy fields
+    // never move it, so dedupe/eviction are unchanged this slice.
+    await expect(computeLearningId("Prefer service-layer database access.")).resolves.toBe(
+      await computeLearningId("Prefer service-layer database access."),
+    )
+
+    const withType = entry({
+      id: "same",
+      type: "transient_feedback",
+      lifespanAnchor: { kind: "pr", prNumber: 1 },
+    })
+    const withoutType = entry({ id: "same" })
+    // upsert dedupes by id identically whether or not the entry carries the new fields.
+    expect(upsertEntry(store([withoutType]), withType, TS).entries).toHaveLength(1)
+
+    // selectRelevantForPaths ignores the new fields — same ids, same order.
+    const args = [
+      entry({ id: "a", rule: "Repo-wide guidance", pathGlob: null }),
+      entry({ id: "b", rule: "API guidance", pathGlob: "src/api/**" }),
+    ] as const
+    const baseline = selectRelevantForPaths([...args], ["src/api/users.ts"])
+    const tagged = selectRelevantForPaths(
+      args.map((e) => entry({ ...e, type: "ephemeral_project", lifespanAnchor: { kind: "pr", prNumber: 2 } })),
+      ["src/api/users.ts"],
+    )
+    expect(tagged.map((e) => e.id)).toEqual(baseline.map((e) => e.id))
+  })
 })
 
 describe("parseLearningsCommand", () => {
@@ -261,6 +294,38 @@ describe("adapters/store", () => {
     expect((await loadLearnings(env, "repo", "123"))?.entries.map((e) => e.id)).toEqual(["two"])
     await hardDeleteLearnings(env, "repo", "123")
     expect(values.has("learnings:repo:123")).toBe(false)
+  })
+
+  it("round-trips the memory taxonomy fields (type + lifespanAnchor) through KV", async () => {
+    const { env } = makeEnv()
+    await appendLearning(
+      env,
+      "repo",
+      "123",
+      entry({ id: "typed", type: "transient_feedback", lifespanAnchor: { kind: "pr", prNumber: 42 } }),
+      Date.parse(TS),
+    )
+    const loaded = await loadLearnings(env, "repo", "123")
+    expect(loaded?.entries[0]).toMatchObject({
+      id: "typed",
+      type: "transient_feedback",
+      lifespanAnchor: { kind: "pr", prNumber: 42 },
+    })
+  })
+
+  it("loads and validates old-shape records that predate the taxonomy fields (backward-compat)", async () => {
+    const { env, values } = makeEnv()
+    // Seed a store whose entry has NO `type` / `lifespanAnchor` — the shape written
+    // before this slice. It must still validate and load unchanged.
+    const legacy = entry({ id: "legacy" })
+    expect("type" in legacy).toBe(false)
+    expect("lifespanAnchor" in legacy).toBe(false)
+    values.set("learnings:repo:123", JSON.stringify(store([legacy])))
+    const loaded = await loadLearnings(env, "repo", "123")
+    expect(loaded?.entries).toHaveLength(1)
+    expect(loaded?.entries[0]?.id).toBe("legacy")
+    expect(loaded?.entries[0]?.type).toBeUndefined()
+    expect(loaded?.entries[0]?.lifespanAnchor).toBeUndefined()
   })
 
   it("returns safe defaults on KV failures", async () => {

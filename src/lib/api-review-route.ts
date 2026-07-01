@@ -39,7 +39,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
-import { resolveApiKey } from "@/src/lib/api-key-resolver"
+import { resolveApiKey, callerOwnsInstallation } from "@/src/lib/api-key-resolver"
 import {
   admitTenant,
   releaseTenant,
@@ -173,7 +173,8 @@ function parseBody(raw: unknown): ReviewApiBody | string {
 /**
  * POST /v1/review (Mode A diff-only, or Mode B grounded — see file header). Auth is
  * checked from the header BEFORE the body is read so an unauthenticated caller can't
- * force a large body buffer.
+ * force a large body buffer. 403 (Mode B only) when a per-tenant key's repo doesn't
+ * match its own installation (SIG-494).
  */
 export async function handleReviewApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
@@ -184,18 +185,20 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
   // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
   // fail-open D1 default on purpose, because this gates authentication).
   //
-  // NOT threaded further: Mode B's tenant (fairness/shadow-quota/buildClient) is
-  // already resolved independently from the CLAIMED owner/repo via
-  // resolveInstallation below — that is the repo's registered GitHub App
-  // installation, not the caller's identity, and is unrelated to which bearer
-  // authenticated the request. Mode A's `installationId: 0` is also left as-is
-  // (see its comment) — reconciling the resolved caller identity with the
-  // owner/repo-derived tenant is a product decision for a follow-up slice, not
-  // an auth-swap concern.
+  // SIG-494: the caller's installationId IS threaded further now for Mode B —
+  // callerOwnsInstallation (below, once `lookup` resolves) reconciles it against
+  // the repo's OWN resolved installation before any ceiling/fairness/GitHub-touching
+  // work runs. Before this fix the two were resolved independently and never
+  // compared: any valid per-tenant key could run a GROUNDED review against ANY
+  // indexed repo (cross-tenant leak). Mode A's `installationId: 0` is correctly
+  // left as-is — it is genuinely ungrounded (ungroundedEnv stubs retrieval to
+  // empty), so there is no tenant's indexed code to leak. The legacy global key is
+  // exempt by design (see callerOwnsInstallation's header) — it stays broad.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "review_endpoint_not_configured" }, 503)
   }
-  if (!(await resolveApiKey(request, env, ctx))) return json({ error: "unauthorized" }, 401)
+  const caller = await resolveApiKey(request, env, ctx)
+  if (!caller) return json({ error: "unauthorized" }, 401)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized
   // payload is aborted, never fully buffered; `null` = over the cap → 413.
@@ -267,6 +270,12 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
         },
         422,
       )
+    }
+    // SIG-494: fail-closed tenant-scope gate — a real per-tenant key may only run a
+    // GROUNDED review against repo(s) its OWN installation owns. Runs before any
+    // ceiling/fairness/GitHub-touching work so a mismatched repo never spends budget.
+    if (!callerOwnsInstallation(caller.installationId, lookup)) {
+      return json({ error: "forbidden", detail: "api key is not scoped to this repo" }, 403)
     }
     // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
     // GitHub counts against the budget (no free installation enumeration).

@@ -114,7 +114,10 @@ describe("handleBlastRadiusApiRoute — auth + validation", () => {
       createdBy: "1",
       nowIso: "2026-01-01T00:00:00Z",
     })
-    const res = await handleBlastRadiusApiRoute(req(validBody, plaintext), env(undefined, { SIGILIX_PLATFORM_DB: db }))
+    const res = await handleBlastRadiusApiRoute(
+      req(validBody, plaintext),
+      env(undefined, { SIGILIX_PLATFORM_DB: db, OPENCLAW_GITHUB_INSTALLATION_MAP: '{"o/r":"42"}' }),
+    )
     expect(res.status).toBe(200)
   })
   it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key", async () => {
@@ -124,6 +127,53 @@ describe("handleBlastRadiusApiRoute — auth + validation", () => {
     )
     expect(res.status).toBe(401)
     expect(mockBlastRadius).not.toHaveBeenCalled()
+  })
+})
+
+describe("handleBlastRadiusApiRoute — SIG-494 tenant-scope reconciliation", () => {
+  async function keyedEnv(installationId: number, extra: Partial<Env> = {}): Promise<Env> {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = `sigilix_live_blast_${installationId}`
+    await insertApiKey(db, {
+      id: `key-${installationId}`,
+      keyHash: await sha256Hex(plaintext),
+      installationId,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    return env(undefined, { SIGILIX_PLATFORM_DB: db, ...extra }) as Env
+  }
+  function tokenFor(installationId: number): string {
+    return `sigilix_live_blast_${installationId}`
+  }
+
+  it("403 when a per-tenant key requests a repo owned by a DIFFERENT installation (the core leak, proven closed)", async () => {
+    const e = await keyedEnv(42, { OPENCLAW_GITHUB_INSTALLATION_MAP: '{"other/repo":"42","o/r":"999"}' })
+    const res = await handleBlastRadiusApiRoute(req(validBody, tokenFor(42)), e)
+    expect(res.status).toBe(403)
+    expect(mockBlastRadius).not.toHaveBeenCalled()
+  })
+
+  it("403 when the requested repo doesn't resolve to ANY installation (fail-closed)", async () => {
+    const e = await keyedEnv(42, { OPENCLAW_GITHUB_INSTALLATION_MAP: '{"other/repo":"42"}' })
+    const res = await handleBlastRadiusApiRoute(req(validBody, tokenFor(42)), e)
+    expect(res.status).toBe(403)
+    expect(mockBlastRadius).not.toHaveBeenCalled()
+  })
+
+  it("200 when a per-tenant key requests a repo its OWN installation owns", async () => {
+    const e = await keyedEnv(42, { OPENCLAW_GITHUB_INSTALLATION_MAP: '{"o/r":"42"}' })
+    const res = await handleBlastRadiusApiRoute(req(validBody, tokenFor(42)), e)
+    expect(res.status).toBe(200)
+    expect(mockBlastRadius).toHaveBeenCalled()
+  })
+
+  it("200 (unchanged, still broad) — the legacy global key is exempt from the per-repo gate", async () => {
+    const e = env(TOKEN, { OPENCLAW_GITHUB_INSTALLATION_MAP: '{"other/repo":"42"}' }) // repo NOT o/r, still allowed
+    const res = await handleBlastRadiusApiRoute(req(validBody, TOKEN), e)
+    expect(res.status).toBe(200)
+    expect(mockBlastRadius).toHaveBeenCalled()
   })
 })
 

@@ -466,6 +466,39 @@ export interface Env {
   // (`astraeus:count:<YYYY-MM-DD>`), unset → a built-in default, 429 once the day hits it.
   OPENCLAW_ASTRAEUS_DAILY_LIMIT?: string
 
+  // #158 failover chain, leg 2 (Ollama Turbo). Per-model override of the Turbo
+  // fallback model id substituted when the Vertex leg fails before the first
+  // response byte (connect error / timeout / 5xx / 429). Unset -> the route's
+  // built-in default (Boreas/Astraeus) or no Turbo leg at all (Pyroeis has no
+  // built-in default -- see constants.ts). Requires OLLAMA_API_KEY to actually
+  // be configured; the leg is skipped (not attempted) without it.
+  OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL?: string
+  // Same shape as OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL above. NO built-in
+  // default -- Pyroeis's Vertex model (Gemma 4 26B) has no confirmed Ollama
+  // Turbo tag in this codebase, so guessing one risks a silent wrong-model
+  // swap. Unset -> Pyroeis has no Turbo leg; a Vertex failure surfaces
+  // directly (or falls to Bedrock, once configured).
+  OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL?: string
+  // Same shape as OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL above.
+  OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL?: string
+
+  // #158 failover chain, leg 3 (AWS Bedrock -- SCAFFOLD, disabled at launch).
+  // Shared AWS credentials for the SigV4-signed Bedrock Runtime Converse call.
+  // ALL THREE (region + access key id + secret) must be set for the Bedrock leg
+  // to be attempted for ANY model; any one missing -> the leg is skipped
+  // entirely (not a failure -- this is the founder-locked launch state until
+  // real AWS creds exist). Set via `wrangler secret put` for the two secret
+  // values; the region may be a plain [vars] entry.
+  OPENCLAW_AWS_REGION?: string
+  OPENCLAW_AWS_ACCESS_KEY_ID?: string
+  OPENCLAW_AWS_SECRET_ACCESS_KEY?: string
+  // Per-model Bedrock model id override -- also gates the leg per-model: even
+  // with AWS creds configured, a route with its model id unset skips Bedrock
+  // (no guessed model id). Same three-var pattern as the Turbo fallback above.
+  OPENCLAW_BOREAS_FALLBACK_BEDROCK_MODEL?: string
+  OPENCLAW_PYROEIS_FALLBACK_BEDROCK_MODEL?: string
+  OPENCLAW_ASTRAEUS_FALLBACK_BEDROCK_MODEL?: string
+
   // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
   // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in
   // default. A global KV counter (`v1verify:count:<YYYY-MM-DD>`), not per-key metering —

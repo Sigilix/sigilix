@@ -57,3 +57,49 @@ export const VERTEX_CHAT_COMPLETIONS_URL = `https://aiplatform.googleapis.com/v1
 export const OIDC_PRIVKEY_KV_KEY = "gateway:oidc:privkey"
 /** KV key holding the cached impersonated Vertex access token. */
 export const VERTEX_TOKEN_KV_KEY = "gateway:vertex:token"
+
+// ── #158 failover chain — leg 2 (Ollama Turbo, per-token/serverless) ───────────
+//
+// Same auth pattern the rest of the Worker already uses for Ollama Turbo
+// (Authorization: Bearer OLLAMA_API_KEY) and the same OpenAI-compatible base URL
+// (`https://ollama.com/v1`, e.g. admin-agent-run-route.ts / linear-agent-run.ts) —
+// NOT the NDJSON `/api/chat` / `/api/generate` adapters, which speak a different
+// wire protocol. The gateway proxies raw OpenAI chat-completions bodies, so the
+// OpenAI-compatible endpoint is the one that lets us pass the body straight
+// through unchanged (same shape as the Vertex leg), model id swapped only.
+export const OLLAMA_TURBO_CHAT_COMPLETIONS_URL = "https://ollama.com/v1/chat/completions"
+
+/**
+ * Built-in default Turbo fallback model for the Boreas route (env
+ * OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL overrides it). A strong Qwen3 Ollama Turbo
+ * tag — already in production use as the logic-specialist fallback
+ * (shared/domain/config/types.ts), so it's a proven-live tag, not a guess.
+ */
+export const DEFAULT_BOREAS_FALLBACK_TURBO_MODEL = "qwen3-coder-next:cloud"
+
+/**
+ * Built-in default Turbo fallback model for the Astraeus route (env
+ * OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL overrides it). Astraeus's Vertex model is
+ * GLM-5.2 (zai-org/glm-5-maas); glm-5.2:cloud is the SAME model family already
+ * live as the agent-runner's Ollama Turbo default (admin-agent-run-route.ts /
+ * linear-agent-run.ts), so it's the closest real substitution available.
+ */
+export const DEFAULT_ASTRAEUS_FALLBACK_TURBO_MODEL = "glm-5.2:cloud"
+
+// NOTE: Pyroeis has NO built-in default Turbo fallback model. Its Vertex model is
+// Gemma 4 26B (google/gemma-4-26b-a4b-it-maas); there is no confirmed Gemma tag on
+// Ollama Turbo in this codebase today, and guessing one risks silently routing to a
+// model that doesn't exist. OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL must be set
+// explicitly to enable a Turbo leg for Pyroeis — unset means Pyroeis has only the
+// Vertex leg (plus Bedrock, once configured).
+
+// ── #158 failover chain — leg 3 (AWS Bedrock, serverless — SCAFFOLD, disabled
+// until OPENCLAW_AWS_* creds + a per-model OPENCLAW_<MODEL>_FALLBACK_BEDROCK_MODEL
+// are set) ──────────────────────────────────────────────────────────────────────
+/** AWS SigV4 service name for Bedrock's model-invocation runtime plane. */
+export const BEDROCK_SIGV4_SERVICE = "bedrock"
+
+/** Bedrock Runtime Converse REST endpoint for a given region + model id. */
+export function bedrockConverseUrl(region: string, modelId: string): string {
+  return `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(modelId)}/converse`
+}

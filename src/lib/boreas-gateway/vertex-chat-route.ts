@@ -23,8 +23,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
-import { getVertexAccessToken } from "./vertex-token"
-import { VERTEX_CHAT_COMPLETIONS_URL } from "./constants"
+import { runGatewayChain } from "./fallback-chain"
 
 // Chat bodies carry the full prompt/history, so the cap is generous (vs the tiny
 // query routes) but still bounds an abusive buffer. Enforced as the stream is read.
@@ -43,6 +42,15 @@ export interface VertexChatRouteConfig {
   counterKey: string
   /** Env var holding this route's numeric daily ceiling (unset → DEFAULT_DAILY_LIMIT). */
   limitEnvVar: keyof Env
+  // #158 (model-gateway failover chain) — see fallback-chain.ts for the full design.
+  /** Telemetry model id for the `gateway-fallback` event ("boreas" | "pyroeis" | "astraeus"). */
+  sigilixModel: string
+  /** Env var holding this route's Turbo fallback model override. */
+  fallbackTurboModelEnvVar: keyof Env
+  /** Built-in default Turbo fallback model id — undefined → no default (e.g. Pyroeis). */
+  defaultFallbackTurboModel?: string
+  /** Env var holding this route's Bedrock fallback model id (scaffold — see bedrock-chat.ts). */
+  fallbackBedrockModelEnvVar: keyof Env
 }
 
 function json(body: unknown, status: number): Response {
@@ -123,37 +131,12 @@ export async function handleVertexChatRoute(
     return json({ error: "invalid_request", detail: "body must be a JSON object" }, 400)
   }
 
-  // Force the model id — the caller can't override which model the gateway bills for.
-  const payload = { ...(raw as Record<string, unknown>), model: cfg.model }
-
-  // Mint/reuse the keyless Vertex SA token. A GCP failure → 502 (never a clean pass).
-  // The error is logged SERVER-SIDE for debugging but the caller-facing `detail` is
-  // generic — a GCP STS/IAM error body carries the project number / pool / provider /
-  // SA email, which must never reach a caller.
-  let accessToken: string
-  try {
-    accessToken = await getVertexAccessToken(env, ctx)
-  } catch (err) {
-    console.error(`${cfg.counterKey}: vertex token mint failed`, err)
-    return json({ error: "boreas_upstream_error", detail: "upstream token mint failed" }, 502)
-  }
-
-  let upstream: Response
-  try {
-    upstream = await fetch(VERTEX_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-  } catch (err) {
-    console.error(`${cfg.counterKey}: vertex chat-completions fetch failed`, err)
-    return json({ error: "boreas_upstream_error", detail: "upstream request failed" }, 502)
-  }
-
-  // Passthrough: forwarding the upstream body streams transparently when the caller
-  // requested `stream:true` and returns the JSON otherwise — same code path either way.
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-  })
+  // #158: walk the ordered per-model failover chain (Vertex -> Ollama Turbo ->
+  // AWS Bedrock scaffold). Model-forcing happens PER LEG inside the chain (each
+  // leg substitutes its own model id) — `raw` is passed through untouched so a
+  // fallback leg doesn't inherit the Vertex model id. Streaming/response
+  // semantics, the daily counter (already applied above, once), and the
+  // generic-error-detail contract are all preserved; see fallback-chain.ts for
+  // the retry/telemetry/marker design.
+  return runGatewayChain(env, ctx, cfg, raw as Record<string, unknown>)
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { resolveLearningsMode, resolveMemoryDecayMode } from "@/src/features/learnings/domain/mode"
+import {
+  resolveLearningsMode,
+  resolveMemoryDecayMode,
+  resolveOrgMemoryCaptureMode,
+} from "@/src/features/learnings/domain/mode"
 import {
   MAX_LEARNINGS,
   computeLearningId,
@@ -112,6 +116,18 @@ describe("resolveMemoryDecayMode", () => {
     expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "enforce" })).toBe("enforce")
     // Trimmed + case-insensitive (mirrors resolveQuotaMode).
     expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "  ENFORCE  " })).toBe("enforce")
+  })
+})
+
+describe("resolveOrgMemoryCaptureMode", () => {
+  it("defaults to off (unset / unknown) and accepts only 'on'", () => {
+    expect(resolveOrgMemoryCaptureMode({})).toBe("off")
+    expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "" })).toBe("off")
+    expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "off" })).toBe("off")
+    expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "shadow" })).toBe("off")
+    expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "on" })).toBe("on")
+    // Trimmed + case-insensitive (mirrors resolveMemoryDecayMode).
+    expect(resolveOrgMemoryCaptureMode({ OPENCLAW_ORG_MEMORY_CAPTURE: "  ON  " })).toBe("on")
   })
 })
 

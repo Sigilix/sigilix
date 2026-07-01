@@ -47,6 +47,7 @@ import {
   emitLearningAudit,
   extractLearning,
   hasRepoWriteAccess,
+  mirrorLearningToOrgScope,
   normalizeRule,
   recordConfirmationMapForThread,
   renderConfirmReply,
@@ -316,6 +317,11 @@ async function captureConversationalLearning(args: {
     }
     const appended = await appendLearning(args.env, "repo", subjectId, entry, Date.parse(createdTs))
     if (!appended) return
+
+    // Seat∪Org memory layering, Phase 1 (additive, shadow-safe — see
+    // mirrorLearningToOrgScope). No-op unless OPENCLAW_ORG_MEMORY_CAPTURE=on;
+    // never throws, never blocks the confirmation reply below.
+    await mirrorLearningToOrgScope({ env: args.env, owner: args.owner, repo: args.repo, entry })
 
     const confirmBody = renderConfirmReply(rule)
     const confirm =

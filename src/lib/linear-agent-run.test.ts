@@ -15,6 +15,10 @@
 //   (d) no OLLAMA_API_KEY → no dispatch
 //   (e) issue not found → no dispatch
 //   (f) the model key NEVER appears in any console output
+//   (g) SIG-145b milestone thought stream: both milestones post NON-terminal + strictly
+//       before the terminal on a normal run; a milestone's own cancel-check skips just that
+//       milestone without aborting the run; milestone post failures are swallowed; no
+//       milestone on the interim-assignee (no sessionId) path; a dedupe skips milestones too
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from "vitest"
 
@@ -275,6 +279,81 @@ describe("runLinearAgentRun", () => {
     expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-ack-no-token")
   })
 
+  // ── SIG-145b: milestone thought stream (live progress instead of a silent "Working…") ──
+
+  it("posts both milestones (thought then action) STRICTLY BEFORE the terminal response, on a normal run", async () => {
+    const prUrl = "https://github.com/Sigilix/sigilix/pull/9"
+    mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true, outcome: { status: "opened", prUrl } })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    const calls = mockCreateAgentActivity.mock.calls as ActivityCall[]
+    expect(calls).toHaveLength(3)
+    const [planning, implementing, terminal] = calls
+    expect(planning![2]).toBe("thought")
+    expect(String(planning![1])).toContain("Reading the codebase")
+    expect(implementing![2]).toBe("action")
+    expect(String(implementing![1])).toContain("Implementing")
+    expect(terminal![2]).toBe("response")
+    expect(String(terminal![1])).toContain(prUrl)
+    // The terminal (response/error) is always LAST — never followed by a milestone.
+    const terminalIndex = calls.findIndex((c) => c[2] === "response" || c[2] === "error")
+    expect(terminalIndex).toBe(calls.length - 1)
+  })
+
+  it("skips a milestone whose OWN cancel-check reads cancelled, without aborting the whole run", async () => {
+    // checkpoint 0: not cancelled; the planning-milestone's own cancel check: cancelled
+    // (skips just that milestone); checkpoint 1, the implementing-milestone check, and
+    // checkpoint 2 all read not-cancelled — the run proceeds normally otherwise.
+    mockIsAgentSessionCancelled
+      .mockResolvedValueOnce(false) // checkpoint 0 (pre-start)
+      .mockResolvedValueOnce(true) // planning-milestone cancel check
+      .mockResolvedValueOnce(false) // checkpoint 1 (pre-dispatch)
+      .mockResolvedValueOnce(false) // implementing-milestone cancel check
+      .mockResolvedValueOnce(false) // checkpoint 2 (post-dispatch)
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    const nonTerminal = (mockCreateAgentActivity.mock.calls as ActivityCall[]).filter(
+      (c) => c[2] !== "response" && c[2] !== "error",
+    )
+    // Only the implementing milestone posted — the planning one was skipped for its own
+    // cancel check, not for aborting the run.
+    expect(nonTerminal).toHaveLength(1)
+    expect(nonTerminal[0]![2]).toBe("action")
+    expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-milestone-skipped-cancelled")
+  })
+
+  it("swallows a milestone post failure without failing the run or blocking the terminal post", async () => {
+    let call = 0
+    mockCreateAgentActivity.mockImplementation(() => {
+      call += 1
+      // Fail only the FIRST call (the planning milestone) — the rest still succeed.
+      return call === 1 ? Promise.reject(new Error("Linear API down")) : Promise.resolve(undefined)
+    })
+
+    await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    // The terminal post still went through despite the milestone failure.
+    expect(terminalActivityCalls(mockCreateAgentActivity.mock.calls)).toHaveLength(1)
+    expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-milestone-failed")
+  })
+
+  it("does NOT post a milestone on the interim-assignee path (no sessionId — no session to narrate into)", async () => {
+    await runLinearAgentRun(ISSUE_ID, makeEnv())
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+  })
+
+  it("a DEDUPE skips both milestones too (not just the terminal) — zero activity, matching dispatchTicketImplementation's contract", async () => {
+    const kv = makeKv({ "linear-agent-run:issue-uuid-1": "1" })
+    await runLinearAgentRun(ISSUE_ID, makeEnv({ OPENCLAW_STATE: kv }), "agent-session-1")
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+  })
+
   // ── SIG-145: stop/cancel checkpoints ──
 
   it("stop before start (cancelled at checkpoint 0) → no dispatch, no activity posted at all", async () => {
@@ -288,19 +367,33 @@ describe("runLinearAgentRun", () => {
   })
 
   it("stop before dispatch (cancelled at checkpoint 1) → NO container dispatch, NO terminal post", async () => {
-    // checkpoint 0 sees not-cancelled, checkpoint 1 (pre-dispatch) sees cancelled.
-    mockIsAgentSessionCancelled.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    // checkpoint 0 and the planning-milestone cancel check both see not-cancelled (so the
+    // planning milestone posts), then checkpoint 1 (pre-dispatch) sees cancelled and aborts
+    // — before the container ever dispatches and before the implementing milestone / terminal.
+    mockIsAgentSessionCancelled
+      .mockResolvedValueOnce(false) // checkpoint 0 (pre-start)
+      .mockResolvedValueOnce(false) // planning-milestone cancel check
+      .mockResolvedValueOnce(true) // checkpoint 1 (pre-dispatch)
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")
 
     expect(mockDispatchAgentRun).not.toHaveBeenCalled()
-    expect(mockCreateAgentActivity).not.toHaveBeenCalled()
+    // No TERMINAL activity — the abort happens before dispatch and before the terminal
+    // post. A non-terminal planning milestone may already have posted; that's fine, it
+    // never resolves the session.
+    expect(terminalActivityCalls(mockCreateAgentActivity.mock.calls)).toHaveLength(0)
     expect(spyLog.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-cancelled")
   })
 
   it("stop mid-run (cancelled at checkpoint 2, after dispatch) → does NOT post its own completion (webhook already resolved as stopped)", async () => {
-    // checkpoints 0 + 1 not-cancelled; the post-dispatch checkpoint sees cancelled.
-    mockIsAgentSessionCancelled.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    // checkpoint 0, both milestone cancel checks, and checkpoint 1 all see not-cancelled
+    // (so both milestones post); the post-dispatch checkpoint 2 sees cancelled.
+    mockIsAgentSessionCancelled
+      .mockResolvedValueOnce(false) // checkpoint 0 (pre-start)
+      .mockResolvedValueOnce(false) // planning-milestone cancel check
+      .mockResolvedValueOnce(false) // checkpoint 1 (pre-dispatch)
+      .mockResolvedValueOnce(false) // implementing-milestone cancel check
+      .mockResolvedValueOnce(true) // checkpoint 2 (post-dispatch)
     mockDispatchAgentRun.mockResolvedValue({
       runId: "run-1",
       dispatched: true,

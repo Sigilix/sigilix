@@ -54,6 +54,13 @@ const AGENT_RUN_DEDUPE_TTL_SECONDS = 3600
  * - Minimal engine ALWAYS (untrusted free-tier input — never "full").
  * - NEVER logs model.key. NEVER throws — fail-safe to `{ dispatched: false }`.
  */
+/** KV key for the per-ticket dispatch idempotency marker — shared by the authoritative
+ *  check-and-set below and the best-effort, read-only milestone-narration peek in
+ *  `runLinearAgentRun` (`peekTicketDeduped`), so the two never drift on key format. */
+function ticketDedupeKey(dedupeId: string): string {
+  return `linear-agent-run:${dedupeId}`
+}
+
 export async function dispatchTicketImplementation(
   env: Env,
   args: {
@@ -67,7 +74,7 @@ export async function dispatchTicketImplementation(
   // Declared outside the try so the catch can release the marker if a fault occurs
   // AFTER it was set but before dispatch was confirmed (defends a future edit that
   // throws post-set; today dispatchAgentRun is fail-safe and never throws).
-  const dedupeKey = `linear-agent-run:${args.dedupeId}`
+  const dedupeKey = ticketDedupeKey(args.dedupeId)
   let markerSet = false
   try {
     // Build the runner model — default to Ollama Turbo (the free minimal engine).
@@ -180,6 +187,23 @@ export async function dispatchTicketImplementation(
  * cannot interrupt an already-running container, so a stop that lands mid-container may still
  * open the PR — but the session stays resolved as "stopped" because the run skips its "Done".
  *
+ * MILESTONE THOUGHT STREAM (SIG-145b, follow-up to the terminal-post fix above): between the
+ * ack and the terminal post, a real run can sit on a silent "Working…" for minutes while the
+ * container clones/edits/opens the PR. `dispatchTicketImplementation` awaits that ENTIRE run as
+ * one opaque call, so this file cannot stream real per-step progress from inside the container
+ * — instead it posts up to two coarse, best-effort, NON-terminal `postMilestoneThought` calls at
+ * its own worker-side checkpoints (after the repo/installation resolve, and again right before
+ * the dispatch await): "reading the codebase…" then "implementing…". Each checks the cancel
+ * flag immediately before posting and skips if cancelled, and both are placed — and fully
+ * AWAITED — strictly before the `dispatchTicketImplementation` call, so they can never land
+ * after the terminal `response`/`error` post below (that post only fires once dispatch has
+ * already resolved). Both are also skipped together on a best-effort dedupe PEEK
+ * (`peekTicketDeduped`) — the same per-ticket marker `dispatchTicketImplementation` itself
+ * check-and-sets — so a webhook redelivery that's about to dedupe never narrates into a
+ * session a concurrent/earlier run already owns (matching that function's `deduped` contract:
+ * zero activity on a deduped call). Richer per-step streaming driven by the container engine
+ * itself is a documented follow-up, not attempted here.
+ *
  * KNOWN LIMITATION (the per-ticket idempotency window): the terminal post is SKIPPED on a
  * dedupe (`deduped`) — correct for a webhook redelivery of THIS turn (a concurrent/earlier
  * run owns + resolves the session). But the dedupe marker is keyed on the issue id with a
@@ -236,6 +260,28 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       return
     }
 
+    // Best-effort, READ-ONLY peek at the per-ticket dedupe marker (SIG-145b) before
+    // narrating any milestone: if a concurrent/earlier run already owns this issue's
+    // dispatch (e.g. a webhook redelivery), that run is the one narrating (and will
+    // resolve) this session — THIS invocation must post nothing, matching
+    // `dispatchTicketImplementation`'s own `deduped` contract below. Never sets the
+    // marker itself; the authoritative check-and-set stays the single one inside
+    // `dispatchTicketImplementation`. sessionId-only (no session to narrate into
+    // otherwise) — skipped, not computed, when sessionId is absent.
+    const skipMilestones = sessionId ? await peekTicketDeduped(env, issue.id) : false
+
+    // Milestone (SIG-145b): the repo + installation are resolved, so the run is about to
+    // start real work — surface that as live progress instead of a silent "Working…".
+    if (sessionId && !skipMilestones) {
+      await postMilestoneThought(env, {
+        issueId,
+        sessionId,
+        checkpoint: "planning",
+        type: "thought",
+        text: "🔍 Reading the codebase and planning the change…",
+      })
+    }
+
     // Checkpoint 1 (stop): cancelled before dispatching the container → abort. Do NOT
     // dispatch (don't open a PR); the webhook's stop handler already resolved the session.
     if (sessionId && (await isAgentSessionCancelled(env, sessionId))) {
@@ -243,6 +289,19 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
         JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "pre-dispatch" }),
       )
       return
+    }
+
+    // Milestone (SIG-145b): about to hand off to the container implementation. This is
+    // the last milestone before the (single, opaque) await that runs the container to
+    // completion — everything after this point is either the terminal post or a return.
+    if (sessionId && !skipMilestones) {
+      await postMilestoneThought(env, {
+        issueId,
+        sessionId,
+        checkpoint: "implementing",
+        type: "action",
+        text: "🛠️ Implementing…",
+      })
     }
 
     const { dispatched, outcome, deduped } = await dispatchTicketImplementation(env, {
@@ -318,6 +377,94 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
         issueId,
         error: err instanceof Error ? err.message : String(err),
         // model.key / installation token intentionally excluded
+      }),
+    )
+  }
+}
+
+/**
+ * Best-effort, READ-ONLY peek at the per-ticket dispatch dedupe marker (SIG-145b) — the
+ * same key `dispatchTicketImplementation` itself check-and-sets — so the milestone
+ * narration in `runLinearAgentRun` can skip itself when a concurrent/earlier run already
+ * owns this issue's dispatch. Matches `dispatchTicketImplementation`'s own `deduped`
+ * contract: a deduped invocation posts ZERO activity into a session another run is
+ * already narrating and will resolve. NEVER sets the marker (read-only). Fails open to
+ * "not deduped" on a KV fault (never blocks the run) — same fail-open shape as
+ * `isAgentSessionCancelled`. Racy like every KV read here (eventually consistent ~60s
+ * cross-POP): the single authoritative check-and-set remains the one inside
+ * `dispatchTicketImplementation`.
+ */
+async function peekTicketDeduped(env: Env, dedupeId: string): Promise<boolean> {
+  try {
+    return (await env.OPENCLAW_STATE.get(ticketDedupeKey(dedupeId))) !== null
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-run-milestone-dedupe-peek-failed",
+        dedupeId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return false
+  }
+}
+
+/**
+ * Post a best-effort, NON-terminal Linear agent-session milestone (`thought`/`action`) so a
+ * running agent shows live progress instead of a silent "Working…" (SIG-145b). Coarse
+ * WORKER-side checkpoints only — richer per-step streaming driven by the container engine
+ * itself is a documented follow-up, not attempted here (from this file's perspective the
+ * container run is a single opaque await).
+ *
+ * CRITICAL ORDERING: callers MUST only invoke this strictly BEFORE dispatching the container
+ * and BEFORE the terminal `response`/`error` post — never after a stop or after the run has
+ * resolved. This call is fully AWAITED end-to-end (cancel check + the network post), so
+ * sequencing every call site before `dispatchTicketImplementation` guarantees it lands before
+ * the terminal post (which only fires once that dispatch has resolved) — no fire-and-forget,
+ * no race between this post and the terminal one.
+ *
+ * Checks the cancel flag immediately before posting and skips the milestone if the session was
+ * stopped, rather than racing the webhook's terminal "stopped" activity. Best-effort: a missing
+ * agent token or any Linear API fault is logged + swallowed, never thrown. NEVER logs token
+ * material; NEVER falls back to a human key (a null client just skips the post).
+ */
+async function postMilestoneThought(
+  env: Env,
+  args: { issueId: string; sessionId: string; checkpoint: string; type: AgentActivityType; text: string },
+): Promise<void> {
+  try {
+    if (await isAgentSessionCancelled(env, args.sessionId)) {
+      console.log(
+        JSON.stringify({
+          event: "linear-agent-run-milestone-skipped-cancelled",
+          issueId: args.issueId,
+          sessionId: args.sessionId,
+          checkpoint: args.checkpoint,
+        }),
+      )
+      return
+    }
+    const agent = await buildLinearAgentClient(env)
+    if (!agent) {
+      console.warn(
+        JSON.stringify({
+          event: "linear-agent-run-milestone-no-token",
+          issueId: args.issueId,
+          sessionId: args.sessionId,
+          checkpoint: args.checkpoint,
+        }),
+      )
+      return
+    }
+    await agent.createAgentActivity(args.sessionId, args.text, args.type)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "linear-agent-run-milestone-failed",
+        issueId: args.issueId,
+        sessionId: args.sessionId,
+        checkpoint: args.checkpoint,
+        error: err instanceof Error ? err.message : String(err),
       }),
     )
   }

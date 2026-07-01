@@ -31,7 +31,8 @@ import { readActiveRunId } from "@/src/lib/repo-index-active-run"
 import { CHUNK_LINES, CHUNK_OVERLAP } from "@/src/lib/chunk-core"
 import { walkScopedRuleFiles } from "@/src/lib/scoped-rules"
 import { writeScopedRulesManifest } from "@/src/lib/scoped-rules-kv"
-import { type TreeEntry, leaseAllows } from "@/src/lib/indexer-internals"
+import { type TreeEntry, leaseAllows, repoRoleClassifyEnabled } from "@/src/lib/indexer-internals"
+import { computeRepoRole, type RepoRole } from "@/src/features/repo-role"
 
 type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
 
@@ -133,6 +134,78 @@ interface PersistManifestArgs {
   chunkCount: number
   shardCount: number
   chunkerVersion: number
+  /**
+   * A precomputed repo role to carry forward (the incremental push path passes
+   * the prior manifest's role so a delta refresh doesn't erase it). Takes
+   * precedence over `roleClassify` when set.
+   */
+  repoRole?: RepoRole | undefined
+  /**
+   * Full-index inputs for classifying the repo role on this write. When
+   * provided (and `repoRole` is not), `persistManifest` runs
+   * `computeRepoRoleForIndex` — which self-gates on the feature flag +
+   * default-branch and NEVER throws. OPTIONAL + purely ADDITIVE: absent = no
+   * classification, no extra fetch. Nothing reads the role yet.
+   */
+  roleClassify?: { client: GitHubClient; treeEntries: ReadonlyArray<TreeEntry> } | undefined
+}
+
+/**
+ * Classify the repo's role from cheap index-time signals and return it, or
+ * `undefined` when the feature is off / this is not the default-branch run.
+ *
+ * NEVER throws and NEVER fails the index job: when the flag is off (default) it
+ * returns immediately with no package.json fetch; when on it fetches
+ * `package.json` best-effort (a fetch error just degrades signals) and any
+ * unexpected error is caught and reported as `unknown`. The classification is
+ * additive metadata — nothing reads it yet, so this cannot change behavior.
+ */
+export async function computeRepoRoleForIndex(args: {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  ref: string
+  treeEntries: ReadonlyArray<TreeEntry>
+  isDefaultBranch: boolean
+}): Promise<RepoRole | undefined> {
+  if (!args.isDefaultBranch || !repoRoleClassifyEnabled(args.env)) return undefined
+  try {
+    // Blob-only, matching `walkIndexableFiles`: directory (`type: "tree"`)
+    // entries have no extension and would dilute the file-ratio denominator.
+    const treePaths: string[] = []
+    let hasRootPackageJson = false
+    for (const entry of args.treeEntries) {
+      if (entry.type !== "blob") continue
+      if (typeof entry.path !== "string" || entry.path.length === 0) continue
+      treePaths.push(entry.path)
+      if (entry.path === "package.json") hasRootPackageJson = true
+    }
+    // Only fetch package.json when the tree actually has one — skips a
+    // guaranteed 404 round-trip for non-JS repos (Go/Rust/Python/infra).
+    let packageJsonRaw: string | null = null
+    if (hasRootPackageJson) {
+      try {
+        packageJsonRaw = await args.client.getFileContent(args.owner, args.repo, "package.json", args.ref)
+      } catch {
+        // A package.json fetch failure just means fewer signals — the
+        // classifier still works from the tree paths. Never fail the index job.
+        packageJsonRaw = null
+      }
+    }
+    return computeRepoRole({ treePaths, packageJsonRaw })
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "repo-role-classify-failed",
+        owner: args.owner,
+        repo: args.repo,
+        ref: args.ref,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return "unknown"
+  }
 }
 
 export async function persistManifest(args: PersistManifestArgs): Promise<void> {
@@ -172,6 +245,27 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
   // matches the type-guard in repo-index-manifest.ts.
   if (typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0) {
     manifest.githubRepoId = args.githubRepoId
+  }
+  // Additive: stamp the detected repo role. A carried-forward role
+  // (`args.repoRole`, from an incremental refresh) wins; otherwise classify
+  // from the full-index inputs when supplied. Both paths are feature-gated +
+  // default-branch only and NEVER throw, so this cannot fail the index job.
+  // Nothing reads the role yet — purely additive metadata.
+  const repoRole =
+    args.repoRole ??
+    (args.roleClassify !== undefined
+      ? await computeRepoRoleForIndex({
+          env: args.env,
+          client: args.roleClassify.client,
+          owner: args.owner,
+          repo: args.repo,
+          ref: args.headSha,
+          treeEntries: args.roleClassify.treeEntries,
+          isDefaultBranch: args.branch === null,
+        })
+      : undefined)
+  if (repoRole !== undefined) {
+    manifest.repoRole = repoRole
   }
   try {
     await writeRepoIndexManifest(args.env, manifest)

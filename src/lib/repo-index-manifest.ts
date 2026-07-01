@@ -25,6 +25,7 @@
 // manifests — revalidation does the real freshness work.
 
 import type { Env } from "@/src/shared/types/env"
+import { isRepoRole, type RepoRole } from "@/src/features/repo-role"
 
 // SIG-132 (2026-05-20) — multi-tenant isolation. The index namespace
 // (Vectorize namespace + the suffix of the manifest/vectors KV keys) is
@@ -133,6 +134,15 @@ export interface RepoIndexManifestV1 {
   windowLines: number
   /** Chunker overlap line count. Captured for forensics. */
   overlapLines: number
+  /**
+   * Detected repository role (frontend / backend / infra / library / mobile /
+   * fullstack / unknown), classified at index time from cheap signals
+   * (`@/src/features/repo-role`). OPTIONAL + purely ADDITIVE: nothing reads it
+   * yet, so records without it parse unchanged, and it is only populated when
+   * the `OPENCLAW_REPO_ROLE_CLASSIFY` flag is on. A later slice re-ranks
+   * retrieval/review by this field.
+   */
+  repoRole?: RepoRole
 }
 
 export type ReadResult =
@@ -200,6 +210,9 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (typeof o.chunkerVersion !== "number") return false
   if (typeof o.windowLines !== "number") return false
   if (typeof o.overlapLines !== "number") return false
+  // Additive optional field: absent is valid (legacy records), present must be
+  // one of the known roles — a garbage value is rejected at the boundary.
+  if (o.repoRole !== undefined && !isRepoRole(o.repoRole)) return false
   return true
 }
 

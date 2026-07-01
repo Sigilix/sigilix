@@ -56,6 +56,16 @@ export function astChunkingEnabled(env: Env): boolean {
   return (env.OPENCLAW_AST_CHUNKING ?? "").trim().toLowerCase() === "on"
 }
 
+/**
+ * Whether the index job should classify + stamp the repo's role
+ * (`OPENCLAW_REPO_ROLE_CLASSIFY`, case-insensitive "on"). Default OFF: only
+ * "on" enables, so no extra package.json fetch happens otherwise. Purely
+ * additive metadata — nothing reads the role yet.
+ */
+export function repoRoleClassifyEnabled(env: Pick<Env, "OPENCLAW_REPO_ROLE_CLASSIFY">): boolean {
+  return (env.OPENCLAW_REPO_ROLE_CLASSIFY ?? "").trim().toLowerCase() === "on"
+}
+
 export const MAX_FILES_PER_JOB = 1000
 
 const SKIP_DIRS = new Set([

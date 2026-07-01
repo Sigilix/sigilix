@@ -5,11 +5,11 @@
 // keyless SA-token mint, stream passthrough, generic GCP errors). Identical to the Boreas
 // route (same project / SA / WIF token mint) — it pins ONLY the Astraeus-specific knobs:
 // the forced model id (GLM-5.2 serverless MaaS), the daily-counter key prefix, and the
-// daily ceiling env var.
+// daily ceiling env var — plus (#158) its ordered-fallback-chain knobs (see fallback-chain.ts).
 
 import type { Env } from "@/src/shared/types/env"
 import { handleVertexChatRoute } from "./vertex-chat-route"
-import { ASTRAEUS_MODEL } from "./constants"
+import { ASTRAEUS_MODEL, DEFAULT_ASTRAEUS_FALLBACK_TURBO_MODEL } from "./constants"
 
 /** POST /v1/astraeus/chat/completions — the Astraeus-pinned Vertex chat proxy. */
 export function handleAstraeusApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -17,5 +17,9 @@ export function handleAstraeusApiRoute(request: Request, env: Env, ctx: Executio
     model: ASTRAEUS_MODEL,
     counterKey: "astraeus",
     limitEnvVar: "OPENCLAW_ASTRAEUS_DAILY_LIMIT",
+    sigilixModel: "astraeus",
+    fallbackTurboModelEnvVar: "OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL",
+    defaultFallbackTurboModel: DEFAULT_ASTRAEUS_FALLBACK_TURBO_MODEL,
+    fallbackBedrockModelEnvVar: "OPENCLAW_ASTRAEUS_FALLBACK_BEDROCK_MODEL",
   })
 }

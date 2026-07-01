@@ -57,6 +57,51 @@ server-side. Users never touch GCP.
   `astraeus:count:<day>`, and `OPENCLAW_ASTRAEUS_DAILY_LIMIT`. Same project / SA / WIF token
   mint as Boreas/Pyroeis — only the forced model and the metering counter/limit differ.
 
+## #158 — the ordered per-model failover chain
+
+Each route's `handleVertexChatRoute` call now ends by handing off to
+`fallback-chain.ts`'s `runGatewayChain`, which walks an ORDERED, per-model chain of
+per-token/serverless legs instead of a single hard dependency on Vertex:
+
+1. **Vertex MaaS** — the original leg, unchanged behavior/model-forcing.
+2. **Ollama Turbo** (`turbo-chat.ts`) — the OpenAI-compatible `https://ollama.com/v1/chat/completions`
+   endpoint (same auth pattern as the rest of the Worker's Ollama Turbo usage:
+   `Authorization: Bearer OLLAMA_API_KEY`). Per-model fallback model id is
+   env-configurable (`OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL` default
+   `qwen3-coder-next:cloud`, `OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL` default
+   `glm-5.2:cloud`, `OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL` — **no built-in
+   default**, since there is no confirmed Gemma tag on Ollama Turbo in this
+   codebase; Pyroeis needs it set explicitly or it has no Turbo leg).
+3. **AWS Bedrock** (`bedrock-chat.ts` + `aws-sigv4.ts`) — a SCAFFOLD, disabled at
+   launch. Requires `OPENCLAW_AWS_REGION` + `OPENCLAW_AWS_ACCESS_KEY_ID` +
+   `OPENCLAW_AWS_SECRET_ACCESS_KEY` + a per-model
+   `OPENCLAW_<MODEL>_FALLBACK_BEDROCK_MODEL` — ANY of these unset skips the leg
+   entirely (the founder activates AWS later). Uses the Bedrock Runtime
+   **Converse** REST API, translating OpenAI `messages` <-> Converse's
+   `system`/`messages` shape both ways; SigV4-signed with a minimal
+   self-contained signer (`aws-sigv4.ts`, Web Crypto only, no new dependency) —
+   verified in `aws-sigv4.test.ts` against an independently-written
+   `node:crypto` reimplementation of the same algorithm. **Known limitation**:
+   always calls the non-streaming Converse endpoint (Bedrock's streaming variant
+   uses binary `vnd.amazon.eventstream` framing, not SSE) — a caller's
+   `stream:true` still gets a single accumulated JSON response from this leg.
+   Revisit before enabling Bedrock for a model whose callers rely on streaming.
+
+**Failover triggers — strictly BEFORE the first response byte**: a connect
+error, a timeout, HTTP 5xx, or HTTP 429. A genuine 4xx (a caller mistake) never
+retries onto the next leg. Once a leg's `fetch` resolves with headers/status the
+retry/serve decision is made immediately — the body is never buffered or
+inspected, so whichever leg ultimately serves streams straight through
+untouched (mid-stream failover is explicitly not attempted).
+
+**Never silent**: any leg past Vertex that serves the response gets a
+`console.log(JSON.stringify({ event: "gateway-fallback", sigilixModel, leg,
+upstreamModel, reason }))` line (no secret/token material) and an
+`x-sigilix-served-by: <leg>` response header. If every configured leg fails, the
+last leg's real error surfaces as-is — never a fabricated success. The daily-
+ceiling KV counter still runs exactly once, before the chain, regardless of
+which leg ultimately serves.
+
 ## Assertion JWT (the WIF subject token)
 
 - header `{ alg:"RS256", typ:"JWT", kid }` (kid matches the JWKS key)

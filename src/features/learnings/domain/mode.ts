@@ -55,3 +55,33 @@ export function resolveOrgMemoryCaptureMode(env: Pick<Env, "OPENCLAW_ORG_MEMORY_
   const v = env.OPENCLAW_ORG_MEMORY_CAPTURE?.trim().toLowerCase()
   return v === "on" ? "on" : "off"
 }
+
+/**
+ * Seat∪Org memory layering — Phase 2 (apply/read side) rollout gate.
+ *
+ * Three-state, off-by-default (mirrors resolveMemoryDecayMode's trim+lowercase
+ * parsing, but with the `"on"` enforcement state named to match
+ * `resolveLearningsMode`'s off/shadow/on shape — this is the READ side of the
+ * same review pipeline the learnings mode gates, not the capture/write side
+ * gated by resolveOrgMemoryCaptureMode):
+ *   - `"off"`    — (default / unset / anything else) review reads repo-scope
+ *                  learnings ONLY, byte-identical to pre-slice-2: no
+ *                  installation-id resolution, no `learnings:org:*` KV read.
+ *   - `"shadow"` — review ALSO loads the org-scope corpus + resolves the
+ *                  installation and LOGS the delta (which org learnings WOULD
+ *                  widen the applied set), but the applied set stays repo-only
+ *                  (bake the signal, output byte-unchanged).
+ *   - `"on"`     — the applied set is repo ∪ org (deduped by id; a repo copy
+ *                  wins a collision), so an org-scope learning can shape the
+ *                  review for any repo under the installation.
+ *
+ * Pure: the only import is the `Env` TYPE (type-only, zero runtime cost).
+ */
+export type OrgMemoryApplyMode = "off" | "shadow" | "on"
+
+export function resolveOrgMemoryApplyMode(env: Pick<Env, "OPENCLAW_ORG_MEMORY_APPLY">): OrgMemoryApplyMode {
+  const v = env.OPENCLAW_ORG_MEMORY_APPLY?.trim().toLowerCase()
+  if (v === "on") return "on"
+  if (v === "shadow") return "shadow"
+  return "off"
+}

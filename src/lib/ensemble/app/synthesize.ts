@@ -36,7 +36,7 @@ import {
 import { renderAstFindingsAsJsonForSynth, runAstRules } from "@/src/features/ast-rules"
 import { renderSarifFindingsAsJsonForSynth, type SarifFinding } from "@/src/features/sarif-evidence"
 import {
-  loadLearnings,
+  loadEffectiveLearnings,
   renderLearningsForPrompt,
   resolveLearningsMode,
   selectRelevantForPaths,
@@ -404,8 +404,8 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     // shadow path picks it up. Best-effort — the loader never throws.
     const synthLearningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
     if (synthLearningsMode !== "off" && repoId !== undefined) {
-      const learningsStore = await loadLearnings(env, "repo", String(repoId))
-      const relevantLearnings = selectRelevantForPaths(learningsStore?.entries ?? [], filePaths)
+      const learningsEntries = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
+      const relevantLearnings = selectRelevantForPaths(learningsEntries, filePaths)
       console.log(
         JSON.stringify({
           event: "learnings-synth-inject",

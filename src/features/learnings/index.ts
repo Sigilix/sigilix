@@ -9,14 +9,20 @@ export {
 } from "./adapters/confirmation-map"
 export { extractLearning } from "./adapters/extractor-model"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
+export { loadEffectiveLearnings } from "./adapters/org-apply"
 export { mirrorLearningToOrgScope } from "./adapters/org-mirror"
 export { classifyLearningMemory } from "./domain/classify"
 export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
 export { parseLearningsCommand } from "./domain/command"
 export { EPHEMERAL_MEMORY_TYPES, MEMORY_DECAY_WINDOW_DAYS, isMemoryDecayEligible } from "./domain/decay"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
-export { resolveLearningsMode, resolveMemoryDecayMode, resolveOrgMemoryCaptureMode } from "./domain/mode"
-export type { MemoryDecayMode, OrgMemoryCaptureMode } from "./domain/mode"
+export {
+  resolveLearningsMode,
+  resolveMemoryDecayMode,
+  resolveOrgMemoryApplyMode,
+  resolveOrgMemoryCaptureMode,
+} from "./domain/mode"
+export type { MemoryDecayMode, OrgMemoryApplyMode, OrgMemoryCaptureMode } from "./domain/mode"
 export {
   renderBoostedCategoriesForPrompt,
   renderConfirmReply,

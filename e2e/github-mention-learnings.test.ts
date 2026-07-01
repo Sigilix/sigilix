@@ -69,7 +69,7 @@ vi.mock("@/src/features/learnings", async (importActual) => {
 })
 
 import { queueGithubMention } from "@/src/index"
-import { handleGithubMention } from "@/src/lib/github-mention"
+import { formatReply, handleGithubMention } from "@/src/lib/github-mention"
 import { renderConfirmReply, renderForgetConfirm } from "@/src/features/learnings"
 import type { Env } from "@/src/shared/types/env"
 
@@ -275,7 +275,7 @@ describe("handleGithubMention learnings commands", () => {
     expect(generateMock).not.toHaveBeenCalled()
   })
 
-  it("captures explicit remember intent from normal Q&A after posting the answer", async () => {
+  it("folds explicit remember intent from normal Q&A into the SAME reply as a footer — one comment, not two", async () => {
     const { env, store } = makeEnv("on")
     const rule = "Prefer service-layer database access in controllers."
     extractLearningMock.mockResolvedValueOnce({
@@ -284,7 +284,7 @@ describe("handleGithubMention learnings commands", () => {
       category: null,
       pathGlob: null,
     })
-    replyToReviewCommentMock.mockResolvedValueOnce({ id: 9_010 }).mockResolvedValueOnce({ id: 9_011 })
+    replyToReviewCommentMock.mockResolvedValueOnce({ id: 9_010 })
     listPullRequestReviewCommentsMock.mockResolvedValue([
       reviewComment({
         id: 506,
@@ -295,14 +295,6 @@ describe("handleGithubMention learnings commands", () => {
     await runReviewMention({ env, commentId: 506, repoId: REPO_ID })
 
     expect(generateMock).toHaveBeenCalledOnce()
-    expect(replyToReviewCommentMock).toHaveBeenNthCalledWith(
-      1,
-      OWNER,
-      REPO,
-      PR,
-      506,
-      expect.stringContaining("regular Q&A fallback"),
-    )
     expect(extractLearningMock).toHaveBeenCalledWith(
       env,
       expect.objectContaining({
@@ -317,13 +309,68 @@ describe("handleGithubMention learnings commands", () => {
       rule,
       source: { kind: "qa", commentId: 506 },
     })
-    expect(replyToReviewCommentMock).toHaveBeenNthCalledWith(2, OWNER, REPO, PR, 506, renderConfirmReply(rule))
-    expect(JSON.parse(store.get("learning-confirmation:9011") ?? "{}")).toEqual({
+
+    // Exactly ONE comment posted — the ack/answer body with the learning
+    // confirmation folded in as a footer, not a second separate comment.
+    expect(replyToReviewCommentMock).toHaveBeenCalledOnce()
+    const expectedAnswerBody = formatReply({
+      answer: "regular Q&A fallback",
+      confidence: 4,
+      abstain: false,
+      verdict: "answer",
+    })
+    expect(replyToReviewCommentMock).toHaveBeenCalledWith(
+      OWNER,
+      REPO,
+      PR,
+      506,
+      `${expectedAnswerBody}\n\n${renderConfirmReply(rule)}`,
+    )
+
+    // Confirmation map is keyed to the SINGLE posted comment's id (9010) —
+    // dual-keyed with the thread root (506) so `@sigilix forget` resolves
+    // whichever id GitHub's flattened-thread reply actually carries.
+    const learningId = stored.entries?.[0]?.id
+    expect(JSON.parse(store.get("learning-confirmation:9010") ?? "{}")).toEqual({
       scope: "repo",
       subjectId: String(REPO_ID),
-      learningId: stored.entries?.[0]?.id,
+      learningId,
+    })
+    expect(JSON.parse(store.get("learning-confirmation:506") ?? "{}")).toEqual({
+      scope: "repo",
+      subjectId: String(REPO_ID),
+      learningId,
     })
     expect(store.get("gh-mention:506")).toBe("9010")
+  })
+
+  it("resolves @sigilix forget against the combined QA reply via the flattened thread root", async () => {
+    const { env, store } = makeEnv("on")
+    const rule = "Prefer service-layer database access in controllers."
+    extractLearningMock.mockResolvedValueOnce({
+      rule,
+      polarity: "context",
+      category: null,
+      pathGlob: null,
+    })
+    replyToReviewCommentMock.mockResolvedValueOnce({ id: 9_010 }).mockResolvedValueOnce({ id: 9_012 })
+    // GitHub flattens review-comment threads: a reply to the combined
+    // comment (9010) actually carries in_reply_to_id = the thread ROOT
+    // (506), not 9010 itself.
+    listPullRequestReviewCommentsMock.mockResolvedValue([
+      reviewComment({
+        id: 506,
+        body: "@sigilix can you explain this? Please remember that controllers use service-layer database access.",
+      }),
+      reviewComment({ id: 520, body: "@sigilix forget", inReplyToId: 506 }),
+    ])
+
+    await runReviewMention({ env, commentId: 506, repoId: REPO_ID })
+    await runReviewMention({ env, commentId: 520, threadRootId: 506, repoId: REPO_ID })
+
+    const stored = JSON.parse(store.get(`learnings:repo:${REPO_ID}`) ?? "{}") as { entries?: unknown[] }
+    expect(stored.entries).toEqual([])
+    expect(replyToReviewCommentMock).toHaveBeenLastCalledWith(OWNER, REPO, PR, 506, renderForgetConfirm())
   })
 
   it("lists learned rule text without public ids", async () => {

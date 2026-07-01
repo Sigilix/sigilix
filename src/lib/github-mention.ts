@@ -32,7 +32,7 @@ import {
   learningCommandDedupeKey,
   validGithubRepoId,
 } from "./github-mention-learnings"
-import { captureGithubMentionQaLearning } from "./github-mention-auto-learnings"
+import { postGithubMentionQaReply } from "./github-mention-auto-learnings"
 import { parseLearningsCommand, resolveLearningsMode } from "@/src/features/learnings"
 import { parseFindingCategory, parseFindingFingerprint, parseFindingSeverity } from "./pr-finding-markers"
 import { verifyAndSanitizeCitations } from "./citation-verifier"
@@ -573,19 +573,9 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     verdict = { ...verdict, answer: citationCheck.answer }
   }
 
-  const replyBody = formatReply(verdict)
-  const newId = await postReply({
-    client,
-    owner,
-    repo,
-    prNumber,
-    surface,
-    threadRootId: args.threadRootId ?? commentId,
-    body: replyBody,
-  })
-  since("reply-posted", { newId })
-
-  await captureGithubMentionQaLearning({
+  // Fold a captured QA learning into the SAME reply as a footer instead of
+  // a second, separate confirmation comment (see github-mention-auto-learnings).
+  const newId = await postGithubMentionQaReply({
     client,
     env,
     owner,
@@ -595,9 +585,13 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     commentId,
     sourceComment,
     ...(repoId !== undefined ? { repoId } : {}),
-    threadRootId: args.threadRootId ?? commentId,
     question,
+    baseReplyBody: formatReply(verdict),
+    threadRootId: args.threadRootId ?? commentId,
+    post: (body) =>
+      postReply({ client, owner, repo, prNumber, surface, threadRootId: args.threadRootId ?? commentId, body }),
   })
+  since("reply-posted", { newId })
 
   // SIG-160 PR3: when the model explicitly concedes on an inline thread,
   // persist a WithdrawalRecord so the review-emit path drops the

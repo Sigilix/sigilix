@@ -68,14 +68,22 @@ function contentToText(content: unknown): string {
   return ""
 }
 
-/** Translate an OpenAI-shaped `messages` array into Bedrock Converse's `system` + `messages`. */
+/**
+ * Translate an OpenAI-shaped `messages` array into Bedrock Converse's `system` +
+ * `messages`. Converse requires STRICTLY ALTERNATING user/assistant turns and
+ * rejects empty content blocks, so this also (a) folds any non-system,
+ * non-assistant role (e.g. "tool") into "user" rather than dropping it, (b)
+ * MERGES adjacent same-role turns (concatenated with a newline) instead of
+ * emitting consecutive same-role messages Converse would reject, and (c) drops
+ * any turn that ends up with empty text after merging.
+ */
 export function openAiMessagesToConverse(messages: unknown): {
   system: { text: string }[]
   converseMessages: { role: "user" | "assistant"; content: { text: string }[] }[]
 } {
   const system: { text: string }[] = []
-  const converseMessages: { role: "user" | "assistant"; content: { text: string }[] }[] = []
-  if (!Array.isArray(messages)) return { system, converseMessages }
+  const merged: { role: "user" | "assistant"; text: string }[] = []
+  if (!Array.isArray(messages)) return { system, converseMessages: [] }
   for (const raw of messages as OpenAiMessage[]) {
     const role = typeof raw.role === "string" ? raw.role : "user"
     const text = contentToText(raw.content)
@@ -85,9 +93,17 @@ export function openAiMessagesToConverse(messages: unknown): {
     }
     // Converse only knows "user" | "assistant"; fold anything else (e.g. "tool") into "user"
     // rather than dropping it silently.
-    const converseRole = role === "assistant" ? "assistant" : "user"
-    converseMessages.push({ role: converseRole, content: [{ text }] })
+    const converseRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user"
+    const last = merged[merged.length - 1]
+    if (last && last.role === converseRole) {
+      last.text = last.text ? `${last.text}\n${text}` : text
+    } else {
+      merged.push({ role: converseRole, text })
+    }
   }
+  const converseMessages = merged
+    .filter((m) => m.text.length > 0)
+    .map((m) => ({ role: m.role, content: [{ text: m.text }] }))
   return { system, converseMessages }
 }
 
@@ -156,33 +172,36 @@ export async function attemptBedrockLeg(
       body: bodyStr,
     })
 
+    // The timeout covers the fetch AND the (non-streaming, always-fully-read)
+    // response body read — a hanging Bedrock body read is just as much a "leg is
+    // flaky" condition as a hanging connect, and this leg never streams (see the
+    // file header), so there's no legitimate long-lived read to protect here.
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
-    let upstream: Response
     try {
-      upstream = await fetch(url, {
+      const upstream = await fetch(url, {
         method: "POST",
         headers: signed.headers,
         body: bodyStr,
         signal: controller.signal,
       })
+
+      if (!upstream.ok) {
+        // Drain the body (never logged/returned — may carry AWS account/ARN detail) and
+        // synthesize a generic failure response so the chain can decide retryability
+        // purely from `upstream.status`.
+        await upstream.body?.cancel()
+        return {
+          response: json({ error: "boreas_upstream_error", detail: "upstream request failed" }, upstream.status),
+          upstreamModel: modelId,
+        }
+      }
+
+      const converseJson = (await upstream.json()) as ConverseResponse
+      return { response: json(converseResponseToOpenAi(converseJson, modelId), 200), upstreamModel: modelId }
     } finally {
       clearTimeout(timer)
     }
-
-    if (!upstream.ok) {
-      // Drain the body (never logged/returned — may carry AWS account/ARN detail) and
-      // synthesize a generic failure response so the chain can decide retryability
-      // purely from `upstream.status`.
-      await upstream.body?.cancel()
-      return {
-        response: json({ error: "boreas_upstream_error", detail: "upstream request failed" }, upstream.status),
-        upstreamModel: modelId,
-      }
-    }
-
-    const converseJson = (await upstream.json()) as ConverseResponse
-    return { response: json(converseResponseToOpenAi(converseJson, modelId), 200), upstreamModel: modelId }
   } catch (err) {
     console.error(JSON.stringify({ event: "gateway-leg-error", leg: "bedrock", detail: String(err) }))
     return {

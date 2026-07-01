@@ -62,6 +62,26 @@ describe("openAiMessagesToConverse", () => {
   it("returns empty arrays for a non-array messages field", () => {
     expect(openAiMessagesToConverse(undefined)).toEqual({ system: [], converseMessages: [] })
   })
+
+  it("merges adjacent same-role turns instead of emitting consecutive same-role messages (Converse requires strict alternation)", () => {
+    const { converseMessages } = openAiMessagesToConverse([
+      { role: "user", content: "first" },
+      { role: "tool", content: "tool result" }, // folds into "user" — adjacent to the turn above
+      { role: "assistant", content: "reply" },
+    ])
+    expect(converseMessages).toEqual([
+      { role: "user", content: [{ text: "first\ntool result" }] },
+      { role: "assistant", content: [{ text: "reply" }] },
+    ])
+  })
+
+  it("drops a turn that ends up with empty text after merging (Converse rejects empty content blocks)", () => {
+    const { converseMessages } = openAiMessagesToConverse([
+      { role: "user", content: "" },
+      { role: "assistant", content: "hi" },
+    ])
+    expect(converseMessages).toEqual([{ role: "assistant", content: [{ text: "hi" }] }])
+  })
 })
 
 describe("converseResponseToOpenAi", () => {

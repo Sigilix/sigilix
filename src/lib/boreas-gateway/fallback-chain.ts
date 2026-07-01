@@ -218,6 +218,23 @@ export async function runGatewayChain(
       return new Response(attempt.response.body, { status: attempt.response.status, headers })
     }
 
+    if (retryable && isLastLeg && legs.length > 1) {
+      // Every configured leg failed — the real error surfaces below (recall-safe,
+      // no fake success), but a mass-fallback-then-fail incident must still be
+      // OBSERVABLE: without this, a fully-exhausted chain logs nothing at this
+      // layer (a resolved 5xx/429 response, unlike a thrown connect error, isn't
+      // itself console.error'd by the per-leg attempt functions).
+      console.error(
+        JSON.stringify({
+          event: "gateway-chain-exhausted",
+          sigilixModel: cfg.sigilixModel,
+          leg: attempt.leg,
+          upstreamModel: attempt.upstreamModel,
+          reason: attempt.reason,
+        }),
+      )
+    }
+
     // Vertex serving normally (no marker), OR the chain is exhausted and this
     // leg's real error/response surfaces as-is — recall-safe, no fake success.
     return attempt.response

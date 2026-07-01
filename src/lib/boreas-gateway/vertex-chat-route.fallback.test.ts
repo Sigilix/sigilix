@@ -138,6 +138,34 @@ describe("model-gateway failover chain — #158", () => {
     })
   })
 
+  it("a genuine Vertex 4xx (caller's fault, not Vertex being flaky) surfaces directly — NEVER triggers fallback", async () => {
+    const f = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      const u = String(url)
+      const stock = stsAndImpersonateOk(u)
+      if (stock) return stock
+      if (u === VERTEX_CHAT_COMPLETIONS_URL) {
+        return new Response(JSON.stringify({ error: "invalid_request", detail: "bad schema" }), {
+          status: 403,
+          headers: jsonHeaders.headers,
+        })
+      }
+      throw new Error(`unexpected fetch: ${u}`) // proves Turbo/Bedrock are never reached on a 4xx
+    })
+    vi.stubGlobal("fetch", f)
+    const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER, OLLAMA_API_KEY: OLLAMA_KEY })
+    const { ctx } = makeCtx()
+
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${KEY}`),
+      env,
+      ctx,
+    )
+
+    expect(res.status).toBe(403) // Vertex's real 4xx, unchanged — never retried onto Turbo
+    expect(res.headers.get("x-sigilix-served-by")).toBeNull()
+    expect(f.mock.calls.some((c) => String(c[0]) === OLLAMA_TURBO_CHAT_COMPLETIONS_URL)).toBe(false)
+  })
+
   it("Vertex 429 → Turbo leg serves + marker + telemetry with reason 429", async () => {
     const logSpy = vi.spyOn(console, "log")
     const f = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
@@ -200,7 +228,8 @@ describe("model-gateway failover chain — #158", () => {
     expect(f.mock.calls.some((c) => String(c[0]) === OLLAMA_TURBO_CHAT_COMPLETIONS_URL)).toBe(true)
   })
 
-  it("both Vertex AND Turbo fail → the real error surfaces (no fake success, no marker)", async () => {
+  it("both Vertex AND Turbo fail → the real error surfaces (no fake success, no marker) + a chain-exhausted telemetry line", async () => {
+    const errSpy = vi.spyOn(console, "error")
     const f = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       const u = String(url)
       const stock = stsAndImpersonateOk(u)
@@ -223,6 +252,80 @@ describe("model-gateway failover chain — #158", () => {
     expect(res.headers.get("x-sigilix-served-by")).toBeNull()
     const text = await res.text()
     expect(text).toBe("turbo also down")
+
+    // Even though nothing "served", a fully-exhausted chain must still be observable.
+    const exhausted = errSpy.mock.calls
+      .map((c) => c.map(String).join(" "))
+      .find((s) => s.includes("gateway-chain-exhausted"))
+    expect(exhausted).toBeDefined()
+    expect(JSON.parse(exhausted!.match(/\{.*\}/)![0])).toMatchObject({
+      event: "gateway-chain-exhausted",
+      sigilixModel: "boreas",
+      leg: "turbo",
+    })
+  })
+
+  it("a single Vertex failure with NO fallback leg configured logs no chain-exhausted event (nothing was exhausted — there was only ever one leg)", async () => {
+    const errSpy = vi.spyOn(console, "error")
+    const f = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      const u = String(url)
+      const stock = stsAndImpersonateOk(u)
+      if (stock) return stock
+      if (u === VERTEX_CHAT_COMPLETIONS_URL) return new Response("vertex down", { status: 500 })
+      throw new Error(`unexpected fetch: ${u}`)
+    })
+    vi.stubGlobal("fetch", f)
+    // No OLLAMA_API_KEY at all — Turbo is never a configured leg.
+    const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER })
+    const { ctx } = makeCtx()
+
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${KEY}`),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(500)
+    const exhausted = errSpy.mock.calls
+      .map((c) => c.map(String).join(" "))
+      .find((s) => s.includes("gateway-chain-exhausted"))
+    expect(exhausted).toBeUndefined()
+  })
+
+  it("passes the serving leg's response body through as a live stream — never buffers/parses it to decide (bodyUsed stays false until the CALLER reads it)", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ id: "cmpl-turbo-streamed" })))
+        controller.close()
+      },
+    })
+    const f = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      const u = String(url)
+      const stock = stsAndImpersonateOk(u)
+      if (stock) return stock
+      if (u === VERTEX_CHAT_COMPLETIONS_URL) return new Response("vertex down", { status: 500 })
+      if (u === OLLAMA_TURBO_CHAT_COMPLETIONS_URL) {
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } })
+      }
+      throw new Error(`unexpected fetch: ${u}`)
+    })
+    vi.stubGlobal("fetch", f)
+    const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER, OLLAMA_API_KEY: OLLAMA_KEY })
+    const { ctx } = makeCtx()
+
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${KEY}`),
+      env,
+      ctx,
+    )
+
+    // The chain decided retry/serve using ONLY the response status — the returned
+    // Response's body must still be untouched (unread) the instant the route
+    // returns; only the CALLER reading it below should disturb it. If the chain
+    // had buffered/parsed the body to decide, it would already be `true` here.
+    expect(res.bodyUsed).toBe(false)
+    const body = (await res.json()) as { id?: string }
+    expect(body.id).toBe("cmpl-turbo-streamed")
+    expect(res.bodyUsed).toBe(true)
   })
 
   it("Pyroeis with NO configured Turbo fallback → Vertex error surfaces directly (Turbo never attempted)", async () => {

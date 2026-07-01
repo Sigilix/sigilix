@@ -43,7 +43,14 @@ function referenceSign(args: {
   const signedHeaderNames = Object.keys(headersToSign).sort()
   const canonicalHeaders = signedHeaderNames.map((n) => `${n}:${headersToSign[n]}\n`).join("")
   const signedHeaders = signedHeaderNames.join(";")
-  const canonicalRequest = [args.method, u.pathname || "/", "", canonicalHeaders, signedHeaders, payloadHash].join("\n")
+  // Non-S3 services double-URI-encode the canonical path (see the matching note
+  // in aws-sigv4.ts) — reimplemented independently here too, so this reference
+  // actually exercises the same rule rather than assuming the module got it right.
+  const canonicalUri = (u.pathname || "/")
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+  const canonicalRequest = [args.method, canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n")
   const credentialScope = `${dateStamp}/${args.region}/${args.service}/aws4_request`
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256Hex(canonicalRequest)].join("\n")
 
@@ -81,6 +88,24 @@ describe("signAwsRequestV4", () => {
     expect(got.headers["x-amz-date"]).toBe(want.headers["x-amz-date"])
     expect(got.headers["x-amz-content-sha256"]).toBe(want.headers["x-amz-content-sha256"])
     expect(got.headers.host).toBe(want.headers.host)
+  })
+
+  it("double-URI-encodes a path segment that already contains a percent-escape (e.g. a Bedrock model id's colon) — matches the reference implementation", async () => {
+    // Mirrors bedrockConverseUrl(): a real Bedrock model id like
+    // "anthropic.claude-3-5-sonnet-20241022-v2:0" arrives here already
+    // single-encoded (":" -> "%3A") by encodeURIComponent at URL-construction
+    // time; the canonical URI must encode it AGAIN for a non-S3 service.
+    const args = {
+      ...baseArgs,
+      url: `https://bedrock-runtime.us-east-1.amazonaws.com/model/${encodeURIComponent("anthropic.claude-3-5-sonnet-20241022-v2:0")}/converse`,
+    }
+    const got = await signAwsRequestV4(args)
+    const want = referenceSign(args)
+    expect(got.headers.authorization).toBe(want.headers.authorization)
+    // Sanity: the double-encoding actually changed the signature vs. the
+    // colon-free fixture — proves this is not a no-op path.
+    const plain = await signAwsRequestV4(baseArgs)
+    expect(got.headers.authorization).not.toBe(plain.headers.authorization)
   })
 
   it("matches the reference implementation for an empty-body request too", async () => {

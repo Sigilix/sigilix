@@ -81,11 +81,27 @@ export async function signAwsRequestV4(args: SignAwsRequestArgs): Promise<Signed
   const { amzDate, dateStamp } = formatAmzDate(args.now ?? new Date())
   const payloadHash = await sha256Hex(body)
 
-  const canonicalUri = parsed.pathname || "/"
   // Query-string signing isn't implemented (no leg needs it yet) — a query string
   // here would silently produce a WRONG signature (AWS requires it in the
   // canonical request), so fail loudly rather than mint a bad signature.
   if (parsed.search) throw new Error("signAwsRequestV4: query strings are not supported")
+
+  // AWS's canonical-request algorithm URI-encodes the path TWICE for every
+  // service EXCEPT S3 (S3 encodes once) — a well-documented, frequently-missed
+  // SigV4 gotcha (see AWS's "Create a canonical request" reference + the
+  // aws-sigv4-test-suite). `parsed.pathname` is already single-encoded (e.g. a
+  // Bedrock model id's `:` arrives here as a literal `%3A`, from
+  // `bedrockConverseUrl`'s `encodeURIComponent`); this signer's only caller
+  // today is Bedrock (non-S3), so encoding each path segment again here
+  // (turning that `%3A` into `%253A` for signing purposes ONLY — the actual
+  // request line on the wire still sends the single-encoded path) is
+  // correct. If this module ever signs an S3 request, this MUST become
+  // single-encoding for that call instead — verified independently in
+  // aws-sigv4.test.ts against a from-scratch node:crypto reimplementation.
+  const canonicalUri = (parsed.pathname || "/")
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
 
   const extra = args.extraHeaders ?? {}
   const headersToSign: Record<string, string> = {

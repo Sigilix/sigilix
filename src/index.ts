@@ -62,6 +62,7 @@ import {
 import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-retrieval-probe-route"
 import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib/agent-runner/admin-agent-run-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { requireSession } from "@/src/lib/auth-middleware"
@@ -727,6 +728,26 @@ export default {
           }),
         )
       }),
+    )
+    // Memory Gardener — activity-aware decay tick (Phase-1 dynamic-memory moat).
+    // Independent of the indexer gate below: it runs EVERY tick and self-gates
+    // on OPENCLAW_MEMORY_DECAY_MODE (unset → "off" → returns instantly with zero
+    // side effects, so prod is unaffected until an operator opts in). Own
+    // try/catch + own error-event name so a decay failure can never poison the
+    // reconciliation tick, and vice-versa.
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await runMemoryDecayPass(env)
+        } catch (err) {
+          console.error(
+            JSON.stringify({
+              event: "memory-decay-tick-error",
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          )
+        }
+      })(),
     )
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
     // manual routes (index-repo / index-backfill / index-reconcile) stay

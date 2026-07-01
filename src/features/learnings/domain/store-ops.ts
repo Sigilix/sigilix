@@ -17,6 +17,40 @@ export function learningsKey(scope: LearningScope, subjectId: string): string {
   return `learnings:${scope}:${subjectId}`
 }
 
+/**
+ * The Gardener's tombstone keyspace (Phase-1 decay). A reaped memory is moved
+ * here (never hard-deleted) so it stays recoverable. The prefix is DISTINCT
+ * from `learnings:` (the trailing `-archive` means a `list({prefix:"learnings:"})`
+ * active scan never matches an archive key — the char after `learnings` is `-`,
+ * not `:`).
+ */
+export function learningsArchiveKey(scope: LearningScope, subjectId: string): string {
+  return `learnings-archive:${scope}:${subjectId}`
+}
+
+/**
+ * Parse a scanned active-store key (`learnings:<scope>:<subjectId>`) back into
+ * its scope + subjectId. Pure, defensive: returns null for a malformed key or
+ * an unknown scope so a KV-scan caller can skip it rather than throw. The
+ * subjectId is everything after the second `:` (subjectIds don't contain a
+ * colon today, but taking the remainder keeps this robust if one ever does).
+ */
+export function parseLearningsKey(key: string): { scope: LearningScope; subjectId: string } | null {
+  const prefix = "learnings:"
+  if (!key.startsWith(prefix)) return null
+  const rest = key.slice(prefix.length)
+  const sep = rest.indexOf(":")
+  if (sep < 0) return null
+  const scope = rest.slice(0, sep)
+  const subjectId = rest.slice(sep + 1)
+  if (!isLearningScope(scope) || subjectId.length === 0) return null
+  return { scope, subjectId }
+}
+
+function isLearningScope(value: string): value is LearningScope {
+  return value === "repo" || value === "org" || value === "project"
+}
+
 export function normalizeRule(raw: string): string {
   const collapsed = raw
     .trim()

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { resolveLearningsMode } from "@/src/features/learnings/domain/mode"
+import { resolveLearningsMode, resolveMemoryDecayMode } from "@/src/features/learnings/domain/mode"
 import {
   MAX_LEARNINGS,
   computeLearningId,
+  learningsArchiveKey,
   learningsKey,
   normalizeRule,
+  parseLearningsKey,
   removeEntry,
   selectRelevantForPaths,
   upsertEntry,
@@ -100,11 +102,46 @@ describe("resolveLearningsMode", () => {
   })
 })
 
+describe("resolveMemoryDecayMode", () => {
+  it("defaults to off (unset / unknown) and accepts shadow/enforce", () => {
+    expect(resolveMemoryDecayMode({})).toBe("off")
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "" })).toBe("off")
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "off" })).toBe("off")
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "on" })).toBe("off")
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "shadow" })).toBe("shadow")
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "enforce" })).toBe("enforce")
+    // Trimmed + case-insensitive (mirrors resolveQuotaMode).
+    expect(resolveMemoryDecayMode({ OPENCLAW_MEMORY_DECAY_MODE: "  ENFORCE  " })).toBe("enforce")
+  })
+})
+
 describe("store-ops", () => {
   it("builds the scope-parameterized key", () => {
     expect(learningsKey("repo", "987654")).toBe("learnings:repo:987654")
     expect(learningsKey("org", "sigilix")).toBe("learnings:org:sigilix")
     expect(learningsKey("project", "SIG")).toBe("learnings:project:SIG")
+  })
+
+  it("builds the archive tombstone key on a distinct prefix (never matched by the active scan)", () => {
+    expect(learningsArchiveKey("repo", "987654")).toBe("learnings-archive:repo:987654")
+    // The active-scan prefix is `learnings:`; an archive key must NOT start with it
+    // (the char after `learnings` is `-`, not `:`), so a `list({prefix:"learnings:"})`
+    // never returns a tombstone.
+    expect(learningsArchiveKey("repo", "987654").startsWith("learnings:")).toBe(false)
+  })
+
+  it("parses an active-store key back into scope + subjectId, rejecting malformed / archive keys", () => {
+    expect(parseLearningsKey("learnings:repo:123")).toEqual({ scope: "repo", subjectId: "123" })
+    expect(parseLearningsKey("learnings:org:sigilix")).toEqual({ scope: "org", subjectId: "sigilix" })
+    expect(parseLearningsKey("learnings:project:SIG")).toEqual({ scope: "project", subjectId: "SIG" })
+    // round-trips with the builder
+    expect(parseLearningsKey(learningsKey("repo", "987654"))).toEqual({ scope: "repo", subjectId: "987654" })
+    // rejects: unknown scope, missing subjectId, wrong prefix, and archive keys
+    expect(parseLearningsKey("learnings:tenant:1")).toBeNull()
+    expect(parseLearningsKey("learnings:repo:")).toBeNull()
+    expect(parseLearningsKey("learnings:repo")).toBeNull()
+    expect(parseLearningsKey("other:repo:1")).toBeNull()
+    expect(parseLearningsKey("learnings-archive:repo:123")).toBeNull()
   })
 
   it("normalizes commands and redacts secrets, emails, and tokens before storage", () => {

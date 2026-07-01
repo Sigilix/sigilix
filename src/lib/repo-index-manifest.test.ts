@@ -282,6 +282,43 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     expect(r4.kind).toBe("invalid")
   })
 
+  it("round-trips a manifest with repoRole set (additive field)", async () => {
+    // repo-role classification is additive metadata: a stamped role must
+    // survive the read so a later slice can re-rank by it.
+    const { kv } = makeKvStub()
+    const withRole: RepoIndexManifestV1 = { ...SAMPLE_MANIFEST, repoRole: "backend" }
+    await writeRepoIndexManifest(makeEnv(kv), withRole)
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.manifest.repoRole).toBe("backend")
+      expect(result.manifest).toEqual(withRole)
+    }
+  })
+
+  it("reads a legacy manifest without repoRole as valid (backward-compat)", async () => {
+    // Records written before repo-role classification (and any record written
+    // while the flag is off) simply lack the field — they must still parse.
+    const { kv } = makeKvStub()
+    await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.manifest.repoRole).toBeUndefined()
+    }
+  })
+
+  it("rejects a manifest whose repoRole is not a known role (shape)", async () => {
+    const { kv, store } = makeKvStub()
+    const bad = { ...SAMPLE_MANIFEST, repoRole: "frontendish" }
+    store.set("repo-index-manifest:sigilix/sigilix", JSON.stringify(bad))
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "sigilix")
+    expect(result.kind).toBe("invalid")
+    if (result.kind === "invalid") {
+      expect(result.reason).toBe("shape")
+    }
+  })
+
   it("writeRepoIndexManifest propagates the KV.put error (SIG-156 PR3 hardening)", async () => {
     // Was best-effort (caught + returned false), leaving vectors written
     // with no manifest → repo undiscoverable + push won't bootstrap.

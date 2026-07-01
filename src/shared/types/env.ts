@@ -990,6 +990,15 @@ export interface Env {
   // `wrangler secret put OPENCLAW_AST_CHUNKING on`.
   OPENCLAW_AST_CHUNKING?: string
 
+  // Repo-role classification. When "on", the index-repo job computes the repo's
+  // role (frontend / backend / infra / library / mobile / fullstack / unknown)
+  // from cheap signals (tree paths + package.json) and stamps it on the repo's
+  // index manifest. DEFAULT OFF — only "on" enables (anything else, including
+  // unset, keeps it off, so no extra package.json fetch happens). Purely
+  // ADDITIVE metadata: nothing reads `role` yet, so a flip is zero-behavior;
+  // any classification failure yields `unknown` and never fails the index job.
+  OPENCLAW_REPO_ROLE_CLASSIFY?: string
+
   // ARC-283 Phase B1b — shadow-mode model bake-off. CSV of role names
   // whose CANDIDATE lineup (per `SHADOW_BAKEOFF_LINEUP` in
   // `lib/shadow-bakeoff-config.ts`) should fire in parallel with prod

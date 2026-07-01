@@ -262,6 +262,10 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     chunkCount: vectorsResult.chunkCount,
     shardCount: 1,
     chunkerVersion: args.chunkerVersion,
+    // Carry the prior role forward so a push-delta refresh doesn't erase the
+    // additive metadata (this path does not re-classify). Undefined on legacy
+    // records is fine — the field is just omitted.
+    repoRole: prior.repoRole,
   })
   const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeAfterManifest, args.runId)) {
@@ -364,6 +368,8 @@ async function handleNoopIncremental(
     chunkCount: vectorsResult.chunkCount,
     shardCount: 1,
     chunkerVersion: args.chunkerVersion,
+    // Carry the prior role forward (the no-op push path does not re-classify).
+    repoRole: prior.repoRole,
   })
   const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeAfterManifest, args.runId)) {

@@ -404,6 +404,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       chunkCount: 0,
       shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
+      roleClassify: { client, treeEntries: tree.tree },
     })
     console.log(
       JSON.stringify({
@@ -550,6 +551,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     chunkCount,
     shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
+    roleClassify: { client, treeEntries: tree.tree },
   })
   console.log(
     JSON.stringify({
@@ -879,6 +881,7 @@ async function handleShardJob(
       chunkCount: cumulativeChunks,
       shardCount,
       chunkerVersion: effectiveChunkerVersion(astOn),
+      roleClassify: { client, treeEntries: tree.tree },
     })
     console.log(
       JSON.stringify({

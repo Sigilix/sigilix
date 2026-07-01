@@ -11,6 +11,10 @@
 // so `storeMemoryFact` exercises its real embed→upsert→KV→dedup legs.
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { insertApiKey } from "@/src/lib/api-key-store"
+import { sha256Hex } from "@/src/lib/auth-bearer"
 import { handleMemoryExtractRoute } from "./agent-memory-extract"
 import { memoryNamespace } from "./retrieval"
 import type { Env } from "@/src/shared/types/env"
@@ -87,7 +91,7 @@ function fakeIndex() {
 let kv: KVNamespace
 let idx: ReturnType<typeof fakeIndex>
 
-function makeEnv(): Env {
+function makeEnv(extra: Partial<Env> = {}): Env {
   return {
     OPENCLAW_SIGILIX_API_KEY: TOKEN,
     OPENROUTER_API_KEY: "or-test-key", // the extractor config primary is an OpenRouter id
@@ -96,17 +100,31 @@ function makeEnv(): Env {
     OPENCLAW_STATE: kv,
     AI: fakeAi(),
     OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
+    ...extra,
   } as unknown as Env
+}
+const MIGRATION_SQL_API_KEY = readFileSync(
+  new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+/** Throws on any operation — simulates a genuine D1 outage/fault. */
+function makeBrokenDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error("simulated D1 error")
+    },
+  } as unknown as D1Database
 }
 
 /** Env with the static bearer UNSET (the inert-503 case). */
-function unkeyedEnv(): Env {
+function unkeyedEnv(extra: Partial<Env> = {}): Env {
   return {
     OPENROUTER_API_KEY: "or-test-key",
     OLLAMA_API_KEY: "",
     OPENCLAW_STATE: kv,
     AI: fakeAi(),
     OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
+    ...extra,
   } as unknown as Env
 }
 
@@ -154,6 +172,34 @@ describe("POST /v1/memory/extract — auth + validation", () => {
   })
   it("401 on a bad bearer", async () => {
     expect((await handleMemoryExtractRoute(extractReq(exchangeBody, "nope"), makeEnv())).status).toBe(401)
+  })
+
+  // #155 slice 2: the route now authenticates via resolveApiKey (D1 api_key lookup,
+  // falling back to the legacy global key). These pin the new invariants at the
+  // route level (resolveApiKey's own unit suite covers the resolver exhaustively).
+  it("200 with a valid per-tenant api_key — NO global key configured at all", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    const plaintext = "sigilix_live_extract_test"
+    await insertApiKey(db, {
+      id: "key-1",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 42,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const res = await handleMemoryExtractRoute(
+      extractReq(exchangeBody, plaintext),
+      unkeyedEnv({ SIGILIX_PLATFORM_DB: db }),
+    )
+    expect(res.status).toBe(200)
+  })
+  it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key", async () => {
+    const res = await handleMemoryExtractRoute(
+      extractReq(exchangeBody, TOKEN),
+      makeEnv({ SIGILIX_PLATFORM_DB: makeBrokenDb() }),
+    )
+    expect(res.status).toBe(401)
   })
   it("400 on invalid JSON", async () => {
     expect((await handleMemoryExtractRoute(extractReq("{nope"), makeEnv())).status).toBe(400)

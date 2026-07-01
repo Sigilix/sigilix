@@ -21,7 +21,7 @@
 // NOTHING here logs or returns the SA token / the request body.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireBearerToken } from "@/src/lib/auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { getVertexAccessToken } from "./vertex-token"
 import { VERTEX_CHAT_COMPLETIONS_URL } from "./constants"
@@ -86,9 +86,20 @@ export async function handleVertexChatRoute(
   cfg: VertexChatRouteConfig,
 ): Promise<Response> {
   // AUTH FIRST — before body read, token mint, or any GCP call.
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "boreas_gateway_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication). No
+  // installationId is threaded further: this gateway has no per-tenant concept
+  // downstream (only the global per-day KV counter below), so the resolved
+  // identity is used ONLY to decide 401 vs proceed.
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "boreas_gateway_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env, ctx))) return json({ error: "unauthorized" }, 401)
   if (!env.OPENCLAW_GATEWAY_ISSUER) return json({ error: "boreas_gateway_not_configured" }, 503)
 
   // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so

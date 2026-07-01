@@ -39,7 +39,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
-import { requireBearerToken } from "./auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import {
   admitTenant,
   releaseTenant,
@@ -176,9 +176,26 @@ function parseBody(raw: unknown): ReviewApiBody | string {
  * force a large body buffer.
  */
 export async function handleReviewApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "review_endpoint_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication).
+  //
+  // NOT threaded further: Mode B's tenant (fairness/shadow-quota/buildClient) is
+  // already resolved independently from the CLAIMED owner/repo via
+  // resolveInstallation below — that is the repo's registered GitHub App
+  // installation, not the caller's identity, and is unrelated to which bearer
+  // authenticated the request. Mode A's `installationId: 0` is also left as-is
+  // (see its comment) — reconciling the resolved caller identity with the
+  // owner/repo-derived tenant is a product decision for a follow-up slice, not
+  // an auth-swap concern.
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "review_endpoint_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env, ctx))) return json({ error: "unauthorized" }, 401)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized
   // payload is aborted, never fully buffered; `null` = over the cap → 413.

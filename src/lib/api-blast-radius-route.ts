@@ -16,7 +16,7 @@
 // on a bad bearer; 400 on bad JSON / missing|empty fields; 413 on an oversized body.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireBearerToken } from "./auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { blastRadiusByNamesFor } from "@/src/lib/repo-graph-client"
 
@@ -79,9 +79,19 @@ function parseBody(raw: unknown): BlastRadiusApiBody | ParseError {
  * result at 200 — the route never returns a 500.
  */
 export async function handleBlastRadiusApiRoute(request: Request, env: Env): Promise<Response> {
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "blast_radius_endpoint_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication). No
+  // installationId is threaded further — the graph read below is keyed by
+  // owner/repo, not installationId.
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "blast_radius_endpoint_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized payload is
   // aborted, never fully buffered; `null` = over the cap → 413.

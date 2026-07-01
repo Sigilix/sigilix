@@ -14,7 +14,7 @@
 // body-cap / JSON / field-validation gates mirror the PUT + query routes exactly.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireBearerToken } from "@/src/lib/auth-bearer"
+import { resolveApiKey } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import {
@@ -216,9 +216,20 @@ interface StoredFactResult {
  * `{ stored, facts: [{ kind, content, id, deduped }] }`.
  */
 export async function handleMemoryExtractRoute(request: Request, env: Env): Promise<Response> {
-  const token = env.OPENCLAW_SIGILIX_API_KEY
-  if (!token) return json({ error: "memory_endpoint_not_configured" }, 503)
-  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
+  // api_key lookup), falling back to the legacy shared secret
+  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
+  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
+  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
+  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
+  // fail-open D1 default on purpose, because this gates authentication). No
+  // installationId is threaded further — see agent-memory-route.ts's
+  // handleMemoryWriteRoute comment (this store's tenant scope is the
+  // caller-asserted userId/repoId body fields, a different axis).
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "memory_endpoint_not_configured" }, 503)
+  }
+  if (!(await resolveApiKey(request, env))) return json({ error: "unauthorized" }, 401)
 
   let raw: unknown
   try {

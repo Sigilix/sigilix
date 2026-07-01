@@ -213,6 +213,15 @@ const MIGRATION_SQL_ROUTE = readFileSync(
   new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
   "utf8",
 )
+// #155 slice 2: handleReviewApiRoute now resolves auth via resolveApiKey, which queries
+// the `api_key` table (migrations/0003) whenever SIGILIX_PLATFORM_DB is bound — mirroring
+// a real SIGILIX_PLATFORM_DB, which has ALL migrations applied cumulatively. Without this,
+// the D1 query throws "no such table: api_key" and the resolver (correctly) fails CLOSED,
+// 401-ing before admitTenant is ever reached.
+const MIGRATION_SQL_API_KEY = readFileSync(
+  new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
 
 describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
   beforeEach(() => {
@@ -225,6 +234,7 @@ describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
   it("D1 has operator-set cap → admitTenant called with D1 cap, not env cap", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL_ROUTE)
+    await db.exec(MIGRATION_SQL_API_KEY)
     // Installation 42 comes from the OPENCLAW_GITHUB_INSTALLATION_MAP fixture '{"o/r":"42"}'
     await upsertTenantAndRepo(
       { SIGILIX_PLATFORM_DB: db },
@@ -247,6 +257,7 @@ describe("handleReviewApiRoute — D1 cap wiring (SIG-343 PR C Task 6)", () => {
   it("tenant missing from D1 → admitTenant called with env-default cap", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL_ROUTE)
+    await db.exec(MIGRATION_SQL_API_KEY)
     // No row for installationId 42 → falls back to SIGILIX_TENANT_CONCURRENCY_CAP
 
     const e = groundedEnv({

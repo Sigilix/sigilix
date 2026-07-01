@@ -392,6 +392,18 @@ SIGILIX_TENANT_CONCURRENCY_CAP = "2"
 # SIG-455 PR B: provider backpressure cooldown mode. "off" (default) | "shadow" | "enforce".
 SIGILIX_PROVIDER_COOLDOWN_MODE = "shadow"
 
+# Memory moat rollout (2026-07-01) — SHADOW-SAFE start of the org/seat memory + decay layering
+# (PRs #757/#760/#761/#762/#763/#764). CAPTURE=on begins accumulating org memory from PR reviews;
+# APPLY/CLI/DECAY stay SHADOW (load + log the delta, NO behavior change) until dogfood + shadow-log
+# validation, then flip to on/enforce. REPO_ROLE=on classifies repos at index time (additive metadata).
+# These are non-sensitive mode strings → committed [vars] (like the fairness/verification flags);
+# do NOT also `wrangler secret put` the same names (a secret would shadow this value).
+OPENCLAW_ORG_MEMORY_CAPTURE = "on"
+OPENCLAW_ORG_MEMORY_APPLY = "shadow"
+OPENCLAW_CLI_ORG_MEMORY = "shadow"
+OPENCLAW_MEMORY_DECAY_MODE = "shadow"
+OPENCLAW_REPO_ROLE_CLASSIFY = "on"
+
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
 #                            indexer (extract + RepoGraphDO upsert/commit).

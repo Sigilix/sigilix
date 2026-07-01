@@ -24,7 +24,7 @@ import {
   type PackAndRouteTelemetry,
 } from "@/src/lib/ensemble/app/context/fetch-and-pack"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
-import { EMPTY_CONFIG, resolveCostControlsConfig } from "@/src/lib/sigilix-config"
+import { EMPTY_CONFIG, parseSigilixConfig, resolveCostControlsConfig } from "@/src/lib/sigilix-config"
 import type { Env } from "@/src/shared/types/env"
 import type { PullRequestMeta } from "@/src/shared/types/github"
 
@@ -126,6 +126,55 @@ describe("packAndRoute — SIG-414 risk-ordering (call-site wiring)", () => {
     expect(result.reviewedFiles.map((f) => f.path)).toEqual(["src/auth-session.ts", "src/util.ts"])
     // The revert-detector: high-risk file leads.
     expect(result.reviewedFiles[0]?.path).toBe("src/auth-session.ts")
+  })
+})
+
+// A repo's `sigilix.json` `pathFilters` must actually remove matching files from
+// the reviewed set. Prior coverage tested the two seams only in ISOLATION —
+// `parseSigilixConfig` extracts `pathFilters` from raw text (`sigilix-config.test.ts`)
+// and `shouldReview` filters a path list (`path-glob.test.ts`) — but every
+// `packAndRoute` case passed `EMPTY_CONFIG`, leaving the WIRING
+// (`filterPatterns = sigilixConfig.pathFilters ?? []` → `filesAfterFilter`) untested.
+// These cases go raw config TEXT → `parseSigilixConfig` → `packAndRoute` and assert
+// the excluded file is gone from `reviewedFiles`. Revert-detector: hardcoding
+// `filterPatterns = []` (or dropping the `sigilixConfig.pathFilters` derivation) keeps
+// every other test green but fails these — that's the silent no-op we're guarding.
+describe("packAndRoute — repo config pathFilters (end-to-end config wiring)", () => {
+  it("EXCLUDES a file matching a pathFilters glob parsed from raw sigilix.json text", async () => {
+    const kept = fileBlock("src/util.ts", "export const x = 1")
+    const ignored = fileBlock("dist/bundle.js", "module.exports = {}")
+    const fullDiff = `${kept}\n${ignored}`
+
+    // Real parser on real config text — not a hand-built config object.
+    const sigilixConfig = parseSigilixConfig(JSON.stringify({ pathFilters: ["dist/**"] }))
+    expect(sigilixConfig?.pathFilters).toEqual(["dist/**"])
+
+    const result = await packAndRoute(makeArgs({ fullDiff, sigilixConfig: sigilixConfig! }))
+
+    const reviewedPaths = result.reviewedFiles.map((f) => f.path)
+    // The dist file is genuinely REMOVED from review, not merely annotated.
+    expect(reviewedPaths).toEqual(["src/util.ts"])
+    expect(reviewedPaths).not.toContain("dist/bundle.js")
+    // …and disclosed as dropped-by-filter, not silently vanished.
+    expect(result.filesDroppedByFilter).toEqual(["dist/bundle.js"])
+  })
+
+  it("re-includes a `!pattern` override so an otherwise-excluded file IS reviewed", async () => {
+    const kept = fileBlock("src/util.ts", "export const x = 1")
+    const excludedYaml = fileBlock("pnpm-lock.yaml", "lockfileVersion: 9")
+    const reincluded = fileBlock("critical/important.lock", "keep me")
+    const fullDiff = `${kept}\n${excludedYaml}\n${reincluded}`
+
+    const sigilixConfig = parseSigilixConfig(
+      JSON.stringify({ pathFilters: ["**/*.lock", "*.yaml", "!critical/important.lock"] }),
+    )
+    const result = await packAndRoute(makeArgs({ fullDiff, sigilixConfig: sigilixConfig! }))
+
+    const reviewedPaths = result.reviewedFiles.map((f) => f.path)
+    expect(reviewedPaths).toContain("src/util.ts")
+    expect(reviewedPaths).toContain("critical/important.lock") // re-included by the `!` override
+    expect(reviewedPaths).not.toContain("pnpm-lock.yaml") // excluded by `*.yaml`
+    expect(result.filesDroppedByFilter).toEqual(["pnpm-lock.yaml"])
   })
 })
 

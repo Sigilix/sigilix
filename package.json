@@ -61,6 +61,7 @@
     "acorn": "8.14.0",
     "acorn-typescript": "1.4.13",
     "acorn-walk": "8.3.4",
+    "agents": "0.17.3",
     "fflate": "0.8.2",
     "js-yaml": "^4.2.0",
     "jsonrepair": "^3.14.0",

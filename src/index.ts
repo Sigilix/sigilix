@@ -45,6 +45,7 @@ import {
   handleMemoryDeleteRoute,
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
+import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -526,6 +527,8 @@ export default {
       }
     }
 
+    const mcpResponse = await tryHandleMcpRoute(request, env, ctx, url)
+    if (mcpResponse) return mcpResponse
     // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
     // mint/revoke per-installation API keys.
     if (request.method === "POST" && url.pathname === "/v1/keys") {
@@ -993,3 +996,5 @@ export { LinearTokenBroker } from "@/src/do/linear-token-broker"
 
 // SIG-298: DeepResearchDO — deep web research engine (one instance per run).
 export { DeepResearchDO } from "@/src/do/deep-research/deep-research-do"
+// sig-mcp-connections-p1: McpConnectionsAgent — one instance per seat/tenant.
+export { McpConnectionsAgent } from "@/src/do/mcp/mcp-connections-do"

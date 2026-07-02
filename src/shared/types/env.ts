@@ -681,6 +681,13 @@ export interface Env {
   // token lifecycle + serializes refresh across isolates. Singleton; INERT this slice.
   LINEAR_TOKEN_BROKER: DurableObjectNamespace
 
+  // sig-mcp-connections-p1: McpConnectionsAgent — one DO instance per seat
+  // (idFromName("session:<githubUserId>") or "tenant:<installationId>"), wrapping
+  // the Cloudflare `agents` SDK's MCPClientManager. Owns connect (incl. OAuth),
+  // token storage (the SDK's own SQLite), list, and disconnect for any
+  // user-supplied MCP server URL. See src/do/mcp/.
+  MCP_CONNECTIONS: DurableObjectNamespace
+
   // SIG-156: shared-secret bearer token for the privileged admin endpoints
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.

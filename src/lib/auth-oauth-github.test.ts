@@ -144,6 +144,17 @@ describe("handleGitHubAuthKickoff", () => {
     const parsed = JSON.parse(stored!)
     expect(parsed.redirectAfter).toBe("/dashboard")
   })
+
+  it("omits redirectAfter from the stored state record when no query param was given (P1 fix: must NOT default to /auth/welcome here — the callback's OPENCLAW_PORTAL_URL branch depends on telling 'nothing requested' apart from 'requested and it validated to /auth/welcome')", async () => {
+    const kv = makeKV()
+    const req = new Request("https://app.sigilix.ai/auth/github")
+    await handleGitHubAuthKickoff(req, env(kv))
+    const stored = [...kv._store.values()][0]
+    expect(stored).toBeTruthy()
+    const parsed = JSON.parse(stored!)
+    expect(parsed.redirectAfter).toBeUndefined()
+    expect("redirectAfter" in parsed).toBe(false)
+  })
 })
 
 describe("handleGitHubAuthCallback", () => {
@@ -209,7 +220,9 @@ describe("handleGitHubAuthCallback", () => {
     const sessionCookie = cookies.find((c) => c.startsWith("__Host-sigilix_session="))!
     expect(sessionCookie).toContain("HttpOnly")
     expect(sessionCookie).toContain("Secure")
-    expect(sessionCookie).toContain("SameSite=Lax")
+    // SIG-155 slice 3: SameSite=None so the portal (a different origin) can
+    // read this session cross-site over fetch(..., {credentials:"include"}).
+    expect(sessionCookie).toContain("SameSite=None")
     // State cookie cleared
     const stateCookie = cookies.find((c) => c.startsWith("__Host-sigilix_oauth_state=") && c.includes("Max-Age=0"))
     expect(stateCookie).toBeTruthy()
@@ -312,6 +325,71 @@ describe("handleGitHubAuthCallback", () => {
     const res = await handleGitHubAuthCallback(req, env(kv))
     expect(res.status).toBe(302)
     expect(res.headers.get("location")).toBe("/auth/welcome")
+  })
+
+  // SIG-155 slice 3 — env-gated redirect polish (portal endpoints).
+  describe("OPENCLAW_PORTAL_URL redirect polish", () => {
+    it("unset: default destination is byte-identical to /auth/welcome", async () => {
+      const kv = makeKV({
+        "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),
+      })
+      mockGitHubFetch({})
+      const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+      const res = await handleGitHubAuthCallback(req, env(kv))
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("/auth/welcome")
+    })
+
+    it("set + no explicit redirectAfter: 302s to an ABSOLUTE cross-origin ${OPENCLAW_PORTAL_URL}/setup", async () => {
+      const kv = makeKV({
+        "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),
+      })
+      mockGitHubFetch({})
+      const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+      const res = await handleGitHubAuthCallback(req, { ...env(kv), OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" })
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("https://app.sigilix.ai/setup")
+      // The session cookie must still be minted on this path.
+      const cookies = res.headers.getSetCookie()
+      expect(cookies.some((c) => c.startsWith("__Host-sigilix_session="))).toBe(true)
+    })
+
+    it("full kickoff -> callback round trip (no redirectAfter query param) actually reaches the portal default — regression guard for the P1 dead-code bug", async () => {
+      const kv = makeKV()
+      const kickoffReq = new Request("https://app.sigilix.ai/auth/github")
+      const portalEnv = { ...env(kv), OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" }
+      const kickoffRes = await handleGitHubAuthKickoff(kickoffReq, portalEnv)
+      const location = kickoffRes.headers.get("location")!
+      const state = new URL(location).searchParams.get("state")!
+
+      mockGitHubFetch({})
+      const req = callbackReq({ code: "c", state, cookieNonce: state })
+      const res = await handleGitHubAuthCallback(req, portalEnv)
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("https://app.sigilix.ai/setup")
+    })
+
+    it("set + explicit redirectAfter present: the explicit value still wins, unaffected by OPENCLAW_PORTAL_URL", async () => {
+      const kv = makeKV({
+        "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now(), redirectAfter: "/dashboard" }),
+      })
+      mockGitHubFetch({})
+      const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+      const res = await handleGitHubAuthCallback(req, { ...env(kv), OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" })
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("/dashboard")
+    })
+
+    it("set + explicit MALICIOUS redirectAfter: still validated same-origin (safeRedirectAfter untouched)", async () => {
+      const kv = makeKV({
+        "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now(), redirectAfter: "//evil.com" }),
+      })
+      mockGitHubFetch({})
+      const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+      const res = await handleGitHubAuthCallback(req, { ...env(kv), OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" })
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("/auth/welcome")
+    })
   })
 
   it("missing code or state returns 400", async () => {

@@ -251,6 +251,59 @@ describe("handleSetupRoute (GET /setup)", () => {
     expect(keys?.n).toBe(1)
   })
 
+  // SIG-155 slice 3 — env-gated redirect polish (portal endpoints).
+  describe("OPENCLAW_PORTAL_URL redirect polish", () => {
+    it("unset: renders the plaintext-key page (byte-identical to before)", async () => {
+      stubUserInstallations([42])
+      const state = await mintState(111)
+      const res = await handleSetupRoute(
+        reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain("sigilix_live_")
+    })
+
+    it("set: 302s to `${OPENCLAW_PORTAL_URL}/setup?installed=1` instead of rendering the key page", async () => {
+      stubUserInstallations([42])
+      const state = await mintState(111)
+      const portalEnv = { ...env, OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" }
+      const res = await handleSetupRoute(
+        reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
+        portalEnv,
+      )
+      expect(res.status).toBe(302)
+      expect(res.headers.get("location")).toBe("https://app.sigilix.ai/setup?installed=1")
+      // Never the key in the URL.
+      expect(res.headers.get("location")).not.toContain("sigilix_live_")
+      const body = await res.text()
+      expect(body).not.toContain("sigilix_live_")
+
+      // Linking + minting still happened even though the key page never renders.
+      const link = await db
+        .prepare("SELECT role FROM account_tenant WHERE github_user_id = ? AND installation_id = ?")
+        .bind("111", 42)
+        .first<{ role: string }>()
+      expect(link?.role).toBe("owner")
+      const keys = await db
+        .prepare("SELECT COUNT(*) AS n FROM api_key WHERE installation_id = ?")
+        .bind(42)
+        .first<{ n: number }>()
+      expect(keys?.n).toBe(1)
+    })
+
+    it("set: a 403 ownership failure still returns 403 (redirect gate never overrides an auth failure)", async () => {
+      stubUserInstallations([1])
+      const state = await mintState(111)
+      const portalEnv = { ...env, OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" }
+      const res = await handleSetupRoute(
+        reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
+        portalEnv,
+      )
+      expect(res.status).toBe(403)
+    })
+  })
+
   it("does not require the `tenant` row to pre-exist (benign async-webhook race)", async () => {
     stubUserInstallations([999])
     const state = await mintState(111)

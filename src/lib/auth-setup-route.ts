@@ -195,6 +195,22 @@ export async function handleSetupRoute(request: Request, env: Env, ctx?: Executi
     return new Response("setup_failed\n", { status: 500 })
   }
 
+  // Redirect polish (env-gated, SIG-155 slice 3): once the portal owns this
+  // flow, hand the browser back to the portal's own /setup page instead of
+  // rendering this Worker's plaintext-key page — the portal mints its OWN
+  // key via POST /v1/keys (session-authed, CORS'd) once the user lands
+  // there, so the key minted just above simply goes unused on this path.
+  // NEVER put the key in the URL, ever — a GET request's query string ends
+  // up in browser history, proxy logs, and server access logs. When
+  // OPENCLAW_PORTAL_URL is unset this branch is inert and behavior is
+  // byte-identical to before (renders the plaintext-key page).
+  if (env.OPENCLAW_PORTAL_URL) {
+    return new Response(null, {
+      status: 302,
+      headers: { location: `${env.OPENCLAW_PORTAL_URL}/setup?installed=1` },
+    })
+  }
+
   // Plaintext rendered into the page exactly once; never passed to console.*.
   return renderSetupSuccessPage(plaintext)
 }

@@ -39,6 +39,9 @@ interface AuthOauthEnv {
   GITHUB_OAUTH_CLIENT_SECRET?: string
   OPENCLAW_SESSION_ENCRYPTION_KEY?: string
   OPENCLAW_BASE_URL?: string
+  // #155 onboarding-backend slice 3 (env-gated redirect polish — see
+  // safeRedirectAfter callers below). Unset = today's behavior, unchanged.
+  OPENCLAW_PORTAL_URL?: string
 }
 
 function baseUrl(env: AuthOauthEnv): string {
@@ -68,10 +71,20 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
 
   const url = new URL(request.url)
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
-  const redirectAfter = safeRedirectAfter(rawRedirect, baseUrl(env))
+  // Only validate + store a redirectAfter when the CALLER explicitly asked
+  // for one. safeRedirectAfter's own fallback ("/auth/welcome") is for the
+  // CALLBACK's use when nothing was stored — computing it here too would
+  // make `record.redirectAfter` always truthy, which would make the
+  // callback unable to tell "no redirectAfter was requested" from "one WAS
+  // requested and it happened to validate to /auth/welcome," silently
+  // defeating the OPENCLAW_PORTAL_URL default-destination switch below.
+  const redirectAfter = rawRedirect ? safeRedirectAfter(rawRedirect, baseUrl(env)) : undefined
 
   const nonce = mintStateNonce()
-  const record: StateRecord = { createdAt: Date.now(), redirectAfter }
+  // exactOptionalPropertyTypes: omit the key entirely rather than set it to
+  // `undefined` — `JSON.stringify` would drop it anyway, but this keeps the
+  // in-memory shape and the serialized shape identical.
+  const record: StateRecord = redirectAfter ? { createdAt: Date.now(), redirectAfter } : { createdAt: Date.now() }
   await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${nonce}`, JSON.stringify(record), {
     expirationTtl: STATE_TTL_SECONDS,
   })
@@ -288,9 +301,24 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     ts: Date.now(),
   })
 
-  // 6. 302 to redirectAfter (validated) or /auth/welcome.
-  const dest = stateRaw.redirectAfter ?? "/auth/welcome"
-  const finalDest = safeRedirectAfter(dest, baseUrl(env))
+  // 6. 302 to redirectAfter (validated) or the default success destination.
+  //
+  // Redirect polish (env-gated, SIG-155 slice 3): when OPENCLAW_PORTAL_URL
+  // is set, the DEFAULT destination (no explicit redirectAfter requested at
+  // kickoff) becomes the portal's own /setup page instead of this Worker's
+  // /auth/welcome — an intentional, absolute CROSS-ORIGIN 302. That's safe
+  // here because it's a top-level browser navigation (not a fetch/XHR), so
+  // no CORS is involved, and the destination is operator config
+  // (OPENCLAW_PORTAL_URL), never user input. It deliberately bypasses
+  // safeRedirectAfter, which exists to stop an ATTACKER-SUPPLIED
+  // redirectAfter from escaping this Worker's own origin — it was never
+  // meant to constrain OUR OWN fallback. An explicit redirectAfter (when
+  // present) is untouched by this and keeps going through
+  // safeRedirectAfter exactly as before. When OPENCLAW_PORTAL_URL is unset,
+  // this whole branch is inert and behavior is byte-identical to before.
+  const portalUrl = env.OPENCLAW_PORTAL_URL
+  const dest = stateRaw.redirectAfter ?? (portalUrl ? `${portalUrl}/setup` : "/auth/welcome")
+  const finalDest = stateRaw.redirectAfter ? safeRedirectAfter(dest, baseUrl(env)) : dest
 
   const headers = new Headers({ location: finalDest })
   headers.append("set-cookie", setSessionCookie(sessionId))

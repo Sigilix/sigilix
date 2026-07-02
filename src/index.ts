@@ -70,6 +70,9 @@ import { renderWelcomePage } from "@/src/lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
 import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
 import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
+import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
+import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
+import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
@@ -471,21 +474,47 @@ export default {
     if (request.method === "GET" && url.pathname === "/setup") {
       return handleSetupRoute(request, env, ctx)
     }
+    // #155 onboarding-backend slice 3 (portal endpoints): the portal
+    // (a DIFFERENT ORIGIN — app.sigilix.ai / localhost:3300 dev) drives
+    // these session-authed routes over `fetch(..., { credentials: "include" })`,
+    // so they're CORS'd via portal-cors.ts. OPTIONS is handled once, up
+    // front, for every path in this set; every actual response is wrapped
+    // with withPortalCors so credentials-mode responses never carry `*`.
+    const isPortalCorsPath =
+      url.pathname === "/v1/keys" ||
+      url.pathname.startsWith("/v1/keys/") ||
+      url.pathname === "/v1/onboarding" ||
+      url.pathname === "/v1/onboarding/context"
+    if (request.method === "OPTIONS" && isPortalCorsPath) {
+      return handlePortalPreflight(request, env)
+    }
+
     // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
-    // mint/revoke per-installation API keys. NOT yet consumed by any
-    // existing endpoint (that swap is slice 2); resolveApiKey is inert.
+    // mint/revoke per-installation API keys.
     if (request.method === "POST" && url.pathname === "/v1/keys") {
-      return handleCreateApiKeyRoute(request, env, ctx)
+      return withPortalCors(request, await handleCreateApiKeyRoute(request, env, ctx), env)
     }
     if (request.method === "DELETE" && url.pathname.startsWith("/v1/keys/")) {
       const keyId = decodeURIComponent(url.pathname.slice("/v1/keys/".length))
       if (!keyId) {
-        return new Response(JSON.stringify({ error: "missing key id" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        })
+        return withPortalCors(
+          request,
+          new Response(JSON.stringify({ error: "missing key id" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+          env,
+        )
       }
-      return handleRevokeApiKeyRoute(request, env, keyId, ctx)
+      return withPortalCors(request, await handleRevokeApiKeyRoute(request, env, keyId, ctx), env)
+    }
+    // #155 onboarding-backend slice 3 (portal endpoints): the setup
+    // wizard's repo/installation picker context + the wizard-answers sink.
+    if (request.method === "GET" && url.pathname === "/v1/onboarding/context") {
+      return withPortalCors(request, await handleOnboardingContextRoute(request, env, ctx), env)
+    }
+    if (request.method === "POST" && url.pathname === "/v1/onboarding") {
+      return withPortalCors(request, await handleOnboardingSubmitRoute(request, env, ctx), env)
     }
     // ARC-190: GET /reviews/<owner>/<repo>/<prNumber> — public status
     // route for DO-tracked PR review runs. v1 unauth (read-only

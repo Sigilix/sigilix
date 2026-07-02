@@ -219,14 +219,21 @@ describe("cookie helpers", () => {
     expect(readCookie(req, "missing")).toBeNull()
   })
 
-  it("setSessionCookie produces the locked attribute set", () => {
+  it("setSessionCookie produces the locked attribute set — SameSite=None (SIG-155 slice 3, cross-origin portal fetch)", () => {
     const c = setSessionCookie("session-abc")
     expect(c).toContain("__Host-sigilix_session=session-abc")
     expect(c).toContain("HttpOnly")
     expect(c).toContain("Secure")
-    expect(c).toContain("SameSite=Lax")
+    // Cross-site: the portal (a different origin) reads this session over
+    // `fetch(..., { credentials: "include" })` — a subresource request, so
+    // SameSite=Lax would silently drop the cookie. See the tradeoff/mitigation
+    // comment on setSessionCookie itself.
+    expect(c).toContain("SameSite=None")
+    expect(c).not.toContain("SameSite=Lax")
     expect(c).toContain("Path=/")
     expect(c).toContain("Max-Age=2592000")
+    // __Host- prefix still forces Secure + Path=/ + no Domain regardless of SameSite.
+    expect(c).not.toContain("Domain=")
   })
 
   it("clearSessionCookie sets Max-Age=0 with the same locked attributes", () => {

@@ -11,6 +11,7 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { hasJsonContentType } from "@/src/lib/portal-cors"
 import {
   getApiKeyById,
   insertApiKey,
@@ -42,6 +43,11 @@ function extractInstallationId(body: unknown): number | null {
 export async function handleCreateApiKeyRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const authed = await requireSession(request, env, ctx)
   if (!authed) return json({ error: "unauthenticated" }, 401)
+
+  // CSRF guard (SIG-155 slice 3 — see portal-cors.ts's hasJsonContentType doc
+  // comment): required because the session cookie is now SameSite=None.
+  if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
+
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
   const db = env.SIGILIX_PLATFORM_DB
 

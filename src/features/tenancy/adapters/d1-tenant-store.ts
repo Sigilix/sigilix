@@ -61,6 +61,39 @@ export async function upsertTenantAndRepo(
 }
 
 /**
+ * Look up the repo_id + installation_id for a GitHub `owner/repo` full name.
+ * Returns null when the platform DB binding is absent, the repo has no row
+ * yet (a benign race — the PR webhook upserts this table asynchronously, so
+ * a repo picked in the onboarding wizard before its first PR has none), or
+ * any D1 error occurs. Never throws — callers (e.g. onboarding-memory-capture.ts)
+ * treat null as "skip this repo".
+ */
+export async function lookupRepoByFullName(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  fullName: string,
+): Promise<{ repoId: number; installationId: number } | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return null
+  const db = env.SIGILIX_PLATFORM_DB
+  try {
+    const row = await db
+      .prepare("SELECT repo_id, installation_id FROM repo WHERE full_name = ?")
+      .bind(fullName)
+      .first<{ repo_id: number; installation_id: number }>()
+    if (row == null) return null
+    return { repoId: row.repo_id, installationId: row.installation_id }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-store-lookup-repo-failed",
+        fullName,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
+}
+
+/**
  * Read the per-tenant concurrency_cap and daily_budget from the platform DB.
  * Returns null when the binding is absent, the tenant row is missing, or any
  * D1 error occurs.  Individual fields are null when the column value is NULL

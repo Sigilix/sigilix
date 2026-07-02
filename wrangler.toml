@@ -1291,6 +1291,27 @@ OPENCLAW_AGENT_RUNNER_MODE = "on"
 #                                 the GitHub App's configured callback URL).
 #                                 Defaults to https://app.sigilix.ai when unset.
 #
+# Optional (#155 onboarding-backend slice 3 — portal endpoints). The portal
+# (Next.js, app.sigilix.ai prod / localhost:3300 dev) is a DIFFERENT ORIGIN
+# from this Worker and drives the session-based onboarding flow over
+# `fetch(..., { credentials: "include" })`:
+#
+#   OPENCLAW_PORTAL_ORIGINS       Comma-separated EXACT origins allowed to make
+#                                 credentialed cross-origin requests against the
+#                                 onboarding + key routes (CORS-with-credentials —
+#                                 see src/lib/portal-cors.ts). Defaults to
+#                                 "https://app.sigilix.ai,http://localhost:3300"
+#                                 when unset.
+#   OPENCLAW_PORTAL_URL           When set, gates two redirect changes (unset =
+#                                 today's behavior, byte-identical): the OAuth
+#                                 login callback's default success destination
+#                                 becomes `${OPENCLAW_PORTAL_URL}/setup` instead
+#                                 of /auth/welcome, and GET /setup 302s to
+#                                 `${OPENCLAW_PORTAL_URL}/setup?installed=1`
+#                                 instead of rendering the plaintext-key page
+#                                 (the portal mints its own key via POST
+#                                 /v1/keys). e.g. https://app.sigilix.ai
+#
 # GitHub App callback URL (required for OAuth): set on the App settings page →
 # Identifying and authorizing users → User authorization callback URL:
 #   https://app.sigilix.ai/auth/github/callback

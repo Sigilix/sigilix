@@ -68,7 +68,11 @@ describe("handleCreateApiKeyRoute (POST /v1/keys)", () => {
 
   it("401 without a session", async () => {
     const res = await handleCreateApiKeyRoute(
-      reqWithSession("https://x/v1/keys", null, { method: "POST", body: JSON.stringify({ installationId: 1 }) }),
+      reqWithSession("https://x/v1/keys", null, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ installationId: 1 }),
+      }),
       env,
     )
     expect(res.status).toBe(401)
@@ -77,16 +81,37 @@ describe("handleCreateApiKeyRoute (POST /v1/keys)", () => {
   it("403 when the session's user is not linked to the requested installation", async () => {
     await seedSession(kv, "sess-1", 111)
     const res = await handleCreateApiKeyRoute(
-      reqWithSession("https://x/v1/keys", "sess-1", { method: "POST", body: JSON.stringify({ installationId: 42 }) }),
+      reqWithSession("https://x/v1/keys", "sess-1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ installationId: 42 }),
+      }),
       env,
     )
     expect(res.status).toBe(403)
   })
 
+  it("415 (CSRF guard) when Content-Type is not application/json — SIG-155 slice 3 (SameSite=None mitigation)", async () => {
+    await seedSession(kv, "sess-1", 111)
+    const res = await handleCreateApiKeyRoute(
+      reqWithSession("https://x/v1/keys", "sess-1", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: JSON.stringify({ installationId: 42 }),
+      }),
+      env,
+    )
+    expect(res.status).toBe(415)
+  })
+
   it("400 on a missing/invalid installationId", async () => {
     await seedSession(kv, "sess-1", 111)
     const res = await handleCreateApiKeyRoute(
-      reqWithSession("https://x/v1/keys", "sess-1", { method: "POST", body: JSON.stringify({}) }),
+      reqWithSession("https://x/v1/keys", "sess-1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
       env,
     )
     expect(res.status).toBe(400)
@@ -102,7 +127,11 @@ describe("handleCreateApiKeyRoute (POST /v1/keys)", () => {
     })
 
     const res = await handleCreateApiKeyRoute(
-      reqWithSession("https://x/v1/keys", "sess-1", { method: "POST", body: JSON.stringify({ installationId: 42 }) }),
+      reqWithSession("https://x/v1/keys", "sess-1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ installationId: 42 }),
+      }),
       env,
     )
     expect(res.status).toBe(201)
@@ -123,7 +152,11 @@ describe("handleCreateApiKeyRoute (POST /v1/keys)", () => {
     await seedSession(kv, "sess-1", 111)
     const noDbEnv = { OPENCLAW_STATE: kv } as unknown as Env
     const res = await handleCreateApiKeyRoute(
-      reqWithSession("https://x/v1/keys", "sess-1", { method: "POST", body: JSON.stringify({ installationId: 1 }) }),
+      reqWithSession("https://x/v1/keys", "sess-1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ installationId: 1 }),
+      }),
       noDbEnv,
     )
     expect(res.status).toBe(503)

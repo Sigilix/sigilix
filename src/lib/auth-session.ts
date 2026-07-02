@@ -176,7 +176,33 @@ export function setSessionCookie(sessionId: string): string {
     "Path=/",
     "HttpOnly",
     "Secure",
-    "SameSite=Lax",
+    // SameSite=None (not Lax) -- SIG-155 slice 3. The portal
+    // (app.sigilix.ai / localhost:3300 dev) is a DIFFERENT ORIGIN from this
+    // Worker, and its setup wizard drives this session over
+    // `fetch(..., { credentials: "include" })` -- a subresource request,
+    // not a top-level navigation, so SameSite=Lax would silently drop the
+    // cookie cross-site. None widens the CSRF surface (any origin can now
+    // cause a browser to attach this cookie to a cross-site request), but
+    // three things mitigate it -- and (3) is load-bearing, not incidental:
+    // (1) the OAuth login flow that mints this cookie is itself
+    // CSRF-protected by the state nonce + browser-bound state cookie
+    // (auth-oauth-github.ts), independent of this cookie's SameSite value;
+    // (2) every session-authed portal route sits behind the
+    // CORS-with-credentials allowlist (portal-cors.ts), which echoes only
+    // an allowlisted Origin and NEVER `*` -- BUT that allowlist is only
+    // consulted for a PREFLIGHTED request, and a cross-site POST with a
+    // CORS-"simple" Content-Type (text/plain,
+    // application/x-www-form-urlencoded, multipart/form-data, or none)
+    // skips the preflight entirely and would still fire with this cookie
+    // attached; (3) that's why every mutating route on this cookie (POST
+    // /v1/keys, POST /v1/onboarding) explicitly REQUIRES
+    // `application/json` via `hasJsonContentType` (portal-cors.ts) --
+    // that Content-Type is NOT on the Fetch spec's CORS safelist, so it
+    // forces the preflight and the allowlist in (2) actually applies.
+    // Skipping that check on a new mutating route is a live CSRF hole, not
+    // a style nit. The `__Host-` prefix still forces Secure + Path=/ + no
+    // Domain regardless of SameSite.
+    "SameSite=None",
     `Max-Age=${SESSION_TTL_SECONDS}`,
   ].join("; ")
 }

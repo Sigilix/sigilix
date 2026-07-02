@@ -71,6 +71,21 @@ export interface Env {
   // Public origin for OAuth callbacks (must match the GitHub App's
   // configured callback URL). Defaults to https://app.sigilix.ai.
   OPENCLAW_BASE_URL?: string
+  // #155 onboarding-backend slice 3 (portal endpoints). Comma-separated
+  // EXACT origins allowed to make credentialed cross-origin requests
+  // (CORS + `SameSite=None` session cookie) against the session-authed
+  // onboarding + key routes. Defaults to
+  // "https://app.sigilix.ai,http://localhost:3300" when unset. See
+  // src/lib/portal-cors.ts.
+  OPENCLAW_PORTAL_ORIGINS?: string
+  // #155 onboarding-backend slice 3. When set, gates two redirect changes
+  // (byte-identical to today when unset): the GitHub OAuth login callback's
+  // default success destination becomes `${OPENCLAW_PORTAL_URL}/setup`
+  // (instead of /auth/welcome), and the GitHub App Setup URL handler
+  // (`GET /setup`) 302s to `${OPENCLAW_PORTAL_URL}/setup?installed=1`
+  // instead of rendering the plaintext-key page — the portal mints its own
+  // key afterward via POST /v1/keys. e.g. https://app.sigilix.ai
+  OPENCLAW_PORTAL_URL?: string
   // SIG-132: VALUES are `<owner>/<repo>` lowercased (the Vectorize
   // namespace), e.g. {"ARC":"sigilix/rubberfit"}.
   OPENCLAW_TEAM_REPO_MAP?: string

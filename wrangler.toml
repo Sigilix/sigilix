@@ -11,6 +11,11 @@ main = "src/index.ts"
 
 # Public API hostname (the sigilix.ai zone is on this Cloudflare account).
 # workers.dev stays active as a legacy/fallback host during the transition.
+# Keep the workers.dev subdomain ALIVE alongside the custom domain — the
+# GitHub App + Linear webhooks (and older CLI configs) still point at it.
+# Wrangler disables workers.dev by default once routes exist; this opts back in.
+workers_dev = true
+
 routes = [
   { pattern = "api.sigilix.ai", custom_domain = true }
 ]

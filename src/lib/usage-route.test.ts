@@ -132,6 +132,37 @@ function stubInstallations(installations: Array<{ id: number }>) {
   )
 }
 
+/**
+ * Stub BOTH GitHub calls the route + resolveUserRole make (installations with
+ * account metadata + org memberships) so the admin/member gate on `?scope=org`
+ * and `?author=` can be exercised. A `User`-type install whose login matches
+ * the session login makes the caller an admin; otherwise member.
+ */
+function stubGitHubRole(opts: {
+  installations: Array<{ id: number; account: { type: string; login: string } }>
+  memberships?: Array<{ role: string; state: string; organization: { login: string } }>
+}) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        return new Response(
+          JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/user/memberships/orgs?")) {
+        return new Response(JSON.stringify(opts.memberships ?? []), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }),
+  )
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -349,6 +380,111 @@ describe("handleUsageRoute (GET /v1/usage)", () => {
     expect(body.session!.used).toBe(2) // both devs' reviews in the 5h window
     expect(body.session!.limit).toBeNull() // org grain → no single per-developer cap
     expect(body.totals.reviews).toBe(2)
+  })
+
+  it("admin session with ?scope=org → org-wide usage, no per-developer cap", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    // Personal install owned by the session user → admin.
+    stubGitHubRole({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+    await insertTenant(db, 1, "octocat")
+    const now = Date.now()
+    for (const [login, i] of [
+      ["dev-a", 1],
+      ["dev-b", 2],
+      ["dev-c", 3],
+    ] as const) {
+      await insertUsage(db, {
+        installationId: 1,
+        repoId: 100,
+        prNumber: i,
+        headSha: `sha-${i}`,
+        authorLogin: login,
+        createdAt: new Date(now - 60 * 60 * 1000).toISOString(),
+      })
+    }
+
+    const res = await handleUsageRoute(reqWithSession("sess-1", "?scope=org"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.scope).toBe("org")
+    expect(body.session!.used).toBe(3) // all three devs' reviews in the 5h window
+    expect(body.session!.limit).toBeNull() // org grain → no single per-developer cap
+    expect(body.totals.reviews).toBe(3)
+  })
+
+  it("MEMBER session with ?scope=org → falls back to self (never another member's usage)", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "quiet-dev", 222)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    // Org install, caller not an admin of it → member.
+    stubGitHubRole({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [],
+    })
+    await insertTenant(db, 1, "acme")
+    const now = Date.now()
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "sha-self",
+      authorLogin: "quiet-dev",
+      createdAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    })
+    // Another member's review — must NOT be counted for a member asking scope=org.
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 2,
+      headSha: "sha-boss",
+      authorLogin: "boss",
+      createdAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    })
+
+    const res = await handleUsageRoute(reqWithSession("sess-1", "?scope=org"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.scope).toBe("user") // downgraded to self
+    expect(body.session!.used).toBe(1) // only their own review
+    expect(body.session!.limit).toBe(2)
+  })
+
+  it("admin session with ?author=<member> → that member's per-developer usage", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHubRole({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+    await insertTenant(db, 1, "octocat")
+    const now = Date.now()
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "sha-m",
+      authorLogin: "member-x",
+      createdAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    })
+
+    const res = await handleUsageRoute(reqWithSession("sess-1", "?author=member-x"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.scope).toBe("user")
+    expect(body.session!.used).toBe(1)
+    expect(body.session!.limit).toBe(2)
   })
 
   it("CORS preflight: OPTIONS /v1/usage from an allowlisted portal origin returns the CORS grant", async () => {

@@ -39,6 +39,7 @@
 import { requireSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { resolveUserRole } from "@/src/lib/resolve-user-role"
 import {
   resolveRateLimitMode,
   resolveRateLimitCap,
@@ -292,7 +293,34 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     const ownedIds = await fetchUserInstallationIds(accessToken)
     const current = requested !== null && ownedIds.includes(requested) ? requested : (ownedIds[0] ?? 0)
     const account = current > 0 ? await readAccountLogin(env, current) : ""
-    resolved = { scope: "user", installationId: current, authorLogin: session.record.login, account }
+
+    // Default is the caller's OWN per-developer usage. The org Billing→Usage
+    // tab may request `?scope=org` (installation-wide) or `?author=<login>`
+    // (drill into a specific member) — both are ADMIN-only and always scoped to
+    // the caller's own installation (tenant isolation). A member (or an absent
+    // param) always falls back to self, so a member can never read another
+    // member's usage. resolveUserRole is only consulted when a privileged param
+    // is present, so the common personal path stays a single GitHub call.
+    const selfLogin = session.record.login
+    const wantsOrg = url.searchParams.get("scope") === "org"
+    const authorParam = url.searchParams.get("author")?.trim()
+    const wantsOtherAuthor = !!authorParam && authorParam.toLowerCase() !== selfLogin.toLowerCase()
+
+    let scopeKind: "user" | "org" = "user"
+    let effectiveAuthor: string | null = selfLogin
+    if ((wantsOrg || wantsOtherAuthor) && current > 0) {
+      const role = await resolveUserRole(accessToken, selfLogin)
+      if (role === "admin") {
+        if (wantsOrg) {
+          scopeKind = "org"
+          effectiveAuthor = null
+        } else if (authorParam) {
+          effectiveAuthor = authorParam
+        }
+      }
+      // non-admin → stays self (never another member's usage)
+    }
+    resolved = { scope: scopeKind, installationId: current, authorLogin: effectiveAuthor, account }
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
     if ("response" in apiAuth) return apiAuth.response // 401

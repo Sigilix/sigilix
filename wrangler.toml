@@ -661,6 +661,22 @@ OPENCLAW_TOCTOU_HINTS = "on"
 # reviewing a sample of `sdk-pack-matched` telemetry for false-positive detection.
 OPENCLAW_SDK_PACKS_MODE = "shadow"
 
+# Config-as-code structured rules — the repo-owned id/scope/severity/enabled
+# rule surface in sigilix.json (`customRules` + disable-by-id `disabledRules`).
+# Matched by each rule's `scope` globs against the PR's changed files and
+# injected into the specialist prompts alongside the other repo-guidance
+# sources, with a `[repo-rule:<id>]` self-tag attribution marker (mirrors
+# OPENCLAW_SDK_PACKS_MODE's marker scheme — findings a rule informed render a
+# quiet "via repo rule <id>" line). Binary: "off" (the CODE-level fallback for
+# an unset/missing value — byte-identical review even if a repo declares
+# `customRules`) or "on" (match + inject + attribution parse). No shadow state
+# because injection is ALREADY opt-in per repo via the presence of `customRules`
+# in that repo's own sigilix.json — there is no cross-repo blast radius to
+# stage, so default-on at the deploy level is a no-op for every repo that
+# hasn't declared any custom rules. Parsed by resolveConfigAsCodeMode
+# (@/src/shared/domain/config/resolve).
+OPENCLAW_CONFIG_AS_CODE_MODE = "on"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

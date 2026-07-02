@@ -29,6 +29,10 @@ import {
   renderPathInstructionsForPrompt,
   resolvePathInstructionsForChangedPaths,
   resolveAstRulesConfig,
+  resolveConfigAsCodeMode,
+  resolveCustomRulesForChangedPaths,
+  renderCustomRulesForPrompt,
+  type MatchedSigilixCustomRule,
   type SigilixConfig,
 } from "@/src/lib/sigilix-config"
 import { renderHitsForPrompt, type DeterministicCheckHit } from "@/src/shared/domain/deterministic-checks"
@@ -173,6 +177,11 @@ export interface AssemblePromptsResult {
    *  `[sdk:<packId>]` marker only attributes when the id matches a pack this
    *  review's context actually saw. Empty in off/shadow, or no match. */
   matchedSdkPacks: MatchedSdkPack[]
+  /** Config-as-code: the `customRules` actually injected into the specialist
+   *  prompts — threaded to render-prep's attribution gate so a
+   *  `[repo-rule:<id>]` marker only attributes when the id matches a rule
+   *  this review's context actually saw. Empty when off, or no match. */
+  matchedCustomRules: MatchedSigilixCustomRule[]
 }
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
@@ -841,6 +850,31 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       }),
     )
   }
+  // Config-as-code structured rules. Binary off/on gate (no shadow — injection
+  // is already opt-in per repo via the presence of `customRules`). `off` → no
+  // match, empty block (byte-identical); `on` → match the repo's `customRules`
+  // against the PR's changed files and inject `customRulesBlock` into every
+  // SPECIALIST message below. `matchedCustomRules` is threaded to render-prep's
+  // attribution gate so a `[repo-rule:<id>]` marker only attributes an id this
+  // review's context actually saw.
+  const configAsCodeMode = resolveConfigAsCodeMode(env)
+  const matchedCustomRules =
+    configAsCodeMode === "on"
+      ? resolveCustomRulesForChangedPaths(sigilixConfig, [...filePaths, ...filesNotReviewed])
+      : []
+  const customRulesBlock = renderCustomRulesForPrompt(matchedCustomRules)
+  if (matchedCustomRules.length > 0) {
+    console.log(
+      JSON.stringify({
+        event: "config-as-code-rules-matched",
+        owner,
+        repo,
+        prNumber,
+        mode: configAsCodeMode,
+        ruleIds: matchedCustomRules.map((m) => m.rule.id),
+      }),
+    )
+  }
   const messageForRole = (role: SpecialistRole): string => {
     const cached = specialistMessageCache.get(role)
     if (cached !== undefined) return cached
@@ -886,6 +920,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
       ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
+      ...(customRulesBlock.length > 0 ? { customRulesBlock } : {}),
     })
     // SIG-452: the LOGIC locus. Append the enforce-gated removed-guarding-tests
     // block to the LOGIC specialist's message only. Empty unless enforce + a
@@ -914,6 +949,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
       ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
+      ...(customRulesBlock.length > 0 ? { customRulesBlock } : {}),
     })
     // SIG-452 (Codex sign-off #5): the LOGIC locus must also fire on the SIG-418
     // multibatch spillover re-runs — the signal is computed over the full PR diff,
@@ -936,5 +972,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     messageForBatchRole,
     adversarialFramingSynthBlock,
     matchedSdkPacks,
+    matchedCustomRules,
   }
 }

@@ -206,6 +206,18 @@ export interface Env {
   // resolveSdkPacksMode (@/src/lib/sdk-packs).
   OPENCLAW_SDK_PACKS_MODE?: string
 
+  // Config-as-code structured rules (sigilix.json `customRules` + `disabledRules`):
+  // id/scope-glob/severity/enabled structured rules, matched against the PR's
+  // changed files and injected into specialist prompts, with a `[repo-rule:<id>]`
+  // self-tag attribution marker (mirrors OPENCLAW_SDK_PACKS_MODE's marker scheme).
+  // "off" (default/unset/any other value) — the loader is skipped entirely:
+  // byte-identical review even if a repo's sigilix.json declares `customRules`.
+  // "on" — matches + injects the rules and enables the attribution marker parse.
+  // Binary (no shadow state) because injection is ALREADY opt-in per repo via the
+  // `customRules` field's presence — there is no cross-repo blast radius to stage.
+  // Parsed by resolveConfigAsCodeMode (@/src/shared/domain/config/resolve).
+  OPENCLAW_CONFIG_AS_CODE_MODE?: string
+
   // Memory Gardener — activity-aware decay pass (Phase-1 of the dynamic-memory
   // moat), driven off the 6h cron. Three-state, DEFAULT OFF:
   //   - "off" (default / unset / any other value): the decay pass is fully

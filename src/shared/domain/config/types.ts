@@ -88,6 +88,45 @@ export interface SigilixConfig {
    */
   pathFilters?: string[]
   /**
+   * Config-as-code structured rules — the repo-owned, id/scope/severity
+   * surface for review criteria. DISTINCT from the free-text `rules`
+   * field above: `rules` is per-specialist-role prose; `customRules` is
+   * a list of individually-addressable rules with a stable `id`, an
+   * optional `scope` glob, an optional `severity` hint, and a per-rule
+   * `enabled` toggle.
+   *
+   * Recall-safety: a rule only ever ADDS review attention on the matched
+   * files — it can never suppress, downgrade, or omit a finding the model
+   * finds independently. Rules are matched by their `scope` globs against
+   * the PR's changed files (same `compileGlob`/`pathMatchesAny` semantics
+   * as `pathFilters` / `pathInstructions`); an absent/empty `scope`
+   * applies the rule to every changed file.
+   *
+   * Injected into specialist prompts only when
+   * `OPENCLAW_CONFIG_AS_CODE_MODE=on`; a `[repo-rule:<id>]` self-tag
+   * attribution marker lets the model attribute a finding a rule informed
+   * (mirrors the SDK-pack `[sdk:<id>]` scheme).
+   *
+   * Example:
+   *   "customRules": [
+   *     {
+   *       "id": "no-raw-sql",
+   *       "rule": "Flag string-concatenated SQL; require parameterized queries.",
+   *       "scope": ["src/db/**"],
+   *       "severity": "P1"
+   *     }
+   *   ]
+   */
+  customRules?: SigilixCustomRule[]
+  /**
+   * Config-as-code disable-by-id list: ids from THIS repo's own
+   * `customRules` array that should be skipped at match time (e.g. to
+   * turn off a rule without deleting its definition). Cross-subsystem
+   * disable-by-id (SDK-pack ids, AST rule ids, etc.) is a possible future
+   * extension — NOT built here; this list only affects `customRules`.
+   */
+  disabledRules?: string[]
+  /**
    * ARC-176: review tone. Default `chill` (only must-fix). Set to
    * `assertive` to also surface nits and style.
    */
@@ -530,6 +569,33 @@ export interface SigilixPathInstruction {
 }
 
 export interface MatchedSigilixPathInstruction extends SigilixPathInstruction {
+  matchedPaths: string[]
+}
+
+export type SigilixCustomRuleSeverity = "P1" | "P2" | "P3"
+
+export interface SigilixCustomRule {
+  /** Stable id, unique within the repo config. Used as the `[repo-rule:<id>]`
+   *  attribution marker and as the disable-by-id key in `disabledRules`.
+   *  Must match /^[a-z0-9][a-z0-9-]{0,63}$/ (mirrors the SDK-pack id convention
+   *  in sdk-packs/types.ts) — invalid ids are dropped at parse time. */
+  id: string
+  /** The rule text — 1-3 sentences, review-actionable, injected verbatim as
+   *  additional context. Never an instruction to suppress/downgrade a finding. */
+  rule: string
+  /** Glob patterns (same compileGlob/pathMatchesAny semantics as pathFilters)
+   *  scoping this rule to matching changed files. Absent/empty = applies to
+   *  every changed file (matches pathMatchesAny's empty-array semantics). */
+  scope?: string[]
+  /** Soft priority hint for the model — never a score mutation, never a gate.
+   *  Mirrors SdkPackRule.severityHint. Default (absent) renders with no tag. */
+  severity?: SigilixCustomRuleSeverity
+  /** Per-rule enable toggle. Default true — only literal `false` disables. */
+  enabled?: boolean
+}
+
+export interface MatchedSigilixCustomRule {
+  rule: SigilixCustomRule
   matchedPaths: string[]
 }
 

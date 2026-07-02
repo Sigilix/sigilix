@@ -552,6 +552,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       messageForBatchRole,
       adversarialFramingSynthBlock,
       matchedSdkPacks,
+      matchedCustomRules,
     } = prompts
 
     args.statusReporter?.report(
@@ -781,6 +782,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       consensusProvenance,
       consensusByIndex,
       matchedSdkPacks,
+      matchedCustomRules,
     })
     // `let` (was const): SIG-285 PR 4 filters this in lockstep with
     // submissionVerdict.findings when a refuted finding is demoted, to keep the

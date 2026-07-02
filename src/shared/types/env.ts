@@ -1139,6 +1139,15 @@ export interface Env {
   // Optional so a deploy that hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
 
+  // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
+  // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";
+  // absent/invalid OPENCLAW_PER_SEAT_PRICE surfaces perSeatMonthly=null ("billing
+  // at launch"). Values are display-only until real Stripe billing lands.
+  //   OPENCLAW_PLAN            "free" (default) | "pro" | "max" | "ultra" | "team" | "enterprise".
+  //   OPENCLAW_PER_SEAT_PRICE  monthly per-seat price, parsed as a number (e.g. "20").
+  OPENCLAW_PLAN?: string
+  OPENCLAW_PER_SEAT_PRICE?: string
+
   // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command.
   //   OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE  "off" (default/unknown) | "shadow" | "on".
   //   OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP  JSON {"owner/repo":"<linearTeamId>","owner":"<linearTeamId>"}

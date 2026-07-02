@@ -26,6 +26,15 @@
 //     api-key-resolver.ts. A real per-tenant key is scoped to exactly its
 //     own installation; it can never see another tenant's rows.
 //
+// Display cap: each section (`org`, `mine`) is independently capped at
+// PER_SECTION_LIMIT distinct PRs, newest-first, AFTER collapsing the adapter's
+// raw ledger rows (see d1-workspace-prs-read.ts's RECENT_LIMIT comment for why
+// the raw scan is wider than this). `mine` is sliced from the full collapsed
+// set rather than from an already-capped `org` list — otherwise a less-active
+// author's PR that ranks outside `org`'s top 100 (because busier PRs from
+// other authors outrank it) would never reach `mine`, even though `mine`
+// itself has plenty of room.
+//
 // Fail-soft on the DATA path: a D1 read fault (readRecentWorkspacePrs ->
 // { ok: false }, which itself already warn-logs the underlying error) or a
 // GitHub installations-listing error resolves to `{ org: [], mine: [] }` at
@@ -44,6 +53,7 @@ import { readRecentWorkspacePrs, collapseWorkspacePrs, type WorkspacePrSummary }
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_INSTALLATION_PAGES = 20
+const PER_SECTION_LIMIT = 100
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -148,10 +158,16 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
     return json({ org: [], mine: [] } satisfies WorkspacePrsResponse, 200)
   }
 
-  const org = collapseWorkspacePrs(read.rows)
+  const collapsed = collapseWorkspacePrs(read.rows)
   const mine = sessionLogin
-    ? org.filter((pr) => pr.authorLogin !== null && pr.authorLogin.toLowerCase() === sessionLogin!.toLowerCase())
+    ? collapsed.filter((pr) => pr.authorLogin !== null && pr.authorLogin.toLowerCase() === sessionLogin!.toLowerCase())
     : []
 
-  return json({ org, mine } satisfies WorkspacePrsResponse, 200)
+  return json(
+    {
+      org: collapsed.slice(0, PER_SECTION_LIMIT),
+      mine: mine.slice(0, PER_SECTION_LIMIT),
+    } satisfies WorkspacePrsResponse,
+    200,
+  )
 }

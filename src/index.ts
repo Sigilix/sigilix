@@ -83,6 +83,7 @@ import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute } from "@/src/lib/workspace-prs-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
+import { handleUsageRoute } from "@/src/lib/usage-route"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
@@ -485,16 +486,11 @@ export default {
     if (request.method === "GET" && url.pathname === "/setup") {
       return handleSetupRoute(request, env, ctx)
     }
-    // #155 onboarding-backend slice 3 (portal endpoints): the portal
-    // (a DIFFERENT ORIGIN — app.sigilix.ai / localhost:3300 dev) drives
-    // these session-authed routes over `fetch(..., { credentials: "include" })`,
-    // so they're CORS'd via portal-cors.ts. OPTIONS is handled once, up
-    // front, for every path in this set; every actual response is wrapped
-    // with withPortalCors so credentials-mode responses never carry `*`.
-    // sig-workspace-prs: /v1/workspace/prs is dual-authed (session cookie OR
-    // bearer api key — see workspace-prs-route.ts), but the portal's browser
-    // session path still needs the same credentialed-CORS treatment as the
-    // other session-authed portal routes above.
+    // #155 portal endpoints: the portal (a DIFFERENT ORIGIN — app.sigilix.ai /
+    // localhost:3300) drives these routes over `fetch(…, { credentials:
+    // "include" })`, so they're CORS'd via portal-cors.ts — OPTIONS handled once
+    // here, every response wrapped with withPortalCors (never a `*` origin).
+    // These are dual-authed (session cookie OR bearer api key); see each route.
     const isPortalCorsPath =
       url.pathname === "/v1/keys" ||
       url.pathname.startsWith("/v1/keys/") ||
@@ -507,6 +503,7 @@ export default {
       // (seats + per-seat billing). Dual-authed (session OR api key); see
       // org-overview-route.ts.
       url.pathname === "/v1/org/overview" ||
+      url.pathname === "/v1/usage" || // sig-usage: portal usage panel + CLI /usage bars
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
       // are portal-facing (dual-authed session OR api key — see
@@ -575,6 +572,10 @@ export default {
     // org-overview-route.ts.
     if (request.method === "GET" && url.pathname === "/v1/org/overview") {
       return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
+    }
+    // sig-usage: portal "Plan usage limits" panel + CLI `/usage` bars (usage-route.ts).
+    if (request.method === "GET" && url.pathname === "/v1/usage") {
+      return withPortalCors(request, await handleUsageRoute(request, env, ctx), env)
     }
     if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
       return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)

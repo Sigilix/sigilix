@@ -206,6 +206,57 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
       expect(body.mine.map((p) => p.prNumber)).toEqual([1])
     })
 
+    it("busy installation: a less-active author's own recent PR still reaches `mine` even though it falls outside the old raw-100 window (regression for the pre-collapse-cap bug)", async () => {
+      const db = await makeDb()
+      const kv = makeKV()
+      await seedSession(kv, "sess-1", "quiet-dev", 111)
+      const env = {
+        OPENCLAW_STATE: kv,
+        OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+        SIGILIX_PLATFORM_DB: db,
+      } as unknown as Env
+      stubInstallations([1])
+
+      await insertRepo(db, 100, 1, "acme/api")
+
+      const base = Date.parse("2026-06-01T00:00:00.000Z")
+      // quiet-dev's own PR, reviewed once, well before the flood of busy-bot
+      // activity below.
+      await insertUsage(db, {
+        installationId: 1,
+        repoId: 100,
+        prNumber: 9999,
+        headSha: "sha-quiet",
+        authorLogin: "quiet-dev",
+        createdAt: new Date(base).toISOString(),
+      })
+      // 150 distinct PRs from a busy author, each reviewed once, all newer
+      // than quiet-dev's PR — enough on their own to fill (and overflow) the
+      // OLD raw-100 window, pushing quiet-dev's row entirely outside it even
+      // though the collapsed result (151 distinct PRs) has plenty of room.
+      for (let i = 0; i < 150; i++) {
+        await insertUsage(db, {
+          installationId: 1,
+          repoId: 100,
+          prNumber: i,
+          headSha: `sha-busy-${i}`,
+          authorLogin: "busy-bot",
+          createdAt: new Date(base + (i + 1) * 60_000).toISOString(),
+        })
+      }
+
+      const res = await handleWorkspacePrsRoute(reqWithSession("sess-1"), env)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { org: Array<{ prNumber: number }>; mine: Array<{ prNumber: number }> }
+
+      // Under the old raw-100-then-collapse behavior, quiet-dev's row never
+      // survives the raw scan at all (150 busier rows outrank it), so `mine`
+      // would be empty here. The wider raw scan (400) plus computing `mine`
+      // from the full collapsed set — not a pre-capped `org` slice — means
+      // quiet-dev's own PR still reaches their personal section.
+      expect(body.mine.map((p) => p.prNumber)).toEqual([9999])
+    })
+
     it("scopes org to only the session user's own installations (never another tenant's rows)", async () => {
       const db = await makeDb()
       const kv = makeKV()

@@ -83,6 +83,7 @@ import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute } from "@/src/lib/workspace-prs-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
+import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
@@ -494,6 +495,7 @@ export default {
       // (seats + per-seat billing). Dual-authed (session OR api key); see
       // org-overview-route.ts.
       url.pathname === "/v1/org/overview" ||
+      url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
       // are portal-facing (dual-authed session OR api key — see
       // agent-memory-crud-route.ts). The earlier PUT/POST /v1/memory* routes
@@ -568,6 +570,9 @@ export default {
     // org-overview-route.ts.
     if (request.method === "GET" && url.pathname === "/v1/org/overview") {
       return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
+    }
+    if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
+      return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)
     }
     // sig-memory-crud: the portal's memory-management surface. GET lists the
     // caller's saved memories (paginated); DELETE removes one by id. Dual-authed

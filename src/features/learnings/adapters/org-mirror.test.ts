@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { upsertTenantAndRepo } from "@/src/features/tenancy"
 import { mirrorLearningToOrgScope } from "@/src/features/learnings/adapters/org-mirror"
 import { learningsKey } from "@/src/features/learnings/domain/store-ops"
 import type { LearningEntry } from "@/src/features/learnings/domain/types"
 import type { Env } from "@/src/shared/types/env"
+
+const MIGRATION_SQL = readFileSync(
+  new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
+  "utf8",
+)
 
 const CREATED_TS = "2026-06-15T12:00:00.000Z"
 
@@ -119,5 +127,97 @@ describe("mirrorLearningToOrgScope (Seat∪Org memory layering, Phase 1)", () =>
     } as unknown as Env
     await expect(mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY })).resolves.toBeUndefined()
     consoleSpy.mockRestore()
+  })
+
+  // ── D1-first installation resolution (the prod bug fix) ────────────────
+  // Prod had OPENCLAW_ORG_MEMORY_CAPTURE="on" but NO OPENCLAW_GITHUB_INSTALLATION_MAP
+  // entries at all — so the old env-var-only lookup always returned `no_installation`
+  // and `learnings:org:*` stayed at 0 keys forever, even with 47 real repo-scope
+  // learnings captured. The live D1 `repo` registry (populated by every real PR
+  // webhook via `upsertTenantAndRepo`) is the fix: it is authoritative for any repo
+  // this mirror ever fires for.
+  describe("D1-first installation resolution", () => {
+    async function makeDbWithRepo(installationId: number, fullName: string): Promise<D1Database> {
+      const db = makeD1()
+      await db.exec(MIGRATION_SQL)
+      await upsertTenantAndRepo(
+        { SIGILIX_PLATFORM_DB: db },
+        { installationId, repoId: 1225209204, fullName, nowIso: "2026-01-01T00:00:00Z" },
+      )
+      return db
+    }
+
+    it("D1 repo row resolves the installation — writes org-scope entry with NO installation-map entry at all (the prod fix)", async () => {
+      const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+      const db = await makeDbWithRepo(134_811_639, "octo/repo")
+      const { env, store } = makeEnv({
+        OPENCLAW_ORG_MEMORY_CAPTURE: "on",
+        SIGILIX_PLATFORM_DB: db,
+        // No OPENCLAW_GITHUB_INSTALLATION_MAP at all — matches prod.
+      })
+      await mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY })
+
+      const orgKey = learningsKey("org", "134811639")
+      expect(store.has(orgKey)).toBe(true)
+      const orgStore = JSON.parse(store.get(orgKey)!)
+      expect(orgStore.entries).toHaveLength(1)
+      consoleSpy.mockRestore()
+    })
+
+    it("D1 row takes precedence over a conflicting OPENCLAW_GITHUB_INSTALLATION_MAP entry", async () => {
+      const db = await makeDbWithRepo(42, "octo/repo")
+      const { env, store } = makeEnv({
+        OPENCLAW_ORG_MEMORY_CAPTURE: "on",
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ "octo/repo": 999 }),
+      })
+      await mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY })
+      expect(store.has(learningsKey("org", "42"))).toBe(true)
+      expect(store.has(learningsKey("org", "999"))).toBe(false)
+    })
+
+    it("D1 binding present but repo not yet registered (no row) — falls back to the env-var map", async () => {
+      const db = makeD1()
+      await db.exec(MIGRATION_SQL)
+      const { env, store } = makeEnv({
+        OPENCLAW_ORG_MEMORY_CAPTURE: "on",
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ "octo/repo": 42 }),
+      })
+      await mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY })
+      expect(store.has(learningsKey("org", "42"))).toBe(true)
+    })
+
+    it("D1 query throws (genuine outage) — fails soft, falls back to the env-var map, never throws", async () => {
+      const brokenDb = {
+        prepare() {
+          throw new Error("simulated D1 error")
+        },
+      } as unknown as D1Database
+      const { env, store } = makeEnv({
+        OPENCLAW_ORG_MEMORY_CAPTURE: "on",
+        SIGILIX_PLATFORM_DB: brokenDb,
+        OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ "octo/repo": 42 }),
+      })
+      await expect(
+        mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY }),
+      ).resolves.toBeUndefined()
+      expect(store.has(learningsKey("org", "42"))).toBe(true)
+    })
+
+    it("D1 query throws AND no env-var map — skips silently, never throws", async () => {
+      const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+      const brokenDb = {
+        prepare() {
+          throw new Error("simulated D1 error")
+        },
+      } as unknown as D1Database
+      const { env, store } = makeEnv({ OPENCLAW_ORG_MEMORY_CAPTURE: "on", SIGILIX_PLATFORM_DB: brokenDb })
+      await expect(
+        mirrorLearningToOrgScope({ env, owner: "octo", repo: "repo", entry: ENTRY }),
+      ).resolves.toBeUndefined()
+      expect(store.size).toBe(0)
+      consoleSpy.mockRestore()
+    })
   })
 })

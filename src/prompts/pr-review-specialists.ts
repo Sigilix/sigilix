@@ -260,6 +260,16 @@ export interface SpecialistInitialMessageCtx {
    */
   sdkGuidanceBlock?: string
   /**
+   * Config-as-code: pre-rendered "REPO RULES" block — the repo-owner's
+   * `sigilix.json` `customRules` scoped (by their `scope` globs) to the
+   * files this PR changed. Same block for every role, injected alongside
+   * the other repo/context guidance sources. Empty/absent when the feature
+   * is off (`OPENCLAW_CONFIG_AS_CODE_MODE` unset/off) or no rule matched
+   * the changed files. Built by `renderCustomRulesForPrompt`
+   * (@/src/lib/sigilix-config).
+   */
+  customRulesBlock?: string
+  /**
    * ARC-193: pre-rendered deterministic-check hits block. Injected
    * BEFORE the diff so the specialist sees these as authoritative
    * facts about lines the regex layer already flagged. Empty/absent
@@ -385,6 +395,13 @@ export function buildSpecialistInitialMessage(ctx: SpecialistInitialMessageCtx):
   // guidance sources (guidance / pathInstructions / scopedRules / learnings).
   if (ctx.sdkGuidanceBlock && ctx.sdkGuidanceBlock.length > 0) {
     lines.push(ctx.sdkGuidanceBlock)
+    lines.push("")
+  }
+  // Config-as-code: repo-owner structured rules, alongside the other
+  // repo/context guidance sources (guidance / pathInstructions /
+  // scopedRules / learnings / SDK guidance).
+  if (ctx.customRulesBlock && ctx.customRulesBlock.length > 0) {
+    lines.push(ctx.customRulesBlock)
     lines.push("")
   }
   if (ctx.profile === "chill") {

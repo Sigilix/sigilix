@@ -382,6 +382,17 @@ export interface PrReviewFinding {
    * model output beyond the marker itself.
    */
   sdkGuidance?: { packId: string; vendor: string; docsUrl: string }
+  /**
+   * Config-as-code structured rules: runtime-only "applied repo rule"
+   * attribution — set at render-prep when the model appended a
+   * `[repo-rule:<id>]` marker to this finding's body (parsed + stripped by
+   * `applyCustomRuleAttribution`) referencing a rule that was actually
+   * injected into this review's context. The renderer surfaces a small
+   * `<sub>via repo rule <id></sub>` provenance line, mirroring
+   * `sdkGuidance`'s convention. Never parsed from raw model output beyond
+   * the marker itself; gated by `OPENCLAW_CONFIG_AS_CODE_MODE=on`.
+   */
+  repoRule?: { id: string; rule: string }
 }
 
 /**

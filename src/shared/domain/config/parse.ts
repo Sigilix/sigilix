@@ -21,6 +21,8 @@ import {
   type SigilixCommandName,
   type SigilixConfig,
   type SigilixConfigSource,
+  type SigilixCustomRule,
+  type SigilixCustomRuleSeverity,
   type SigilixPathInstruction,
 } from "./types"
 import { parseYamlConfigDocument } from "./yaml"
@@ -41,6 +43,14 @@ const FALLBACKS_MAX_ENTRIES = 4
 const PATH_INSTRUCTIONS_MAX_ENTRIES = 20
 const PATH_INSTRUCTIONS_MAX_PATHS = 50
 const PATH_INSTRUCTIONS_TEXT_MAX_CODE_POINTS = 4000
+
+// Config-as-code structured rules (`customRules` / `disabledRules`) bounds.
+const MAX_CONFIG_RAW_BYTES = 65_536 // ~64KB — SIG config-as-code file-size cap
+const CUSTOM_RULES_MAX_ENTRIES = 100
+const CUSTOM_RULE_TEXT_MAX_CODE_POINTS = 2000
+const CUSTOM_RULE_SCOPE_MAX_GLOBS = 20
+const DISABLED_RULES_MAX_ENTRIES = 200
+const CUSTOM_RULE_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 // SIG-110: perfBudgets numeric bounds. Latency in ms (1ms .. 10min);
 // bundle size in KB (1KB .. 1GB). Out-of-range values drop silently.
@@ -126,6 +136,59 @@ function parsePathInstructions(v: unknown): SigilixPathInstruction[] {
       ...(rules ? { rules } : {}),
     })
     if (out.length >= PATH_INSTRUCTIONS_MAX_ENTRIES) break
+  }
+  return out
+}
+
+/**
+ * Config-as-code: parse the `customRules` array. Fail-open per entry
+ * (mirrors `parsePathInstructions`) — a malformed entry is dropped, not
+ * fatal, so one bad rule can't reject the whole config. Deduped by id
+ * (first occurrence wins), capped at `CUSTOM_RULES_MAX_ENTRIES`.
+ */
+function parseCustomRules(v: unknown): SigilixCustomRule[] {
+  if (!Array.isArray(v)) return []
+  const out: SigilixCustomRule[] = []
+  const seenIds = new Set<string>()
+  for (const item of v) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue
+    const rec = item as Record<string, unknown>
+    const id = typeof rec.id === "string" ? rec.id.trim() : ""
+    if (id.length === 0 || !CUSTOM_RULE_ID_RE.test(id) || seenIds.has(id)) continue
+    const ruleText = typeof rec.rule === "string" ? rec.rule.trim() : ""
+    if (ruleText.length === 0) continue
+    seenIds.add(id)
+    const rule: SigilixCustomRule = {
+      id,
+      rule: takeCodePoints(ruleText, CUSTOM_RULE_TEXT_MAX_CODE_POINTS),
+    }
+    const scope = parseCustomRuleScope(rec.scope)
+    if (scope.length > 0) rule.scope = scope
+    if (rec.severity === "P1" || rec.severity === "P2" || rec.severity === "P3") {
+      rule.severity = rec.severity as SigilixCustomRuleSeverity
+    }
+    if (rec.enabled === true || rec.enabled === false) {
+      rule.enabled = rec.enabled
+    }
+    out.push(rule)
+    if (out.length >= CUSTOM_RULES_MAX_ENTRIES) break
+  }
+  return out
+}
+
+/** Config-as-code: parse a rule's `scope` (string or string[]) — trim,
+ *  dedupe, drop empties, cap at `CUSTOM_RULE_SCOPE_MAX_GLOBS`. */
+function parseCustomRuleScope(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? [v] : []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== "string") continue
+    const trimmed = item.trim()
+    if (trimmed.length === 0 || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+    if (out.length >= CUSTOM_RULE_SCOPE_MAX_GLOBS) break
   }
   return out
 }
@@ -294,6 +357,13 @@ export function parseSigilixConfigSource(source: SigilixConfigSource): ParseResu
 }
 
 function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
+  // Config-as-code file-size cap. Reuses the existing `{ok:false}` fail-path
+  // (→ loadSigilixConfigWithVisibleParseError's warn + PR-comment + EMPTY_CONFIG
+  // fallback) so an oversized config never breaks review. `TextEncoder` is a
+  // Workers-native global (available in tests too).
+  if (new TextEncoder().encode(raw).length > MAX_CONFIG_RAW_BYTES) {
+    return { ok: false, reason: "sigilix.json exceeds max size of 64KB", raw }
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {
       ok: false,
@@ -322,6 +392,22 @@ function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
   // fail-open parser contract: bad entries are dropped, not fatal.
   const pathInstructions = parsePathInstructions(obj.pathInstructions)
   if (pathInstructions.length > 0) out.pathInstructions = pathInstructions
+  // Config-as-code structured rules. Fail-open per entry (like
+  // pathInstructions) — a bad `customRules` entry is dropped, never a hard
+  // reject. `disabledRules` mirrors astRules.disabledRules's parse pattern.
+  const customRules = parseCustomRules(obj.customRules)
+  if (customRules.length > 0) out.customRules = customRules
+  if (Array.isArray(obj.disabledRules)) {
+    const ids = [
+      ...new Set(
+        obj.disabledRules
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      ),
+    ].slice(0, DISABLED_RULES_MAX_ENTRIES)
+    if (ids.length > 0) out.disabledRules = ids
+  }
   // ARC-193: deterministicChecks parsing delegated to the runner module
   // so the schema stays co-located with the runtime that consumes it.
   if (obj.deterministicChecks !== undefined) {

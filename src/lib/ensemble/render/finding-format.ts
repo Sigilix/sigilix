@@ -112,6 +112,19 @@ export function formatSdkGuidanceAttribution(finding: PrReviewFinding): string {
   return `<sub>via ${escapeInlineEvidenceValue(attribution.vendor)} SDK guidance — ${escapeInlineEvidenceValue(attribution.docsUrl)}</sub>`
 }
 
+/**
+ * Config-as-code: the inline "applied repo rule" attribution line — a small
+ * muted `<sub>` provenance note rendered under a finding the model
+ * self-tagged with a `[repo-rule:<id>]` marker (parsed + stripped at
+ * render-prep). Returns "" when the finding carries no attribution. Mirrors
+ * `formatSdkGuidanceAttribution`'s shape. Pure — exported for tests.
+ */
+export function formatRepoRuleAttribution(finding: PrReviewFinding): string {
+  const attribution = finding.repoRule
+  if (!attribution) return ""
+  return `<sub>via repo rule \`${escapeInlineEvidenceValue(attribution.id)}\`</sub>`
+}
+
 export function sanitizeMoreInfoMarkdownText(s: string): string {
   const htmlSafe = wrapInlineHtmlTags(s)
   return htmlSafe.replace(MARKDOWN_HEADING_LINE_RE, "$1\\$2$3").replace(MARKDOWN_TASK_LIST_LINE_RE, "$1\\$2$3")

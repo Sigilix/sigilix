@@ -157,6 +157,12 @@ export function stripBodyForMatching(body: string): string {
       // absence (the model doesn't always emit it) must not drift the
       // fingerprint/Jaccard match for an otherwise-identical finding.
       .replace(/\s*\[sdk:[a-z0-9][a-z0-9-]*\]/gi, "")
+      // Config-as-code: the `[repo-rule:<id>]` attribution marker is stripped
+      // from the body downstream (applyCustomRuleAttribution), but that gate
+      // runs AFTER this fingerprint/similarity path — its presence or absence
+      // (the model doesn't always emit it) must not drift the fingerprint/
+      // Jaccard match for an otherwise-identical finding.
+      .replace(/\s*\[repo-rule:[a-z0-9][a-z0-9-]*\]/gi, "")
       // Collapse whitespace
       .replace(/\s+/g, " ")
       .trim()

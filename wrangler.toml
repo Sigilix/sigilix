@@ -641,6 +641,21 @@ OPENCLAW_ASYMMETRY_HINTS = "on"
 # racy, bumpViewCount fires-but-safe). Rollback path = "shadow".
 OPENCLAW_TOCTOU_HINTS = "on"
 
+# SIG-298 follow-on: "SDK guidance packs" v1 (Greptile-partners-style vendor
+# review context, self-authored from public docs — labeled "SDK guidance", NOT
+# "partner": no endorsement claims, no logos). Detects known SDKs/frameworks
+# (stripe, nextjs, openai-sdk, anthropic-sdk, supabase, posthog) touched by a
+# PR's diff and injects failure-pattern/implementation-rule guidance into the
+# specialist + synth prompts, the same context-injection channel as Learnings
+# (OPENCLAW_LEARNINGS_MODE). "off" (default) is fully inert. "shadow" detects
+# + logs `sdk-pack-matched {packs, prKey}` WITHOUT touching the prompt (bake
+# the detector before it can shape a review). "on" injects the guidance
+# section and enables the `[sdk:<packId>]` attribution marker parse — findings
+# it informed render a quiet "via <Vendor> SDK guidance" line. Parsed by
+# resolveSdkPacksMode (@/src/lib/sdk-packs). Shadow-first: flip to "on" after
+# reviewing a sample of `sdk-pack-matched` telemetry for false-positive detection.
+OPENCLAW_SDK_PACKS_MODE = "shadow"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

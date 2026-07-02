@@ -113,6 +113,13 @@ describe("stripBodyForMatching", () => {
     const long = "word ".repeat(500)
     expect(stripBodyForMatching(long).length).toBe(800)
   })
+
+  it("SIG-298: strips an SDK-guidance attribution marker so its presence/absence can't drift the fingerprint/Jaccard match", () => {
+    const withMarker = stripBodyForMatching("Missing signature verification. [sdk:stripe]")
+    const withoutMarker = stripBodyForMatching("Missing signature verification.")
+    expect(withMarker).toBe(withoutMarker)
+    expect(withMarker).not.toContain("[sdk:")
+  })
 })
 
 // ── Match logic ───────────────────────────────────────────────────

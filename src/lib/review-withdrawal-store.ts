@@ -151,6 +151,12 @@ export function stripBodyForMatching(body: string): string {
       .replace(/```[\s\S]*?```/g, "")
       // Link URLs — keep the link text, drop the URL
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // SIG-298 follow-on: the SDK-guidance attribution marker is stripped
+      // from the body downstream (applySdkGuidanceAttribution), but that
+      // gate runs AFTER this fingerprint/similarity path — its presence or
+      // absence (the model doesn't always emit it) must not drift the
+      // fingerprint/Jaccard match for an otherwise-identical finding.
+      .replace(/\s*\[sdk:[a-z0-9][a-z0-9-]*\]/gi, "")
       // Collapse whitespace
       .replace(/\s+/g, " ")
       .trim()

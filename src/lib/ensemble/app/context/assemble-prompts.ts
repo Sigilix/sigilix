@@ -81,6 +81,8 @@ import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
 import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
 import type { GraphContextNode } from "@/src/do/repo-graph"
+import { resolveSdkGuidance, resolveSdkPacksMode, SDK_PACKS } from "@/src/lib/sdk-packs"
+import type { MatchedSdkPack } from "@/src/lib/sdk-packs"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
@@ -166,6 +168,11 @@ export interface AssemblePromptsResult {
    *  signal exists (off/shadow → "" → byte-identical synth message). Threaded to
    *  the synth phase by the orchestrator. */
   adversarialFramingSynthBlock: string
+  /** SIG-298 follow-on: the packs that were actually injected into the
+   *  specialist prompts — threaded to render-prep's attribution gate so a
+   *  `[sdk:<packId>]` marker only attributes when the id matches a pack this
+   *  review's context actually saw. Empty in off/shadow, or no match. */
+  matchedSdkPacks: MatchedSdkPack[]
 }
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
@@ -811,6 +818,29 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       )
     }
   }
+  // SIG-298 follow-on: SDK guidance packs. Detection is cheap regex over the
+  // full-PR diff text already in memory (no extra fetches). `resolveSdkGuidance`
+  // holds the off/shadow/on decision (pure, unit-tested); `off` → both empty
+  // (byte-identical); `shadow` → `matchedSdkPacks` populated for telemetry ONLY
+  // (block stays "", bake the detector before it can shape a review); `on` →
+  // `sdkGuidanceBlock` is injected into every SPECIALIST message below (not
+  // the synth message — kept out of scope for now; the synth still sees any
+  // marker a specialist emitted, verbatim, via the specialist-verdicts block).
+  const sdkPacksMode = resolveSdkPacksMode(env.OPENCLAW_SDK_PACKS_MODE)
+  const { matched: matchedSdkPacks, block: sdkGuidanceBlock } = resolveSdkGuidance(sdkPacksMode, fullPrDiff, SDK_PACKS)
+  if (matchedSdkPacks.length > 0) {
+    console.log(
+      JSON.stringify({
+        event: "sdk-pack-matched",
+        owner,
+        repo,
+        prNumber,
+        mode: sdkPacksMode,
+        packs: matchedSdkPacks.map((m) => m.pack.id),
+        prKey: `${owner}/${repo}#${prNumber}`,
+      }),
+    )
+  }
   const messageForRole = (role: SpecialistRole): string => {
     const cached = specialistMessageCache.get(role)
     if (cached !== undefined) return cached
@@ -855,6 +885,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         : {}),
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
+      ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
     })
     // SIG-452: the LOGIC locus. Append the enforce-gated removed-guarding-tests
     // block to the LOGIC specialist's message only. Empty unless enforce + a
@@ -882,6 +913,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         ? { graphContext: graphCtxForPrompt }
         : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
+      ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
     })
     // SIG-452 (Codex sign-off #5): the LOGIC locus must also fire on the SIG-418
     // multibatch spillover re-runs — the signal is computed over the full PR diff,
@@ -903,5 +935,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     messageForRole,
     messageForBatchRole,
     adversarialFramingSynthBlock,
+    matchedSdkPacks,
   }
 }

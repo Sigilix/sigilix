@@ -249,6 +249,17 @@ export interface SpecialistInitialMessageCtx {
    */
   learningsBlock?: string
   /**
+   * SIG-298 follow-on: pre-rendered "SDK guidance" block — self-authored
+   * failure-pattern/implementation-rule guidance for SDKs/frameworks this
+   * PR's diff matched (Greptile-partners-style vendor review context, but
+   * labeled "SDK guidance" — no partner/endorsement claim). Same block for
+   * every role, injected alongside the other repo/context guidance sources.
+   * Empty/absent when the feature is off, no pack matched the diff, or mode
+   * is `shadow` (detect + telemeter only). Built by
+   * `renderSdkGuidanceForPrompt` (@/src/lib/sdk-packs).
+   */
+  sdkGuidanceBlock?: string
+  /**
    * ARC-193: pre-rendered deterministic-check hits block. Injected
    * BEFORE the diff so the specialist sees these as authoritative
    * facts about lines the regex layer already flagged. Empty/absent
@@ -368,6 +379,12 @@ export function buildSpecialistInitialMessage(ctx: SpecialistInitialMessageCtx):
   // rule sources (guidance / pathInstructions / scopedRules).
   if (ctx.learningsBlock && ctx.learningsBlock.length > 0) {
     lines.push(ctx.learningsBlock)
+    lines.push("")
+  }
+  // SIG-298 follow-on: SDK guidance, alongside the other repo/context
+  // guidance sources (guidance / pathInstructions / scopedRules / learnings).
+  if (ctx.sdkGuidanceBlock && ctx.sdkGuidanceBlock.length > 0) {
+    lines.push(ctx.sdkGuidanceBlock)
     lines.push("")
   }
   if (ctx.profile === "chill") {

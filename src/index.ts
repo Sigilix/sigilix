@@ -45,6 +45,7 @@ import {
   handleMemoryDeleteRoute,
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
+import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -150,6 +151,18 @@ function validationCacheKey(env: Env): string {
     env.OPENCLAW_TEAM_GITHUB_REPO_MAP ?? "",
     env.OPENCLAW_GITHUB_INSTALLATION_MAP ?? "",
   ].join("\0")
+}
+
+// sig-mcp-connections-p1: a one-line JSON-error-response helper — the
+// pattern every route file in this repo already uses (e.g. deep-research's
+// routes.ts, src/do/mcp/routes.ts). index.ts hand-rolled the same
+// `new Response(JSON.stringify(...), {status, headers})` literal 5 times;
+// factoring it out is a zero-behavior restructuring (COMPLIANCE.md §6 —
+// same status/body/content-type on every call site) that also frees the
+// handful of lines this file's own COMPLIANCE.md §4 budget needs for the
+// new MCP route wiring below.
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
 export default {
@@ -528,6 +541,8 @@ export default {
       }
     }
 
+    const mcpResponse = await tryHandleMcpRoute(request, env, ctx, url)
+    if (mcpResponse) return mcpResponse
     // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
     // mint/revoke per-installation API keys.
     if (request.method === "POST" && url.pathname === "/v1/keys") {
@@ -536,14 +551,7 @@ export default {
     if (request.method === "DELETE" && url.pathname.startsWith("/v1/keys/")) {
       const keyId = decodeURIComponent(url.pathname.slice("/v1/keys/".length))
       if (!keyId) {
-        return withPortalCors(
-          request,
-          new Response(JSON.stringify({ error: "missing key id" }), {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          }),
-          env,
-        )
+        return withPortalCors(request, json({ error: "missing key id" }, 400), env)
       }
       return withPortalCors(request, await handleRevokeApiKeyRoute(request, env, keyId, ctx), env)
     }
@@ -590,10 +598,7 @@ export default {
     if (request.method === "GET" && url.pathname.startsWith("/reviews/")) {
       const segments = url.pathname.slice("/reviews/".length).split("/")
       if (segments.length !== 3) {
-        return new Response(JSON.stringify({ error: "expected /reviews/<owner>/<repo>/<prNumber>" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        })
+        return json({ error: "expected /reviews/<owner>/<repo>/<prNumber>" }, 400)
       }
       let owner: string, repo: string, prNumberRaw: string
       try {
@@ -601,10 +606,7 @@ export default {
         repo = decodeURIComponent(segments[1]!)
         prNumberRaw = decodeURIComponent(segments[2]!)
       } catch {
-        return new Response(JSON.stringify({ error: "malformed percent-encoding in path" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        })
+        return json({ error: "malformed percent-encoding in path" }, 400)
       }
       // CR PR #70: strict-positive-integer check. `Number.parseInt`
       // accepts trailing garbage (`"12foo"` → 12), the unary `+`
@@ -612,17 +614,11 @@ export default {
       // false but several string forms (e.g. `" 12 "`) would still
       // parse. Anchor on `^\d+$` and reject anything else with 400.
       if (!/^\d+$/.test(prNumberRaw)) {
-        return new Response(JSON.stringify({ error: "prNumber must be a positive integer" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        })
+        return json({ error: "prNumber must be a positive integer" }, 400)
       }
       const prNumber = Number.parseInt(prNumberRaw, 10)
       if (!Number.isInteger(prNumber) || prNumber <= 0) {
-        return new Response(JSON.stringify({ error: "prNumber must be a positive integer" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        })
+        return json({ error: "prNumber must be a positive integer" }, 400)
       }
       return handleReviewStatusRoute(env, owner, repo, prNumber)
     }
@@ -998,3 +994,5 @@ export { LinearTokenBroker } from "@/src/do/linear-token-broker"
 
 // SIG-298: DeepResearchDO — deep web research engine (one instance per run).
 export { DeepResearchDO } from "@/src/do/deep-research/deep-research-do"
+// sig-mcp-connections-p1: McpConnectionsAgent — one instance per seat/tenant.
+export { McpConnectionsAgent } from "@/src/do/mcp/mcp-connections-do"

@@ -90,6 +90,17 @@ export default new WebAssembly.Module(__bytes);`
       // src/index.ts statically exports AgentRunnerContainer (extends Container),
       // so without this shim every worker-entry-importing test fails to load.
       "@cloudflare/containers": path.resolve(__dirname, "./src/test-shims/cloudflare-containers-shim.ts"),
+      // sig-mcp-connections-p1: `agents/mcp/client` (McpConnectionsAgent's
+      // dependency) transitively imports `partyserver`, which does
+      // `import ... from "cloudflare:workers"` at module scope — same
+      // externalized-node_modules problem as @cloudflare/containers above.
+      // Aliased at the specifier our OWN code imports (mcp-connections-do.ts
+      // imports "agents/mcp/client" directly) so Vite's resolver — not
+      // Node's native loader — handles it; a deeper alias on `partyserver`
+      // itself doesn't work because by the time resolution reaches a
+      // dependency-of-a-dependency inside node_modules, Vite has already
+      // externalized the whole subtree to Node's loader.
+      "agents/mcp/client": path.resolve(__dirname, "./src/test-shims/agents-mcp-client-shim.ts"),
     },
   },
 })

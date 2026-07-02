@@ -241,6 +241,15 @@ class_name = "LinearTokenBroker"
 name = "DEEP_RESEARCH"
 class_name = "DeepResearchDO"
 
+# sig-mcp-connections-p1: McpConnectionsAgent — one DO instance per seat
+# (idFromName("session:<githubUserId>")) / tenant (idFromName("tenant:<installationId>")).
+# Wraps the `agents` SDK's MCPClientManager: connect (+ OAuth), token storage
+# (the SDK's own SQLite), list, disconnect for any user-supplied MCP server
+# URL. SQLite-backed.
+[[durable_objects.bindings]]
+name = "MCP_CONNECTIONS"
+class_name = "McpConnectionsAgent"
+
 # SIG-545 B1: agent-runner Container DO (dark; gated by OPENCLAW_AGENT_RUNNER_MODE).
 # One DO instance per runId (idFromName(runId)). The Container is configured here
 # but never dispatched to until the mode flag is flipped. The real Dockerfile and
@@ -359,6 +368,17 @@ new_sqlite_classes = ["LinearTokenBroker"]
 [[migrations]]
 tag = "sig-298-deep-research-v1"
 new_sqlite_classes = ["DeepResearchDO"]
+
+# sig-mcp-connections-p1: McpConnectionsAgent — SQLite-backed (new_sqlite_classes;
+# Cloudflare no longer allows newly-created KV-backed DO namespaces). Holds the
+# `agents` SDK MCPClientManager's own server-connection + OAuth-token rows.
+# Forward-only.
+# ⚠️ A new-DO migration requires a one-time non-versioned `wrangler deploy`; a
+# subsequent `wrangler versions upload` will err 10211 — do NOT skip the first
+# plain deploy.
+[[migrations]]
+tag = "sig-mcp-connections-p1-v1"
+new_sqlite_classes = ["McpConnectionsAgent"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

@@ -50,11 +50,19 @@ export async function handleAuthMeRoute(request: Request, env: Env, ctx?: Execut
 
   const role = await resolveRoleFailSafe(authed, env)
 
+  // Identity is nested under `user` (the portal reads `me.data.user.{login,
+  // name,role}` — see the portal's setup/api.ts MeResponse). `name` is the
+  // GitHub display name captured at OAuth time, null when the user has none or
+  // for a session minted before that field existed (consumers fall back to
+  // `login`).
   return json(
     {
-      login: authed.record.login,
-      githubUserId: authed.record.githubUserId,
-      role,
+      user: {
+        login: authed.record.login,
+        name: authed.record.name ?? null,
+        githubUserId: authed.record.githubUserId,
+        role,
+      },
     },
     200,
   )

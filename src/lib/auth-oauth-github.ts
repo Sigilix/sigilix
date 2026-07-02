@@ -124,6 +124,7 @@ interface AccessTokenResponse {
 interface GitHubUserResponse {
   login?: string
   id?: number
+  name?: string | null
   email?: string | null
 }
 
@@ -284,6 +285,9 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
 
   // 5. Mint session + encrypt token + store.
   const sessionId = mintSessionId()
+  // GitHub's display name is optional and can be null/blank — normalize to a
+  // trimmed string, else omit it (exactOptionalPropertyTypes; see createSession).
+  const displayName = typeof user.name === "string" && user.name.trim() ? user.name.trim() : undefined
   await createSession({
     kv: env.OPENCLAW_STATE,
     sessionId,
@@ -291,6 +295,7 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     githubUserId: user.id,
     accessToken,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
+    ...(displayName !== undefined ? { name: displayName } : {}),
   })
 
   await writeAuthEvent(env.OPENCLAW_STATE, {

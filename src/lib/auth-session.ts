@@ -19,6 +19,12 @@ const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000
 
 export interface SessionRecord {
   login: string
+  // GitHub display name (public profile field), captured at OAuth time for the
+  // portal's greeting / setup-wizard name prefill. Optional: GitHub users can
+  // leave it blank, and sessions minted before this field existed won't have
+  // it — consumers must fall back to `login`. Not a secret (public profile),
+  // so stored plaintext alongside `login`; only the access token is encrypted.
+  name?: string
   githubUserId: number
   encryptedAccessToken: string
   iv: string
@@ -120,8 +126,9 @@ export async function createSession(args: {
   githubUserId: number
   accessToken: string
   encryptionKeyB64url: string
+  name?: string
 }): Promise<SessionRecord> {
-  const { kv, sessionId, login, githubUserId, accessToken, encryptionKeyB64url } = args
+  const { kv, sessionId, login, name, githubUserId, accessToken, encryptionKeyB64url } = args
   const { ciphertext, iv } = await encryptAccessToken(accessToken, sessionId, encryptionKeyB64url)
   const now = Date.now()
   const record: SessionRecord = {
@@ -131,6 +138,9 @@ export async function createSession(args: {
     iv,
     createdAt: now,
     lastSeenAt: now,
+    // exactOptionalPropertyTypes: omit the key entirely when absent rather than
+    // set it to `undefined` (keeps the in-memory + JSON-serialized shape aligned).
+    ...(name !== undefined ? { name } : {}),
   }
   await kv.put(`${SESSION_KV_PREFIX}${sessionId}`, JSON.stringify(record), {
     expirationTtl: SESSION_TTL_SECONDS,

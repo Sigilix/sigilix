@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
+import worker from "@/src/index"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
@@ -30,7 +31,13 @@ function makeKV(): KVNamespace {
   } as unknown as KVNamespace
 }
 
-async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
+async function seedSession(
+  kv: KVNamespace,
+  sessionId: string,
+  login: string,
+  githubUserId: number,
+  name?: string,
+): Promise<void> {
   await createSession({
     kv,
     sessionId,
@@ -38,7 +45,12 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
     githubUserId,
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
+    ...(name !== undefined ? { name } : {}),
   })
+}
+
+interface MeBody {
+  user: { login: string; name: string | null; githubUserId: number; role: string }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -82,8 +94,8 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
 
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { login: string; githubUserId: number; role: string }
-    expect(body).toEqual({ login: "octocat", githubUserId: 111, role: "admin" })
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "admin" } })
   })
 
   it("falls back to role=member when GitHub is unreachable (never 500s)", async () => {
@@ -100,8 +112,8 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
 
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { login: string; githubUserId: number; role: string }
-    expect(body).toEqual({ login: "octocat", githubUserId: 111, role: "member" })
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
   })
 
   it("falls back to role=member when the session encryption key is missing (never 500s)", async () => {
@@ -111,8 +123,8 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
 
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { login: string; githubUserId: number; role: string }
-    expect(body).toEqual({ login: "octocat", githubUserId: 111, role: "member" })
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
   })
 
   it("falls back to role=member when the token fails to decrypt (never 500s)", async () => {
@@ -126,8 +138,86 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
 
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { login: string; githubUserId: number; role: string }
-    expect(body).toEqual({ login: "octocat", githubUserId: 111, role: "member" })
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
+  })
+
+  it("returns the GitHub display name nested under `user` when the session has one", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+    await seedSession(kv, "sess-1", "octocat", 111, "Octo Cat")
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          total_count: 1,
+          installations: [{ id: 1, account: { type: "User", login: "octocat" } }],
+        }),
+      ),
+    )
+
+    const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: "Octo Cat", githubUserId: 111, role: "admin" } })
+  })
+
+  // #155 onboarding: the portal reads /auth/me cross-origin with
+  // credentials:include, so the response MUST carry credentialed CORS headers
+  // (echoed origin + allow-credentials) or the browser blocks the portal from
+  // reading it — silently breaking the setup-wizard session bootstrap. These
+  // drive the REAL worker entrypoint (index.ts) to prove the wrapping is wired,
+  // mirroring org-overview-route.test.ts's CORS-path coverage.
+  it("carries credentialed CORS headers for an allowlisted portal origin (via the worker entrypoint)", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    await seedSession(kv, "sess-1", "octocat", 111)
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          total_count: 1,
+          installations: [{ id: 1, account: { type: "User", login: "octocat" } }],
+        }),
+      ),
+    )
+
+    const req = new Request("https://x/auth/me", {
+      headers: { cookie: `${SESSION_COOKIE}=sess-1`, origin: "https://app.sigilix.ai" },
+    })
+    const res = await worker.fetch(req, env, ctx)
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
+    expect(res.headers.get("access-control-allow-credentials")).toBe("true")
+    const body = (await res.json()) as MeBody
+    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "admin" } })
+  })
+
+  it("does NOT echo an Access-Control-Allow-Origin for a non-allowlisted origin (via the worker entrypoint)", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    await seedSession(kv, "sess-1", "octocat", 111)
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down")
+      }),
+    )
+
+    const req = new Request("https://x/auth/me", {
+      headers: { cookie: `${SESSION_COOKIE}=sess-1`, origin: "https://evil.example.com" },
+    })
+    const res = await worker.fetch(req, env, ctx)
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBeNull()
+    // Vary: Origin is always appended so a shared cache never leaks one
+    // origin's (absent) CORS grant to another.
+    expect(res.headers.get("vary")?.toLowerCase()).toContain("origin")
   })
 
   it("never includes the access token in any logged output", async () => {

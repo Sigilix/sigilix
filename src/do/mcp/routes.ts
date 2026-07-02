@@ -155,10 +155,9 @@ export async function handleMcpServersDelete(
  * success/error flag on the redirect.
  */
 export async function handleMcpOAuthCallback(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const portalUrl = safePortalBase(env)
   const auth = await authorize(request, env, ctx)
   if ("response" in auth) {
-    return Response.redirect(`${portalUrl}/#/apps?mcpError=unauthenticated`, 302)
+    return Response.redirect(portalRedirect(env, "unauthenticated"), 302)
   }
 
   const url = new URL(request.url)
@@ -167,13 +166,26 @@ export async function handleMcpOAuthCallback(request: Request, env: Env, ctx: Ex
     const response = await stub.fetch(`${DO_BASE}/oauth-callback${url.search}`, { method: "GET" })
     const result = (await response.json()) as { authSuccess?: boolean; authError?: string }
     if (result.authSuccess) {
-      return Response.redirect(`${portalUrl}/#/apps?mcpConnected=1`, 302)
+      return Response.redirect(portalRedirect(env, "connected"), 302)
     }
-    return Response.redirect(`${portalUrl}/#/apps?mcpError=oauth_failed`, 302)
+    return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
   } catch (err) {
     console.error("mcp-oauth-callback: DO call failed", err instanceof Error ? err.message : err)
-    return Response.redirect(`${portalUrl}/#/apps?mcpError=oauth_failed`, 302)
+    return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
   }
+}
+
+/**
+ * Build the redirect back to the portal's Apps page. The portal's hash
+ * router only parses `#/apps` (or `#/apps/<appId>`) — a query string glued
+ * onto the hash (`#/apps?x=1`) fails to match and silently falls back to the
+ * chat view — so the status flag goes on the real URL query string (read via
+ * `location.search`, stripped client-side) and the hash stays a bare route.
+ */
+function portalRedirect(env: Env, status: "connected" | "oauth_failed" | "unauthenticated"): string {
+  const portalUrl = safePortalBase(env)
+  const param = status === "connected" ? "mcpConnected=1" : `mcpError=${status}`
+  return `${portalUrl}/?${param}#/apps`
 }
 
 /** The portal origin to redirect back to. Falls back to the default portal

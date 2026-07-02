@@ -400,7 +400,7 @@ describe("GET /mcp/oauth/callback", () => {
     )
     const res = await dispatch(callbackRequest("sess-1"), { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/#/apps?mcpConnected=1`)
+    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpConnected=1#/apps`)
   })
 
   it("redirects with mcpError=oauth_failed when the SDK reports failure", async () => {
@@ -416,7 +416,7 @@ describe("GET /mcp/oauth/callback", () => {
     )
     const res = await dispatch(callbackRequest("sess-1"), { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/#/apps?mcpError=oauth_failed`)
+    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpError=oauth_failed#/apps`)
   })
 
   it("redirects with mcpError=unauthenticated when there is no session at all (fail-soft, never a raw 401 mid-OAuth)", async () => {
@@ -424,6 +424,6 @@ describe("GET /mcp/oauth/callback", () => {
     const { namespace } = makeMcpNamespace(() => new Response("should not be called", { status: 500 }))
     const res = await dispatch(callbackRequest(undefined), { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/#/apps?mcpError=unauthenticated`)
+    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpError=unauthenticated#/apps`)
   })
 })

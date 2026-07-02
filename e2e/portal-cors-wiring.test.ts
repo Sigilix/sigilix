@@ -1,8 +1,9 @@
 // #155 onboarding-backend slice 3 — end-to-end CORS wiring test. Drives the
 // REAL worker fetch() (src/index.ts), not the individual route handlers in
 // isolation, so it proves the OPTIONS-preflight + withPortalCors wrapping is
-// actually wired to /v1/keys, /v1/keys/:id, /v1/onboarding, and
-// /v1/onboarding/context — not just that portal-cors.ts works standalone.
+// actually wired to /v1/keys, /v1/keys/:id, /v1/onboarding,
+// /v1/onboarding/context, and (sig-workspace-prs) /v1/workspace/prs — not
+// just that portal-cors.ts works standalone.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import worker from "@/src/index"
@@ -137,6 +138,72 @@ describe("portal CORS wiring (real worker.fetch)", () => {
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
     expect(await kv.get("onboarding:111", "json")).toEqual({ fullName: "Ada" })
+  })
+
+  it("OPTIONS /v1/workspace/prs from an allowlisted origin: 204 + full CORS grant", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv } as unknown as Env
+    const res = await worker.fetch(
+      new Request("https://worker.example/v1/workspace/prs", { method: "OPTIONS", headers: { origin: PORTAL_ORIGIN } }),
+      env,
+      ctx(),
+    )
+    expect(res.status).toBe(204)
+    expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(res.headers.get("access-control-allow-credentials")).toBe("true")
+  })
+
+  it("OPTIONS /v1/workspace/prs from a non-allowlisted origin: 403, no CORS headers", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv } as unknown as Env
+    const res = await worker.fetch(
+      new Request("https://worker.example/v1/workspace/prs", {
+        method: "OPTIONS",
+        headers: { origin: "https://evil.example" },
+      }),
+      env,
+      ctx(),
+    )
+    expect(res.status).toBe(403)
+    expect(res.headers.get("access-control-allow-origin")).toBeNull()
+  })
+
+  it("GET /v1/workspace/prs response carries the CORS grant for an allowlisted Origin", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", 111)
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ total_count: 0, installations: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    )
+    const res = await worker.fetch(
+      new Request("https://worker.example/v1/workspace/prs", {
+        headers: { origin: PORTAL_ORIGIN, cookie: `${SESSION_COOKIE}=sess-1` },
+      }),
+      env,
+      ctx(),
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(res.headers.get("access-control-allow-credentials")).toBe("true")
+  })
+
+  it("GET /v1/workspace/prs without any auth is a 401, CORS'd (never leaks org data)", async () => {
+    const kv = makeKV()
+    const env = { OPENCLAW_STATE: kv } as unknown as Env
+    const res = await worker.fetch(
+      new Request("https://worker.example/v1/workspace/prs", { headers: { origin: PORTAL_ORIGIN } }),
+      env,
+      ctx(),
+    )
+    expect(res.status).toBe(401)
+    expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
   })
 
   it("POST /v1/keys response carries the CORS grant (existing key route, now CORS'd)", async () => {

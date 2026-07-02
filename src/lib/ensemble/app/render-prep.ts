@@ -42,7 +42,7 @@ import {
   type WarmSoftenCandidate,
   type WarmSoftenDecision,
 } from "@/src/lib/review-memory/calibration"
-import { resolveReviewMemoryConfig, type SigilixConfig } from "@/src/lib/sigilix-config"
+import { resolveReviewMemoryConfig, type MatchedSigilixCustomRule, type SigilixConfig } from "@/src/lib/sigilix-config"
 import { categoryFromRoleHint, computeFid, computePathSha256 } from "@/src/lib/review-memory/marker"
 import {
   extractClaims,
@@ -54,7 +54,7 @@ import type { ReviewMemoryClaimMarkerData, ReviewMemoryClaimType } from "@/src/l
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/src/features/precision-profile"
 import { applyLearningSuppressions } from "./learnings-suppress-prep"
-import { applySdkGuidanceAttribution } from "./sdk-guidance-attribution-prep"
+import { applyMarkerAttributions } from "./marker-attribution-prep"
 import type { MatchedSdkPack } from "@/src/lib/sdk-packs"
 import { readReviewManifest, toManifestFinding, type ReviewManifestFinding } from "@/src/lib/review-manifest"
 import { type RouterDecision } from "@/src/lib/ensemble-router"
@@ -120,6 +120,7 @@ export interface RenderPrepArgs {
   consensusProvenance: SynthesizerProvenanceFindings
   consensusByIndex: number[]
   matchedSdkPacks?: MatchedSdkPack[] // SIG-298: packs actually injected, for the attribution gate.
+  matchedCustomRules?: MatchedSigilixCustomRule[] // Config-as-code: rules actually injected, for the attribution gate.
 }
 
 export interface RenderPrepResult {
@@ -166,7 +167,6 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     consensusVerdict,
     consensusProvenance,
     consensusByIndex,
-    matchedSdkPacks = [],
   } = a
   // ─── SIG-216: overview-then-submit ordering ────────────────
   // The overview comment lands immediately BEFORE the review comment in this
@@ -642,10 +642,9 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     consensusProvenance,
     changedPaths: [...reviewable.keys(), ...filesNotReviewed],
   })
-  // SIG-298: strip `[sdk:<packId>]` markers + stamp attribution (pure/sync).
-  // BOTH scopes — a marker must never leak into a body-only comment either.
-  precisionKept = applySdkGuidanceAttribution({ env, owner, repo, prNumber, kept: precisionKept, matchedSdkPacks })
-  applySdkGuidanceAttribution({ env, owner, repo, prNumber, kept: renderableUnanchoredRaw, matchedSdkPacks })
+  // SIG-298 + config-as-code: strip `[sdk:<packId>]` / `[repo-rule:<id>]` self-tag
+  // markers + stamp attribution (pure/sync) over BOTH renderable scopes.
+  precisionKept = applyMarkerAttributions({ ...a, precisionKept, renderableUnanchoredRaw })
   // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
   // body-only set. PR C's enforce mode can demote a LINE-scoped finding
   // (which carries a real path+line) to the body; without this it would

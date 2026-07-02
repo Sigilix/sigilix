@@ -42,6 +42,7 @@ import {
   formatProposedChangeBlock,
   formatLearningAttribution,
   formatSdkGuidanceAttribution,
+  formatRepoRuleAttribution,
   renderFindingEvidenceBlock,
   collectCitedLineText,
   extensionToFenceLang,
@@ -110,6 +111,10 @@ export function renderBodyOnlyFindings(
     // OPENCLAW_SDK_PACKS_MODE=on), not by the trust-ledger flag — a separate
     // feature with its own rollout gate.
     const sdkGuidanceAttribution = formatSdkGuidanceAttribution(f)
+    // Config-as-code: the "applied repo rule" attribution line — gated by the
+    // presence of `f.repoRule` (stamped only when OPENCLAW_CONFIG_AS_CODE_MODE=on),
+    // its own rollout gate, not the trust-ledger flag.
+    const repoRuleAttribution = formatRepoRuleAttribution(f)
     // Indent the body so it nests under the bullet visually.
     // SIG-465 (founder Image #2): issue prose + code blocks lead; the verbose
     // collapsibles (Detailed reasoning, More Info) render BELOW the code blocks.
@@ -123,6 +128,7 @@ export function renderBodyOnlyFindings(
       formatFindingMoreInfoMarkdown(f),
       learningAttribution,
       sdkGuidanceAttribution,
+      repoRuleAttribution,
     ].filter((s) => s !== "")
     const bodyLines = detailLines
       .join("\n\n")
@@ -316,6 +322,10 @@ export function formatFindingComment(
   // trust-ledger.
   const sdkGuidanceAttribution = formatSdkGuidanceAttribution(finding)
   if (sdkGuidanceAttribution) lines.push(sdkGuidanceAttribution)
+  // Config-as-code: the "applied repo rule" attribution — gated by the
+  // presence of `finding.repoRule` (own rollout gate), not by trust-ledger.
+  const repoRuleAttribution = formatRepoRuleAttribution(finding)
+  if (repoRuleAttribution) lines.push(repoRuleAttribution)
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   const moreInfo = formatFindingMoreInfoMarkdown(finding)

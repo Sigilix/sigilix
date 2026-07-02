@@ -13,6 +13,7 @@ import {
   MCP_TOOL_IDS,
   SPECIALIST_ROLES,
   type LinterId,
+  type MatchedSigilixCustomRule,
   type MatchedSigilixPathInstruction,
   type McpToolId,
   type ReviewMemoryCategoryRef,
@@ -162,6 +163,83 @@ export function renderPathInstructionsForPrompt(
     "",
     ...blocks,
   ].join("\n\n")
+}
+
+// ─── Config-as-code structured rules ─────────────────────────────────
+
+/**
+ * Config-as-code rollout gate. Binary (no shadow state) because injection
+ * is ALREADY opt-in per repo via the presence of `customRules` — there is
+ * no cross-repo blast radius to stage. Takes a narrow inline env shape
+ * (like `isFindingEvidenceVisible`) to keep this pure domain file decoupled
+ * from the full `Env` type.
+ */
+export function resolveConfigAsCodeMode(env: { OPENCLAW_CONFIG_AS_CODE_MODE?: string }): "off" | "on" {
+  return env.OPENCLAW_CONFIG_AS_CODE_MODE?.trim().toLowerCase() === "on" ? "on" : "off"
+}
+
+/**
+ * Match the repo's `customRules` against the PR's changed files. A rule is
+ * included when it is enabled (not `enabled: false`, not listed in
+ * `disabledRules`) AND its `scope` globs match at least one changed file
+ * (an absent/empty `scope` matches every changed file, per
+ * `pathMatchesAny`'s empty-array semantics). Pure; never throws.
+ */
+export function resolveCustomRulesForChangedPaths(
+  config: SigilixConfig | null,
+  changedPaths: ReadonlyArray<string>,
+): MatchedSigilixCustomRule[] {
+  const rules = config?.customRules ?? []
+  if (rules.length === 0 || changedPaths.length === 0) return []
+  const disabled = new Set(config?.disabledRules ?? [])
+  const uniqueChangedPaths = [...new Set(changedPaths.map((p) => p.trim()).filter((p) => p.length > 0))]
+  const matches: MatchedSigilixCustomRule[] = []
+  for (const rule of rules) {
+    if (rule.enabled === false) continue
+    if (disabled.has(rule.id)) continue
+    const scope = rule.scope ?? []
+    const matchedPaths = uniqueChangedPaths.filter((path) => pathMatchesAny(path, scope))
+    if (matchedPaths.length === 0) continue
+    matches.push({ rule, matchedPaths })
+  }
+  return matches
+}
+
+function escapeCustomRuleMarkdown(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+/**
+ * Render the matched custom rules into a specialist prompt section.
+ *
+ * RECALL-SAFETY: this block only ever ADDS attention to the repo-owner's
+ * rules. It never instructs the model to suppress, downgrade, drop, skip,
+ * or ignore any finding — the one negative instruction it carries is the
+ * opposite: never use the attribution marker to silence a real issue.
+ * Mirrors `renderSdkGuidanceForPrompt`'s framing.
+ */
+export function renderCustomRulesForPrompt(matches: ReadonlyArray<MatchedSigilixCustomRule>): string {
+  if (matches.length === 0) return ""
+  const lines: string[] = [
+    "[REPO RULES (from sigilix.json custom rules)]",
+    "The following are repo-owner-authored rules scoped to files this PR changed. Use them as ADDITIONAL context to sharpen review attention — they never replace your own judgment, never limit what you may flag, and must NEVER be used to suppress, downgrade, omit, or soften any finding (including one unrelated to a listed rule).",
+    "",
+  ]
+  for (const { rule, matchedPaths } of matches) {
+    const severityTag = rule.severity ? `[${rule.severity}] ` : ""
+    const matched =
+      matchedPaths.length > 5
+        ? `${matchedPaths.slice(0, 5).join(", ")}, +${matchedPaths.length - 5} more`
+        : matchedPaths.join(", ")
+    lines.push(
+      `- ${severityTag}${escapeCustomRuleMarkdown(rule.rule)} (id: \`${escapeCustomRuleMarkdown(rule.id)}\`; matched: ${matched})`,
+    )
+  }
+  lines.push(
+    "",
+    "If one of these rules directly informed a finding, append `[repo-rule:<id>]` (the id shown above, e.g. `[repo-rule:no-raw-sql]`) to the very end of that finding's body. Use this marker ONLY to attribute a finding you are already reporting — NEVER to suppress, downgrade, omit, or soften a finding, including one unrelated to this guidance.",
+  )
+  return lines.join("\n")
 }
 
 // ─── ARC-272: docs-coverage resolution ───────────────────────────────

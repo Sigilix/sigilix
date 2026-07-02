@@ -208,10 +208,10 @@ describe("readRecentWorkspacePrs", () => {
     expect(result).not.toMatchObject({ ok: true })
   })
 
-  it("caps the result at 100 rows, newest-first", async () => {
+  it("caps the result at 400 rows, newest-first", async () => {
     await insertRepo(db, 100, 1, "acme/api")
     const base = Date.parse("2026-06-01T00:00:00.000Z")
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 420; i++) {
       await insertUsage(db, {
         installationId: 1,
         repoId: 100,
@@ -224,10 +224,10 @@ describe("readRecentWorkspacePrs", () => {
     const result = await readRecentWorkspacePrs(makeEnv(db), [1])
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.rows).toHaveLength(100)
-    // Newest-first (the 100 most recent of the 120 inserted rows).
-    expect(result.rows[0]!.prNumber).toBe(119)
-    expect(result.rows[99]!.prNumber).toBe(20)
+    expect(result.rows).toHaveLength(400)
+    // Newest-first (the 400 most recent of the 420 inserted rows).
+    expect(result.rows[0]!.prNumber).toBe(419)
+    expect(result.rows[399]!.prNumber).toBe(20)
     for (let i = 1; i < result.rows.length; i++) {
       expect(result.rows[i - 1]!.createdAt >= result.rows[i]!.createdAt).toBe(true)
     }

@@ -1,11 +1,13 @@
 // sig-workspace-prs — read adapter backing GET /v1/workspace/prs (the
 // portal's Pull-requests workspace page).
 //
-// Reads the most recent ~100 usage_ledger rows joined to repo.full_name,
+// Reads the most recent ~400 usage_ledger rows joined to repo.full_name,
 // optionally scoped to a caller-owned set of installation ids. Grouping
 // (collapsing multiple reviews of the same PR to the latest) is the pure
 // domain function `collapseWorkspacePrs` in ../domain/workspace-prs.ts — this
-// adapter only fetches the flat rows.
+// adapter only fetches the flat rows. The route caps the COLLAPSED output at
+// 100 distinct PRs per section (see workspace-prs-route.ts) — this raw window
+// is deliberately wider than that final cap (see RECENT_LIMIT below).
 //
 // Fail-soft by design (the workspace panel must never 500): a missing
 // binding OR an empty scope short-circuits to `{ ok: true, rows: [] }`
@@ -15,15 +17,23 @@
 
 import type { Env } from "@/src/shared/types/env"
 
-// The 100-row cap applies to RAW ledger rows, before collapse — i.e. the
-// window is "latest ~100 reviews", not "latest 100 distinct PRs". On a busy
-// installation, a handful of hot PRs can consume the whole window, so a
-// less-active author's PR (feeding the route's `mine` section) can legitimately
-// fall outside it even though it was reviewed recently. Known/accepted
-// tradeoff for a "recent activity" panel — flagged here rather than silently
-// baked in, in case `mine`'s completeness needs a dedicated author-scoped
-// query later.
-const RECENT_LIMIT = 100
+// The cap applies to RAW ledger rows, before collapse — i.e. the window is
+// "latest ~400 reviews", not "latest 400 distinct PRs". It is set wide
+// relative to the route's 100-distinct-PR display cap specifically so that
+// collapsing has room: on a busy installation a handful of hot PRs can rack
+// up many review rows each, so a naive 1:1 raw-rows-to-displayed-PRs cap
+// (i.e. RECENT_LIMIT == the display cap) would let those hot PRs crowd a
+// less-active author's PR out of the raw window even though the COLLAPSED
+// result would have had room for it. Widening the raw scan to 4x the display
+// cap before collapsing (rather than collapsing in SQL — see
+// ../domain/workspace-prs.ts's header for why grouping stays a pure,
+// unit-tested TS function instead of a GROUP BY) makes that failure far less
+// likely without giving up the domain-layer purity this codebase leans on. It
+// is a mitigation, not a cure — an installation busy enough to fill even a
+// 400-row raw window with hot-PR reviews could still crowd out a less-active
+// author's older row. If that ever bites in practice, the real fix is a
+// dedicated author-scoped query for `mine` rather than raising this further.
+const RECENT_LIMIT = 400
 
 export type WorkspacePrRawRow = {
   repo: string

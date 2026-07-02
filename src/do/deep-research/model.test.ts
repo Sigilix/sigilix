@@ -1,0 +1,73 @@
+import { describe, it, expect, vi, beforeEach } from "vitest"
+import type { ChatArgs } from "@/src/shared/ports/model"
+import type { Env } from "@/src/shared/types/env"
+
+// Capture what buildModelFn sends to the model-adapter seam. `vi.mock` is
+// hoisted above the imports below, so buildModelFn resolves to this fake `chat`.
+const chatMock = vi.fn(async (_args: ChatArgs) => ({
+  message: { role: "assistant" as const, content: "answer" },
+  hasToolCalls: false,
+  usage: {},
+}))
+
+vi.mock("@/src/shared/adapters/model", () => ({
+  chat: (args: ChatArgs) => chatMock(args),
+  isOpenRouterModel: (m: string) => m.includes("/"),
+}))
+
+import { buildModelFn, MissingModelKeyError } from "./model"
+import { resolveResearchConfig, TIER_MODELS } from "./config"
+
+function env(over: Partial<Env> = {}): Env {
+  return { OLLAMA_API_KEY: "ollama-key", ...over } as unknown as Env
+}
+
+beforeEach(() => chatMock.mockClear())
+
+describe("buildModelFn — per-role tier routing", () => {
+  it("astraeus: heavy roles hit the astraeus model id, classify/extract hit boreas", async () => {
+    const cfg = resolveResearchConfig(env(), { model: "astraeus" })
+    const fn = buildModelFn(env(), cfg)
+
+    for (const role of ["planner", "synthesis", "stopCheck", "finalReport"] as const) {
+      chatMock.mockClear()
+      await fn(role, [{ role: "user", content: "x" }])
+      expect(chatMock.mock.calls[0]![0].model).toBe(TIER_MODELS.astraeus)
+    }
+    for (const role of ["classify", "extract"] as const) {
+      chatMock.mockClear()
+      await fn(role, [{ role: "user", content: "x" }])
+      expect(chatMock.mock.calls[0]![0].model).toBe(TIER_MODELS.boreas)
+    }
+  })
+
+  it("boreas: EVERY role hits the boreas model id", async () => {
+    const cfg = resolveResearchConfig(env(), { model: "boreas" })
+    const fn = buildModelFn(env(), cfg)
+    for (const role of ["planner", "synthesis", "stopCheck", "finalReport", "classify", "extract"] as const) {
+      chatMock.mockClear()
+      await fn(role, [{ role: "user", content: "x" }])
+      expect(chatMock.mock.calls[0]![0].model).toBe(TIER_MODELS.boreas)
+    }
+  })
+
+  it("pyroeis: heavy roles hit the mid-tier model id", async () => {
+    const cfg = resolveResearchConfig(env(), { model: "pyroeis" })
+    const fn = buildModelFn(env(), cfg)
+    await fn("planner", [{ role: "user", content: "x" }])
+    expect(chatMock.mock.calls[0]![0].model).toBe(TIER_MODELS.pyroeis)
+  })
+
+  it("selects the Ollama key for :cloud model ids", async () => {
+    const cfg = resolveResearchConfig(env(), { model: "astraeus" })
+    const fn = buildModelFn(env({ OLLAMA_API_KEY: "the-ollama-key" }), cfg)
+    await fn("planner", [{ role: "user", content: "x" }])
+    expect(chatMock.mock.calls[0]![0].apiKey).toBe("the-ollama-key")
+  })
+
+  it("throws MissingModelKeyError when the selected provider key is unset", async () => {
+    const cfg = resolveResearchConfig(env(), { model: "astraeus" })
+    const fn = buildModelFn({ OLLAMA_API_KEY: "" } as unknown as Env, cfg)
+    await expect(fn("planner", [{ role: "user", content: "x" }])).rejects.toBeInstanceOf(MissingModelKeyError)
+  })
+})

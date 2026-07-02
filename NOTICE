@@ -1,0 +1,43 @@
+Sigilix Worker
+Copyright Sigilix.
+
+This product includes software adapted from third-party open-source projects.
+
+────────────────────────────────────────────────────────────────────────────
+Portions adapted from Tongyi DeepResearch, Copyright Alibaba-NLP/Tongyi Lab,
+Apache-2.0.
+────────────────────────────────────────────────────────────────────────────
+
+The deep web research engine (SIG-298, src/do/deep-research/) adapts the
+research-loop structure and several prompt/extraction patterns from the
+Apache-2.0 "Tongyi DeepResearch" project. The prompts were re-tuned for
+Sigilix's code-review / repo-improvement research assistant and are collected in
+src/do/deep-research/prompts.ts. Adapted (not verbatim-copied) material and its
+Tongyi sources:
+
+  - Goal-conditioned page extraction prompt (buildExtractionPrompt)
+      ← WebAgent/NestBrowse/prompts.py
+        (SUMMARY_PROMPT / SYSTEM_PROMPT_SUMMARY_OURS — rationale/evidence/
+        summary extraction framing)
+
+  - Planning and query-generation prompts (buildPlanPrompt / buildQueryPrompt)
+    and the overall multi-round search → read → synthesize loop structure
+      ← WebAgent/WebWeaver/prompt/search_sys_prompt_2.py
+        (SEARCH_SYSTEM_PROMPT — persistent information-seeking / decompose-into-
+        facets framing)
+      ← WebAgent/NestBrowse/prompts.py (SYSTEM_PROMPT_OURS — multi-source
+        investigation framing) and the NestBrowse/WebWeaver infer/run scripts +
+        toolkit/tool files (search/visit loop shape)
+
+  - Final cited-report prompt (buildFinalReportPrompt)
+      ← WebAgent/WebWeaver/prompt/write_prompt_multi_hop_2.py
+        (analytical, well-cited, takeaway-first markdown report framing)
+
+The utility helpers stripThinking and isLowQuality, and the lightweight HTML
+stripper (src/do/deep-research/text-utils.ts), were written fresh for this repo
+and are NOT adapted from Tongyi DeepResearch.
+
+Tongyi DeepResearch is licensed under the Apache License, Version 2.0. The full
+license text is delivered with this repository in the LICENSE-APACHE file (as
+required by Apache-2.0 §4(a)); it is also available at
+https://www.apache.org/licenses/LICENSE-2.0

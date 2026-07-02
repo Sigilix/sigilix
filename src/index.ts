@@ -73,6 +73,7 @@ import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-ro
 import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
+import { handleWorkspacePrsRoute } from "@/src/lib/workspace-prs-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
@@ -481,13 +482,18 @@ export default {
     // so they're CORS'd via portal-cors.ts. OPTIONS is handled once, up
     // front, for every path in this set; every actual response is wrapped
     // with withPortalCors so credentials-mode responses never carry `*`.
+    // sig-workspace-prs: /v1/workspace/prs is dual-authed (session cookie OR
+    // bearer api key — see workspace-prs-route.ts), but the portal's browser
+    // session path still needs the same credentialed-CORS treatment as the
+    // other session-authed portal routes above.
     const isPortalCorsPath =
       url.pathname === "/v1/keys" ||
       url.pathname.startsWith("/v1/keys/") ||
       url.pathname === "/v1/onboarding" ||
       url.pathname === "/v1/onboarding/context" ||
       url.pathname === "/v1/research" ||
-      url.pathname.startsWith("/v1/research/")
+      url.pathname.startsWith("/v1/research/") ||
+      url.pathname === "/v1/workspace/prs"
     if (request.method === "OPTIONS" && isPortalCorsPath) {
       return handlePortalPreflight(request, env)
     }
@@ -540,6 +546,12 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/v1/onboarding") {
       return withPortalCors(request, await handleOnboardingSubmitRoute(request, env, ctx), env)
+    }
+    // sig-workspace-prs: the portal's Pull-requests workspace page — org-wide
+    // + mine PR sections from D1 usage_ledger. Dual-authed (session OR api
+    // key); see workspace-prs-route.ts.
+    if (request.method === "GET" && url.pathname === "/v1/workspace/prs") {
+      return withPortalCors(request, await handleWorkspacePrsRoute(request, env, ctx), env)
     }
     // ARC-190: GET /reviews/<owner>/<repo>/<prNumber> — public status
     // route for DO-tracked PR review runs. v1 unauth (read-only

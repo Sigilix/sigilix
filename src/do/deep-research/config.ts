@@ -1,33 +1,51 @@
 // SIG-298 — env → clamped research run configuration. Pure: no IO, only reads
-// string env fields and normalizes them into safe numerics + per-role model
-// ids. Every knob has a hard default so the engine never depends on unset env.
-// Follows the repo's OPENCLAW_* env-var convention.
+// string env fields + the per-run request options (model tier + effort) and
+// normalizes them into safe numerics + per-role model ids. Every knob has a
+// hard default so the engine never depends on unset env. The termination quad
+// is `maxRounds` / `maxTimeMs` / `minRounds` / `maxEmptyRounds`.
+//
+// PRECEDENCE (addendum): the request's `effort` picks the DEFAULT budget tier
+// and the request's `model` picks the DEFAULT heavy-role model id; an explicit
+// env override (OPENCLAW_RESEARCH_*) ALWAYS wins over both. `minRounds` (2) and
+// the empty-round kill (2) apply at every effort.
 
 import type { Env } from "@/src/shared/types/env"
-import type { ResearchConfig, ResearchModelConfig } from "./types"
+import type { ResearchConfig, ResearchEffort, ResearchModelConfig, ResearchTier } from "./types"
 
-/** Termination-quad + budget defaults (spec §3). */
-const DEFAULTS = {
-  maxRounds: 8,
-  maxTimeMs: 300_000,
+/** Fixed defaults that do not vary with effort (minRounds/empty-kill apply at
+ *  every effort per the addendum). */
+const FIXED_DEFAULTS = {
   minRounds: 2,
   maxEmptyRounds: 2,
-  maxQueriesPerRound: 4,
-  maxPagesPerRound: 5,
   maxParallelFetches: 3,
   tokenBudget: 250_000,
   cleanupAfterMs: 60 * 60 * 1000, // ~1 hour after last activity
 } as const
 
-/** Default per-role model ids. Astraeus chain for reasoning-heavy roles; a
- *  cheaper tier (Boreas) for classify/extract. All env-overridable below. */
-const DEFAULT_MODELS: ResearchModelConfig = {
-  planner: "glm-5.2:cloud",
-  synthesis: "glm-5.2:cloud",
-  stopCheck: "glm-5.2:cloud",
-  finalReport: "glm-5.2:cloud",
-  classify: "gpt-oss:120b-cloud",
-  extract: "gpt-oss:120b-cloud",
+/** Effort → budget preset (the DEFAULT tier; env overrides still win). */
+const EFFORT_PRESETS: Record<
+  ResearchEffort,
+  { maxRounds: number; maxQueriesPerRound: number; maxPagesPerRound: number; maxTimeMs: number }
+> = {
+  low: { maxRounds: 3, maxQueriesPerRound: 2, maxPagesPerRound: 3, maxTimeMs: 120_000 },
+  medium: { maxRounds: 8, maxQueriesPerRound: 4, maxPagesPerRound: 5, maxTimeMs: 300_000 },
+  high: { maxRounds: 12, maxQueriesPerRound: 5, maxPagesPerRound: 6, maxTimeMs: 480_000 },
+}
+
+/** Named model tier → default model id for the HEAVY roles. Only Boreas exists
+ *  today; pyroeis/astraeus are named tiers. astraeus = the flagship reasoning
+ *  default (glm-5.2:cloud-class), pyroeis = a mid-tier (glm-5.1:cloud, the
+ *  repo's DEFAULT_MODEL across triage), boreas = the cheap tier (gpt-oss). */
+export const TIER_MODELS: Record<ResearchTier, string> = {
+  boreas: "gpt-oss:120b-cloud",
+  pyroeis: "glm-5.1:cloud",
+  astraeus: "glm-5.2:cloud",
+}
+
+/** Per-run request options that steer config defaults. */
+export interface ResearchRequestOptions {
+  model?: ResearchTier
+  effort?: ResearchEffort
 }
 
 /** Parse a positive integer env value, clamped to [min, max]; default on junk. */
@@ -44,35 +62,62 @@ function modelOr(raw: string | undefined, def: string): string {
   return t ? t : def
 }
 
-/**
- * Resolve the run config from env. `minRounds` is additionally clamped to never
- * exceed `maxRounds` so the floor can't outrun the ceiling on a misconfig.
- */
-export function resolveResearchConfig(env: Env): ResearchConfig {
-  const maxRounds = clampInt(env.OPENCLAW_RESEARCH_MAX_ROUNDS, DEFAULTS.maxRounds, 1, 20)
-  const minRounds = Math.min(maxRounds, clampInt(env.OPENCLAW_RESEARCH_MIN_ROUNDS, DEFAULTS.minRounds, 1, 20))
+/** Resolve the per-role model ids for a heavy tier + the cheap (Boreas) tier.
+ *  Classification/extraction stay on Boreas regardless of the chosen tier
+ *  (cheap) — unless the tier IS boreas, in which case everything is Boreas
+ *  naturally. Per-role env overrides always win. */
+function resolveModels(env: Env, tier: ResearchTier): ResearchModelConfig {
+  const heavy = TIER_MODELS[tier]
+  const cheap = TIER_MODELS.boreas
   return {
+    planner: modelOr(env.OPENCLAW_RESEARCH_PLANNER_MODEL, heavy),
+    synthesis: modelOr(env.OPENCLAW_RESEARCH_SYNTHESIS_MODEL, heavy),
+    stopCheck: modelOr(env.OPENCLAW_RESEARCH_STOP_CHECK_MODEL, heavy),
+    finalReport: modelOr(env.OPENCLAW_RESEARCH_FINAL_REPORT_MODEL, heavy),
+    classify: modelOr(env.OPENCLAW_RESEARCH_CLASSIFY_MODEL, cheap),
+    extract: modelOr(env.OPENCLAW_RESEARCH_EXTRACT_MODEL, cheap),
+  }
+}
+
+/**
+ * Resolve the run config from env + the per-run request options. `minRounds` is
+ * additionally clamped to never exceed `maxRounds` so the floor can't outrun the
+ * ceiling on a misconfig.
+ */
+export function resolveResearchConfig(env: Env, options: ResearchRequestOptions = {}): ResearchConfig {
+  const tier: ResearchTier = options.model ?? "astraeus"
+  const effort: ResearchEffort = options.effort ?? "medium"
+  const preset = EFFORT_PRESETS[effort]
+
+  const maxRounds = clampInt(env.OPENCLAW_RESEARCH_MAX_ROUNDS, preset.maxRounds, 1, 20)
+  const minRounds = Math.min(maxRounds, clampInt(env.OPENCLAW_RESEARCH_MIN_ROUNDS, FIXED_DEFAULTS.minRounds, 1, 20))
+  return {
+    tier,
+    effort,
     maxRounds,
     minRounds,
-    maxTimeMs: clampInt(env.OPENCLAW_RESEARCH_MAX_TIME_MS, DEFAULTS.maxTimeMs, 30_000, 600_000),
-    maxEmptyRounds: clampInt(env.OPENCLAW_RESEARCH_MAX_EMPTY_ROUNDS, DEFAULTS.maxEmptyRounds, 1, 10),
-    maxQueriesPerRound: clampInt(env.OPENCLAW_RESEARCH_MAX_QUERIES_PER_ROUND, DEFAULTS.maxQueriesPerRound, 1, 10),
-    maxPagesPerRound: clampInt(env.OPENCLAW_RESEARCH_MAX_PAGES_PER_ROUND, DEFAULTS.maxPagesPerRound, 1, 12),
-    maxParallelFetches: clampInt(env.OPENCLAW_RESEARCH_MAX_PARALLEL_FETCHES, DEFAULTS.maxParallelFetches, 1, 6),
-    tokenBudget: clampInt(env.OPENCLAW_RESEARCH_TOKEN_BUDGET, DEFAULTS.tokenBudget, 10_000, 5_000_000),
+    maxTimeMs: clampInt(env.OPENCLAW_RESEARCH_MAX_TIME_MS, preset.maxTimeMs, 30_000, 600_000),
+    maxEmptyRounds: clampInt(env.OPENCLAW_RESEARCH_MAX_EMPTY_ROUNDS, FIXED_DEFAULTS.maxEmptyRounds, 1, 10),
+    maxQueriesPerRound: clampInt(env.OPENCLAW_RESEARCH_MAX_QUERIES_PER_ROUND, preset.maxQueriesPerRound, 1, 10),
+    maxPagesPerRound: clampInt(env.OPENCLAW_RESEARCH_MAX_PAGES_PER_ROUND, preset.maxPagesPerRound, 1, 12),
+    maxParallelFetches: clampInt(env.OPENCLAW_RESEARCH_MAX_PARALLEL_FETCHES, FIXED_DEFAULTS.maxParallelFetches, 1, 6),
+    tokenBudget: clampInt(env.OPENCLAW_RESEARCH_TOKEN_BUDGET, FIXED_DEFAULTS.tokenBudget, 10_000, 5_000_000),
     cleanupAfterMs: clampInt(
       env.OPENCLAW_RESEARCH_CLEANUP_AFTER_MS,
-      DEFAULTS.cleanupAfterMs,
+      FIXED_DEFAULTS.cleanupAfterMs,
       60_000,
       24 * 60 * 60 * 1000,
     ),
-    models: {
-      planner: modelOr(env.OPENCLAW_RESEARCH_PLANNER_MODEL, DEFAULT_MODELS.planner),
-      synthesis: modelOr(env.OPENCLAW_RESEARCH_SYNTHESIS_MODEL, DEFAULT_MODELS.synthesis),
-      stopCheck: modelOr(env.OPENCLAW_RESEARCH_STOP_CHECK_MODEL, DEFAULT_MODELS.stopCheck),
-      finalReport: modelOr(env.OPENCLAW_RESEARCH_FINAL_REPORT_MODEL, DEFAULT_MODELS.finalReport),
-      classify: modelOr(env.OPENCLAW_RESEARCH_CLASSIFY_MODEL, DEFAULT_MODELS.classify),
-      extract: modelOr(env.OPENCLAW_RESEARCH_EXTRACT_MODEL, DEFAULT_MODELS.extract),
-    },
+    models: resolveModels(env, tier),
   }
+}
+
+/** Validate a raw model-tier value from a request; null when invalid. */
+export function parseTier(raw: unknown): ResearchTier | null {
+  return raw === "boreas" || raw === "pyroeis" || raw === "astraeus" ? raw : null
+}
+
+/** Validate a raw effort value from a request; null when invalid. */
+export function parseEffort(raw: unknown): ResearchEffort | null {
+  return raw === "low" || raw === "medium" || raw === "high" ? raw : null
 }

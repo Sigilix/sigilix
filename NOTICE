@@ -37,5 +37,7 @@ The utility helpers stripThinking and isLowQuality, and the lightweight HTML
 stripper (src/do/deep-research/text-utils.ts), were written fresh for this repo
 and are NOT adapted from Tongyi DeepResearch.
 
-Tongyi DeepResearch is licensed under the Apache License, Version 2.0. A copy of
-the license is available at https://www.apache.org/licenses/LICENSE-2.0
+Tongyi DeepResearch is licensed under the Apache License, Version 2.0. The full
+license text is delivered with this repository in the LICENSE-APACHE file (as
+required by Apache-2.0 §4(a)); it is also available at
+https://www.apache.org/licenses/LICENSE-2.0

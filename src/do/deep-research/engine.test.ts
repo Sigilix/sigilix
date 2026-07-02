@@ -85,7 +85,8 @@ describe("happy path", () => {
 
     const types = typesOf(events)
     // planning first, done last, final immediately before done.
-    expect(events[0]).toEqual({ type: "status", phase: "planning", round: 0 })
+    // First status is planning round 0 and echoes the resolved model + effort.
+    expect(events[0]).toEqual({ type: "status", phase: "planning", round: 0, model: "astraeus", effort: "medium" })
     expect(types).toContain("plan")
     expect(types).toContain("queries")
     expect(types).toContain("source")
@@ -197,5 +198,87 @@ describe("low-quality extraction is dropped", () => {
     await runResearchLoop(deps)
     // Two empty rounds (extractions all dropped) → empty-kill fires.
     expect(countSearching(events)).toBe(2)
+  })
+})
+
+describe("model + effort echo (addendum §3)", () => {
+  it("ONLY the first status carries model + effort; every other status omits them", async () => {
+    const cfg = resolveResearchConfig({} as Env, { model: "pyroeis", effort: "high" })
+    const { deps, events } = makeDeps({ config: cfg, model: makeModel({ stop: "STOP" }) })
+    await runResearchLoop(deps)
+
+    const statuses = events.filter((e) => e.type === "status")
+    expect(statuses[0]).toMatchObject({ phase: "planning", round: 0, model: "pyroeis", effort: "high" })
+    for (const s of statuses.slice(1)) {
+      if (s.type !== "status") continue
+      expect(s.model).toBeUndefined()
+      expect(s.effort).toBeUndefined()
+    }
+  })
+})
+
+describe("effort budget matrix (addendum §2)", () => {
+  it("low effort caps rounds at 3 and queries/pages per round", async () => {
+    const cfg = resolveResearchConfig({} as Env, { effort: "low" })
+    // Sanity: the preset numbers.
+    expect(cfg.maxRounds).toBe(3)
+    expect(cfg.maxQueriesPerRound).toBe(2)
+    expect(cfg.maxPagesPerRound).toBe(3)
+    expect(cfg.maxTimeMs).toBe(120_000)
+
+    let maxQueriesSeen = 0
+    let hitCounter = 0
+    const fetchesPerRound: number[] = []
+    let currentRoundFetches = 0
+    const events: ResearchEvent[] = []
+    // The planner returns 6 candidate queries; the engine must cap at 2.
+    const model: ResearchModelFn = async (role) => ({
+      text:
+        role === "classify"
+          ? "factual"
+          : role === "planner"
+            ? "q1\nq2\nq3\nq4\nq5\nq6"
+            : role === "stopCheck"
+              ? "CONTINUE" // never stop on the check → only maxRounds can stop it
+              : role === "extract"
+                ? "A detailed, information-rich finding about the topic with concrete version 3.2 specifics."
+                : "Consolidated notes with concrete sourced detail.",
+      tokens: 1,
+    })
+    await runResearchLoop({
+      question: "q",
+      runId: "r",
+      config: cfg,
+      hasSearchProvider: true,
+      emit: (e) => {
+        events.push(e)
+        if (e.type === "queries") maxQueriesSeen = Math.max(maxQueriesSeen, e.items.length)
+        if (e.type === "status" && e.phase === "searching") {
+          if (events.length > 1) fetchesPerRound.push(currentRoundFetches)
+          currentRoundFetches = 0
+        }
+      },
+      model,
+      // A unique URL per call so rounds never go empty (dedupe would otherwise
+      // starve later rounds) — the ONLY thing that stops the loop is maxRounds.
+      search: () =>
+        Promise.resolve({
+          ok: true,
+          provider: "tavily",
+          hits: [{ url: `https://e.com/${hitCounter++}`, title: "A", snippet: "s" }],
+        }),
+      fetchPage: (url) => {
+        currentRoundFetches++
+        return Promise.resolve({ ok: true, page: { url, title: "A", domain: "e.com", text: "body text long enough" } })
+      },
+      isCancelled: () => false,
+      now: () => 0,
+    })
+    fetchesPerRound.push(currentRoundFetches)
+
+    // low effort → exactly 3 rounds (maxRounds), ≤2 queries/round, ≤3 pages/round.
+    expect(events.filter((e) => e.type === "status" && e.phase === "searching")).toHaveLength(3)
+    expect(maxQueriesSeen).toBe(2)
+    for (const n of fetchesPerRound) expect(n).toBeLessThanOrEqual(cfg.maxPagesPerRound)
   })
 })

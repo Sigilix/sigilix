@@ -15,15 +15,17 @@
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
 import { runResearchLoop, type EngineDeps } from "./engine"
-import { resolveResearchConfig } from "./config"
+import { parseEffort, parseTier, resolveResearchConfig } from "./config"
 import { buildModelFn } from "./model"
 import { hasAnySearchProvider, searchWeb } from "./search"
 import { fetchPage } from "./fetch-guard"
-import type { ResearchEvent } from "./types"
+import type { ResearchEffort, ResearchEvent, ResearchTier } from "./types"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
 const SEQ_PAD = 12
+/** Header the route uses to bind a run to its creator (tenant/session subject). */
+export const CREATOR_HEADER = "x-research-creator"
 
 interface RunMeta {
   question: string
@@ -31,6 +33,11 @@ interface RunMeta {
   seq: number
   done: boolean
   cancelled: boolean
+  /** The opaque creator identity that owns this run (session subject / api
+   *  tenant / installation id). Only this identity may stream or cancel it. */
+  creator: string
+  model: ResearchTier
+  effort: ResearchEffort
 }
 
 /** Test seam: lets DO-level tests drive the loop with fake IO. Never set in
@@ -48,14 +55,17 @@ export class DeepResearchDO extends DurableObject<Env> {
   private seq = 0
   private driveDone: Promise<void> | null = null
   private hooks: ResearchTestHooks | undefined
+  private creator = ""
+  private model: ResearchTier = "astraeus"
+  private effort: ResearchEffort = "medium"
   private readonly encoder = new TextEncoder()
 
   /** Route the internal DO requests. Matches PrReviewRunDO's fetch-based API. */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (request.method === "POST" && url.pathname === "/start") return this.handleStart(request)
-    if (request.method === "GET" && url.pathname === "/stream") return this.handleStream()
-    if (request.method === "POST" && url.pathname === "/cancel") return this.handleCancel()
+    if (request.method === "GET" && url.pathname === "/stream") return this.handleStream(request)
+    if (request.method === "POST" && url.pathname === "/cancel") return this.handleCancel(request)
     return json({ error: "not found" }, 404)
   }
 
@@ -66,17 +76,32 @@ export class DeepResearchDO extends DurableObject<Env> {
 
   private async handleStart(request: Request): Promise<Response> {
     if (this.started) return json({ ok: true, alreadyStarted: true })
-    let body: { question?: unknown }
+    let body: { question?: unknown; model?: unknown; effort?: unknown; creator?: unknown }
     try {
-      body = (await request.json()) as { question?: unknown }
+      body = (await request.json()) as typeof body
     } catch {
       return json({ error: "invalid json" }, 400)
     }
     const question = typeof body.question === "string" ? body.question.trim() : ""
     if (!question) return json({ error: "missing question" }, 400)
 
+    // The route validates model/effort and rejects bad values with a 400 before
+    // ever reaching the DO; here we simply default anything absent/unknown.
+    this.model = parseTier(body.model) ?? "astraeus"
+    this.effort = parseEffort(body.effort) ?? "medium"
+    this.creator = typeof body.creator === "string" ? body.creator : ""
+
     this.started = true
-    const meta: RunMeta = { question, startedAt: Date.now(), seq: 0, done: false, cancelled: false }
+    const meta: RunMeta = {
+      question,
+      startedAt: Date.now(),
+      seq: 0,
+      done: false,
+      cancelled: false,
+      creator: this.creator,
+      model: this.model,
+      effort: this.effort,
+    }
     await this.ctx.storage.put(META_KEY, meta)
     await this.armCleanupAlarm()
 
@@ -87,8 +112,9 @@ export class DeepResearchDO extends DurableObject<Env> {
   }
 
   private async drive(question: string): Promise<void> {
-    const config = resolveResearchConfig(this.env)
+    const config = resolveResearchConfig(this.env, { model: this.model, effort: this.effort })
     const runId = this.ctx.id.toString()
+    const tenant = this.creator || "anonymous"
     const deps: EngineDeps = {
       question,
       runId,
@@ -96,8 +122,8 @@ export class DeepResearchDO extends DurableObject<Env> {
       hasSearchProvider: hasAnySearchProvider(this.env),
       emit: (event) => this.emit(event),
       model: this.hooks?.model ?? buildModelFn(this.env, config),
-      search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId })),
-      fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId })),
+      search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
+      fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId, tenant })),
       isCancelled: () => this.cancelled,
       now: this.hooks?.now ?? (() => Date.now()),
     }
@@ -142,6 +168,9 @@ export class DeepResearchDO extends DurableObject<Env> {
       seq: 0,
       done: false,
       cancelled: false,
+      creator: this.creator,
+      model: this.model,
+      effort: this.effort,
     }
     meta.seq = this.seq
     if (event.type === "done") meta.done = true
@@ -149,7 +178,20 @@ export class DeepResearchDO extends DurableObject<Env> {
     await this.ctx.storage.put(META_KEY, meta)
   }
 
-  private async handleStream(): Promise<Response> {
+  /** Enforce that the requester owns this run. Returns a 403 when the presented
+   *  creator differs from the stored one; null when it matches (or no run yet). */
+  private async ownerGuard(request: Request): Promise<Response | null> {
+    const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
+    if (!meta) return null // nothing to protect yet
+    const presented = request.headers.get(CREATOR_HEADER) ?? ""
+    if (meta.creator && meta.creator !== presented) return json({ error: "forbidden" }, 403)
+    return null
+  }
+
+  private async handleStream(request: Request): Promise<Response> {
+    const forbidden = await this.ownerGuard(request)
+    if (forbidden) return forbidden
+
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
     const writer = writable.getWriter()
 
@@ -183,14 +225,14 @@ export class DeepResearchDO extends DurableObject<Env> {
     })
   }
 
-  private async handleCancel(): Promise<Response> {
-    if (!this.started) return json({ error: "not started" }, 409)
-    this.cancelled = true
+  private async handleCancel(request: Request): Promise<Response> {
     const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
-    if (meta) {
-      meta.cancelled = true
-      await this.ctx.storage.put(META_KEY, meta)
-    }
+    if (!meta) return json({ error: "not started" }, 409)
+    const presented = request.headers.get(CREATOR_HEADER) ?? ""
+    if (meta.creator && meta.creator !== presented) return json({ error: "forbidden" }, 403)
+    this.cancelled = true
+    meta.cancelled = true
+    await this.ctx.storage.put(META_KEY, meta)
     return json({ ok: true, cancelled: true })
   }
 
@@ -199,11 +241,14 @@ export class DeepResearchDO extends DurableObject<Env> {
     const map = await this.ctx.storage.list<string>({ prefix: EVENT_PREFIX })
     const frames = [...map.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, v]) => v)
     const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
-    return { frames, seq: meta?.seq ?? frames.length, done: meta?.done ?? frames.some((f) => f.includes('"done"')) }
+    // Prefer the persisted meta flag; else derive from the last frame's parsed
+    // type (the terminal event is always `done`) rather than a substring match.
+    const doneFromFrames = frameType(frames[frames.length - 1]) === "done"
+    return { frames, seq: meta?.seq ?? frames.length, done: meta?.done ?? doneFromFrames }
   }
 
   private async armCleanupAlarm(): Promise<void> {
-    const config = resolveResearchConfig(this.env)
+    const config = resolveResearchConfig(this.env, { model: this.model, effort: this.effort })
     await this.ctx.storage.setAlarm(Date.now() + config.cleanupAfterMs)
   }
 
@@ -228,4 +273,15 @@ export class DeepResearchDO extends DurableObject<Env> {
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+/** Parse the `type` out of a persisted `data: {json}\n\n` frame, or null. */
+function frameType(frame: string | undefined): string | null {
+  if (!frame) return null
+  try {
+    const parsed = JSON.parse(frame.replace(/^data: /, "").trim()) as { type?: unknown }
+    return typeof parsed.type === "string" ? parsed.type : null
+  } catch {
+    return null
+  }
 }

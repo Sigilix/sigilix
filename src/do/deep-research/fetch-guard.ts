@@ -141,6 +141,8 @@ export type FetchLike = (url: string, init: { redirect: "manual"; signal: AbortS
 export interface FetchPageArgs {
   url: string
   runId: string
+  /** The owning tenant/creator identity — attributed in the metering line. */
+  tenant: string
   fetchImpl?: FetchLike
 }
 
@@ -162,6 +164,10 @@ export async function fetchPage(args: FetchPageArgs): Promise<FetchPageResult> {
 
   let current = firstGuard.url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    // One deadline covers BOTH the header round-trip AND the body read below —
+    // a slow-loris server dribbling bytes must not hang the fetch (and, with
+    // the fetch concurrency limiter, the whole round). The timer is only
+    // cleared once we are fully done reading (or on an early return).
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     let response: Response
@@ -171,10 +177,10 @@ export async function fetchPage(args: FetchPageArgs): Promise<FetchPageResult> {
       clearTimeout(timer)
       return { ok: false, reason: err instanceof Error && err.name === "AbortError" ? "timeout" : "fetch-failed" }
     }
-    clearTimeout(timer)
 
     // Manual redirect handling — re-validate the Location before following.
     if (response.status >= 300 && response.status < 400) {
+      clearTimeout(timer)
       await response.body?.cancel().catch(() => {})
       if (hop === MAX_REDIRECTS) return { ok: false, reason: "too-many-redirects" }
       const location = response.headers.get("location")
@@ -188,22 +194,32 @@ export async function fetchPage(args: FetchPageArgs): Promise<FetchPageResult> {
     }
 
     // Terminal response.
-    meterFetch(args.runId, current.hostname)
+    meterFetch(args.runId, current.hostname, args.tenant)
     if (!response.ok) {
+      clearTimeout(timer)
       await response.body?.cancel().catch(() => {})
       return { ok: false, reason: `http-${response.status}` }
     }
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase()
     if (!ALLOWED_CONTENT_TYPES.some((t) => contentType.includes(t))) {
+      clearTimeout(timer)
       await response.body?.cancel().catch(() => {})
       return { ok: false, reason: "unsupported-content-type" }
     }
 
-    const body = await readCapped(response, MAX_BYTES)
-    const isHtml = contentType.includes("text/html")
-    const text = isHtml ? htmlToText(body) : body.trim()
-    const title = isHtml ? extractTitle(body) || current.hostname : current.hostname
-    return { ok: true, page: { url: current.toString(), title, domain: current.hostname, text } }
+    // Body read is under the SAME deadline (controller.signal) — a stalled read
+    // aborts instead of hanging.
+    try {
+      const body = await readCapped(response, MAX_BYTES, controller.signal)
+      const isHtml = contentType.includes("text/html")
+      const text = isHtml ? htmlToText(body) : body.trim()
+      const title = isHtml ? extractTitle(body) || current.hostname : current.hostname
+      return { ok: true, page: { url: current.toString(), title, domain: current.hostname, text } }
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error && err.name === "AbortError" ? "timeout" : "read-failed" }
+    } finally {
+      clearTimeout(timer)
+    }
   }
   return { ok: false, reason: "too-many-redirects" }
 }
@@ -217,15 +233,33 @@ function safeResolve(location: string, base: URL): string | null {
   }
 }
 
-/** Read a response body up to `maxBytes`, aborting the stream past the cap. */
-async function readCapped(response: Response, maxBytes: number): Promise<string> {
+/** An Error tagged as AbortError without depending on DOMException. */
+function abortError(): Error {
+  return Object.assign(new Error("aborted"), { name: "AbortError" })
+}
+
+/** A promise that rejects when `signal` aborts (never resolves otherwise). */
+function abortRejection(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    if (signal.aborted) return reject(abortError())
+    signal.addEventListener("abort", () => reject(abortError()), { once: true })
+  })
+}
+
+/**
+ * Read a response body up to `maxBytes`, aborting the stream past the cap. Each
+ * `reader.read()` races the abort signal so a stalled server (a read that never
+ * resolves) is bounded by the caller's deadline instead of hanging forever.
+ */
+async function readCapped(response: Response, maxBytes: number, signal: AbortSignal): Promise<string> {
   const reader = response.body?.getReader()
   if (!reader) return ""
   const chunks: Uint8Array[] = []
   let total = 0
+  const aborted = abortRejection(signal)
   try {
     for (;;) {
-      const { done, value } = await reader.read()
+      const { done, value } = await Promise.race([reader.read(), aborted])
       if (done) break
       if (value) {
         chunks.push(value)
@@ -248,7 +282,7 @@ async function readCapped(response: Response, maxBytes: number): Promise<string>
   return new TextDecoder("utf-8").decode(merged)
 }
 
-/** Structured per-fetch metering line — runId + domain only, never secrets. */
-function meterFetch(runId: string, domain: string): void {
-  console.log(JSON.stringify({ event: "research-fetch-metered", runId, domain }))
+/** Structured per-fetch metering line — runId + domain + tenant, never secrets. */
+function meterFetch(runId: string, domain: string, tenant: string): void {
+  console.log(JSON.stringify({ event: "research-fetch-metered", runId, domain, tenant }))
 }

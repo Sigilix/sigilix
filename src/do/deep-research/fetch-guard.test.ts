@@ -77,19 +77,18 @@ describe("fetchPage", () => {
   it("fetches, strips HTML, and meters exactly once", async () => {
     const fake: FetchLike = async () =>
       htmlResponse("<html><title>Doc</title><body><p>hello world content</p></body></html>")
-    const res = await fetchPage({ url: "https://example.com/x", runId: "r1", fetchImpl: fake })
+    const res = await fetchPage({ url: "https://example.com/x", runId: "r1", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(true)
     if (res.ok) {
       expect(res.page.title).toBe("Doc")
       expect(res.page.domain).toBe("example.com")
       expect(res.page.text).toContain("hello world content")
     }
-    // Metering line emitted once with runId + domain, no secrets.
+    // Metering line emitted once with runId + domain + tenant, no secrets.
     const lines = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]))
     const metered = lines.filter((l) => l.includes("research-fetch-metered"))
     expect(metered).toHaveLength(1)
-    expect(metered[0]).toContain('"runId":"r1"')
-    expect(metered[0]).toContain('"domain":"example.com"')
+    expect(JSON.parse(metered[0]!)).toMatchObject({ runId: "r1", domain: "example.com", tenant: "t1" })
   })
 
   it("refuses a public URL that redirects to a private target (SSRF-via-redirect)", async () => {
@@ -101,7 +100,7 @@ describe("fetchPage", () => {
       }
       return htmlResponse("<p>SHOULD NEVER BE REACHED</p>")
     }
-    const res = await fetchPage({ url: "https://example.com/redir", runId: "r2", fetchImpl: fake })
+    const res = await fetchPage({ url: "https://example.com/redir", runId: "r2", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.reason).toContain("redirect-blocked")
   })
@@ -112,7 +111,7 @@ describe("fetchPage", () => {
         return new Response(null, { status: 301, headers: { location: "https://dest.example.org/final" } })
       return htmlResponse("<p>final content here for the reader</p>")
     }
-    const res = await fetchPage({ url: "https://example.com/start", runId: "r3", fetchImpl: fake })
+    const res = await fetchPage({ url: "https://example.com/start", runId: "r3", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(true)
     if (res.ok) expect(res.page.domain).toBe("dest.example.org")
   })
@@ -120,14 +119,14 @@ describe("fetchPage", () => {
   it("rejects a non-allowlisted content-type", async () => {
     const fake: FetchLike = async () =>
       new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
-    const res = await fetchPage({ url: "https://example.com/api", runId: "r4", fetchImpl: fake })
+    const res = await fetchPage({ url: "https://example.com/api", runId: "r4", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.reason).toBe("unsupported-content-type")
   })
 
   it("refuses the initial URL when it is private", async () => {
     const fake: FetchLike = async () => htmlResponse("<p>x</p>")
-    const res = await fetchPage({ url: "http://192.168.0.5/", runId: "r5", fetchImpl: fake })
+    const res = await fetchPage({ url: "http://192.168.0.5/", runId: "r5", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.reason).toBe("private-ipv4")
   })
@@ -138,8 +137,31 @@ describe("fetchPage", () => {
       n++
       return new Response(null, { status: 302, headers: { location: `https://hop${n}.example.com/` } })
     }
-    const res = await fetchPage({ url: "https://start.example.com/", runId: "r6", fetchImpl: fake })
+    const res = await fetchPage({ url: "https://start.example.com/", runId: "r6", tenant: "t1", fetchImpl: fake })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.reason).toBe("too-many-redirects")
+  })
+
+  it("aborts a stalled body read at the deadline (slow-loris — P1.2)", async () => {
+    // Revert-proof: if the deadline did not cover the body read, this hangs
+    // forever. The stream sends headers (200) but never enqueues/closes a body,
+    // so reader.read() stays pending until the 15s timer aborts it.
+    vi.useFakeTimers()
+    try {
+      const stalled = new ReadableStream<Uint8Array>({
+        start() {
+          /* never enqueue, never close → read() stays pending */
+        },
+      })
+      const fake: FetchLike = async () =>
+        new Response(stalled, { status: 200, headers: { "content-type": "text/html" } })
+      const pending = fetchPage({ url: "https://slow.example.com/", runId: "r7", tenant: "t1", fetchImpl: fake })
+      await vi.advanceTimersByTimeAsync(15_000)
+      const res = await pending
+      expect(res.ok).toBe(false)
+      if (!res.ok) expect(res.reason).toBe("timeout")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

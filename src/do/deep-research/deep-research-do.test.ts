@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { DeepResearchDO, type ResearchTestHooks } from "./deep-research-do"
+import { DeepResearchDO, CREATOR_HEADER, type ResearchTestHooks } from "./deep-research-do"
 import type { Env } from "@/src/shared/types/env"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
@@ -104,10 +104,14 @@ async function readSse(res: Response): Promise<Array<{ type: string; [k: string]
     .map((json) => JSON.parse(json) as { type: string })
 }
 
-function req(path: string, method: string, body?: unknown): Request {
+function req(path: string, method: string, body?: unknown, creator?: string): Request {
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers["content-type"] = "application/json"
+  if (creator !== undefined) headers[CREATOR_HEADER] = creator
   return new Request(`https://deep-research.do${path}`, {
     method,
-    ...(body !== undefined ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
 }
 
@@ -277,5 +281,41 @@ describe("DeepResearchDO — validation", () => {
     const instance = new DeepResearchDO(ctx, makeEnv())
     const res = await instance.fetch(req("/cancel", "POST"))
     expect(res.status).toBe(409)
+  })
+})
+
+describe("DeepResearchDO — creator ownership (P2.3)", () => {
+  it("a run bound to a creator refuses stream/cancel from a different creator (403)", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    instance.setTestHooks(baseHooks())
+    await instance.fetch(req("/start", "POST", { question: "q", creator: "session:alice" }))
+    await drive(instance)
+
+    // Wrong creator → 403 on both mutating/streaming paths.
+    const badStream = await instance.fetch(req("/stream", "GET", undefined, "session:mallory"))
+    expect(badStream.status).toBe(403)
+    const badCancel = await instance.fetch(req("/cancel", "POST", {}, "session:mallory"))
+    expect(badCancel.status).toBe(403)
+
+    // Correct creator → allowed.
+    const okStream = await instance.fetch(req("/stream", "GET", undefined, "session:alice"))
+    expect(okStream.status).toBe(200)
+  })
+})
+
+describe("DeepResearchDO — model + effort echo through the DO", () => {
+  it("the start body's model + effort surface in the first status event", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    instance.setTestHooks(baseHooks())
+    await instance.fetch(
+      req("/start", "POST", { question: "q", model: "pyroeis", effort: "low", creator: "session:alice" }),
+    )
+    await drive(instance)
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    const first = events[0] as { type: string; model?: string; effort?: string }
+    expect(first).toMatchObject({ type: "status", model: "pyroeis", effort: "low" })
   })
 })

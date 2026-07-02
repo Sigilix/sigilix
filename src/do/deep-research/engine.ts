@@ -74,7 +74,9 @@ async function runInner(deps: EngineDeps): Promise<void> {
   }
 
   // ── plan ──────────────────────────────────────────────────────────
-  await deps.emit({ type: "status", phase: "planning", round: 0 })
+  // ONLY this first status carries model + effort (the UI reads them here);
+  // every other status event omits them (the original contract shape).
+  await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
   const planPrompt = buildPlanPrompt(deps.question)
   const plan = await deps.model("planner", toMessages(planPrompt))
   track(plan.tokens)

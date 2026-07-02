@@ -574,8 +574,17 @@ export interface Env {
   OPENCLAW_RESEARCH_FINAL_REPORT_MODEL?: string
   OPENCLAW_RESEARCH_CLASSIFY_MODEL?: string
   OPENCLAW_RESEARCH_EXTRACT_MODEL?: string
-  // Search-provider keys — ordered fallback chain (first configured wins).
-  // Unset providers are skipped; all-unset fails fast with an error event.
+  // Search-provider keys — the fallback chain (first CONFIGURED provider in the
+  // resolved chain serves each query). Unset providers are skipped; all-unset
+  // fails fast with an error event.
+  // OPENCLAW_SEARCH_CHAIN: comma-separated provider order; unknown keys are
+  // skipped (logged). Default: "exa,tavily,brave,selfhost,google-pse". "serper"
+  // is not in the default chain but its adapter stays available as an opt-in
+  // entry. The self-hosted SearXNG/agent-search leg is an overflow lane.
+  OPENCLAW_SEARCH_CHAIN?: string
+  OPENCLAW_EXA_API_KEY?: string
+  OPENCLAW_SELFHOST_SEARCH_URL?: string
+  OPENCLAW_SELFHOST_SEARCH_TOKEN?: string
   OPENCLAW_TAVILY_API_KEY?: string
   OPENCLAW_BRAVE_API_KEY?: string
   OPENCLAW_SERPER_API_KEY?: string

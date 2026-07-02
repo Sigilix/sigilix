@@ -1,9 +1,13 @@
-// SIG-298 — web search with an ordered provider fallback chain. The chain is
-// Tavily → Brave → Serper → Google PSE; the first CONFIGURED provider serves a
+// SIG-298 — web search with an env-configurable provider fallback chain. The
+// order comes from OPENCLAW_SEARCH_CHAIN (default: exa,tavily,brave,selfhost,
+// google-pse); the first CONFIGURED provider in the resolved chain serves a
 // query, and if it errors at runtime the next configured provider is tried.
-// Unset providers are skipped silently. If NO provider is configured the caller
-// fails fast (see `hasAnySearchProvider`) rather than hanging. Each executed
-// query emits one `research-search-metered` line (provider + runId, no secrets).
+// Unknown chain keys are skipped (logged); providers whose keys/config are unset
+// are skipped silently. If NO provider is configured the caller fails fast (see
+// `hasAnySearchProvider`) rather than hanging. Only the SERVED provider emits a
+// `research-search-metered` line (provider + runId + tenant, no secrets). The
+// self-hosted SearXNG/agent-search leg is an overflow lane; "serper" is not in
+// the default chain but stays available when explicitly listed.
 
 import type { Env } from "@/src/shared/types/env"
 import type { SearchHit, SearchProvider } from "./types"
@@ -12,27 +16,68 @@ import type { SearchHit, SearchProvider } from "./types"
 export type SearchFetchLike = (url: string, init: RequestInit) => Promise<Response>
 
 const SEARCH_TIMEOUT_MS = 15_000
+const SELFHOST_TIMEOUT_MS = 10_000
 const MAX_HITS_PER_QUERY = 8
 
-/** True when at least one provider in the chain is configured. */
+/** The default chain when OPENCLAW_SEARCH_CHAIN is unset/empty. */
+const DEFAULT_CHAIN: SearchProvider[] = ["exa", "tavily", "brave", "selfhost", "google-pse"]
+
+/** Every provider the code knows how to run (for validating chain entries). */
+const KNOWN_PROVIDERS = new Set<SearchProvider>(["exa", "tavily", "brave", "serper", "selfhost", "google-pse"])
+
+/** True when at least one provider in the resolved chain is configured. */
 export function hasAnySearchProvider(env: Env): boolean {
   return configuredProviders(env).length > 0
 }
 
-/** The configured providers in fallback order. */
+/** Resolve the ordered chain from OPENCLAW_SEARCH_CHAIN (trim/lowercase; unknown
+ *  keys skipped with a structured log), or the default when unset/empty. */
+function resolveChain(env: Env): SearchProvider[] {
+  const raw = env.OPENCLAW_SEARCH_CHAIN?.trim()
+  if (!raw) return DEFAULT_CHAIN
+  const out: SearchProvider[] = []
+  for (const entry of raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)) {
+    if (!KNOWN_PROVIDERS.has(entry as SearchProvider)) {
+      console.error(JSON.stringify({ event: "research-search-chain-unknown-provider", provider: entry }))
+      continue
+    }
+    out.push(entry as SearchProvider)
+  }
+  return out
+}
+
+/** Whether a given provider has the config it needs to run. */
+function isProviderConfigured(provider: SearchProvider, env: Env): boolean {
+  switch (provider) {
+    case "exa":
+      return !!env.OPENCLAW_EXA_API_KEY?.trim()
+    case "tavily":
+      return !!env.OPENCLAW_TAVILY_API_KEY?.trim()
+    case "brave":
+      return !!env.OPENCLAW_BRAVE_API_KEY?.trim()
+    case "serper":
+      return !!env.OPENCLAW_SERPER_API_KEY?.trim()
+    case "selfhost":
+      return !!env.OPENCLAW_SELFHOST_SEARCH_URL?.trim()
+    case "google-pse":
+      return !!env.OPENCLAW_GOOGLE_PSE_KEY?.trim() && !!env.OPENCLAW_GOOGLE_PSE_CX?.trim()
+  }
+}
+
+/** The configured providers, in resolved-chain order. */
 function configuredProviders(env: Env): SearchProvider[] {
-  const chain: SearchProvider[] = []
-  if (env.OPENCLAW_TAVILY_API_KEY?.trim()) chain.push("tavily")
-  if (env.OPENCLAW_BRAVE_API_KEY?.trim()) chain.push("brave")
-  if (env.OPENCLAW_SERPER_API_KEY?.trim()) chain.push("serper")
-  if (env.OPENCLAW_GOOGLE_PSE_KEY?.trim() && env.OPENCLAW_GOOGLE_PSE_CX?.trim()) chain.push("google-pse")
-  return chain
+  return resolveChain(env).filter((p) => isProviderConfigured(p, env))
 }
 
 export interface SearchArgs {
   query: string
   env: Env
   runId: string
+  /** The owning tenant/creator identity — attributed in the metering line. */
+  tenant: string
   fetchImpl?: SearchFetchLike
 }
 
@@ -54,9 +99,11 @@ export async function searchWeb(args: SearchArgs): Promise<SearchQueryResult> {
   const fetchImpl = args.fetchImpl ?? ((u, init) => fetch(u, init))
   let lastReason = "no-search-provider-configured"
   for (const provider of providers) {
-    meterSearch(provider, args.runId)
     try {
       const hits = await runProvider(provider, args.query, args.env, fetchImpl)
+      // Meter ONLY the provider that actually served this query — a provider
+      // that throws and falls through must not emit a metered line.
+      meterSearch(provider, args.runId, args.tenant)
       return { ok: true, provider, hits: hits.slice(0, MAX_HITS_PER_QUERY) }
     } catch (err) {
       lastReason = err instanceof Error ? err.message : String(err)
@@ -77,6 +124,10 @@ function runProvider(
   fetchImpl: SearchFetchLike,
 ): Promise<SearchHit[]> {
   switch (provider) {
+    case "exa":
+      return searchExa(query, env.OPENCLAW_EXA_API_KEY!, fetchImpl)
+    case "selfhost":
+      return searchSelfhost(query, env.OPENCLAW_SELFHOST_SEARCH_URL!, env.OPENCLAW_SELFHOST_SEARCH_TOKEN, fetchImpl)
     case "tavily":
       return searchTavily(query, env.OPENCLAW_TAVILY_API_KEY!, fetchImpl)
     case "brave":
@@ -88,14 +139,56 @@ function runProvider(
   }
 }
 
-async function withTimeout(run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+async function withTimeout(
+  run: (signal: AbortSignal) => Promise<Response>,
+  timeoutMs = SEARCH_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     return await run(controller.signal)
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Exa: POST https://api.exa.ai/search {query, numResults} with x-api-key.
+ *  Tolerant map results[].{url, title, text → snippet}. */
+async function searchExa(query: string, apiKey: string, fetchImpl: SearchFetchLike): Promise<SearchHit[]> {
+  const res = await withTimeout((signal) =>
+    fetchImpl("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({ query, numResults: MAX_HITS_PER_QUERY }),
+      signal,
+    }),
+  )
+  if (!res.ok) throw new Error(`exa-http-${res.status}`)
+  const data = (await res.json()) as { results?: Array<{ url?: string; title?: string; text?: string }> }
+  return (data.results ?? []).map((r) => ({ url: r.url ?? "", title: r.title ?? "", snippet: r.text ?? "" }))
+}
+
+/** Self-hosted SearXNG / agent-search compatible leg: GET {base}/search?q=…&format=json.
+ *  Tolerant parse — accepts `{results:[{url,title,content?|snippet?}]}`. On any
+ *  error / non-200 / empty results the caller falls through to the next leg. */
+async function searchSelfhost(
+  query: string,
+  baseUrl: string,
+  token: string | undefined,
+  fetchImpl: SearchFetchLike,
+): Promise<SearchHit[]> {
+  const base = baseUrl.replace(/\/+$/, "")
+  const url = `${base}/search?q=${encodeURIComponent(query)}&format=json`
+  const headers: Record<string, string> = { accept: "application/json" }
+  if (token?.trim()) headers.authorization = `Bearer ${token.trim()}`
+  const res = await withTimeout((signal) => fetchImpl(url, { method: "GET", headers, signal }), SELFHOST_TIMEOUT_MS)
+  if (!res.ok) throw new Error(`selfhost-http-${res.status}`)
+  const data = (await res.json()) as {
+    results?: Array<{ url?: string; title?: string; content?: string; snippet?: string }>
+  }
+  const results = data.results ?? []
+  if (results.length === 0) throw new Error("selfhost-empty")
+  return results.map((r) => ({ url: r.url ?? "", title: r.title ?? "", snippet: r.content ?? r.snippet ?? "" }))
 }
 
 async function searchTavily(query: string, apiKey: string, fetchImpl: SearchFetchLike): Promise<SearchHit[]> {
@@ -161,7 +254,7 @@ async function searchGooglePse(
   return (data.items ?? []).map((r) => ({ url: r.link ?? "", title: r.title ?? "", snippet: r.snippet ?? "" }))
 }
 
-/** Structured per-query metering line — provider + runId only, never secrets. */
-function meterSearch(provider: SearchProvider, runId: string): void {
-  console.log(JSON.stringify({ event: "research-search-metered", provider, queries: 1, runId }))
+/** Structured per-query metering line — provider + runId + tenant, never secrets. */
+function meterSearch(provider: SearchProvider, runId: string, tenant: string): void {
+  console.log(JSON.stringify({ event: "research-search-metered", provider, queries: 1, runId, tenant }))
 }

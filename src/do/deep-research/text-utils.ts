@@ -72,7 +72,8 @@ export function isLowQuality(text: string): boolean {
   return false
 }
 
-/** Void HTML elements that never have a closing tag (no inner text to drop). */
+/** Elements whose ENTIRE subtree (content included) is dropped — their inner
+ *  text is never page content. */
 const DROPPED_ELEMENTS = ["script", "style", "noscript", "template", "svg", "head"]
 
 /** Named entities common enough to be worth decoding after tag removal. */

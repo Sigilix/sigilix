@@ -7,6 +7,14 @@
 /** The coarse phase a `status` event reports for the current round. */
 export type ResearchPhase = "planning" | "searching" | "reading" | "synthesizing" | "finalizing"
 
+/** The named model tier for the HEAVY roles (planning/synthesis/stop-check/
+ *  final report). Only Boreas exists today; pyroeis/astraeus are named tiers
+ *  that map to default model ids (env-overridable per role). */
+export type ResearchTier = "boreas" | "pyroeis" | "astraeus"
+
+/** The effort level — scales the loop budgets (rounds / queries / pages / time). */
+export type ResearchEffort = "low" | "medium" | "high"
+
 /** A web source surfaced during the run (a search hit or a fetched page). */
 export interface ResearchSource {
   url: string
@@ -21,7 +29,10 @@ export interface ResearchSource {
  * exact.
  */
 export type ResearchEvent =
-  | { type: "status"; phase: ResearchPhase; round: number }
+  // The FIRST emitted status (phase "planning", round 0) additionally carries
+  // the resolved `model` tier + `effort` so the UI can display them. Every
+  // OTHER status event omits those fields (the original contract).
+  | { type: "status"; phase: ResearchPhase; round: number; model?: ResearchTier; effort?: ResearchEffort }
   | { type: "plan"; text: string }
   | { type: "queries"; items: string[] }
   | { type: "source"; url: string; title: string; domain: string; snippet?: string }
@@ -46,8 +57,10 @@ export interface SearchResult {
   hits: SearchHit[]
 }
 
-/** The ordered search-provider fallback chain (first configured wins). */
-export type SearchProvider = "tavily" | "brave" | "serper" | "google-pse"
+/** A search provider that can appear in the fallback chain. The order is set by
+ *  `OPENCLAW_SEARCH_CHAIN` (default: exa,tavily,brave,selfhost,google-pse); the
+ *  first configured provider in the resolved chain serves each query. */
+export type SearchProvider = "exa" | "tavily" | "brave" | "serper" | "selfhost" | "google-pse"
 
 /** A page successfully fetched + stripped to plain text. */
 export interface FetchedPage {
@@ -63,6 +76,10 @@ export interface FetchedPage {
  * `maxRounds` / `maxTimeMs` / `minRounds` / `maxEmptyRounds`.
  */
 export interface ResearchConfig {
+  /** The resolved model tier for the heavy roles (echoed in the first status). */
+  tier: ResearchTier
+  /** The resolved effort level (echoed in the first status). */
+  effort: ResearchEffort
   maxRounds: number
   maxTimeMs: number
   minRounds: number

@@ -81,6 +81,7 @@ import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute } from "@/src/lib/workspace-prs-route"
+import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
@@ -488,6 +489,10 @@ export default {
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
+      // sig-org-overview: GET /v1/org/overview — the portal's Organization page
+      // (seats + per-seat billing). Dual-authed (session OR api key); see
+      // org-overview-route.ts.
+      url.pathname === "/v1/org/overview" ||
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
       // are portal-facing (dual-authed session OR api key — see
       // agent-memory-crud-route.ts). The earlier PUT/POST /v1/memory* routes
@@ -553,6 +558,13 @@ export default {
     // key); see workspace-prs-route.ts.
     if (request.method === "GET" && url.pathname === "/v1/workspace/prs") {
       return withPortalCors(request, await handleWorkspacePrsRoute(request, env, ctx), env)
+    }
+    // sig-org-overview: the portal's Organization page — org headline, billable
+    // seats (distinct usage_ledger authors scoped to the caller's installation),
+    // and per-seat billing. Dual-authed (session OR api key); see
+    // org-overview-route.ts.
+    if (request.method === "GET" && url.pathname === "/v1/org/overview") {
+      return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
     }
     // sig-memory-crud: the portal's memory-management surface. GET lists the
     // caller's saved memories (paginated); DELETE removes one by id. Dual-authed

@@ -73,6 +73,7 @@ import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { requireSession } from "@/src/lib/auth-middleware"
+import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
 import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
@@ -455,20 +456,7 @@ export default {
       return renderWelcomePage(authed.record)
     }
     if (request.method === "GET" && url.pathname === "/auth/me") {
-      const authed = await requireSession(request, env, ctx)
-      if (!authed) {
-        return new Response(JSON.stringify({ error: "unauthenticated" }), {
-          status: 401,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      return new Response(
-        JSON.stringify({
-          login: authed.record.login,
-          githubUserId: authed.record.githubUserId,
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      )
+      return handleAuthMeRoute(request, env, ctx)
     }
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       const sessionId = readCookie(request, SESSION_COOKIE_NAME)

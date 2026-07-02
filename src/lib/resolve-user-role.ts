@@ -3,19 +3,27 @@
 // token + `GET /user/installations` pattern as onboarding-context-route.ts
 // and auth-setup-route.ts's `userControlsInstallation`.
 //
-// Derivation (per connected installation):
-//   - `account.type === "User"` (a personal install) AND `account.login`
-//     matches the session's own login → the user owns it → "admin".
-//   - `account.type === "Organization"` → check the caller's OWN membership
-//     role in that org via `GET /user/memberships/orgs/{org}` (reports the
-//     authenticated user's own membership, no extra scope needed).
-// Aggregated across installations: admin of ANY connected installation/org
-// wins. Otherwise "member".
+// Derivation:
+//   1. `GET /user/installations` — the installations the user's token can
+//      see. A personal install (`account.type === "User"`) whose
+//      `account.login` matches the session's own login → the user owns it →
+//      "admin".
+//   2. `GET /user/memberships/orgs?state=active` — the caller's OWN org
+//      memberships (each item carries `.role` and `.organization.login`).
+//      This is the AUTHENTICATED user's self-memberships list, so it works
+//      with a plain user-to-server token and requires NO org permission /
+//      `read:org` scope — no GitHub App permission change, no org
+//      re-approval. Fetched ONCE, not per-org.
+//   3. For each ORGANIZATION installation, look up the user's role in that
+//      org from the memberships map; `role === "admin"` (state is already
+//      "active" from the query filter) → "admin".
+// Aggregated: admin of ANY connected installation/org wins. Otherwise
+// "member".
 //
 // FAIL-SAFE, always: any error (missing token, GitHub 5xx, malformed JSON,
-// no installations) resolves to "member" (least privilege) rather than
-// throwing — this function must never be the reason /auth/me 500s. Never
-// logs the access token, only the derived role + installation count.
+// no installations, no memberships) resolves to "member" (least privilege)
+// rather than throwing — this function must never be the reason /auth/me
+// 500s. Never logs the access token, only the derived role + counts.
 
 export type UserRole = "admin" | "member"
 
@@ -36,18 +44,19 @@ interface UserInstallationsResponse {
   installations?: GitHubInstallation[]
 }
 
-interface OrgMembershipResponse {
+interface OrgMembershipItem {
   role?: string
   // GitHub returns "active" once the invite is accepted, "pending"
-  // otherwise. An admin grant only counts once it's actually active — an
-  // unaccepted pending-admin invite must not gate a real admin role.
+  // otherwise. We filter to state=active in the query and re-check
+  // defensively so an unaccepted pending-admin invite can't gate admin.
   state?: string
+  organization?: { login?: string } | null
 }
 
 // Defensive pagination cap — mirrors onboarding-context-route.ts /
 // auth-setup-route.ts: real users never approach this, so hitting it means
 // something's wrong upstream, not that we should spin forever.
-const MAX_INSTALLATION_PAGES = 20
+const MAX_PAGES = 20
 
 function githubHeaders(accessToken: string): HeadersInit {
   return {
@@ -62,7 +71,7 @@ function githubHeaders(accessToken: string): HeadersInit {
 async function fetchInstallations(accessToken: string, fetchImpl: FetchImpl): Promise<GitHubInstallation[]> {
   const out: GitHubInstallation[] = []
   let seen = 0
-  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
+  for (let page = 1; page <= MAX_PAGES; page++) {
     let res: Response
     try {
       res = await fetchImpl(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
@@ -88,29 +97,35 @@ async function fetchInstallations(accessToken: string, fetchImpl: FetchImpl): Pr
 }
 
 /**
- * The caller's own membership in `orgLogin`, via
- * `GET /user/memberships/orgs/{org}` (reports the AUTHENTICATED user's own
- * membership). Soft-fails to `null` on any error — never throws.
+ * The caller's OWN active org memberships via
+ * `GET /user/memberships/orgs?state=active` (the authenticated user's
+ * self-memberships list — no org permission / `read:org` scope needed).
+ * Paginated. Soft-fails to whatever was collected so far (never throws).
  */
-async function fetchOrgMembership(
-  accessToken: string,
-  orgLogin: string,
-  fetchImpl: FetchImpl,
-): Promise<OrgMembershipResponse | null> {
-  let res: Response
-  try {
-    res = await fetchImpl(`https://api.github.com/user/memberships/orgs/${encodeURIComponent(orgLogin)}`, {
-      headers: githubHeaders(accessToken),
-    })
-  } catch {
-    return null
+async function fetchOwnOrgMemberships(accessToken: string, fetchImpl: FetchImpl): Promise<OrgMembershipItem[]> {
+  const out: OrgMembershipItem[] = []
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    let res: Response
+    try {
+      res = await fetchImpl(`https://api.github.com/user/memberships/orgs?state=active&per_page=100&page=${page}`, {
+        headers: githubHeaders(accessToken),
+      })
+    } catch {
+      break
+    }
+    if (!res.ok) break
+    let body: OrgMembershipItem[]
+    try {
+      body = (await res.json()) as OrgMembershipItem[]
+    } catch {
+      break
+    }
+    const items = Array.isArray(body) ? body : []
+    out.push(...items)
+    // This list endpoint has no total_count; stop on a short/empty page.
+    if (items.length < 100) break
   }
-  if (!res.ok) return null
-  try {
-    return (await res.json()) as OrgMembershipResponse
-  } catch {
-    return null
-  }
+  return out
 }
 
 /**
@@ -124,34 +139,43 @@ export async function resolveUserRole(
   fetchImpl: FetchImpl = fetch,
 ): Promise<UserRole> {
   try {
-    const installations = await fetchInstallations(accessToken, fetchImpl)
+    const [installations, memberships] = await Promise.all([
+      fetchInstallations(accessToken, fetchImpl),
+      fetchOwnOrgMemberships(accessToken, fetchImpl),
+    ])
 
     const ownsPersonalInstall = installations.some(
       (inst) => inst.account?.type === "User" && inst.account.login === sessionLogin,
     )
 
-    // Dedup org logins (defensive — GitHub shouldn't surface the same org
-    // twice, but a duplicate would otherwise cost an extra round-trip) and
-    // check them all in parallel rather than serially, since a member of
-    // several orgs otherwise pays one round-trip per org on every /auth/me.
-    const orgLogins = [
-      ...new Set(
-        installations
-          .map((inst) => inst.account)
-          .filter(
-            (account): account is GitHubInstallationAccount & { login: string } =>
-              account?.type === "Organization" && typeof account.login === "string" && account.login.length > 0,
-          )
-          .map((account) => account.login),
-      ),
-    ]
-    const orgMemberships = await Promise.all(orgLogins.map((org) => fetchOrgMembership(accessToken, org, fetchImpl)))
-    // Only an ACTIVE admin grant counts — an unaccepted pending-admin invite
-    // must not gate a real admin role.
-    const isOrgAdmin = orgMemberships.some((m) => m?.role === "admin" && m.state === "active")
+    // org-login → is the caller an ACTIVE admin of it. Only active admin
+    // grants count (a pending-admin invite must not gate admin).
+    const adminOrgs = new Set<string>()
+    for (const m of memberships) {
+      const login = m.organization?.login
+      if (typeof login === "string" && login && m.role === "admin" && m.state === "active") {
+        adminOrgs.add(login)
+      }
+    }
+
+    // The user is an org admin for our purposes only if they're an admin of
+    // an org that actually has Sigilix installed (a connected org install).
+    const isOrgAdmin = installations.some(
+      (inst) =>
+        inst.account?.type === "Organization" &&
+        typeof inst.account.login === "string" &&
+        adminOrgs.has(inst.account.login),
+    )
 
     const role: UserRole = ownsPersonalInstall || isOrgAdmin ? "admin" : "member"
-    console.log(JSON.stringify({ event: "auth-me-role", role, installations: installations.length }))
+    console.log(
+      JSON.stringify({
+        event: "auth-me-role",
+        role,
+        installations: installations.length,
+        adminOrgs: adminOrgs.size,
+      }),
+    )
     return role
   } catch (error) {
     console.error(

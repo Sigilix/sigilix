@@ -237,6 +237,33 @@ describe("handleGitHubAuthCallback", () => {
     expect(sessionEntry![1]).not.toContain("ghu_token")
   })
 
+  it("captures the GitHub display name into the session record when present", async () => {
+    const kv = makeKV({
+      "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),
+    })
+    mockGitHubFetch({ userResponse: { login: "alice", id: 12345, name: "Alice Example" } })
+    const req = callbackReq({ code: "code-1", state: "nonce-1", cookieNonce: "nonce-1" })
+    const res = await handleGitHubAuthCallback(req, env(kv))
+    expect(res.status).toBe(302)
+    const sessionEntry = [...kv._store.entries()].find(([k]) => k.startsWith("auth_session:"))
+    const record = JSON.parse(sessionEntry![1])
+    expect(record.name).toBe("Alice Example")
+  })
+
+  it("omits name from the session record when GitHub returns no display name", async () => {
+    const kv = makeKV({
+      "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),
+    })
+    // Default userResponse has no `name`.
+    mockGitHubFetch({})
+    const req = callbackReq({ code: "code-1", state: "nonce-1", cookieNonce: "nonce-1" })
+    const res = await handleGitHubAuthCallback(req, env(kv))
+    expect(res.status).toBe(302)
+    const sessionEntry = [...kv._store.entries()].find(([k]) => k.startsWith("auth_session:"))
+    const record = JSON.parse(sessionEntry![1])
+    expect("name" in record).toBe(false)
+  })
+
   it("rejects state_mismatch when cookie nonce missing", async () => {
     const kv = makeKV({
       "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),

@@ -471,7 +471,8 @@ export default {
       return renderWelcomePage(authed.record)
     }
     if (request.method === "GET" && url.pathname === "/auth/me") {
-      return handleAuthMeRoute(request, env, ctx)
+      // #155: portal reads this cross-origin with credentials — needs CORS (simple GET, no preflight).
+      return withPortalCors(request, await handleAuthMeRoute(request, env, ctx), env)
     }
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       const sessionId = readCookie(request, SESSION_COOKIE_NAME)

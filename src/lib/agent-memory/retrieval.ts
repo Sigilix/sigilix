@@ -49,6 +49,7 @@ interface AgentMemoryVectorIndex {
     vector: number[],
     options: { topK?: number; namespace?: string; returnMetadata?: "all" | "indexed" },
   ): Promise<{ matches: VectorizeMatch[] }>
+  deleteByIds(ids: string[]): Promise<unknown>
 }
 
 export interface AgentMemoryRetrievalEnv {
@@ -152,6 +153,23 @@ export async function queryMemoryIds(
     })
   }
   return hits
+}
+
+/**
+ * Best-effort delete of one memory's vector by its id (the record id — the same
+ * value {@link upsertMemoryVector} used). SOFT: a delete failure (or an absent /
+ * incompatible binding) returns false, telemetered — a stale vector is recall-safe
+ * (its KV record is gone, so a query hit hydrates to null and is dropped) and must
+ * never fail the caller's KV delete. Never throws.
+ */
+export async function deleteMemoryVector(env: AgentMemoryRetrievalEnv, id: string): Promise<boolean> {
+  try {
+    await env.OPENCLAW_AGENT_MEMORY_INDEX.deleteByIds([id])
+    return true
+  } catch (err) {
+    emitTelemetry("agent-memory-vector-delete-failed", { id, err: errMsg(err) })
+    return false
+  }
 }
 
 function isMemoryKind(value: unknown): value is AgentMemoryKind {

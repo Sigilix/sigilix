@@ -37,7 +37,13 @@ import { handleAgentContextRoute } from "@/src/lib/api-context-route"
 import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
 import { handleBlastRadiusApiRoute } from "@/src/lib/api-blast-radius-route"
 import { handleFleetApiRoute } from "@/src/lib/api-fleet-route"
-import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
+import {
+  handleMemoryWriteRoute,
+  handleMemoryQueryRoute,
+  handleMemoryExtractRoute,
+  handleMemoryListRoute,
+  handleMemoryDeleteRoute,
+} from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
@@ -493,7 +499,14 @@ export default {
       url.pathname === "/v1/onboarding/context" ||
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
-      url.pathname === "/v1/workspace/prs"
+      url.pathname === "/v1/workspace/prs" ||
+      // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
+      // are portal-facing (dual-authed session OR api key — see
+      // agent-memory-crud-route.ts). The earlier PUT/POST /v1/memory* routes
+      // (write/query/extract, api-key-only) return before this block, so
+      // adding /v1/memory here only affects the new GET/DELETE + their OPTIONS.
+      url.pathname === "/v1/memory" ||
+      url.pathname.startsWith("/v1/memory/")
     if (request.method === "OPTIONS" && isPortalCorsPath) {
       return handlePortalPreflight(request, env)
     }
@@ -552,6 +565,18 @@ export default {
     // key); see workspace-prs-route.ts.
     if (request.method === "GET" && url.pathname === "/v1/workspace/prs") {
       return withPortalCors(request, await handleWorkspacePrsRoute(request, env, ctx), env)
+    }
+    // sig-memory-crud: the portal's memory-management surface. GET lists the
+    // caller's saved memories (paginated); DELETE removes one by id. Dual-authed
+    // (session cookie OR bearer api key — see agent-memory-crud-route.ts) and
+    // CORS'd for the portal origins. Registered AFTER the PUT/POST /v1/memory*
+    // write/query/extract routes above, so the HTTP method disambiguates them.
+    if (request.method === "GET" && url.pathname === "/v1/memory") {
+      return withPortalCors(request, await handleMemoryListRoute(request, env, ctx), env)
+    }
+    if (request.method === "DELETE" && url.pathname.startsWith("/v1/memory/")) {
+      const memoryId = decodeURIComponent(url.pathname.slice("/v1/memory/".length))
+      return withPortalCors(request, await handleMemoryDeleteRoute(request, env, memoryId, ctx), env)
     }
     // ARC-190: GET /reviews/<owner>/<repo>/<prNumber> — public status
     // route for DO-tracked PR review runs. v1 unauth (read-only

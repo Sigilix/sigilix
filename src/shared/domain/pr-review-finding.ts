@@ -370,6 +370,18 @@ export interface PrReviewFinding {
    * from model output; gated behind the trust-ledger render flag.
    */
   shapedByLearning?: { ruleText: string }
+  /**
+   * SDK guidance packs v1 (SIG-298 follow-on): runtime-only "applied SDK
+   * guidance" attribution — set at render-prep when the model appended a
+   * `[sdk:<packId>]` marker to this finding's body (parsed + stripped by
+   * `applySdkGuidanceAttribution`) referencing a pack that was actually
+   * injected into this review's context. The renderer surfaces a small
+   * `<sub>via <Vendor> SDK guidance — <docsUrl></sub>` provenance line,
+   * mirroring `shapedByLearning`'s convention. Self-authored guidance from
+   * public docs — never a partner/endorsement claim. Never parsed from raw
+   * model output beyond the marker itself.
+   */
+  sdkGuidance?: { packId: string; vendor: string; docsUrl: string }
 }
 
 /**

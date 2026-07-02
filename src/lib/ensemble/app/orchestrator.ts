@@ -551,6 +551,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       messageForRole,
       messageForBatchRole,
       adversarialFramingSynthBlock,
+      matchedSdkPacks,
     } = prompts
 
     args.statusReporter?.report(
@@ -779,6 +780,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       consensusVerdict,
       consensusProvenance,
       consensusByIndex,
+      matchedSdkPacks,
     })
     // `let` (was const): SIG-285 PR 4 filters this in lockstep with
     // submissionVerdict.findings when a refuted finding is demoted, to keep the
@@ -987,14 +989,8 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 // ─── telemetry / result binding ──────────────────────────────────────────
 
 // SIG-318 (PR 12h): the orchestrator-private `EnsembleTelemetry` run-record interface
-// lives in `./orchestrator-types` (split out for the 1k cap). It is never exported from
-// the shim — the persistence port / SLO leaf consume the decoupled
-// `EnsembleTelemetrySummary` slice; its only consumers are the `telemetry` skeleton the
-// handler builds and the `EnsembleResult` binding. The generic `EnsembleResult`,
-// `EnsembleResultStatus`, `ReviewMeta`, and the `finalize` choke point live in
-// ensemble/app/session (generic over the telemetry type so session never names the
-// concrete `EnsembleTelemetry`). SIG-386 (PR1): the concrete
-// `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>` binding moved to
-// `./orchestrator-types` (co-located with `EnsembleTelemetry`) to land this file at
-// <=1k lines; re-exported here so the public type is byte-identical.
+// lives in `./orchestrator-types` (split out for the 1k cap). The generic `EnsembleResult`,
+// `EnsembleResultStatus`, `ReviewMeta`, and `finalize` choke point live in ensemble/app/session.
+// SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>` binding
+// moved to `./orchestrator-types`; re-exported here so the public type is byte-identical.
 export type { EnsembleResult }

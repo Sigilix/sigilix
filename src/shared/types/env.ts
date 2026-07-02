@@ -196,6 +196,16 @@ export interface Env {
   // prompts. Parsed by resolveLearningsMode (@/features/learnings).
   OPENCLAW_LEARNINGS_MODE?: string
 
+  // SDK guidance packs v1 (Greptile-partners-style vendor review context,
+  // self-authored from public docs — labeled "SDK guidance", not "partner").
+  // "off" (default) — no detection, no telemetry, byte-identical output.
+  // "shadow" — detects matched packs from the diff and logs
+  // `sdk-pack-matched {packs, prKey}`, but injects NOTHING into the prompt.
+  // "on" — injects the matched packs' rules into specialist + synth prompts
+  // and enables the `[sdk:<packId>]` attribution marker parse. Parsed by
+  // resolveSdkPacksMode (@/src/lib/sdk-packs).
+  OPENCLAW_SDK_PACKS_MODE?: string
+
   // Memory Gardener — activity-aware decay pass (Phase-1 of the dynamic-memory
   // moat), driven off the 6h cron. Three-state, DEFAULT OFF:
   //   - "off" (default / unset / any other value): the decay pass is fully

@@ -41,6 +41,7 @@ import {
   formatBodyFindingSuggestedChange,
   formatProposedChangeBlock,
   formatLearningAttribution,
+  formatSdkGuidanceAttribution,
   renderFindingEvidenceBlock,
   collectCitedLineText,
   extensionToFenceLang,
@@ -104,6 +105,11 @@ export function renderBodyOnlyFindings(
     // SIG-104 PR-3: the "applied learning" attribution line on a body-only
     // finding too (trust-ledger-gated, like the inline pill above).
     const learningAttribution = trustLedger ? formatLearningAttribution(f) : ""
+    // SIG-298 follow-on: the "applied SDK guidance" attribution line — gated
+    // by the presence of `f.sdkGuidance` itself (stamped only when
+    // OPENCLAW_SDK_PACKS_MODE=on), not by the trust-ledger flag — a separate
+    // feature with its own rollout gate.
+    const sdkGuidanceAttribution = formatSdkGuidanceAttribution(f)
     // Indent the body so it nests under the bullet visually.
     // SIG-465 (founder Image #2): issue prose + code blocks lead; the verbose
     // collapsibles (Detailed reasoning, More Info) render BELOW the code blocks.
@@ -116,6 +122,7 @@ export function renderBodyOnlyFindings(
       detailedReasoning,
       formatFindingMoreInfoMarkdown(f),
       learningAttribution,
+      sdkGuidanceAttribution,
     ].filter((s) => s !== "")
     const bodyLines = detailLines
       .join("\n\n")
@@ -304,6 +311,11 @@ export function formatFindingComment(
   // (the carve-out kept it). Gated behind the trust-ledger flag like the pills.
   const learningAttribution = trustLedger ? formatLearningAttribution(finding) : ""
   if (learningAttribution) lines.push(learningAttribution)
+  // SIG-298 follow-on: the "applied SDK guidance" attribution — gated by the
+  // presence of `finding.sdkGuidance` itself (own rollout gate), not by
+  // trust-ledger.
+  const sdkGuidanceAttribution = formatSdkGuidanceAttribution(finding)
+  if (sdkGuidanceAttribution) lines.push(sdkGuidanceAttribution)
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   const moreInfo = formatFindingMoreInfoMarkdown(finding)

@@ -54,6 +54,8 @@ import type { ReviewMemoryClaimMarkerData, ReviewMemoryClaimType } from "@/src/l
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/src/features/precision-profile"
 import { applyLearningSuppressions } from "./learnings-suppress-prep"
+import { applySdkGuidanceAttribution } from "./sdk-guidance-attribution-prep"
+import type { MatchedSdkPack } from "@/src/lib/sdk-packs"
 import { readReviewManifest, toManifestFinding, type ReviewManifestFinding } from "@/src/lib/review-manifest"
 import { type RouterDecision } from "@/src/lib/ensemble-router"
 import {
@@ -117,6 +119,7 @@ export interface RenderPrepArgs {
   consensusVerdict: PrReviewVerdict
   consensusProvenance: SynthesizerProvenanceFindings
   consensusByIndex: number[]
+  matchedSdkPacks?: MatchedSdkPack[] // SIG-298: packs actually injected, for the attribution gate.
 }
 
 export interface RenderPrepResult {
@@ -163,18 +166,12 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     consensusVerdict,
     consensusProvenance,
     consensusByIndex,
+    matchedSdkPacks = [],
   } = a
   // ─── SIG-216: overview-then-submit ordering ────────────────
-  //
-  // Pre-SIG-216 the overview ran as its own queue job kicked off
-  // by the push webhook and a "Reviewing…" stub was synchronously
-  // posted at webhook time so the review-side wait gate could line
-  // it up ahead of `submitReview`. Founder direction 2026-05-25:
-  // drop the stub-first pattern; the overview comment now lands
-  // immediately BEFORE the review comment in this same handler
-  // invocation, CodeRabbit-style. See `runInlineOverview` below
-  // (called once the submission verdict is final, just before the
-  // pre-submit dismiss + `submitReview`).
+  // The overview comment lands immediately BEFORE the review comment in this
+  // same handler invocation, CodeRabbit-style (see `runInlineOverview` below,
+  // called once the submission verdict is final, just before `submitReview`).
 
   // ─── Submit ────────────────────────────────────────────────
   // GitHub validates every inline anchor and rejects the entire review
@@ -645,6 +642,10 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     consensusProvenance,
     changedPaths: [...reviewable.keys(), ...filesNotReviewed],
   })
+  // SIG-298: strip `[sdk:<packId>]` markers + stamp attribution (pure/sync).
+  // BOTH scopes — a marker must never leak into a body-only comment either.
+  precisionKept = applySdkGuidanceAttribution({ env, owner, repo, prNumber, kept: precisionKept, matchedSdkPacks })
+  applySdkGuidanceAttribution({ env, owner, repo, prNumber, kept: renderableUnanchoredRaw, matchedSdkPacks })
   // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
   // body-only set. PR C's enforce mode can demote a LINE-scoped finding
   // (which carries a real path+line) to the body; without this it would

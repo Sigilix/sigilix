@@ -97,6 +97,21 @@ export function formatLearningAttribution(finding: PrReviewFinding): string {
   return `<sub>shaped by learned rule: "${escapeInlineEvidenceValue(capped)}"</sub>`
 }
 
+/**
+ * SIG-298 follow-on: the inline "applied SDK guidance" attribution line — a
+ * small muted `<sub>` provenance note rendered under a finding the model
+ * self-tagged with a `[sdk:<packId>]` marker (parsed + stripped at
+ * render-prep). Returns "" when the finding carries no attribution. Mirrors
+ * `formatLearningAttribution`'s shape; self-authored guidance from public
+ * docs — the line makes no partner/endorsement claim. Pure — exported for
+ * tests.
+ */
+export function formatSdkGuidanceAttribution(finding: PrReviewFinding): string {
+  const attribution = finding.sdkGuidance
+  if (!attribution) return ""
+  return `<sub>via ${escapeInlineEvidenceValue(attribution.vendor)} SDK guidance — ${escapeInlineEvidenceValue(attribution.docsUrl)}</sub>`
+}
+
 export function sanitizeMoreInfoMarkdownText(s: string): string {
   const htmlSafe = wrapInlineHtmlTags(s)
   return htmlSafe.replace(MARKDOWN_HEADING_LINE_RE, "$1\\$2$3").replace(MARKDOWN_TASK_LIST_LINE_RE, "$1\\$2$3")

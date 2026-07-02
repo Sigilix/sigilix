@@ -8,6 +8,12 @@
 # first).
 name = "sigilix"
 main = "src/index.ts"
+
+# Public API hostname (the sigilix.ai zone is on this Cloudflare account).
+# workers.dev stays active as a legacy/fallback host during the transition.
+routes = [
+  { pattern = "api.sigilix.ai", custom_domain = true }
+]
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 

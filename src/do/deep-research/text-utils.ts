@@ -1,0 +1,156 @@
+// SIG-298 — pure text helpers for the research engine. All original to this
+// repo (NOT adapted from Tongyi DeepResearch): `stripThinking` and
+// `isLowQuality` are written fresh from their functional specs, and the HTML
+// stripper is a deliberately lightweight state-machine so the Worker pulls in
+// no heavy HTML-parsing dependency.
+
+/**
+ * Remove model reasoning/thinking spans from a completion before it is shown or
+ * parsed. Strips paired `<think>…</think>` / `<thinking>…</thinking>` /
+ * `<reasoning>…</reasoning>` blocks (case-insensitive, across newlines). A lone
+ * unmatched OPENING tag (a truncated stream) drops everything from that tag to
+ * the end — reasoning must never leak. A lone CLOSING tag with no opener drops
+ * everything before it (the opener was cut off upstream). Whitespace is
+ * trimmed. Never throws.
+ */
+export function stripThinking(raw: string): string {
+  if (!raw) return ""
+  const tags = ["think", "thinking", "reasoning"]
+  let out = raw
+  for (const tag of tags) {
+    // Paired blocks.
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, "gi"), "")
+    // Unmatched opener → drop to end.
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "gi"), "")
+    // Unmatched closer → drop from start.
+    out = out.replace(new RegExp(`^[\\s\\S]*?</${tag}>`, "gi"), "")
+  }
+  return out.trim()
+}
+
+/** Words that signal a model produced nothing usable this round. */
+const JUNK_MARKERS = [
+  "no relevant information",
+  "no useful information",
+  "nothing relevant",
+  "could not find",
+  "couldn't find",
+  "no results",
+  "not found",
+  "n/a",
+  "none found",
+  "no data",
+  "i don't know",
+  "i do not know",
+  "unable to find",
+]
+
+/**
+ * Heuristic: does this text carry so little information it should count as an
+ * empty/low-quality round? True when the text is empty, too short to hold a
+ * fact, made entirely of junk/boilerplate markers, or has almost no unique
+ * word content (a repeated-token wall). Conservative on purpose — a false
+ * "low quality" only costs one round toward the empty-round kill, and the
+ * `minRounds` floor still protects against stopping too early.
+ */
+export function isLowQuality(text: string): boolean {
+  const trimmed = (text ?? "").trim()
+  if (trimmed.length < 40) return true
+
+  const lower = trimmed.toLowerCase()
+  // Strip junk markers; if what remains is tiny, it was all boilerplate.
+  let stripped = lower
+  for (const marker of JUNK_MARKERS) stripped = stripped.split(marker).join(" ")
+  if (stripped.replace(/[^a-z0-9]+/g, "").length < 24) return true
+
+  // Low lexical diversity → a repeated-token wall carries little information.
+  const words = lower.match(/[a-z0-9]+/g) ?? []
+  if (words.length < 8) return true
+  const unique = new Set(words)
+  if (unique.size / words.length < 0.25) return true
+
+  return false
+}
+
+/** Void HTML elements that never have a closing tag (no inner text to drop). */
+const DROPPED_ELEMENTS = ["script", "style", "noscript", "template", "svg", "head"]
+
+/** Named entities common enough to be worth decoding after tag removal. */
+const ENTITIES: Record<string, string> = {
+  "&nbsp;": " ",
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&mdash;": "—",
+  "&ndash;": "–",
+  "&hellip;": "…",
+}
+
+/**
+ * Strip HTML to readable plain text with a lightweight regex/state-machine
+ * approach — no DOM, no parser dependency. Drops entire `<script>/<style>/…`
+ * subtrees (content and all), removes remaining tags, decodes a small set of
+ * common entities + numeric references, and collapses whitespace. Deterministic
+ * and total; malformed HTML degrades to best-effort text rather than throwing.
+ */
+export function htmlToText(html: string): string {
+  if (!html) return ""
+  let out = html
+
+  // Remove whole subtrees whose text is never content.
+  for (const el of DROPPED_ELEMENTS) {
+    out = out.replace(new RegExp(`<${el}\\b[^>]*>[\\s\\S]*?</${el}>`, "gi"), " ")
+    // Unclosed variant (truncated body) — drop to end of the element open.
+    out = out.replace(new RegExp(`<${el}\\b[^>]*>`, "gi"), " ")
+  }
+
+  // HTML comments.
+  out = out.replace(/<!--[\s\S]*?-->/g, " ")
+  // Turn block-ish boundaries into newlines so text doesn't run together.
+  out = out.replace(/<\/(p|div|section|article|li|tr|h[1-6]|br|header|footer)\s*>/gi, "\n")
+  out = out.replace(/<br\s*\/?>/gi, "\n")
+  // Remove all remaining tags.
+  out = out.replace(/<[^>]+>/g, " ")
+
+  // Decode named entities.
+  for (const [entity, value] of Object.entries(ENTITIES)) {
+    out = out.split(entity).join(value)
+  }
+  // Decode decimal + hex numeric references.
+  out = out.replace(/&#(\d+);/g, (_m, code: string) => safeFromCodePoint(Number.parseInt(code, 10)))
+  out = out.replace(/&#[xX]([0-9a-fA-F]+);/g, (_m, code: string) => safeFromCodePoint(Number.parseInt(code, 16)))
+
+  // Collapse whitespace: trim each line, drop blank runs.
+  return out
+    .split("\n")
+    .map((line) => line.replace(/[ \t\f\v ]+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .join("\n")
+    .trim()
+}
+
+/** Guard `String.fromCodePoint` against NaN / out-of-range references. */
+function safeFromCodePoint(code: number): string {
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return ""
+  try {
+    return String.fromCodePoint(code)
+  } catch {
+    return ""
+  }
+}
+
+/** Extract a page `<title>` (decoded, whitespace-collapsed) or "" if absent. */
+export function extractTitle(html: string): string {
+  const match = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)
+  if (!match || !match[1]) return ""
+  return htmlToText(match[1]).replace(/\s+/g, " ").trim()
+}
+
+/** Hard character cap with an ellipsis marker; used to bound model inputs. */
+export function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  return text.slice(0, maxChars) + "\n…[truncated]"
+}

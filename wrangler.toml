@@ -229,6 +229,13 @@ class_name = "ProviderCooldownDO"
 name = "LINEAR_TOKEN_BROKER"
 class_name = "LinearTokenBroker"
 
+# SIG-298: DeepResearchDO — one DO instance per research run (crypto-random id
+# from POST /v1/research). Owns the research loop + the buffered SSE transcript
+# streamed from GET /v1/research/:id/stream. SQLite-backed.
+[[durable_objects.bindings]]
+name = "DEEP_RESEARCH"
+class_name = "DeepResearchDO"
+
 # SIG-545 B1: agent-runner Container DO (dark; gated by OPENCLAW_AGENT_RUNNER_MODE).
 # One DO instance per runId (idFromName(runId)). The Container is configured here
 # but never dispatched to until the mode flag is flipped. The real Dockerfile and
@@ -337,6 +344,16 @@ new_sqlite_classes = ["AgentRunnerContainer"]
 [[migrations]]
 tag = "sig-144-linear-token-broker-v1"
 new_sqlite_classes = ["LinearTokenBroker"]
+
+# SIG-298: DeepResearchDO — SQLite-backed (new_sqlite_classes; Cloudflare no
+# longer allows newly-created KV-backed DO namespaces). Holds the per-run
+# buffered SSE transcript (evt:<seq>) + run meta. Forward-only.
+# ⚠️ A new-DO migration requires a one-time non-versioned `wrangler deploy`; a
+# subsequent `wrangler versions upload` will err 10211 — do NOT skip the first
+# plain deploy.
+[[migrations]]
+tag = "sig-298-deep-research-v1"
+new_sqlite_classes = ["DeepResearchDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

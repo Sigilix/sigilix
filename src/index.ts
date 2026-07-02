@@ -38,6 +38,7 @@ import { handleVerifyApiRoute } from "@/src/lib/api-verify-route"
 import { handleBlastRadiusApiRoute } from "@/src/lib/api-blast-radius-route"
 import { handleFleetApiRoute } from "@/src/lib/api-fleet-route"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, handleMemoryExtractRoute } from "@/src/lib/agent-memory"
+import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -484,9 +485,33 @@ export default {
       url.pathname === "/v1/keys" ||
       url.pathname.startsWith("/v1/keys/") ||
       url.pathname === "/v1/onboarding" ||
-      url.pathname === "/v1/onboarding/context"
+      url.pathname === "/v1/onboarding/context" ||
+      url.pathname === "/v1/research" ||
+      url.pathname.startsWith("/v1/research/")
     if (request.method === "OPTIONS" && isPortalCorsPath) {
       return handlePortalPreflight(request, env)
+    }
+
+    // SIG-298: deep web research engine. Auth = session OR API key (handled in
+    // the route). CORS'd via portal-cors (the SSE stream body passes through).
+    //   POST /v1/research            → { id }
+    //   GET  /v1/research/:id/stream → SSE transcript (replay-from-start + live)
+    //   POST /v1/research/:id/cancel → cooperative cancel
+    if (request.method === "POST" && url.pathname === "/v1/research") {
+      return withPortalCors(request, await handleResearchCreate(request, env, ctx), env)
+    }
+    if (url.pathname.startsWith("/v1/research/")) {
+      const rest = url.pathname.slice("/v1/research/".length)
+      const streamMatch = /^([^/]+)\/stream$/.exec(rest)
+      if (request.method === "GET" && streamMatch) {
+        const id = decodeURIComponent(streamMatch[1]!)
+        return withPortalCors(request, await handleResearchStream(request, env, ctx, id), env)
+      }
+      const cancelMatch = /^([^/]+)\/cancel$/.exec(rest)
+      if (request.method === "POST" && cancelMatch) {
+        const id = decodeURIComponent(cancelMatch[1]!)
+        return withPortalCors(request, await handleResearchCancel(request, env, ctx, id), env)
+      }
     }
 
     // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
@@ -928,3 +953,6 @@ export { AgentRunnerContainer } from "@/src/do/agent-runner-container"
 // sig-144-linear-token-broker-v1 new_sqlite_classes migration in wrangler.toml.
 // INERT — no caller in this slice.
 export { LinearTokenBroker } from "@/src/do/linear-token-broker"
+
+// SIG-298: DeepResearchDO — deep web research engine (one instance per run).
+export { DeepResearchDO } from "@/src/do/deep-research/deep-research-do"

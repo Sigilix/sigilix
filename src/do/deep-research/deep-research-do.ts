@@ -1,0 +1,231 @@
+// SIG-298 — DeepResearchDO: the Durable Object that runs one deep-research job
+// and streams its transcript over SSE. One DO instance per run (crypto-random
+// id from the route). The DO OWNS the event buffer: every emitted event is
+// appended to an in-memory buffer AND persisted to DO storage (evt:<seq>), so a
+// client that (re)connects to /stream replays the whole transcript from the
+// start and then continues live. Cancellation is cooperative — the loop checks a
+// flag between steps. A cleanup alarm wipes state ~1h after the last activity.
+//
+// Why the DO runs the loop directly (unlike PrReviewRunDO, which defers to a
+// queue): the research loop is IO-bound (model + search + fetch awaits) and
+// bounded by maxTimeMs (5 min) — wall-clock spent awaiting does not burn DO CPU
+// time. The loop is kicked off with ctx.waitUntil so it outlives the /start
+// request while /stream stays concurrently serviceable.
+
+import { DurableObject } from "cloudflare:workers"
+import type { Env } from "@/src/shared/types/env"
+import { runResearchLoop, type EngineDeps } from "./engine"
+import { resolveResearchConfig } from "./config"
+import { buildModelFn } from "./model"
+import { hasAnySearchProvider, searchWeb } from "./search"
+import { fetchPage } from "./fetch-guard"
+import type { ResearchEvent } from "./types"
+
+const META_KEY = "meta"
+const EVENT_PREFIX = "evt:"
+const SEQ_PAD = 12
+
+interface RunMeta {
+  question: string
+  startedAt: number
+  seq: number
+  done: boolean
+  cancelled: boolean
+}
+
+/** Test seam: lets DO-level tests drive the loop with fake IO. Never set in
+ *  production (buildDeps falls back to the real adapters). */
+export type ResearchTestHooks = Partial<Pick<EngineDeps, "model" | "search" | "fetchPage" | "now">>
+
+export class DeepResearchDO extends DurableObject<Env> {
+  /** In-memory authoritative event buffer (mirrors persisted evt:* frames). */
+  private events: string[] = []
+  /** Live SSE subscribers. */
+  private writers = new Set<WritableStreamDefaultWriter<Uint8Array>>()
+  private started = false
+  private cancelled = false
+  private done = false
+  private seq = 0
+  private driveDone: Promise<void> | null = null
+  private hooks: ResearchTestHooks | undefined
+  private readonly encoder = new TextEncoder()
+
+  /** Route the internal DO requests. Matches PrReviewRunDO's fetch-based API. */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (request.method === "POST" && url.pathname === "/start") return this.handleStart(request)
+    if (request.method === "GET" && url.pathname === "/stream") return this.handleStream()
+    if (request.method === "POST" && url.pathname === "/cancel") return this.handleCancel()
+    return json({ error: "not found" }, 404)
+  }
+
+  /** Install test IO hooks (test-only seam; no-op contract in prod). */
+  setTestHooks(hooks: ResearchTestHooks): void {
+    this.hooks = hooks
+  }
+
+  private async handleStart(request: Request): Promise<Response> {
+    if (this.started) return json({ ok: true, alreadyStarted: true })
+    let body: { question?: unknown }
+    try {
+      body = (await request.json()) as { question?: unknown }
+    } catch {
+      return json({ error: "invalid json" }, 400)
+    }
+    const question = typeof body.question === "string" ? body.question.trim() : ""
+    if (!question) return json({ error: "missing question" }, 400)
+
+    this.started = true
+    const meta: RunMeta = { question, startedAt: Date.now(), seq: 0, done: false, cancelled: false }
+    await this.ctx.storage.put(META_KEY, meta)
+    await this.armCleanupAlarm()
+
+    this.driveDone = this.drive(question)
+    // Keep the DO alive while the loop runs, without blocking /stream.
+    this.ctx.waitUntil?.(this.driveDone)
+    return json({ ok: true })
+  }
+
+  private async drive(question: string): Promise<void> {
+    const config = resolveResearchConfig(this.env)
+    const runId = this.ctx.id.toString()
+    const deps: EngineDeps = {
+      question,
+      runId,
+      config,
+      hasSearchProvider: hasAnySearchProvider(this.env),
+      emit: (event) => this.emit(event),
+      model: this.hooks?.model ?? buildModelFn(this.env, config),
+      search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId })),
+      fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId })),
+      isCancelled: () => this.cancelled,
+      now: this.hooks?.now ?? (() => Date.now()),
+    }
+    await runResearchLoop(deps)
+  }
+
+  /** Append an event to the buffer, persist it, and fan it out to live writers. */
+  private async emit(event: ResearchEvent): Promise<void> {
+    const frame = `data: ${JSON.stringify(event)}\n\n`
+    this.events.push(frame)
+    this.seq += 1
+    const key = EVENT_PREFIX + String(this.seq).padStart(SEQ_PAD, "0")
+    await this.ctx.storage.put(key, frame)
+    await this.touchMeta(event)
+    await this.armCleanupAlarm()
+
+    const bytes = this.encoder.encode(frame)
+    for (const writer of [...this.writers]) {
+      try {
+        await writer.write(bytes)
+      } catch {
+        this.writers.delete(writer)
+      }
+    }
+    if (event.type === "done") {
+      this.done = true
+      for (const writer of [...this.writers]) {
+        try {
+          await writer.close()
+        } catch {
+          // already closed / aborted
+        }
+        this.writers.delete(writer)
+      }
+    }
+  }
+
+  private async touchMeta(event: ResearchEvent): Promise<void> {
+    const meta = (await this.ctx.storage.get<RunMeta>(META_KEY)) ?? {
+      question: "",
+      startedAt: Date.now(),
+      seq: 0,
+      done: false,
+      cancelled: false,
+    }
+    meta.seq = this.seq
+    if (event.type === "done") meta.done = true
+    if (this.cancelled) meta.cancelled = true
+    await this.ctx.storage.put(META_KEY, meta)
+  }
+
+  private async handleStream(): Promise<Response> {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+    const writer = writable.getWriter()
+
+    // Hydrate the in-memory buffer from storage on a cold isolate. Guarded so a
+    // concurrent live emit (same isolate) is never clobbered.
+    if (this.events.length === 0) {
+      const loaded = await this.loadPersistedFrames()
+      if (this.events.length === 0) {
+        this.events = loaded.frames
+        this.seq = loaded.seq
+        this.done = loaded.done
+      }
+    }
+
+    // Replay the full transcript synchronously (no await) → no race with emit.
+    for (const frame of this.events) {
+      void writer.write(this.encoder.encode(frame))
+    }
+    if (this.done) {
+      void writer.close()
+    } else {
+      this.writers.add(writer)
+    }
+    return new Response(readable, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+      },
+    })
+  }
+
+  private async handleCancel(): Promise<Response> {
+    if (!this.started) return json({ error: "not started" }, 409)
+    this.cancelled = true
+    const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
+    if (meta) {
+      meta.cancelled = true
+      await this.ctx.storage.put(META_KEY, meta)
+    }
+    return json({ ok: true, cancelled: true })
+  }
+
+  /** Load persisted frames in seq order for cold-isolate replay. */
+  private async loadPersistedFrames(): Promise<{ frames: string[]; seq: number; done: boolean }> {
+    const map = await this.ctx.storage.list<string>({ prefix: EVENT_PREFIX })
+    const frames = [...map.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, v]) => v)
+    const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
+    return { frames, seq: meta?.seq ?? frames.length, done: meta?.done ?? frames.some((f) => f.includes('"done"')) }
+  }
+
+  private async armCleanupAlarm(): Promise<void> {
+    const config = resolveResearchConfig(this.env)
+    await this.ctx.storage.setAlarm(Date.now() + config.cleanupAfterMs)
+  }
+
+  /** Cleanup: wipe all run state ~1h after the last activity. */
+  override async alarm(): Promise<void> {
+    for (const writer of [...this.writers]) {
+      try {
+        await writer.close()
+      } catch {
+        // ignore
+      }
+      this.writers.delete(writer)
+    }
+    if (typeof this.ctx.storage.deleteAll === "function") {
+      await this.ctx.storage.deleteAll()
+    } else {
+      const map = await this.ctx.storage.list()
+      for (const key of map.keys()) await this.ctx.storage.delete(key)
+    }
+  }
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}

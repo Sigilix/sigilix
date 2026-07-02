@@ -552,6 +552,36 @@ export interface Env {
   // the readable CONTROL-vs-TREATMENT number the PR3 inject GO/KILL keys off.
   GRAPH_EXPANSION_METRICS_DO: DurableObjectNamespace
 
+  // ─── SIG-298: deep web research engine ─────────────────────────────
+  // DeepResearchDO — one DO instance per research run (crypto-random id). Owns
+  // the run loop + the buffered SSE transcript. See src/do/deep-research/.
+  DEEP_RESEARCH: DurableObjectNamespace
+  // Termination quad + budgets (all clamped in config.ts; defaults in parens).
+  OPENCLAW_RESEARCH_MAX_ROUNDS?: string // hard round ceiling (8)
+  OPENCLAW_RESEARCH_MAX_TIME_MS?: string // wall-clock ceiling ms (300000)
+  OPENCLAW_RESEARCH_MIN_ROUNDS?: string // floor before stop-check/empty-kill fire (2)
+  OPENCLAW_RESEARCH_MAX_EMPTY_ROUNDS?: string // consecutive empty rounds that kill (2)
+  OPENCLAW_RESEARCH_MAX_QUERIES_PER_ROUND?: string // (4)
+  OPENCLAW_RESEARCH_MAX_PAGES_PER_ROUND?: string // (5)
+  OPENCLAW_RESEARCH_MAX_PARALLEL_FETCHES?: string // (3)
+  OPENCLAW_RESEARCH_TOKEN_BUDGET?: string // run-level token cap (250000)
+  OPENCLAW_RESEARCH_CLEANUP_AFTER_MS?: string // DO cleanup-alarm horizon (3600000)
+  // Per-role model overrides (Astraeus chain for reasoning roles; cheap Boreas
+  // tier for classify/extract). Unset → the defaults in config.ts.
+  OPENCLAW_RESEARCH_PLANNER_MODEL?: string
+  OPENCLAW_RESEARCH_SYNTHESIS_MODEL?: string
+  OPENCLAW_RESEARCH_STOP_CHECK_MODEL?: string
+  OPENCLAW_RESEARCH_FINAL_REPORT_MODEL?: string
+  OPENCLAW_RESEARCH_CLASSIFY_MODEL?: string
+  OPENCLAW_RESEARCH_EXTRACT_MODEL?: string
+  // Search-provider keys — ordered fallback chain (first configured wins).
+  // Unset providers are skipped; all-unset fails fast with an error event.
+  OPENCLAW_TAVILY_API_KEY?: string
+  OPENCLAW_BRAVE_API_KEY?: string
+  OPENCLAW_SERPER_API_KEY?: string
+  OPENCLAW_GOOGLE_PSE_KEY?: string
+  OPENCLAW_GOOGLE_PSE_CX?: string
+
   // SIG-184: runner-evidence ingest (POST /runner/ingest). The GitHub OIDC token
   // IS the auth; these pin what a valid token must attest. Both come from the
   // Sigilix runner repo — until set, the ingest route returns 503.

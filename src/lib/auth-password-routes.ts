@@ -1,7 +1,7 @@
 // Email/password sign-up + login (launch P0 — sig-user-identity).
 //
-//   POST /v1/auth/signup  { email, password, name? }  -> 201 + session cookie
-//   POST /v1/auth/login   { email, password }          -> 200 + session cookie
+//   POST /v1/auth/signup  { email, password, name? }  -> 201, verificationRequired (NO session)
+//   POST /v1/auth/login   { email, password }          -> 200 + session cookie (gated on verified)
 //
 // AUTH-CRITICAL. Never logs an email or password. Passwords are slow-hashed
 // (auth-password.ts) and only the hash is stored (user_credential). Login is a
@@ -10,13 +10,20 @@
 // routes are rate-limited (auth-rate-limit.ts) and require an application/json
 // Content-Type (the CSRF guard for the SameSite=None session cookie).
 //
-// On success each route mints the SAME opaque session as the OAuth flows
-// (createSession) and sets the __Host-sigilix_session cookie, so the portal
-// treats an email/password user identically to a GitHub/Google user.
+// EMAIL VERIFICATION (sig-email-verification): a new email/password account is
+// UNVERIFIED, so signup issues NO session — it mints a single-use token and
+// emails a verify link (fail-soft). Login is GATED on email_verified: an
+// unverified account gets a 403 `email_unverified` (after the password check, so
+// it never leaks existence) carrying the email so the portal can offer a resend.
+// The session that login mints is the SAME opaque session as the OAuth flows
+// (createSession → __Host-sigilix_session), so a verified email/password user is
+// treated identically to a GitHub/Google user. OAuth logins are provider-verified
+// and never route through here, so they are never subject to this gate.
 
 import { createSession, mintSessionId, setSessionCookie } from "./auth-session"
 import { hashPassword, isAcceptablePassword, MIN_PASSWORD_LENGTH, needsRehash, verifyPassword } from "./auth-password"
 import { checkAuthRateLimit, clientIp } from "./auth-rate-limit"
+import { mintAndSendVerification } from "./email-verification"
 import { hasJsonContentType } from "./portal-cors"
 import {
   createPasswordIdentity,
@@ -113,21 +120,29 @@ export async function handleSignupRoute(request: Request, env: Env): Promise<Res
     return json({ error: "email_taken" }, 409)
   }
 
-  const sessionId = mintSessionId()
-  await createSession({
-    kv: env.OPENCLAW_STATE,
-    sessionId,
-    login: result.identity.email ?? email,
-    userId: result.identity.userId,
-    provider: "password",
-    remember: creds.remember,
-    encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    ...(result.identity.email ? { email: result.identity.email } : {}),
-    ...(result.identity.name ? { name: result.identity.name } : {}),
-  })
-  return json({ ok: true, userId: result.identity.userId }, 201, {
-    "set-cookie": setSessionCookie(sessionId, creds.remember),
-  })
+  // A new email/password account is UNVERIFIED. We do NOT issue a session here —
+  // the user must confirm the email first (login is gated on email_verified).
+  // Mint a single-use token + send the verify link. This fails SOFT: a send
+  // outage still leaves the account created and returns emailSent=false so the
+  // portal shows a "resend" affordance (a token was persisted regardless).
+  let emailSent = false
+  try {
+    ;({ emailSent } = await mintAndSendVerification(env, {
+      userId: result.identity.userId,
+      email: result.identity.email ?? email,
+      name: result.identity.name,
+    }))
+  } catch (error) {
+    // A token-store fault must not crash a successful signup — the user can
+    // recover via POST /v1/auth/resend-verification.
+    console.error(
+      JSON.stringify({
+        event: "signup-verify-issue-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+  return json({ ok: true, userId: result.identity.userId, verificationRequired: true, emailSent }, 201)
 }
 
 /** POST /v1/auth/login — verify an email/password credential + mint a session. */
@@ -171,6 +186,15 @@ export async function handleLoginRoute(request: Request, env: Env): Promise<Resp
   const ok = await verifyPassword(creds.password, storedHash ?? DUMMY_HASH)
   if (!identity || !storedHash || !ok) {
     return json({ error: "invalid_credentials" }, 401)
+  }
+
+  // Gate on email verification. An email/password account cannot complete login
+  // until it has confirmed the address (OAuth providers are provider-verified and
+  // never reach this route). We surface a DISTINCT state — only AFTER the password
+  // has been proven correct, so this never leaks whether an address is registered
+  // to an unauthenticated probe — with the email so the portal can offer a resend.
+  if (!identity.emailVerified) {
+    return json({ error: "email_unverified", email: identity.email ?? email }, 403)
   }
 
   // Transparent work-factor upgrade + last-login touch — both best-effort.

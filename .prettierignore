@@ -13,6 +13,10 @@ src/lib/dep-vulns/db
 .claude
 # Golden fixtures + captured eval data are records, not hand-authored code.
 e2e/_golden
+# Email templates are email-client-safe HTML/text that must byte-match the
+# embedded runtime constants in render.ts (render.test.ts enforces the sync);
+# Prettier reformatting would desync them.
+src/lib/email/templates
 # Docs are hand-maintained; config JSON (tsconfig*) carries comments Prettier
 # would strip. The one-shot format targets code (.ts/.mjs/.js).
 *.md

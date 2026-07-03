@@ -92,6 +92,10 @@ export interface Env {
   // access tokens at rest in OPENCLAW_STATE. Rotating this invalidates
   // every active session.
   OPENCLAW_SESSION_ENCRYPTION_KEY?: string
+  // sig-email-verification: Resend API key (secret). Transactional email is sent
+  // From "Sigilix <verify@sigilix.ai>" (verified sending domain). Absent → the
+  // sender fails soft (signup still succeeds; the portal shows a "resend").
+  RESEND_API_KEY?: string
   // Public origin for OAuth callbacks (must match the GitHub App's
   // configured callback URL). Defaults to https://app.sigilix.ai.
   OPENCLAW_BASE_URL?: string

@@ -18,6 +18,7 @@
 import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-consent-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
+import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import type { Env } from "@/src/shared/types/env"
 
@@ -25,10 +26,16 @@ import type { Env } from "@/src/shared/types/env"
 // `.exec()` — matches the two regex literals index.ts used inline.
 const SEAT_PATH_RE = /^\/v1\/org\/([^/]+)\/members\/([^/]+)\/seat$/
 const DATA_CONSENT_PATH_RE = /^\/v1\/org\/([^/]+)\/data-consent$/
+const REVIEW_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/review-config$/
 
-/** True for a path this surface serves — overview, a seat path, or data-consent. */
+/** True for a path this surface serves — overview, seat, data-consent, or review-config. */
 function isOrgPath(pathname: string): boolean {
-  return pathname === "/v1/org/overview" || SEAT_PATH_RE.test(pathname) || DATA_CONSENT_PATH_RE.test(pathname)
+  return (
+    pathname === "/v1/org/overview" ||
+    SEAT_PATH_RE.test(pathname) ||
+    DATA_CONSENT_PATH_RE.test(pathname) ||
+    REVIEW_CONFIG_PATH_RE.test(pathname)
+  )
 }
 
 /**
@@ -62,6 +69,18 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     }
     if (request.method === "POST") {
       return withPortalCors(request, await handleSetDataConsent(request, env, ctx, iid), env)
+    }
+  }
+  // sig-dashboard-review-config: read/write the portal's server-persisted review
+  // config (admin-gated, merged UNDER the committed sigilix.json) — review-config-route.ts
+  const reviewConfigMatch = REVIEW_CONFIG_PATH_RE.exec(url.pathname)
+  if (reviewConfigMatch) {
+    const iid = Number(decodeURIComponent(reviewConfigMatch[1]!))
+    if (request.method === "GET") {
+      return withPortalCors(request, await handleGetReviewConfig(request, env, ctx, iid), env)
+    }
+    if (request.method === "PUT") {
+      return withPortalCors(request, await handleSetReviewConfig(request, env, ctx, iid), env)
     }
   }
   return null

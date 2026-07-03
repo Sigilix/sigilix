@@ -296,6 +296,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       headSha,
       ensembleConfig,
       telemetry,
+      installationId,
     })
     const { fullPrDiff, openPrsForStack, fullDiff, shouldLoadAiInstructions, costControls } = fetched
     let sigilixConfig = fetched.sigilixConfig

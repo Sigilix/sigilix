@@ -32,7 +32,7 @@ import {
   resolveCostControlsConfig,
   type SigilixConfig,
 } from "@/src/lib/sigilix-config"
-import { loadSigilixConfigWithVisibleParseError } from "@/src/lib/sigilix-config-error-comment"
+import { resolveEffectiveSigilixConfig } from "@/src/lib/ensemble/app/context/resolve-effective-config"
 import {
   buildAiInstructionGuidance,
   filterAiInstructionsForChangedPaths,
@@ -110,6 +110,8 @@ export interface FetchDiffAndConfigArgs {
   ensembleConfig: EnsembleConfig
   /** Mutated by reference: the SIG-10 incremental-review telemetry write. */
   telemetry: FetchDiffTelemetry
+  /** sig-dashboard-review-config: installation id → org/repo dashboard config merged UNDER the committed file. */
+  installationId?: number
 }
 
 export interface FetchDiffAndConfigResult {
@@ -168,11 +170,11 @@ export async function fetchDiffAndConfig(a: FetchDiffAndConfigArgs): Promise<Fet
   }
   const fullDiff = diffSelection.diff
 
-  // ARC-174: per-repo `sigilix.json` config, read at the PR head SHA. Always
-  // resolves — a malformed config now surfaces via a visible PR comment
-  // (SIG-107; see `loadSigilixConfigWithVisibleParseError`) but still falls
-  // back to EMPTY_CONFIG. Loaded BEFORE the diff split (ARC-176 pathFilters).
-  const sigilixConfig = await loadSigilixConfigWithVisibleParseError({ env, client, owner, repo, prNumber, headSha })
+  // ARC-174 + sig-dashboard-review-config: EFFECTIVE per-repo config at head SHA —
+  // committed `sigilix.json` (SIG-107 visible parse-error; EMPTY_CONFIG fallback)
+  // merged committed-wins + recall-safe with the portal dashboard config (see
+  // resolve-effective-config.ts). Loaded BEFORE the diff split (ARC-176 pathFilters).
+  const sigilixConfig = await resolveEffectiveSigilixConfig(a)
   const shouldLoadAiInstructions = shouldIngestAiInstructions(
     sigilixConfig.guidance,
     ensembleConfig.flags.ingestAiInstructions,

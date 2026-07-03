@@ -1,0 +1,113 @@
+<!-- ==========================================================================
+  Sigilix — email verification (transactional, sent via Resend).
+
+  Placeholders (replaced by src/lib/email/render.ts — values are pre-escaped):
+    {{name}}         "" when no name, or " FirstName" WITH a leading space,
+                     so "Hi{{name}}," renders as "Hi," or "Hi Ada,"
+    {{verifyUrl}}    HTML-escaped verification link
+    {{expiryHours}}  hours until the link expires
+    {{year}}         current year for the footer
+
+  Email-client constraints: table layout, all layout CSS inline, bgcolor
+  attributes for Outlook, VML bulletproof button. The <style> block is
+  progressive enhancement only (mobile padding + color-scheme).
+
+  Keep byte-identical to VERIFY_EMAIL_HTML_TEMPLATE in ../render.ts —
+  render.test.ts enforces the sync.
+=========================================================================== -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="x-apple-disable-message-reformatting" />
+<meta name="color-scheme" content="dark" />
+<meta name="supported-color-schemes" content="dark" />
+<title>Verify your email for Sigilix</title>
+<!--[if mso]>
+<noscript>
+<xml>
+<o:OfficeDocumentSettings>
+<o:PixelsPerInch>96</o:PixelsPerInch>
+</o:OfficeDocumentSettings>
+</xml>
+</noscript>
+<![endif]-->
+<style type="text/css">
+  :root { color-scheme: dark; supported-color-schemes: dark; }
+  body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+  table { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+  img { border: 0; line-height: 100%; outline: none; text-decoration: none; }
+  @media only screen and (max-width: 480px) {
+    .sx-shell { padding-left: 12px !important; padding-right: 12px !important; }
+    .sx-card { padding-left: 24px !important; padding-right: 24px !important; }
+  }
+</style>
+</head>
+<body style="margin:0;padding:0;word-spacing:normal;background-color:#0b0c10;" bgcolor="#0b0c10">
+  <!-- Preheader: hidden preview line -->
+  <div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">Confirm your email to finish setting up your Sigilix account.&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
+  <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#0b0c10" style="background-color:#0b0c10;">
+    <tr>
+      <td align="center" class="sx-shell" style="padding:40px 16px 48px;">
+        <!--[if mso]><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" align="center"><tr><td><![endif]-->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;width:100%;">
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding:0 0 28px;">
+              <img src="https://sigilix.ai/Sigilix.png" width="44" height="44" alt="Sigilix" style="display:block; border:0;" />
+            </td>
+          </tr>
+          <!-- Card -->
+          <tr>
+            <td bgcolor="#15161b" class="sx-card" style="background-color:#15161b;border:1px solid #2a2b30;border-radius:6px;padding:40px 48px 36px;">
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;font-weight:600;color:#f0f0f2;padding:0 0 12px;">Hi{{name}},</td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:26px;color:#c7c8cd;padding:0 0 28px;">Confirm your email to finish setting up your Sigilix account.</td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:0 0 28px;">
+                    <!--[if mso]>
+                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{verifyUrl}}" style="height:48px;v-text-anchor:middle;width:220px;" arcsize="13%" fillcolor="#f1140d" stroke="f">
+                      <w:anchorlock/>
+                      <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">Verify email</center>
+                    </v:roundrect>
+                    <![endif]-->
+                    <!--[if !mso]><!-->
+                    <a href="{{verifyUrl}}" target="_blank" style="display:inline-block;background-color:#f1140d;color:#ffffff;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:600;line-height:48px;text-align:center;text-decoration:none;width:220px;border-radius:6px;">Verify email</a>
+                    <!--<![endif]-->
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#8a8b91;padding:0 0 28px;word-break:break-all;">or paste this link: <a href="{{verifyUrl}}" target="_blank" style="color:#ff5a54;text-decoration:underline;">{{verifyUrl}}</a></td>
+                </tr>
+                <tr>
+                  <td height="1" bgcolor="#2a2b30" style="background-color:#2a2b30;font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#8a8b91;padding:24px 0 8px;">This link expires in {{expiryHours}} hours.</td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#8a8b91;padding:0;">If you didn't create a Sigilix account, you can safely ignore this email.</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding:28px 8px 0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:20px;color:#5a5b61;">
+              Sigilix &middot; &copy; {{year}} Sigilix, Inc.<br />
+              Questions? Contact <a href="mailto:support@sigilix.ai" style="color:#8a8b91;text-decoration:underline;">support@sigilix.ai</a>
+            </td>
+          </tr>
+        </table>
+        <!--[if mso]></td></tr></table><![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

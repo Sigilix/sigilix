@@ -5,6 +5,8 @@
 //
 //   GET  /v1/org/overview                              → org-overview-route.ts
 //   POST /v1/org/:installationId/members/:login/seat   → org-seat-route.ts
+//   GET  /v1/org/:installationId/data-consent          → data-consent-route.ts
+//   POST /v1/org/:installationId/data-consent          → data-consent-route.ts
 //
 // Both are portal-facing (a DIFFERENT ORIGIN — app.sigilix.ai / localhost:3300
 // drives them over `fetch(…, { credentials: "include" })`), so this surface
@@ -13,6 +15,7 @@
 // withPortalCors (never a `*` origin). The dispatcher returns `null` when
 // nothing under /v1/org/ matches, so index.ts falls through to its own routing.
 
+import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-consent-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
@@ -21,10 +24,11 @@ import type { Env } from "@/src/shared/types/env"
 // Non-global (no `g` flag) so it is safe to reuse for both `.test()` and
 // `.exec()` — matches the two regex literals index.ts used inline.
 const SEAT_PATH_RE = /^\/v1\/org\/([^/]+)\/members\/([^/]+)\/seat$/
+const DATA_CONSENT_PATH_RE = /^\/v1\/org\/([^/]+)\/data-consent$/
 
-/** True for a path this surface serves — the overview endpoint or a seat path. */
+/** True for a path this surface serves — overview, a seat path, or data-consent. */
 function isOrgPath(pathname: string): boolean {
-  return pathname === "/v1/org/overview" || SEAT_PATH_RE.test(pathname)
+  return pathname === "/v1/org/overview" || SEAT_PATH_RE.test(pathname) || DATA_CONSENT_PATH_RE.test(pathname)
 }
 
 /**
@@ -48,6 +52,17 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     const iid = Number(decodeURIComponent(seatMatch[1]!))
     const who = decodeURIComponent(seatMatch[2]!)
     return withPortalCors(request, await handleOrgSeatRoute(request, env, ctx, iid, who), env)
+  }
+  // sig-training-data-consent: read/set the org's model-training consent — data-consent-route.ts
+  const consentMatch = DATA_CONSENT_PATH_RE.exec(url.pathname)
+  if (consentMatch) {
+    const iid = Number(decodeURIComponent(consentMatch[1]!))
+    if (request.method === "GET") {
+      return withPortalCors(request, await handleGetDataConsent(request, env, ctx, iid), env)
+    }
+    if (request.method === "POST") {
+      return withPortalCors(request, await handleSetDataConsent(request, env, ctx, iid), env)
+    }
   }
   return null
 }

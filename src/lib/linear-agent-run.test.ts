@@ -187,6 +187,26 @@ describe("runLinearAgentRun", () => {
     expect(mockCreateComment.mock.calls[0]![0]).toBe(ISSUE_ID)
   })
 
+  // ── sig-free-tier-entitlements: the Linear agent is Pro/Max/Ultra only ──────
+
+  it("entitlements enforce + un-entitled (no platform DB) → no dispatch, posts an upgrade comment", async () => {
+    const env = makeEnv({ OPENCLAW_ENTITLEMENTS_MODE: "enforce" }) // no SIGILIX_PLATFORM_DB → fail-closed
+    await runLinearAgentRun(ISSUE_ID, env)
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    // No sessionId → the upsell lands as a plain issue comment (human-visible).
+    expect(mockCreateComment).toHaveBeenCalledOnce()
+    const [postedIssueId, postedBody] = mockCreateComment.mock.calls[0]!
+    expect(postedIssueId).toBe(ISSUE_ID)
+    expect(postedBody).toContain("Pro feature")
+    expect(postedBody).toContain("app.sigilix.ai")
+  })
+
+  it("entitlements off (default) → gate is a no-op, dispatch still runs", async () => {
+    await runLinearAgentRun(ISSUE_ID, makeEnv()) // no OPENCLAW_ENTITLEMENTS_MODE → off
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+  })
+
   // ── SIG-145: AgentSession completion post (resolves the "Working" spinner) ──
 
   it("AgentSession path: run opened a PR → posts a TERMINAL `response` activity with the PR link, NOT a comment", async () => {

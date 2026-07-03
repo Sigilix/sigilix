@@ -1199,6 +1199,15 @@ export interface Env {
   //   "enforce" — reviews are rejected when a tenant exceeds their rolling-window cap.
   SIGILIX_RATE_LIMIT_MODE?: string
 
+  // sig-free-tier-entitlements: master rollout switch for the paid-only feature
+  // gate (CI-failure triage, the Slack assistant, Linear triage/agent are
+  // Pro/Max/Ultra only). "off" (default/unset/unknown) — NO gating, byte-identical
+  // to pre-entitlements behavior. "shadow" — resolve the plan and LOG what would be
+  // gated, but allow it (validate on live traffic before enforcing). "enforce" —
+  // actually gate an un-entitled installation. Resolved by resolveEntitlementsMode
+  // (@/features/entitlements); ships dark.
+  OPENCLAW_ENTITLEMENTS_MODE?: string
+
   // SIG-343 PR C: platform DB — tenant/repo/usage_ledger + (SIG-38) triage_usage_ledger.
   // Optional so a deploy that hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database

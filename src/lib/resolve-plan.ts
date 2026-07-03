@@ -40,7 +40,7 @@ export function resolvePlanFromEnv(env: Pick<Env, "OPENCLAW_PLAN">): PlanName {
  * user. Async + githubUserId-scoped on purpose so the future per-user billing
  * lookup is a body-only change with no signature churn at any call site.
  */
-export async function resolveUserPlan(env: Pick<Env, "OPENCLAW_PLAN">, _githubUserId: number): Promise<PlanName> {
+export async function resolveUserPlan(env: Pick<Env, "OPENCLAW_PLAN">, _githubUserId?: number): Promise<PlanName> {
   // BILLING SEAM: replace this line with a lookup by `_githubUserId` in the
   // subscription store, falling back to resolvePlanFromEnv(env) when none.
   return resolvePlanFromEnv(env)

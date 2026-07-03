@@ -60,6 +60,20 @@ export async function handleUserProfileGetRoute(request: Request, env: Env, ctx?
   if (!authed) return json({ error: "unauthenticated" }, 401)
 
   const { githubUserId, login } = authed.record
+  if (githubUserId == null) {
+    // Google / email-password users have no GitHub id; user_profile is keyed on
+    // github_user_id, so there's no persisted profile yet — return the session
+    // fallback (TODO: re-key profile on the surrogate userId to cover all providers).
+    const { name, source } = resolveDisplayName(null, authed.record.name, login)
+    const body: ProfileResponse = {
+      display_name: name,
+      display_name_source: source,
+      login,
+      settings: {},
+      plan: await resolveUserPlan(env),
+    }
+    return json(body, 200)
+  }
   // Reads degrade gracefully: a missing binding / no row / D1 fault → null, and
   // we fall back to the GitHub identity. Never a 5xx on the read path.
   const profile = await readUserProfile(env, githubUserId)
@@ -141,9 +155,15 @@ export async function handleUserProfilePatchRoute(
     return json({ error: "no_fields" }, 400)
   }
 
+  const gid = authed.record.githubUserId
+  if (gid == null) {
+    // Profile is keyed on github_user_id; non-GitHub users can't persist one yet.
+    return json({ error: "profile_requires_github" }, 400)
+  }
+
   try {
     await upsertUserProfile(env, {
-      githubUserId: authed.record.githubUserId,
+      githubUserId: gid,
       nowIso: new Date().toISOString(),
       // Only include a field when the caller actually sent it (undefined =
       // "leave unchanged"); exactOptionalPropertyTypes forbids passing undefined.

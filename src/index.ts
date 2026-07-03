@@ -73,12 +73,13 @@ import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleAuthRoutes } from "@/src/lib/auth-routes"
-import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
+import { handleCreateApiKeyRoute, handleListApiKeysRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
 import { handleOrgRoutes } from "@/src/lib/org-routes"
 import { tryHandlePortalAccountRoute } from "@/src/lib/portal-account-routes"
+import { tryHandleAccountRoute } from "@/src/lib/account-routes"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
@@ -516,6 +517,10 @@ export default {
     if (request.method === "POST" && url.pathname === "/v1/keys") {
       return withPortalCors(request, await handleCreateApiKeyRoute(request, env, ctx), env)
     }
+    // sig-settings-backends: list the caller's OWN keys (metadata only, no secret).
+    if (request.method === "GET" && url.pathname === "/v1/keys") {
+      return withPortalCors(request, await handleListApiKeysRoute(request, env, ctx), env)
+    }
     if (request.method === "DELETE" && url.pathname.startsWith("/v1/keys/")) {
       const keyId = decodeURIComponent(url.pathname.slice("/v1/keys/".length))
       if (!keyId) {
@@ -546,6 +551,10 @@ export default {
     // within the size budget; see that file's header.
     const accountResponse = await tryHandlePortalAccountRoute(request, env, ctx, url)
     if (accountResponse) return accountResponse
+    // sig-settings-backends: account controls (delete / export / logout-all).
+    // Self-contained portal-CORS (own preflight + wrapping) like the dispatcher above.
+    const accountControlsResponse = await tryHandleAccountRoute(request, env, ctx, url)
+    if (accountControlsResponse) return accountControlsResponse
     if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
       return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)
     }

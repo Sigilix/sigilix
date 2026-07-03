@@ -16,7 +16,10 @@
 
 import { base64urlEncode } from "@/src/lib/auth-session"
 
-const API_KEY_PREFIX = "sigilix_live_"
+/** The non-secret token TYPE prefix every minted key carries. Shown (alone) as the
+ *  masked stand-in in the keys list — the random tail is never stored, so it can
+ *  never be reconstructed for an existing key. */
+export const API_KEY_PREFIX = "sigilix_live_"
 
 /** Mint a new plaintext API key. Never logged; the caller shows it once. */
 export function mintApiKeyPlaintext(): string {
@@ -30,12 +33,85 @@ export function mintApiKeyPlaintext(): string {
  */
 export async function insertApiKey(
   db: D1Database,
-  args: { id: string; keyHash: string; installationId: number; createdBy: string; nowIso: string },
+  args: {
+    id: string
+    keyHash: string
+    installationId: number
+    createdBy: string
+    nowIso: string
+    name?: string | null
+  },
 ): Promise<void> {
+  // Reference the `name` column (migrations/0009) ONLY when a label is actually
+  // supplied. A null/absent name keeps the original 5-column INSERT, so this
+  // helper still works against a DB that predates 0009 (and no existing caller
+  // that omits `name` needs the new column).
+  if (args.name != null) {
+    await db
+      .prepare(
+        "INSERT INTO api_key (id, key_hash, installation_id, created_by, created_at, name) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .bind(args.id, args.keyHash, args.installationId, args.createdBy, args.nowIso, args.name)
+      .run()
+    return
+  }
   await db
     .prepare("INSERT INTO api_key (id, key_hash, installation_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
     .bind(args.id, args.keyHash, args.installationId, args.createdBy, args.nowIso)
     .run()
+}
+
+/** One api_key row as the portal's list surface shows it — NEVER the hash. */
+export interface ApiKeySummary {
+  id: string
+  name: string | null
+  installationId: number
+  createdAt: string
+  lastUsedAt: string | null
+  revokedAt: string | null
+}
+
+/**
+ * List every api_key MINTED BY `createdBy` (a GitHub user id), newest first. This
+ * is the caller's PERSONAL keys view — scoped to the keys they created, never
+ * another user's. Returns metadata ONLY (id, name, installation, timestamps,
+ * revoked state); the SHA-256 `key_hash` is never selected, so the secret can
+ * never leak through this path. FAILS SOFT — a D1 error yields an empty list
+ * (the portal shows "no keys" rather than a 500 on a read surface).
+ */
+export async function listApiKeysByCreator(db: D1Database, createdBy: string): Promise<ApiKeySummary[]> {
+  try {
+    const { results } = await db
+      .prepare(
+        "SELECT id, name, installation_id, created_at, last_used_at, revoked_at FROM api_key " +
+          "WHERE created_by = ? ORDER BY created_at DESC",
+      )
+      .bind(createdBy)
+      .all<{
+        id: string
+        name: string | null
+        installation_id: number
+        created_at: string
+        last_used_at: string | null
+        revoked_at: string | null
+      }>()
+    return (results ?? []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      installationId: row.installation_id,
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at,
+      revokedAt: row.revoked_at,
+    }))
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "api-key-store-list-by-creator-d1-error",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return []
+  }
 }
 
 /**

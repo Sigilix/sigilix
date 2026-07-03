@@ -1,0 +1,11 @@
+-- sig-settings-backends — add a human LABEL to api_key rows (P1 keys page).
+-- Forward-only; immutable once applied (COMPLIANCE.md §8). Applied via
+-- `wrangler d1 migrations apply <db>` — NOT auto on deploy. Additive only:
+-- a single nullable column on the existing api_key table (migrations/0003), so
+-- every existing row and the current INSERT stay valid (NULL = unnamed key).
+--
+-- `name` is a user-chosen label ("laptop", "CI") shown in the portal API-keys
+-- list so a person can tell their keys apart. It is NOT a secret and never part
+-- of the key material — the plaintext is still only ever returned once at mint
+-- and only its SHA-256 hash is stored (api-key-store.ts).
+ALTER TABLE api_key ADD COLUMN name TEXT;

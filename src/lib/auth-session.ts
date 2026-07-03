@@ -16,6 +16,12 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const STATE_COOKIE = "__Host-sigilix_oauth_state"
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000
+// "Remember me" OFF: a browser-SESSION cookie (no Max-Age → dropped on browser
+// close) backed by a shorter server-side KV TTL. The KV cap is deliberately
+// short so an abandoned/forgotten session on a shared machine cannot be
+// resurrected for weeks; the cookie and this record still expire independently
+// (whichever comes first wins), and logout always revokes both regardless.
+const SESSION_SHORT_TTL_SECONDS = 24 * 60 * 60 // 1 day
 
 export interface SessionRecord {
   login: string
@@ -25,7 +31,37 @@ export interface SessionRecord {
   // it — consumers must fall back to `login`. Not a secret (public profile),
   // so stored plaintext alongside `login`; only the access token is encrypted.
   name?: string
-  githubUserId: number
+  // GitHub numeric user id. Present for GitHub logins; ABSENT for Google /
+  // email-password sessions (sig-user-identity). GitHub-App-install features
+  // (keys, onboarding, org, usage seats) require it and fail closed when it is
+  // absent — see the `githubUserId == null` guards in those routes.
+  githubUserId?: number
+  // The persistent user_identity.user_id (UUID) — the provider-agnostic account
+  // key (migrations/0006). Present on every session minted since
+  // sig-user-identity; absent only on legacy sessions minted before it, whose
+  // consumers fall back to githubUserId. This is the stable subject to prefer.
+  userId?: string
+  // Captured/known email for this account, mirrored onto the session so the
+  // portal can prompt for it (email-capture) without a D1 round-trip. Optional:
+  // a GitHub user with a private email has none until captured.
+  email?: string
+  // Which provider minted this session. Absent on legacy GitHub sessions
+  // (treat as "github").
+  provider?: "github" | "google" | "password"
+  // "Remember me" choice at login. `false` → a browser-session cookie + the
+  // shorter KV TTL (SESSION_SHORT_TTL_SECONDS); anything else (true OR absent)
+  // → the persistent 30-day cookie + TTL. Absent on legacy sessions minted
+  // before this field, which are treated as persistent to preserve their
+  // existing lifetime. Stored so touchSession/setSessionEmail refresh the KV
+  // record under the SAME TTL the session was issued with, never silently
+  // promoting a short session to 30 days.
+  remember?: boolean
+  // AES-GCM ciphertext of the GitHub user-to-server access token. For non-GitHub
+  // sessions there is no GitHub token, so this holds the encryption of an EMPTY
+  // string — decrypt yields "" and any GitHub API call made with it fails the
+  // same way a scope-less token would, which the GitHub-backed routes already
+  // treat as "no data / member" (fail-safe). The field stays a required string
+  // so every existing consumer keeps compiling unchanged.
   encryptedAccessToken: string
   iv: string
   createdAt: number
@@ -117,33 +153,62 @@ export function mintStateNonce(): string {
   return base64urlEncode(crypto.getRandomValues(new Uint8Array(16)))
 }
 
+// ─── session lifetime selection ─────────────────────────────────────
+
+/**
+ * The KV `expirationTtl` (seconds) a session record should be written with.
+ * `remember === false` → the short (browser-session) TTL; true OR absent →
+ * the persistent 30-day TTL. Legacy records (no `remember` field) therefore
+ * keep their original 30-day lifetime unchanged. This single mapping is the
+ * source of truth shared by createSession/touchSession/setSessionEmail AND
+ * mirrors the cookie Max-Age chosen in setSessionCookie, so the cookie can
+ * never outlive its server-side record.
+ */
+export function sessionTtlSeconds(remember: boolean | undefined): number {
+  return remember === false ? SESSION_SHORT_TTL_SECONDS : SESSION_TTL_SECONDS
+}
+
 // ─── session CRUD against KV ────────────────────────────────────────
 
 export async function createSession(args: {
   kv: KVNamespace
   sessionId: string
   login: string
-  githubUserId: number
-  accessToken: string
   encryptionKeyB64url: string
+  // Optional so Google / email-password sessions (which have no GitHub token or
+  // id) can be minted. `accessToken` defaults to "" (encrypts an empty token);
+  // `githubUserId` is omitted for non-GitHub providers.
+  accessToken?: string
+  githubUserId?: number
+  userId?: string
+  email?: string
+  provider?: "github" | "google" | "password"
   name?: string
+  // "Remember me" choice. `false` → browser-session cookie + short KV TTL;
+  // true OR omitted → persistent 30-day cookie + TTL (preserves prior behavior
+  // for any caller that doesn't opt in).
+  remember?: boolean
 }): Promise<SessionRecord> {
-  const { kv, sessionId, login, name, githubUserId, accessToken, encryptionKeyB64url } = args
-  const { ciphertext, iv } = await encryptAccessToken(accessToken, sessionId, encryptionKeyB64url)
+  const { kv, sessionId, login, name, githubUserId, userId, email, provider, remember, encryptionKeyB64url } = args
+  const { ciphertext, iv } = await encryptAccessToken(args.accessToken ?? "", sessionId, encryptionKeyB64url)
   const now = Date.now()
   const record: SessionRecord = {
     login,
-    githubUserId,
     encryptedAccessToken: ciphertext,
     iv,
     createdAt: now,
     lastSeenAt: now,
-    // exactOptionalPropertyTypes: omit the key entirely when absent rather than
-    // set it to `undefined` (keeps the in-memory + JSON-serialized shape aligned).
+    // exactOptionalPropertyTypes: omit each optional key entirely when absent
+    // rather than set it to `undefined` (keeps in-memory + JSON shapes aligned).
+    ...(githubUserId !== undefined ? { githubUserId } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    ...(email !== undefined ? { email } : {}),
+    ...(provider !== undefined ? { provider } : {}),
     ...(name !== undefined ? { name } : {}),
+    ...(remember !== undefined ? { remember } : {}),
   }
   await kv.put(`${SESSION_KV_PREFIX}${sessionId}`, JSON.stringify(record), {
-    expirationTtl: SESSION_TTL_SECONDS,
+    expirationTtl: sessionTtlSeconds(remember),
   })
   return record
 }
@@ -154,18 +219,39 @@ export async function getSession(args: { kv: KVNamespace; sessionId: string }): 
 }
 
 export async function touchSession(args: { kv: KVNamespace; sessionId: string; record: SessionRecord }): Promise<void> {
-  // Sliding 30-day TTL — refresh lastSeenAt + KV TTL on each authenticated
-  // request so an active user never gets logged out at exactly day 30.
-  // Done as fire-and-forget from the request path; the race-window
+  // Sliding TTL — refresh lastSeenAt + KV TTL on each authenticated request so
+  // an active user never gets logged out at exactly the horizon. The horizon
+  // matches how the session was ISSUED (record.remember): a "remember me" OFF
+  // session keeps sliding on the 1-day cap and is never silently promoted to 30
+  // days. Done as fire-and-forget from the request path; the race-window
   // consequence is at most a slightly stale lastSeenAt.
   const updated: SessionRecord = { ...args.record, lastSeenAt: Date.now() }
   await args.kv.put(`${SESSION_KV_PREFIX}${args.sessionId}`, JSON.stringify(updated), {
-    expirationTtl: SESSION_TTL_SECONDS,
+    expirationTtl: sessionTtlSeconds(args.record.remember),
   })
 }
 
 export async function deleteSession(args: { kv: KVNamespace; sessionId: string }): Promise<void> {
   await args.kv.delete(`${SESSION_KV_PREFIX}${args.sessionId}`)
+}
+
+/**
+ * Mirror a just-captured email onto the live session (sig-user-identity email
+ * capture) so /auth/me reflects it without a re-login. Preserves the sliding
+ * TTL. The email is not a secret (the user just typed it into their own portal).
+ */
+export async function setSessionEmail(args: {
+  kv: KVNamespace
+  sessionId: string
+  record: SessionRecord
+  email: string
+}): Promise<void> {
+  const updated: SessionRecord = { ...args.record, email: args.email, lastSeenAt: Date.now() }
+  await args.kv.put(`${SESSION_KV_PREFIX}${args.sessionId}`, JSON.stringify(updated), {
+    // Preserve the session's issued lifetime (see touchSession) — capturing an
+    // email must not extend a "remember me" OFF session to 30 days.
+    expirationTtl: sessionTtlSeconds(args.record.remember),
+  })
 }
 
 // ─── cookie helpers ─────────────────────────────────────────────────
@@ -180,8 +266,8 @@ export function readCookie(request: Request, name: string): string | null {
   return null
 }
 
-export function setSessionCookie(sessionId: string): string {
-  return [
+export function setSessionCookie(sessionId: string, remember = true): string {
+  const parts = [
     `${SESSION_COOKIE}=${sessionId}`,
     "Path=/",
     "HttpOnly",
@@ -213,8 +299,17 @@ export function setSessionCookie(sessionId: string): string {
     // a style nit. The `__Host-` prefix still forces Secure + Path=/ + no
     // Domain regardless of SameSite.
     "SameSite=None",
-    `Max-Age=${SESSION_TTL_SECONDS}`,
-  ].join("; ")
+  ]
+  // "Remember me" ON (default): a PERSISTENT cookie whose Max-Age equals the
+  // 30-day KV record TTL — matched so the cookie never outlives its server-side
+  // session. OFF: NO Max-Age/Expires attribute at all → a browser-SESSION
+  // cookie the browser discards on close, backed by the short KV TTL. Either
+  // way the `__Host-` prefix + HttpOnly + Secure + SameSite=None above are
+  // unchanged, and logout still revokes both sides.
+  if (remember) {
+    parts.push(`Max-Age=${SESSION_TTL_SECONDS}`)
+  }
+  return parts.join("; ")
 }
 
 export function clearSessionCookie(): string {

@@ -67,6 +67,11 @@ export async function handleInstallRedirect(request: Request, env: Env, ctx?: Ex
   if (!authed) {
     return new Response(null, { status: 302, headers: { location: "/auth/github" } })
   }
+  // sig-user-identity: the GitHub App install flow requires a GitHub session.
+  // A Google / email-password user has no github id — send them to link GitHub.
+  if (authed.record.githubUserId == null) {
+    return new Response(null, { status: 302, headers: { location: "/auth/github" } })
+  }
 
   const nonce = crypto.randomUUID()
   const record: SetupStateRecord = { githubUserId: authed.record.githubUserId, createdAt: Date.now() }
@@ -84,6 +89,11 @@ export async function handleSetupRoute(request: Request, env: Env, ctx?: Executi
   const authed = await requireSession(request, env, ctx)
   if (!authed) {
     return new Response("unauthenticated\n", { status: 401 })
+  }
+  // sig-user-identity: setup links a GitHub App install to the GitHub user id —
+  // a non-GitHub session can't complete it. Fail closed.
+  if (authed.record.githubUserId == null) {
+    return new Response("github_account_required\n", { status: 403 })
   }
 
   const url = new URL(request.url)

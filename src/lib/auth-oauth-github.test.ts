@@ -155,6 +155,21 @@ describe("handleGitHubAuthKickoff", () => {
     expect(parsed.redirectAfter).toBeUndefined()
     expect("redirectAfter" in parsed).toBe(false)
   })
+
+  it("carries remember=0 (remember me OFF) into the stored state record", async () => {
+    const kv = makeKV()
+    const req = new Request("https://app.sigilix.ai/auth/github?remember=0")
+    await handleGitHubAuthKickoff(req, env(kv))
+    const parsed = JSON.parse([...kv._store.values()][0]!)
+    expect(parsed.remember).toBe(false)
+  })
+
+  it("omits remember from the state record by default (persistent) so existing records are unchanged", async () => {
+    const kv = makeKV()
+    await handleGitHubAuthKickoff(new Request("https://app.sigilix.ai/auth/github?remember=1"), env(kv))
+    const parsed = JSON.parse([...kv._store.values()][0]!)
+    expect("remember" in parsed).toBe(false)
+  })
 })
 
 describe("handleGitHubAuthCallback", () => {
@@ -235,6 +250,35 @@ describe("handleGitHubAuthCallback", () => {
     expect(record.encryptedAccessToken).toBeTruthy()
     // Plaintext access token is NOT stored.
     expect(sessionEntry![1]).not.toContain("ghu_token")
+  })
+
+  it("remember me OFF (state.remember=false) → browser-session cookie (no Max-Age) + short-TTL record, secure flags intact", async () => {
+    const kv = makeKV({
+      "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now(), remember: false }),
+    })
+    mockGitHubFetch({})
+    const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+    const res = await handleGitHubAuthCallback(req, env(kv))
+    expect(res.status).toBe(302)
+    const sessionCookie = res.headers.getSetCookie().find((c) => c.startsWith("__Host-sigilix_session="))!
+    expect(sessionCookie).not.toContain("Max-Age")
+    expect(sessionCookie).not.toContain("Expires")
+    expect(sessionCookie).toContain("HttpOnly")
+    expect(sessionCookie).toContain("Secure")
+    expect(sessionCookie).toContain("SameSite=None")
+    const record = JSON.parse([...kv._store.entries()].find(([k]) => k.startsWith("auth_session:"))![1])
+    expect(record.remember).toBe(false)
+  })
+
+  it("remember me default (state has no remember) → persistent 30-day session cookie", async () => {
+    const kv = makeKV({
+      "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now() }),
+    })
+    mockGitHubFetch({})
+    const req = callbackReq({ code: "c", state: "nonce-1", cookieNonce: "nonce-1" })
+    const res = await handleGitHubAuthCallback(req, env(kv))
+    const sessionCookie = res.headers.getSetCookie().find((c) => c.startsWith("__Host-sigilix_session="))!
+    expect(sessionCookie).toContain("Max-Age=2592000")
   })
 
   it("captures the GitHub display name into the session record when present", async () => {

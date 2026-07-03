@@ -43,6 +43,10 @@ function extractInstallationId(body: unknown): number | null {
 export async function handleCreateApiKeyRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const authed = await requireSession(request, env, ctx)
   if (!authed) return json({ error: "unauthenticated" }, 401)
+  // sig-user-identity: API keys are minted for a GitHub App installation the
+  // caller is linked to (account_tenant, keyed by github_user_id). A non-GitHub
+  // session has no such link — fail closed.
+  if (authed.record.githubUserId == null) return json({ error: "github_account_required" }, 403)
 
   // CSRF guard (SIG-155 slice 3 — see portal-cors.ts's hasJsonContentType doc
   // comment): required because the session cookie is now SameSite=None.
@@ -92,6 +96,7 @@ export async function handleRevokeApiKeyRoute(
 ): Promise<Response> {
   const authed = await requireSession(request, env, ctx)
   if (!authed) return json({ error: "unauthenticated" }, 401)
+  if (authed.record.githubUserId == null) return json({ error: "github_account_required" }, 403)
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
   const db = env.SIGILIX_PLATFORM_DB
 

@@ -52,15 +52,23 @@ export async function handleAuthMeRoute(request: Request, env: Env, ctx?: Execut
 
   // Identity is nested under `user` (the portal reads `me.data.user.{login,
   // name,role}` — see the portal's setup/api.ts MeResponse). `name` is the
-  // GitHub display name captured at OAuth time, null when the user has none or
-  // for a session minted before that field existed (consumers fall back to
-  // `login`).
+  // display name captured at login, null when the user has none or for a session
+  // minted before that field existed (consumers fall back to `login`).
+  //
+  // sig-user-identity: also surface the persistent identity fields — `userId`
+  // (the provider-agnostic account key), `email` (null until captured; the
+  // portal shows its email-capture step when null), and `provider` (which login
+  // minted this session). githubUserId is null for Google / email-password
+  // sessions.
   return json(
     {
       user: {
         login: authed.record.login,
         name: authed.record.name ?? null,
-        githubUserId: authed.record.githubUserId,
+        githubUserId: authed.record.githubUserId ?? null,
+        userId: authed.record.userId ?? null,
+        email: authed.record.email ?? null,
+        provider: authed.record.provider ?? "github",
         role,
       },
     },

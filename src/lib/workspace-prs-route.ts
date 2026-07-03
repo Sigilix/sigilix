@@ -50,7 +50,12 @@ import { requireSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { readRecentWorkspacePrs, collapseWorkspacePrs, type WorkspacePrSummary } from "@/src/features/tenancy"
+import { resolveGithubAuthors } from "@/src/shared/adapters/github/resolve-authors"
 import type { Env } from "@/src/shared/types/env"
+
+// sig-pr-interface-fixes: re-exported so index.ts imports both workspace-PR
+// handlers on one line (the index god-file is at its max-lines budget).
+export { handleWorkspacePrReviewRoute } from "@/src/lib/workspace-pr-review-route"
 
 const MAX_INSTALLATION_PAGES = 20
 const PER_SECTION_LIMIT = 100
@@ -108,9 +113,23 @@ async function fetchUserInstallationIds(accessToken: string): Promise<number[]> 
   return ids
 }
 
+/** GitHub author identity attached to each PR row — `avatarUrl` is valid for
+ *  EVERY author including bots/apps (the login-based `github.com/<login>.png`
+ *  URL 404s for a `[bot]` login). Resolved via GitHub (resolve-authors.ts) on
+ *  the session path; null-valued on the api-key path (no user token). */
+export interface WorkspacePrAuthor {
+  login: string | null
+  avatar_url: string | null
+  id: number | null
+}
+
+/** A PR row in the response: the collapsed ledger summary plus a resolved
+ *  `author` object. `authorLogin` is kept as a transitional flat field. */
+export type WorkspacePrRow = WorkspacePrSummary & { author: WorkspacePrAuthor }
+
 export interface WorkspacePrsResponse {
-  org: WorkspacePrSummary[]
-  mine: WorkspacePrSummary[]
+  org: WorkspacePrRow[]
+  mine: WorkspacePrRow[]
 }
 
 /** GET /v1/workspace/prs — see file header. */
@@ -119,6 +138,7 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
 
   let scope: number[] | "all"
   let sessionLogin: string | null = null
+  let accessToken: string | null = null
 
   if (authed) {
     if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
@@ -127,9 +147,9 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
     }
     sessionLogin = authed.record.login
 
-    let accessToken: string
+    let token: string
     try {
-      accessToken = await decryptAccessToken(
+      token = await decryptAccessToken(
         { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
         authed.sessionId,
         env.OPENCLAW_SESSION_ENCRYPTION_KEY,
@@ -145,7 +165,8 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
       return json({ error: "workspace_prs_failed" }, 500)
     }
 
-    scope = await fetchUserInstallationIds(accessToken)
+    accessToken = token
+    scope = await fetchUserInstallationIds(token)
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
     if ("response" in apiAuth) return apiAuth.response
@@ -163,10 +184,34 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
     ? collapsed.filter((pr) => pr.authorLogin !== null && pr.authorLogin.toLowerCase() === sessionLogin!.toLowerCase())
     : []
 
+  const orgPage = collapsed.slice(0, PER_SECTION_LIMIT)
+  const minePage = mine.slice(0, PER_SECTION_LIMIT)
+
+  // Enrich every displayed author with GitHub's real identity (avatar + id) so
+  // the portal can render a profile photo — including for bot/app authors,
+  // whose `[bot]` login 404s on the legacy login-based avatar URL. Best-effort
+  // (resolveGithubAuthors is fully fail-soft): a lookup miss / api-key caller
+  // with no token yields a login-only author and the portal shows an initial.
+  const authors = await resolveGithubAuthors(
+    [...orgPage, ...minePage].map((pr) => pr.authorLogin),
+    accessToken,
+  )
+  const attachAuthor = (pr: WorkspacePrSummary): WorkspacePrRow => {
+    const resolved = pr.authorLogin ? authors.get(pr.authorLogin.toLowerCase()) : undefined
+    return {
+      ...pr,
+      author: {
+        login: pr.authorLogin,
+        avatar_url: resolved?.avatarUrl ?? null,
+        id: resolved?.id ?? null,
+      },
+    }
+  }
+
   return json(
     {
-      org: collapsed.slice(0, PER_SECTION_LIMIT),
-      mine: mine.slice(0, PER_SECTION_LIMIT),
+      org: orgPage.map(attachAuthor),
+      mine: minePage.map(attachAuthor),
     } satisfies WorkspacePrsResponse,
     200,
   )

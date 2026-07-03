@@ -105,6 +105,7 @@ describe("readRecentWorkspacePrs", () => {
     if (!result.ok) return
     expect(result.rows.map((r) => r.prNumber)).toEqual([2, 1])
     expect(result.rows[0]).toEqual({
+      installationId: 1,
       repo: "acme/api",
       prNumber: 2,
       headSha: "sha-b",

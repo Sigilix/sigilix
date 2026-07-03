@@ -5,6 +5,7 @@ import { collapseWorkspacePrs, type WorkspacePrLedgerRow } from "./workspace-prs
 
 function row(overrides: Partial<WorkspacePrLedgerRow>): WorkspacePrLedgerRow {
   return {
+    installationId: 1,
     repo: "acme/api",
     prNumber: 1,
     headSha: "sha1",
@@ -19,6 +20,7 @@ describe("collapseWorkspacePrs", () => {
     const result = collapseWorkspacePrs([row({})])
     expect(result).toEqual([
       {
+        installationId: 1,
         repo: "acme/api",
         prNumber: 1,
         headSha: "sha1",

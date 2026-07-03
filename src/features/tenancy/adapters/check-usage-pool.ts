@@ -22,7 +22,7 @@ import {
   resolveUsagePoolCap,
   decideUsagePool,
   USAGE_SESSION_WINDOW_MS,
-  USAGE_WEEKLY_WINDOW_MS,
+  weeklyWindowStartMs,
   type UsageMeterMode,
   type UsagePool,
 } from "@/src/features/tenancy/domain/usage-meters"
@@ -103,8 +103,10 @@ export async function checkUsagePool(
     const scope: { installationId?: number; userKey?: string } = {}
     if (args.installationId !== undefined) scope.installationId = args.installationId
     if (args.userKey !== undefined) scope.userKey = args.userKey
+    // Session = 5h ROLLING; weekly = since the most recent Monday-09:00 UTC anchor
+    // (a FIXED weekly reset, not a rolling 7d — see usage-meters.ts).
     const sinceSession = new Date(args.nowMs - USAGE_SESSION_WINDOW_MS).toISOString()
-    const sinceWeekly = new Date(args.nowMs - USAGE_WEEKLY_WINDOW_MS).toISOString()
+    const sinceWeekly = new Date(weeklyWindowStartMs(args.nowMs)).toISOString()
     const [usedSession, usedWeekly] = await Promise.all([
       readPoolTotal(env, args.pool, scope, sinceSession),
       readPoolTotal(env, args.pool, scope, sinceWeekly),

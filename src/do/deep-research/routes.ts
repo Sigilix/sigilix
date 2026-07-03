@@ -98,16 +98,19 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
 
   // SIG-303: record the chatbot SEAT event (one per started run). event_id = the
   // DO id → idempotent on a retry. Fire-and-forget (fail-open; never fails the run).
-  ctx.waitUntil(
-    appendUsageEvent(env, {
-      meter: "chatbot",
-      installationId: seat.installationId,
-      userKey: seat.userKey,
-      surface: "portal",
-      eventId: id.toString(),
-      nowIso: new Date(now).toISOString(),
-    }),
-  )
+  // mode="off" is a true kill switch — shed the D1 write entirely.
+  if (meterDecision.mode !== "off") {
+    ctx.waitUntil(
+      appendUsageEvent(env, {
+        meter: "chatbot",
+        installationId: seat.installationId,
+        userKey: seat.userKey,
+        surface: "portal",
+        eventId: id.toString(),
+        nowIso: new Date(now).toISOString(),
+      }),
+    )
+  }
 
   return json({ id: id.toString() })
 }

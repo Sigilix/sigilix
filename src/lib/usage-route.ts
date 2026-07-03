@@ -14,7 +14,8 @@
 //   versa. Per-meter `used` is a breakdown; `totals` is the pool aggregate that
 //   enforcement actually gates on (`limit` = the shared pool cap).
 //
-// Windows: 5h rolling (session/burst) AND 7d rolling (weekly, the headline cap).
+// Windows: 5h rolling (session/burst) AND a FIXED weekly window that resets every
+// Monday 09:00 UTC (the headline cap) — weekly resets_at is the next Monday 09:00.
 // Everything is COUNT-based (runs / messages / reviews) — never per-minute/cost.
 //
 // Auth mirrors workspace-prs / org-overview: portal SESSION cookie first
@@ -25,7 +26,7 @@
 import { requireSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
-import { resolveUserRole } from "@/src/lib/resolve-user-role"
+import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import {
   resolveUsageMeterMode,
   resolveUsagePoolCap,
@@ -37,7 +38,8 @@ import {
   ORG_METERS,
   SEAT_METERS,
   USAGE_SESSION_WINDOW_MS,
-  USAGE_WEEKLY_WINDOW_MS,
+  weeklyWindowStartMs,
+  weeklyWindowResetMs,
   USAGE_WINDOW_LABEL,
 } from "@/src/features/tenancy"
 import type { UsageMeter, UsageMeterMode, UsagePool } from "@/src/features/tenancy"
@@ -176,7 +178,15 @@ interface ResolvedScope {
 /**
  * Count one ORG-pool meter for an installation in [since, now]. pr_reviews reads
  * usage_ledger (per-author when `author` is set); linear_triage/slack read
- * usage_events. Returns null on a fault so the row renders honestly (no fake 0).
+ * usage_events. Returns null on a fault; the caller's `cell()` renders that as 0
+ * with the cap (the safe direction — a read fault never inflates usage against a
+ * cap, so it can't wrongly block).
+ *
+ * INTENTIONAL: the `author` drill-down is only meaningful for pr_reviews, whose
+ * usage_ledger.author_login IS a GitHub login. slack rows are user-keyed as
+ * `slack:<id>` (a Slack id, not a GitHub login) and linear_triage rows have a NULL
+ * user_key, so an `author=<github-login>` filter legitimately returns 0 for those
+ * two — org drill-down by GitHub identity is a pr_reviews concept.
  */
 async function readOrgMeter(
   env: Env,
@@ -212,7 +222,12 @@ async function readSeatMeter(env: Env, meter: UsageMeter, seatKey: string, since
   return res.ok ? res.count : null
 }
 
-/** Build a { used, limit, pct } window cell. `used===null` (fault) renders as 0 w/ the cap. */
+/**
+ * Build a { used, limit, pct } window cell. A null `used` (a read fault) collapses
+ * to 0 here — deliberately the SAFE direction: a fault shows 0 usage rather than a
+ * fabricated high number, so a display read can never overstate consumption against
+ * the cap. (Enforcement lives in checkUsagePool, which fails OPEN on the same fault.)
+ */
 function cell(used: number | null, cap: number | null): UsageMeterWindow {
   const u = used ?? 0
   return { used: u, limit: cap, pct: usagePct(u, cap) }
@@ -255,12 +270,16 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     // `?scope=org` (org pool) or `?scope=org&author=<login>` (drill into who
     // triggered org usage) — both ADMIN-only, always the caller's own installation
     // (tenant isolation). A member (or absent param) always falls back to self.
+    // SIG-303: the admin check MUST be scoped to `current` (this installation) via
+    // isAdminOfInstallation — NOT the aggregate resolveUserRole, which returns
+    // "admin" for anyone owning ANY personal install and would let a mere member of
+    // this org read its aggregate + per-developer usage.
     const wantsOrg = url.searchParams.get("scope") === "org"
     const authorParam = url.searchParams.get("author")?.trim() || null
 
     if (wantsOrg && current > 0) {
-      const role = await resolveUserRole(accessToken, session.record.login)
-      if (role === "admin") {
+      const isAdmin = await isAdminOfInstallation(accessToken, session.record.login, current)
+      if (isAdmin) {
         resolved = { scope: "org", installationId: current, seatKey: null, authorFilter: authorParam, account }
       } else {
         // non-admin → own seat (never the org aggregate)
@@ -313,8 +332,10 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   const pool: UsagePool = resolved.scope === "org" ? "org" : "seat"
   const capSession = resolveUsagePoolCap(env, pool, "session")
   const capWeekly = resolveUsagePoolCap(env, pool, "weekly")
+  // Session = 5h ROLLING; weekly = since the most recent Monday-09:00 UTC anchor
+  // (FIXED weekly reset — see usage-meters.ts).
   const sinceSession = new Date(nowMs - USAGE_SESSION_WINDOW_MS).toISOString()
-  const sinceWeekly = new Date(nowMs - USAGE_WEEKLY_WINDOW_MS).toISOString()
+  const sinceWeekly = new Date(weeklyWindowStartMs(nowMs)).toISOString()
 
   const metersOut: Partial<Record<UsageMeter, UsageMeterBars>> = {}
   let sumSession = 0
@@ -375,7 +396,10 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     }
   }
 
-  const windowResets = (windowMs: number): string => new Date(nowMs + windowMs).toISOString()
+  // session: 5h ROLLING → clears by now+5h (upper bound). weekly: FIXED schedule →
+  // the exact NEXT Monday-09:00 UTC boundary (honest "Resets Mon 9:00 AM" label).
+  const sessionResetsAt = new Date(nowMs + USAGE_SESSION_WINDOW_MS).toISOString()
+  const weeklyResetsAt = new Date(weeklyWindowResetMs(nowMs)).toISOString()
 
   const body: UsageResponse = {
     plan,
@@ -383,8 +407,8 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     scope: resolved.scope,
     mode,
     windows: {
-      session: { window_label: USAGE_WINDOW_LABEL.session, resets_at: windowResets(USAGE_SESSION_WINDOW_MS) },
-      weekly: { window_label: USAGE_WINDOW_LABEL.weekly, resets_at: windowResets(USAGE_WEEKLY_WINDOW_MS) },
+      session: { window_label: USAGE_WINDOW_LABEL.session, resets_at: sessionResetsAt },
+      weekly: { window_label: USAGE_WINDOW_LABEL.weekly, resets_at: weeklyResetsAt },
     },
     meters: metersOut,
     totals: {

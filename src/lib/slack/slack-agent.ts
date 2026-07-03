@@ -134,13 +134,16 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
     }
   }
   // Record one slack ORG event per handled mention (fail-open; never throws).
-  await appendUsageEvent(env, {
-    meter: "slack",
-    installationId: primary.installationId,
-    userKey: `slack:${ctx.slackUserId}`,
-    surface: "slack",
-    nowIso: new Date(now).toISOString(),
-  })
+  // mode="off" is a true kill switch — shed the D1 write entirely.
+  if (orgDecision.mode !== "off") {
+    await appendUsageEvent(env, {
+      meter: "slack",
+      installationId: primary.installationId,
+      userKey: `slack:${ctx.slackUserId}`,
+      surface: "slack",
+      nowIso: new Date(now).toISOString(),
+    })
+  }
 
   const memScope: SlackMemoryScope = {
     teamId: scope.teamId,

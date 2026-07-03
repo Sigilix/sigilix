@@ -45,10 +45,11 @@ export {
   ORG_METERS,
   SEAT_METERS,
   DEFAULT_POOL_CAPS,
-  USAGE_WINDOW_MS,
   USAGE_WINDOW_LABEL,
   USAGE_SESSION_WINDOW_MS,
   USAGE_WEEKLY_WINDOW_MS,
+  weeklyWindowStartMs,
+  weeklyWindowResetMs,
 } from "./domain/usage-meters"
 export type { UsagePool, UsageMeter, UsageWindow, UsageEventMeter, UsageMeterMode } from "./domain/usage-meters"
 export { appendUsageEvent } from "./adapters/d1-usage-events"

@@ -5,7 +5,7 @@
 // INDEPENDENT, window-separated, and tenant-isolated. The CORS-preflight test drives
 // the real worker entrypoint to prove the path is registered in isPortalCorsPath.
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handleUsageRoute, type UsageResponse } from "@/src/lib/usage-route"
@@ -172,8 +172,21 @@ function stubGitHubRole(opts: {
 }
 
 const HOUR = 60 * 60 * 1000
+// Pin "now" to a Wednesday noon UTC so the FIXED weekly window (resets Mon 09:00
+// UTC) is deterministic: the anchor is Mon 2026-07-06T09:00Z, and events at
+// now-1h…now-10h all land after it. Only Date is faked (timers stay real so async
+// works). A dedicated test steps back before the anchor to prove the boundary.
+const NOW = new Date("2026-07-08T12:00:00.000Z") // Wednesday
+const MONDAY_ANCHOR = "2026-07-06T09:00:00.000Z"
+const NEXT_MONDAY_ANCHOR = "2026-07-13T09:00:00.000Z"
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(NOW)
+})
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -234,7 +247,7 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
     expect(body.totals.session.limit).toBe(40) // DEFAULT_POOL_CAPS.seat.session
     expect(body.totals.weekly.limit).toBe(200) // DEFAULT_POOL_CAPS.seat.weekly (headline)
     expect(body.windows.session.window_label).toBe("5h")
-    expect(body.windows.weekly.window_label).toBe("7d")
+    expect(body.windows.weekly.window_label).toBe("Mon 9:00")
   })
 
   it("POOL INDEPENDENCE: org-automation events never move a dev's SEAT counters", async () => {
@@ -454,6 +467,98 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
     expect(body.scope).toBe("user") // downgraded to self seat
     expect(Object.keys(body.meters).sort()).toEqual(["chatbot", "coding_agent"])
     expect(body.totals.session.used).toBe(1) // only their own chatbot; org slack excluded
+  })
+
+  it("P1: a MEMBER of org B who owns a PERSONAL install is DENIED org-B scope (scoped admin check)", async () => {
+    // The caller owns a personal install (→ aggregate resolveUserRole would say
+    // "admin"), but is only a MEMBER of org B. The scoped isAdminOfInstallation(B)
+    // must return false → the request is downgraded to the caller's own seat and
+    // org B's aggregate + per-author breakdown are NOT leaked.
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    // Owns personal install id 2; is a plain member (no admin membership) of org B (install id 1).
+    stubGitHubRole({
+      installations: [
+        { id: 2, account: { type: "User", login: "octocat" } },
+        { id: 1, account: { type: "Organization", login: "org-b" } },
+      ],
+      memberships: [{ role: "member", state: "active", organization: { login: "org-b" } }],
+    })
+    await insertTenant(db, 1, "org-b")
+    const now = Date.now()
+    // Org B activity that must stay hidden from this non-admin.
+    await insertEvent(db, {
+      meter: "slack",
+      installationId: 1,
+      userKey: "slack:boss",
+      createdAt: new Date(now - HOUR).toISOString(),
+    })
+    await insertEvent(db, { meter: "chatbot", userKey: "gh:111", createdAt: new Date(now - HOUR).toISOString() })
+
+    const res = await handleUsageRoute(reqWithSession("sess-1", "?scope=org&installationId=1&author=boss"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.scope).toBe("user") // DENIED org scope → downgraded to self seat
+    expect(Object.keys(body.meters).sort()).toEqual(["chatbot", "coding_agent"])
+    expect(body.meters.slack).toBeUndefined() // org meters never returned
+    expect(body.authors).toBeUndefined() // per-author breakdown never returned
+    expect(body.totals.session.used).toBe(1) // only the caller's own chatbot
+  })
+
+  it("ADMIN of the queried org (via active org-admin membership) → org scope granted", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHubRole({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+    })
+    await insertTenant(db, 1, "acme")
+    const now = Date.now()
+    await insertEvent(db, {
+      meter: "slack",
+      installationId: 1,
+      userKey: "slack:U1",
+      createdAt: new Date(now - HOUR).toISOString(),
+    })
+
+    const res = await handleUsageRoute(reqWithSession("sess-1", "?scope=org"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.scope).toBe("org")
+    expect(body.meters.slack!.session.used).toBe(1)
+  })
+
+  it("FIXED weekly reset: an event before this week's Monday-09:00 anchor is not counted; resets_at = next Monday 09:00", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "dev", 555)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubInstallations([{ id: 1 }])
+    await insertTenant(db, 1, "acme")
+    // One event AFTER the Monday anchor (in-window) and one BEFORE it (previous week).
+    await insertEvent(db, { meter: "chatbot", userKey: "gh:555", createdAt: "2026-07-07T10:00:00.000Z" }) // Tue, after Mon 9am
+    await insertEvent(db, { meter: "chatbot", userKey: "gh:555", createdAt: "2026-07-06T08:59:59.000Z" }) // just before Mon 9am → prior week
+
+    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.meters.chatbot!.weekly.used).toBe(1) // only the post-anchor event counts
+    expect(body.windows.weekly.resets_at).toBe(NEXT_MONDAY_ANCHOR)
+    expect(body.windows.weekly.window_label).toBe("Mon 9:00")
+    expect(body.totals.since_weekly).toBe(MONDAY_ANCHOR)
   })
 
   it("enforce mode is reflected in the response `mode`", async () => {

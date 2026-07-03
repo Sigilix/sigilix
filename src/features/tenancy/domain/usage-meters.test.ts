@@ -8,6 +8,8 @@ import {
   usagePct,
   meterPool,
   DEFAULT_POOL_CAPS,
+  weeklyWindowStartMs,
+  weeklyWindowResetMs,
 } from "@/src/features/tenancy/domain/usage-meters"
 import type { Env } from "@/src/shared/types/env"
 
@@ -67,5 +69,37 @@ describe("usagePct", () => {
     expect(usagePct(50, 40)).toBe(100) // clamped
     expect(usagePct(5, null)).toBeNull()
     expect(usagePct(5, 0)).toBeNull()
+  })
+})
+
+describe("weeklyWindowStartMs / weeklyWindowResetMs (fixed Monday 09:00 UTC)", () => {
+  const iso = (ms: number) => new Date(ms).toISOString()
+
+  it("mid-week → the current week's Monday 09:00 UTC and next Monday 09:00 UTC", () => {
+    const wed = Date.parse("2026-07-08T12:00:00.000Z") // Wednesday
+    expect(iso(weeklyWindowStartMs(wed))).toBe("2026-07-06T09:00:00.000Z")
+    expect(iso(weeklyWindowResetMs(wed))).toBe("2026-07-13T09:00:00.000Z")
+  })
+
+  it("Monday BEFORE 09:00 → previous week's Monday (anchor is always <= now)", () => {
+    const monEarly = Date.parse("2026-07-06T08:59:59.000Z")
+    expect(iso(weeklyWindowStartMs(monEarly))).toBe("2026-06-29T09:00:00.000Z")
+  })
+
+  it("Monday exactly at 09:00 → that Monday (inclusive lower bound)", () => {
+    const monNine = Date.parse("2026-07-06T09:00:00.000Z")
+    expect(weeklyWindowStartMs(monNine)).toBe(monNine)
+    expect(iso(weeklyWindowResetMs(monNine))).toBe("2026-07-13T09:00:00.000Z")
+  })
+
+  it("Sunday evening → still the past Monday (start), reset next day", () => {
+    const sun = Date.parse("2026-07-12T20:00:00.000Z") // Sunday
+    expect(iso(weeklyWindowStartMs(sun))).toBe("2026-07-06T09:00:00.000Z")
+    expect(iso(weeklyWindowResetMs(sun))).toBe("2026-07-13T09:00:00.000Z")
+  })
+
+  it("boundaries are exactly 7 days apart (DST-immune UTC)", () => {
+    const t = Date.parse("2026-03-10T00:00:00.000Z") // spans a US DST change in local tz
+    expect(weeklyWindowResetMs(t) - weeklyWindowStartMs(t)).toBe(7 * 24 * 60 * 60 * 1000)
   })
 })

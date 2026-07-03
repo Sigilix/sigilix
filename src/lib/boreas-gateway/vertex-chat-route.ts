@@ -147,16 +147,21 @@ export async function handleVertexChatRoute(
   // Fire-and-forget via waitUntil so metering never adds latency and a ledger
   // fault never fails the request (appendUsageEvent is itself fail-open). The
   // legacy global key (Sigilix-internal) is not a real seat → installation_id 0.
+  // mode="off" is a true kill switch — shed the D1 write entirely. Best-effort by
+  // design: the append is fire-and-forget (never awaited), so under burst a few
+  // events may land just after an admission read — same non-atomic posture as SIG-38.
   const installationId = auth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : auth.caller.installationId
-  ctx.waitUntil(
-    appendUsageEvent(env, {
-      meter: "coding_agent",
-      installationId,
-      userKey: seatKey,
-      surface: "cli",
-      nowIso: new Date(now).toISOString(),
-    }),
-  )
+  if (meterDecision.mode !== "off") {
+    ctx.waitUntil(
+      appendUsageEvent(env, {
+        meter: "coding_agent",
+        installationId,
+        userKey: seatKey,
+        surface: "cli",
+        nowIso: new Date(now).toISOString(),
+      }),
+    )
+  }
 
   // #158: walk the ordered per-model failover chain (Vertex -> Ollama Turbo ->
   // AWS Bedrock scaffold). Model-forcing happens PER LEG inside the chain (each

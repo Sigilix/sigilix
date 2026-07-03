@@ -13,8 +13,9 @@
 // pool, and a seat event never decrements the org pool. Everything is COUNT-based
 // (runs / messages / reviews) — never per-minute or per-cost.
 //
-// Windows: 5h rolling (session/burst) AND 7d rolling (weekly). WEEKLY is the
-// primary/headline cap; the 5h window is the shorter burst guard.
+// Windows: 5h ROLLING (session/burst) AND a FIXED weekly window that resets every
+// Monday 09:00 UTC (NOT rolling 7d). WEEKLY is the primary/headline cap; the 5h
+// window is the shorter burst guard. See weeklyWindowStartMs/ResetMs below.
 //
 // Domain-layer contract: NO env reads beyond the injected flag/override lookups,
 // NO I/O, NO clock, NO network. Mirrors domain/rate-limit.ts conventions.
@@ -42,18 +43,58 @@ export type UsageEventMeter = "slack" | "linear_triage" | "coding_agent" | "chat
 
 // ─── Window constants ──────────────────────────────────────────────────────────
 
-/** 5h rolling burst window (ms) — mirrors RATE_LIMIT_WINDOW_MS deliberately. */
+/** 5h ROLLING burst window (ms) — mirrors RATE_LIMIT_WINDOW_MS deliberately. */
 export const USAGE_SESSION_WINDOW_MS = 18_000_000
-/** 7d rolling weekly window (ms) — the headline cap. */
-export const USAGE_WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
-export const USAGE_WINDOW_MS: Record<UsageWindow, number> = {
-  session: USAGE_SESSION_WINDOW_MS,
-  weekly: USAGE_WEEKLY_WINDOW_MS,
-}
+/**
+ * The WEEKLY window is NOT rolling — it resets on a FIXED weekly schedule:
+ * every Monday 09:00. Weekly usage = events since the most recent Monday-09:00
+ * boundary; it resets (zeroes) at the next Monday 09:00.
+ *
+ * TIMEZONE: UTC — a documented fixed anchor. The Worker has no per-user tz, and a
+ * fixed UTC anchor is deterministic across POPs and immune to DST (a Monday-09:00
+ * UTC boundary is always exactly 7×24h from the next). The portal renders the
+ * `resets_at` instant in the viewer's locale, so "Resets Mon 9:00 AM" stays honest
+ * as a wall-clock label even though the anchor itself is UTC.
+ */
+export const WEEKLY_ANCHOR_DOW_UTC = 1 // Monday (Date.getUTCDay(): 0=Sun … 6=Sat)
+export const WEEKLY_ANCHOR_HOUR_UTC = 9 // 09:00
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Full week length (ms) — the fixed distance between consecutive Monday-09:00 anchors. */
+export const USAGE_WEEKLY_WINDOW_MS = WEEK_MS
+
 export const USAGE_WINDOW_LABEL: Record<UsageWindow, string> = {
   session: "5h",
-  weekly: "7d",
+  weekly: "Mon 9:00",
+}
+
+/**
+ * Epoch-ms of the most recent Monday-09:00 UTC boundary at or before `nowMs` — the
+ * lower bound of the current weekly window. Pure; DST-immune (all-UTC arithmetic).
+ */
+export function weeklyWindowStartMs(nowMs: number): number {
+  const d = new Date(nowMs)
+  const daysSinceMonday = (d.getUTCDay() - WEEKLY_ANCHOR_DOW_UTC + 7) % 7
+  // Date.UTC normalizes a negative/overflowing day-of-month, so month/year roll safely.
+  let anchor = Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() - daysSinceMonday,
+    WEEKLY_ANCHOR_HOUR_UTC,
+    0,
+    0,
+    0,
+  )
+  // If now is earlier in Monday than 09:00 (or the subtraction landed after now),
+  // step back a full week so the anchor is always <= now.
+  if (nowMs < anchor) anchor -= WEEK_MS
+  return anchor
+}
+
+/** Epoch-ms of the NEXT Monday-09:00 UTC boundary strictly after `nowMs` (the weekly reset). */
+export function weeklyWindowResetMs(nowMs: number): number {
+  return weeklyWindowStartMs(nowMs) + WEEK_MS
 }
 
 // ─── Mode flag (shadow by default) ──────────────────────────────────────────────

@@ -64,6 +64,9 @@ export function isGoogleConfigured(env: GoogleOauthEnv): boolean {
 interface StateRecord {
   createdAt: number
   redirectAfter?: string
+  // "Remember me" choice, carried server-side through the OAuth round-trip
+  // (mirrors auth-oauth-github.ts). Absent = persistent default.
+  remember?: boolean
 }
 
 export async function handleGoogleAuthKickoff(request: Request, env: GoogleOauthEnv): Promise<Response> {
@@ -73,11 +76,17 @@ export async function handleGoogleAuthKickoff(request: Request, env: GoogleOauth
   }
 
   const url = new URL(request.url)
+  // Persistent 30-day session unless the login form opted out (`?remember=0`).
+  const remember = url.searchParams.get("remember") !== "0"
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
   const redirectAfter = rawRedirect ? safeRedirectAfter(rawRedirect, baseUrl(env)) : undefined
 
   const nonce = mintStateNonce()
-  const record: StateRecord = redirectAfter ? { createdAt: Date.now(), redirectAfter } : { createdAt: Date.now() }
+  const record: StateRecord = {
+    createdAt: Date.now(),
+    ...(redirectAfter ? { redirectAfter } : {}),
+    ...(remember ? {} : { remember: false }),
+  }
   await env.OPENCLAW_STATE.put(`${GOOGLE_STATE_KV_PREFIX}${nonce}`, JSON.stringify(record), {
     expirationTtl: STATE_TTL_SECONDS,
   })
@@ -200,6 +209,8 @@ export async function handleGoogleAuthCallback(request: Request, env: GoogleOaut
   }
 
   // Mint the SAME session shape as a GitHub login (no GitHub token → default "").
+  // `remember` (default persistent) rode through the single-use KV state record.
+  const remember = stateRaw.remember !== false
   const sessionId = mintSessionId()
   await createSession({
     kv: env.OPENCLAW_STATE,
@@ -207,6 +218,7 @@ export async function handleGoogleAuthCallback(request: Request, env: GoogleOaut
     login: identity.email ?? info.email,
     userId: identity.userId,
     provider: "google",
+    remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.name ? { name: identity.name } : {}),
@@ -217,7 +229,7 @@ export async function handleGoogleAuthCallback(request: Request, env: GoogleOaut
   const finalDest = stateRaw.redirectAfter ? safeRedirectAfter(dest, baseUrl(env)) : dest
 
   const headers = new Headers({ location: finalDest })
-  headers.append("set-cookie", setSessionCookie(sessionId))
+  headers.append("set-cookie", setSessionCookie(sessionId, remember))
   headers.append("set-cookie", clearStateCookie())
   return new Response(null, { status: 302, headers })
 }

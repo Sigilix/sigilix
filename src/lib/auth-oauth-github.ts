@@ -65,6 +65,10 @@ function isMisconfigured(env: AuthOauthEnv): string | null {
 interface StateRecord {
   createdAt: number
   redirectAfter?: string
+  // "Remember me" choice, carried server-side through the OAuth round-trip (the
+  // callback has no other channel to the login form). Absent = persistent
+  // default. Not a secret; lives only in the single-use KV state nonce record.
+  remember?: boolean
 }
 
 export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEnv): Promise<Response> {
@@ -75,6 +79,9 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
   }
 
   const url = new URL(request.url)
+  // Persistent 30-day session unless the login form explicitly opted out
+  // (`?remember=0`). Any other value keeps the persistent default.
+  const remember = url.searchParams.get("remember") !== "0"
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
   // Only validate + store a redirectAfter when the CALLER explicitly asked
   // for one. safeRedirectAfter's own fallback ("/auth/welcome") is for the
@@ -88,8 +95,14 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
   const nonce = mintStateNonce()
   // exactOptionalPropertyTypes: omit the key entirely rather than set it to
   // `undefined` — `JSON.stringify` would drop it anyway, but this keeps the
-  // in-memory shape and the serialized shape identical.
-  const record: StateRecord = redirectAfter ? { createdAt: Date.now(), redirectAfter } : { createdAt: Date.now() }
+  // in-memory shape and the serialized shape identical. `remember` is only
+  // stored when it deviates from the persistent default (i.e. remember=false),
+  // so existing state records are byte-identical unless a user opts out.
+  const record: StateRecord = {
+    createdAt: Date.now(),
+    ...(redirectAfter ? { redirectAfter } : {}),
+    ...(remember ? {} : { remember: false }),
+  }
   await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${nonce}`, JSON.stringify(record), {
     expirationTtl: STATE_TTL_SECONDS,
   })
@@ -313,7 +326,9 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     }
   }
 
-  // 6. Mint session + encrypt token + store.
+  // 6. Mint session + encrypt token + store. `remember` (default persistent)
+  //    was carried from the login form through the single-use KV state record.
+  const remember = stateRaw.remember !== false
   const sessionId = mintSessionId()
   await createSession({
     kv: env.OPENCLAW_STATE,
@@ -322,6 +337,7 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     githubUserId: user.id,
     accessToken,
     provider: "github",
+    remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
     // exactOptionalPropertyTypes: omit each key entirely when absent.
     ...(displayName !== undefined ? { name: displayName } : {}),
@@ -357,7 +373,7 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
   const finalDest = stateRaw.redirectAfter ? safeRedirectAfter(dest, baseUrl(env)) : dest
 
   const headers = new Headers({ location: finalDest })
-  headers.append("set-cookie", setSessionCookie(sessionId))
+  headers.append("set-cookie", setSessionCookie(sessionId, remember))
   headers.append("set-cookie", clearStateCookie())
 
   return new Response(null, { status: 302, headers })

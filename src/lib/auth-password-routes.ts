@@ -42,12 +42,19 @@ function json(body: unknown, status: number, extraHeaders?: HeadersInit): Respon
 // costs the same as a real one — otherwise the timing gap re-opens the oracle.
 const DUMMY_HASH = "pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
-function extractCreds(body: unknown): { email: string; password: string; name: string | null } | null {
+function extractCreds(
+  body: unknown,
+): { email: string; password: string; name: string | null; remember: boolean } | null {
   if (body == null || typeof body !== "object") return null
   const b = body as Record<string, unknown>
   if (typeof b.email !== "string" || typeof b.password !== "string") return null
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 120) : null
-  return { email: b.email, password: b.password, name }
+  // "Remember me": persistent 30-day session unless the client explicitly
+  // opts out with `remember: false`. Any non-boolean (or absent) value keeps
+  // the persistent default, so an older client that never sends the flag is
+  // unaffected.
+  const remember = b.remember !== false
+  return { email: b.email, password: b.password, name, remember }
 }
 
 /** POST /v1/auth/signup — create an email/password account + session. */
@@ -113,11 +120,14 @@ export async function handleSignupRoute(request: Request, env: Env): Promise<Res
     login: result.identity.email ?? email,
     userId: result.identity.userId,
     provider: "password",
+    remember: creds.remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
     ...(result.identity.email ? { email: result.identity.email } : {}),
     ...(result.identity.name ? { name: result.identity.name } : {}),
   })
-  return json({ ok: true, userId: result.identity.userId }, 201, { "set-cookie": setSessionCookie(sessionId) })
+  return json({ ok: true, userId: result.identity.userId }, 201, {
+    "set-cookie": setSessionCookie(sessionId, creds.remember),
+  })
 }
 
 /** POST /v1/auth/login — verify an email/password credential + mint a session. */
@@ -186,9 +196,12 @@ export async function handleLoginRoute(request: Request, env: Env): Promise<Resp
     login: identity.email ?? email,
     userId: identity.userId,
     provider: "password",
+    remember: creds.remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.name ? { name: identity.name } : {}),
   })
-  return json({ ok: true, userId: identity.userId }, 200, { "set-cookie": setSessionCookie(sessionId) })
+  return json({ ok: true, userId: identity.userId }, 200, {
+    "set-cookie": setSessionCookie(sessionId, creds.remember),
+  })
 }

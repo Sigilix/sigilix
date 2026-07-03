@@ -61,6 +61,39 @@ describe("email/password auth routes", () => {
     expect(login.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
   })
 
+  it("remember me OFF → login sets a browser-session cookie (no Max-Age) with secure flags intact", async () => {
+    await handleSignupRoute(
+      jsonReq("https://x/v1/auth/signup", { email: "rm@example.com", password: "a-strong-passphrase" }),
+      env,
+    )
+    const login = await handleLoginRoute(
+      jsonReq("https://x/v1/auth/login", {
+        email: "rm@example.com",
+        password: "a-strong-passphrase",
+        remember: false,
+      }),
+      env,
+    )
+    expect(login.status).toBe(200)
+    const cookie = login.headers.get("set-cookie") ?? ""
+    expect(cookie).toContain("__Host-sigilix_session=")
+    expect(cookie).not.toContain("Max-Age")
+    expect(cookie).not.toContain("Expires")
+    // The short-lived session keeps every existing protection.
+    expect(cookie).toContain("HttpOnly")
+    expect(cookie).toContain("Secure")
+    expect(cookie).toContain("SameSite=None")
+  })
+
+  it("remember me default (flag absent) → persistent 30-day cookie", async () => {
+    const signup = await handleSignupRoute(
+      jsonReq("https://x/v1/auth/signup", { email: "def@example.com", password: "a-strong-passphrase" }),
+      env,
+    )
+    expect(signup.status).toBe(201)
+    expect(signup.headers.get("set-cookie") ?? "").toContain("Max-Age=2592000")
+  })
+
   it("rejects a duplicate signup with 409 email_taken", async () => {
     await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "dup@example.com", password: "passphrase-123" }),

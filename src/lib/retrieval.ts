@@ -23,6 +23,13 @@ const DEFAULT_NAMESPACE = "rubberfit"
 const TOP_K = 6
 const MAX_CHUNK_CHARS = 4_000
 const MAX_TOTAL_CHARS = 18_000
+// Cross-repo context (flag ON only). Per-sibling query depth is shallow so a
+// sibling can't dominate; the folded total is hard-capped so the PR repo's own
+// chunks stay the bulk of the context; sibling scores are down-weighted so the
+// PR repo always ranks highest in the prompt ordering.
+const CROSS_REPO_TOP_K = 3
+const MAX_CROSS_REPO_CHUNKS = 3
+const CROSS_REPO_SCORE_WEIGHT = 0.6
 
 interface VectorizeMatch {
   id: string
@@ -64,6 +71,14 @@ interface RetrievalCtx {
   text: string
   teamKey: string | null
   env: RetrievalEnv
+  /**
+   * Cross-repo context: sibling repo namespaces (same-installation, already
+   * isolation-filtered by `resolveCrossRepoNamespaces`) to fold in as
+   * lower-weighted, hard-capped context alongside the PR repo's own chunks.
+   * Empty / undefined ⇒ unchanged single-repo behavior. This list is trusted
+   * to be tenant-isolated by its producer; retrieval never derives it itself.
+   */
+  crossRepoNamespaces?: string[]
 }
 
 export interface RetrievedChunk {
@@ -79,6 +94,13 @@ export interface RetrievedChunk {
   lineEnd: number
   content: string
   score: number
+  /**
+   * Cross-repo context: the sibling repo namespace this chunk came from when it
+   * was retrieved from a repo OTHER than the PR's own. Unset ⇒ the PR repo. The
+   * prompt formatter surfaces this so the model treats cross-repo snippets as
+   * reference-only (never anchors a finding to a sibling repo's file).
+   */
+  repo?: string
   /** SIG-45: which backend(s) surfaced this chunk. Unset = legacy vector-only. */
   source?: "vector" | "lexical" | "hybrid"
   /** SIG-45: summed reciprocal-rank-fusion score (only set on the hybrid path). */
@@ -167,9 +189,33 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
     return []
   }
 
+  const baseChunks = await queryNamespaceWithVector(ctx.env, namespace, queryVector, hybrid, lexicalPromise)
+
+  // Cross-repo fold (flag ON only). The sibling list is already tenant-isolated
+  // by its producer; here we just fan out the SAME embedding to each sibling
+  // namespace, down-weight, and hard-cap the folded total so the PR repo stays
+  // the weighted-highest bulk of the context. Empty list ⇒ single-repo behavior.
+  const siblings = ctx.crossRepoNamespaces ?? []
+  if (siblings.length === 0) return baseChunks
+  return foldCrossRepoChunks(ctx.env, baseChunks, queryVector, siblings)
+}
+
+/**
+ * Query a SINGLE namespace with an already-embedded vector and return ranked
+ * chunks. Encapsulates the vector query + (optional) hybrid lexical fuse +
+ * manifest enrichment for the PR repo's own namespace. A vector-query failure
+ * soft-fails to the lexical leg (hybrid) or `[]` — the review still runs.
+ */
+async function queryNamespaceWithVector(
+  env: RetrievalEnv,
+  namespace: string,
+  queryVector: number[],
+  hybrid: boolean,
+  lexicalPromise: Promise<LexicalMatch[]>,
+): Promise<RetrievedChunk[]> {
   let result: { matches: VectorizeMatch[] }
   try {
-    result = await ctx.env.OPENCLAW_CODE_INDEX.query(queryVector, {
+    result = await env.OPENCLAW_CODE_INDEX.query(queryVector, {
       topK: TOP_K,
       namespace,
       returnMetadata: "all",
@@ -183,11 +229,11 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
     return []
   }
 
-  const vectorChunks = await enrichWithIndexReference(parseVectorMatches(result.matches), ctx.env, namespace)
+  const vectorChunks = await enrichWithIndexReference(parseVectorMatches(result.matches), env, namespace)
   if (!hybrid) return vectorChunks
 
   const lexical = await lexicalPromise
-  const enrichedLexical = await enrichWithIndexReference(lexicalToChunks(lexical), ctx.env, namespace)
+  const enrichedLexical = await enrichWithIndexReference(lexicalToChunks(lexical), env, namespace)
   const fused = fuseRetrieval(vectorChunks, enrichedLexical, namespace)
   console.log(
     JSON.stringify({
@@ -199,6 +245,56 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
     }),
   )
   return fused.slice(0, TOP_K)
+}
+
+/**
+ * Fetch cross-repo context from the (already isolation-filtered) sibling
+ * namespaces and fold it in AFTER the PR repo's own chunks. Sibling chunks are
+ * vector-only (shallow `CROSS_REPO_TOP_K`), tagged with their origin `repo`,
+ * and down-weighted (`CROSS_REPO_SCORE_WEIGHT`) so the PR repo ranks highest in
+ * the prompt ordering; the folded total is hard-capped at `MAX_CROSS_REPO_CHUNKS`.
+ */
+async function foldCrossRepoChunks(
+  env: RetrievalEnv,
+  baseChunks: RetrievedChunk[],
+  queryVector: number[],
+  siblingNamespaces: string[],
+): Promise<RetrievedChunk[]> {
+  const results = await Promise.all(siblingNamespaces.map((ns) => retrieveSiblingChunks(env, ns, queryVector)))
+  const crossRepo = results
+    .flat()
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_CROSS_REPO_CHUNKS)
+  if (crossRepo.length === 0) return baseChunks
+  console.log(
+    JSON.stringify({
+      event: "pr-review-retrieval-cross-repo",
+      siblings: siblingNamespaces.length,
+      folded: crossRepo.length,
+    }),
+  )
+  return [...baseChunks, ...crossRepo]
+}
+
+/** One sibling namespace, vector-only, tagged + down-weighted. Soft-fails to `[]`. */
+async function retrieveSiblingChunks(
+  env: RetrievalEnv,
+  namespace: string,
+  queryVector: number[],
+): Promise<RetrievedChunk[]> {
+  let result: { matches: VectorizeMatch[] }
+  try {
+    result = await env.OPENCLAW_CODE_INDEX.query(queryVector, {
+      topK: CROSS_REPO_TOP_K,
+      namespace,
+      returnMetadata: "all",
+    })
+  } catch (error) {
+    console.warn("cross-repo retrieval query failed", { error: String(error), namespace })
+    return []
+  }
+  const chunks = await enrichWithIndexReference(parseVectorMatches(result.matches), env, namespace)
+  return chunks.map((c) => ({ ...c, repo: namespace, score: c.score * CROSS_REPO_SCORE_WEIGHT }))
 }
 
 /** Map raw Vectorize matches to RetrievedChunks, carrying the chunk id. */
@@ -356,10 +452,13 @@ export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
         ? `(${c.source}, rrf=${c.rrfScore.toFixed(4)})`
         : `(score=${c.score.toFixed(3)})`
     const freshness = formatFreshnessTag(c)
+    // Cross-repo context: mark the origin repo so the model treats the snippet
+    // as reference-only from ANOTHER repo (never anchors a finding to it).
+    const repoTag = c.repo ? ` [repo=${c.repo}]` : ""
     // SIG-536 (P9): mark a capped snippet so the model knows it's partial — don't infer the
     // rest of the file from a truncated chunk (anti-fabrication).
     const trunc = truncated ? ` [truncated: first ${MAX_CHUNK_CHARS} of ${c.content.length} chars]` : ""
-    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag}${freshness}${trunc} ---\n${slice}`
+    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag}${repoTag}${freshness}${trunc} ---\n${slice}`
     if (total + block.length > MAX_TOTAL_CHARS) break
     parts.push(block)
     total += block.length
@@ -386,11 +485,22 @@ function orderChunksForPrompt(chunks: RetrievedChunk[]): RetrievedChunk[] {
   return chunks
     .map((chunk, index) => ({ chunk, index }))
     .sort((a, b) => {
+      // PR repo weighted highest: the PR's own chunks (no `repo` tag) ALWAYS
+      // order before cross-repo sibling context, regardless of score. This
+      // guarantees the code under review consumes the prompt char budget first
+      // — a high-scoring sibling snippet can never evict a primary-repo chunk.
+      const crossRepoDelta = crossRepoRank(a.chunk) - crossRepoRank(b.chunk)
+      if (crossRepoDelta !== 0) return crossRepoDelta
       const scoreDelta = relevanceScore(b.chunk) - relevanceScore(a.chunk)
       if (Math.abs(scoreDelta) > 0.05) return scoreDelta
       return freshnessRank(a.chunk) - freshnessRank(b.chunk) || a.index - b.index
     })
     .map((entry) => entry.chunk)
+}
+
+/** 0 for the PR's own chunks, 1 for cross-repo sibling context (ordered last). */
+function crossRepoRank(chunk: RetrievedChunk): number {
+  return chunk.repo ? 1 : 0
 }
 
 function relevanceScore(chunk: RetrievedChunk): number {

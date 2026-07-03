@@ -19,6 +19,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "@/src/lib/retrieval"
+import { resolveCrossRepoNamespaces } from "@/src/lib/cross-repo-context"
 import {
   multiCorpusEnabled,
   retrieveMultiCorpus,
@@ -146,6 +147,10 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
     maxCalls: ensembleConfig.tunables.maxRetrieveCallsPerPr,
   })
   const namespace = indexNamespace(owner, repo)
+  // Cross-repo context (flag ON only). Resolved ONCE here with hard tenant
+  // isolation (same-installation siblings from the owner-scoped manifest set);
+  // `[]` when the flag is off (no KV cost) ⇒ unchanged single-repo retrieval.
+  const crossRepoNamespaces = await resolveCrossRepoNamespaces(env, owner, repo)
   const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
   // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
   // retrieval can't silently consume the synth budget. Failure here
@@ -179,7 +184,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
           caller: "specialist:performance",
           query: perfQuery,
           namespace,
-          fetcher: () => retrieveChunks({ text: perfQuery, teamKey: namespace, env }),
+          fetcher: () => retrieveChunks({ text: perfQuery, teamKey: namespace, env, crossRepoNamespaces }),
         }),
       RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
       orchCtrl.signal,
@@ -210,7 +215,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
           caller: "preflight",
           query: preflightQuery,
           namespace,
-          fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env }),
+          fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env, crossRepoNamespaces }),
         }),
       RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
       orchCtrl.signal,
@@ -430,7 +435,9 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
       return mainChunks
     }
     const branchChunks = retrieveBranchChunks(qVec, branchVectors, TOP_K_BRANCH)
-    branchMergeStats[pass] = mainChunks.filter((c) => changedPaths.has(c.path)).length
+    // Cross-repo sibling chunks are exempt from the changed-path tombstone
+    // (see mergeBranchAware), so don't count them as head-overrides either.
+    branchMergeStats[pass] = mainChunks.filter((c) => c.repo === undefined && changedPaths.has(c.path)).length
     return mergeBranchAware(mainChunks, branchChunks, changedPaths)
   }
 

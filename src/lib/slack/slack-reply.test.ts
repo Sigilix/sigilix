@@ -72,10 +72,15 @@ describe("formatSigilixReply", () => {
     expect(result).toContain("This is the answer.")
   })
 
-  it("contains a footer", () => {
+  it("does NOT append a branding footer", () => {
     const result = formatSigilixReply("Some body.")
-    expect(result).toContain("---")
-    expect(result).toContain("Sigilix")
+    expect(result).not.toContain("---")
+    expect(result).not.toContain("powered by your codebase")
+  })
+
+  it("returns the body verbatim when no provenance is provided", () => {
+    const result = formatSigilixReply("Answer here.")
+    expect(result).toBe("Answer here.")
   })
 
   it("does NOT contain the phrase 'slack bot'", () => {
@@ -83,17 +88,9 @@ describe("formatSigilixReply", () => {
     expect(result.toLowerCase()).not.toContain("slack bot")
   })
 
-  it("appends provenance when provided", () => {
-    const result = formatSigilixReply("Answer here.", { provenance: "grounded" })
-    expect(result).toContain("grounded")
-  })
-
-  it("omits provenance suffix when not provided", () => {
-    const result = formatSigilixReply("Answer here.")
-    // Footer ends without extra '·' from provenance
-    const lines = result.split("\n")
-    const footerLine = lines[lines.length - 1]
-    expect(footerLine).not.toMatch(/·\s*$/)
+  it("appends provenance as an italic marker when provided", () => {
+    const result = formatSigilixReply("Answer here.", { provenance: "degraded" })
+    expect(result).toContain("_degraded_")
   })
 
   it("trims leading/trailing whitespace from body", () => {

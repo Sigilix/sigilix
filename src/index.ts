@@ -120,7 +120,7 @@ import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
-import { handleSlackInstall, handleSlackOAuthCallback } from "@/src/lib/slack/slack-install"
+import { handleSlackInstall, handleSlackOAuthCallback, handleSlackInstalled } from "@/src/lib/slack/slack-install"
 import { handleLinearOAuthCallback, handleLinearInstall } from "@/src/lib/linear-agent-oauth"
 
 // Re-export the relocated public symbols so the entry module's export
@@ -450,11 +450,10 @@ export default {
     if (request.method === "POST" && url.pathname === "/slack/events") {
       return handleSlackRequest(request, env, ctx)
     }
-    if (request.method === "GET" && url.pathname === "/slack/install") {
-      return handleSlackInstall(request, env)
-    }
-    if (request.method === "GET" && url.pathname === "/slack/oauth/callback") {
-      return handleSlackOAuthCallback(request, env)
+    if (request.method === "GET") {
+      if (url.pathname === "/slack/install") return handleSlackInstall(request, env)
+      if (url.pathname === "/slack/oauth/callback") return handleSlackOAuthCallback(request, env)
+      if (url.pathname === "/slack/installed") return handleSlackInstalled()
     }
 
     // ─── Phase 5 user OAuth (ARC-163) ────────────────────────────

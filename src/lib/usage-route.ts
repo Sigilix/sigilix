@@ -24,6 +24,7 @@
 // and always tenant-isolated to the caller's own installation. CORS'd in index.ts.
 
 import { requireSession } from "@/src/lib/auth-middleware"
+import { resolvePlanFromEnv, type PlanName } from "@/src/lib/resolve-plan"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
@@ -47,8 +48,9 @@ import type { Env } from "@/src/shared/types/env"
 
 const MAX_INSTALLATION_PAGES = 20
 
-const USAGE_PLANS = ["free", "pro", "max", "ultra", "team", "enterprise"] as const
-type UsagePlan = (typeof USAGE_PLANS)[number]
+// Plan name/type live in resolve-plan.ts (the billing seam) so /v1/usage and
+// /v1/profile can never disagree about a user's plan.
+type UsagePlan = PlanName
 
 /** One window of one meter/total: usage vs the (shared pool) cap. */
 export interface UsageMeterWindow {
@@ -87,11 +89,6 @@ export interface UsageResponse {
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
-}
-
-function resolvePlan(env: Pick<Env, "OPENCLAW_PLAN">): UsagePlan {
-  const raw = env.OPENCLAW_PLAN
-  return (USAGE_PLANS as readonly string[]).includes(raw ?? "") ? (raw as UsagePlan) : "free"
 }
 
 function githubHeaders(accessToken: string): HeadersInit {
@@ -238,7 +235,7 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   const url = new URL(request.url)
   const nowMs = Date.now()
   const mode = resolveUsageMeterMode(env)
-  const plan = resolvePlan(env)
+  const plan = resolvePlanFromEnv(env)
 
   const session = await requireSession(request, env, ctx)
   let resolved: ResolvedScope

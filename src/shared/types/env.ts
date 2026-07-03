@@ -1158,6 +1158,24 @@ export interface Env {
   // Optional so a deploy that hasn't provisioned/migrated D1 stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
 
+  // SIG-303 full usage metering (two independent pools: ORG + SEAT). Own flag +
+  // tunable per-(pool × window) caps, independent of the SIG-38 PR-review gate.
+  //   SIGILIX_USAGE_METER_MODE      "shadow" (default/unknown) | "off" | "enforce".
+  //                                 shadow = record + telemeter, never block; enforce =
+  //                                 block the NEXT run/request over its pool cap.
+  //   SIGILIX_USAGE_CAP_SEAT_SESSION / _WEEKLY   per-dev SEAT pool caps (coding_agent +
+  //                                 chatbot). Integer count; negative = no cap. Unset →
+  //                                 DEFAULT_POOL_CAPS.seat (40 / 5h · 200 / 7d).
+  //   SIGILIX_USAGE_CAP_ORG_SESSION / _WEEKLY    shared ORG pool caps (pr_reviews +
+  //                                 linear_triage + slack). Integer count; negative = no
+  //                                 cap. Unset → DEFAULT_POOL_CAPS.org (20 / 5h · 100 / 7d).
+  // All caps are placeholders the founder / SIG-41 (Stripe) tunes; weekly is the headline.
+  SIGILIX_USAGE_METER_MODE?: string
+  SIGILIX_USAGE_CAP_SEAT_SESSION?: string
+  SIGILIX_USAGE_CAP_SEAT_WEEKLY?: string
+  SIGILIX_USAGE_CAP_ORG_SESSION?: string
+  SIGILIX_USAGE_CAP_ORG_WEEKLY?: string
+
   // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
   // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";
   // absent/invalid OPENCLAW_PER_SEAT_PRICE surfaces perSeatMonthly=null ("billing

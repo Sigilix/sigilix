@@ -9,6 +9,13 @@
 
 import type { JobMessage } from "./job"
 
+// sig-worker-debrand-openclaw: OPENCLAW_ → SIGILIX_ rebrand of the Worker's config
+// vars, secrets, and resource bindings, done BACK-COMPAT. `interface Env` below keeps
+// the legacy `OPENCLAW_<X>` names (the live prod keys) so the ~5,000 existing call
+// sites type-check unchanged. `SigilixAliasEnv` derives the NEW canonical
+// `SIGILIX_<X>` sibling for each — all optional (unset until the founder sets them).
+// `normalizeEnv` (@/src/shared/util/normalize-env) mirrors the two at each entry
+// point, SIGILIX_-preferred with OPENCLAW_ fallback, and returns `NormalizedEnv`.
 export interface Env {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
@@ -1288,3 +1295,17 @@ export interface Env {
   // Fail-closed to "off" (see resolveLinearUnifiedMode in linear.ts).
   OPENCLAW_LINEAR_UNIFIED?: string
 }
+
+// sig-worker-debrand-openclaw: the NEW canonical `SIGILIX_<X>` name for every legacy
+// `OPENCLAW_<X>` binding / var / secret above. Derived from `Env` via key remapping so
+// the ~180 pairs stay in sync automatically — no hand-maintained duplicate list. Every
+// alias is OPTIONAL: it is only present once the founder sets the SIGILIX_ secret / var
+// (or a SIGILIX_ binding is added to wrangler.toml). The value type mirrors the legacy
+// key's (e.g. SIGILIX_CODE_INDEX?: VectorizeIndex, SIGILIX_STATE?: KVNamespace).
+export type SigilixAliasEnv = {
+  [K in keyof Env as K extends `OPENCLAW_${infer Rest}` ? `SIGILIX_${Rest}` : never]?: Env[K]
+}
+
+// The env shape AFTER `normalizeEnv`: the legacy contract PLUS every SIGILIX_ alias.
+// Both names resolve to the same SIGILIX_-preferred value at runtime.
+export type NormalizedEnv = Env & SigilixAliasEnv

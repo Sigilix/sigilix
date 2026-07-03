@@ -11,7 +11,9 @@
 //     before/alongside a `wrangler versions upload` — see infra gotcha 10211.
 
 import { Container } from "@cloudflare/containers"
+import type { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
+import { normalizeEnv } from "@/src/shared/util/normalize-env"
 
 const RUN_RECORD_KEY = "run-record"
 
@@ -38,6 +40,12 @@ export interface AgentRunRecord {
  * Dark: only dispatched when OPENCLAW_AGENT_RUNNER_MODE === "on".
  */
 export class AgentRunnerContainer extends Container<Env> {
+  // sig-worker-debrand-openclaw: SIGILIX_-preferred / OPENCLAW_-fallback env on
+  // `this.env` (see normalize-env.ts). Dark until OPENCLAW_/SIGILIX_ AGENT_RUNNER_MODE=on.
+  constructor(ctx: DurableObject<Env>["ctx"], env: Env) {
+    super(ctx, normalizeEnv(env))
+  }
+
   // Port the in-container HTTP task-runner listens on (POST / → start job).
   override defaultPort = 8080
 

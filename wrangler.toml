@@ -1,11 +1,18 @@
 # Worker name — drives the deploy URL (e.g.
 # `sigilix.<account>.workers.dev`) and is what GitHub / Linear webhook
 # configs point at. Renamed from `openclaw-worker` during the Sigilix
-# rebrand. KV/Queue/Vectorize binding NAMES still use the legacy
-# `OPENCLAW_*` prefix (deferred to a follow-up to avoid churning ~100
-# `env.OPENCLAW_*` references in code in the same PR — bindings are
-# internal, not user-visible, so the visible-surface rebrand can ship
-# first).
+# rebrand.
+#
+# sig-worker-debrand-openclaw: the OPENCLAW_ → SIGILIX_ rebrand of the
+# Worker's KV/Queue/Vectorize BINDINGS is done BACK-COMPAT. Each binding is
+# declared TWICE below — the legacy `OPENCLAW_*` name AND the new `SIGILIX_*`
+# name — both pointing at the SAME underlying Cloudflare resource (same KV
+# namespace id / Vectorize index_name / queue). `normalizeEnv`
+# (src/shared/util/normalize-env.ts) makes code prefer the SIGILIX_ binding and
+# fall back to the OPENCLAW_ one, so nothing breaks whether a deploy has the new
+# binding yet or not. The underlying RESOURCE NAMES (`openclaw-code-index`,
+# `boreas-agent-memory`, the KV namespace, `openclaw-jobs`) are NOT renamed here
+# — that needs create-new + repoint + re-index and is a coordinated follow-up.
 name = "sigilix"
 main = "src/index.ts"
 
@@ -64,6 +71,13 @@ cpu_ms = 300000
 binding = "OPENCLAW_STATE"
 id = "df689379ea6240f7808997a75ceaed7e"
 
+# sig-worker-debrand-openclaw: SIGILIX_ alias for the SAME KV namespace (same id).
+# normalizeEnv prefers this binding, falls back to OPENCLAW_STATE. Do NOT change
+# the id — both names must resolve to the identical namespace so no data is orphaned.
+[[kv_namespaces]]
+binding = "SIGILIX_STATE"
+id = "df689379ea6240f7808997a75ceaed7e"
+
 # Vectorize index for codebase chunks. Embeddings are 768-dim vectors
 # from Cloudflare's @cf/baai/bge-base-en-v1.5, indexed under one
 # namespace per repo (e.g. "rubberfit", "rubberfit-desktop") so
@@ -76,6 +90,14 @@ id = "df689379ea6240f7808997a75ceaed7e"
 binding = "OPENCLAW_CODE_INDEX"
 index_name = "openclaw-code-index"
 
+# sig-worker-debrand-openclaw: SIGILIX_ alias for the SAME Vectorize index.
+# normalizeEnv prefers this binding, falls back to OPENCLAW_CODE_INDEX. The
+# resource `openclaw-code-index` is intentionally NOT renamed here (rename =
+# create-new + re-index, a coordinated follow-up).
+[[vectorize]]
+binding = "SIGILIX_CODE_INDEX"
+index_name = "openclaw-code-index"
+
 # SIG-483: Vectorize index for the local CLI agent's durable per-(user, repo)
 # memories. Same 768-dim BGE embeddings + cosine metric as the code index, but
 # isolated per tenant by the Vectorize namespace `<userId>/<repoId>` lowercased.
@@ -85,6 +107,13 @@ index_name = "openclaw-code-index"
 #   --dimensions=768 --metric=cosine`
 [[vectorize]]
 binding = "OPENCLAW_AGENT_MEMORY_INDEX"
+index_name = "boreas-agent-memory"
+
+# sig-worker-debrand-openclaw: SIGILIX_ alias for the SAME agent-memory Vectorize
+# index. normalizeEnv prefers this binding, falls back to OPENCLAW_AGENT_MEMORY_INDEX.
+# The resource `boreas-agent-memory` is intentionally NOT renamed here.
+[[vectorize]]
+binding = "SIGILIX_AGENT_MEMORY_INDEX"
 index_name = "boreas-agent-memory"
 
 # SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the code
@@ -107,6 +136,14 @@ index_name = "boreas-agent-memory"
 # binding = "OPENCLAW_LEXICAL_INDEX"
 # database_name = "sigilix-lexical-index"
 # database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
+#
+# sig-worker-debrand-openclaw: when this is enabled, ALSO add a SIGILIX_ alias
+# binding (SIGILIX_LEXICAL_INDEX) pointing at the same database_id, matching the
+# dual-binding pattern used for the KV/Vectorize/Queue bindings above.
+# [[d1_databases]]
+# binding = "SIGILIX_LEXICAL_INDEX"
+# database_name = "sigilix-lexical-index"
+# database_id = ""
 
 # SIG-343 PR C: platform store (tenant registry + repo registry + usage ledger).
 # Applied via `wrangler d1 migrations apply sigilix-platform` (NOT auto on deploy).
@@ -138,6 +175,13 @@ binding = "AI"
 # Producer binding — the fetch handler `.send()`s here.
 [[queues.producers]]
 binding = "OPENCLAW_JOBS"
+queue = "openclaw-jobs"
+
+# sig-worker-debrand-openclaw: SIGILIX_ alias producer for the SAME queue.
+# normalizeEnv prefers this binding, falls back to OPENCLAW_JOBS. The queue
+# `openclaw-jobs` is intentionally NOT renamed here.
+[[queues.producers]]
+binding = "SIGILIX_JOBS"
 queue = "openclaw-jobs"
 
 # ARC-190: Durable Object for per-PR review-run state. Spec at

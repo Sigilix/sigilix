@@ -14,6 +14,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
+import { normalizeEnv } from "@/src/shared/util/normalize-env"
 import { runResearchLoop, type EngineDeps } from "./engine"
 import { parseEffort, parseTier, resolveResearchConfig } from "./config"
 import { buildModelFn } from "./model"
@@ -59,6 +60,12 @@ export class DeepResearchDO extends DurableObject<Env> {
   private model: ResearchTier = "astraeus"
   private effort: ResearchEffort = "medium"
   private readonly encoder = new TextEncoder()
+
+  // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
+  // research config + search-provider keys on `this.env` (see normalize-env.ts).
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, normalizeEnv(env))
+  }
 
   /** Route the internal DO requests. Matches PrReviewRunDO's fetch-based API. */
   override async fetch(request: Request): Promise<Response> {

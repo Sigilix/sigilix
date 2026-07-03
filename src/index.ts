@@ -85,6 +85,7 @@ import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
 import { isIndexerEnabled } from "@/src/lib/index-producer"
 import type { Env } from "@/src/shared/types/env"
+import { normalizeEnv } from "@/src/shared/util/normalize-env"
 import type { JobMessage } from "@/src/shared/types/job"
 import {
   admitTenant,
@@ -162,7 +163,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext): Promise<Response> {
+    // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
+    // config, secrets, and bindings once at the entry point (see normalize-env.ts).
+    const env = normalizeEnv(rawEnv)
     const badgeAsset = handleBadgeAssetRoute(request)
     if (badgeAsset) return badgeAsset
 
@@ -603,7 +607,9 @@ export default {
    * the failure is visible in Workers Logs as `dropped` instead of
    * blending into the regular retry chatter.
    */
-  async queue(batch: MessageBatch<JobMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+  async queue(batch: MessageBatch<JobMessage>, rawEnv: Env, ctx: ExecutionContext): Promise<void> {
+    // sig-worker-debrand-openclaw: SIGILIX_-preferred / OPENCLAW_-fallback env (see fetch).
+    const env = normalizeEnv(rawEnv)
     const MAX_RETRIES = 3
     // SIG-455: per-tenant fairness mode. "off" disables admission entirely;
     // "shadow" measures the desired decision but always proceeds; "enforce"
@@ -754,7 +760,9 @@ export default {
    * Failures are swallowed — a transient GitHub/API error must not poison
    * the cron; the next tick retries.
    */
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(_event: ScheduledEvent, rawEnv: Env, ctx: ExecutionContext): Promise<void> {
+    // sig-worker-debrand-openclaw: SIGILIX_-preferred / OPENCLAW_-fallback env (see fetch).
+    const env = normalizeEnv(rawEnv)
     // SIG-287/SIG-114 recall alarm — runs EVERY tick, independent of the
     // indexer gate. Read-only + log-only: scans recent review telemetry for a
     // silently-degraded reviewer (logic missing / synth shutout) and emits a

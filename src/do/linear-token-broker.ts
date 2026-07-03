@@ -32,6 +32,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
+import { normalizeEnv } from "@/src/shared/util/normalize-env"
 import {
   performAgentTokenRefresh,
   resolveAgentOAuthCreds,
@@ -75,6 +76,13 @@ function alert(event: string, fields: Record<string, unknown> = {}): void {
 }
 
 export class LinearTokenBroker extends DurableObject<Env> {
+  // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
+  // Linear agent OAuth creds on `this.env` so a founder-set SIGILIX_ secret applies
+  // inside the broker DO too (see normalize-env.ts).
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, normalizeEnv(env))
+  }
+
   /**
    * In-instance single-flight: concurrent refresh callers dedupe to ONE in-flight
    * POST. Because this DO is a SINGLETON (idFromName("linear-agent")), there is

@@ -31,8 +31,24 @@ export interface ConsentRecord {
  * The KINDS of user data that COULD feed the training corpus. Each maps to a
  * capture surface identified in the data-capture audit. Used as an R2 key
  * segment so a partition can be listed/purged per (installation, kind).
+ *
+ * - `review-finding` — a Sigilix finding paired with its human accept/dismiss
+ *   verdict and any correction reply (the "was Sigilix right" dismissal corpus).
+ * - `learning` — an extracted preference/rule (the org-memory mirror seam).
+ * - `chat` — a portal/agent chat turn.
+ * - `codebase-chunk` — an indexed code chunk.
+ * - `fix-diff` — a before/after edit pair with the verification-oracle verdict
+ *   (the /v1/verify path — the "how a flagged issue got fixed" corpus).
+ * - `agent-trajectory` — an agent-runner task paired with its terminal outcome
+ *   (ticket → PR-opened / no-change / error — the "what worked" corpus).
  */
-export type TrainingRecordKind = "review-finding" | "learning" | "chat" | "codebase-chunk"
+export type TrainingRecordKind =
+  | "review-finding"
+  | "learning"
+  | "chat"
+  | "codebase-chunk"
+  | "fix-diff"
+  | "agent-trajectory"
 
 /**
  * A single record staged for the training corpus. `payload` is arbitrary

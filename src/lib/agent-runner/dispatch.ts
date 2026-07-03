@@ -16,6 +16,7 @@
 import { getContainer } from "@cloudflare/containers"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { resolveAgentRunnerMode, type AgentRunnerEngine } from "@/src/lib/agent-runner/mode"
+import { retainTrainingRecord } from "@/src/lib/training-retention/retain-training"
 import type { AgentRunnerContainer, AgentRunRecord } from "@/src/do/agent-runner-container"
 import type { Env } from "@/src/shared/types/env"
 
@@ -242,6 +243,34 @@ export async function dispatchAgentRun(
           // installationToken and model.key intentionally excluded
         }),
       )
+    }
+
+    // sig-training-retention-wiring (flagged-off). A SUCCESS trajectory — the
+    // ticket that produced a PR (status "opened") — is high-signal "what worked"
+    // data: task → outcome. Offer it to the consent-gated training store for the
+    // target installation. INERT by default: retainTrainingRecord returns
+    // immediately (no record build, no I/O) while SIGILIX_TRAINING_RETENTION_MODE
+    // is off, and even flipped on writes only for a consenting org into the
+    // SEPARATE R2 partition, redacted first. Only the ticket text + terminal
+    // outcome are captured (the installation token and model.key are NEVER
+    // included). Best-effort; never affects the dispatch result.
+    if (outcome?.status === "opened") {
+      await retainTrainingRecord(env, input.installationId, () => ({
+        kind: "agent-trajectory",
+        id: runId,
+        payload: JSON.stringify({
+          ticket: input.ticket,
+          status: outcome.status,
+          ...(outcome.prUrl !== undefined ? { prUrl: outcome.prUrl } : {}),
+        }),
+        meta: {
+          owner: input.owner,
+          repo: input.repo,
+          ticket: input.ticket.identifier,
+          status: outcome.status,
+          engine: packet.engine,
+        },
+      }))
     }
 
     return { runId, dispatched: true, ...(outcome !== undefined ? { outcome } : {}) }

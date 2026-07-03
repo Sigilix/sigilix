@@ -1,0 +1,19 @@
+SIGILIX
+------------------------------------------------------------
+
+Hi{{name}},
+
+Confirm your email to finish setting up your Sigilix account.
+
+Verify your email by opening this link:
+
+{{verifyUrl}}
+
+This link expires in {{expiryHours}} hours.
+
+If you didn't create a Sigilix account, you can safely ignore
+this email.
+
+------------------------------------------------------------
+Sigilix - (c) {{year}} Sigilix, Inc.
+Questions? Contact support@sigilix.ai

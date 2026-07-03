@@ -11,6 +11,7 @@ import {
   findByUserId,
   findOrCreateGoogleIdentity,
   getPasswordHash,
+  markEmailVerified,
   setIdentityEmail,
   upsertGithubIdentity,
 } from "@/src/lib/user-identity-store"
@@ -365,5 +366,52 @@ describe("user-identity-store — cross-provider linking is takeover-safe", () =
     const firstAfter = await findByUserId(db, first.userId)
     expect(firstAfter!.googleSub).toBe("sub-A")
     expect(firstAfter!.email).toBe("twins@corp.com")
+  })
+
+  it("markEmailVerified activates the verified↔verified link: a verified password row gains a same-email Google login", async () => {
+    // Password signup — UNVERIFIED. While unverified, a Google login must NOT
+    // link (fail-closed): it creates a SEPARATE account (email=NULL).
+    const pw = await createPasswordIdentity(db, {
+      email: "activate@corp.com",
+      passwordHash: "pbkdf2-sha256$600000$aa$bb",
+      nowIso: NOW,
+    })
+    const uid = pw.ok ? pw.identity.userId : ""
+    const beforeVerify = await findOrCreateGoogleIdentity(db, {
+      googleSub: "sub-early",
+      email: "activate@corp.com",
+      nowIso: NOW,
+    })
+    expect(beforeVerify.userId).not.toBe(uid) // unverified → deferred, separate account
+    expect(beforeVerify.email).toBeNull()
+
+    // The REAL verification flow flips the password row verified...
+    expect(await markEmailVerified(db, uid, "activate@corp.com")).toBe(true)
+
+    // ...now a fresh Google sub for the same, now-verified address LINKS into the
+    // password account (verified↔verified), non-destructively.
+    const linked = await findOrCreateGoogleIdentity(db, {
+      googleSub: "sub-late",
+      email: "activate@corp.com",
+      nowIso: NOW,
+    })
+    expect(linked.userId).toBe(uid)
+    expect(linked.providers).toEqual(["password", "google"])
+    expect(await getPasswordHash(db, uid)).not.toBeNull() // credential intact
+  })
+
+  it("markEmailVerified is a no-op (returns false) when the row's email changed after minting", async () => {
+    const pw = await createPasswordIdentity(db, {
+      email: "changed@corp.com",
+      passwordHash: "pbkdf2-sha256$600000$aa$bb",
+      nowIso: NOW,
+    })
+    const uid = pw.ok ? pw.identity.userId : ""
+    // A token was minted for changed@corp.com, but the account's email since moved.
+    await setIdentityEmail(db, uid, "moved@corp.com")
+    // Verifying the STALE address must not stamp the current (different) one verified.
+    expect(await markEmailVerified(db, uid, "changed@corp.com")).toBe(false)
+    const after = await findByUserId(db, uid)
+    expect(after!.emailVerified).toBe(false)
   })
 })

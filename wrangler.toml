@@ -155,6 +155,21 @@ database_name = "sigilix-platform"
 database_id = "3b840a0e-e1b0-4cc7-9b8e-f06f7b4981b0"
 migrations_dir = "migrations"
 
+# sig-training-data-consent: the PHYSICALLY SEPARATE, consent-gated training
+# corpus. COMMENTED OUT ON PURPOSE — the bucket is intentionally NOT provisioned
+# at launch, so the SIGILIX_TRAINING_DATA binding is ABSENT and every write to the
+# training store no-ops (retention is impossible even if the master flag were
+# flipped). This is a DIFFERENT binding from every operational store — nothing in
+# the review / learnings / chat / indexing paths references it — so non-consented
+# data has no route in. Provision + uncomment ONLY after the legal prerequisites in
+# src/features/training-consent/README.md are signed off:
+#   1. `wrangler r2 bucket create sigilix-training-data`
+#   2. uncomment the block below and redeploy
+#   3. THEN, and only then, `wrangler secret put SIGILIX_TRAINING_RETENTION_MODE on`
+# [[r2_buckets]]
+# binding = "SIGILIX_TRAINING_DATA"
+# bucket_name = "sigilix-training-data"
+
 # Cloudflare Workers AI binding — used for embedding the issue/comment
 # body at query time. Keeps the embedding model identical between
 # index time (CLI/CI script also calls @cf/baai/bge-base-en-v1.5 via
@@ -504,6 +519,17 @@ OPENCLAW_ORG_MEMORY_APPLY = "on"
 OPENCLAW_CLI_ORG_MEMORY = "on"
 OPENCLAW_MEMORY_DECAY_MODE = "shadow"
 OPENCLAW_REPO_ROLE_CLASSIFY = "on"
+
+# sig-training-data-consent: MASTER kill switch for the consent-gated training
+# corpus. Pinned OFF — the ONLY value that enables retention is the exact string
+# "on", and it must NOT be flipped until the legal prerequisites in
+# src/features/training-consent/README.md (ToS consent language, GDPR/CCPA
+# deletion path, data-processing terms) are signed off AND the R2 bucket above is
+# provisioned. Layered on top of per-org consent (data_learning_consent, migration
+# 0008): even a consenting org retains NOTHING while this is off. Kept as a
+# committed [vars] mode string like the other feature flags; do NOT also
+# `wrangler secret put` the same name (a secret would shadow this value).
+SIGILIX_TRAINING_RETENTION_MODE = "off"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

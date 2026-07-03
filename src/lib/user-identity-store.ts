@@ -5,24 +5,30 @@
 // Google + email/password to ONE account.
 //
 // ACCOUNT-LINKING RULE (security — sig-user-identity P0 fix): a row is resolved
-// by its PROVIDER key (github_user_id / google_sub) FIRST. Email is NOT a
-// cross-provider auto-linking key while email verification is stubbed, because
-// an email can be written by an UNVERIFIED path (password signup, email-capture,
-// a GitHub-provided address) — treating it as a merge key let an attacker seed a
-// victim's email onto their own row and have the victim's later VERIFIED login
-// silently merge in (account takeover). So:
+// by its PROVIDER key (github_user_id / google_sub) FIRST. Email is NEVER a
+// cross-provider auto-linking key UNLESS both sides are VERIFIED, because an
+// email can be written by an UNVERIFIED path (password signup, email-capture, a
+// GitHub-provided address) — treating an unverified address as a merge key let
+// an attacker seed a victim's email onto their own row and have the victim's
+// later VERIFIED login silently merge in (account takeover). So:
 //   - GitHub login (email UNVERIFIED): resolve by github_user_id ONLY; never
 //     link into, or collide with, an email another row holds.
 //   - Google login (email VERIFIED by Google): resolve by google_sub; only link
 //     into a pre-existing email row when that row's email is ALREADY verified
-//     (email_verified=1) AND that row carries no rival google_sub. Otherwise
-//     linking is DEFERRED, NON-DESTRUCTIVELY: if an UNVERIFIED row (or a verified
-//     row under a DIFFERENT google_sub) holds the email, the Google login gets its
-//     OWN separate row carrying email=NULL — the pre-existing row keeps its email
-//     AND its password credential fully intact. Nobody is revoked or orphaned; the
-//     two accounts coexist until an explicit verified link/merge flow ships.
-//   - password signup / email-capture: store the email UNVERIFIED + non-linking.
-// Cross-provider linking by email returns once a real verification flow ships.
+//     (email_verified=1) AND that row carries no rival google_sub — i.e. a
+//     VERIFIED↔VERIFIED link. Now that the email/password verification flow ships
+//     (auth-verify-email-routes.ts → markEmailVerified), a password row CAN reach
+//     email_verified=1 with google_sub NULL, so this link is a LIVE, intended
+//     path (previously only a Google row set the flag, and that always carried a
+//     google_sub, so the branch was dormant). Otherwise — an UNVERIFIED row, or a
+//     verified row under a DIFFERENT google_sub — linking is DEFERRED,
+//     NON-DESTRUCTIVELY: the Google login gets its OWN separate row carrying
+//     email=NULL; the pre-existing row keeps its email AND its password credential
+//     fully intact. Nobody is revoked or orphaned.
+//   - password signup / email-capture: store the email UNVERIFIED + non-linking
+//     until the user proves ownership via the verify link.
+// Cross-provider linking by email is ACTIVE only for the verified↔verified case;
+// unverified emails remain fail-closed (never a linking key).
 //
 // Fail-direction:
 //   - `upsertGithubIdentity` is BEST-EFFORT — a GitHub OAuth login has already
@@ -392,6 +398,26 @@ export async function setIdentityEmail(db: D1Database, userId: string, email: st
 /** Best-effort last_login_at touch (login already succeeded — a failure is non-fatal). */
 export async function touchLastLogin(db: D1Database, userId: string, nowIso: string): Promise<void> {
   await db.prepare("UPDATE user_identity SET last_login_at = ? WHERE user_id = ?").bind(nowIso, userId).run()
+}
+
+/**
+ * Flip email_verified=1 for `userId` — but ONLY while the row's current email
+ * still equals the address the verify token was minted for. Returns true when a
+ * row was updated, false when nothing matched (the email changed after the link
+ * was sent, or the user is gone) so the caller can treat a mismatch as an
+ * invalid verification and issue no session. Binding the email is the guard that
+ * keeps a stale token from stamping a DIFFERENT address as verified (that address
+ * would otherwise become a cross-provider linking target — see the module docs).
+ * FAILS CLOSED (throws on a D1 fault; the verify route degrades to an error page).
+ */
+export async function markEmailVerified(db: D1Database, userId: string, email: string): Promise<boolean> {
+  const norm = normalizeEmail(email)
+  if (!norm) return false
+  const res = await db
+    .prepare("UPDATE user_identity SET email_verified = 1 WHERE user_id = ? AND email = ?")
+    .bind(userId, norm)
+    .run()
+  return (res.meta?.changes ?? 0) >= 1
 }
 
 // ─── password credential (email/password sign-up + login) ───────────────────

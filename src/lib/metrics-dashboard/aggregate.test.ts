@@ -7,6 +7,8 @@ import {
   reviewerTimeSavedHours,
   roleToCategory,
   scoreToSeverity,
+  bandToolFindings,
+  toolFindingKind,
   MIN_PER_COMMENT,
   type PostedFinding,
 } from "@/src/lib/metrics-dashboard/aggregate"
@@ -102,5 +104,40 @@ describe("avgReviewIterationsPerPr", () => {
     expect(avgReviewIterationsPerPr(10, 4)).toBe(2.5)
     expect(avgReviewIterationsPerPr(0, 0)).toBeNull()
     expect(avgReviewIterationsPerPr(5, 0)).toBeNull()
+  })
+})
+
+describe("toolFindingKind", () => {
+  it("bands a security-primary cataloged tool to sast", () => {
+    expect(toolFindingKind("semgrep")).toBe("sast")
+    expect(toolFindingKind("gitleaks")).toBe("sast")
+    expect(toolFindingKind("osv-scanner")).toBe("sast")
+  })
+  it("bands a logic/style cataloged tool to linter", () => {
+    expect(toolFindingKind("eslint")).toBe("linter")
+    expect(toolFindingKind("tsc")).toBe("linter")
+  })
+  it("bands an unknown but shape-safe id to other", () => {
+    expect(toolFindingKind("customtool")).toBe("other")
+  })
+})
+
+describe("bandToolFindings", () => {
+  it("sums result counts into sast/linter/other bands", () => {
+    expect(
+      bandToolFindings([
+        { toolId: "semgrep", resultCount: 3 },
+        { toolId: "eslint", resultCount: 5 },
+        { toolId: "customtool", resultCount: 2 },
+      ]),
+    ).toEqual({ sast: 3, linter: 5, other: 2 })
+  })
+  it("floors negative/non-finite counts to 0", () => {
+    expect(
+      bandToolFindings([
+        { toolId: "semgrep", resultCount: -4 },
+        { toolId: "eslint", resultCount: Number.NaN },
+      ]),
+    ).toEqual({ sast: 0, linter: 0, other: 0 })
   })
 })

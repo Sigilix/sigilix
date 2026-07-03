@@ -16,6 +16,8 @@
 // with no real source (dataIntegrity has no producing specialist) are simply
 // never emitted — never fabricated as a zero.
 
+import { isRunnerToolId, rolesForRunnerTool } from "@/src/shared/domain/runner-tool-catalog"
+
 // ─── Contract key sets (the portal consumes these verbatim) ───
 
 /** Severity bands. Every posted finding has a numeric score, so all four bands
@@ -240,4 +242,45 @@ export function reviewerTimeSavedHours(acceptedFindings: number): number {
 export function avgReviewIterationsPerPr(totalRows: number, distinctPrs: number): number | null {
   if (distinctPrs <= 0) return null
   return totalRows / distinctPrs
+}
+
+// ─── Tool findings banding (deterministic runner tools) ───────
+
+/** Deterministic-tool finding counts, banded by tool kind (portal tile). */
+export interface ToolFindings {
+  sast: number
+  linter: number
+  other: number
+}
+
+/** One runner tool's latest result count (from RunnerToolMetricsDO.latestByRepo). */
+export interface ToolFindingRow {
+  toolId: string
+  resultCount: number
+}
+
+/**
+ * Band a runner tool to a finding kind by its catalog role. A cataloged tool
+ * whose primary role is `security` is a SAST/security scanner (semgrep, gitleaks,
+ * osv-scanner, …); any other cataloged tool is a linter/type-checker; an unknown
+ * (but shape-safe) tool id falls to `other`. Grounded in the real catalog roles —
+ * not a fabricated mapping.
+ */
+export function toolFindingKind(toolId: string): keyof ToolFindings {
+  if (!isRunnerToolId(toolId)) return "other"
+  return rolesForRunnerTool(toolId)[0] === "security" ? "sast" : "linter"
+}
+
+/**
+ * Sum runner-tool result counts into the sast/linter/other bands. Pure: the
+ * route pre-filters the rows to the caller's owned repos (tenant scope) and
+ * passes only those here. Negative/non-finite counts are floored to 0.
+ */
+export function bandToolFindings(rows: readonly ToolFindingRow[]): ToolFindings {
+  const out: ToolFindings = { sast: 0, linter: 0, other: 0 }
+  for (const row of rows) {
+    const n = Number.isFinite(row.resultCount) && row.resultCount > 0 ? row.resultCount : 0
+    out[toolFindingKind(row.toolId)] += n
+  }
+  return out
 }

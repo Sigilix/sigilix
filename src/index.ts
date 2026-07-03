@@ -81,7 +81,7 @@ import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-ro
 import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
-import { handleWorkspacePrsRoute } from "@/src/lib/workspace-prs-route"
+import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleUsageRoute } from "@/src/lib/usage-route"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
@@ -563,8 +563,9 @@ export default {
     // sig-workspace-prs: the portal's Pull-requests workspace page — org-wide
     // + mine PR sections from D1 usage_ledger. Dual-authed (session OR api
     // key); see workspace-prs-route.ts.
-    if (request.method === "GET" && url.pathname === "/v1/workspace/prs") {
-      return withPortalCors(request, await handleWorkspacePrsRoute(request, env, ctx), env)
+    if (request.method === "GET" && url.pathname.startsWith("/v1/workspace/prs")) {
+      const handler = url.pathname === "/v1/workspace/prs" ? handleWorkspacePrsRoute : handleWorkspacePrReviewRoute
+      return withPortalCors(request, await handler(request, env, ctx), env)
     }
     // sig-org-overview: the portal's Organization page — org headline, billable
     // seats (distinct usage_ledger authors scoped to the caller's installation),

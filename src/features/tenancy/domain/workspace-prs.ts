@@ -22,6 +22,7 @@
 // sorts lexicographically identically to chronologically.
 
 export interface WorkspacePrLedgerRow {
+  installationId: number
   repo: string
   prNumber: number
   headSha: string
@@ -30,6 +31,7 @@ export interface WorkspacePrLedgerRow {
 }
 
 export interface WorkspacePrSummary {
+  installationId: number
   repo: string
   prNumber: number
   headSha: string
@@ -55,6 +57,7 @@ export function collapseWorkspacePrs(rows: WorkspacePrLedgerRow[]): WorkspacePrS
 
   return Array.from(groups.values())
     .map(({ latest, reviews }) => ({
+      installationId: latest.installationId,
       repo: latest.repo,
       prNumber: latest.prNumber,
       headSha: latest.headSha,

@@ -33,7 +33,10 @@ type CallerAuth = { creator: string } | { response: Response }
  */
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
   const session = await requireSession(request, env, ctx)
-  if (session) return { creator: `session:${session.record.githubUserId}` }
+  // sig-user-identity: prefer the provider-agnostic user_id so Google /
+  // email-password sessions (no githubUserId) get a distinct, non-colliding
+  // creator instead of all sharing "session:undefined".
+  if (session) return { creator: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}` }
   const tenant = await requireApiTenant(request, env, ctx)
   if ("caller" in tenant) return { creator: `tenant:${tenant.caller.installationId}` }
   return { response: tenant.response }

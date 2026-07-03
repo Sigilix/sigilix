@@ -286,7 +286,7 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
         resolved = {
           scope: "user",
           installationId: current,
-          seatKey: `gh:${session.record.githubUserId}`,
+          seatKey: `gh:${session.record.githubUserId ?? session.record.userId ?? "anon"}`,
           authorFilter: null,
           account,
         }

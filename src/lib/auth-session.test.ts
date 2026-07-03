@@ -15,6 +15,7 @@ import {
   mintSessionId,
   mintStateNonce,
   readCookie,
+  sessionTtlSeconds,
   setSessionCookie,
   setStateCookie,
   touchSession,
@@ -207,6 +208,86 @@ describe("session CRUD against KV", () => {
   })
 })
 
+describe("remember-me session lifetime (KV TTL)", () => {
+  const DAY = 24 * 60 * 60
+  const THIRTY_DAYS = 30 * DAY
+
+  it("sessionTtlSeconds maps remember true/absent → 30d, false → 1d", () => {
+    expect(sessionTtlSeconds(true)).toBe(THIRTY_DAYS)
+    expect(sessionTtlSeconds(undefined)).toBe(THIRTY_DAYS) // legacy records stay persistent
+    expect(sessionTtlSeconds(false)).toBe(DAY)
+  })
+
+  it("createSession with remember:false writes the SHORT (1-day) KV TTL + stores the flag", async () => {
+    const kv = makeKV()
+    const record = await createSession({
+      kv: kv as unknown as KVNamespace,
+      sessionId: "short-id",
+      login: "alice",
+      provider: "password",
+      remember: false,
+      encryptionKeyB64url: TEST_KEY,
+    })
+    expect(record.remember).toBe(false)
+    expect(kv.put).toHaveBeenCalledWith(
+      "auth_session:short-id",
+      expect.any(String),
+      expect.objectContaining({ expirationTtl: DAY }),
+    )
+  })
+
+  it("createSession with remember:true writes the persistent 30-day KV TTL", async () => {
+    const kv = makeKV()
+    await createSession({
+      kv: kv as unknown as KVNamespace,
+      sessionId: "long-id",
+      login: "alice",
+      provider: "password",
+      remember: true,
+      encryptionKeyB64url: TEST_KEY,
+    })
+    expect(kv.put).toHaveBeenCalledWith(
+      "auth_session:long-id",
+      expect.any(String),
+      expect.objectContaining({ expirationTtl: THIRTY_DAYS }),
+    )
+  })
+
+  it("touchSession keeps a remember:false session on the SHORT TTL (never promotes to 30d)", async () => {
+    const kv = makeKV()
+    const record = await createSession({
+      kv: kv as unknown as KVNamespace,
+      sessionId: "short-id",
+      login: "alice",
+      provider: "password",
+      remember: false,
+      encryptionKeyB64url: TEST_KEY,
+    })
+    kv.put.mockClear()
+    await touchSession({ kv: kv as unknown as KVNamespace, sessionId: "short-id", record })
+    expect(kv.put).toHaveBeenCalledWith(
+      "auth_session:short-id",
+      expect.any(String),
+      expect.objectContaining({ expirationTtl: DAY }),
+    )
+  })
+
+  it("logout still revokes a remember:false session (KV record deleted)", async () => {
+    const kv = makeKV()
+    await createSession({
+      kv: kv as unknown as KVNamespace,
+      sessionId: "short-id",
+      login: "alice",
+      provider: "password",
+      remember: false,
+      encryptionKeyB64url: TEST_KEY,
+    })
+    await deleteSession({ kv: kv as unknown as KVNamespace, sessionId: "short-id" })
+    const out = await getSession({ kv: kv as unknown as KVNamespace, sessionId: "short-id" })
+    expect(out).toBeNull()
+  })
+})
+
 describe("cookie helpers", () => {
   it("readCookie extracts a value by name", () => {
     const req = new Request("https://example.com", {
@@ -242,6 +323,32 @@ describe("cookie helpers", () => {
     expect(c).toContain("Max-Age=0")
     expect(c).toContain("HttpOnly")
     expect(c).toContain("Secure")
+  })
+
+  it("remember me ON (default) → persistent 30-day cookie with all secure flags", () => {
+    const c = setSessionCookie("session-abc", true)
+    expect(c).toContain("__Host-sigilix_session=session-abc")
+    expect(c).toContain("Max-Age=2592000") // 30 days
+    // Secure attribute set is preserved on the persistent path.
+    expect(c).toContain("HttpOnly")
+    expect(c).toContain("Secure")
+    expect(c).toContain("SameSite=None")
+    expect(c).toContain("Path=/")
+    expect(c).not.toContain("Domain=")
+  })
+
+  it("remember me OFF → browser-SESSION cookie (no Max-Age/Expires) but same secure flags", () => {
+    const c = setSessionCookie("session-abc", false)
+    expect(c).toContain("__Host-sigilix_session=session-abc")
+    // A session cookie carries NO Max-Age and NO Expires → cleared on browser close.
+    expect(c).not.toContain("Max-Age")
+    expect(c).not.toContain("Expires")
+    // Every existing session protection stays intact on the short-lived path.
+    expect(c).toContain("HttpOnly")
+    expect(c).toContain("Secure")
+    expect(c).toContain("SameSite=None")
+    expect(c).toContain("Path=/")
+    expect(c).not.toContain("Domain=")
   })
 
   it("setStateCookie has 600s TTL", () => {

@@ -28,6 +28,7 @@ import {
   setStateCookie,
   STATE_COOKIE_NAME,
 } from "./auth-session"
+import { upsertGithubIdentity } from "./user-identity-store"
 
 const STATE_KV_PREFIX = "auth_state:"
 const STATE_TTL_SECONDS = 600
@@ -42,6 +43,10 @@ interface AuthOauthEnv {
   // #155 onboarding-backend slice 3 (env-gated redirect polish — see
   // safeRedirectAfter callers below). Unset = today's behavior, unchanged.
   OPENCLAW_PORTAL_URL?: string
+  // sig-user-identity: the persistent identity D1. Optional so a deploy that
+  // hasn't migrated 0006 still logs users in (identity persistence is
+  // best-effort — a missing binding just skips the upsert, never blocks login).
+  SIGILIX_PLATFORM_DB?: D1Database
 }
 
 function baseUrl(env: AuthOauthEnv): string {
@@ -60,6 +65,10 @@ function isMisconfigured(env: AuthOauthEnv): string | null {
 interface StateRecord {
   createdAt: number
   redirectAfter?: string
+  // "Remember me" choice, carried server-side through the OAuth round-trip (the
+  // callback has no other channel to the login form). Absent = persistent
+  // default. Not a secret; lives only in the single-use KV state nonce record.
+  remember?: boolean
 }
 
 export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEnv): Promise<Response> {
@@ -70,6 +79,9 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
   }
 
   const url = new URL(request.url)
+  // Persistent 30-day session unless the login form explicitly opted out
+  // (`?remember=0`). Any other value keeps the persistent default.
+  const remember = url.searchParams.get("remember") !== "0"
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
   // Only validate + store a redirectAfter when the CALLER explicitly asked
   // for one. safeRedirectAfter's own fallback ("/auth/welcome") is for the
@@ -83,8 +95,14 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
   const nonce = mintStateNonce()
   // exactOptionalPropertyTypes: omit the key entirely rather than set it to
   // `undefined` — `JSON.stringify` would drop it anyway, but this keeps the
-  // in-memory shape and the serialized shape identical.
-  const record: StateRecord = redirectAfter ? { createdAt: Date.now(), redirectAfter } : { createdAt: Date.now() }
+  // in-memory shape and the serialized shape identical. `remember` is only
+  // stored when it deviates from the persistent default (i.e. remember=false),
+  // so existing state records are byte-identical unless a user opts out.
+  const record: StateRecord = {
+    createdAt: Date.now(),
+    ...(redirectAfter ? { redirectAfter } : {}),
+    ...(remember ? {} : { remember: false }),
+  }
   await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${nonce}`, JSON.stringify(record), {
     expirationTtl: STATE_TTL_SECONDS,
   })
@@ -126,6 +144,7 @@ interface GitHubUserResponse {
   id?: number
   name?: string | null
   email?: string | null
+  avatar_url?: string | null
 }
 
 export async function handleGitHubAuthCallback(request: Request, env: AuthOauthEnv): Promise<Response> {
@@ -283,19 +302,47 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     })
   }
 
-  // 5. Mint session + encrypt token + store.
-  const sessionId = mintSessionId()
-  // GitHub's display name is optional and can be null/blank — normalize to a
-  // trimmed string, else omit it (exactOptionalPropertyTypes; see createSession).
+  // 5. Persist the real user record (sig-user-identity). BEST-EFFORT: the login
+  //    has already succeeded, so a D1 fault or an unmigrated/absent binding must
+  //    NOT block sign-in — upsertGithubIdentity swallows + logs its own errors
+  //    and returns null. When it succeeds we thread the surrogate user_id +
+  //    resolved email onto the session so the portal can read a stable account
+  //    key and know whether to prompt for a missing email (email-capture).
   const displayName = typeof user.name === "string" && user.name.trim() ? user.name.trim() : undefined
+  const avatarUrl = typeof user.avatar_url === "string" && user.avatar_url ? user.avatar_url : undefined
+  let identityUserId: string | undefined
+  let identityEmail: string | undefined
+  if (env.SIGILIX_PLATFORM_DB) {
+    const identity = await upsertGithubIdentity(env.SIGILIX_PLATFORM_DB, {
+      githubUserId: String(user.id),
+      email: user.email ?? null,
+      name: displayName ?? null,
+      avatarUrl: avatarUrl ?? null,
+      nowIso: new Date().toISOString(),
+    })
+    if (identity) {
+      identityUserId = identity.userId
+      identityEmail = identity.email ?? undefined
+    }
+  }
+
+  // 6. Mint session + encrypt token + store. `remember` (default persistent)
+  //    was carried from the login form through the single-use KV state record.
+  const remember = stateRaw.remember !== false
+  const sessionId = mintSessionId()
   await createSession({
     kv: env.OPENCLAW_STATE,
     sessionId,
     login: user.login,
     githubUserId: user.id,
     accessToken,
+    provider: "github",
+    remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
+    // exactOptionalPropertyTypes: omit each key entirely when absent.
     ...(displayName !== undefined ? { name: displayName } : {}),
+    ...(identityUserId !== undefined ? { userId: identityUserId } : {}),
+    ...(identityEmail !== undefined ? { email: identityEmail } : {}),
   })
 
   await writeAuthEvent(env.OPENCLAW_STATE, {
@@ -306,7 +353,7 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     ts: Date.now(),
   })
 
-  // 6. 302 to redirectAfter (validated) or the default success destination.
+  // 7. 302 to redirectAfter (validated) or the default success destination.
   //
   // Redirect polish (env-gated, SIG-155 slice 3): when OPENCLAW_PORTAL_URL
   // is set, the DEFAULT destination (no explicit redirectAfter requested at
@@ -326,7 +373,7 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
   const finalDest = stateRaw.redirectAfter ? safeRedirectAfter(dest, baseUrl(env)) : dest
 
   const headers = new Headers({ location: finalDest })
-  headers.append("set-cookie", setSessionCookie(sessionId))
+  headers.append("set-cookie", setSessionCookie(sessionId, remember))
   headers.append("set-cookie", clearStateCookie())
 
   return new Response(null, { status: 302, headers })

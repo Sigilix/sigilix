@@ -50,8 +50,20 @@ async function seedSession(
 }
 
 interface MeBody {
-  user: { login: string; name: string | null; githubUserId: number; role: string }
+  user: {
+    login: string
+    name: string | null
+    githubUserId: number | null
+    userId: string | null
+    email: string | null
+    provider: string
+    role: string
+  }
 }
+
+// sig-user-identity: sessions seeded via createSession here set no userId/email/
+// provider, so /auth/me fills them with the documented defaults.
+const IDENTITY_DEFAULTS = { userId: null, email: null, provider: "github" } as const
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -95,7 +107,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "admin" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: null, githubUserId: 111, ...IDENTITY_DEFAULTS, role: "admin" },
+    })
   })
 
   it("falls back to role=member when GitHub is unreachable (never 500s)", async () => {
@@ -113,7 +127,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: null, githubUserId: 111, ...IDENTITY_DEFAULTS, role: "member" },
+    })
   })
 
   it("falls back to role=member when the session encryption key is missing (never 500s)", async () => {
@@ -124,7 +140,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: null, githubUserId: 111, ...IDENTITY_DEFAULTS, role: "member" },
+    })
   })
 
   it("falls back to role=member when the token fails to decrypt (never 500s)", async () => {
@@ -139,7 +157,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "member" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: null, githubUserId: 111, ...IDENTITY_DEFAULTS, role: "member" },
+    })
   })
 
   it("returns the GitHub display name nested under `user` when the session has one", async () => {
@@ -160,7 +180,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     const res = await handleAuthMeRoute(reqWithSession("https://x/auth/me", "sess-1"), env)
     expect(res.status).toBe(200)
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: "Octo Cat", githubUserId: 111, role: "admin" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: "Octo Cat", githubUserId: 111, ...IDENTITY_DEFAULTS, role: "admin" },
+    })
   })
 
   // #155 onboarding: the portal reads /auth/me cross-origin with
@@ -193,7 +215,9 @@ describe("handleAuthMeRoute (GET /auth/me)", () => {
     expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
     expect(res.headers.get("access-control-allow-credentials")).toBe("true")
     const body = (await res.json()) as MeBody
-    expect(body).toEqual({ user: { login: "octocat", name: null, githubUserId: 111, role: "admin" } })
+    expect(body).toEqual({
+      user: { login: "octocat", name: null, githubUserId: 111, ...IDENTITY_DEFAULTS, role: "admin" },
+    })
   })
 
   it("does NOT echo an Access-Control-Allow-Origin for a non-allowlisted origin (via the worker entrypoint)", async () => {

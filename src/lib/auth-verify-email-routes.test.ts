@@ -46,6 +46,30 @@ function resendReq(body: unknown, contentType = "application/json"): Request {
   })
 }
 
+/**
+ * ExecutionContext stub that CAPTURES ctx.waitUntil promises (the resend/signup
+ * send is deferred fire-and-forget for constant-time). `settled()` drains them so
+ * a test can assert the deferred mint/send actually ran.
+ */
+function makeCtx(): { ctx: ExecutionContext; settled: () => Promise<void> } {
+  const pending: Promise<unknown>[] = []
+  const ctx = {
+    waitUntil: (p: Promise<unknown>) => {
+      pending.push(p)
+    },
+    passThroughOnException: () => {},
+  } as unknown as ExecutionContext
+  return { ctx, settled: async () => void (await Promise.allSettled(pending)) }
+}
+
+async function tokenCount(db: D1Database, email: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM email_verification_token WHERE email = ?")
+    .bind(email)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
 describe("GET /auth/verify", () => {
   let env: Env
   let db: D1Database
@@ -71,7 +95,7 @@ describe("GET /auth/verify", () => {
     return created.identity.userId
   }
 
-  it("a valid token verifies the email, sets a session cookie, and 302s to the portal landing (status=ok)", async () => {
+  it("a valid token marks the email verified and 302s to /login?verified=1 with NO session (login-CSRF guard)", async () => {
     const userId = await makeUnverifiedUser("v@example.com")
     const token = await mintVerificationToken(db, {
       userId,
@@ -81,8 +105,10 @@ describe("GET /auth/verify", () => {
 
     const res = await handleVerifyEmailRoute(env, verifyUrl(token))
     expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/auth/verified?status=ok")
-    expect(res.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/login?verified=1")
+    // CRITICAL: a top-level-navigable GET must NEVER mint a session (would let an
+    // attacker's verify link log a victim in as the attacker).
+    expect(res.headers.get("set-cookie")).toBeNull()
 
     const identity = await findByEmail(db, "v@example.com")
     expect(identity?.emailVerified).toBe(true)
@@ -125,25 +151,28 @@ describe("POST /v1/auth/resend-verification", () => {
   })
 
   it("returns a NEUTRAL 200 for an unknown email (no account enumeration)", async () => {
-    const res = await handleResendVerificationRoute(resendReq({ email: "nobody@example.com" }), env)
+    const { ctx } = makeCtx()
+    const res = await handleResendVerificationRoute(resendReq({ email: "nobody@example.com" }), env, ctx)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
   })
 
-  it("returns a neutral 200 for a real unverified account (and mints a fresh token)", async () => {
+  it("real account: the send is DEFERRED (constant-time) — token mints only after the waitUntil drains", async () => {
     await createPasswordIdentity(db, {
       email: "resend@example.com",
       passwordHash: "pbkdf2-sha256$1$AA$AA",
       nowIso: "2026-07-03T00:00:00.000Z",
     })
-    const res = await handleResendVerificationRoute(resendReq({ email: "resend@example.com" }), env)
+    const { ctx, settled } = makeCtx()
+    const res = await handleResendVerificationRoute(resendReq({ email: "resend@example.com" }), env, ctx)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
-    const tokenRow = await db
-      .prepare("SELECT COUNT(*) AS n FROM email_verification_token WHERE email = ?")
-      .bind("resend@example.com")
-      .first<{ n: number }>()
-    expect(tokenRow?.n).toBe(1)
+    // Nothing minted SYNCHRONOUSLY: the mint+send was dispatched fire-and-forget so
+    // the real-account and no-account branches return in the same time (no oracle).
+    expect(await tokenCount(db, "resend@example.com")).toBe(0)
+    // Drain the deferred work → the fresh token is now persisted.
+    await settled()
+    expect(await tokenCount(db, "resend@example.com")).toBe(1)
   })
 
   it("is rate-limited per email (429 after the cap)", async () => {
@@ -154,7 +183,8 @@ describe("POST /v1/auth/resend-verification", () => {
     })
     const statuses: number[] = []
     for (let i = 0; i < 5; i++) {
-      const res = await handleResendVerificationRoute(resendReq({ email: "rl@example.com" }), env)
+      const { ctx } = makeCtx()
+      const res = await handleResendVerificationRoute(resendReq({ email: "rl@example.com" }), env, ctx)
       statuses.push(res.status)
     }
     // Per-email cap is 3/hour → the 4th+ attempts are throttled.
@@ -162,7 +192,8 @@ describe("POST /v1/auth/resend-verification", () => {
   })
 
   it("requires application/json (415 otherwise)", async () => {
-    const res = await handleResendVerificationRoute(resendReq({ email: "x@example.com" }, "text/plain"), env)
+    const { ctx } = makeCtx()
+    const res = await handleResendVerificationRoute(resendReq({ email: "x@example.com" }, "text/plain"), env, ctx)
     expect(res.status).toBe(415)
   })
 })

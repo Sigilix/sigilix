@@ -36,6 +36,32 @@ function jsonReq(url: string, body: unknown, contentType = "application/json"): 
   return new Request(url, { method: "POST", headers: { "content-type": contentType }, body: JSON.stringify(body) })
 }
 
+/** ExecutionContext stub that DROPS ctx.waitUntil work (the verify send is fire-and-forget). */
+const noopCtx = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext
+
+/** Capturing ExecutionContext stub — `settled()` drains the deferred verify send. */
+function makeCtx(): { ctx: ExecutionContext; settled: () => Promise<void> } {
+  const pending: Promise<unknown>[] = []
+  const ctx = {
+    waitUntil: (p: Promise<unknown>) => {
+      pending.push(p)
+    },
+    passThroughOnException: () => {},
+  } as unknown as ExecutionContext
+  return { ctx, settled: async () => void (await Promise.allSettled(pending)) }
+}
+
+async function tokenCount(db: D1Database, email: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM email_verification_token WHERE email = ?")
+    .bind(email)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
 describe("email/password auth routes", () => {
   let env: Env
   let db: D1Database
@@ -48,14 +74,15 @@ describe("email/password auth routes", () => {
 
   /** Sign up, then flip the new account to verified (simulates clicking the link). */
   async function signupAndVerify(email: string, password: string, name?: string): Promise<string> {
-    const res = await handleSignupRoute(jsonReq("https://x/v1/auth/signup", { email, password, name }), env)
+    const res = await handleSignupRoute(jsonReq("https://x/v1/auth/signup", { email, password, name }), env, noopCtx)
     expect(res.status).toBe(201)
     const { userId } = (await res.json()) as { userId: string }
     expect(await markEmailVerified(db, userId, email)).toBe(true)
     return userId
   }
 
-  it("signup issues NO session and reports verificationRequired (unverified account)", async () => {
+  it("signup issues NO session, reports verificationRequired, and DEFERS the verify send (constant-time)", async () => {
+    const { ctx, settled } = makeCtx()
     const signup = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", {
         email: "user@example.com",
@@ -63,16 +90,25 @@ describe("email/password auth routes", () => {
         name: "User",
       }),
       env,
+      ctx,
     )
     expect(signup.status).toBe(201)
     expect(signup.headers.get("set-cookie")).toBeNull()
-    expect(await signup.json()).toMatchObject({ ok: true, verificationRequired: true, emailSent: false })
+    // emailSent=true reflects that a verify email was DISPATCHED (its outcome is not
+    // awaited — see the constant-time note in handleSignupRoute).
+    expect(await signup.json()).toMatchObject({ ok: true, verificationRequired: true, emailSent: true })
+    // The send is deferred fire-and-forget so the new-account path returns as fast as
+    // the email_taken 409 (no existence oracle): nothing minted synchronously.
+    expect(await tokenCount(db, "user@example.com")).toBe(0)
+    await settled()
+    expect(await tokenCount(db, "user@example.com")).toBe(1)
   })
 
   it("login is BLOCKED (403 email_unverified) until the email is verified, then works", async () => {
     const signup = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "gate@example.com", password: "a-strong-passphrase" }),
       env,
+      noopCtx,
     )
     const { userId } = (await signup.json()) as { userId: string }
 
@@ -127,10 +163,12 @@ describe("email/password auth routes", () => {
     await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "dup@example.com", password: "passphrase-123" }),
       env,
+      noopCtx,
     )
     const again = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "DUP@example.com", password: "passphrase-123" }),
       env,
+      noopCtx,
     )
     expect(again.status).toBe(409)
     expect(await again.json()).toMatchObject({ error: "email_taken" })
@@ -140,6 +178,7 @@ describe("email/password auth routes", () => {
     await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "z@example.com", password: "right-passphrase" }),
       env,
+      noopCtx,
     )
     const res = await handleLoginRoute(
       jsonReq("https://x/v1/auth/login", { email: "z@example.com", password: "wrong-passphrase" }),
@@ -156,6 +195,7 @@ describe("email/password auth routes", () => {
     await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "unv@example.com", password: "right-passphrase" }),
       env,
+      noopCtx,
     )
     const res = await handleLoginRoute(
       jsonReq("https://x/v1/auth/login", { email: "unv@example.com", password: "wrong-passphrase" }),
@@ -178,6 +218,7 @@ describe("email/password auth routes", () => {
     const res = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "w@example.com", password: "short" }),
       env,
+      noopCtx,
     )
     expect(res.status).toBe(400)
     expect(await res.json()).toMatchObject({ error: "weak_password" })
@@ -187,6 +228,7 @@ describe("email/password auth routes", () => {
     const res = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "c@example.com", password: "passphrase-123" }, "text/plain"),
       env,
+      noopCtx,
     )
     expect(res.status).toBe(415)
   })
@@ -200,6 +242,7 @@ describe("email/password auth routes", () => {
     const res = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "shared@example.com", password: "passphrase-123" }),
       env,
+      noopCtx,
     )
     expect(res.status).toBe(409)
     expect(await res.json()).toMatchObject({ error: "email_taken" })
@@ -210,6 +253,7 @@ describe("email/password auth routes", () => {
     const res = await handleSignupRoute(
       jsonReq("https://x/v1/auth/signup", { email: "a@b.com", password: "passphrase-123" }),
       noDb,
+      noopCtx,
     )
     expect(res.status).toBe(503)
   })

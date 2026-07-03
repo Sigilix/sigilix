@@ -21,8 +21,9 @@
 // NOTHING here logs or returns the SA token / the request body.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireApiTenant } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
+import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { runGatewayChain } from "./fallback-chain"
 
 // Chat bodies carry the full prompt/history, so the cap is generous (vs the tiny
@@ -111,6 +112,17 @@ export async function handleVertexChatRoute(
   if ("response" in auth) return auth.response
   if (!env.OPENCLAW_GATEWAY_ISSUER) return json({ error: "boreas_gateway_not_configured" }, 503)
 
+  // SIG-303 SEAT pool (coding_agent). The CLI seat is identified by its API key;
+  // a per-installation key currently has no per-user link, so the seat key is
+  // `inst:<installationId>` (documented gap — unify when per-user CLI keys land).
+  // GRACE POLICY: checked at admission BEFORE the token mint / Vertex call — an
+  // over-cap request never mints a GCP token; an in-flight stream is never aborted.
+  // Behind SIGILIX_USAGE_METER_MODE (default shadow → never blocks). Fail-open.
+  const seatKey = `inst:${auth.caller.installationId}`
+  const now = Date.now()
+  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now })
+  if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
+
   // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so
   // an over-limit request never mints a GCP token or bills Vertex. The increment IS the
   // meter (the `<counterKey>:count:<day>` counter), so it now gates rather than just counting.
@@ -129,6 +141,26 @@ export async function handleVertexChatRoute(
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return json({ error: "invalid_request", detail: "body must be a JSON object" }, 400)
+  }
+
+  // SIG-303: record the coding_agent SEAT event (one per admitted CLI request).
+  // Fire-and-forget via waitUntil so metering never adds latency and a ledger
+  // fault never fails the request (appendUsageEvent is itself fail-open). The
+  // legacy global key (Sigilix-internal) is not a real seat → installation_id 0.
+  // mode="off" is a true kill switch — shed the D1 write entirely. Best-effort by
+  // design: the append is fire-and-forget (never awaited), so under burst a few
+  // events may land just after an admission read — same non-atomic posture as SIG-38.
+  const installationId = auth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : auth.caller.installationId
+  if (meterDecision.mode !== "off") {
+    ctx.waitUntil(
+      appendUsageEvent(env, {
+        meter: "coding_agent",
+        installationId,
+        userKey: seatKey,
+        surface: "cli",
+        nowIso: new Date(now).toISOString(),
+      }),
+    )
   }
 
   // #158: walk the ordered per-model failover chain (Vertex -> Ollama Turbo ->

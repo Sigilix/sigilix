@@ -3,7 +3,7 @@
 // machinery (see auth-me-route.test.ts for the full /auth/me integration).
 
 import { describe, expect, it, vi } from "vitest"
-import { resolveUserRole } from "@/src/lib/resolve-user-role"
+import { resolveUserRole, isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -214,5 +214,54 @@ describe("resolveUserRole", () => {
     }
     logSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+describe("isAdminOfInstallation (SIG-303 — scoped to ONE installation)", () => {
+  it("admin of the queried org install → true", async () => {
+    const fetchImpl = stubFetch([{ id: 5, account: { type: "Organization", login: "acme" } }], {
+      acme: { role: "admin" },
+    })
+    expect(await isAdminOfInstallation("token", "octocat", 5, fetchImpl)).toBe(true)
+  })
+
+  it("P1: owns a PERSONAL install but is only a MEMBER of the queried org → false", async () => {
+    // The exact leak the aggregate resolveUserRole would allow: personal-install
+    // owner (aggregate "admin") who is a mere member of org B must be DENIED B.
+    const fetchImpl = stubFetch(
+      [
+        { id: 2, account: { type: "User", login: "octocat" } },
+        { id: 5, account: { type: "Organization", login: "org-b" } },
+      ],
+      { "org-b": { role: "member" } },
+    )
+    expect(await resolveUserRole("token", "octocat", fetchImpl)).toBe("admin") // aggregate says admin…
+    expect(await isAdminOfInstallation("token", "octocat", 5, fetchImpl)).toBe(false) // …but not of org B
+  })
+
+  it("owns the queried personal install → true; someone else's personal install → false", async () => {
+    const own = stubFetch([{ id: 2, account: { type: "User", login: "octocat" } }])
+    expect(await isAdminOfInstallation("token", "octocat", 2, own)).toBe(true)
+    const other = stubFetch([{ id: 2, account: { type: "User", login: "someone-else" } }])
+    expect(await isAdminOfInstallation("token", "octocat", 2, other)).toBe(false)
+  })
+
+  it("installation the token can't see → false", async () => {
+    const fetchImpl = stubFetch([{ id: 5, account: { type: "Organization", login: "acme" } }], {
+      acme: { role: "admin" },
+    })
+    expect(await isAdminOfInstallation("token", "octocat", 999, fetchImpl)).toBe(false)
+  })
+
+  it("pending (non-active) admin invite does not grant admin", async () => {
+    const fetchImpl = stubFetch([{ id: 5, account: { type: "Organization", login: "acme" } }], {
+      acme: { role: "admin", state: "pending" },
+    })
+    expect(await isAdminOfInstallation("token", "octocat", 5, fetchImpl)).toBe(false)
+  })
+
+  it("fails closed to false on a GitHub error", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "boom" }, 500)) as unknown as typeof fetch
+    expect(await isAdminOfInstallation("token", "octocat", 5, fetchImpl)).toBe(false)
   })
 })

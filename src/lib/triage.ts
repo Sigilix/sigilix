@@ -14,7 +14,13 @@ import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "@/src/shared/domain/schemas"
 import type { Env } from "@/src/shared/types/env"
 import { ISSUE_TRIAGE_PROMPT } from "@/src/prompts/issue-triage"
-import { checkTriageRateLimit, appendTriageUsage } from "@/src/features/tenancy"
+import {
+  checkTriageRateLimit,
+  appendTriageUsage,
+  appendUsageEvent,
+  resolveUsageMeterMode,
+} from "@/src/features/tenancy"
+import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
@@ -160,7 +166,40 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   // without the binding or on missing identity). Mirrors SIG-343's
   // post-completion `appendUsage` timing for PR reviews.
   if (issue.team?.id) {
-    await appendTriageUsage(env, { teamId: issue.team.id, issueId: issue.id, nowIso: new Date().toISOString() })
+    const nowIso = new Date().toISOString()
+    await appendTriageUsage(env, { teamId: issue.team.id, issueId: issue.id, nowIso })
+
+    // SIG-303 ORG pool (linear_triage). The team-keyed triage_usage_ledger above
+    // stays the triage RATE-LIMIT source of truth; this is the org-pool USAGE
+    // mirror, keyed by INSTALLATION so the installation-scoped /v1/usage org read
+    // is uniform (pr_reviews + linear_triage + slack all keyed by installation).
+    // Resolve the installation from the Linear team key → repo mapping. Recorded
+    // only when resolvable; event_id = issue.id dedups redeliveries. Fail-open.
+    // INTENTIONAL: linear_triage CONTRIBUTES to the org pool total but has NO
+    // admission gate of its own here — its team-keyed cap (checkTriageRateLimit,
+    // called at the top of triageIssue) governs whether triage runs at all. So the
+    // org-pool cap is enforced at the newer SIG-303 surfaces (slack/gateway/chat);
+    // pr_reviews + linear_triage keep their own SIG-38 caps and only feed the total.
+    // user_key is null: triage has no single human trigger, so it never contributes
+    // to the per-author org drill-down (that column is meaningful only for
+    // pr_reviews, whose author_login IS a GitHub login).
+    // mode="off" is a true kill switch — shed the D1 write entirely.
+    const mapping = issue.team.key
+      ? listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team!.key)
+      : undefined
+    if (mapping && resolveUsageMeterMode(env) !== "off") {
+      const inst = resolveInstallation(mapping.owner, mapping.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+      if (inst.ok) {
+        await appendUsageEvent(env, {
+          meter: "linear_triage",
+          installationId: inst.installationId,
+          userKey: null,
+          surface: "linear",
+          eventId: issue.id,
+          nowIso,
+        })
+      }
+    }
   }
 
   // Apply priority + estimate + labels + rewritten description on the issue

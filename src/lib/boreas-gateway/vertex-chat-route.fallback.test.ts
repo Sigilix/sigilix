@@ -24,6 +24,9 @@ import {
   DEFAULT_ASTRAEUS_FALLBACK_TURBO_MODEL,
 } from "@/src/lib/boreas-gateway/constants"
 import { makeEnv, makeCtx } from "@/src/lib/boreas-gateway/boreas-gateway.test-helpers"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { readUsageEventCount } from "@/src/features/tenancy"
 
 const KEY = "secret-bearer"
 const ISSUER = "https://gw.example"
@@ -517,5 +520,103 @@ describe("model-gateway failover chain — #158", () => {
     expect(allLogged).not.toContain(OLLAMA_KEY)
     expect(allLogged).not.toContain("sa-token")
     expect(allLogged).not.toContain("fed-token")
+  })
+})
+
+// SIG-303 — coding_agent SEAT-pool metering on the CLI gateway.
+describe("gateway coding_agent SEAT metering — SIG-303", () => {
+  const M1 = readFileSync(new URL("../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+  const M3 = readFileSync(
+    new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+    "utf8",
+  )
+  const M4 = readFileSync(new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url), "utf8")
+
+  async function db(): Promise<D1Database> {
+    const d = makeD1()
+    await d.exec(M1)
+    await d.exec(M3) // api_key table so the legacy-global-key fallback path resolves (not fail-closed)
+    await d.exec(M4)
+    return d
+  }
+
+  function vertexOk(u: string): Response | null {
+    const stock = stsAndImpersonateOk(u)
+    if (stock) return stock
+    if (u === VERTEX_CHAT_COMPLETIONS_URL) {
+      return new Response(JSON.stringify({ id: "cmpl", choices: [{ message: { content: "ok" } }] }), jsonHeaders)
+    }
+    return null
+  }
+
+  it("records one coding_agent seat event per admitted request (legacy global key → inst:-1)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL | Request) => {
+        const r = vertexOk(String(url))
+        if (r) return r
+        throw new Error(`unexpected fetch: ${String(url)}`)
+      }),
+    )
+    const d = await db()
+    const env = makeEnv({
+      OPENCLAW_SIGILIX_API_KEY: KEY,
+      OPENCLAW_GATEWAY_ISSUER: ISSUER,
+      OLLAMA_API_KEY: OLLAMA_KEY,
+      SIGILIX_PLATFORM_DB: d,
+    })
+    const { ctx, waits } = makeCtx()
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${KEY}`),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(200)
+    await Promise.all(waits) // the metering append is fire-and-forget via waitUntil
+
+    const seat = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: d },
+      {
+        meter: "coding_agent",
+        userKey: "inst:-1",
+        sinceIso: "2000-01-01T00:00:00.000Z",
+      },
+    )
+    expect(seat).toEqual({ ok: true, count: 1 })
+  })
+
+  it("enforce + over the seat cap → 429 before any Vertex/token call", async () => {
+    const f = vi.fn(async (url: string | URL | Request) => {
+      const r = vertexOk(String(url))
+      if (r) return r
+      throw new Error(`unexpected fetch: ${String(url)}`)
+    })
+    vi.stubGlobal("fetch", f)
+    const d = await db()
+    // Pre-fill the seat pool (keyed inst:-1) to the cap.
+    await d
+      .prepare(
+        "INSERT INTO usage_events (meter, installation_id, user_key, surface, event_id, created_at) VALUES ('coding_agent', 0, 'inst:-1', 'cli', NULL, ?)",
+      )
+      .bind(new Date().toISOString())
+      .run()
+    const env = makeEnv({
+      OPENCLAW_SIGILIX_API_KEY: KEY,
+      OPENCLAW_GATEWAY_ISSUER: ISSUER,
+      OLLAMA_API_KEY: OLLAMA_KEY,
+      SIGILIX_PLATFORM_DB: d,
+      SIGILIX_USAGE_METER_MODE: "enforce",
+      SIGILIX_USAGE_CAP_SEAT_SESSION: "1",
+      SIGILIX_USAGE_CAP_SEAT_WEEKLY: "-1",
+    })
+    const { ctx } = makeCtx()
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${KEY}`),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(429)
+    // No Vertex token mint / chat call happened (blocked before the mint).
+    expect(f).not.toHaveBeenCalled()
   })
 })

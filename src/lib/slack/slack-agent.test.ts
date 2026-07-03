@@ -119,6 +119,9 @@ vi.mock("@/src/shared/adapters/model", () => ({
 // ─── Import SUT after mocks ───────────────────────────────────────────────────
 
 import { runSlackAgent } from "@/src/lib/slack/slack-agent"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { readUsageEventCount } from "@/src/features/tenancy"
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -776,5 +779,72 @@ describe("runSlackAgent — B3c revise", () => {
     // The B3b implement path (create + immediate dispatch) must NOT run.
     expect(createIssueMock).not.toHaveBeenCalled()
     expect(dispatchTicketImplementationMock).not.toHaveBeenCalled()
+  })
+})
+
+// ─── SIG-303: ORG-pool (slack) metering write-path ──────────────────────────────
+describe("runSlackAgent — SIG-303 slack ORG-pool metering", () => {
+  const M1 = readFileSync(new URL("../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+  const M4 = readFileSync(new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url), "utf8")
+
+  async function envWithDb(): Promise<{ env: Env; db: D1Database }> {
+    const db = makeD1()
+    await db.exec(M1)
+    await db.exec(M4)
+    const env = makeEnv()
+    env.SIGILIX_PLATFORM_DB = db
+    return { env, db }
+  }
+
+  it("records one slack ORG event (keyed to the installation, attributed to the slack user) per mention", async () => {
+    const { env, db } = await envWithDb()
+    await runSlackAgent(env, makeCtx()) // installationId 111, slackUserId U001
+    const org = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        meter: "slack",
+        installationId: 111,
+        sinceIso: "2000-01-01T00:00:00.000Z",
+      },
+    )
+    expect(org).toEqual({ ok: true, count: 1 })
+    const byUser = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        meter: "slack",
+        installationId: 111,
+        userKey: "slack:U001",
+        sinceIso: "2000-01-01T00:00:00.000Z",
+      },
+    )
+    expect(byUser).toEqual({ ok: true, count: 1 })
+  })
+
+  it("enforce + over the org cap → a friendly limit reply, and NO extra event is recorded", async () => {
+    const { env, db } = await envWithDb()
+    env.SIGILIX_USAGE_METER_MODE = "enforce"
+    env.SIGILIX_USAGE_CAP_ORG_SESSION = "1"
+    env.SIGILIX_USAGE_CAP_ORG_WEEKLY = "-1"
+    // Pre-fill the org pool to the cap so the NEXT mention is blocked (grace policy).
+    await db
+      .prepare(
+        "INSERT INTO usage_events (meter, installation_id, user_key, surface, event_id, created_at) VALUES ('slack', 111, 'slack:prev', 'slack', NULL, ?)",
+      )
+      .bind(new Date().toISOString())
+      .run()
+
+    const result = await runSlackAgent(env, makeCtx())
+    expect(result.reply).toContain("usage limit")
+    // The blocked mention did not run the agent loop nor record another event.
+    expect(runAgentLoopMock).not.toHaveBeenCalled()
+    const org = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        meter: "slack",
+        installationId: 111,
+        sinceIso: "2000-01-01T00:00:00.000Z",
+      },
+    )
+    expect(org).toEqual({ ok: true, count: 1 }) // only the pre-filled row
   })
 })

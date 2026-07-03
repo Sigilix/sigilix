@@ -13,16 +13,35 @@ import { requireSession } from "@/src/lib/auth-middleware"
 import { sha256Hex } from "@/src/lib/auth-bearer"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import {
+  API_KEY_PREFIX,
   getApiKeyById,
   insertApiKey,
   isLinkedToInstallation,
+  listApiKeysByCreator,
   mintApiKeyPlaintext,
   revokeApiKeyById,
 } from "@/src/lib/api-key-store"
 import type { Env } from "@/src/shared/types/env"
 
+/** The masked stand-in the list shows for every key — only the non-secret type
+ *  prefix; the random tail is never stored, so it can't be reconstructed. */
+const MASKED_KEY = `${API_KEY_PREFIX}••••••••`
+
+/** Bound on a user-supplied key name (a display label, never key material). */
+const MAX_KEY_NAME = 60
+
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+/** Read an optional trimmed `name` label from a parsed body. Null when absent/blank/over-long. */
+function extractKeyName(body: unknown): string | null {
+  if (body == null || typeof body !== "object") return null
+  const raw = (body as Record<string, unknown>).name
+  if (typeof raw !== "string") return null
+  const trimmed = raw.trim()
+  if (trimmed === "" || trimmed.length > MAX_KEY_NAME) return null
+  return trimmed
 }
 
 /** Strict-positive-integer installationId from a parsed JSON body. */
@@ -70,12 +89,13 @@ export async function handleCreateApiKeyRoute(request: Request, env: Env, ctx?: 
   const authorized = await isLinkedToInstallation(db, githubUserId, installationId)
   if (!authorized) return json({ error: "forbidden" }, 403)
 
+  const name = extractKeyName(body)
   const plaintext = mintApiKeyPlaintext()
   const keyHash = await sha256Hex(plaintext)
   const id = crypto.randomUUID()
   const now = new Date().toISOString()
   try {
-    await insertApiKey(db, { id, keyHash, installationId, createdBy: githubUserId, nowIso: now })
+    await insertApiKey(db, { id, keyHash, installationId, createdBy: githubUserId, nowIso: now, name })
   } catch (error) {
     console.error(
       JSON.stringify({ event: "api-key-mint-failed", err: error instanceof Error ? error.message : String(error) }),
@@ -84,7 +104,38 @@ export async function handleCreateApiKeyRoute(request: Request, env: Env, ctx?: 
   }
 
   // Plaintext is returned exactly once here and is never logged above.
-  return json({ id, key: plaintext, installationId }, 201)
+  return json({ id, key: plaintext, installationId, name }, 201)
+}
+
+/**
+ * GET /v1/keys — list the CALLER'S OWN keys (metadata only; never the secret).
+ *
+ * Session-authed (portal browser), GitHub-account-required (keys are keyed by the
+ * caller's GitHub user id). Returns every key the caller MINTED — scoped to
+ * `created_by`, so a caller can never see another user's keys. Each entry carries
+ * id, name, installation, timestamps, revoked state, and a MASKED prefix stand-in;
+ * the SHA-256 hash is never selected. FAILS SOFT on the data path (empty list, not
+ * a 500). Response: `{ keys: [{ id, name, installationId, createdAt, lastUsedAt,
+ * revokedAt, keyPrefix }] }`.
+ */
+export async function handleListApiKeysRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+  const authed = await requireSession(request, env, ctx)
+  if (!authed) return json({ error: "unauthenticated" }, 401)
+  if (authed.record.githubUserId == null) return json({ error: "github_account_required" }, 403)
+  if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
+
+  const githubUserId = String(authed.record.githubUserId)
+  const summaries = await listApiKeysByCreator(env.SIGILIX_PLATFORM_DB, githubUserId)
+  const keys = summaries.map((k) => ({
+    id: k.id,
+    name: k.name,
+    installationId: k.installationId,
+    createdAt: k.createdAt,
+    lastUsedAt: k.lastUsedAt,
+    revokedAt: k.revokedAt,
+    keyPrefix: MASKED_KEY,
+  }))
+  return json({ keys }, 200)
 }
 
 /** DELETE /v1/keys/:id — revoke a key the caller is linked to (via its installation). */

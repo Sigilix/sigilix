@@ -44,9 +44,11 @@
 //                        repo slugs before summing — no cross-tenant leak (see
 //                        scanToolFindings). resultCount is banded to sast /
 //                        linter / other via the runner-tool catalog roles. Null
-//                        (Coming soon) when the DO binding is absent or no owned
-//                        repo has a recorded manifest — an honest empty, never a
-//                        fabricated zero.
+//                        (Coming soon) when the DO binding is absent, no owned
+//                        repo has a recorded manifest, or the window exceeds the
+//                        DO's own clamp (so 90d stays honestly empty rather than
+//                        a 30d number under a 90d label) — an honest empty, never
+//                        a fabricated zero.
 //
 //   NULL (no source — never fabricated):
 //     - chatUsage        chatbot metering (SIG-303 usage_events) is not yet in
@@ -109,6 +111,12 @@ const MAX_MEMORY_FETCH = 200
 const DAY_MS = 24 * 60 * 60 * 1000
 const ALLOWED_WINDOW_DAYS = [7, 30, 90] as const
 const DEFAULT_WINDOW_DAYS = 30
+
+// The RunnerToolMetricsDO clamps its query window to this many days (mirror of
+// its MAX_WINDOW_DAYS). Tool findings for a wider dashboard window would be a
+// clamped sum under a wider label, so the tile stays null above it (see
+// scanToolFindings).
+const MAX_DO_WINDOW_DAYS = 30
 
 // ─── Response shape (portal consumes this verbatim) ───────────
 
@@ -589,17 +597,31 @@ function createdMsFromTelemetryKey(key: string): number | null {
  *
  * Returns null (→ "Coming soon") when the DO binding is absent, the scope/slug
  * set is empty, the DO read faults, or no owned repo has a recorded manifest —
- * an honest empty rather than a fabricated zero. Bounded by the DO's own
- * MAX_LATEST_TOOL_ROWS + window; fail-soft in a try/catch (telemetry, never
- * receipt-critical).
+ * an honest empty rather than a fabricated zero. Only `produced` rows are summed
+ * (a disabled/empty tool contributes nothing). Fail-soft in a try/catch
+ * (telemetry, never receipt-critical).
+ *
+ * HONESTY BOUNDS (deliberate, documented rather than fabricated):
+ *   - The DO clamps its own query window to MAX_DO_WINDOW_DAYS. A dashboard
+ *     window ABOVE that (90d) would silently under-report vs its label, so we
+ *     return null (Coming soon) rather than a 30d number under a 90d heading.
+ *   - `latestByRepo` is a single GLOBAL, most-recent-first list capped inside
+ *     the DO; at large platform scale a caller's rows could fall outside that
+ *     cap and under-count (never over-count, never leak). Acceptable at launch
+ *     scale; revisit with a per-repo windowed sum if it becomes material.
  */
 async function scanToolFindings(env: Env, slugsLower: string[], windowDays: number): Promise<ToolFindings | null> {
   if (!env.RUNNER_TOOL_METRICS_DO) return null
   if (slugsLower.length === 0) return null
+  // The DO can only answer up to its own clamp; above it the number would be a
+  // 30d sum wearing a wider label — keep the tile honestly empty instead.
+  if (windowDays > MAX_DO_WINDOW_DAYS) return null
   try {
     const owned = new Set(slugsLower)
     const metrics = await queryRunnerToolMetrics(env, windowDays)
-    const mine = metrics.latestByRepo.filter((r) => owned.has(`${r.owner}/${r.repo}`.toLowerCase()))
+    const mine = metrics.latestByRepo.filter(
+      (r) => r.status === "produced" && owned.has(`${r.owner}/${r.repo}`.toLowerCase()),
+    )
     if (mine.length === 0) return null
     return bandToolFindings(mine.map((r) => ({ toolId: r.toolId, resultCount: r.resultCount })))
   } catch (error) {

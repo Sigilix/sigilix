@@ -321,6 +321,17 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
           resultCount: 2,
           lastSeenAt: iso(1 * DAY),
         },
+        // owned but NOT produced (disabled) → must be excluded
+        {
+          owner: "octocat",
+          repo: "api",
+          toolId: "trivy",
+          enabled: false,
+          status: "disabled",
+          runCount: 0,
+          resultCount: 50,
+          lastSeenAt: iso(1 * DAY),
+        },
         // FOREIGN repo → must be excluded
         {
           owner: "other-org",
@@ -347,7 +358,14 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
     stubInstallations([1])
     const res = await handleMetricsDashboardRoute(reqWithSession("sess-1", "?window=30d"), env)
     const b = (await res.json()) as MetricsDashboardResponse
-    expect(b.toolFindings).toEqual({ sast: 3, linter: 5, other: 2 }) // 99 from foreign repo excluded
+    // 99 (foreign repo) and 50 (disabled tool) both excluded.
+    expect(b.toolFindings).toEqual({ sast: 3, linter: 5, other: 2 })
+
+    // 90d exceeds the DO's own window clamp → the tile stays honestly empty
+    // rather than showing a 30d sum under a 90d label.
+    const res90 = await handleMetricsDashboardRoute(reqWithSession("sess-1", "?window=90d"), env)
+    const b90 = (await res90.json()) as MetricsDashboardResponse
+    expect(b90.toolFindings).toBeNull()
   })
 
   it("fail-soft on a D1 read error: 200 with zeroed metrics, never a 500", async () => {

@@ -15,6 +15,7 @@ import { buildLinearClient } from "@/src/lib/linear"
 import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { triageIssue } from "@/src/lib/triage"
+import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
 import type { SlackMemoryScope } from "@/src/lib/slack/slack-memory"
 import type { SlackScope } from "@/src/lib/slack/slack-scope"
@@ -114,6 +115,32 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
   // rather than returning a qa success-shape on a caller contract violation.
   const [primary] = scope.repos
   if (!primary) throw new Error("runSlackAgent requires a scoped repo")
+
+  // SIG-303 ORG pool (slack). Slack bot activity is org AUTOMATION → it draws the
+  // shared ORG limit, keyed to the installation; the triggering Slack user is
+  // recorded for the per-person breakdown but does NOT consume any dev's seat.
+  // GRACE POLICY: checked at the START of handling the mention; over-cap blocks the
+  // NEXT mention (a friendly reply), never mid-work. Behind SIGILIX_USAGE_METER_MODE
+  // (default shadow → never blocks). Fail-open.
+  const now = Date.now()
+  const orgDecision = await checkUsagePool(env, { pool: "org", installationId: primary.installationId, nowMs: now })
+  if (!orgDecision.allowed) {
+    return {
+      reply: formatSigilixReply(
+        "_This workspace has reached its Sigilix usage limit for now. It'll free up shortly — try again in a bit._",
+        { provenance: "degraded" },
+      ),
+      action: { kind: "qa" },
+    }
+  }
+  // Record one slack ORG event per handled mention (fail-open; never throws).
+  await appendUsageEvent(env, {
+    meter: "slack",
+    installationId: primary.installationId,
+    userKey: `slack:${ctx.slackUserId}`,
+    surface: "slack",
+    nowIso: new Date(now).toISOString(),
+  })
 
   const memScope: SlackMemoryScope = {
     teamId: scope.teamId,

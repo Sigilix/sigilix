@@ -36,6 +36,25 @@ export { resolveTenantCap } from "./adapters/resolve-tenant-cap"
 export { appendUsage } from "./adapters/d1-usage-ledger"
 export { readTenantUsageSince, readUsageRollupSince } from "./adapters/d1-usage-read"
 export type { TenantUsageRow } from "./adapters/d1-usage-read"
+export {
+  resolveUsageMeterMode,
+  resolveUsagePoolCap,
+  decideUsagePool,
+  usagePct,
+  meterPool,
+  ORG_METERS,
+  SEAT_METERS,
+  DEFAULT_POOL_CAPS,
+  USAGE_WINDOW_MS,
+  USAGE_WINDOW_LABEL,
+  USAGE_SESSION_WINDOW_MS,
+  USAGE_WEEKLY_WINDOW_MS,
+} from "./domain/usage-meters"
+export type { UsagePool, UsageMeter, UsageWindow, UsageEventMeter, UsageMeterMode } from "./domain/usage-meters"
+export { appendUsageEvent } from "./adapters/d1-usage-events"
+export { readUsageEventCount, readUsageEventAuthorBreakdown } from "./adapters/d1-usage-events-read"
+export { checkUsagePool } from "./adapters/check-usage-pool"
+export type { UsagePoolDecision, UsagePoolWindowState } from "./adapters/check-usage-pool"
 export { checkShadowQuota } from "./adapters/check-shadow-quota"
 export { readRollingReviewCount } from "./adapters/d1-rate-limit-read"
 export { checkRateLimit } from "./adapters/check-rate-limit"

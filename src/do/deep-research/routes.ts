@@ -14,8 +14,9 @@
 // SameSite=None.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { requireApiTenant } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
+import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { parseEffort, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import type { Env } from "@/src/shared/types/env"
@@ -38,11 +39,36 @@ async function authorize(request: Request, env: Env, ctx: ExecutionContext): Pro
   return { response: tenant.response }
 }
 
+/**
+ * SIG-303 — derive the chatbot SEAT identity from the deep-research `creator`
+ * handle. A portal session is a real per-user seat (`gh:<githubUserId>`); an
+ * API-key tenant's seat is its key (`inst:<installationId>`, matching the CLI
+ * gateway's seat keying). `installationId` is org CONTEXT only (0 = none / legacy)
+ * — chatbot is a SEAT meter and never draws the org pool.
+ */
+export function seatIdentityFromCreator(creator: string): { userKey: string; installationId: number } {
+  if (creator.startsWith("session:")) return { userKey: `gh:${creator.slice("session:".length)}`, installationId: 0 }
+  if (creator.startsWith("tenant:")) {
+    const id = Number(creator.slice("tenant:".length))
+    const installationId = Number.isInteger(id) && id !== LEGACY_TENANT_INSTALLATION_ID ? id : 0
+    return { userKey: `inst:${Number.isInteger(id) ? id : creator.slice("tenant:".length)}`, installationId }
+  }
+  return { userKey: creator, installationId: 0 }
+}
+
 /** POST /v1/research — body { question, model?, effort? } → { id }. */
 export async function handleResearchCreate(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
   const auth = await authorize(request, env, ctx)
   if ("response" in auth) return auth.response
+
+  // SIG-303 SEAT pool (chatbot). GRACE POLICY: checked at the START of a new run,
+  // before the DO is spun up — an over-cap seat blocks the NEXT run, never aborts
+  // an in-flight one. Behind SIGILIX_USAGE_METER_MODE (default shadow → no block).
+  const seat = seatIdentityFromCreator(auth.creator)
+  const now = Date.now()
+  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seat.userKey, nowMs: now })
+  if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
   let body: { question?: unknown; model?: unknown; effort?: unknown }
   try {
@@ -69,6 +95,20 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   if (!started.ok) {
     return json({ error: "failed to start research run" }, 502)
   }
+
+  // SIG-303: record the chatbot SEAT event (one per started run). event_id = the
+  // DO id → idempotent on a retry. Fire-and-forget (fail-open; never fails the run).
+  ctx.waitUntil(
+    appendUsageEvent(env, {
+      meter: "chatbot",
+      installationId: seat.installationId,
+      userKey: seat.userKey,
+      surface: "portal",
+      eventId: id.toString(),
+      nowIso: new Date(now).toISOString(),
+    }),
+  )
+
   return json({ id: id.toString() })
 }
 

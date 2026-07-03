@@ -17,6 +17,7 @@ import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
+import { captureInstructiveLearning } from "@/src/features/learnings"
 import type { SlackMemoryScope } from "@/src/lib/slack/slack-memory"
 import type { SlackScope } from "@/src/lib/slack/slack-scope"
 import { detectSlackIntent, formatSigilixReply } from "@/src/lib/slack/slack-reply"
@@ -262,6 +263,24 @@ async function runQa(
     offer ? " (offered PR)" : ""
   }`
   await captureSlackMemory(env, memScope, { kind: "task_state", content: captureContent }).catch(() => {})
+
+  // Unified learnings capture — an INSTRUCTIVE Slack message (a teach/correct /
+  // "remember this" directed at Sigilix) becomes an ORG-scope learning keyed to
+  // the installation, so every surface (PR review, CLI agent, Linear) reads it
+  // back through the one learnings store. Quality-gated by extractLearning on the
+  // "chat" surface — ordinary questions/chatter never pass. Ships dark behind
+  // OPENCLAW_LEARNINGS_MODE + OPENCLAW_ORG_MEMORY_CAPTURE. Best-effort, non-fatal.
+  await captureInstructiveLearning({
+    env,
+    scope: "org",
+    subjectId: String(primary.installationId),
+    surface: "chat",
+    sourceKind: "chat",
+    message: ctx.mentionText,
+    dedupeId: `slack:${ctx.channelId}:${ctx.threadTs}:${ctx.slackUserId}`,
+    actor: `slack:${ctx.slackUserId}`,
+    telemetry: { surface_detail: "slack", team_id: ctx.scope.teamId },
+  }).catch(() => {})
 
   return { reply, action: offer ? { kind: "implement-offer" } : { kind: "qa" } }
 }

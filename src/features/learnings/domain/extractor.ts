@@ -3,7 +3,7 @@ import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
 import { normalizeRule } from "./store-ops"
 import { LEARNING_MEMORY_TYPES, type LearningMemoryType, type LearningPolarity } from "./types"
 
-export type ExtractionSurface = "inline-reply" | "top-level" | "qa"
+export type ExtractionSurface = "inline-reply" | "top-level" | "qa" | "chat"
 
 export type ExtractedLearning = {
   rule: string
@@ -104,6 +104,8 @@ function surfacePolicy(surface: ExtractionSurface): string {
       return "Policy: this references a Sigilix finding, so proactively extract a learning when the message teaches a durable preference."
     case "qa":
       return 'Policy: ONLY remember when the user explicitly signals learning intent with words like "remember", "always", "never", or "going forward".'
+    case "chat":
+      return "Policy: this is a chat message directed at the Sigilix assistant (Slack or Linear). Remember ONLY when the message TEACHES a durable convention/preference or CORRECTS the assistant with a generalizable rule. Reject casual questions, status updates, task requests, and chit-chat."
   }
 }
 

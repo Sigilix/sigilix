@@ -78,6 +78,39 @@ describe("email-verification-store", () => {
     })
   })
 
+  it("prunes this user's used + expired tokens on the next mint (table stays bounded)", async () => {
+    const count = async (userId: string): Promise<number> => {
+      const row = await db
+        .prepare("SELECT COUNT(*) AS n FROM email_verification_token WHERE user_id = ?")
+        .bind(userId)
+        .first<{ n: number }>()
+      return row?.n ?? 0
+    }
+
+    // (a) a CONSUMED token is pruned when a fresh one is minted.
+    const used = await mintVerificationToken(db, {
+      userId: "p1",
+      email: "p1@example.com",
+      nowIso: "2026-07-03T00:00:00.000Z",
+    })
+    await consumeVerificationToken(db, used, "2026-07-03T01:00:00.000Z")
+    expect(await count("p1")).toBe(1)
+    await mintVerificationToken(db, { userId: "p1", email: "p1@example.com", nowIso: "2026-07-03T02:00:00.000Z" })
+    // The used row is gone; only the fresh live token remains.
+    expect(await count("p1")).toBe(1)
+
+    // (b) an EXPIRED token is pruned when a fresh one is minted.
+    await mintVerificationToken(db, {
+      userId: "p2",
+      email: "p2@example.com",
+      nowIso: "2026-07-03T00:00:00.000Z",
+      ttlHours: 24,
+    })
+    // 25h later the first is expired; minting again prunes it rather than piling up.
+    await mintVerificationToken(db, { userId: "p2", email: "p2@example.com", nowIso: "2026-07-04T01:00:00.000Z" })
+    expect(await count("p2")).toBe(1)
+  })
+
   it("two concurrent consumes of the same token → exactly one succeeds", async () => {
     const token = await mintVerificationToken(db, {
       userId: "u4",

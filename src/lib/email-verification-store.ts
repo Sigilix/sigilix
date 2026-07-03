@@ -38,6 +38,11 @@ export interface MintArgs {
  * Returns the RAW token (the secret that goes in the email link) — it is never
  * stored or logged. Any still-outstanding tokens for this user are invalidated
  * first, so a resend supersedes an earlier link (one live link per user).
+ *
+ * PRUNE: this user's already-used or expired rows are deleted in the same batch
+ * (they are inert — consume rejects them). This keeps the table bounded to at
+ * most the current-live token plus the one it just superseded, without any
+ * scheduled job; it rides the existing idx_email_verification_token_user index.
  */
 export async function mintVerificationToken(db: D1Database, args: MintArgs): Promise<string> {
   const ttlHours = args.ttlHours ?? VERIFY_TOKEN_TTL_HOURS
@@ -45,9 +50,13 @@ export async function mintVerificationToken(db: D1Database, args: MintArgs): Pro
   const tokenHash = await sha256Hex(rawToken)
   const expiresAt = new Date(new Date(args.nowIso).getTime() + ttlHours * 3600_000).toISOString()
 
-  // Invalidate any prior outstanding tokens for this user, then insert the new
-  // one — a single batch so a resend can never leave two live links.
+  // Prune this user's inert (used/expired) rows, invalidate any still-outstanding
+  // token, then insert the new one — one batch so a resend can never leave two
+  // live links, and the table cannot grow unbounded across resends.
   await db.batch([
+    db
+      .prepare("DELETE FROM email_verification_token WHERE user_id = ? AND (used_at IS NOT NULL OR expires_at <= ?)")
+      .bind(args.userId, args.nowIso),
     db
       .prepare("UPDATE email_verification_token SET used_at = ? WHERE user_id = ? AND used_at IS NULL")
       .bind(args.nowIso, args.userId),

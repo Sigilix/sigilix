@@ -187,3 +187,55 @@ export async function resolveUserRole(
     return "member"
   }
 }
+
+/**
+ * SIG-303 — is the session user an admin/owner of ONE SPECIFIC installation?
+ *
+ * {@link resolveUserRole} above is the AGGREGATE role ("admin of ANY connected
+ * install") used by the settings UI. That is WRONG for a per-installation
+ * authorization gate: a user who merely owns a personal install (→ aggregate
+ * "admin") but is only a MEMBER of org B must NOT be treated as an admin of org
+ * B. This function answers the scoped question — admin of `installationId`
+ * specifically — so `GET /v1/usage?scope=org&installationId=<B>` can't leak org
+ * B's aggregate + per-developer usage to a non-admin of B.
+ *
+ * Admin of `installationId` iff that installation is either:
+ *   • the user's OWN personal install (account.type "User", login === session), or
+ *   • an ORGANIZATION install where the user is an ACTIVE admin of that org.
+ * An installation the token can't see (not in the list) → false.
+ *
+ * FAILS CLOSED to false on any error (least privilege) — mirrors resolveUserRole.
+ */
+export async function isAdminOfInstallation(
+  accessToken: string,
+  sessionLogin: string,
+  installationId: number,
+  fetchImpl: FetchImpl = fetch,
+): Promise<boolean> {
+  try {
+    const [installations, memberships] = await Promise.all([
+      fetchInstallations(accessToken, fetchImpl),
+      fetchOwnOrgMemberships(accessToken, fetchImpl),
+    ])
+    const target = installations.find((inst) => inst.id === installationId)
+    if (!target) return false // not visible to the caller's token → not an admin of it
+
+    if (target.account?.type === "User") {
+      return target.account.login === sessionLogin
+    }
+    if (target.account?.type === "Organization" && typeof target.account.login === "string") {
+      const orgLogin = target.account.login
+      return memberships.some((m) => m.organization?.login === orgLogin && m.role === "admin" && m.state === "active")
+    }
+    return false
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "is-admin-of-installation-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return false
+  }
+}

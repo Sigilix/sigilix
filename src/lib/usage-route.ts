@@ -1,92 +1,87 @@
-// sig-usage — GET /v1/usage.
+// SIG-303 full usage metering — GET /v1/usage.
 //
-// Powers the "Plan usage limits" panel in the portal AND the CLI's `/usage`
-// slash-command limit bars. Returns the caller's REAL, live usage against the
-// limits Sigilix actually enforces — never fabricated numbers.
+// Powers the portal "Plan usage" panel + the CLI `/usage` bars with the caller's
+// REAL, live usage against the caps Sigilix actually enforces — never fabricated,
+// never overstated, NO per-model data.
 //
-// What is real today (audited against the metering pipeline):
-//   • `session` — the SIG-38 per-developer rolling-window PR-review cap. Written
-//     to D1 `usage_ledger` on every finalized review (session.ts → appendUsage,
-//     author = pr.user.login) and read here through the SAME adapters the
-//     enforcement gate uses (readRollingReviewCount + resolveRateLimitCap +
-//     decideRateLimit + computeResetMs). used/limit/resets are exactly what the
-//     gate would compute — the panel can never overstate the cap.
-//   • `weekly` — trailing-7d PR-review usage for the same scope. There is NO
-//     weekly CAP in Sigilix yet, so `limit`/`pct`/`resets_at` are null (honest:
-//     usage shown, no bar fill). Do NOT invent a weekly cap here.
-//   • `totals` — trailing-7d raw model-call/token totals. Only attributable at
-//     the INSTALLATION (org) grain via readTenantUsageSince, so on the per-user
-//     scope those are null (we don't have per-author token attribution).
+// TWO INDEPENDENT POOLS (founder model):
+//   • ORG pool  (scope=org)  — a single shared org limit consumed by org AUTOMATION:
+//       pr_reviews (read from usage_ledger) + linear_triage + slack (usage_events).
+//       Keyed by installation. Admin `?author=` drills into who triggered org usage.
+//   • SEAT pool (scope=user) — a per-dev limit consumed by DIRECT personal use:
+//       coding_agent + chatbot (usage_events), keyed by the caller's seat.
+//   The pools are INDEPENDENT: an org event never moves a seat counter and vice
+//   versa. Per-meter `used` is a breakdown; `totals` is the pool aggregate that
+//   enforcement actually gates on (`limit` = the shared pool cap).
 //
-// Cap parity (CRITICAL): the enforcement gate (index-dispatch-rate-limit-gate)
-// calls checkRateLimit WITHOUT a tier, so the effective enforced cap is
-// resolveRateLimitCap(undefined) = DEFAULT_RATE_LIMIT_CAP for every tenant right
-// now. This route mirrors that exactly (no tier passed) so the displayed limit
-// is always the limit that is actually enforced. When SIG-41 wires tier into the
-// gate, pass the same tier here.
-//
-// Plan name is a display label from OPENCLAW_PLAN (mirrors org-overview-route.ts);
-// it is independent of the enforced cap until SIG-41.
+// Windows: 5h rolling (session/burst) AND a FIXED weekly window that resets every
+// Monday 09:00 UTC (the headline cap) — weekly resets_at is the next Monday 09:00.
+// Everything is COUNT-based (runs / messages / reviews) — never per-minute/cost.
 //
 // Auth mirrors workspace-prs / org-overview: portal SESSION cookie first
-// (requireSession, per-user scope), else a bearer API key (requireApiTenant).
-// On the api-key path the caller may pass `?author=<github-login>` to get the
-// same per-developer scope the portal gets; without it the scope is the whole
-// installation (org) and `session` uses the installation-wide review count with
-// a null cap (the cap is per-developer, so an org total has no single cap).
-// CORS'd for the portal origins (portal-cors.ts, wired in index.ts).
+// (requireSession → SEAT scope by default), else a bearer API key (requireApiTenant
+// → ORG scope by default). `?scope=` overrides; org scope + `?author=` is ADMIN-only
+// and always tenant-isolated to the caller's own installation. CORS'd in index.ts.
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
-import { resolveUserRole } from "@/src/lib/resolve-user-role"
+import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import {
-  resolveRateLimitMode,
-  resolveRateLimitCap,
-  decideRateLimit,
-  computeResetMs,
-  readRollingReviewCount,
+  resolveUsageMeterMode,
+  resolveUsagePoolCap,
+  usagePct,
   readTenantUsageSince,
-  RATE_LIMIT_WINDOW_MS,
-  RATE_LIMIT_BURST,
+  readUsageEventCount,
+  readUsageEventAuthorBreakdown,
+  readRollingReviewCount,
+  ORG_METERS,
+  SEAT_METERS,
+  USAGE_SESSION_WINDOW_MS,
+  weeklyWindowStartMs,
+  weeklyWindowResetMs,
+  USAGE_WINDOW_LABEL,
 } from "@/src/features/tenancy"
-import type { RateLimitMode } from "@/src/features/tenancy"
+import type { UsageMeter, UsageMeterMode, UsagePool } from "@/src/features/tenancy"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_INSTALLATION_PAGES = 20
-const WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 const USAGE_PLANS = ["free", "pro", "max", "ultra", "team", "enterprise"] as const
 type UsagePlan = (typeof USAGE_PLANS)[number]
 
-/** A single usage row the portal/CLI renders as a bar. `limit === null` → no hard cap (no fill). */
-export interface UsageBar {
-  key: string
-  label: string
+/** One window of one meter/total: usage vs the (shared pool) cap. */
+export interface UsageMeterWindow {
   used: number
+  /** The shared pool cap for this window. null → no hard cap (usage-only, no bar). */
   limit: number | null
-  /** 0–100, rounded. null when `limit` is null (no cap → no percentage). */
+  /** 0–100 rounded; null when limit is null. */
   pct: number | null
-  window_ms: number
-  window_label: string
-  /** ISO instant the window next frees a slot / rolls; null when nothing to reset. */
-  resets_at: string | null
-  resets_in_ms: number | null
 }
+
+export interface UsageMeterBars {
+  session: UsageMeterWindow
+  weekly: UsageMeterWindow
+}
+
+/** Contract scope label: "user" ⇒ SEAT pool, "org" ⇒ ORG pool. */
+export type UsageScope = "user" | "org"
 
 export interface UsageResponse {
   plan: UsagePlan
   account: string
-  scope: "user" | "org"
-  mode: RateLimitMode
-  session: UsageBar | null
-  weekly: UsageBar | null
-  totals: {
-    reviews: number | null
-    model_calls: number | null
-    tokens: number | null
-    since: string
+  scope: UsageScope
+  mode: UsageMeterMode
+  windows: {
+    session: { window_label: string; resets_at: string }
+    weekly: { window_label: string; resets_at: string }
   }
+  /** Per-meter breakdown for the scope's pool. Keys vary by scope (see file header). */
+  meters: Partial<Record<UsageMeter, UsageMeterBars>>
+  /** The pool aggregate — the enforced total (sum of the pool's meters vs the shared cap). */
+  totals: UsageMeterBars & { since_session: string; since_weekly: string }
+  /** Optional admin breakdown of who triggered ORG usage (scope=org only). */
+  authors?: Array<{ user_key: string; session: number; weekly: number }>
   generated_at: string
 }
 
@@ -94,7 +89,6 @@ function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
-/** Plan display label from OPENCLAW_PLAN (validated against the known set), else "free". */
 function resolvePlan(env: Pick<Env, "OPENCLAW_PLAN">): UsagePlan {
   const raw = env.OPENCLAW_PLAN
   return (USAGE_PLANS as readonly string[]).includes(raw ?? "") ? (raw as UsagePlan) : "free"
@@ -114,7 +108,6 @@ interface UserInstallationsResponse {
   installations?: Array<{ id?: number }>
 }
 
-/** Every installation id the session's GitHub user-to-server token can see. Soft-fails to []. */
 async function fetchUserInstallationIds(accessToken: string): Promise<number[]> {
   const ids: number[] = []
   let seen = 0
@@ -152,7 +145,6 @@ function parseInstallationIdParam(url: URL): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
-/** The tenant's account_login for the headline. Fail-soft to "" (missing binding, no row, or D1 error). */
 async function readAccountLogin(env: Pick<Env, "SIGILIX_PLATFORM_DB">, installationId: number): Promise<string> {
   if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return ""
   try {
@@ -172,104 +164,84 @@ async function readAccountLogin(env: Pick<Env, "SIGILIX_PLATFORM_DB">, installat
   }
 }
 
-function roundPct(used: number, limit: number | null): number | null {
-  if (limit === null || !Number.isFinite(limit) || limit <= 0) return null
-  return Math.min(100, Math.max(0, Math.round((used / limit) * 100)))
-}
-
 /** Resolved caller scope for the usage read. */
-interface UsageScope {
-  scope: "user" | "org"
+interface ResolvedScope {
+  scope: UsageScope
   installationId: number
-  /** The per-developer login for the rolling window; null → org-wide (no per-user cap). */
-  authorLogin: string | null
+  /** Seat key for scope=user (e.g. "gh:<id>" | "inst:<id>"). */
+  seatKey: string | null
+  /** Admin per-author filter for scope=org (matches usage_events.user_key / pr author). */
+  authorFilter: string | null
   account: string
 }
 
 /**
- * Build the per-developer `session` bar: the SIG-38 rolling-window PR-review cap.
- * Reads through the SAME adapters + math the enforcement gate uses so used/limit/
- * resets can never overstate the enforced cap. Returns null on a D1 fault (the
- * caller renders an honest "unavailable" state rather than a fake zero).
+ * Count one ORG-pool meter for an installation in [since, now]. pr_reviews reads
+ * usage_ledger (per-author when `author` is set); linear_triage/slack read
+ * usage_events. Returns null on a fault; the caller's `cell()` renders that as 0
+ * with the cap (the safe direction — a read fault never inflates usage against a
+ * cap, so it can't wrongly block).
+ *
+ * INTENTIONAL: the `author` drill-down is only meaningful for pr_reviews, whose
+ * usage_ledger.author_login IS a GitHub login. slack rows are user-keyed as
+ * `slack:<id>` (a Slack id, not a GitHub login) and linear_triage rows have a NULL
+ * user_key, so an `author=<github-login>` filter legitimately returns 0 for those
+ * two — org drill-down by GitHub identity is a pr_reviews concept.
  */
-async function buildUserSessionBar(
-  env: Pick<Env, "SIGILIX_PLATFORM_DB" | "SIGILIX_RATE_LIMIT_MODE">,
+async function readOrgMeter(
+  env: Env,
+  meter: UsageMeter,
   installationId: number,
-  authorLogin: string,
-  nowMs: number,
-): Promise<UsageBar | null> {
-  // Mirror the enforcement gate exactly: no tier → the actually-enforced cap.
-  const cap = resolveRateLimitCap(undefined)
-  const burst = RATE_LIMIT_BURST
-  const sinceIso = new Date(nowMs - RATE_LIMIT_WINDOW_MS).toISOString()
-  const res = await readRollingReviewCount(env, {
-    installationId,
-    authorLogin,
-    sinceIso,
-    limit: cap + burst + 1,
-  })
-  if (!res.ok) return null
-
-  const used = res.count
-  const rows = res.windowRowsAscMs
-  let resetsInMs: number | null = null
-  if (rows.length > 0) {
-    resetsInMs = decideRateLimit(used, cap, burst)
-      ? Math.max(0, rows[0]! + RATE_LIMIT_WINDOW_MS - nowMs) // under cap: when the count next drops
-      : computeResetMs(rows, RATE_LIMIT_WINDOW_MS, used, cap, burst, nowMs) // over cap: when a slot frees
+  author: string | null,
+  sinceIso: string,
+): Promise<number | null> {
+  if (meter === "pr_reviews") {
+    if (author) {
+      const res = await readRollingReviewCount(env, { installationId, authorLogin: author, sinceIso, limit: 1 })
+      return res.ok ? res.count : null
+    }
+    const res = await readTenantUsageSince(env, installationId, sinceIso)
+    return res.ok ? res.reviews : null
   }
-
-  return {
-    key: "pr_reviews",
-    label: "PR reviews",
-    used,
-    limit: cap,
-    pct: roundPct(used, cap),
-    window_ms: RATE_LIMIT_WINDOW_MS,
-    window_label: "5h",
-    resets_at: resetsInMs === null ? null : new Date(nowMs + resetsInMs).toISOString(),
-    resets_in_ms: resetsInMs,
+  if (meter === "linear_triage" || meter === "slack") {
+    const res = await readUsageEventCount(env, {
+      meter,
+      installationId,
+      ...(author ? { userKey: author } : {}),
+      sinceIso,
+    })
+    return res.ok ? res.count : null
   }
+  return null
+}
+
+/** Count one SEAT-pool meter (coding_agent | chatbot) for a seat in [since, now]. */
+async function readSeatMeter(env: Env, meter: UsageMeter, seatKey: string, sinceIso: string): Promise<number | null> {
+  if (meter !== "coding_agent" && meter !== "chatbot") return null
+  const res = await readUsageEventCount(env, { meter, userKey: seatKey, sinceIso })
+  return res.ok ? res.count : null
 }
 
 /**
- * Build the trailing-7d `weekly` bar for a single developer. Reviews only — the
- * per-author token/model-call figures are not attributable, and there is no
- * weekly CAP, so limit/pct/resets are null (honest usage, no fill). Returns null
- * on a D1 fault.
+ * Build a { used, limit, pct } window cell. A null `used` (a read fault) collapses
+ * to 0 here — deliberately the SAFE direction: a fault shows 0 usage rather than a
+ * fabricated high number, so a display read can never overstate consumption against
+ * the cap. (Enforcement lives in checkUsagePool, which fails OPEN on the same fault.)
  */
-async function buildUserWeeklyBar(
-  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
-  installationId: number,
-  authorLogin: string,
-  nowMs: number,
-): Promise<UsageBar | null> {
-  const sinceIso = new Date(nowMs - WEEKLY_WINDOW_MS).toISOString()
-  const res = await readRollingReviewCount(env, { installationId, authorLogin, sinceIso, limit: 1 })
-  if (!res.ok) return null
-  return {
-    key: "pr_reviews_weekly",
-    label: "PR reviews · this week",
-    used: res.count,
-    limit: null,
-    pct: null,
-    window_ms: WEEKLY_WINDOW_MS,
-    window_label: "7d",
-    resets_at: null,
-    resets_in_ms: null,
-  }
+function cell(used: number | null, cap: number | null): UsageMeterWindow {
+  const u = used ?? 0
+  return { used: u, limit: cap, pct: usagePct(u, cap) }
 }
 
 /** GET /v1/usage — see file header. */
 export async function handleUsageRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url)
   const nowMs = Date.now()
-  const mode = resolveRateLimitMode(env)
+  const mode = resolveUsageMeterMode(env)
   const plan = resolvePlan(env)
 
-  // ── Resolve caller scope ──────────────────────────────────────────────────
   const session = await requireSession(request, env, ctx)
-  let resolved: UsageScope
+  let resolved: ResolvedScope
 
   if (session) {
     if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
@@ -294,114 +266,158 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     const current = requested !== null && ownedIds.includes(requested) ? requested : (ownedIds[0] ?? 0)
     const account = current > 0 ? await readAccountLogin(env, current) : ""
 
-    // Default is the caller's OWN per-developer usage. The org Billing→Usage
-    // tab may request `?scope=org` (installation-wide) or `?author=<login>`
-    // (drill into a specific member) — both are ADMIN-only and always scoped to
-    // the caller's own installation (tenant isolation). A member (or an absent
-    // param) always falls back to self, so a member can never read another
-    // member's usage. resolveUserRole is only consulted when a privileged param
-    // is present, so the common personal path stays a single GitHub call.
-    const selfLogin = session.record.login
+    // Default = the caller's own SEAT usage. The org Billing→Usage tab may request
+    // `?scope=org` (org pool) or `?scope=org&author=<login>` (drill into who
+    // triggered org usage) — both ADMIN-only, always the caller's own installation
+    // (tenant isolation). A member (or absent param) always falls back to self.
+    // SIG-303: the admin check MUST be scoped to `current` (this installation) via
+    // isAdminOfInstallation — NOT the aggregate resolveUserRole, which returns
+    // "admin" for anyone owning ANY personal install and would let a mere member of
+    // this org read its aggregate + per-developer usage.
     const wantsOrg = url.searchParams.get("scope") === "org"
-    const authorParam = url.searchParams.get("author")?.trim()
-    const wantsOtherAuthor = !!authorParam && authorParam.toLowerCase() !== selfLogin.toLowerCase()
+    const authorParam = url.searchParams.get("author")?.trim() || null
 
-    let scopeKind: "user" | "org" = "user"
-    let effectiveAuthor: string | null = selfLogin
-    if ((wantsOrg || wantsOtherAuthor) && current > 0) {
-      const role = await resolveUserRole(accessToken, selfLogin)
-      if (role === "admin") {
-        if (wantsOrg) {
-          scopeKind = "org"
-          effectiveAuthor = null
-        } else if (authorParam) {
-          effectiveAuthor = authorParam
+    if (wantsOrg && current > 0) {
+      const isAdmin = await isAdminOfInstallation(accessToken, session.record.login, current)
+      if (isAdmin) {
+        resolved = { scope: "org", installationId: current, seatKey: null, authorFilter: authorParam, account }
+      } else {
+        // non-admin → own seat (never the org aggregate)
+        resolved = {
+          scope: "user",
+          installationId: current,
+          seatKey: `gh:${session.record.githubUserId}`,
+          authorFilter: null,
+          account,
         }
       }
-      // non-admin → stays self (never another member's usage)
+    } else {
+      resolved = {
+        scope: "user",
+        installationId: current,
+        seatKey: `gh:${session.record.githubUserId}`,
+        authorFilter: null,
+        account,
+      }
     }
-    resolved = { scope: scopeKind, installationId: current, authorLogin: effectiveAuthor, account }
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
-    if ("response" in apiAuth) return apiAuth.response // 401
+    if ("response" in apiAuth) return apiAuth.response
     const installationId = apiAuth.caller.installationId
-    // An api-key caller may pass its own developer login to get per-user scope;
-    // without it we report the whole installation (org) grain.
-    const authorParam = url.searchParams.get("author")?.trim()
-    const authorLogin = authorParam && authorParam !== "" ? authorParam : null
-    // The legacy global key is Sigilix-internal and installation-broad; a real
-    // per-tenant key is scoped to exactly its own installation.
     const scopedInstallationId = installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : installationId
     const account = scopedInstallationId > 0 ? await readAccountLogin(env, scopedInstallationId) : ""
-    resolved = {
-      scope: authorLogin ? "user" : "org",
-      installationId: scopedInstallationId,
-      authorLogin,
-      account,
+    // An API key represents an installation → default ORG scope; `?scope=user`
+    // reports the key's own SEAT (its CLI coding_agent / chatbot usage).
+    const wantsUser = url.searchParams.get("scope") === "user"
+    const authorParam = url.searchParams.get("author")?.trim() || null
+    if (wantsUser) {
+      resolved = {
+        scope: "user",
+        installationId: scopedInstallationId,
+        seatKey: `inst:${scopedInstallationId}`,
+        authorFilter: null,
+        account,
+      }
+    } else {
+      resolved = {
+        scope: "org",
+        installationId: scopedInstallationId,
+        seatKey: null,
+        authorFilter: authorParam,
+        account,
+      }
     }
   }
 
-  // ── Build the bars from real ledger data ──────────────────────────────────
-  const since7dIso = new Date(nowMs - WEEKLY_WINDOW_MS).toISOString()
-  let sessionBar: UsageBar | null = null
-  let weeklyBar: UsageBar | null = null
-  let totals: UsageResponse["totals"] = { reviews: null, model_calls: null, tokens: null, since: since7dIso }
+  const pool: UsagePool = resolved.scope === "org" ? "org" : "seat"
+  const capSession = resolveUsagePoolCap(env, pool, "session")
+  const capWeekly = resolveUsagePoolCap(env, pool, "weekly")
+  // Session = 5h ROLLING; weekly = since the most recent Monday-09:00 UTC anchor
+  // (FIXED weekly reset — see usage-meters.ts).
+  const sinceSession = new Date(nowMs - USAGE_SESSION_WINDOW_MS).toISOString()
+  const sinceWeekly = new Date(weeklyWindowStartMs(nowMs)).toISOString()
 
-  if (resolved.installationId > 0 && resolved.authorLogin) {
-    // Per-developer scope: the accurate, launch-critical path (portal session).
-    ;[sessionBar, weeklyBar] = await Promise.all([
-      buildUserSessionBar(env, resolved.installationId, resolved.authorLogin, nowMs),
-      buildUserWeeklyBar(env, resolved.installationId, resolved.authorLogin, nowMs),
-    ])
-    // Org-grain raw totals are still useful context alongside the per-user bars.
-    const rollup = await readTenantUsageSince(env, resolved.installationId, since7dIso)
-    if (rollup.ok) {
-      totals = { reviews: rollup.reviews, model_calls: rollup.modelCalls, tokens: rollup.tokens, since: since7dIso }
+  const metersOut: Partial<Record<UsageMeter, UsageMeterBars>> = {}
+  let sumSession = 0
+  let sumWeekly = 0
+
+  const meterList = pool === "org" ? ORG_METERS : SEAT_METERS
+  for (const meter of meterList) {
+    let usedS: number | null
+    let usedW: number | null
+    if (pool === "org" && resolved.installationId > 0) {
+      ;[usedS, usedW] = await Promise.all([
+        readOrgMeter(env, meter, resolved.installationId, resolved.authorFilter, sinceSession),
+        readOrgMeter(env, meter, resolved.installationId, resolved.authorFilter, sinceWeekly),
+      ])
+    } else if (pool === "seat" && resolved.seatKey) {
+      ;[usedS, usedW] = await Promise.all([
+        readSeatMeter(env, meter, resolved.seatKey, sinceSession),
+        readSeatMeter(env, meter, resolved.seatKey, sinceWeekly),
+      ])
+    } else {
+      usedS = 0
+      usedW = 0
     }
-  } else if (resolved.installationId > 0) {
-    // Org scope (api key, no author): installation-wide usage. The cap is
-    // per-developer, so an org total has no single cap → limit null (usage only).
-    const [window5h, rollup] = await Promise.all([
-      readTenantUsageSince(env, resolved.installationId, new Date(nowMs - RATE_LIMIT_WINDOW_MS).toISOString()),
-      readTenantUsageSince(env, resolved.installationId, since7dIso),
-    ])
-    if (window5h.ok) {
-      sessionBar = {
-        key: "pr_reviews",
-        label: "PR reviews (org)",
-        used: window5h.reviews,
-        limit: null,
-        pct: null,
-        window_ms: RATE_LIMIT_WINDOW_MS,
-        window_label: "5h",
-        resets_at: null,
-        resets_in_ms: null,
+    metersOut[meter] = { session: cell(usedS, capSession), weekly: cell(usedW, capWeekly) }
+    sumSession += usedS ?? 0
+    sumWeekly += usedW ?? 0
+  }
+
+  // Optional ORG per-author breakdown ("who triggered org usage") — merged across
+  // the usage_events org meters (slack + linear_triage). Only when scope=org, an
+  // installation is resolved, and no author filter is already applied. Best-effort:
+  // a fault just omits the breakdown (never fails the response).
+  let authors: UsageResponse["authors"]
+  if (pool === "org" && resolved.installationId > 0 && !resolved.authorFilter) {
+    const acc = new Map<string, { session: number; weekly: number }>()
+    for (const [win, since] of [
+      ["session", sinceSession],
+      ["weekly", sinceWeekly],
+    ] as const) {
+      for (const meter of ["slack", "linear_triage"] as const) {
+        const res = await readUsageEventAuthorBreakdown(env, {
+          meter,
+          installationId: resolved.installationId,
+          sinceIso: since,
+        })
+        if (!res.ok) continue
+        for (const a of res.authors) {
+          const cur = acc.get(a.userKey) ?? { session: 0, weekly: 0 }
+          cur[win] += a.count
+          acc.set(a.userKey, cur)
+        }
       }
     }
-    if (rollup.ok) {
-      weeklyBar = {
-        key: "pr_reviews_weekly",
-        label: "PR reviews · this week (org)",
-        used: rollup.reviews,
-        limit: null,
-        pct: null,
-        window_ms: WEEKLY_WINDOW_MS,
-        window_label: "7d",
-        resets_at: null,
-        resets_in_ms: null,
-      }
-      totals = { reviews: rollup.reviews, model_calls: rollup.modelCalls, tokens: rollup.tokens, since: since7dIso }
+    if (acc.size > 0) {
+      authors = [...acc.entries()]
+        .map(([user_key, v]) => ({ user_key, session: v.session, weekly: v.weekly }))
+        .sort((a, b) => b.weekly - a.weekly || b.session - a.session)
     }
   }
+
+  // session: 5h ROLLING → clears by now+5h (upper bound). weekly: FIXED schedule →
+  // the exact NEXT Monday-09:00 UTC boundary (honest "Resets Mon 9:00 AM" label).
+  const sessionResetsAt = new Date(nowMs + USAGE_SESSION_WINDOW_MS).toISOString()
+  const weeklyResetsAt = new Date(weeklyWindowResetMs(nowMs)).toISOString()
 
   const body: UsageResponse = {
     plan,
     account: resolved.account,
     scope: resolved.scope,
     mode,
-    session: sessionBar,
-    weekly: weeklyBar,
-    totals,
+    windows: {
+      session: { window_label: USAGE_WINDOW_LABEL.session, resets_at: sessionResetsAt },
+      weekly: { window_label: USAGE_WINDOW_LABEL.weekly, resets_at: weeklyResetsAt },
+    },
+    meters: metersOut,
+    totals: {
+      session: cell(sumSession, capSession),
+      weekly: cell(sumWeekly, capWeekly),
+      since_session: sinceSession,
+      since_weekly: sinceWeekly,
+    },
+    ...(authors ? { authors } : {}),
     generated_at: new Date(nowMs).toISOString(),
   }
   return json(body, 200)

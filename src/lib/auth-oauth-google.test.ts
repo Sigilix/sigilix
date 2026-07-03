@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handleGoogleAuthCallback, handleGoogleAuthKickoff, isGoogleConfigured } from "@/src/lib/auth-oauth-google"
-import { findByGithubUserId, findByEmail, upsertGithubIdentity } from "@/src/lib/user-identity-store"
+import { findByGithubUserId, findByGoogleSub, findByEmail, upsertGithubIdentity } from "@/src/lib/user-identity-store"
 import { base64urlEncode } from "@/src/lib/auth-session"
 
 const MIGRATION_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
@@ -105,10 +105,12 @@ describe("handleGoogleAuthCallback", () => {
     expect(row!.providers).toEqual(["google"])
   })
 
-  it("does NOT merge a verified Google login into an unverified same-email GitHub row (takeover-safe)", async () => {
+  it("does NOT merge a verified Google login into an unverified same-email GitHub row (takeover-safe, non-destructive)", async () => {
     // A GitHub row holds link@example.com UNVERIFIED (GitHub emails are never
     // proven). A verified Google login for the same address must NOT join it —
-    // it revokes the unverified claim and owns the email on a fresh row.
+    // linking is DEFERRED non-destructively: the GitHub row keeps its email +
+    // stays github-only, and Google gets its OWN separate row (email=NULL,
+    // resolves by google_sub). Nobody is revoked or orphaned.
     await upsertGithubIdentity(db, {
       githubUserId: "555",
       email: "link@example.com",
@@ -119,12 +121,16 @@ describe("handleGoogleAuthCallback", () => {
     const res = await handleGoogleAuthCallback(callbackReq("code-2", "nonce-2", "nonce-2"), baseEnv(kv, db))
     expect(res.status).toBe(302)
     const byGithub = await findByGithubUserId(db, "555")
-    const byEmail = await findByEmail(db, "link@example.com")
+    const byGoogle = await findByGoogleSub(db, "g-2")
     expect(byGithub!.providers).toEqual(["github"]) // github row did NOT gain google
-    expect(byGithub!.email).toBeNull() // its unverified email claim was revoked
-    expect(byEmail!.userId).not.toBe(byGithub!.userId) // separate accounts, no silent merge
-    expect(byEmail!.providers).toEqual(["google"])
-    expect(byEmail!.emailVerified).toBe(true)
+    expect(byGithub!.email).toBe("link@example.com") // non-destructive — email retained
+    expect(byGithub!.googleSub).toBeNull() // never gained the google_sub (no takeover)
+    expect(byGoogle!.userId).not.toBe(byGithub!.userId) // separate accounts, no silent merge
+    expect(byGoogle!.providers).toEqual(["google"])
+    expect(byGoogle!.emailVerified).toBe(true)
+    expect(byGoogle!.email).toBeNull() // deferred — the Google row resolves by google_sub
+    // The email still resolves to the (surviving) GitHub account.
+    expect((await findByEmail(db, "link@example.com"))!.userId).toBe(byGithub!.userId)
   })
 
   it("fails closed on state mismatch (cookie != query)", async () => {

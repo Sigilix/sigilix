@@ -72,13 +72,7 @@ import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
-import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
-import { requireSession } from "@/src/lib/auth-middleware"
-import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
-import { tryHandleIdentityRoute } from "@/src/lib/identity-router"
-import { renderWelcomePage } from "@/src/lib/auth-welcome"
-import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
-import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
+import { handleAuthRoutes } from "@/src/lib/auth-routes"
 import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
@@ -457,40 +451,13 @@ export default {
       if (url.pathname === "/slack/installed") return handleSlackInstalled()
     }
 
-    // ─── Phase 5 user OAuth (ARC-163) ────────────────────────────
-    if (request.method === "GET" && url.pathname === "/auth/github") {
-      return handleGitHubAuthKickoff(request, env)
-    }
-    if (request.method === "GET" && url.pathname === "/auth/github/callback") {
-      return handleGitHubAuthCallback(request, env)
-    }
-    if (request.method === "GET" && url.pathname === "/auth/welcome") {
-      const authed = await requireSession(request, env, ctx)
-      if (!authed) {
-        return new Response(null, { status: 302, headers: { location: "/" } })
-      }
-      return renderWelcomePage(authed.record)
-    }
-    if (request.method === "GET" && url.pathname === "/auth/me") {
-      // #155: portal reads this cross-origin with credentials — needs CORS (simple GET, no preflight).
-      return withPortalCors(request, await handleAuthMeRoute(request, env, ctx), env)
-    }
-    if (request.method === "POST" && url.pathname === "/auth/logout") {
-      const sessionId = readCookie(request, SESSION_COOKIE_NAME)
-      return handleLogout(request, env, sessionId)
-    }
-    // #155 onboarding-backend FOUNDATION (slice 1 of 2): the GitHub App Setup
-    // URL handler + the install-redirect kickoff that mints its CSRF nonce.
-    if (request.method === "GET" && url.pathname === "/auth/install-redirect") {
-      return handleInstallRedirect(request, env, ctx)
-    }
-    if (request.method === "GET" && url.pathname === "/setup") {
-      return handleSetupRoute(request, env, ctx)
-    }
-
-    // sig-user-identity: Google OAuth + email/password + email-capture + phase-1 stubs (identity-router.ts).
-    const identityResponse = await tryHandleIdentityRoute(request, env, ctx, url)
-    if (identityResponse) return identityResponse
+    // User-facing auth/identity surface (GitHub + Google OAuth, email/password,
+    // email-capture, the GitHub-App setup flow, and the deferred-provider 501
+    // stubs) — extracted into one cohesive sub-dispatcher (auth-routes.ts) so this
+    // entry module stays under the file-size ceiling. Byte-identical routing;
+    // slotted here (after Slack GET, before the portal-cors block) so order holds.
+    const authResponse = await handleAuthRoutes(request, env, ctx, url)
+    if (authResponse) return authResponse
     // #155 portal endpoints: the portal (a DIFFERENT ORIGIN — app.sigilix.ai /
     // localhost:3300) drives these routes over `fetch(…, { credentials:
     // "include" })`, so they're CORS'd via portal-cors.ts — OPTIONS handled once
@@ -628,17 +595,6 @@ export default {
         return json({ error: "prNumber must be a positive integer" }, 400)
       }
       return handleReviewStatusRoute(env, owner, repo, prNumber)
-    }
-    // Stubs for deferred providers — 501 so "Soon" buttons don't 404. (Google
-    // is live at /auth/google/login; email/password is POST /v1/auth/*.)
-    if (
-      request.method === "GET" &&
-      (url.pathname === "/auth/gitlab" || url.pathname === "/auth/bitbucket" || url.pathname === "/auth/azure")
-    ) {
-      return new Response("provider not implemented yet — see /\n", {
-        status: 501,
-        headers: { "content-type": "text/plain" },
-      })
     }
 
     return new Response("not found\n", { status: 404, headers: { "content-type": "text/plain" } })

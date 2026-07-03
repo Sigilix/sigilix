@@ -73,6 +73,39 @@ describe("user-identity-store", () => {
     expect(pwRow!.providers).toEqual(["password"])
   })
 
+  it("password-first then Google on the same email: BOTH accounts survive, nothing is destroyed", async () => {
+    // Honest user signs up with email/password FIRST (its email is UNVERIFIED).
+    const pw = await createPasswordIdentity(db, {
+      email: "dana@example.com",
+      passwordHash: "pbkdf2-sha256$600000$aa$bb",
+      nowIso: NOW,
+    })
+    expect(pw.ok).toBe(true)
+    const pwUserId = pw.ok ? pw.identity.userId : ""
+
+    // Later they click "Sign in with Google" on the SAME address. Cross-provider
+    // linking is DEFERRED (not destructive): a SEPARATE Google account is created
+    // with email=NULL; the password account is left completely intact.
+    const g = await findOrCreateGoogleIdentity(db, {
+      googleSub: "dana-google-sub",
+      email: "dana@example.com",
+      nowIso: NOW,
+    })
+    expect(g.userId).not.toBe(pwUserId) // separate account, no silent merge
+    expect(g.providers).toEqual(["google"])
+    expect(g.emailVerified).toBe(true)
+    expect(g.email).toBeNull() // deferred — the Google row resolves by google_sub
+
+    // The password account is fully intact: same userId, still owns the email,
+    // and its password credential was NOT deleted (the user can still log in).
+    const pwAfter = await findByUserId(db, pwUserId)
+    expect(pwAfter!.email).toBe("dana@example.com")
+    expect(pwAfter!.providers).toEqual(["password"])
+    expect(await getPasswordHash(db, pwUserId)).toBe("pbkdf2-sha256$600000$aa$bb")
+    // The email still resolves to the (surviving) password account.
+    expect((await findByEmail(db, "dana@example.com"))!.userId).toBe(pwUserId)
+  })
+
   it("findOrCreateGoogleIdentity creates a verified account + is idempotent by sub", async () => {
     const created = await findOrCreateGoogleIdentity(db, {
       googleSub: "sub-abc",
@@ -90,6 +123,25 @@ describe("user-identity-store", () => {
       nowIso: NOW,
     })
     expect(again.userId).toBe(created.userId)
+  })
+
+  it("a returning Google login does NOT stamp a DIFFERENT captured (unverified) email as verified", async () => {
+    // Google login owns its address (verified)...
+    const g = await findOrCreateGoogleIdentity(db, { googleSub: "sub-gv", email: "gv@example.com", nowIso: NOW })
+    expect(g.emailVerified).toBe(true)
+    // ...then the row captures a DIFFERENT address (unverified — forces verified=0).
+    await setIdentityEmail(db, g.userId, "gv-alt@example.com")
+    const mid = await findByUserId(db, g.userId)
+    expect(mid!.email).toBe("gv-alt@example.com")
+    expect(mid!.emailVerified).toBe(false)
+    // The SAME Google sub logs in again (Google returns its own address). The row
+    // keeps the captured address, and its verified flag must stay 0 — Google
+    // verified gv@example.com, NOT gv-alt@example.com; stamping the captured
+    // address verified would make it a cross-provider linking target (takeover).
+    const again = await findOrCreateGoogleIdentity(db, { googleSub: "sub-gv", email: "gv@example.com", nowIso: NOW })
+    expect(again.userId).toBe(g.userId)
+    expect(again.email).toBe("gv-alt@example.com") // captured address retained
+    expect(again.emailVerified).toBe(false) // NOT re-stamped verified
   })
 
   it("createPasswordIdentity rejects a duplicate email (email_taken) — no silent password attach", async () => {
@@ -152,7 +204,11 @@ describe("user-identity-store", () => {
 // ─── account-takeover regression suite (sig-user-identity P0) ────────────────
 // Each test seeds a VICTIM's email onto an attacker-controlled row via an
 // UNVERIFIED path, then runs the victim's later VERIFIED Google login and proves
-// the two accounts do NOT silently merge (the exploit is closed).
+// the two accounts do NOT silently merge (the P0 exploit stays closed). Linking
+// is deferred NON-DESTRUCTIVELY: the pre-existing row keeps its email + password
+// credential, and the Google login gets its own separate row (email=NULL) — no
+// account is revoked or orphaned (the P1 footgun that destroyed an honest
+// password-first user's credential is gone).
 describe("user-identity-store — cross-provider linking is takeover-safe", () => {
   let db: D1Database
   beforeEach(async () => {
@@ -177,39 +233,43 @@ describe("user-identity-store — cross-provider linking is takeover-safe", () =
     expect(victim.googleSub).toBe("victim-google-sub")
     expect(victim.providers).toEqual(["google"])
     expect(victim.emailVerified).toBe(true)
-    // Attacker's row lost the email claim; it never gained the victim's google_sub.
+    expect(victim.email).toBeNull() // deferred — the Google row resolves by google_sub
+    // Non-destructive: the attacker's row is untouched (keeps its seeded email)
+    // and, crucially, never gained the victim's google_sub — so it cannot resolve
+    // the victim's Google login (no takeover).
     const attackerAfter = await findByGithubUserId(db, "attacker-gh")
-    expect(attackerAfter!.email).toBeNull()
+    expect(attackerAfter!.email).toBe("victim@corp.com")
     expect(attackerAfter!.googleSub).toBeNull()
-    // The victim now owns the email.
-    expect((await findByEmail(db, "victim@corp.com"))!.userId).toBe(victim.userId)
   })
 
-  it("Google login revokes a PASSWORD-seeded unverified row + invalidates its credential", async () => {
-    // Attacker: password signup with the victim's email (unverified).
+  it("Google login does NOT merge into (or destroy) a PASSWORD-seeded unverified row", async () => {
+    // A password account already holds this email (unverified). NB: from the
+    // store's view this is indistinguishable from an HONEST password-first user —
+    // which is exactly why the fix must be non-destructive (see the P1 footgun).
     const seeded = await createPasswordIdentity(db, {
       email: "victim2@corp.com",
       passwordHash: "pbkdf2-sha256$600000$aa$bb",
       nowIso: NOW,
     })
     expect(seeded.ok).toBe(true)
-    const attackerId = seeded.ok ? seeded.identity.userId : ""
-    expect(await getPasswordHash(db, attackerId)).not.toBeNull()
+    const seededId = seeded.ok ? seeded.identity.userId : ""
+    expect(await getPasswordHash(db, seededId)).not.toBeNull()
 
-    // Victim: verified Google login for the same address.
+    // A verified Google login arrives for the same address.
     const victim = await findOrCreateGoogleIdentity(db, {
       googleSub: "victim2-google-sub",
       email: "victim2@corp.com",
       nowIso: NOW,
     })
-    expect(victim.userId).not.toBe(attackerId) // no merge
+    expect(victim.userId).not.toBe(seededId) // no merge — separate Google account
     expect(victim.providers).toEqual(["google"])
-    // Attacker's row: email revoked AND its password credential invalidated, so
-    // the attacker can no longer log into the (now emailless) seeded account.
-    const attackerAfter = await findByUserId(db, attackerId)
-    expect(attackerAfter!.email).toBeNull()
-    expect(await getPasswordHash(db, attackerId)).toBeNull()
-    expect((await findByEmail(db, "victim2@corp.com"))!.userId).toBe(victim.userId)
+    expect(victim.email).toBeNull() // deferred — Google row resolves by google_sub
+    // Non-destructive: the pre-existing row keeps its email AND its password
+    // credential (the P0 no-merge holds without destroying anyone's account).
+    const seededAfter = await findByUserId(db, seededId)
+    expect(seededAfter!.email).toBe("victim2@corp.com")
+    expect(await getPasswordHash(db, seededId)).not.toBeNull()
+    expect((await findByEmail(db, "victim2@corp.com"))!.userId).toBe(seededId)
   })
 
   it("Google login does NOT merge into an email-capture-seeded unverified row", async () => {
@@ -227,10 +287,12 @@ describe("user-identity-store — cross-provider linking is takeover-safe", () =
     })
     expect(victim.userId).not.toBe(attacker!.userId) // no merge
     expect(victim.providers).toEqual(["google"])
+    expect(victim.email).toBeNull() // deferred — Google row resolves by google_sub
+    // Non-destructive: the attacker's row keeps its captured email and never
+    // gains the victim's google_sub, so it can't resolve the Google login.
     const attackerAfter = await findByUserId(db, attacker!.userId)
-    expect(attackerAfter!.email).toBeNull() // claim revoked
+    expect(attackerAfter!.email).toBe("victim3@corp.com")
     expect(attackerAfter!.googleSub).toBeNull()
-    expect((await findByEmail(db, "victim3@corp.com"))!.userId).toBe(victim.userId)
   })
 
   it("Google login DOES link into an already-VERIFIED same-email row (legit linking survives)", async () => {
@@ -250,5 +312,58 @@ describe("user-identity-store — cross-provider linking is takeover-safe", () =
     })
     expect(again.userId).toBe(first.userId)
     expect(again.providers).toEqual(["google"])
+  })
+
+  it("Google login LINKS into a VERIFIED same-email row that has no rival Google link (legit linking survives, non-destructively)", async () => {
+    // A password account exists, and a (future) email-verification flow marked its
+    // email verified — a verified row with NO google_sub yet.
+    const pw = await createPasswordIdentity(db, {
+      email: "linkme@corp.com",
+      passwordHash: "pbkdf2-sha256$600000$aa$bb",
+      nowIso: NOW,
+    })
+    const uid = pw.ok ? pw.identity.userId : ""
+    await db.prepare("UPDATE user_identity SET email_verified = 1 WHERE user_id = ?").bind(uid).run()
+
+    // Google login for the same, now-verified address → LINKS into the SAME
+    // account (sets google_sub, adds "google"), non-destructively.
+    const linked = await findOrCreateGoogleIdentity(db, {
+      googleSub: "sub-link",
+      email: "linkme@corp.com",
+      nowIso: NOW,
+    })
+    expect(linked.userId).toBe(uid) // linked, not a new account
+    expect(linked.googleSub).toBe("sub-link")
+    expect(linked.providers).toEqual(["password", "google"])
+    expect(linked.email).toBe("linkme@corp.com")
+    expect(await getPasswordHash(db, uid)).not.toBeNull() // credential intact
+  })
+
+  it("two distinct Google subs on the same VERIFIED email: the second gets a NEW account, not a silent login", async () => {
+    // First Google login owns the verified email (google_sub = sub-A).
+    const first = await findOrCreateGoogleIdentity(db, {
+      googleSub: "sub-A",
+      email: "twins@corp.com",
+      nowIso: NOW,
+    })
+    expect(first.googleSub).toBe("sub-A")
+
+    // A DIFFERENT Google sub presents the SAME verified email. The old
+    // `google_sub = COALESCE(google_sub, ?)` would have silently logged sub-B into
+    // sub-A's account; a differing existing google_sub is now a CONFLICT → a new,
+    // separate account (email=NULL), never a silent takeover.
+    const second = await findOrCreateGoogleIdentity(db, {
+      googleSub: "sub-B",
+      email: "twins@corp.com",
+      nowIso: NOW,
+    })
+    expect(second.userId).not.toBe(first.userId) // new account
+    expect(second.googleSub).toBe("sub-B")
+    expect(second.email).toBeNull() // deferred — email stays with the first row
+
+    // The first account is untouched: still owns sub-A and the email.
+    const firstAfter = await findByUserId(db, first.userId)
+    expect(firstAfter!.googleSub).toBe("sub-A")
+    expect(firstAfter!.email).toBe("twins@corp.com")
   })
 })

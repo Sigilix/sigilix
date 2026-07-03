@@ -15,9 +15,12 @@
 //     link into, or collide with, an email another row holds.
 //   - Google login (email VERIFIED by Google): resolve by google_sub; only link
 //     into a pre-existing email row when that row's email is ALREADY verified
-//     (email_verified=1). If an UNVERIFIED row holds the email, the verified
-//     login REVOKES that claim (nulls its email + invalidates its password
-//     credential) and takes ownership — it never joins the unverified row.
+//     (email_verified=1) AND that row carries no rival google_sub. Otherwise
+//     linking is DEFERRED, NON-DESTRUCTIVELY: if an UNVERIFIED row (or a verified
+//     row under a DIFFERENT google_sub) holds the email, the Google login gets its
+//     OWN separate row carrying email=NULL — the pre-existing row keeps its email
+//     AND its password credential fully intact. Nobody is revoked or orphaned; the
+//     two accounts coexist until an explicit verified link/merge flow ships.
 //   - password signup / email-capture: store the email UNVERIFIED + non-linking.
 // Cross-provider linking by email returns once a real verification flow ships.
 //
@@ -250,18 +253,23 @@ interface GoogleFindOrCreateArgs {
  * account resolution for the provider, so a D1 fault throws (the caller returns
  * a 5xx and no session is issued) rather than silently minting a duplicate.
  *
- * Google verifies the email it returns, so `email_verified` is set to 1. But a
- * pre-existing row found ONLY by email is trusted as a linking target ONLY when
- * its own email is ALREADY verified — otherwise an attacker could seed a
- * victim's email onto an unverified row and have this verified login merge in
- * (account takeover). Resolution:
+ * Google verifies the email it returns, so a NEW row is written email_verified=1.
+ * But cross-provider linking by email is DEFERRED until a real verification flow
+ * ships, and it is NON-DESTRUCTIVE — this NEVER revokes or deletes another
+ * account's email or credential (that was an account-orphaning footgun for an
+ * honest password-first user). Resolution:
  *   1. Existing row for this google_sub -> update, return (the returning user).
- *   2. Else a row whose email == this email AND email_verified=1 -> LINK: set
- *      google_sub + add "google" (a trustworthy same-email account gains Google).
- *   3. Else a row whose email == this email but email_verified=0 -> REVOKE that
- *      unverified claim (null its email + delete its password credential) so the
- *      verified login can OWN the email, then fall through to (4).
- *   4. Else -> insert a new verified row.
+ *   2. Else a row whose email == this email, email_verified=1, AND google_sub IS
+ *      NULL -> LINK: set google_sub + add "google" (a trustworthy same-email
+ *      account with no rival Google link gains Google). We already know no row
+ *      carries this google_sub (step 1 missed), so a non-null existing google_sub
+ *      is a DIFFERENT Google account and is treated as a conflict (falls to 4).
+ *   3. Else a row holds this email but must NOT be linked into (it is UNVERIFIED,
+ *      or verified under a DIFFERENT google_sub) -> leave that row untouched and
+ *      create a SEPARATE Google account carrying email=NULL. The UNIQUE(email)
+ *      partial index is why the new row must not duplicate the address; it
+ *      resolves by google_sub and can be safely linked once verification ships.
+ *   4. Else (no row holds this email) -> insert a new verified row owning it.
  */
 export async function findOrCreateGoogleIdentity(db: D1Database, args: GoogleFindOrCreateArgs): Promise<UserIdentity> {
   const email = normalizeEmail(args.email)
@@ -270,15 +278,32 @@ export async function findOrCreateGoogleIdentity(db: D1Database, args: GoogleFin
   const existingBySub = await findByGoogleSub(db, args.googleSub)
   if (existingBySub) {
     const providers = mergeProvider(existingBySub.providers, "google")
+    // Fill the email only when this row lacks one AND no other account holds it.
+    // A deferred-link Google row (step 3 below) is created with email=NULL while a
+    // separate row still owns the address; writing it here would collide with the
+    // UNIQUE(email) index and fail this returning user's login. COALESCE keeps the
+    // existing value; a null bind leaves it unchanged.
+    const emailToFill =
+      !existingBySub.email && !(await emailHeldByOther(db, email, existingBySub.userId)) ? email : null
+    // Google verifies the ADDRESS IT RETURNED — not whatever unrelated address the
+    // row may currently hold. Only assert email_verified=1 when the row's email
+    // (after this write) IS that Google address: either it already equals it, or
+    // we're filling a null email with it. If the row keeps a DIFFERENT address
+    // (e.g. an unverified one captured via setIdentityEmail), preserve the
+    // existing flag — never stamp an unproven address as verified (that would make
+    // it a cross-provider linking target; see the module + setIdentityEmail docs).
+    const emailAfterIsGoogleVerified = existingBySub.email === email || emailToFill !== null
+    const emailVerifiedFlag = emailAfterIsGoogleVerified || existingBySub.emailVerified ? 1 : 0
     await db
       .prepare(
         "UPDATE user_identity SET name = COALESCE(name, ?), avatar_url = COALESCE(avatar_url, ?), " +
-          "email = COALESCE(email, ?), email_verified = 1, providers = ?, last_login_at = ? WHERE user_id = ?",
+          "email = COALESCE(email, ?), email_verified = ?, providers = ?, last_login_at = ? WHERE user_id = ?",
       )
       .bind(
         args.name ?? null,
         args.avatarUrl ?? null,
-        email,
+        emailToFill,
+        emailVerifiedFlag,
         JSON.stringify(providers),
         args.nowIso,
         existingBySub.userId,
@@ -290,14 +315,17 @@ export async function findOrCreateGoogleIdentity(db: D1Database, args: GoogleFin
   }
 
   const existingByEmail = await selectOne(db, "email = ?", email)
-  if (existingByEmail && existingByEmail.emailVerified) {
+  if (existingByEmail && existingByEmail.emailVerified && existingByEmail.googleSub === null) {
     // The email on this row is ALREADY verified (only a verified provider sets
-    // email_verified=1), so it is a trustworthy same-person account — safe to
-    // link this Google login into it.
+    // email_verified=1) AND the row carries no rival google_sub, so it is a
+    // trustworthy same-person account — safe to link this Google login into it.
+    // (A row with a DIFFERENT existing google_sub is a distinct Google account
+    // sharing the verified email; it is a CONFLICT and falls through to a fresh
+    // row below, never a silent login into someone else's account.)
     const providers = mergeProvider(existingByEmail.providers, "google")
     await db
       .prepare(
-        "UPDATE user_identity SET google_sub = COALESCE(google_sub, ?), name = COALESCE(name, ?), " +
+        "UPDATE user_identity SET google_sub = ?, name = COALESCE(name, ?), " +
           "avatar_url = COALESCE(avatar_url, ?), email_verified = 1, providers = ?, last_login_at = ? WHERE user_id = ?",
       )
       .bind(
@@ -314,18 +342,16 @@ export async function findOrCreateGoogleIdentity(db: D1Database, args: GoogleFin
     return updated
   }
 
-  if (existingByEmail) {
-    // An UNVERIFIED row holds this email (password/github/email-capture wrote it
-    // without proving ownership — possibly attacker-seeded). Do NOT merge the
-    // verified Google login into it. Revoke the unverified claim so the verified
-    // login can own the address: null its email + delete its password
-    // credential, then fall through to insert a fresh verified Google row.
-    await db.batch([
-      db.prepare("UPDATE user_identity SET email = NULL WHERE user_id = ?").bind(existingByEmail.userId),
-      db.prepare("DELETE FROM user_credential WHERE user_id = ?").bind(existingByEmail.userId),
-    ])
-  }
-
+  // A pre-existing row holds this email but we must NOT link into it — it is
+  // either UNVERIFIED (ownership never proved; possibly attacker-seeded) or
+  // verified under a DIFFERENT google_sub. Linking is DEFERRED, NON-DESTRUCTIVELY:
+  // leave that row's email + password credential fully intact and create a
+  // SEPARATE Google account carrying email=NULL (the UNIQUE(email) partial index
+  // requires it). The new row resolves by google_sub on later logins and can be
+  // safely linked once email verification ships. When no row holds the email, the
+  // new row owns it (email=email). This is a SINGLE statement — with the revoke
+  // path gone there is no cross-write atomicity gap left to guard.
+  const emailForNewRow = existingByEmail ? null : email
   const userId = crypto.randomUUID()
   await db
     .prepare(
@@ -335,7 +361,7 @@ export async function findOrCreateGoogleIdentity(db: D1Database, args: GoogleFin
     .bind(
       userId,
       args.googleSub,
-      email,
+      emailForNewRow,
       args.name ?? null,
       args.avatarUrl ?? null,
       JSON.stringify(["google"]),

@@ -64,6 +64,16 @@ export interface Env {
   // server-to-server JWT path in github-app.ts.
   GITHUB_OAUTH_CLIENT_ID?: string
   GITHUB_OAUTH_CLIENT_SECRET?: string
+  // sig-user-identity: Google (OIDC) user login. When unset, GET /auth/providers
+  // reports google:false and the portal hides the "Continue with Google" button
+  // (the kickoff route also 503s), so an unconfigured deploy degrades gracefully.
+  // Registered redirect URI: https://api.sigilix.ai/auth/google/callback
+  GOOGLE_CLIENT_ID?: string
+  GOOGLE_CLIENT_SECRET?: string
+  // sig-user-identity PHASE 1: org-wide MFA (TOTP). "on" un-stubs the (still
+  // incomplete) enrollment/verify endpoints for testing; anything else keeps
+  // them 501. MFA is NOT enforced on login yet regardless — see auth-totp.ts.
+  SIGILIX_MFA_MODE?: string
   // 32 random bytes, base64url-encoded. Used to AES-GCM-encrypt user
   // access tokens at rest in OPENCLAW_STATE. Rotating this invalidates
   // every active session.

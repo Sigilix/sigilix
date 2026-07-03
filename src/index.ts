@@ -75,6 +75,7 @@ import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { requireSession } from "@/src/lib/auth-middleware"
 import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
+import { tryHandleIdentityRoute } from "@/src/lib/identity-router"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "@/src/lib/auth-session"
 import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
@@ -486,6 +487,10 @@ export default {
     if (request.method === "GET" && url.pathname === "/setup") {
       return handleSetupRoute(request, env, ctx)
     }
+
+    // sig-user-identity: Google OAuth + email/password + email-capture + phase-1 stubs (identity-router.ts).
+    const identityResponse = await tryHandleIdentityRoute(request, env, ctx, url)
+    if (identityResponse) return identityResponse
     // #155 portal endpoints: the portal (a DIFFERENT ORIGIN — app.sigilix.ai /
     // localhost:3300) drives these routes over `fetch(…, { credentials:
     // "include" })`, so they're CORS'd via portal-cors.ts — OPTIONS handled once
@@ -624,15 +629,11 @@ export default {
       }
       return handleReviewStatusRoute(env, owner, repo, prNumber)
     }
-    // Stubs for deferred providers — return 501 with a plain message
-    // so the marketing site's "Soon"-labeled buttons don't 404.
+    // Stubs for deferred providers — 501 so "Soon" buttons don't 404. (Google
+    // is live at /auth/google/login; email/password is POST /v1/auth/*.)
     if (
       request.method === "GET" &&
-      (url.pathname === "/auth/google" ||
-        url.pathname === "/auth/email" ||
-        url.pathname === "/auth/gitlab" ||
-        url.pathname === "/auth/bitbucket" ||
-        url.pathname === "/auth/azure")
+      (url.pathname === "/auth/gitlab" || url.pathname === "/auth/bitbucket" || url.pathname === "/auth/azure")
     ) {
       return new Response("provider not implemented yet — see /\n", {
         status: 501,

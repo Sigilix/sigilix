@@ -25,7 +25,29 @@ export interface SessionRecord {
   // it — consumers must fall back to `login`. Not a secret (public profile),
   // so stored plaintext alongside `login`; only the access token is encrypted.
   name?: string
-  githubUserId: number
+  // GitHub numeric user id. Present for GitHub logins; ABSENT for Google /
+  // email-password sessions (sig-user-identity). GitHub-App-install features
+  // (keys, onboarding, org, usage seats) require it and fail closed when it is
+  // absent — see the `githubUserId == null` guards in those routes.
+  githubUserId?: number
+  // The persistent user_identity.user_id (UUID) — the provider-agnostic account
+  // key (migrations/0006). Present on every session minted since
+  // sig-user-identity; absent only on legacy sessions minted before it, whose
+  // consumers fall back to githubUserId. This is the stable subject to prefer.
+  userId?: string
+  // Captured/known email for this account, mirrored onto the session so the
+  // portal can prompt for it (email-capture) without a D1 round-trip. Optional:
+  // a GitHub user with a private email has none until captured.
+  email?: string
+  // Which provider minted this session. Absent on legacy GitHub sessions
+  // (treat as "github").
+  provider?: "github" | "google" | "password"
+  // AES-GCM ciphertext of the GitHub user-to-server access token. For non-GitHub
+  // sessions there is no GitHub token, so this holds the encryption of an EMPTY
+  // string — decrypt yields "" and any GitHub API call made with it fails the
+  // same way a scope-less token would, which the GitHub-backed routes already
+  // treat as "no data / member" (fail-safe). The field stays a required string
+  // so every existing consumer keeps compiling unchanged.
   encryptedAccessToken: string
   iv: string
   createdAt: number
@@ -123,23 +145,32 @@ export async function createSession(args: {
   kv: KVNamespace
   sessionId: string
   login: string
-  githubUserId: number
-  accessToken: string
   encryptionKeyB64url: string
+  // Optional so Google / email-password sessions (which have no GitHub token or
+  // id) can be minted. `accessToken` defaults to "" (encrypts an empty token);
+  // `githubUserId` is omitted for non-GitHub providers.
+  accessToken?: string
+  githubUserId?: number
+  userId?: string
+  email?: string
+  provider?: "github" | "google" | "password"
   name?: string
 }): Promise<SessionRecord> {
-  const { kv, sessionId, login, name, githubUserId, accessToken, encryptionKeyB64url } = args
-  const { ciphertext, iv } = await encryptAccessToken(accessToken, sessionId, encryptionKeyB64url)
+  const { kv, sessionId, login, name, githubUserId, userId, email, provider, encryptionKeyB64url } = args
+  const { ciphertext, iv } = await encryptAccessToken(args.accessToken ?? "", sessionId, encryptionKeyB64url)
   const now = Date.now()
   const record: SessionRecord = {
     login,
-    githubUserId,
     encryptedAccessToken: ciphertext,
     iv,
     createdAt: now,
     lastSeenAt: now,
-    // exactOptionalPropertyTypes: omit the key entirely when absent rather than
-    // set it to `undefined` (keeps the in-memory + JSON-serialized shape aligned).
+    // exactOptionalPropertyTypes: omit each optional key entirely when absent
+    // rather than set it to `undefined` (keeps in-memory + JSON shapes aligned).
+    ...(githubUserId !== undefined ? { githubUserId } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    ...(email !== undefined ? { email } : {}),
+    ...(provider !== undefined ? { provider } : {}),
     ...(name !== undefined ? { name } : {}),
   }
   await kv.put(`${SESSION_KV_PREFIX}${sessionId}`, JSON.stringify(record), {
@@ -166,6 +197,23 @@ export async function touchSession(args: { kv: KVNamespace; sessionId: string; r
 
 export async function deleteSession(args: { kv: KVNamespace; sessionId: string }): Promise<void> {
   await args.kv.delete(`${SESSION_KV_PREFIX}${args.sessionId}`)
+}
+
+/**
+ * Mirror a just-captured email onto the live session (sig-user-identity email
+ * capture) so /auth/me reflects it without a re-login. Preserves the sliding
+ * TTL. The email is not a secret (the user just typed it into their own portal).
+ */
+export async function setSessionEmail(args: {
+  kv: KVNamespace
+  sessionId: string
+  record: SessionRecord
+  email: string
+}): Promise<void> {
+  const updated: SessionRecord = { ...args.record, email: args.email, lastSeenAt: Date.now() }
+  await args.kv.put(`${SESSION_KV_PREFIX}${args.sessionId}`, JSON.stringify(updated), {
+    expirationTtl: SESSION_TTL_SECONDS,
+  })
 }
 
 // ─── cookie helpers ─────────────────────────────────────────────────

@@ -38,7 +38,9 @@ type CallerAuth = { scope: string } | { response: Response }
 
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
   const session = await requireSession(request, env, ctx)
-  if (session) return { scope: `session:${session.record.githubUserId}` }
+  // sig-user-identity: prefer the provider-agnostic user_id so non-GitHub
+  // sessions get a distinct scope instead of all sharing "session:undefined".
+  if (session) return { scope: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}` }
   const tenant = await requireApiTenant(request, env, ctx)
   if ("caller" in tenant) return { scope: `tenant:${tenant.caller.installationId}` }
   return { response: tenant.response }

@@ -104,6 +104,11 @@ export async function handleOnboardingSubmitRoute(
   const authed = await requireSession(request, env, ctx)
   if (!authed) return json({ error: "unauthenticated" }, 401)
 
+  // sig-user-identity: onboarding is a GitHub-App-install feature keyed by the
+  // GitHub user id. Google / email-password sessions have none — fail closed.
+  const githubUserId = authed.record.githubUserId
+  if (githubUserId == null) return json({ error: "github_account_required" }, 403)
+
   // CSRF guard (SIG-155 slice 3 — see portal-cors.ts's hasJsonContentType doc
   // comment): required because the session cookie is now SameSite=None.
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
@@ -121,7 +126,7 @@ export async function handleOnboardingSubmitRoute(
   const validated = validatePayload(parsed)
   if (typeof validated === "string") return json({ error: validated }, 400)
 
-  const key = `${ONBOARDING_KV_PREFIX}${authed.record.githubUserId}`
+  const key = `${ONBOARDING_KV_PREFIX}${githubUserId}`
   try {
     await env.OPENCLAW_STATE.put(key, JSON.stringify(validated))
   } catch (error) {
@@ -137,7 +142,7 @@ export async function handleOnboardingSubmitRoute(
   // Best-effort — see captureOnboardingMemory's doc comment. Never allowed
   // to affect this response; the raw payload above is already durably
   // stored by the time this runs.
-  await captureOnboardingMemory(env, authed.record.githubUserId, validated)
+  await captureOnboardingMemory(env, githubUserId, validated)
 
   return json({ ok: true }, 200)
 }

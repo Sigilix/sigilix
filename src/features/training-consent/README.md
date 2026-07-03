@@ -18,8 +18,11 @@ signal, nothing is retained.
    default nothing is even read.
 2. **Per-org consent** — `data_learning_consent` (D1, migration `0008`). An explicit
    `granted`/`denied` row wins; absent a row, a **fail-closed plan default** applies
-   (personal paid → granted/opt-out; team + enterprise + free + **unknown** →
-   denied/opt-in). A paid team we can't positively identify as personal → **denied**.
+   (self-serve / individual tiers — `free`, `individual`, `pro`, `max`, `ultra` →
+   granted/opt-out, disclosed via ToS and toggleable OFF; team + enterprise → denied/opt-in,
+   requiring an explicit admin YES; **unknown/unset/`default`** → denied). A multi-owner
+   plan we can't positively identify as individual → **denied**. Everyone can toggle either
+   way via the consent POST; only the DEFAULT differs by tier.
 3. **Separate store** — `SIGILIX_TRAINING_DATA` (a dedicated **R2 bucket**, a
    *different binding* from every operational store: KV `OPENCLAW_STATE`, D1
    `SIGILIX_PLATFORM_DB`, the Vectorize indexes). The bucket is **not provisioned at
@@ -57,10 +60,29 @@ also enforces tenant isolation).
 
 ## Wiring seam (flagged off)
 
-One representative call site is wired today — in the learnings org-mirror capture
-(`src/features/learnings/adapters/org-mirror.ts`) — and is **inert** (the flag is off).
-The other capture surfaces the audit identified (review findings, portal/agent chat, the
-codebase index) each have a future seam and are **not** wired in this scaffold.
+The high-signal capture surfaces are wired today and are all **inert** (the flag is off).
+Each call site is a **flag-first no-op**: with `SIGILIX_TRAINING_RETENTION_MODE` off (the
+default) the wrapper returns before any record is built and before any tenancy/consent/store
+I/O — the capture path is byte-identical to before the wiring. All paths go through
+`retainForTraining` (gate → redact → store); none bypass the gate.
+
+- **Learnings org-mirror** (`src/features/learnings/adapters/org-mirror.ts`) — an extracted
+  learning rule (`kind: "learning"`). The original representative seam.
+- **Review findings + verdict + correction** (`src/lib/review-memory/capture.ts`,
+  `applyFeedbackToTrustedSource`) — the "was Sigilix right" dismissal corpus: the finding,
+  the human accept/dismiss verdict, and the correction reply (`kind: "review-finding"`), for
+  BOTH accepted and dismissed verdicts.
+- **Fix diffs** (`src/lib/api-verify-route.ts`, `POST /v1/verify`) — a before/after edit pair
+  the verification oracle actually ran, plus its behavioral verdict (`kind: "fix-diff"`; only
+  `changed | preserved`, never a soft-fail `skipped`).
+- **Agent success trajectories** (`src/lib/agent-runner/dispatch.ts`) — a ticket that produced
+  a PR (`status: "opened"`): task → outcome (`kind: "agent-trajectory"`; secrets never
+  captured).
+
+The shared call-site wrapper is `src/lib/training-retention/retain-training.ts`
+(`retainTrainingRecord` for a known installation, `retainTrainingRecordForRepo` for a
+repo-coordinate site). The remaining audit surfaces (portal/agent chat, the codebase index)
+still have a future seam and are **not** wired in this pass.
 
 ## LEGAL PREREQUISITES — before `SIGILIX_TRAINING_RETENTION_MODE` is ever `on`
 
@@ -79,3 +101,11 @@ This scaffold must NOT be enabled until legal signs off on ALL of:
    reviewed; confirm no secrets/PII enter the corpus.
 5. **Provisioning** — create the R2 bucket, uncomment the `wrangler.toml` binding, deploy,
    and only then flip the flag. Consider a separate bucket per data-residency region.
+6. **Authoritative installation resolution** — the repo-coordinate capture sites resolve
+   `owner/repo → installationId` via the tenancy `repo` registry, whose `upsertTenantAndRepo`
+   refreshes `full_name` but NOT `installation_id` on a `repo_id` conflict. A transferred /
+   reinstalled repo can therefore carry a STALE installation id, so retention could gate
+   against — and partition under — the wrong org. This is harmless while the flag is off. Before
+   flipping it, make repo resolution authoritative (refresh `installation_id` on conflict and
+   fail closed on ambiguity, or thread the webhook's authoritative `installation.id` to the
+   capture site). This gap is shared with the existing org-mirror learning seam.

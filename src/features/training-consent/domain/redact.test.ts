@@ -44,4 +44,18 @@ describe("redactTrainingRecord", () => {
     // input untouched
     expect(record.payload).toContain("bob@corp.io")
   })
+
+  it("redacts the id too (it lands in the R2 key/body/logs, so it must be masked)", () => {
+    const record: TrainingRecord = {
+      kind: "fix-diff",
+      // a caller-controlled owner/repo could smuggle a secret into the id
+      id: "sk-abcdefghijklmnop1234/repo:verify",
+      payload: "clean",
+    }
+    const out = redactTrainingRecord(record)
+    expect(out.id).not.toContain("sk-abcdefghijklmnop1234")
+    expect(out.id).toContain("[REDACTED]")
+    // input untouched
+    expect(record.id).toContain("sk-abcdefghijklmnop1234")
+  })
 })

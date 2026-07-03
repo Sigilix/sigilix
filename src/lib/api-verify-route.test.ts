@@ -8,12 +8,19 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { makeR2 } from "@/src/features/training-consent/adapters/r2-fake.test-helpers"
+import { upsertConsentRecord } from "@/src/features/training-consent/adapters/consent-store"
 
 vi.mock("@/src/lib/reproduce/purelogic-pair", () => ({ comparePairInSandbox: vi.fn() }))
 
 import { handleVerifyApiRoute } from "./api-verify-route"
 import { comparePairInSandbox } from "@/src/lib/reproduce/purelogic-pair"
 import type { Env } from "@/src/shared/types/env"
+
+const CONSENT_SQL = readFileSync(
+  new URL("../../migrations/0008_create_data_learning_consent.sql", import.meta.url),
+  "utf8",
+)
 
 const mockCompare = vi.mocked(comparePairInSandbox)
 const TOKEN = "verify-secret"
@@ -154,6 +161,99 @@ describe("handleVerifyApiRoute — verdicts pass through as 200", () => {
     const res = await handleVerifyApiRoute(req(validBody), env(TOKEN))
     expect(res.status).toBe(200)
     expect(((await res.json()) as { verdict: string }).verdict).toBe("skipped")
+  })
+})
+
+describe("handleVerifyApiRoute — training-retention wiring (flagged off)", () => {
+  const SECRET_BODY = {
+    owner: "octo",
+    repo: "repo",
+    before: "function f(n){ return n /* token sk-abcdefghijklmnop1234 */ }",
+    after: "function f(n){ return n + 1 }",
+  }
+
+  it("flag OFF: 200 as usual, and NOTHING is written to the training store", async () => {
+    mockCompare.mockResolvedValue(changedResult)
+    const { bucket, store } = makeR2()
+    const e = env(TOKEN, { SIGILIX_TRAINING_DATA: bucket, SIGILIX_TRAINING_RETENTION_MODE: "off" })
+    const res = await handleVerifyApiRoute(req(SECRET_BODY), e)
+    expect(res.status).toBe(200)
+    expect(store.size).toBe(0)
+  })
+
+  it("flag ON + per-tenant consent granted: stores a REDACTED fix-diff in the caller's partition", async () => {
+    mockCompare.mockResolvedValue(changedResult)
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    await db.exec(CONSENT_SQL)
+    const plaintext = "sigilix_live_verify_retain"
+    await insertApiKey(db, {
+      id: "key-retain",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 77,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await upsertConsentRecord(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 77,
+        consent: "granted",
+        setBy: "admin",
+        source: "portal-admin",
+        planAtGrant: "pro",
+        nowIso: "t",
+      },
+    )
+    const { bucket, store } = makeR2()
+    const e = env(undefined, {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_TRAINING_DATA: bucket,
+      SIGILIX_TRAINING_RETENTION_MODE: "on",
+    })
+    const res = await handleVerifyApiRoute(req(SECRET_BODY, plaintext), e)
+    expect(res.status).toBe(200)
+    expect(store.size).toBe(1)
+    const key = [...store.keys()][0]!
+    expect(key).toMatch(/^installation\/77\/fix-diff\//)
+    const stored = [...store.values()][0]!
+    expect(stored).not.toContain("sk-abcdefghijklmnop1234")
+    expect(stored).toContain("[REDACTED]")
+  })
+
+  it("flag ON but verdict skipped (soft-fail): stores NOTHING (low-signal)", async () => {
+    mockCompare.mockResolvedValue({ verdict: "skipped", detail: "arity-mismatch:2!=1", elapsedMs: 1 })
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL_API_KEY)
+    await db.exec(CONSENT_SQL)
+    const plaintext = "sigilix_live_verify_skip"
+    await insertApiKey(db, {
+      id: "key-skip",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 77,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await upsertConsentRecord(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 77,
+        consent: "granted",
+        setBy: "admin",
+        source: "portal-admin",
+        planAtGrant: "pro",
+        nowIso: "t",
+      },
+    )
+    const { bucket, store } = makeR2()
+    const e = env(undefined, {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_TRAINING_DATA: bucket,
+      SIGILIX_TRAINING_RETENTION_MODE: "on",
+    })
+    const res = await handleVerifyApiRoute(req(SECRET_BODY, plaintext), e)
+    expect(res.status).toBe(200)
+    expect(store.size).toBe(0)
   })
 })
 

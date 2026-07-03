@@ -116,9 +116,21 @@ vi.mock("@/src/shared/adapters/model", () => ({
   generate: generateMock,
 }))
 
+// Unified learnings capture — mock ONLY the LLM extractor (the quality gate) so
+// the real captureInstructiveLearning → appendLearning → KV path runs against a
+// real in-memory store. Default declines (nothing instructive) so the pre-existing
+// qa/triage/implement tests keep byte-identical behavior.
+const { extractLearningMock } = vi.hoisted(() => ({
+  extractLearningMock: vi.fn(async () => null as { rule: string; polarity: "require" } | null),
+}))
+vi.mock("@/src/features/learnings/adapters/extractor-model", () => ({
+  extractLearning: extractLearningMock,
+}))
+
 // ─── Import SUT after mocks ───────────────────────────────────────────────────
 
 import { runSlackAgent } from "@/src/lib/slack/slack-agent"
+import { learningsKey } from "@/src/features/learnings/domain/store-ops"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { readUsageEventCount } from "@/src/features/tenancy"
@@ -846,5 +858,49 @@ describe("runSlackAgent — SIG-303 slack ORG-pool metering", () => {
       },
     )
     expect(org).toEqual({ ok: true, count: 1 }) // only the pre-filled row
+  })
+})
+
+describe("runSlackAgent — unified learnings capture", () => {
+  function makeLearningEnv(): { env: Env; store: Map<string, string> } {
+    const store = new Map<string, string>()
+    const kv = {
+      get: async (key: string): Promise<string | null> => store.get(key) ?? null,
+      put: async (key: string, value: string): Promise<void> => {
+        store.set(key, value)
+      },
+      delete: async (key: string): Promise<void> => {
+        store.delete(key)
+      },
+      list: async () => ({ keys: [], list_complete: true }),
+    } as unknown as KVNamespace
+    const env = makeEnv()
+    env.OPENCLAW_STATE = kv
+    env.OPENCLAW_LEARNINGS_MODE = "on"
+    env.OPENCLAW_ORG_MEMORY_CAPTURE = "on"
+    return { env, store }
+  }
+
+  it("captures an INSTRUCTIVE Slack message as an org-scope learning keyed to the installation", async () => {
+    extractLearningMock.mockResolvedValueOnce({ rule: "always use named exports", polarity: "require" })
+    const { env, store } = makeLearningEnv()
+    await runSlackAgent(env, makeCtx({ mentionText: "@sigilix from now on always use named exports" }))
+
+    // installationId 111 (makeCtx default scope) → learnings:org:111
+    const orgKey = learningsKey("org", "111")
+    expect(store.has(orgKey)).toBe(true)
+    const orgStore = JSON.parse(store.get(orgKey)!)
+    expect(orgStore.scope).toBe("org")
+    expect(orgStore.subjectId).toBe("111")
+    expect(orgStore.entries[0].rule).toBe("always use named exports")
+    expect(orgStore.entries[0].source.kind).toBe("chat")
+  })
+
+  it("QUALITY GATE — an ordinary question writes NO learning", async () => {
+    extractLearningMock.mockResolvedValueOnce(null)
+    const { env, store } = makeLearningEnv()
+    await runSlackAgent(env, makeCtx({ mentionText: "how does the auth flow work?" }))
+
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
   })
 })

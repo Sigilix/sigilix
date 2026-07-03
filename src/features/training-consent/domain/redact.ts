@@ -38,9 +38,16 @@ export function redactText(input: string): string {
 }
 
 /**
- * Redact a training record: masks the payload AND every metadata value. Returns
- * a NEW record (never mutates the input). This is the function `retainForTraining`
- * calls before handing anything to the store.
+ * Redact a training record: masks the payload, the `id`, AND every metadata
+ * value. Returns a NEW record (never mutates the input). This is the function
+ * `retainForTraining` calls before handing anything to the store.
+ *
+ * The `id` is redacted too because it is NOT opaque — call sites build it from
+ * capture-surface fields (e.g. `owner/repo` from a request body), and it is
+ * written into the R2 OBJECT KEY, the stored body, and telemetry. A caller that
+ * smuggles a secret/PII into `owner`/`repo` would otherwise leak it via the key
+ * even though the payload was masked. Redacting here closes that class for every
+ * kind and every present/future call site (the store never sees a raw id).
  */
 export function redactTrainingRecord(record: TrainingRecord): TrainingRecord {
   const meta = record.meta
@@ -48,7 +55,7 @@ export function redactTrainingRecord(record: TrainingRecord): TrainingRecord {
     : undefined
   return {
     kind: record.kind,
-    id: record.id,
+    id: redactText(record.id),
     payload: redactText(record.payload),
     ...(meta ? { meta } : {}),
   }

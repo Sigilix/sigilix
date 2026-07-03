@@ -33,6 +33,7 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
 import { extractCodeCitations, verifyAndSanitizeCitations } from "./citation-verifier"
+import { captureInstructiveLearning } from "@/src/features/learnings"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -478,6 +479,30 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   // produce a duplicate reply. 30-day TTL — webhooks from Linear get
   // retried at most over a few hours, so this is generous.
   await env.OPENCLAW_STATE.put(kvKey, newCommentId, { expirationTtl: 60 * 60 * 24 * 30 })
+
+  // Unified learnings capture — a human INSTRUCTION/CORRECTION on a Sigilix-touched
+  // (triaged or answered) Linear issue becomes an ORG-scope learning keyed to the
+  // team's installation, so every surface (PR review, CLI agent, Slack) reads it
+  // back through the one learnings store. Only fires when the team maps to a
+  // resolvable installation; quality-gated by extractLearning on the "chat"
+  // surface — ordinary questions never pass. Ships dark behind
+  // OPENCLAW_LEARNINGS_MODE + OPENCLAW_ORG_MEMORY_CAPTURE. Best-effort, non-fatal.
+  if (teamRepo) {
+    const inst = resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+    if (inst.ok) {
+      await captureInstructiveLearning({
+        env,
+        scope: "org",
+        subjectId: String(inst.installationId),
+        surface: "chat",
+        sourceKind: "chat",
+        message: question,
+        dedupeId: `linear:${commentId}`,
+        actor: askerHandle,
+        telemetry: { surface_detail: "linear", team_key: teamKey },
+      }).catch(() => {})
+    }
+  }
 }
 
 export interface LinkedPrFailure {

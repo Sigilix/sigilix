@@ -54,6 +54,7 @@ import {
   resolveLearningsMode,
 } from "@/src/features/learnings"
 import type { ExtractionSurface, LearningEntry, LearningSourceKind } from "@/src/features/learnings"
+import { retainReviewFindingSignal } from "./retain-finding"
 
 const SEEN_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60
 const LEARNING_CAPTURE_DEDUPE_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -126,7 +127,7 @@ type SignalSource = "inline-reply" | "top-level-explicit" | "review-dismissed-st
 type LearningCaptureClient = Pick<GitHubClient, "createIssueComment" | "replyToReviewComment" | "restGet">
 type ReviewMemoryLearningSurface = Extract<ExtractionSurface, "inline-reply" | "top-level">
 
-interface TrustedSigilixSource {
+export interface TrustedSigilixSource {
   body: string
   marker: SigilixCommentMarker | null
   path?: string
@@ -533,9 +534,24 @@ async function applyFeedbackToTrustedSource(args: {
   source: SignalSource
   feedback: ParsedReviewFeedback
   trusted: TrustedSigilixSource
+  humanReplyBody: string
   repoId?: number
 }): Promise<void> {
   const precisionOutcome = args.feedback.outcome === "dismissed" ? "dismissed" : "accepted"
+
+  // sig-training-retention-wiring (flagged-off; see retain-finding.ts). INERT by default.
+  await retainReviewFindingSignal({
+    env: args.env,
+    owner: args.owner,
+    repo: args.repo,
+    prNumber: args.prNumber,
+    commentId: args.commentId,
+    source: args.source,
+    trusted: args.trusted,
+    feedback: args.feedback,
+    humanReplyBody: args.humanReplyBody,
+  })
+
   await recordPrecisionOutcomesFromBody({
     env: args.env,
     owner: args.owner,
@@ -729,6 +745,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     source,
     feedback,
     trusted: { body: parentBody, marker, path: replyComment.path },
+    humanReplyBody: replyComment.body,
     ...(repoId !== undefined ? { repoId } : {}),
   })
 }
@@ -923,6 +940,7 @@ export async function captureTopLevelReviewFeedback(args: TopLevelCaptureArgs): 
     source,
     feedback,
     trusted,
+    humanReplyBody: comment.body,
     ...(repoId !== undefined ? { repoId } : {}),
   })
 }

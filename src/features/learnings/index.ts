@@ -8,6 +8,8 @@ export {
   resolveConfirmationMap,
 } from "./adapters/confirmation-map"
 export { extractLearning } from "./adapters/extractor-model"
+export { captureInstructiveLearning } from "./adapters/instructive-capture"
+export type { CaptureInstructiveLearningArgs, CaptureInstructiveLearningResult } from "./adapters/instructive-capture"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
 export { loadEffectiveLearnings } from "./adapters/org-apply"
 export { mirrorLearningToOrgScope } from "./adapters/org-mirror"

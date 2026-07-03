@@ -105,7 +105,10 @@ describe("handleGoogleAuthCallback", () => {
     expect(row!.providers).toEqual(["google"])
   })
 
-  it("LINKS to a pre-existing GitHub account that shares the email (account-linking-by-email)", async () => {
+  it("does NOT merge a verified Google login into an unverified same-email GitHub row (takeover-safe)", async () => {
+    // A GitHub row holds link@example.com UNVERIFIED (GitHub emails are never
+    // proven). A verified Google login for the same address must NOT join it —
+    // it revokes the unverified claim and owns the email on a fresh row.
     await upsertGithubIdentity(db, {
       githubUserId: "555",
       email: "link@example.com",
@@ -117,8 +120,11 @@ describe("handleGoogleAuthCallback", () => {
     expect(res.status).toBe(302)
     const byGithub = await findByGithubUserId(db, "555")
     const byEmail = await findByEmail(db, "link@example.com")
-    expect(byEmail!.userId).toBe(byGithub!.userId) // one account, both providers
-    expect(byEmail!.providers.sort()).toEqual(["github", "google"])
+    expect(byGithub!.providers).toEqual(["github"]) // github row did NOT gain google
+    expect(byGithub!.email).toBeNull() // its unverified email claim was revoked
+    expect(byEmail!.userId).not.toBe(byGithub!.userId) // separate accounts, no silent merge
+    expect(byEmail!.providers).toEqual(["google"])
+    expect(byEmail!.emailVerified).toBe(true)
   })
 
   it("fails closed on state mismatch (cookie != query)", async () => {

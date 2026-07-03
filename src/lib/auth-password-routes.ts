@@ -37,8 +37,10 @@ function json(body: unknown, status: number, extraHeaders?: HeadersInit): Respon
 
 // A precomputed hash of a random throwaway password. Verifying against it on the
 // "no such user" branch keeps the login path's timing roughly constant whether
-// or not the email exists (defense against enumeration-by-timing).
-const DUMMY_HASH = "pbkdf2-sha256$210000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+// or not the email exists (defense against enumeration-by-timing). Its iteration
+// count MUST track DEFAULT_ITERATIONS (auth-password.ts) so the dummy verify
+// costs the same as a real one — otherwise the timing gap re-opens the oracle.
+const DUMMY_HASH = "pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 function extractCreds(body: unknown): { email: string; password: string; name: string | null } | null {
   if (body == null || typeof body !== "object") return null
@@ -69,12 +71,19 @@ export async function handleSignupRoute(request: Request, env: Env): Promise<Res
     return json({ error: "weak_password", minLength: MIN_PASSWORD_LENGTH }, 400)
   }
 
-  // Rate-limit signups per IP (spam control). Fail-open.
-  const rl = await checkAuthRateLimit(env.OPENCLAW_STATE, "signup", clientIp(request), {
-    max: 10,
-    windowSeconds: 3600,
-  })
-  if (!rl.allowed) return json({ error: "rate_limited" }, 429)
+  // Rate-limit signups per IP (spam control) AND per email. The per-email limit
+  // blunts abuse of the 409 `email_taken` response as an existence oracle: an
+  // attacker can no longer probe many addresses from one email bucket, and the
+  // same address can't be hammered from rotating IPs. Fail-open (availability >
+  // this soft control). NOTE: a residual oracle remains — a single 409 still
+  // reveals that one address is registered. True neutrality needs the (not-yet-
+  // shipped) email-verification sender to confirm out-of-band instead of via the
+  // sync response; until then this rate limit is the mitigation.
+  const [ipRl, emailRl] = await Promise.all([
+    checkAuthRateLimit(env.OPENCLAW_STATE, "signup-ip", clientIp(request), { max: 10, windowSeconds: 3600 }),
+    checkAuthRateLimit(env.OPENCLAW_STATE, "signup-email", email, { max: 5, windowSeconds: 3600 }),
+  ])
+  if (!ipRl.allowed || !emailRl.allowed) return json({ error: "rate_limited" }, 429)
 
   let result
   try {

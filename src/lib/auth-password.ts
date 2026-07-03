@@ -11,8 +11,10 @@
 //   intentionally minimal). PBKDF2 is the algorithm Cloudflare's own docs
 //   recommend for password hashing on Workers and is available through the
 //   platform WebCrypto (crypto.subtle) with zero new dependencies. It is a
-//   NIST-approved KDF; at 210,000 SHA-256 iterations it meets the OWASP 2023
-//   password-storage floor.
+//   NIST-approved KDF; at 600,000 SHA-256 iterations it meets the OWASP 2023
+//   password-storage floor for PBKDF2-HMAC-SHA256 (the SHA-512 floor is the
+//   lower 210,000 — this code uses SHA-256, so the higher count applies). A
+//   single derive is ~90ms of native Worker CPU, well within the CPU budget.
 //
 //   The stored hash is a PHC-style string that RECORDS its own work factor:
 //     pbkdf2-sha256$<iterations>$<saltB64url>$<hashB64url>
@@ -25,9 +27,11 @@
 import { base64urlDecode, base64urlEncode } from "@/src/lib/auth-session"
 
 const ALGO_PREFIX = "pbkdf2-sha256"
-// OWASP 2023 floor for PBKDF2-HMAC-SHA256. Bump this constant to raise the work
-// factor; old hashes then report `needsRehash === true` and upgrade on login.
-const DEFAULT_ITERATIONS = 210_000
+// OWASP 2023 floor for PBKDF2-HMAC-SHA256 (SHA-256 variant → 600,000; the
+// 210,000 figure is the SHA-512 floor and does NOT apply here). Bump this
+// constant to raise the work factor; old hashes then report `needsRehash ===
+// true` and upgrade transparently on next login.
+const DEFAULT_ITERATIONS = 600_000
 const SALT_BYTES = 16
 const KEY_BITS = 256 // 32-byte derived key
 

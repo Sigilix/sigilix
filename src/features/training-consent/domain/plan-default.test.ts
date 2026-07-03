@@ -7,8 +7,8 @@ import {
 } from "@/src/features/training-consent/domain/plan-default"
 
 describe("resolveDefaultConsent — plan-based default (opt-out allowlist)", () => {
-  it("GRANTS (opt-out) for personal paid plans", () => {
-    for (const plan of ["individual", "pro", "max", "ultra"]) {
+  it("GRANTS (opt-out) for the self-serve / individual plans (free included)", () => {
+    for (const plan of ["free", "individual", "pro", "max", "ultra"]) {
       expect(resolveDefaultConsent(plan)).toBe("granted")
     }
   })
@@ -16,6 +16,7 @@ describe("resolveDefaultConsent — plan-based default (opt-out allowlist)", () 
   it("is case/whitespace-insensitive on the allowlist", () => {
     expect(resolveDefaultConsent("  PRO ")).toBe("granted")
     expect(resolveDefaultConsent("Individual")).toBe("granted")
+    expect(resolveDefaultConsent(" FREE ")).toBe("granted")
   })
 
   it("DENIES (opt-in) for team and enterprise", () => {
@@ -23,18 +24,21 @@ describe("resolveDefaultConsent — plan-based default (opt-out allowlist)", () 
     expect(resolveDefaultConsent("enterprise")).toBe("denied")
   })
 
-  it("fail-closed: DENIES for free / unknown / unset / blank / typo", () => {
-    for (const plan of ["free", "default", "oss", "cli", "enterprisex", "", "   "]) {
+  it("fail-closed: DENIES for unknown / unset / blank / typo / default", () => {
+    for (const plan of ["default", "oss", "cli", "enterprisex", "", "   "]) {
       expect(resolveDefaultConsent(plan)).toBe("denied")
     }
     expect(resolveDefaultConsent(null)).toBe("denied")
     expect(resolveDefaultConsent(undefined)).toBe("denied")
   })
 
-  it("the allowlist never contains a team/enterprise/free plan", () => {
+  it("the allowlist never contains a team/enterprise plan", () => {
     expect(OPT_OUT_PLANS.has("team")).toBe(false)
     expect(OPT_OUT_PLANS.has("enterprise")).toBe(false)
-    expect(OPT_OUT_PLANS.has("free")).toBe(false)
+  })
+
+  it("the allowlist DOES contain free (individual default-on tier)", () => {
+    expect(OPT_OUT_PLANS.has("free")).toBe(true)
   })
 
   it("normalizePlan lowercases + trims, maps nullish to empty", () => {

@@ -27,6 +27,7 @@ import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { comparePairInSandbox } from "@/src/lib/reproduce/purelogic-pair"
+import { retainTrainingRecord } from "@/src/lib/training-retention/retain-training"
 
 // Snippets are small (one function each). Cap each snippet at 16KB, and the whole
 // envelope generously above 2× that + the small owner/repo meta — enforced as the stream
@@ -150,5 +151,29 @@ export async function handleVerifyApiRoute(request: Request, env: Env): Promise<
   // The oracle NEVER throws — any unexpected failure resolves to a `skipped` verdict, so a
   // soft-fail is always a 200, never a 500.
   const result = await comparePairInSandbox(parsed.before, parsed.after)
+
+  // sig-training-retention-wiring (flagged-off). A before/after pair the oracle
+  // actually RAN (verdict changed | preserved — never a soft-fail `skipped`) is a
+  // high-signal fix-diff: how a flagged issue got edited, plus the behavioral
+  // verdict. Offer it to the consent-gated training store for the caller's own
+  // installation. INERT by default: retainTrainingRecord returns immediately (no
+  // record build, no I/O) while SIGILIX_TRAINING_RETENTION_MODE is off, and even
+  // flipped on writes only for a consenting org into the SEPARATE R2 partition,
+  // redacted first. The LEGACY global-key sentinel (installationId -1) fails the
+  // consent gate closed. Best-effort; never affects the 200 response.
+  if (result.verdict !== "skipped") {
+    await retainTrainingRecord(env, auth.caller.installationId, () => ({
+      kind: "fix-diff",
+      id: `${parsed.owner}/${parsed.repo}:verify`,
+      payload: JSON.stringify({
+        before: parsed.before,
+        after: parsed.after,
+        verdict: result.verdict,
+        ...(result.detail !== undefined ? { detail: result.detail } : {}),
+      }),
+      meta: { owner: parsed.owner, repo: parsed.repo, verdict: result.verdict },
+    }))
+  }
+
   return json(result, 200)
 }

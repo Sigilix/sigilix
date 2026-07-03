@@ -27,6 +27,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_SEAT_SQL = readFileSync(
+  new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -49,6 +53,7 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_SEAT_SQL)
   return db
 }
 
@@ -566,6 +571,52 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     } finally {
       errSpy.mockRestore()
     }
+  })
+
+  it("assigned overrides: an unassigned seat is reflected as assigned=false + drops assignedSeatCount", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
+
+    await insertRepo(db, 100, 1, "octocat/api", "octocat")
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "sha-1",
+      authorLogin: "octocat",
+      createdAt: "2026-06-05T00:00:00.000Z",
+    })
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 2,
+      headSha: "sha-2",
+      authorLogin: "contributor",
+      createdAt: "2026-06-03T00:00:00.000Z",
+    })
+    // Persisted unassign override for "contributor" (case-insensitive key).
+    await db
+      .prepare(
+        "INSERT INTO org_seat_assignment (installation_id, login, assigned, is_admin, updated_at, updated_by)" +
+          " VALUES (1, 'contributor', 0, 0, '2026-06-06T00:00:00.000Z', 'octocat')",
+      )
+      .run()
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as OrgOverviewResponse
+    expect(body.seatCount).toBe(2)
+    expect(body.assignedSeatCount).toBe(1) // contributor no longer billed
+    const contributor = body.seats.find((s) => s.login === "contributor")!
+    expect(contributor.assigned).toBe(false)
+    const own = body.seats.find((s) => s.login.toLowerCase() === "octocat")!
+    expect(own.assigned).toBe(true)
   })
 
   it("CORS preflight: OPTIONS /v1/org/overview from an allowlisted portal origin returns the CORS grant", async () => {

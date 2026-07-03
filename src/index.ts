@@ -82,7 +82,7 @@ import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
-import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
+import { handleOrgRoutes } from "@/src/lib/org-routes"
 import { handleUsageRoute } from "@/src/lib/usage-route"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
@@ -499,10 +499,6 @@ export default {
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
-      // sig-org-overview: GET /v1/org/overview — the portal's Organization page
-      // (seats + per-seat billing). Dual-authed (session OR api key); see
-      // org-overview-route.ts.
-      url.pathname === "/v1/org/overview" ||
       url.pathname === "/v1/usage" || // sig-usage: portal usage panel + CLI /usage bars
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
@@ -567,13 +563,9 @@ export default {
       const handler = url.pathname === "/v1/workspace/prs" ? handleWorkspacePrsRoute : handleWorkspacePrReviewRoute
       return withPortalCors(request, await handler(request, env, ctx), env)
     }
-    // sig-org-overview: the portal's Organization page — org headline, billable
-    // seats (distinct usage_ledger authors scoped to the caller's installation),
-    // and per-seat billing. Dual-authed (session OR api key); see
-    // org-overview-route.ts.
-    if (request.method === "GET" && url.pathname === "/v1/org/overview") {
-      return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
-    }
+    // portal Organization page (overview + seat) incl. its CORS preflight — org-routes.ts.
+    const orgResponse = await handleOrgRoutes(request, env, ctx)
+    if (orgResponse) return orgResponse
     // sig-usage: portal "Plan usage limits" panel + CLI `/usage` bars (usage-route.ts).
     if (request.method === "GET" && url.pathname === "/v1/usage") {
       return withPortalCors(request, await handleUsageRoute(request, env, ctx), env)
@@ -581,10 +573,9 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
       return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)
     }
-    // sig-memory-crud: the portal's memory-management surface. GET lists the
-    // caller's saved memories (paginated); DELETE removes one by id. Dual-authed
-    // (session cookie OR bearer api key — see agent-memory-crud-route.ts) and
-    // CORS'd for the portal origins. Registered AFTER the PUT/POST /v1/memory*
+    // sig-memory-crud: the portal's memory-management surface. GET lists the caller's
+    // saved memories (paginated); DELETE removes one by id. Dual-authed (session OR api
+    // key — see agent-memory-crud-route.ts). Registered AFTER the PUT/POST /v1/memory*
     // write/query/extract routes above, so the HTTP method disambiguates them.
     if (request.method === "GET" && url.pathname === "/v1/memory") {
       return withPortalCors(request, await handleMemoryListRoute(request, env, ctx), env)

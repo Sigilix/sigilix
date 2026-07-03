@@ -268,6 +268,88 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
     expect(b.facets.teams).toEqual([])
   })
 
+  it("toolFindings: banded from the RunnerToolMetrics DO, scoped to owned repos", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    // The caller owns installation 1 / octocat/api; a foreign repo's tool rows
+    // must never be summed in (tenant isolation).
+    await insertRepo(db, 100, 1, "octocat/api")
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "s1",
+      authorLogin: "octocat",
+      createdAt: iso(1 * DAY),
+    })
+    const cannedQuery = {
+      window: { days: 30, startDay: "", endDay: "" },
+      manifestReceipts: 0,
+      toolRows: 0,
+      tools: [],
+      latestByRepo: [
+        // owned → counted: semgrep (security → sast) + eslint (logic → linter)
+        {
+          owner: "octocat",
+          repo: "api",
+          toolId: "semgrep",
+          enabled: true,
+          status: "produced",
+          runCount: 1,
+          resultCount: 3,
+          lastSeenAt: iso(1 * DAY),
+        },
+        {
+          owner: "octocat",
+          repo: "api",
+          toolId: "eslint",
+          enabled: true,
+          status: "produced",
+          runCount: 1,
+          resultCount: 5,
+          lastSeenAt: iso(1 * DAY),
+        },
+        // owned, non-catalog but shape-safe id → other
+        {
+          owner: "octocat",
+          repo: "api",
+          toolId: "customtool",
+          enabled: true,
+          status: "produced",
+          runCount: 1,
+          resultCount: 2,
+          lastSeenAt: iso(1 * DAY),
+        },
+        // FOREIGN repo → must be excluded
+        {
+          owner: "other-org",
+          repo: "secret",
+          toolId: "semgrep",
+          enabled: true,
+          status: "produced",
+          runCount: 1,
+          resultCount: 99,
+          lastSeenAt: iso(1 * DAY),
+        },
+      ],
+    }
+    const RUNNER_TOOL_METRICS_DO = {
+      idFromName: (name: string) => name,
+      get: () => ({ query: async () => cannedQuery }),
+    }
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      RUNNER_TOOL_METRICS_DO,
+    } as unknown as Env
+    stubInstallations([1])
+    const res = await handleMetricsDashboardRoute(reqWithSession("sess-1", "?window=30d"), env)
+    const b = (await res.json()) as MetricsDashboardResponse
+    expect(b.toolFindings).toEqual({ sast: 3, linter: 5, other: 2 }) // 99 from foreign repo excluded
+  })
+
   it("fail-soft on a D1 read error: 200 with zeroed metrics, never a 500", async () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)

@@ -36,12 +36,22 @@
 //     - severity[]                      posted/accepted banded from real score
 //     - category[]                      posted/accepted mapped from real role
 //
+//   REAL (RunnerToolMetricsDO `repo_tool_latest`, tenant-scoped by owned repo):
+//     - toolFindings     deterministic-tool findings from the latest scan of
+//                        each of the caller's OWN repos. The DO is a single
+//                        global instance, but its per-repo `latestByRepo` rows
+//                        carry (owner, repo), so we filter to the caller's owned
+//                        repo slugs before summing — no cross-tenant leak (see
+//                        scanToolFindings). resultCount is banded to sast /
+//                        linter / other via the runner-tool catalog roles. Null
+//                        (Coming soon) when the DO binding is absent or no owned
+//                        repo has a recorded manifest — an honest empty, never a
+//                        fabricated zero.
+//
 //   NULL (no source — never fabricated):
-//     - chatUsage        portal chat is a separate repo; not instrumented here
+//     - chatUsage        chatbot metering (SIG-303 usage_events) is not yet in
+//                        this worker; there is no session/message store to read
 //     - medianTime       no merge/last-commit timestamps are persisted
-//     - toolFindings     tracked ONLY in a single GLOBAL RunnerToolMetrics DO
-//                        with no per-installation scoping — returning it would
-//                        LEAK cross-tenant tool counts, so it is null by design
 //     - pipelineFailures CI triage is post-and-forget; no aggregate is stored
 //
 // Tenant isolation (CRITICAL): the D1 reads filter on the caller's exact
@@ -69,10 +79,13 @@ import {
   aggregateReviewComments,
   avgReviewIterationsPerPr,
   reviewerTimeSavedHours,
+  bandToolFindings,
   type CategoryBucket,
   type PostedFinding,
   type SeverityBucket,
+  type ToolFindings,
 } from "@/src/lib/metrics-dashboard/aggregate"
+import { queryRunnerToolMetrics } from "@/src/lib/runner-tool-metrics-client"
 import type { Env } from "@/src/shared/types/env"
 
 // Defensive pagination cap on GET /user/installations — mirrors the sibling
@@ -565,6 +578,41 @@ function createdMsFromTelemetryKey(key: string): number | null {
   return Number.isFinite(createdMs) ? createdMs : null
 }
 
+// ─── Tool findings (RunnerToolMetricsDO, tenant-scoped by owned repo) ──
+
+/**
+ * Deterministic-tool findings for the caller's OWN repos. The DO is a single
+ * global instance, so we read its per-repo `latestByRepo` rows and keep only
+ * those whose `${owner}/${repo}` slug is in the caller's owned set — a global
+ * count is never returned, so no cross-tenant leak. Each kept row's resultCount
+ * is banded to sast/linter/other by the runner-tool catalog (see aggregate).
+ *
+ * Returns null (→ "Coming soon") when the DO binding is absent, the scope/slug
+ * set is empty, the DO read faults, or no owned repo has a recorded manifest —
+ * an honest empty rather than a fabricated zero. Bounded by the DO's own
+ * MAX_LATEST_TOOL_ROWS + window; fail-soft in a try/catch (telemetry, never
+ * receipt-critical).
+ */
+async function scanToolFindings(env: Env, slugsLower: string[], windowDays: number): Promise<ToolFindings | null> {
+  if (!env.RUNNER_TOOL_METRICS_DO) return null
+  if (slugsLower.length === 0) return null
+  try {
+    const owned = new Set(slugsLower)
+    const metrics = await queryRunnerToolMetrics(env, windowDays)
+    const mine = metrics.latestByRepo.filter((r) => owned.has(`${r.owner}/${r.repo}`.toLowerCase()))
+    if (mine.length === 0) return null
+    return bandToolFindings(mine.map((r) => ({ toolId: r.toolId, resultCount: r.resultCount })))
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "metrics-dashboard-tool-findings-scan-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
+}
+
 // ─── Filter resolution (tenant-safe: NARROW only) ─────────────
 
 interface ResolvedFilters {
@@ -671,6 +719,9 @@ export async function handleMetricsDashboardRoute(
 
   const reviewComments = await scanReviewComments(env, filters.slugsLower, nowMs, windowDays, prKeyAllowSet)
 
+  // Deterministic-tool findings for the caller's OWN repos (tenant-scoped inside).
+  const toolFindings = await scanToolFindings(env, filters.slugsLower, windowDays)
+
   const body: MetricsDashboardResponse = {
     window: `${windowDays}d`,
     activeRepos: usage.activeRepos,
@@ -687,10 +738,10 @@ export async function handleMetricsDashboardRoute(
     avgReviewIterationsPerPr: avgReviewIterationsPerPr(usage.totalRows, usage.distinctPrs),
     severity: reviewComments?.severity ?? [],
     category: reviewComments?.category ?? [],
+    toolFindings,
     // No instrumented source — null so the portal renders "Coming soon".
     chatUsage: null,
     medianTime: null,
-    toolFindings: null,
     pipelineFailures: null,
     facets: {
       repos: allowedRepos.map((r) => ({ id: r.id, name: r.name })),

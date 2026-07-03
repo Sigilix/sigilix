@@ -24,6 +24,7 @@ import { isRepoSensitive } from "./repo-policy"
 import { parseCiSuggestionsMode, planCiSuggestions, submitCiSuggestionReview } from "./ci-suggestions"
 import { parseCiTriageSynthMode } from "./ci-triage-synth"
 import { runCiTriageSynth } from "./ci-triage-synth-run"
+import { resolveEntitlement } from "@/src/features/entitlements"
 import type { Env } from "@/src/shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -96,6 +97,26 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   }
 
   since("start")
+
+  // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
+  // CI-failure triage is Pro/Max/Ultra only. If this installation isn't entitled,
+  // clean-skip BEFORE any work — no PR comment (a paywall comment on every failed
+  // CI run would be spam). off/shadow are non-blocking; enforce blocks.
+  const entitlement = await resolveEntitlement(env, { installationId, feature: "ci_triage" })
+  if (entitlement.blocked) {
+    console.log(
+      JSON.stringify({
+        event: "ci-triage-skipped",
+        reason: "not_entitled",
+        owner,
+        repo,
+        prNumber,
+        runId,
+        plan: entitlement.plan,
+      }),
+    )
+    return
+  }
 
   // Concurrent-run guard. Two retried webhooks for the same workflow
   // run must not both reach the listIssueComments → no-marker branch.

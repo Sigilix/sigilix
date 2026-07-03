@@ -20,6 +20,7 @@ import { buildLinearClient, buildLinearAgentClient, type AgentActivityType } fro
 import { dispatchAgentRun, type AgentRunOutcome } from "@/src/lib/agent-runner/dispatch"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
+import { resolveEntitlement, upsellFor as linearUpsellFor } from "@/src/features/entitlements"
 
 /** Ollama Turbo base — the free minimal-engine provider for the B3 trigger. */
 const OLLAMA_TURBO_BASE = "https://ollama.com/v1"
@@ -255,6 +256,41 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
           owner: mapping.owner,
           repo: mapping.repo,
           reason: inst.reason,
+        }),
+      )
+      return
+    }
+
+    // ── Entitlement gate (sig-free-tier-entitlements) ──────────────────────────
+    // The Linear agent is Pro/Max/Ultra only. Resolve the plan from THIS issue's
+    // team→repo→installation (tenant isolation). If not entitled, post a brief
+    // upgrade note where a human sees it — a terminal session activity (so the
+    // session resolves out of "Working") when there's a sessionId, else an issue
+    // comment — and do NOT dispatch. off/shadow are non-blocking; enforce blocks.
+    const entitlement = await resolveEntitlement(env, {
+      installationId: inst.installationId,
+      feature: "linear",
+    })
+    if (entitlement.blocked) {
+      const upsell = linearUpsellFor("linear")
+      if (upsell) {
+        if (sessionId) {
+          const agent = await buildLinearAgentClient(env)
+          if (agent) await agent.createAgentActivity(sessionId, upsell, "response")
+        } else {
+          try {
+            await linear.createComment(issue.id, upsell)
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
+      console.log(
+        JSON.stringify({
+          event: "linear-agent-run-not-entitled",
+          issueId,
+          identifier: issue.identifier,
+          plan: entitlement.plan,
         }),
       )
       return

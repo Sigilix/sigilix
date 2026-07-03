@@ -206,4 +206,30 @@ describe("handleLinearTriageCommand — direct unit tests", () => {
     })
     expect(putSpy).not.toHaveBeenCalled()
   })
+
+  // sig-free-tier-entitlements — with the gate in ENFORCE and no platform DB (plan
+  // unresolvable → fail-closed → not entitled), a trusted author on a matching
+  // command gets a brief upsell reply, and NO Linear issue is created.
+  it("(i) entitlements enforce + un-entitled → upgrade reply, no create", async () => {
+    const kv = makeKv()
+    const env = {
+      ...(makeEnv("on", TEAM_MAP, kv) as unknown as Record<string, unknown>),
+      OPENCLAW_ENTITLEMENTS_MODE: "enforce",
+    } as unknown as Env
+    const result = await handleLinearTriageCommand(baseArgs({ env }))
+    expect(result).toMatchObject({ handled: true })
+    expect((result as { handled: true; reply: string }).reply).toContain("Pro feature")
+    expect((result as { handled: true; reply: string }).reply).toContain("app.sigilix.ai")
+    expect(createIssueMock).not.toHaveBeenCalled()
+  })
+
+  // The gate is a strict no-op with the flag OFF (default): the create path still
+  // runs even for an un-entitled/unknown plan.
+  it("(j) entitlements off (default) → gate is a no-op, create still runs", async () => {
+    const kv = makeKv()
+    const env = makeEnv("on", TEAM_MAP, kv) // no OPENCLAW_ENTITLEMENTS_MODE set
+    const result = await handleLinearTriageCommand(baseArgs({ env }))
+    expect((result as { handled: true; reply: string }).reply).toContain("Created")
+    expect(createIssueMock).toHaveBeenCalledOnce()
+  })
 })

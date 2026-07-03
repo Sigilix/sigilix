@@ -12,6 +12,7 @@ import { getSlackBotToken } from "@/src/lib/slack/slack-install"
 import { postSlackMessage, fetchSlackThread, capAndRedactThread } from "@/src/lib/slack/slack-api"
 import { checkSlackRateLimit, recordSlackAction } from "@/src/lib/slack/slack-rate-limit"
 import { runSlackAgent } from "@/src/lib/slack/slack-agent"
+import { resolveEntitlement, upsellFor } from "@/src/features/entitlements"
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
@@ -152,6 +153,23 @@ async function runDeferredWork(
   const botToken = await getSlackBotToken(env, teamId)
   if (!botToken) {
     console.log(JSON.stringify({ event: "slack-no-bot-token", teamId, channelId, mode }))
+    return
+  }
+
+  // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
+  // The Slack assistant is Pro/Max/Ultra only. Resolve the plan from THIS team's
+  // mapped installation (scope isolation — never another team's). If not entitled,
+  // reply with a brief upsell rather than silently ignoring or answering.
+  // off/shadow are non-blocking; only enforce blocks.
+  const slackInstallationId = scopeResult.scope.repos[0]?.installationId ?? 0
+  const slackEntitlement = await resolveEntitlement(env, {
+    installationId: slackInstallationId,
+    feature: "slack",
+  })
+  if (slackEntitlement.blocked) {
+    const upsell = upsellFor("slack")
+    if (upsell) await postSlackMessage({ botToken, channel: channelId, threadTs, text: upsell })
+    console.log(JSON.stringify({ event: "slack-not-entitled", teamId, channelId, plan: slackEntitlement.plan }))
     return
   }
 

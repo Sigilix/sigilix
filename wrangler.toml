@@ -531,6 +531,16 @@ OPENCLAW_REPO_ROLE_CLASSIFY = "on"
 # `wrangler secret put` the same name (a secret would shadow this value).
 SIGILIX_TRAINING_RETENTION_MODE = "off"
 
+# sig-free-tier-entitlements: master rollout switch for the paid-only feature gate
+# (CI-failure triage, the Slack assistant, Linear triage/agent are Pro/Max/Ultra
+# only). "off" (default) is fully inert — no plan lookup, no gating, byte-identical
+# to pre-entitlements behavior. "shadow" resolves the plan and LOGS what would be
+# gated but still allows it (validate the plan→installation resolution on live
+# traffic first). "enforce" actually gates an un-entitled installation. Ships dark;
+# flip to "shadow" to validate, then "enforce". Committed [vars] mode string like
+# the other feature flags; do NOT also `wrangler secret put` the same name.
+OPENCLAW_ENTITLEMENTS_MODE = "off"
+
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
 #                            indexer (extract + RepoGraphDO upsert/commit).

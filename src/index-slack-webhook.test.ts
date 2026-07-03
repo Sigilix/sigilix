@@ -371,6 +371,46 @@ describe("handleSlackRequest", () => {
     expect(recordSlackAction).not.toHaveBeenCalled()
   })
 
+  // ── (h) entitlements enforce → un-entitled team gets an upsell, no agent run ──
+  // sig-free-tier-entitlements: on + scoped, but the mapped installation's plan is
+  // unresolvable (no platform DB → fail-closed → not entitled). The surface must
+  // post a brief upsell and NOT run the agent.
+
+  it("(h) entitlements enforce + un-entitled → upsell posted, runSlackAgent NOT called", async () => {
+    const kv = makeFakeKV()
+    const env = {
+      ...(makeEnv("on", kv) as unknown as Record<string, unknown>),
+      OPENCLAW_ENTITLEMENTS_MODE: "enforce",
+    } as unknown as Env
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+    expect(res.status).toBe(200)
+    await ctx.flush()
+
+    expect(runSlackAgent).not.toHaveBeenCalled()
+    expect(recordSlackAction).not.toHaveBeenCalled()
+    expect(postSlackMessage).toHaveBeenCalledTimes(1)
+    const posted = vi.mocked(postSlackMessage).mock.calls[0]?.[0] as { text: string }
+    expect(posted.text).toContain("Pro feature")
+    expect(posted.text).toContain("app.sigilix.ai")
+  })
+
+  // ── (i) entitlements off (default) → gate is a no-op, agent runs as before ────
+
+  it("(i) entitlements off (default) → runSlackAgent still called (no-op gate)", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv("on", kv) // no OPENCLAW_ENTITLEMENTS_MODE → off
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+    await ctx.flush()
+
+    expect(runSlackAgent).toHaveBeenCalledTimes(1)
+  })
+
   // ── url_verification works in on mode too (always highest priority) ─────────
 
   it("url_verification in on mode returns 200 + challenge without auth", async () => {

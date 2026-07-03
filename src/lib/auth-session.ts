@@ -235,6 +235,38 @@ export async function deleteSession(args: { kv: KVNamespace; sessionId: string }
   await args.kv.delete(`${SESSION_KV_PREFIX}${args.sessionId}`)
 }
 
+/** One enumerated session (its id + record) from {@link listSessionsPage}. */
+export interface EnumeratedSession {
+  sessionId: string
+  record: SessionRecord
+}
+
+/**
+ * One KV page of live sessions (id + record), for the account-wide "sign out
+ * everywhere" / "delete account" sweeps that must revoke EVERY session a user
+ * holds — not just the current cookie. KV has no value index, so the caller
+ * walks pages and filters by identity. A record that fails to parse (or has
+ * since expired) is skipped rather than surfaced. Returns the next `cursor`
+ * (undefined once `listComplete`).
+ */
+export async function listSessionsPage(
+  kv: KVNamespace,
+  cursor?: string,
+): Promise<{ sessions: EnumeratedSession[]; cursor?: string; listComplete: boolean }> {
+  const page = await kv.list({ prefix: SESSION_KV_PREFIX, ...(cursor ? { cursor } : {}) })
+  const sessions: EnumeratedSession[] = []
+  for (const key of page.keys) {
+    const sessionId = key.name.slice(SESSION_KV_PREFIX.length)
+    if (!sessionId) continue
+    const record = await getSession({ kv, sessionId })
+    if (record) sessions.push({ sessionId, record })
+  }
+  // The list result is a discriminated union — `cursor` only exists on the
+  // not-complete arm, so branch on `list_complete` to read it type-safely.
+  if (!page.list_complete) return { sessions, cursor: page.cursor, listComplete: false }
+  return { sessions, listComplete: true }
+}
+
 /**
  * Mirror a just-captured email onto the live session (sig-user-identity email
  * capture) so /auth/me reflects it without a re-login. Preserves the sliding

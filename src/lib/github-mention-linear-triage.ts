@@ -1,7 +1,8 @@
 // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command. Dark by default.
 import { buildLinearClient } from "@/src/lib/linear"
 import { triageIssue } from "@/src/lib/triage"
-import { resolveLinearTeamForRepo } from "@/src/shared/adapters/github/github-installation"
+import { resolveLinearTeamForRepo, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import { resolveEntitlement, upsellFor as linearUpsellFor } from "@/src/features/entitlements"
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { isAuthorAllowedForReviewDismiss } from "./github-mention-dismiss"
@@ -95,6 +96,21 @@ export async function handleLinearTriageCommand(args: {
   if (!isAuthorAllowedForReviewDismiss(authorAssociation)) {
     return { handled: true, reply: null }
   }
+
+  // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
+  // Linear triage is Pro/Max/Ultra only. Resolve the plan from THIS PR's own
+  // installation (tenant isolation). If not entitled, reply with a brief upgrade
+  // note in the GitHub thread — the natural human surface — and do not create.
+  // A failed installation resolve → unknown plan → fail-closed (blocked in enforce).
+  const inst = resolveInstallation(owner, repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+  const entitlement = await resolveEntitlement(env, {
+    installationId: inst.ok ? inst.installationId : 0,
+    feature: "linear",
+  })
+  if (entitlement.blocked) {
+    return { handled: true, reply: linearUpsellFor("linear") }
+  }
+
   if (mode === "shadow") {
     console.log(JSON.stringify({ event: "github-linear-triage-would-create", owner, repo, prNumber }))
     return { handled: true, reply: null }

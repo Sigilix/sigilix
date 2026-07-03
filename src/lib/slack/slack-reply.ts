@@ -54,18 +54,19 @@ export function detectSlackIntent(mentionText: string): SlackIntent {
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
 
-const FOOTER_DIVIDER = "\n\n---"
-const FOOTER_TEXT = "_Sigilix · powered by your codebase_"
-
 /**
  * Wrap a model-generated body in the Sigilix Slack voice.
- * - Body is rendered verbatim.
- * - A subtle footer is appended.
+ * - Body is rendered verbatim (no branding footer).
+ * - A `provenance` marker (e.g. "degraded") is appended as a subtle italic line
+ *   when provided — a recall-safety signal so a degraded reply never reads as
+ *   authoritative. Absent it, the body is returned as-is.
  * - Never says "slack bot" — voice matches the agent system prompt (senior
  *   teammate, direct, technical).
  */
 export function formatSigilixReply(body: string, opts?: { provenance?: string }): string {
   const trimmedBody = body.trim()
-  const provenance = opts?.provenance ? ` · ${opts.provenance}` : ""
-  return `${trimmedBody}${FOOTER_DIVIDER}\n${FOOTER_TEXT}${provenance}`
+  if (opts?.provenance) {
+    return `${trimmedBody}\n\n_${opts.provenance}_`
+  }
+  return trimmedBody
 }

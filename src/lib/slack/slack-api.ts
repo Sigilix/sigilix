@@ -2,6 +2,7 @@
 // Privacy contract: the bot token and message text are NEVER logged.
 
 import { containsCredentialToken } from "@/src/lib/secret-scan"
+import { markdownToMrkdwn } from "@/src/lib/slack/slack-mrkdwn"
 
 const SLACK_API = "https://slack.com/api"
 
@@ -22,7 +23,10 @@ export async function postSlackMessage(args: {
 }): Promise<{ ok: boolean }> {
   const { botToken, channel, threadTs, text } = args
   try {
-    const body: Record<string, string> = { channel, text }
+    // Slack renders mrkdwn, not standard Markdown — convert the outgoing text so
+    // **bold** / # headings / [text](url) render correctly (this is the single
+    // post choke point, so every bot reply is converted).
+    const body: Record<string, string> = { channel, text: markdownToMrkdwn(text) }
     if (threadTs !== undefined) {
       body["thread_ts"] = threadTs
     }

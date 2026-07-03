@@ -82,8 +82,7 @@ import { handleCreateApiKeyRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
-import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
-import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
+import { handleOrgRoutes } from "@/src/lib/org-routes"
 import { handleUsageRoute } from "@/src/lib/usage-route"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
@@ -500,9 +499,6 @@ export default {
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
-      // portal org routes: overview (GET) + seat assign/unassign (POST) — org-*-route.ts
-      url.pathname === "/v1/org/overview" ||
-      /^\/v1\/org\/[^/]+\/members\/[^/]+\/seat$/.test(url.pathname) ||
       url.pathname === "/v1/usage" || // sig-usage: portal usage panel + CLI /usage bars
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
@@ -567,16 +563,9 @@ export default {
       const handler = url.pathname === "/v1/workspace/prs" ? handleWorkspacePrsRoute : handleWorkspacePrReviewRoute
       return withPortalCors(request, await handler(request, env, ctx), env)
     }
-    // portal Organization page: overview (GET) + seat assign/unassign (POST) — org-*-route.ts
-    if (request.method === "GET" && url.pathname === "/v1/org/overview") {
-      return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
-    }
-    const seatMatch = /^\/v1\/org\/([^/]+)\/members\/([^/]+)\/seat$/.exec(url.pathname)
-    if (request.method === "POST" && seatMatch) {
-      const iid = Number(decodeURIComponent(seatMatch[1]!))
-      const who = decodeURIComponent(seatMatch[2]!)
-      return withPortalCors(request, await handleOrgSeatRoute(request, env, ctx, iid, who), env)
-    }
+    // portal Organization page (overview + seat) incl. its CORS preflight — org-routes.ts.
+    const orgResponse = await handleOrgRoutes(request, env, ctx)
+    if (orgResponse) return orgResponse
     // sig-usage: portal "Plan usage limits" panel + CLI `/usage` bars (usage-route.ts).
     if (request.method === "GET" && url.pathname === "/v1/usage") {
       return withPortalCors(request, await handleUsageRoute(request, env, ctx), env)

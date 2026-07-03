@@ -6,7 +6,7 @@
 // Routing map (all fail-closed; see each handler):
 //   GET  /auth/google/login        — Google OAuth kickoff (top-level nav)
 //   GET  /auth/google/callback     — Google OAuth callback (top-level nav)
-//   GET  /auth/verify              — email-verification confirm (top-level nav, sets session + 302)
+//   GET  /auth/verify              — email-verification confirm (top-level nav; marks verified, 302s to /login — NO session)
 //   GET  /auth/providers           — which login methods are configured (portal reads this, CORS)
 //   POST /v1/auth/signup           — email/password sign-up            (CORS; no session until verified)
 //   POST /v1/auth/login            — email/password login              (CORS + session cookie; gated on verified)
@@ -69,13 +69,13 @@ export async function tryHandleIdentityRoute(
 
   // ── Email/password auth ──
   if (method === "POST" && pathname === "/v1/auth/signup") {
-    return withPortalCors(request, await handleSignupRoute(request, env), env)
+    return withPortalCors(request, await handleSignupRoute(request, env, ctx), env)
   }
   if (method === "POST" && pathname === "/v1/auth/login") {
     return withPortalCors(request, await handleLoginRoute(request, env), env)
   }
   if (method === "POST" && pathname === "/v1/auth/resend-verification") {
-    return withPortalCors(request, await handleResendVerificationRoute(request, env), env)
+    return withPortalCors(request, await handleResendVerificationRoute(request, env, ctx), env)
   }
 
   // ── Email capture ──

@@ -64,8 +64,8 @@ function extractCreds(
   return { email: b.email, password: b.password, name, remember }
 }
 
-/** POST /v1/auth/signup — create an email/password account + session. */
-export async function handleSignupRoute(request: Request, env: Env): Promise<Response> {
+/** POST /v1/auth/signup — create an email/password account (NO session; sends a verify email). */
+export async function handleSignupRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) return json({ error: "auth_misconfigured" }, 503)
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
@@ -122,27 +122,30 @@ export async function handleSignupRoute(request: Request, env: Env): Promise<Res
 
   // A new email/password account is UNVERIFIED. We do NOT issue a session here —
   // the user must confirm the email first (login is gated on email_verified).
-  // Mint a single-use token + send the verify link. This fails SOFT: a send
-  // outage still leaves the account created and returns emailSent=false so the
-  // portal shows a "resend" affordance (a token was persisted regardless).
-  let emailSent = false
-  try {
-    ;({ emailSent } = await mintAndSendVerification(env, {
+  //
+  // CONSTANT-TIME: dispatch the mint+send fire-and-forget via ctx.waitUntil so the
+  // new-account response returns in the same time as the `email_taken` 409 above —
+  // awaiting the network send only on the new-account path would leak, via latency,
+  // that the address was previously unregistered. The send is fail-soft (logged),
+  // and the user always has POST /v1/auth/resend-verification to recover.
+  ctx.waitUntil(
+    mintAndSendVerification(env, {
       userId: result.identity.userId,
       email: result.identity.email ?? email,
       name: result.identity.name,
-    }))
-  } catch (error) {
-    // A token-store fault must not crash a successful signup — the user can
-    // recover via POST /v1/auth/resend-verification.
-    console.error(
-      JSON.stringify({
-        event: "signup-verify-issue-failed",
-        err: error instanceof Error ? error.message : String(error),
-      }),
-    )
-  }
-  return json({ ok: true, userId: result.identity.userId, verificationRequired: true, emailSent }, 201)
+    }).catch((error) => {
+      console.error(
+        JSON.stringify({
+          event: "signup-verify-issue-failed",
+          err: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    }),
+  )
+  // `emailSent: true` reflects that a verify email was DISPATCHED (best-effort) —
+  // its outcome is intentionally not awaited (see constant-time note). The portal
+  // still offers a resend affordance if the mail never arrives.
+  return json({ ok: true, userId: result.identity.userId, verificationRequired: true, emailSent: true }, 201)
 }
 
 /** POST /v1/auth/login — verify an email/password credential + mint a session. */

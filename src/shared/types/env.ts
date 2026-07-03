@@ -25,6 +25,20 @@ export interface Env {
   // flag is off) retrieval stays pure-vector and the indexer skips the
   // dual-write. Provisioned via `wrangler d1 create sigilix-lexical-index`.
   OPENCLAW_LEXICAL_INDEX?: D1Database
+  // sig-training-data-consent: the PHYSICALLY SEPARATE, consent-gated long-term
+  // training corpus. A DEDICATED R2 bucket — a DIFFERENT binding from every
+  // operational store (KV OPENCLAW_STATE, D1 SIGILIX_PLATFORM_DB, the Vectorize
+  // indexes) — so non-consented data has NO code path into it: the ONLY writer
+  // is `retainForTraining` (@/features/training-consent), which is itself gated
+  // on consent AND the SIGILIX_TRAINING_RETENTION_MODE master flag. Records are
+  // partitioned per installation (`installation/<id>/...` key prefix) for per-org
+  // isolation + a prefix-scoped right-to-forget purge. OPTIONAL: when the binding
+  // is absent (the launch default — the bucket is intentionally not yet
+  // provisioned) the store no-ops, so retention is impossible even if the flag
+  // were flipped. Provision via `wrangler r2 bucket create sigilix-training-data`
+  // and uncomment the wrangler.toml [[r2_buckets]] block only AFTER the legal
+  // prerequisites in src/features/training-consent/README.md are met.
+  SIGILIX_TRAINING_DATA?: R2Bucket
   // Workers AI binding for embedding queries at retrieval time.
   AI: Ai
   // Cloudflare Queue producer binding. Webhook handlers enqueue
@@ -1195,6 +1209,18 @@ export interface Env {
   SIGILIX_USAGE_CAP_SEAT_WEEKLY?: string
   SIGILIX_USAGE_CAP_ORG_SESSION?: string
   SIGILIX_USAGE_CAP_ORG_WEEKLY?: string
+
+  // sig-training-data-consent: the MASTER kill switch for the consent-gated
+  // training corpus. Layered ON TOP of per-org consent — even a consented org's
+  // data is NEVER written unless this is on. FAIL-CLOSED: only the exact string
+  // "on" enables retention; unset (the launch default) / "" / "true" / "shadow"
+  // / any other value keeps it off, so no capture path can ever reach the store.
+  // Do NOT flip to "on" until the legal prerequisites in
+  // src/features/training-consent/README.md (consent language in the ToS, a
+  // GDPR/CCPA deletion path, data-processing terms) are signed off. Parsed by
+  // resolveTrainingRetentionMode (@/features/training-consent). Operator flips
+  // via `wrangler secret put SIGILIX_TRAINING_RETENTION_MODE on`.
+  SIGILIX_TRAINING_RETENTION_MODE?: string
 
   // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
   // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";

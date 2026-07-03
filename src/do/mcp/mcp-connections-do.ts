@@ -21,6 +21,7 @@ import { MCPClientManager } from "agents/mcp/client"
 import { SlackAwareOAuthProvider } from "./slack-oauth-provider"
 import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { Env } from "@/src/shared/types/env"
+import { normalizeEnv } from "@/src/shared/util/normalize-env"
 
 /** Fixed identity handed to the SDK — used for OAuth client metadata + the
  *  DCR client name; NOT a secret and NOT per-server. */
@@ -45,7 +46,9 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   private restored: Promise<void> | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env)
+    // sig-worker-debrand-openclaw: SIGILIX_-preferred / OPENCLAW_-fallback env on
+    // `this.env` (see normalize-env.ts).
+    super(ctx, normalizeEnv(env))
     this.mcp = new MCPClientManager(MCP_CLIENT_NAME, MCP_CLIENT_VERSION, {
       storage: ctx.storage,
       // Restored connections do NOT persist a transport.authProvider

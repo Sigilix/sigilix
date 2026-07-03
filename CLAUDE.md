@@ -82,8 +82,13 @@ the system is built and where code goes; read it before working in an unfamiliar
 - Four review specialists (logic / security / performance / tests) run in parallel; a
   synthesizer dedupes into one posted review. Most review logic lives under
   `src/lib/` (notably the `triage-pr-review*` files).
-- Tests are **vitest**; `npm run build` runs the whole gate. Internal env vars keep the
-  legacy `OPENCLAW_*` prefix on purpose — don't rename them.
+- Tests are **vitest**; `npm run build` runs the whole gate. Internal env vars are
+  being rebranded `OPENCLAW_*` → `SIGILIX_*` (sig-worker-debrand-openclaw). This is done
+  BACK-COMPAT: `normalizeEnv` (`src/shared/util/normalize-env.ts`) resolves each pair
+  SIGILIX_-first with OPENCLAW_ fallback at every entry point, so the live deployment keeps
+  working whether Cloudflare still holds the OPENCLAW_ secret/var/binding or the new SIGILIX_
+  one. Prefer the `SIGILIX_*` name for any NEW var; the OPENCLAW_ names stay declared
+  (optional) on `Env` until the resource + secret migration completes.
 
 ---
 

@@ -18,6 +18,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import { MCPClientManager } from "agents/mcp/client"
+import { SlackAwareOAuthProvider } from "./slack-oauth-provider"
 import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { Env } from "@/src/shared/types/env"
 
@@ -45,7 +46,22 @@ export class McpConnectionsAgent extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
-    this.mcp = new MCPClientManager(MCP_CLIENT_NAME, MCP_CLIENT_VERSION, { storage: ctx.storage })
+    this.mcp = new MCPClientManager(MCP_CLIENT_NAME, MCP_CLIENT_VERSION, {
+      storage: ctx.storage,
+      // Restored connections do NOT persist a transport.authProvider
+      // (registerServer strips it before saving), so the manager rebuilds one via
+      // this factory on wake — return the Slack-aware provider so a restored Slack
+      // connection keeps its static confidential client instead of falling back to
+      // DCR. The manager sets `.serverId` on the returned provider itself.
+      createAuthProvider: (callbackUrl) =>
+        new SlackAwareOAuthProvider(
+          ctx.storage,
+          MCP_CLIENT_NAME,
+          callbackUrl,
+          env.SIGILIX_SLACK_CLIENT_ID,
+          env.SIGILIX_SLACK_CLIENT_SECRET,
+        ),
+    })
   }
 
   /** Route the internal DO requests, mirroring DeepResearchDO's fetch-based API. */
@@ -103,7 +119,25 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     const id = crypto.randomUUID()
 
     try {
-      await this.mcp.registerServer(id, { url: guard.url.toString(), name, callbackUrl })
+      // Fresh connect: attach the Slack-aware auth provider directly. registerServer
+      // wires transport.authProvider into the connection (then strips it before
+      // persisting — the ctor `createAuthProvider` factory covers the later restore
+      // path). Without this, a first-time OAuth connect would have no auth provider
+      // at all. serverId must be set so the provider can resolve its server host.
+      const authProvider = new SlackAwareOAuthProvider(
+        this.ctx.storage,
+        MCP_CLIENT_NAME,
+        callbackUrl,
+        this.env.SIGILIX_SLACK_CLIENT_ID,
+        this.env.SIGILIX_SLACK_CLIENT_SECRET,
+      )
+      authProvider.serverId = id
+      await this.mcp.registerServer(id, {
+        url: guard.url.toString(),
+        name,
+        callbackUrl,
+        transport: { authProvider },
+      })
     } catch (err) {
       console.error("mcp-connections: registerServer failed", err instanceof Error ? err.message : err)
       return connectJson({ status: "error", error: "registration failed" }, 502)

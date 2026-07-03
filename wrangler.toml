@@ -420,6 +420,13 @@ new_sqlite_classes = ["McpConnectionsAgent"]
 # Ollama Cloud); the bake-off no longer has a current target.
 SHADOW_BAKEOFF_ROLES = ""
 
+# sig-mcp-slack-static-oauth: Sigilix's PRE-REGISTERED public OAuth client id for
+# Slack's hosted MCP server (https://mcp.slack.com/mcp), which requires a static
+# confidential client (no DCR). Safe to commit (public client identifier). The
+# matching SIGILIX_SLACK_CLIENT_SECRET is a secret set via `wrangler secret put`,
+# NEVER in [vars]. Distinct from the SIG-196 SLACK_* triage-app credentials.
+SIGILIX_SLACK_CLIENT_ID = "10539390863863.11471637305556"
+
 # SIG-144: unify the two Linear OAuth apps into one. "on" routes all Linear API
 # calls through the single agent-app token (throws rather than falling back to
 # the human LINEAR_API_KEY). Off/unset = legacy client_credentials path.
@@ -1247,6 +1254,8 @@ OPENCLAW_GATE = "shadow"
 # SIG-196: Sigilix Slack agent mode. "off" (default) | "shadow" | "on".
 # Secrets (SLACK_SIGNING_SECRET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET,
 # SLACK_BOT_TOKEN) go through `wrangler secret put`; they are never in [vars].
+# The hosted-MCP static-OAuth secret SIGILIX_SLACK_CLIENT_SECRET is likewise set
+# via `wrangler secret put` (its public id SIGILIX_SLACK_CLIENT_ID is in [vars]).
 SIGILIX_SLACK_MODE = "on"
 # Beta channel→repo scope (key "<teamId>:<channelId>"; repos must be EXACT
 # owner/repo entries in OPENCLAW_GITHUB_INSTALLATION_MAP).

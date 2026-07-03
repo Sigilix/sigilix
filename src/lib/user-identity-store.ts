@@ -407,8 +407,9 @@ export async function touchLastLogin(db: D1Database, userId: string, nowIso: str
  *
  * The row is inserted with email_verified=0: a signup email is UNVERIFIED and
  * therefore NON-LINKING — a later verified Google login for the same address
- * will NOT merge into this row (it revokes the unverified claim instead), so an
- * attacker cannot seed a victim's email here to capture their account.
+ * will NOT merge into this row (it leaves this row intact and creates a SEPARATE
+ * Google account instead), so an attacker cannot seed a victim's email here to
+ * capture their account.
  */
 export async function createPasswordIdentity(
   db: D1Database,

@@ -20,7 +20,7 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
 
 const MIGRATION_PROFILE_SQL = readFileSync(
-  new URL("../../migrations/0004_create_user_profile.sql", import.meta.url),
+  new URL("../../migrations/0005_create_user_profile.sql", import.meta.url),
   "utf8",
 )
 

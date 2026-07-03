@@ -55,6 +55,7 @@
 import { resolveOrgMemoryCaptureMode } from "@/src/features/learnings/domain/mode"
 import type { LearningEntry } from "@/src/features/learnings/domain/types"
 import { lookupRepoByFullName } from "@/src/features/tenancy"
+import { retainForTraining } from "@/src/features/training-consent"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import type { Env } from "@/src/shared/types/env"
 import { appendLearning } from "./store"
@@ -109,6 +110,24 @@ export async function mirrorLearningToOrgScope(args: {
         ...(appended ? {} : { reason: "append-failed" }),
       }),
     )
+
+    // sig-training-data-consent WIRING SEAM (flagged-off by default). This is the
+    // representative integration point: a just-captured learning is offered to the
+    // consent-gated training store. `retainForTraining` is INERT here today — it
+    // returns immediately without any I/O because the SIGILIX_TRAINING_RETENTION_MODE
+    // master flag defaults OFF (and, even flipped on, only writes for a consenting
+    // org into the SEPARATE R2 partition — never the operational learnings KV). The
+    // OTHER capture surfaces the audit identified (review findings, portal/agent
+    // chat, the codebase index) each have their own future seam and are deliberately
+    // NOT wired in this scaffold. Best-effort; never affects the org-mirror result.
+    if (appended) {
+      await retainForTraining(env, installationId, {
+        kind: "learning",
+        id: entry.id,
+        payload: entry.rule,
+        meta: { owner, repo, scope: entry.scope, polarity: entry.polarity },
+      })
+    }
   } catch (err) {
     console.log(
       JSON.stringify({

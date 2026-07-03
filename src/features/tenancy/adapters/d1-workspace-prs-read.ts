@@ -36,6 +36,7 @@ import type { Env } from "@/src/shared/types/env"
 const RECENT_LIMIT = 400
 
 export type WorkspacePrRawRow = {
+  installationId: number
   repo: string
   prNumber: number
   headSha: string
@@ -44,6 +45,7 @@ export type WorkspacePrRawRow = {
 }
 
 type RawQueryRow = {
+  installationId: unknown
   repo: unknown
   prNumber: unknown
   headSha: unknown
@@ -70,8 +72,8 @@ export async function readRecentWorkspacePrs(
   const db = env.SIGILIX_PLATFORM_DB
   try {
     const sql =
-      "SELECT r.full_name AS repo, u.pr_number AS prNumber, u.head_sha AS headSha," +
-      " u.author_login AS authorLogin, u.created_at AS createdAt" +
+      "SELECT u.installation_id AS installationId, r.full_name AS repo, u.pr_number AS prNumber," +
+      " u.head_sha AS headSha, u.author_login AS authorLogin, u.created_at AS createdAt" +
       " FROM usage_ledger u JOIN repo r ON r.repo_id = u.repo_id" +
       (installationIds === "all" ? "" : ` WHERE u.installation_id IN (${installationIds.map(() => "?").join(",")})`) +
       " ORDER BY u.created_at DESC LIMIT ?"
@@ -83,6 +85,7 @@ export async function readRecentWorkspacePrs(
 
     const { results } = await stmt.all<RawQueryRow>()
     const rows: WorkspacePrRawRow[] = results.map((r) => ({
+      installationId: Number(r.installationId) || 0,
       repo: typeof r.repo === "string" ? r.repo : "",
       prNumber: Number(r.prNumber) || 0,
       headSha: typeof r.headSha === "string" ? r.headSha : "",

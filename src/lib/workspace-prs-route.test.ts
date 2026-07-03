@@ -206,6 +206,128 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
       expect(body.mine.map((p) => p.prNumber)).toEqual([1])
     })
 
+    it("attaches installationId + a GitHub-resolved author (avatar + id) to each row, incl. bot authors", async () => {
+      const db = await makeDb()
+      const kv = makeKV()
+      await seedSession(kv, "sess-1", "octocat", 111)
+      const env = {
+        OPENCLAW_STATE: kv,
+        OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+        SIGILIX_PLATFORM_DB: db,
+      } as unknown as Env
+
+      // Serve both the installations listing and the per-author lookups. The
+      // bot login (`sigilix[bot]`) resolves to a `.../in/<app_id>` avatar — the
+      // exact case the login-based `github.com/<login>.png` URL 404s on.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = typeof input === "string" ? input : input.toString()
+          if (url.startsWith("https://api.github.com/user/installations?")) {
+            return new Response(JSON.stringify({ total_count: 1, installations: [{ id: 1 }] }), { status: 200 })
+          }
+          const userMatch = /https:\/\/api\.github\.com\/users\/([^?]+)/.exec(url)
+          if (userMatch) {
+            const login = decodeURIComponent(userMatch[1]!)
+            if (login === "sigilix[bot]") {
+              return new Response(
+                JSON.stringify({
+                  login: "sigilix[bot]",
+                  id: 280779545,
+                  avatar_url: "https://avatars.githubusercontent.com/in/3558711?v=4",
+                }),
+                { status: 200 },
+              )
+            }
+            return new Response(
+              JSON.stringify({
+                login: "octocat",
+                id: 583231,
+                avatar_url: "https://avatars.githubusercontent.com/u/583231?v=4",
+              }),
+              { status: 200 },
+            )
+          }
+          throw new Error(`unexpected fetch: ${url}`)
+        }),
+      )
+
+      await insertRepo(db, 100, 1, "acme/api")
+      await insertUsage(db, {
+        installationId: 1,
+        repoId: 100,
+        prNumber: 7,
+        headSha: "sha-bot",
+        authorLogin: "sigilix[bot]",
+        createdAt: "2026-06-05T00:00:00.000Z",
+      })
+      await insertUsage(db, {
+        installationId: 1,
+        repoId: 100,
+        prNumber: 8,
+        headSha: "sha-human",
+        authorLogin: "octocat",
+        createdAt: "2026-06-04T00:00:00.000Z",
+      })
+
+      const res = await handleWorkspacePrsRoute(reqWithSession("sess-1"), env)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        org: Array<{
+          installationId: number
+          authorLogin: string
+          author: { login: string | null; avatar_url: string | null; id: number | null }
+        }>
+      }
+      const bot = body.org.find((p) => p.authorLogin === "sigilix[bot]")!
+      expect(bot.installationId).toBe(1)
+      expect(bot.author).toEqual({
+        login: "sigilix[bot]",
+        avatar_url: "https://avatars.githubusercontent.com/in/3558711?v=4",
+        id: 280779545,
+      })
+      const human = body.org.find((p) => p.authorLogin === "octocat")!
+      expect(human.author.avatar_url).toBe("https://avatars.githubusercontent.com/u/583231?v=4")
+      expect(human.author.id).toBe(583231)
+    })
+
+    it("degrades to a login-only author (null avatar/id) when the GitHub user lookup fails", async () => {
+      const db = await makeDb()
+      const kv = makeKV()
+      await seedSession(kv, "sess-1", "octocat", 111)
+      const env = {
+        OPENCLAW_STATE: kv,
+        OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+        SIGILIX_PLATFORM_DB: db,
+      } as unknown as Env
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = typeof input === "string" ? input : input.toString()
+          if (url.startsWith("https://api.github.com/user/installations?")) {
+            return new Response(JSON.stringify({ total_count: 1, installations: [{ id: 1 }] }), { status: 200 })
+          }
+          return new Response("not found", { status: 404 })
+        }),
+      )
+
+      await insertRepo(db, 100, 1, "acme/api")
+      await insertUsage(db, {
+        installationId: 1,
+        repoId: 100,
+        prNumber: 3,
+        headSha: "sha-x",
+        authorLogin: "octocat",
+        createdAt: "2026-06-05T00:00:00.000Z",
+      })
+
+      const res = await handleWorkspacePrsRoute(reqWithSession("sess-1"), env)
+      const body = (await res.json()) as {
+        org: Array<{ author: { login: string | null; avatar_url: string | null; id: number | null } }>
+      }
+      expect(body.org[0]!.author).toEqual({ login: "octocat", avatar_url: null, id: null })
+    })
+
     it("busy installation: a less-active author's own recent PR still reaches `mine` even though it falls outside the old raw-100 window (regression for the pre-collapse-cap bug)", async () => {
       const db = await makeDb()
       const kv = makeKV()

@@ -78,7 +78,7 @@ import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
 import { handleOrgRoutes } from "@/src/lib/org-routes"
-import { handleUsageRoute } from "@/src/lib/usage-route"
+import { tryHandlePortalAccountRoute } from "@/src/lib/portal-account-routes"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
@@ -471,7 +471,6 @@ export default {
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
-      url.pathname === "/v1/usage" || // sig-usage: portal usage panel + CLI /usage bars
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
       // are portal-facing (dual-authed session OR api key — see
@@ -538,10 +537,11 @@ export default {
     // portal Organization page (overview + seat) incl. its CORS preflight — org-routes.ts.
     const orgResponse = await handleOrgRoutes(request, env, ctx)
     if (orgResponse) return orgResponse
-    // sig-usage: portal "Plan usage limits" panel + CLI `/usage` bars (usage-route.ts).
-    if (request.method === "GET" && url.pathname === "/v1/usage") {
-      return withPortalCors(request, await handleUsageRoute(request, env, ctx), env)
-    }
+    // sig-usage + sig-user-profile: the portal account/plan panel routes
+    // (/v1/usage, /v1/profile) live in portal-account-routes.ts to keep index.ts
+    // within the size budget; see that file's header.
+    const accountResponse = await tryHandlePortalAccountRoute(request, env, ctx, url)
+    if (accountResponse) return accountResponse
     if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
       return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)
     }

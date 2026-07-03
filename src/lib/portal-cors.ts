@@ -43,7 +43,7 @@ export function hasJsonContentType(request: Request): boolean {
 }
 
 const DEFAULT_PORTAL_ORIGINS = "https://app.sigilix.ai,http://localhost:3300"
-const ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
+const ALLOWED_METHODS = "GET, POST, PATCH, DELETE, OPTIONS"
 const ALLOWED_HEADERS = "content-type"
 const PREFLIGHT_MAX_AGE_SECONDS = "600"
 

@@ -1186,6 +1186,15 @@ export interface Env {
   SIGILIX_SLACK_MODE?: string
   SIGILIX_SLACK_SCOPE_MAP?: string
 
+  // sig-mcp-slack-static-oauth: Sigilix's PRE-REGISTERED confidential OAuth
+  // client for Slack's hosted MCP server (https://mcp.slack.com/mcp), which
+  // requires a static client_id + client_secret (no DCR). SEPARATE from the
+  // SIG-196 SLACK_CLIENT_ID/SLACK_CLIENT_SECRET above (that is the Slack
+  // webhook/triage app). The id is a non-secret [vars] value; the secret is
+  // provisioned via `wrangler secret put`.
+  SIGILIX_SLACK_CLIENT_ID?: string
+  SIGILIX_SLACK_CLIENT_SECRET?: string
+
   // SIG-545 B1: hosted agent-runner (Cloudflare Container, dark by default).
   //   AGENT_RUNNER                   — DO namespace; one instance per runId.
   //                                    Backed by the AgentRunnerContainer class

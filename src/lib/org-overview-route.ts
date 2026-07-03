@@ -86,12 +86,18 @@ export interface OrgSeat {
   role: UserRole
   reviews: number
   lastActiveAt: string
+  /** Whether this seat holds a BILLABLE seat. Default true (derived-from-activity);
+   * an admin unassigns it via POST …/seat (org-seat-route.ts), persisted in
+   * org_seat_assignment (0007) and read back here. */
+  assigned: boolean
 }
 
 export interface OrgOverviewResponse {
   org: { account: string; installationId: number; plan: OrgPlan }
   role: UserRole
   seatCount: number
+  /** The billed subset — seats currently assigned (seatCount minus unassigned overrides). */
+  assignedSeatCount: number
   seats: OrgSeat[]
   billing: { model: "per-seat"; perSeatMonthly: number | null; note: string }
   nextCursor?: string
@@ -354,7 +360,9 @@ async function readInstallationSeats(
       // Only the caller's own login is marked admin, and only when the caller is
       // confirmed admin (see the KNOWN LIMITATION note above).
       const role: UserRole = callerRole === "admin" && callerKey !== null && key === callerKey ? "admin" : "member"
-      byLogin.set(key, { login, role, reviews, lastActiveAt })
+      // Default-assigned; an explicit unassign override is applied later from
+      // org_seat_assignment (see applySeatAssignments).
+      byLogin.set(key, { login, role, reviews, lastActiveAt, assigned: true })
     }
   }
 
@@ -382,6 +390,50 @@ async function readAccountLogin(env: Pick<Env, "SIGILIX_PLATFORM_DB">, installat
     )
     return ""
   }
+}
+
+/**
+ * The set of logins (lowercased) EXPLICITLY UNASSIGNED for an installation —
+ * org_seat_assignment rows with assigned = 0. A seat not in this set stays
+ * assigned (the derived-from-activity default). Tenant-isolated by a bound
+ * installation_id `?`. Fail-soft to an empty set (missing binding, no table yet,
+ * or a D1 fault) — the panel then shows every seat as assigned rather than 500.
+ */
+async function readUnassignedLogins(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return out
+  try {
+    const { results } = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT login FROM org_seat_assignment WHERE installation_id = ? AND assigned = 0",
+    )
+      .bind(installationId)
+      .all<{ login: unknown }>()
+    for (const r of results) {
+      if (typeof r.login === "string" && r.login !== "") out.add(r.login.toLowerCase())
+    }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-overview-seat-assignments-read-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+  return out
+}
+
+/** Apply unassign overrides in place; returns the billed (assigned) seat count. */
+function applySeatAssignments(seats: OrgSeat[], unassigned: Set<string>): number {
+  let assignedCount = 0
+  for (const seat of seats) {
+    if (unassigned.has(seat.login.toLowerCase())) seat.assigned = false
+    if (seat.assigned) assignedCount++
+  }
+  return assignedCount
 }
 
 // ─── Handler ──────────────────────────────────────────────────
@@ -429,6 +481,11 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
   const org = { account, installationId: scope.installationId, plan }
   const seatCount = seats.length
 
+  // Apply persisted assign/unassign overrides (org_seat_assignment, 0007) so the
+  // billed-seat count reflects an admin's explicit choices, not just activity.
+  const unassigned = await readUnassignedLogins(env, scope.installationId)
+  const assignedSeatCount = applySeatAssignments(seats, unassigned)
+
   // MEMBER: never expose other members' logins/activity/roles — return only the
   // caller's own seat (if present), no pagination.
   if (scope.role !== "admin") {
@@ -439,6 +496,7 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
         org,
         role: scope.role,
         seatCount,
+        assignedSeatCount,
         seats: ownSeat ? [ownSeat] : [],
         billing,
       } satisfies OrgOverviewResponse,
@@ -458,6 +516,7 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
       org,
       role: scope.role,
       seatCount,
+      assignedSeatCount,
       seats: page,
       billing,
       ...(nextCursor ? { nextCursor } : {}),

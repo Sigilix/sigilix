@@ -999,6 +999,16 @@ export interface Env {
   // Flip via `wrangler secret put OPENCLAW_MULTICORPUS_RETRIEVAL on`.
   OPENCLAW_MULTICORPUS_RETRIEVAL?: string
 
+  // Cross-repo review context. When "on", PR-review retrieval is grounded not
+  // only in the PR's own repo index but also in its SIBLING repos in the SAME
+  // GitHub App installation (resolved owner-scoped from the indexed-repo
+  // manifest set — hard tenant isolation, never cross-owner, never a repo the
+  // app isn't installed on). Sibling chunks are down-weighted and hard-capped so
+  // the PR repo stays weighted-highest. Any other value keeps it dark
+  // (single-repo behavior, unchanged). Flip via
+  // `wrangler secret put OPENCLAW_CROSS_REPO_CONTEXT on`.
+  OPENCLAW_CROSS_REPO_CONTEXT?: string
+
   // SIG-144: review output surface. Controls WHERE findings are posted —
   // GitHub Checks annotations (inline in the Files tab + Checks UI, like
   // CodeRabbit/Copilot), PR review comments (the historical default), or both.

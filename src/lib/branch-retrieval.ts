@@ -31,7 +31,10 @@ export function mergeBranchAware(
   branchChunks: readonly RetrievedChunk[],
   changedPaths: ReadonlySet<string>,
 ): RetrievedChunk[] {
-  const keptMain = mainChunks.filter((c) => !changedPaths.has(c.path))
+  // Cross-repo sibling chunks (a `repo` tag) are NEVER tombstoned by the PR's
+  // changed-path set — a sibling repo's `src/index.ts` is unrelated to the PR
+  // repo's changed `src/index.ts`, so a path collision must not drop it.
+  const keptMain = mainChunks.filter((c) => c.repo !== undefined || !changedPaths.has(c.path))
   return [...keptMain, ...branchChunks].sort((a, b) => b.score - a.score)
 }
 

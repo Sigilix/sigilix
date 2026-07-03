@@ -44,6 +44,18 @@ describe("mergeBranchAware", () => {
     expect(out.some((x) => x.path === "c.ts")).toBe(false)
     expect(out.some((x) => x.path === "keep.ts")).toBe(true)
   })
+
+  it("never tombstones a cross-repo sibling chunk on a changed-path collision", () => {
+    // A sibling repo's `src/index.ts` shares a path with the PR's changed
+    // `src/index.ts`, but it is UNRELATED code — the `repo` tag exempts it from
+    // the changed-path tombstone so valid cross-repo context is never dropped.
+    const sibling: RetrievedChunk = { ...rc("src/index.ts", 1, 30, 0.4, "SIBLING"), repo: "acme/gadgets" }
+    const main = [rc("src/index.ts", 1, 30, 0.9, "STALE_PRIMARY"), sibling]
+    const out = mergeBranchAware(main, [], new Set(["src/index.ts"]))
+    // Primary chunk on the changed path is tombstoned; the sibling survives.
+    expect(out.some((c) => c.content === "STALE_PRIMARY")).toBe(false)
+    expect(out.some((c) => c.repo === "acme/gadgets" && c.content === "SIBLING")).toBe(true)
+  })
 })
 
 describe("buildBranchChunks", () => {

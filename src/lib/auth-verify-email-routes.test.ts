@@ -3,7 +3,7 @@
 // shim + a fake KV. Also asserts OAuth (github) identities are NOT subject to
 // the password-login verify gate.
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handleResendVerificationRoute, handleVerifyEmailRoute } from "@/src/lib/auth-verify-email-routes"
@@ -73,7 +73,14 @@ async function tokenCount(db: D1Database, email: string): Promise<number> {
 describe("GET /auth/verify", () => {
   let env: Env
   let db: D1Database
+  // Tokens are minted at a fixed `nowIso` (2026-07-03) with a 24h TTL, but the
+  // consume path (handleVerifyEmailRoute) reads the REAL system clock. Pin the
+  // clock to the mint instant so consume sees the token as live regardless of
+  // the wall-clock date — otherwise these tests are a time-bomb that reads
+  // `expired` once the machine date passes the TTL.
   beforeEach(async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-03T00:00:00.000Z"))
     db = makeD1()
     await db.exec(MIGRATION_0006)
     await db.exec(MIGRATION_0008)
@@ -83,6 +90,10 @@ describe("GET /auth/verify", () => {
       OPENCLAW_SESSION_ENCRYPTION_KEY: KEY,
       OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
     } as unknown as Env
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   async function makeUnverifiedUser(email: string): Promise<string> {

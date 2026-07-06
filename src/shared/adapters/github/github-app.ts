@@ -333,6 +333,136 @@ export async function listAppInstallationIds(appId: string, privateKeyPem: strin
   }
 }
 
+/** A GitHub account (org member or repo collaborator) as the org page needs it. */
+export interface GitHubMember {
+  login: string
+  /** GitHub avatar URL from the API payload; "" when the payload omitted it. */
+  avatarUrl: string
+}
+
+/**
+ * sig-org-members: list an ORGANIZATION's members via the App installation
+ * token (`GET /orgs/{org}/members`, paginated). Powers the portal Organization
+ * → Members roster for an org install. Fail-soft + `complete` flag, mirroring
+ * listInstallationRepoFullNames — a 403/404 (the App lacks the "Members" org
+ * read permission, or the account isn't an org) returns `{ items: [], complete:
+ * false }` so the caller degrades to the activity-derived seats rather than 5xx.
+ */
+export async function listOrgMembers(
+  kv: KVNamespace,
+  appId: string,
+  privateKey: string,
+  installationId: number,
+  orgLogin: string,
+): Promise<ListingResult<GitHubMember>> {
+  const items: GitHubMember[] = []
+  try {
+    const token = await getInstallationToken({ kv, appId, privateKey, installationId })
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(
+        `https://api.github.com/orgs/${encodeURIComponent(orgLogin)}/members?per_page=100&page=${page}`,
+        { headers: GH_API_HEADERS(`token ${token}`) },
+      )
+      if (!res.ok) {
+        console.warn(
+          JSON.stringify({
+            event: "list-org-members-failed",
+            installation_id: installationId,
+            page,
+            status: res.status,
+          }),
+        )
+        return { items, complete: false }
+      }
+      const arr = (await res.json()) as Array<{ login?: unknown; avatar_url?: unknown }>
+      if (!Array.isArray(arr) || arr.length === 0) return { items, complete: true }
+      for (const m of arr) {
+        if (typeof m.login === "string" && m.login !== "") {
+          items.push({ login: m.login, avatarUrl: typeof m.avatar_url === "string" ? m.avatar_url : "" })
+        }
+      }
+      if (arr.length < 100) return { items, complete: true }
+      if (page === MAX_PAGES) {
+        console.warn(JSON.stringify({ event: "list-org-members-truncated", installation_id: installationId }))
+        return { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "list-org-members-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return { items, complete: false }
+  }
+}
+
+/**
+ * sig-org-members: list the deduped set of repo COLLABORATORS across every repo
+ * an installation can access (`GET /repos/{owner}/{repo}/collaborators`,
+ * installation-token auth). Used for a PERSONAL (`account.type: "User"`) install
+ * where there is no org roster — the "members" are the people who can touch the
+ * installed repos. Deduped case-insensitively (first-seen avatar wins). Fail-soft
+ * + `complete` flag: any repo enumeration / page error marks the result partial
+ * but keeps whatever was collected.
+ */
+export async function listInstallationCollaborators(
+  kv: KVNamespace,
+  appId: string,
+  privateKey: string,
+  installationId: number,
+): Promise<ListingResult<GitHubMember>> {
+  const byLogin = new Map<string, GitHubMember>()
+  const repos = await listInstallationRepoFullNames(kv, appId, privateKey, installationId)
+  let complete = repos.complete
+  try {
+    const token = await getInstallationToken({ kv, appId, privateKey, installationId })
+    for (const fullName of repos.items) {
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const res = await fetch(`https://api.github.com/repos/${fullName}/collaborators?per_page=100&page=${page}`, {
+          headers: GH_API_HEADERS(`token ${token}`),
+        })
+        if (!res.ok) {
+          console.warn(
+            JSON.stringify({
+              event: "list-collaborators-failed",
+              installation_id: installationId,
+              repo: fullName,
+              status: res.status,
+            }),
+          )
+          complete = false
+          break
+        }
+        const arr = (await res.json()) as Array<{ login?: unknown; avatar_url?: unknown }>
+        if (!Array.isArray(arr) || arr.length === 0) break
+        for (const c of arr) {
+          if (typeof c.login !== "string" || c.login === "") continue
+          const key = c.login.toLowerCase()
+          if (!byLogin.has(key)) {
+            byLogin.set(key, { login: c.login, avatarUrl: typeof c.avatar_url === "string" ? c.avatar_url : "" })
+          }
+        }
+        if (arr.length < 100) break
+        if (page === MAX_PAGES) complete = false
+      }
+    }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "list-collaborators-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    complete = false
+  }
+  return { items: [...byLogin.values()], complete }
+}
+
 /**
  * SIG-156: list the `full_name`s of repos an installation can access
  * (`GET /installation/repositories`, paginated, installation-token auth).

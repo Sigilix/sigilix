@@ -3,8 +3,10 @@
 // google-pse); the first CONFIGURED provider in the resolved chain serves a
 // query, and if it errors at runtime the next configured provider is tried.
 // Unknown chain keys are skipped (logged); providers whose keys/config are unset
-// are skipped silently. If NO provider is configured the caller fails fast (see
-// `hasAnySearchProvider`) rather than hanging. Only the SERVED provider emits a
+// are skipped silently. If NO provider is configured `searchWeb` returns
+// {ok:false} without a network call (see `hasAnySearchProvider`); the engine reads
+// that same signal up front and degrades to a model-only answer rather than
+// erroring. Only the SERVED provider emits a
 // `research-search-metered` line (provider + runId + tenant, no secrets). The
 // self-hosted SearXNG/agent-search leg is an overflow lane; "serper" is not in
 // the default chain but stays available when explicitly listed.
@@ -61,10 +63,21 @@ function isProviderConfigured(provider: SearchProvider, env: Env): boolean {
     case "serper":
       return !!env.OPENCLAW_SERPER_API_KEY?.trim()
     case "selfhost":
-      return !!env.OPENCLAW_SELFHOST_SEARCH_URL?.trim()
+      return !!selfhostSearchUrl(env)?.trim()
     case "google-pse":
       return !!env.OPENCLAW_GOOGLE_PSE_KEY?.trim() && !!env.OPENCLAW_GOOGLE_PSE_CX?.trim()
   }
+}
+
+// sig-selfhost-search: SIGILIX_-first with OPENCLAW_ fallback for the self-hosted
+// (SearXNG) leg. Read explicitly here — not just via normalizeEnv — so a SIGILIX_-only
+// value resolves even though the shim only mirrors keys that already have an OPENCLAW_
+// sibling present on `env`.
+function selfhostSearchUrl(env: Env): string | undefined {
+  return env.SIGILIX_SELFHOST_SEARCH_URL ?? env.OPENCLAW_SELFHOST_SEARCH_URL
+}
+function selfhostSearchToken(env: Env): string | undefined {
+  return env.SIGILIX_SELFHOST_SEARCH_TOKEN ?? env.OPENCLAW_SELFHOST_SEARCH_TOKEN
 }
 
 /** The configured providers, in resolved-chain order. */
@@ -127,7 +140,7 @@ function runProvider(
     case "exa":
       return searchExa(query, env.OPENCLAW_EXA_API_KEY!, fetchImpl)
     case "selfhost":
-      return searchSelfhost(query, env.OPENCLAW_SELFHOST_SEARCH_URL!, env.OPENCLAW_SELFHOST_SEARCH_TOKEN, fetchImpl)
+      return searchSelfhost(query, selfhostSearchUrl(env)!, selfhostSearchToken(env), fetchImpl)
     case "tavily":
       return searchTavily(query, env.OPENCLAW_TAVILY_API_KEY!, fetchImpl)
     case "brave":

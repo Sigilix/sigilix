@@ -632,8 +632,8 @@ export interface Env {
   OPENCLAW_RESEARCH_CLASSIFY_MODEL?: string
   OPENCLAW_RESEARCH_EXTRACT_MODEL?: string
   // Search-provider keys — the fallback chain (first CONFIGURED provider in the
-  // resolved chain serves each query). Unset providers are skipped; all-unset
-  // fails fast with an error event.
+  // resolved chain serves each query). Unset providers are skipped; when ALL are
+  // unset the engine degrades gracefully to a model-only answer (no error event).
   // OPENCLAW_SEARCH_CHAIN: comma-separated provider order; unknown keys are
   // skipped (logged). Default: "exa,tavily,brave,selfhost,google-pse". "serper"
   // is not in the default chain but its adapter stays available as an opt-in
@@ -642,6 +642,16 @@ export interface Env {
   OPENCLAW_EXA_API_KEY?: string
   OPENCLAW_SELFHOST_SEARCH_URL?: string
   OPENCLAW_SELFHOST_SEARCH_TOKEN?: string
+  // sig-selfhost-search: Sigilix-first names for the self-hosted (SearXNG) search
+  // leg. NEW config, so the canonical SIGILIX_ name is declared explicitly here
+  // (search.ts reads `env.SIGILIX_SELFHOST_SEARCH_URL ?? env.OPENCLAW_SELFHOST_SEARCH_URL`).
+  // The OPENCLAW_ names stay as the fallback for continuity with the normalizeEnv
+  // shim / any legacy secret. `_URL` is the base origin of the SearXNG instance
+  // (e.g. https://search.sigilix.ai); `_TOKEN` is an OPTIONAL bearer the adapter
+  // sends as `Authorization: Bearer <token>` (enforced by a proxy in front — SearXNG
+  // core does not check it).
+  SIGILIX_SELFHOST_SEARCH_URL?: string
+  SIGILIX_SELFHOST_SEARCH_TOKEN?: string
   OPENCLAW_TAVILY_API_KEY?: string
   OPENCLAW_BRAVE_API_KEY?: string
   OPENCLAW_SERPER_API_KEY?: string

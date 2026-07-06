@@ -8,6 +8,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import type { RosterResult } from "@/src/lib/org-members-roster"
+
+// sig-org-members: the admin branch merges the GitHub roster via
+// fetchInstallationRoster. Mock it so these tests drive the merge without a real
+// App token; the default is an empty roster (no-op) so the pre-existing
+// activity-only assertions below are unaffected.
+const rosterMock = vi.fn<(...a: unknown[]) => Promise<RosterResult>>(async () => ({
+  members: [],
+  source: "none",
+}))
+vi.mock("@/src/lib/org-members-roster", () => ({
+  fetchInstallationRoster: (...a: unknown[]) => rosterMock(...a),
+}))
+
 import { handleOrgOverviewRoute, type OrgOverviewResponse } from "@/src/lib/org-overview-route"
 import worker from "@/src/index"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
@@ -162,6 +176,8 @@ function stubGitHub(opts: {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  rosterMock.mockReset()
+  rosterMock.mockResolvedValue({ members: [], source: "none" })
 })
 
 describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
@@ -230,6 +246,138 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(own.lastActiveAt).toBe("2026-06-05T00:00:00.000Z")
     const other = body.seats.find((s) => s.login === "contributor")!
     expect(other.role).toBe("member")
+  })
+
+  it("admin session: merges the GitHub roster — active seats keep their state, roster-only members appended unassigned", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+
+    await insertRepo(db, 100, 1, "octocat/api", "octocat")
+    // One active author (has usage).
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "sha-1",
+      authorLogin: "octocat",
+      createdAt: "2026-06-05T00:00:00.000Z",
+    })
+    // Roster: the active author (with an avatar) + a never-active org member.
+    rosterMock.mockResolvedValue({
+      members: [
+        { login: "Octocat", avatarUrl: "https://avatars/octocat" },
+        { login: "newbie", avatarUrl: "https://avatars/newbie" },
+      ],
+      source: "org",
+    })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as OrgOverviewResponse
+
+    expect(rosterMock).toHaveBeenCalledWith(env, 1, "octocat", expect.any(String))
+    const byLogin = Object.fromEntries(body.seats.map((s) => [s.login.toLowerCase(), s]))
+    // Active seat: assigned (derived), avatar picked up from the roster.
+    expect(byLogin["octocat"]).toMatchObject({ assigned: true, reviews: 1, avatarUrl: "https://avatars/octocat" })
+    // Roster-only member: appended, no activity, default UNASSIGNED.
+    expect(byLogin["newbie"]).toMatchObject({
+      assigned: false,
+      reviews: 0,
+      lastActiveAt: "",
+      avatarUrl: "https://avatars/newbie",
+    })
+    expect(body.seatCount).toBe(2)
+    expect(body.assignedSeatCount).toBe(1) // only the active seat is billed
+  })
+
+  it("admin session: an explicit org_seat_assignment override flips a roster-only member to assigned", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+    await insertRepo(db, 100, 1, "octocat/api", "octocat")
+    // An admin has explicitly ASSIGNED a seat to a never-active member.
+    await db
+      .prepare(
+        "INSERT INTO org_seat_assignment (installation_id, login, assigned, is_admin, updated_at)" +
+          " VALUES (1, 'newbie', 1, 0, '2026-06-01T00:00:00.000Z')",
+      )
+      .run()
+    rosterMock.mockResolvedValue({ members: [{ login: "newbie", avatarUrl: "" }], source: "org" })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as OrgOverviewResponse
+    const newbie = body.seats.find((s) => s.login === "newbie")!
+    expect(newbie.assigned).toBe(true) // override wins over the roster-only default
+    expect(body.assignedSeatCount).toBe(1)
+  })
+
+  it("admin session: a failed roster fetch (empty) still 200s with the activity-derived seats (fail-soft)", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+    await insertRepo(db, 100, 1, "octocat/api", "octocat")
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      headSha: "sha-1",
+      authorLogin: "octocat",
+      createdAt: "2026-06-05T00:00:00.000Z",
+    })
+    rosterMock.mockResolvedValue({ members: [], source: "org", reason: "org_members_unavailable" })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as OrgOverviewResponse
+    expect(body.seats.map((s) => s.login)).toEqual(["octocat"]) // unchanged
+    expect(body.seatCount).toBe(1)
+  })
+
+  it("member session: the GitHub roster is NEVER fetched (no cross-member disclosure)", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "quiet-dev", 222)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+    })
+    await insertRepo(db, 100, 1, "acme/api", "acme")
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    expect(res.status).toBe(200)
+    expect(rosterMock).not.toHaveBeenCalled()
   })
 
   it("member session: limited shape — only the caller's own seat, no other members' data", async () => {

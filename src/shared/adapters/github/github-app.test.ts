@@ -17,6 +17,8 @@ import {
   resolveRepoInstallationId,
   listAppInstallationIds,
   listInstallationRepoFullNames,
+  listOrgMembers,
+  listInstallationCollaborators,
 } from "@/src/shared/adapters/github/github-app"
 
 // PKCS#8 RSA-2048 private key — generated with:
@@ -275,5 +277,128 @@ describe("listInstallationRepoFullNames", () => {
     )
     const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
     expect(r.complete).toBe(false)
+  })
+})
+
+// sig-org-members — the roster listings the org page merges in.
+const rosterKv = { get: async () => null, put: async () => {} } as unknown as Parameters<typeof listOrgMembers>[0]
+const okToken = () =>
+  new Response(JSON.stringify({ token: "tkn", expires_at: new Date(Date.now() + 3_600_000).toISOString() }), {
+    status: 201,
+  })
+
+describe("listOrgMembers", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("returns {login, avatarUrl} for the org (token auth, /orgs/{org}/members)", async () => {
+    const authSchemes: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/orgs/acme/members")) {
+          if (init?.headers?.authorization) authSchemes.push(init.headers.authorization)
+          const p = new URL(url).searchParams.get("page")
+          return p === "1"
+            ? new Response(
+                JSON.stringify([
+                  { login: "alice", avatar_url: "https://avatars/alice" },
+                  { login: "bob", avatar_url: "https://avatars/bob" },
+                ]),
+                { status: 200 },
+              )
+            : new Response(JSON.stringify([]), { status: 200 })
+        }
+        return new Response("{}", { status: 404 })
+      }),
+    )
+    const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
+    expect(r).toEqual({
+      items: [
+        { login: "alice", avatarUrl: "https://avatars/alice" },
+        { login: "bob", avatarUrl: "https://avatars/bob" },
+      ],
+      complete: true,
+    })
+    expect(authSchemes[0]).toBe("token tkn") // installation token → `token`, not `Bearer`
+  })
+
+  it("403 (App lacks Members permission) → empty + complete:false (fail-soft, never throws)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response("forbidden", { status: 403 })
+      }),
+    )
+    const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
+    expect(r).toEqual({ items: [], complete: false })
+  })
+})
+
+describe("listInstallationCollaborators", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("dedupes collaborators across the installation's repos (case-insensitive)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          const p = new URL(url).searchParams.get("page")
+          return p === "1"
+            ? new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }, { full_name: "o/b" }] }), {
+                status: 200,
+              })
+            : new Response(JSON.stringify({ repositories: [] }), { status: 200 })
+        }
+        if (url.includes("/repos/o/a/collaborators")) {
+          const p = new URL(url).searchParams.get("page")
+          return p === "1"
+            ? new Response(JSON.stringify([{ login: "Dana", avatar_url: "https://avatars/dana" }]), { status: 200 })
+            : new Response(JSON.stringify([]), { status: 200 })
+        }
+        if (url.includes("/repos/o/b/collaborators")) {
+          const p = new URL(url).searchParams.get("page")
+          // "dana" again (dupe, lowercased) + a new "erin".
+          return p === "1"
+            ? new Response(
+                JSON.stringify([
+                  { login: "dana", avatar_url: "https://avatars/dana2" },
+                  { login: "erin", avatar_url: "https://avatars/erin" },
+                ]),
+                { status: 200 },
+              )
+            : new Response(JSON.stringify([]), { status: 200 })
+        }
+        return new Response("{}", { status: 404 })
+      }),
+    )
+    const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(true)
+    // First-seen avatar wins for the dupe; deduped to 2 distinct logins.
+    expect(r.items).toEqual([
+      { login: "Dana", avatarUrl: "https://avatars/dana" },
+      { login: "erin", avatarUrl: "https://avatars/erin" },
+    ])
+  })
+
+  it("a collaborators page error marks complete:false but keeps what it got", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          const p = new URL(url).searchParams.get("page")
+          return p === "1"
+            ? new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+            : new Response(JSON.stringify({ repositories: [] }), { status: 200 })
+        }
+        return new Response("forbidden", { status: 403 }) // collaborators page fails
+      }),
+    )
+    const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(false)
+    expect(r.items).toEqual([])
   })
 })

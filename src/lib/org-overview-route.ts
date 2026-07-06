@@ -62,6 +62,7 @@
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { resolveUserRole, type UserRole } from "@/src/lib/resolve-user-role"
 import type { Env } from "@/src/shared/types/env"
 
@@ -86,10 +87,16 @@ export interface OrgSeat {
   role: UserRole
   reviews: number
   lastActiveAt: string
-  /** Whether this seat holds a BILLABLE seat. Default true (derived-from-activity);
-   * an admin unassigns it via POST …/seat (org-seat-route.ts), persisted in
-   * org_seat_assignment (0007) and read back here. */
+  /** Whether this seat holds a BILLABLE seat. An admin flips it via POST …/seat
+   * (org-seat-route.ts), persisted in org_seat_assignment (0007) and read back
+   * here. Default true for an ACTIVE seat (derived-from-activity); default false
+   * for a roster-only member (a GitHub member with no activity yet — an admin
+   * assigns them a seat explicitly). */
   assigned: boolean
+  /** GitHub avatar URL for the roster (sig-org-members). Omitted for an
+   * activity-only seat we never matched to the GitHub roster; the portal then
+   * falls back to `https://github.com/{login}.png`. */
+  avatarUrl?: string
 }
 
 export interface OrgOverviewResponse {
@@ -236,7 +243,7 @@ async function resolveSessionScope(
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
     console.error(JSON.stringify({ event: "org-overview-encryption-key-missing" }))
     // installationId is forced to 0 (never the caller-supplied, unverified
-    // requestedInstallationId) so readAccountLogin's `installationId <= 0`
+    // requestedInstallationId) so readAccountInfo's `installationId <= 0`
     // guard short-circuits — a genuinely empty panel, not a cross-tenant leak.
     return { installationId: 0, ledgerScope: [], role: "member", login }
   }
@@ -372,14 +379,24 @@ async function readInstallationSeats(
   })
 }
 
-/** The tenant's account_login for the headline. Fail-soft to "" (missing binding, no row, or D1 error). */
-async function readAccountLogin(env: Pick<Env, "SIGILIX_PLATFORM_DB">, installationId: number): Promise<string> {
-  if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return ""
+/** The tenant's account_login + account_type ("Organization" | "User") for the
+ * headline + the roster-source decision. Fail-soft to empty strings (missing
+ * binding, no row, or D1 error). */
+async function readAccountInfo(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<{ login: string; type: string }> {
+  if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return { login: "", type: "" }
   try {
-    const row = await env.SIGILIX_PLATFORM_DB.prepare("SELECT account_login FROM tenant WHERE installation_id = ?")
+    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT account_login, account_type FROM tenant WHERE installation_id = ?",
+    )
       .bind(installationId)
-      .first<{ account_login: unknown }>()
-    return row != null && typeof row.account_login === "string" ? row.account_login : ""
+      .first<{ account_login: unknown; account_type: unknown }>()
+    return {
+      login: row != null && typeof row.account_login === "string" ? row.account_login : "",
+      type: row != null && typeof row.account_type === "string" ? row.account_type : "",
+    }
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -388,31 +405,32 @@ async function readAccountLogin(env: Pick<Env, "SIGILIX_PLATFORM_DB">, installat
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    return ""
+    return { login: "", type: "" }
   }
 }
 
 /**
- * The set of logins (lowercased) EXPLICITLY UNASSIGNED for an installation —
- * org_seat_assignment rows with assigned = 0. A seat not in this set stays
- * assigned (the derived-from-activity default). Tenant-isolated by a bound
- * installation_id `?`. Fail-soft to an empty set (missing binding, no table yet,
- * or a D1 fault) — the panel then shows every seat as assigned rather than 500.
+ * The EXPLICIT seat-assignment overrides for an installation — a login
+ * (lowercased) → its stored `assigned` flag from org_seat_assignment. A login
+ * NOT in this map keeps its per-seat default (an active seat defaults assigned;
+ * a roster-only member defaults unassigned). Tenant-isolated by a bound
+ * installation_id `?`. Fail-soft to an empty map (missing binding, no table yet,
+ * or a D1 fault) — the panel then shows each seat at its default state, not 500.
  */
-async function readUnassignedLogins(
+async function readSeatAssignmentMap(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   installationId: number,
-): Promise<Set<string>> {
-  const out = new Set<string>()
+): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>()
   if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return out
   try {
     const { results } = await env.SIGILIX_PLATFORM_DB.prepare(
-      "SELECT login FROM org_seat_assignment WHERE installation_id = ? AND assigned = 0",
+      "SELECT login, assigned FROM org_seat_assignment WHERE installation_id = ?",
     )
       .bind(installationId)
-      .all<{ login: unknown }>()
+      .all<{ login: unknown; assigned: unknown }>()
     for (const r of results) {
-      if (typeof r.login === "string" && r.login !== "") out.add(r.login.toLowerCase())
+      if (typeof r.login === "string" && r.login !== "") out.set(r.login.toLowerCase(), Number(r.assigned) === 1)
     }
   } catch (error) {
     console.warn(
@@ -426,14 +444,66 @@ async function readUnassignedLogins(
   return out
 }
 
-/** Apply unassign overrides in place; returns the billed (assigned) seat count. */
-function applySeatAssignments(seats: OrgSeat[], unassigned: Set<string>): number {
+/** Apply the stored overrides in place; returns the billed (assigned) seat count.
+ * A seat present in the map takes its stored flag; otherwise it keeps the
+ * default `seat.assigned` set at construction (active → true, roster-only → false). */
+function applySeatAssignments(seats: OrgSeat[], overrides: Map<string, boolean>): number {
   let assignedCount = 0
   for (const seat of seats) {
-    if (unassigned.has(seat.login.toLowerCase())) seat.assigned = false
+    const override = overrides.get(seat.login.toLowerCase())
+    if (override !== undefined) seat.assigned = override
     if (seat.assigned) assignedCount++
   }
   return assignedCount
+}
+
+/**
+ * sig-org-members: merge the installation's GitHub member roster into the
+ * activity-derived `seats` (in place, admin scope only). An active seat that
+ * matches a roster member gains its avatar; a roster member with NO activity is
+ * appended as a new seat (reviews 0, "never" active, default UNASSIGNED — an
+ * admin assigns them a billable seat explicitly). De-dup is case-insensitive on
+ * login, matching readInstallationSeats. Fully fail-soft (see fetchInstallationRoster):
+ * an empty roster leaves `seats` exactly as it was.
+ */
+async function mergeGitHubRoster(
+  env: Env,
+  seats: OrgSeat[],
+  installationId: number,
+  account: { login: string; type: string },
+): Promise<void> {
+  const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
+  if (roster.reason) {
+    console.warn(
+      JSON.stringify({ event: "org-overview-roster", installationId, source: roster.source, reason: roster.reason }),
+    )
+  }
+  if (roster.members.length === 0) return
+
+  const byLogin = new Map<string, OrgSeat>()
+  for (const seat of seats) byLogin.set(seat.login.toLowerCase(), seat)
+
+  for (const member of roster.members) {
+    const key = member.login.toLowerCase()
+    const existing = byLogin.get(key)
+    if (existing) {
+      // Prefer the GitHub avatar for a seat we can now match to the roster.
+      if (member.avatarUrl !== "") existing.avatarUrl = member.avatarUrl
+      continue
+    }
+    // Roster-only member: no activity yet, so default UNASSIGNED (an admin
+    // grants the seat). An org_seat_assignment override is applied afterwards.
+    const seat: OrgSeat = {
+      login: member.login,
+      role: "member",
+      reviews: 0,
+      lastActiveAt: "",
+      assigned: false,
+      ...(member.avatarUrl !== "" ? { avatarUrl: member.avatarUrl } : {}),
+    }
+    byLogin.set(key, seat)
+    seats.push(seat)
+  }
 }
 
 // ─── Handler ──────────────────────────────────────────────────
@@ -459,11 +529,11 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
 
   // Best-effort org headline + seats. Any D1 fault degrades to an empty seat
   // list at 200 — never a 500 (see the file header).
-  let account = ""
+  let accountInfo = { login: "", type: "" }
   let seats: OrgSeat[] = []
   try {
-    ;[account, seats] = await Promise.all([
-      readAccountLogin(env, scope.installationId),
+    ;[accountInfo, seats] = await Promise.all([
+      readAccountInfo(env, scope.installationId),
       readInstallationSeats(env, scope.ledgerScope, scope.login, scope.role),
     ])
   } catch (error) {
@@ -474,17 +544,33 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    account = ""
+    accountInfo = { login: "", type: "" }
     seats = []
   }
 
-  const org = { account, installationId: scope.installationId, plan }
+  // sig-org-members: an ADMIN sees the org's ACTUAL GitHub roster (fetched via
+  // the installed App token), merged with the activity-derived seats — so the
+  // Members tab lists everyone, not only people who've already used Sigilix. A
+  // MEMBER only ever sees their own seat (below), so the roster fetch is skipped
+  // for them (bounded cost + no cross-member disclosure). Fully fail-soft.
+  if (scope.role === "admin") {
+    await mergeGitHubRoster(env, seats, scope.installationId, accountInfo)
+    // Re-sort the merged list: recently-active seats first (real lastActiveAt,
+    // newest wins), then the never-active roster members by login — a stable,
+    // cursor-friendly order matching readInstallationSeats' own ordering.
+    seats.sort((a, b) => {
+      if (a.lastActiveAt !== b.lastActiveAt) return a.lastActiveAt < b.lastActiveAt ? 1 : -1
+      return a.login.toLowerCase() < b.login.toLowerCase() ? -1 : a.login.toLowerCase() > b.login.toLowerCase() ? 1 : 0
+    })
+  }
+
+  const org = { account: accountInfo.login, installationId: scope.installationId, plan }
   const seatCount = seats.length
 
   // Apply persisted assign/unassign overrides (org_seat_assignment, 0007) so the
   // billed-seat count reflects an admin's explicit choices, not just activity.
-  const unassigned = await readUnassignedLogins(env, scope.installationId)
-  const assignedSeatCount = applySeatAssignments(seats, unassigned)
+  const overrides = await readSeatAssignmentMap(env, scope.installationId)
+  const assignedSeatCount = applySeatAssignments(seats, overrides)
 
   // MEMBER: never expose other members' logins/activity/roles — return only the
   // caller's own seat (if present), no pagination.

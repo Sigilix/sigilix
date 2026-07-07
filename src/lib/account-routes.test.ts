@@ -79,6 +79,7 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database; kv: KVNamespace & 
   await db.exec(migration("0006_create_user_identity.sql"))
   await db.exec(migration("0008_create_email_verification_token.sql"))
   await db.exec(migration("0009_add_api_key_name.sql"))
+  await db.exec(migration("0010_add_gitlab_id_to_user_identity.sql"))
   const kv = makeKV()
   const env = {
     OPENCLAW_STATE: kv,

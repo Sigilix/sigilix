@@ -16,6 +16,7 @@
 //   POST /v1/auth/verify-email|password/reset — PHASE 1 stubs         (CORS, 501)
 
 import { handleGoogleAuthCallback, handleGoogleAuthKickoff, isGoogleConfigured } from "./auth-oauth-google"
+import { isGitlabConfigured } from "./auth-oauth-gitlab"
 import { handleLoginRoute, handleSignupRoute } from "./auth-password-routes"
 import { handleResendVerificationRoute, handleVerifyEmailRoute } from "./auth-verify-email-routes"
 import { handleIdentityEmailRoute } from "./identity-email-route"
@@ -54,7 +55,12 @@ export async function tryHandleIdentityRoute(
 
   // ── Provider-config probe (portal reads cross-origin; simple GET, CORS) ──
   if (method === "GET" && pathname === "/auth/providers") {
-    const body = { github: Boolean(env.GITHUB_OAUTH_CLIENT_ID), google: isGoogleConfigured(env), password: true }
+    const body = {
+      github: Boolean(env.GITHUB_OAUTH_CLIENT_ID),
+      google: isGoogleConfigured(env),
+      gitlab: isGitlabConfigured(env),
+      password: true,
+    }
     return withPortalCors(
       request,
       new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }),

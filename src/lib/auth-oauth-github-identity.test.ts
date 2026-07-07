@@ -11,6 +11,10 @@ import { findByGithubUserId } from "@/src/lib/user-identity-store"
 import { base64urlEncode } from "@/src/lib/auth-session"
 
 const MIGRATION_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
+const MIGRATION_0010 = readFileSync(
+  new URL("../../migrations/0010_add_gitlab_id_to_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const KEY = base64urlEncode(new Uint8Array(32).fill(4))
 
 function makeKV(initial: Record<string, string> = {}) {
@@ -77,6 +81,7 @@ describe("GitHub callback persists identity on login", () => {
   it("upserts a user_identity row (email/name/avatar/providers) and threads user_id onto the session", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const { kv, store } = makeKV({ "auth_state:n1": JSON.stringify({ createdAt: Date.now() }) })
     mockGitHubFetch({ login: "alice", id: 4242, name: "Alice", email: "alice@example.com", avatar_url: "https://a/1" })
 
@@ -116,6 +121,7 @@ describe("GitHub callback persists identity on login", () => {
   it("private-email user (/user email null) resolves the primary+verified address from /user/emails and completes login", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const { kv, store } = makeKV({ "auth_state:n2": JSON.stringify({ createdAt: Date.now() }) })
     mockGitHubFetch(
       { login: "bob", id: 777, name: "Bob", email: null, avatar_url: "https://a/2" },
@@ -142,6 +148,7 @@ describe("GitHub callback persists identity on login", () => {
   it("selection precedence: primary+verified wins over a non-primary verified email", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const { kv } = makeKV({ "auth_state:n3": JSON.stringify({ createdAt: Date.now() }) })
     mockGitHubFetch(
       { login: "carol", id: 888, email: null },
@@ -163,6 +170,7 @@ describe("GitHub callback persists identity on login", () => {
   it("/user/emails failure falls through soft — login is NOT blocked and no email is captured", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const { kv, store } = makeKV({ "auth_state:n4": JSON.stringify({ createdAt: Date.now() }) })
     mockGitHubFetch({ login: "dave", id: 999, email: null }, { emailsStatus: 404, emails: { message: "Not Found" } })
 

@@ -31,7 +31,7 @@ export interface AccountSubject {
   /** GitHub login (the fallback session-owner match key). */
   login: string
   /** Which provider minted the session (fallback match key). */
-  provider: "github" | "google" | "password"
+  provider: "github" | "google" | "gitlab" | "password"
 }
 
 /** Derive the caller's {@link AccountSubject} from a live session record. */

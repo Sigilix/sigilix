@@ -10,6 +10,10 @@ import { findByGithubUserId, findByGoogleSub, findByEmail, upsertGithubIdentity 
 import { base64urlEncode } from "@/src/lib/auth-session"
 
 const MIGRATION_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
+const MIGRATION_0010 = readFileSync(
+  new URL("../../migrations/0010_add_gitlab_id_to_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const KEY = base64urlEncode(new Uint8Array(32).fill(3))
 
 function makeKV(initial: Record<string, string> = {}) {
@@ -77,6 +81,7 @@ describe("isGoogleConfigured / kickoff", () => {
   it("302s to Google with a state cookie when configured", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const { kv } = makeKV()
     const res = await handleGoogleAuthKickoff(new Request("https://api.sigilix.ai/auth/google/login"), baseEnv(kv, db))
     expect(res.status).toBe(302)
@@ -90,6 +95,7 @@ describe("handleGoogleAuthCallback", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
   })
   afterEach(() => vi.restoreAllMocks())
 

@@ -47,7 +47,7 @@ export interface SessionRecord {
   email?: string
   // Which provider minted this session. Absent on legacy GitHub sessions
   // (treat as "github").
-  provider?: "github" | "google" | "password"
+  provider?: "github" | "google" | "gitlab" | "password"
   // "Remember me" choice at login. `false` → a browser-session cookie + the
   // shorter KV TTL (SESSION_SHORT_TTL_SECONDS); anything else (true OR absent)
   // → the persistent 30-day cookie + TTL. Absent on legacy sessions minted
@@ -208,7 +208,7 @@ export async function createSession(args: {
   githubUserId?: number
   userId?: string
   email?: string
-  provider?: "github" | "google" | "password"
+  provider?: "github" | "google" | "gitlab" | "password"
   name?: string
   // "Remember me" choice. `false` → browser-session cookie + short KV TTL;
   // true OR omitted → persistent 30-day cookie + TTL (preserves prior behavior

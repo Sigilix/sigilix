@@ -8,15 +8,18 @@
 // Routing map (relative order preserved from the old inline dispatch):
 //   GET  /auth/github               — GitHub OAuth kickoff (top-level nav)
 //   GET  /auth/github/callback      — GitHub OAuth callback (top-level nav)
+//   GET  /auth/gitlab[/login]       — GitLab OAuth kickoff (top-level nav)
+//   GET  /auth/gitlab/callback      — GitLab OAuth callback (top-level nav)
 //   GET  /auth/welcome              — session-gated welcome page (302 → / if not authed)
 //   GET  /auth/me                   — session/whoami (portal reads cross-origin, CORS)
 //   POST /auth/logout               — clears the session cookie
 //   GET  /auth/install-redirect     — GitHub App install kickoff (mints CSRF nonce)
 //   GET  /setup                     — GitHub App Setup URL callback
 //   …then delegates to tryHandleIdentityRoute (Google OAuth + /v1/auth/* + email-capture)…
-//   GET  /auth/gitlab|bitbucket|azure — deferred-provider 501 stubs (so "Soon" buttons don't 404)
+//   GET  /auth/bitbucket|azure — deferred-provider 501 stubs (so "Soon" buttons don't 404)
 
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
+import { handleGitlabAuthCallback, handleGitlabAuthKickoff } from "@/src/lib/auth-oauth-gitlab"
 import { requireSession } from "@/src/lib/auth-middleware"
 import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
 import { tryHandleIdentityRoute } from "@/src/lib/identity-router"
@@ -47,6 +50,16 @@ export async function handleAuthRoutes(
   }
   if (method === "GET" && pathname === "/auth/github/callback") {
     return handleGitHubAuthCallback(request, env)
+  }
+  // ─── GitLab user OAuth (sig-gitlab-oauth-login) ──────────────
+  // Top-level browser navigation (no CORS), mirroring the GitHub flow.
+  // `/auth/gitlab/login` matches the portal's authApi convention; `/auth/gitlab`
+  // stays live as the alias the deferred-provider stub historically served.
+  if (method === "GET" && (pathname === "/auth/gitlab/login" || pathname === "/auth/gitlab")) {
+    return handleGitlabAuthKickoff(request, env)
+  }
+  if (method === "GET" && pathname === "/auth/gitlab/callback") {
+    return handleGitlabAuthCallback(request, env)
   }
   if (method === "GET" && pathname === "/auth/welcome") {
     const authed = await requireSession(request, env, ctx)
@@ -81,12 +94,10 @@ export async function handleAuthRoutes(
   const identityResponse = await tryHandleIdentityRoute(request, env, ctx, url)
   if (identityResponse) return identityResponse
 
-  // Stubs for deferred providers — 501 so "Soon" buttons don't 404. (Google
-  // is live at /auth/google/login; email/password is POST /v1/auth/*.)
-  if (
-    method === "GET" &&
-    (pathname === "/auth/gitlab" || pathname === "/auth/bitbucket" || pathname === "/auth/azure")
-  ) {
+  // Stubs for deferred providers — 501 so "Soon" buttons don't 404. (Google is
+  // live at /auth/google/login; GitLab is live at /auth/gitlab/login;
+  // email/password is POST /v1/auth/*.)
+  if (method === "GET" && (pathname === "/auth/bitbucket" || pathname === "/auth/azure")) {
     return new Response("provider not implemented yet — see /\n", {
       status: 501,
       headers: { "content-type": "text/plain" },

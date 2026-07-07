@@ -126,6 +126,16 @@ export interface Env {
   // Registered redirect URI: https://api.sigilix.ai/auth/google/callback
   GOOGLE_CLIENT_ID?: string
   GOOGLE_CLIENT_SECRET?: string
+  // sig-gitlab-oauth-login: GitLab user login (dashboard sign-in) REUSES the same
+  // SIGILIX_GITLAB_OAUTH_CLIENT_ID/_SECRET declared above — one group-owned GitLab
+  // OAuth application powers BOTH flows. They stay independent by differing on the
+  // redirect URI + scope: the connector uses `/gitlab/connect/callback` + scope
+  // `api`, while login uses `/auth/gitlab/callback` + the minimal `read_user email`
+  // (login must NOT request `api`). When the credentials are unset, GET
+  // /auth/providers reports gitlab:false and the portal hides the "Sign in with
+  // GitLab" button (the kickoff route also 503s), so an unconfigured deploy
+  // degrades gracefully. The GitLab instance origin reuses SIGILIX_GITLAB_BASE_URL
+  // (default https://gitlab.com; a self-managed instance overrides it).
   // sig-user-identity PHASE 1: org-wide MFA (TOTP). "on" un-stubs the (still
   // incomplete) enrollment/verify endpoints for testing; anything else keeps
   // them 501. MFA is NOT enforced on login yet regardless — see auth-totp.ts.

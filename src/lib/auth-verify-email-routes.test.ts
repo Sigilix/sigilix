@@ -18,6 +18,10 @@ const MIGRATION_0008 = readFileSync(
   new URL("../../migrations/0008_create_email_verification_token.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_0010 = readFileSync(
+  new URL("../../migrations/0010_add_gitlab_id_to_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const KEY = base64urlEncode(new Uint8Array(32).fill(9))
 
 function makeKV(): KVNamespace {
@@ -83,6 +87,7 @@ describe("GET /auth/verify", () => {
     vi.setSystemTime(new Date("2026-07-03T00:00:00.000Z"))
     db = makeD1()
     await db.exec(MIGRATION_0006)
+    await db.exec(MIGRATION_0010)
     await db.exec(MIGRATION_0008)
     env = {
       OPENCLAW_STATE: makeKV(),
@@ -153,6 +158,7 @@ describe("POST /v1/auth/resend-verification", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_0006)
+    await db.exec(MIGRATION_0010)
     await db.exec(MIGRATION_0008)
     env = {
       OPENCLAW_STATE: makeKV(),
@@ -215,6 +221,7 @@ describe("OAuth identities are not subject to the password verify gate", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_0006)
+    await db.exec(MIGRATION_0010)
     await db.exec(MIGRATION_0008)
     env = {
       OPENCLAW_STATE: makeKV(),

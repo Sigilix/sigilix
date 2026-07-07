@@ -64,6 +64,26 @@ export interface SessionRecord {
   // so every existing consumer keeps compiling unchanged.
   encryptedAccessToken: string
   iv: string
+  // GitHub App user-to-server token refresh (sig-portal-bugs). GitHub App user
+  // tokens are SHORT-LIVED (~8h) when the App has "Expire user authorization
+  // tokens" enabled, but the portal session cookie/record lives up to 30 days —
+  // so without a refresh the stored token is dead long before the session is,
+  // and every live GitHub call (installations, org membership → role) silently
+  // 401s and degrades to "member" + an empty installation scope. These fields
+  // let getValidGithubToken (github-user-token.ts) transparently refresh an
+  // expired access token before use. All OPTIONAL: sessions minted before this
+  // field existed (and non-GitHub sessions, and sessions from a GitHub App with
+  // expiration disabled) simply have no refresh material — those keep the prior
+  // behavior (the stored token is used as-is, never refreshed).
+  //
+  // AES-GCM ciphertext of the rotating refresh token (same key + per-session AAD
+  // as encryptedAccessToken; its own random IV in `refreshIv`).
+  encryptedRefreshToken?: string
+  refreshIv?: string
+  // ms-epoch when the access token expires (from the exchange's `expires_in`).
+  accessTokenExpiresAt?: number
+  // ms-epoch when the refresh token itself expires (from `refresh_token_expires_in`).
+  refreshTokenExpiresAt?: number
   createdAt: number
   lastSeenAt: number
 }
@@ -179,6 +199,12 @@ export async function createSession(args: {
   // id) can be minted. `accessToken` defaults to "" (encrypts an empty token);
   // `githubUserId` is omitted for non-GitHub providers.
   accessToken?: string
+  // GitHub App user-token refresh material (sig-portal-bugs). Present only for a
+  // GitHub session minted against an App with token expiration enabled; omitted
+  // otherwise (the stored access token is then used as-is, never refreshed).
+  refreshToken?: string
+  accessTokenExpiresAt?: number
+  refreshTokenExpiresAt?: number
   githubUserId?: number
   userId?: string
   email?: string
@@ -192,6 +218,12 @@ export async function createSession(args: {
   const { kv, sessionId, login, name, githubUserId, userId, email, provider, remember, encryptionKeyB64url } = args
   const { ciphertext, iv } = await encryptAccessToken(args.accessToken ?? "", sessionId, encryptionKeyB64url)
   const now = Date.now()
+  // Encrypt the refresh token (when present) under the same key + per-session
+  // AAD as the access token, with its own random IV.
+  const refresh =
+    args.refreshToken !== undefined && args.refreshToken !== ""
+      ? await encryptAccessToken(args.refreshToken, sessionId, encryptionKeyB64url)
+      : null
   const record: SessionRecord = {
     login,
     encryptedAccessToken: ciphertext,
@@ -206,6 +238,9 @@ export async function createSession(args: {
     ...(provider !== undefined ? { provider } : {}),
     ...(name !== undefined ? { name } : {}),
     ...(remember !== undefined ? { remember } : {}),
+    ...(refresh ? { encryptedRefreshToken: refresh.ciphertext, refreshIv: refresh.iv } : {}),
+    ...(args.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: args.accessTokenExpiresAt } : {}),
+    ...(args.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: args.refreshTokenExpiresAt } : {}),
   }
   await kv.put(`${SESSION_KV_PREFIX}${sessionId}`, JSON.stringify(record), {
     expirationTtl: sessionTtlSeconds(remember),
@@ -233,6 +268,43 @@ export async function touchSession(args: { kv: KVNamespace; sessionId: string; r
 
 export async function deleteSession(args: { kv: KVNamespace; sessionId: string }): Promise<void> {
   await args.kv.delete(`${SESSION_KV_PREFIX}${args.sessionId}`)
+}
+
+/**
+ * Persist a freshly-refreshed GitHub App user-to-server token onto the live
+ * session (sig-portal-bugs). Re-encrypts the new access + rotated refresh token
+ * under the session's key + AAD, records the new expiry timestamps, and writes
+ * the record back under the SAME issued TTL (see touchSession) so a refresh
+ * never silently extends — or shortens — the session's lifetime. All other
+ * fields (identity, remember, createdAt) are preserved; lastSeenAt is bumped.
+ */
+export async function updateSessionTokens(args: {
+  kv: KVNamespace
+  sessionId: string
+  record: SessionRecord
+  encryptionKeyB64url: string
+  accessToken: string
+  refreshToken: string
+  accessTokenExpiresAt: number
+  refreshTokenExpiresAt?: number
+}): Promise<SessionRecord> {
+  const { kv, sessionId, record, encryptionKeyB64url } = args
+  const access = await encryptAccessToken(args.accessToken, sessionId, encryptionKeyB64url)
+  const refresh = await encryptAccessToken(args.refreshToken, sessionId, encryptionKeyB64url)
+  const updated: SessionRecord = {
+    ...record,
+    encryptedAccessToken: access.ciphertext,
+    iv: access.iv,
+    encryptedRefreshToken: refresh.ciphertext,
+    refreshIv: refresh.iv,
+    accessTokenExpiresAt: args.accessTokenExpiresAt,
+    lastSeenAt: Date.now(),
+    ...(args.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: args.refreshTokenExpiresAt } : {}),
+  }
+  await kv.put(`${SESSION_KV_PREFIX}${sessionId}`, JSON.stringify(updated), {
+    expirationTtl: sessionTtlSeconds(record.remember),
+  })
+  return updated
 }
 
 /** One enumerated session (its id + record) from {@link listSessionsPage}. */

@@ -19,6 +19,7 @@
 
 import {
   base64urlEncode,
+  clearSessionCookie,
   clearStateCookie,
   createSession,
   mintSessionId,
@@ -28,6 +29,7 @@ import {
   setStateCookie,
   STATE_COOKIE_NAME,
 } from "./auth-session"
+import { parseGithubTokenSet } from "./github-user-token"
 import { upsertGithubIdentity } from "./user-identity-store"
 
 const STATE_KV_PREFIX = "auth_state:"
@@ -135,6 +137,14 @@ interface AccessTokenResponse {
   access_token?: string
   token_type?: string
   scope?: string
+  // sig-portal-bugs: a GitHub App with "Expire user authorization tokens"
+  // enabled returns these alongside the access token. Captured so the session
+  // can transparently refresh the short-lived (~8h) access token instead of
+  // silently degrading to "member" + an empty feed once it dies (see
+  // github-user-token.ts). Absent when the App has expiration disabled.
+  refresh_token?: string
+  expires_in?: number
+  refresh_token_expires_in?: number
   error?: string
   error_description?: string
 }
@@ -255,6 +265,10 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     })
   }
   const accessToken = tokenJson.access_token
+  // sig-portal-bugs: resolve the (optional) refresh material into absolute
+  // expiries the session stores, so getValidGithubToken can renew the short-
+  // lived access token before it 401s the portal's role + feed lookups.
+  const tokenSet = parseGithubTokenSet(tokenJson, Date.now())
 
   // 4. Fetch user profile.
   let userRes: Response
@@ -340,6 +354,9 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     remember,
     encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
     // exactOptionalPropertyTypes: omit each key entirely when absent.
+    ...(tokenSet?.refreshToken !== undefined ? { refreshToken: tokenSet.refreshToken } : {}),
+    ...(tokenSet?.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: tokenSet.accessTokenExpiresAt } : {}),
+    ...(tokenSet?.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: tokenSet.refreshTokenExpiresAt } : {}),
     ...(displayName !== undefined ? { name: displayName } : {}),
     ...(identityUserId !== undefined ? { userId: identityUserId } : {}),
     ...(identityEmail !== undefined ? { email: identityEmail } : {}),
@@ -455,11 +472,15 @@ export async function handleLogout(_request: Request, _env: AuthOauthEnv, sessio
       console.error("logout cleanup failed", { error: String(e) })
     }
   }
+  // 204 (not a 302 redirect): the portal calls this cross-origin via
+  // `fetch(..., { credentials: "include" })` and handles navigation itself.
+  // A redirect would send the fetch to this Worker's "/" — a cross-origin hop
+  // with no CORS grant that rejects the portal's fetch. A bodyless 204 carrying
+  // the clear-cookie lets the browser drop the session cookie and the fetch
+  // resolve cleanly. The caller wraps this with withPortalCors so the
+  // credentialed response is actually accepted (see auth-routes.ts).
   return new Response(null, {
-    status: 302,
-    headers: {
-      location: "/",
-      "set-cookie": [`__Host-sigilix_session=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; "),
-    },
+    status: 204,
+    headers: { "set-cookie": clearSessionCookie() },
   })
 }

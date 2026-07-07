@@ -60,7 +60,7 @@
 // ?installationId= query param (see resolveSessionScope).
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { resolveUserRole, type UserRole } from "@/src/lib/resolve-user-role"
@@ -250,11 +250,15 @@ async function resolveSessionScope(
 
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    // sig-portal-bugs: refresh the short-lived GitHub App user token before the
+    // installation-scope + role lookups — a stale token 401s both and would
+    // downgrade an org owner to "member" with an empty seat list.
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (error) {
     // Never log the token itself — only that decryption failed.
     console.error(

@@ -3,16 +3,26 @@
 # configs point at. Renamed from `openclaw-worker` during the Sigilix
 # rebrand.
 #
-# sig-worker-debrand-openclaw: the OPENCLAW_ → SIGILIX_ rebrand of the
-# Worker's KV/Queue/Vectorize BINDINGS is done BACK-COMPAT. Each binding is
-# declared TWICE below — the legacy `OPENCLAW_*` name AND the new `SIGILIX_*`
-# name — both pointing at the SAME underlying Cloudflare resource (same KV
-# namespace id / Vectorize index_name / queue). `normalizeEnv`
-# (src/shared/util/normalize-env.ts) makes code prefer the SIGILIX_ binding and
-# fall back to the OPENCLAW_ one, so nothing breaks whether a deploy has the new
-# binding yet or not. The underlying RESOURCE NAMES (`openclaw-code-index`,
-# `boreas-agent-memory`, the KV namespace, `openclaw-jobs`) are NOT renamed here
-# — that needs create-new + repoint + re-index and is a coordinated follow-up.
+# sig-worker-debrand-openclaw: the OPENCLAW_ → SIGILIX_ rebrand of the Worker's
+# config is done BACK-COMPAT via the bidirectional `normalizeEnv` shim
+# (src/shared/util/normalize-env.ts), which resolves each OPENCLAW_/SIGILIX_ pair
+# SIGILIX_-first with OPENCLAW_ fallback and mirrors the value under BOTH names.
+#
+# WHAT IS RENAMED HERE (this PR): every plain-text [vars] flag/mode is now under its
+# canonical `SIGILIX_*` name. The ~1,600 call sites still read `env.OPENCLAW_<X>`;
+# the shim mirrors each SIGILIX_ [vars] value back to the OPENCLAW_ name at every
+# entry point, so those readers keep working with zero call-site edits.
+#
+# WHAT IS NOT RENAMED YET (deferred, coordinated follow-ups):
+#   - BINDINGS: each KV/Queue/Vectorize binding is declared TWICE below — the legacy
+#     `OPENCLAW_*` name AND the new `SIGILIX_*` name — both pointing at the SAME
+#     underlying Cloudflare resource. The shim prefers the SIGILIX_ binding, falls
+#     back to the OPENCLAW_ one.
+#   - RESOURCE NAMES (`openclaw-code-index`, `boreas-agent-memory`, the KV namespace,
+#     `openclaw-jobs`): NOT renamed — needs create-new + repoint + re-index.
+#   - SECRETS (`wrangler secret put` values, documented at the end of [vars]): still
+#     set under their OPENCLAW_ names; each must be re-set as SIGILIX_ (write-only) in
+#     its own step. The shim keeps both names resolving throughout.
 name = "sigilix"
 main = "src/index.ts"
 
@@ -210,7 +220,7 @@ class_name = "PrReviewRunDO"
 
 # SIG-138: per-repo code/dependency graph stored in SQLite DO storage.
 # Keyed by `indexNamespace(owner, repo)` (one DO instance per repo).
-# Flag-gated behind OPENCLAW_GRAPH_INDEX / OPENCLAW_GRAPH_RETRIEVAL.
+# Flag-gated behind SIGILIX_GRAPH_INDEX / SIGILIX_GRAPH_RETRIEVAL.
 [[durable_objects.bindings]]
 name = "REPO_GRAPH_DO"
 class_name = "RepoGraphDO"
@@ -309,7 +319,7 @@ class_name = "DeepResearchDO"
 name = "MCP_CONNECTIONS"
 class_name = "McpConnectionsAgent"
 
-# SIG-545 B1: agent-runner Container DO (dark; gated by OPENCLAW_AGENT_RUNNER_MODE).
+# SIG-545 B1: agent-runner Container DO (dark; gated by SIGILIX_AGENT_RUNNER_MODE).
 # One DO instance per runId (idFromName(runId)). The Container is configured here
 # but never dispatched to until the mode flag is flipped. The real Dockerfile and
 # dispatch logic arrive in later tasks (B2/B3/B4).
@@ -448,8 +458,8 @@ new_sqlite_classes = ["McpConnectionsAgent"]
 # SIG-184 runner-evidence ingest (POST /runner/ingest) — both UNSET for now; the
 # route returns 503 until they're provided (values come from the Sigilix runner
 # repo, PR 4). Non-secret → set in [vars] below or via the dashboard when ready:
-#   OPENCLAW_RUNNER_OIDC_AUDIENCE        # the `aud` the runner mints its OIDC token with
-#   OPENCLAW_RUNNER_WORKFLOW_REF         # pinned reusable-workflow `owner/repo/path` (no @ref)
+#   SIGILIX_RUNNER_OIDC_AUDIENCE        # the `aud` the runner mints its OIDC token with
+#   SIGILIX_RUNNER_WORKFLOW_REF         # pinned reusable-workflow `owner/repo/path` (no @ref)
 # ARC-283 Phase B1b — shadow-mode model bake-off:
 #   SHADOW_BAKEOFF_ROLES                 # CSV of "logic"|"security"|"performance"|"tests"|"synth"
 #                                        # (default "" — shadow off everywhere). When set, the
@@ -489,12 +499,12 @@ SIGILIX_SLACK_CLIENT_ID = "10539390863863.11471637305556"
 # SIG-144: unify the two Linear OAuth apps into one. "on" routes all Linear API
 # calls through the single agent-app token (throws rather than falling back to
 # the human LINEAR_API_KEY). Off/unset = legacy client_credentials path.
-OPENCLAW_LINEAR_UNIFIED = "on"
+SIGILIX_LINEAR_UNIFIED = "on"
 
 # SIG-545: Linear agent run mode. "on" lets an AgentSessionEvent (an issue
 # assigned/delegated to the Sigilix agent) trigger the agent-runner to implement
 # the ticket and open a PR. Off/unset = triage-only.
-OPENCLAW_LINEAR_AGENT_RUN_MODE = "on"
+SIGILIX_LINEAR_AGENT_RUN_MODE = "on"
 
 # SIG-455: per-tenant fairness gate. "off" | "shadow" (default) | "enforce".
 # "shadow" runs the gate + telemeters but lets every review through — dark
@@ -514,11 +524,11 @@ SIGILIX_PROVIDER_COOLDOWN_MODE = "shadow"
 # age past 21d. REPO_ROLE=on classifies repos at index time (additive metadata).
 # These are non-sensitive mode strings → committed [vars] (like the fairness/verification flags);
 # do NOT also `wrangler secret put` the same names (a secret would shadow this value).
-OPENCLAW_ORG_MEMORY_CAPTURE = "on"
-OPENCLAW_ORG_MEMORY_APPLY = "on"
-OPENCLAW_CLI_ORG_MEMORY = "on"
-OPENCLAW_MEMORY_DECAY_MODE = "shadow"
-OPENCLAW_REPO_ROLE_CLASSIFY = "on"
+SIGILIX_ORG_MEMORY_CAPTURE = "on"
+SIGILIX_ORG_MEMORY_APPLY = "on"
+SIGILIX_CLI_ORG_MEMORY = "on"
+SIGILIX_MEMORY_DECAY_MODE = "shadow"
+SIGILIX_REPO_ROLE_CLASSIFY = "on"
 
 # sig-training-data-consent: MASTER kill switch for the consent-gated training
 # corpus. Pinned OFF — the ONLY value that enables retention is the exact string
@@ -539,12 +549,12 @@ SIGILIX_TRAINING_RETENTION_MODE = "off"
 # traffic first). "enforce" actually gates an un-entitled installation. Ships dark;
 # flip to "shadow" to validate, then "enforce". Committed [vars] mode string like
 # the other feature flags; do NOT also `wrangler secret put` the same name.
-OPENCLAW_ENTITLEMENTS_MODE = "enforce"
+SIGILIX_ENTITLEMENTS_MODE = "enforce"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
-#   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
+#   SIGILIX_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
 #                            indexer (extract + RepoGraphDO upsert/commit).
-#   OPENCLAW_GRAPH_RETRIEVAL "off" | "shadow" | "post" — graph EXPANSION of
+#   SIGILIX_GRAPH_RETRIEVAL "off" | "shadow" | "post" — graph EXPANSION of
 #                            vector hits in PR review (Phase 2).
 # Shadow emits telemetry only; neither changes posted review output. Flip to
 # "shadow" per phase after acceptance review, then "on"/"post" once the
@@ -561,8 +571,8 @@ OPENCLAW_ENTITLEMENTS_MODE = "enforce"
 # the graph block now INJECTS context into the logic/tests/synth prompts (not
 # just telemetry). The INDEX flag stays "shadow" (`graphIndexEnabled` treats
 # "on" and "shadow" identically, so no behavior change there).
-OPENCLAW_GRAPH_INDEX = "shadow"
-OPENCLAW_GRAPH_RETRIEVAL = "post"
+SIGILIX_GRAPH_INDEX = "shadow"
+SIGILIX_GRAPH_RETRIEVAL = "post"
 
 # SIG-426: CI-failure triage → review synth (grounded inline). "off" | "shadow" |
 # "enforce". "shadow": on a failed CI run, run the nemotron-ultra synth pass +
@@ -570,7 +580,7 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # (NO customer-visible change) — the data-gathering window before enforce.
 # "enforce": post the grounded inline finding(s); suppress the legacy sticky +
 # SIG-333 suggestions. Code default is off (parseCiTriageSynthMode).
-OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
+SIGILIX_CI_TRIAGE_SYNTH_MODE = "enforce"
 
 # SIG-433: deterministic anchor remap — re-homes a correctly-diagnosed CI finding
 # from the test-assertion line / enclosing function header onto the exact changed
@@ -579,7 +589,7 @@ OPENCLAW_CI_TRIAGE_SYNTH_MODE = "enforce"
 # 17%→100%), hallucination 0, off-diff still 100% withheld (no fabricated anchors).
 # Only re-homes to a real changed RIGHT line; no confident match → withheld.
 # Code default is off (parseCiTriageAnchorRemap).
-OPENCLAW_CI_TRIAGE_ANCHOR_REMAP = "on"
+SIGILIX_CI_TRIAGE_ANCHOR_REMAP = "on"
 
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
 # Both modes COMPUTE the enriched changed-symbol context (definition / caller /
@@ -592,7 +602,7 @@ OPENCLAW_CI_TRIAGE_ANCHOR_REMAP = "on"
 # SIG-286 (2026-06-01): flipped shadow → post to START the A/B. The blanket
 # inject was a pre-registered KILL (median net-new tokens 0); this measures the
 # targeted version. Rollback: set "shadow" (inject stops; telemetry continues).
-OPENCLAW_GRAPH_EXPANSION = "post"
+SIGILIX_GRAPH_EXPANSION = "post"
 
 # SIG-407: symbol-aware @sigilix Q&A retrieval. "on" expands each retrieval hit →
 # enclosing symbol + callers via the SIG-138 graph and injects a [SYMBOL CONTEXT]
@@ -600,7 +610,7 @@ OPENCLAW_GRAPH_EXPANSION = "post"
 # Flipped ON 2026-06-15: deterministic eval cleared the gate (symbol recall@6
 # OFF 20% → ON 80%, +60pp); low-stakes Q&A surface; off was byte-identical.
 # Rollback: "shadow" (build+measure, no inject) or "off" (inert).
-OPENCLAW_MENTION_SYMBOL_EXPANSION = "on"
+SIGILIX_MENTION_SYMBOL_EXPANSION = "on"
 
 # SIG-314 (2026-06-02): deterministic IDOR/BOLA floor (no-unauthorized-object-
 # lookup AST rule). Run-invariant insurance so the obvious in-diff IDOR the
@@ -615,42 +625,42 @@ OPENCLAW_MENTION_SYMBOL_EXPANSION = "on"
 # advisory on a middleware-only-authz handler (no in-body principal proxy) —
 # internal noise, not a believability incident. Rollback: "shadow" (measure-only)
 # or "off".
-OPENCLAW_AUTHZ_IDOR_SCAN = "post"
+SIGILIX_AUTHZ_IDOR_SCAN = "post"
 # Deterministic weak-randomness floor (CWE-338, no-insecure-random-token): flags
 # Math.random() minting a credential-named token/secret. P2-capped
 # (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post" 2026-06-04.
-OPENCLAW_WEAK_RANDOM_SCAN = "post"
+SIGILIX_WEAK_RANDOM_SCAN = "post"
 # Deterministic open-redirect floor (CWE-601, no-open-redirect): flags a
 # request-controlled value flowing into a redirect/Location sink with no
 # destination validation. P2-capped (clampAstEmitScores: never a P0/P1 alone).
 # Shipped at "post" — fail-closed taint + Headers-receiver gating keep FPs out.
-OPENCLAW_OPEN_REDIRECT_SCAN = "post"
+SIGILIX_OPEN_REDIRECT_SCAN = "post"
 # Deterministic SSRF floor (CWE-918, no-ssrf): flags a request-controlled value
 # reaching a server-side fetch sink (fetch/axios/http(s)/got/ky) whose authority
 # the request can control, with no host validation. P2-capped (clampAstEmitScores:
 # never a P0/P1 alone). Promoted shadow→"post" 2026-06-04 (founder-authorized;
 # watch the review stream for FPs — rollback is this flag back to "shadow").
-OPENCLAW_SSRF_SCAN = "post"
+SIGILIX_SSRF_SCAN = "post"
 # Deterministic path-traversal floor (CWE-22, no-path-traversal): flags a
 # request-controlled value reaching a filesystem path op (fs.*/sendFile/Deno) with
 # no path sanitization (basename / within-root check). No fixed-prefix exemption —
 # `../` escapes a base. P2-capped (clampAstEmitScores: never a P0/P1 alone).
 # Promoted shadow→"post" 2026-06-04 (founder-authorized; rollback = "shadow").
-OPENCLAW_PATH_TRAVERSAL_SCAN = "post"
+SIGILIX_PATH_TRAVERSAL_SCAN = "post"
 # Deterministic SQL-injection floor (CWE-89, no-sql-injection): flags a request-
 # controlled value concatenated into a raw SQL string at a query sink (.query/
 # .execute/.exec/.prepare/.raw + raw-named $queryRawUnsafe/whereRaw). Parameterized
 # queries (taint in the params, not the SQL string) + tagged-template queries are
 # auto-safe. P2-capped (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→
 # "post" 2026-06-05 on the floor-eval ruler (0% FP / 100% recall across the corpus).
-OPENCLAW_SQL_INJECTION_SCAN = "post"
+SIGILIX_SQL_INJECTION_SCAN = "post"
 # Deterministic SSTI floor (CWE-1336, no-ssti): flags a request-controlled value
 # used as the TEMPLATE source of a template engine (handlebars/ejs/pug/nunjucks/
 # eta/_.template .compile/.render/.renderString). The SAFE use (constant template +
 # user data as the SEPARATE render arg) is auto-excluded (taint must be in arg 0).
 # P2-capped (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post"
 # 2026-06-05 on the floor-eval ruler (0% FP / 100% recall across the corpus).
-OPENCLAW_SSTI_SCAN = "post"
+SIGILIX_SSTI_SCAN = "post"
 # Deterministic NoSQL-injection floor (CWE-943, no-nosql-injection): flags a
 # request-controlled object handed DIRECTLY to a Mongo query as the filter
 # (find/findOne/updateMany/deleteMany/aggregate(req.query|req.body|alias)) or a
@@ -658,23 +668,23 @@ OPENCLAW_SSTI_SCAN = "post"
 # tainted scalar field, array .find(cb), lodash) is auto-excluded. P2-capped
 # (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post" 2026-06-05 on
 # the floor-eval ruler (no-nosql-injection = 100% recall / 0% FP across the corpus).
-OPENCLAW_NOSQL_INJECTION_SCAN = "post"
+SIGILIX_NOSQL_INJECTION_SCAN = "post"
 # Deterministic prototype-pollution floor (CWE-1321, no-prototype-pollution): flags a
 # request-controlled object RECURSIVELY merged into a target (_.merge/defaultsDeep/
 # mergeWith/deepmerge) — the lodash CVE-2019-10744 shape. SAFE: Object.assign (shallow),
 # bare merge on a non-lodash receiver, non-tainted sources, a __proto__ guard, and
 # user-keyed dynamic-dict writes are all excluded. P2-capped (never a P0/P1). Shipped "shadow".
-OPENCLAW_PROTO_POLLUTION_SCAN = "shadow"
+SIGILIX_PROTO_POLLUTION_SCAN = "shadow"
 # Deterministic XXE floor (CWE-611, no-xxe): flags an XML parse with external-entity
 # / DTD resolution EXPLICITLY enabled (noent/replaceEntities/resolveExternalEntities/
 # dtdload/…) on request-controlled input — e.g. libxmljs.parseXml(req.body.xml,
 # { noent: true }). SAFE: no option (default-off), an explicitly-false option, and
 # constant/non-request input are all excluded. P2-capped (never a P0/P1). Shipped "shadow".
-OPENCLAW_XXE_SCAN = "shadow"
+SIGILIX_XXE_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.
-OPENCLAW_INGEST_AI_INSTRUCTIONS = "on"
+SIGILIX_INGEST_AI_INSTRUCTIONS = "on"
 
 # SIG-317 (2026-06-02): synth verdict-truncation recovery. On target-rich PRs the
 # synthesizer writes a COMPLETE provenance.findings but a SHORTER verdict.findings
@@ -687,27 +697,27 @@ OPENCLAW_INGEST_AI_INSTRUCTIONS = "on"
 # by construction (recovers only synth-provenanced-kept findings, never invents;
 # the gates remain the authority) — running at "on" to surface on real reviews.
 # Rollback: "shadow" (telemetry only) or "off" (inert).
-OPENCLAW_SYNTH_RECOVERY = "on"
+SIGILIX_SYNTH_RECOVERY = "on"
 # SIG-484: lower the full-coverage synth source floor 4→2 + raise the per-verdict synth-input
 # cap (bounded 16k). Flipped to "on" after the dense-fixture grade: recall up (a P0 went
 # 2/3→3/3 + real P1/P2 bugs restored), hi-sev-FP FLAT by construction (floor restores only
 # score 2-3 → P2/P3, can never add a P0/P1 FP). Cap raise unexercised by the fixture but
 # recall-safe-by-design. Rollback: "shadow" (telemetry only) or "off" (inert).
-OPENCLAW_SYNTH_SOURCE_FLOOR_LOW = "on"
+SIGILIX_SYNTH_SOURCE_FLOOR_LOW = "on"
 # SIG-487: 2nd full-strength security pass + union (recall #4). off|shadow|on.
 # A faithful K=2 draw (same recall prompt/reasoning/MCP tools as pass-1) — recovers
 # the NON-deterministic security misses pass-1 drops (security has no lens/resweep
 # booster). NOT differentiated from pass-1, so the 2x spend is justified ONLY if it
 # finds new findings: ship "shadow" to measure `newFindings`/`overlap`, then flip
 # "on" (or back to "off") based on that signal. Rollback: "shadow"/"off".
-OPENCLAW_SECURITY_KUNION = "shadow"
+SIGILIX_SECURITY_KUNION = "shadow"
 # SIG-488 (recall #5): demote-instead-of-hard-drop for sev>=4 at the vague-prefix +
 # uncited-testing gates. off|shadow|on. "on" = a sev>=4 finding those HARD-DROP
 # heuristics would DELETE is demoted to a P2 non-blocking note instead (visible, never
 # blocks) rather than lost; low-sev nits still drop. Recall-safe + precision-bounded:
 # can only ADD a finding (was being dropped), P2-capped so it can never add a P0/P1 FP.
 # Shipped "on" for the recall probe. Rollback: "shadow" (count-only) / "off" (inert).
-OPENCLAW_GATE_DEMOTE_HIGH_SEV = "on"
+SIGILIX_GATE_DEMOTE_HIGH_SEV = "on"
 
 # SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
 # `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its
@@ -723,7 +733,7 @@ OPENCLAW_GATE_DEMOTE_HIGH_SEV = "on"
 # noise and would erode believability (dual sign-off). The `on` flip is gated on
 # (a) Part B landed AND (b) the shadow would-inject sample being genuine proven
 # needles, not noise. Rollback: "shadow" or "off".
-OPENCLAW_AST_EMIT_FLOOR = "shadow"
+SIGILIX_AST_EMIT_FLOOR = "shadow"
 
 # SIG-317 Part 4b (2026-06-02): cross-function asymmetry hints for the LOGIC
 # specialist — the evidence injector. Surfaces a deterministic FACT (a function
@@ -740,7 +750,7 @@ OPENCLAW_AST_EMIT_FLOOR = "shadow"
 # 2026-06-02: message hardened (#311: append-only + anti-reclassification branches,
 # real identifiers) + dual-signed-off + offline non-regression clean → flipped "on"
 # for the live pr/12 over-credit A/B. Rollback path = "shadow".
-OPENCLAW_ASYMMETRY_HINTS = "on"
+SIGILIX_ASYMMETRY_HINTS = "on"
 
 # SIG-317 Part 4b-v2: the TOCTOU / check-then-act race evidence-injector. Same
 # shadow-first ladder as the over-credit injector above. Detects SELECT-of-C ->
@@ -751,7 +761,7 @@ OPENCLAW_ASYMMETRY_HINTS = "on"
 # race-benchmark + the SIG-245 zero-P1-FP window.
 # 2026-06-03: flipped "on" for the live pr/13 race A/B (reserveStock + claimCoupon
 # racy, bumpViewCount fires-but-safe). Rollback path = "shadow".
-OPENCLAW_TOCTOU_HINTS = "on"
+SIGILIX_TOCTOU_HINTS = "on"
 
 # SIG-298 follow-on: "SDK guidance packs" v1 (Greptile-partners-style vendor
 # review context, self-authored from public docs — labeled "SDK guidance", NOT
@@ -759,21 +769,21 @@ OPENCLAW_TOCTOU_HINTS = "on"
 # (stripe, nextjs, openai-sdk, anthropic-sdk, supabase, posthog) touched by a
 # PR's diff and injects failure-pattern/implementation-rule guidance into the
 # specialist + synth prompts, the same context-injection channel as Learnings
-# (OPENCLAW_LEARNINGS_MODE). "off" (default) is fully inert. "shadow" detects
+# (SIGILIX_LEARNINGS_MODE). "off" (default) is fully inert. "shadow" detects
 # + logs `sdk-pack-matched {packs, prKey}` WITHOUT touching the prompt (bake
 # the detector before it can shape a review). "on" injects the guidance
 # section and enables the `[sdk:<packId>]` attribution marker parse — findings
 # it informed render a quiet "via <Vendor> SDK guidance" line. Parsed by
 # resolveSdkPacksMode (@/src/lib/sdk-packs). Shadow-first: flip to "on" after
 # reviewing a sample of `sdk-pack-matched` telemetry for false-positive detection.
-OPENCLAW_SDK_PACKS_MODE = "shadow"
+SIGILIX_SDK_PACKS_MODE = "shadow"
 
 # Config-as-code structured rules — the repo-owned id/scope/severity/enabled
 # rule surface in sigilix.json (`customRules` + disable-by-id `disabledRules`).
 # Matched by each rule's `scope` globs against the PR's changed files and
 # injected into the specialist prompts alongside the other repo-guidance
 # sources, with a `[repo-rule:<id>]` self-tag attribution marker (mirrors
-# OPENCLAW_SDK_PACKS_MODE's marker scheme — findings a rule informed render a
+# SIGILIX_SDK_PACKS_MODE's marker scheme — findings a rule informed render a
 # quiet "via repo rule <id>" line). Binary: "off" (the CODE-level fallback for
 # an unset/missing value — byte-identical review even if a repo declares
 # `customRules`) or "on" (match + inject + attribution parse). No shadow state
@@ -782,25 +792,25 @@ OPENCLAW_SDK_PACKS_MODE = "shadow"
 # stage, so default-on at the deploy level is a no-op for every repo that
 # hasn't declared any custom rules. Parsed by resolveConfigAsCodeMode
 # (@/src/shared/domain/config/resolve).
-OPENCLAW_CONFIG_AS_CODE_MODE = "on"
+SIGILIX_CONFIG_AS_CODE_MODE = "on"
 
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.
-#   OPENCLAW_RUNNER_OIDC_AUDIENCE  — the `aud` the runner mints its OIDC token
+#   SIGILIX_RUNNER_OIDC_AUDIENCE  — the `aud` the runner mints its OIDC token
 #     with; the ingest route requires the token's `aud` to equal this. Stable
 #     opaque id (domain-independent) so a future custom domain doesn't break
 #     every caller workflow. The caller's `oidc-audience:` input MUST match.
-#   OPENCLAW_RUNNER_WORKFLOW_REF   — Sigilix's pinned reusable workflow as
+#   SIGILIX_RUNNER_WORKFLOW_REF   — Sigilix's pinned reusable workflow as
 #     `owner/repo/path` (NO @ref). The token's `job_workflow_ref` path part must
 #     equal this (owner/repo compared case-insensitively, path case-sensitively).
-#   OPENCLAW_RUNNER_EVIDENCE_MODE  — "off" | "shadow" | "post". `post`: a verified
+#   SIGILIX_RUNNER_EVIDENCE_MODE  — "off" | "shadow" | "post". `post`: a verified
 #     receipt's SARIF backs the review (rawOverride) + the check-run renders the
 #     VERIFIED/PENDING trust pill. runner-absent (no receipt) is inert — every
 #     repo without the Action reviews exactly as before. Rollback: set "off".
-OPENCLAW_RUNNER_OIDC_AUDIENCE = "sigilix-runner-ingest"
-OPENCLAW_RUNNER_WORKFLOW_REF = "Sigilix/runner/.github/workflows/scan.yml"
-OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
+SIGILIX_RUNNER_OIDC_AUDIENCE = "sigilix-runner-ingest"
+SIGILIX_RUNNER_WORKFLOW_REF = "Sigilix/runner/.github/workflows/scan.yml"
+SIGILIX_RUNNER_EVIDENCE_MODE = "post"
 
 # SIG-285 verification-by-execution rollout posture (off | shadow | enforce):
 #   - shadow: re-check (worker-native, line-anchored) that each score>=4
@@ -814,17 +824,17 @@ OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 #     stops being a mis-anchored inline thread. Demote decisions are readable at
 #     /metrics/validation (gate `verification-refuted`).
 # Rollback: set "shadow" (telemetry, no demote) or "off".
-OPENCLAW_VERIFICATION_MODE = "enforce"
+SIGILIX_VERIFICATION_MODE = "enforce"
 
 # SIG-285 re-anchor (inline-first): when verification is `enforce`, set
-# OPENCLAW_VERIFICATION_REANCHOR = "on" to APPLY the re-anchor MUTATION — a
+# SIGILIX_VERIFICATION_REANCHOR = "on" to APPLY the re-anchor MUTATION — a
 # refuted (mis-anchored) inline finding with exactly one same-file added line
 # holding ALL its cited tokens is MOVED to that line (a correct inline) instead
 # of body-demoted (the body-demote handles the ambiguous/no-match remainder).
 # Default (unset / not "on") = OFF — the re-anchor stays shadow-measured (PR1,
 # /metrics/validation gate `verification-reanchor`). Rollback: comment out / set
 # anything but "on".
-OPENCLAW_VERIFICATION_REANCHOR = "on"
+SIGILIX_VERIFICATION_REANCHOR = "on"
 
 # SIG-285 v2 PR1: receipt-join verification — the NO-PERM sandbox foundation.
 # "off" (default) | "shadow" | "enforce" (reserved). When ON + a VERIFIED SIG-184
@@ -841,7 +851,7 @@ OPENCLAW_VERIFICATION_REANCHOR = "on"
 # demote/render). Read GET /metrics/verification → `receiptJoin
 # .refutableEligibleFraction`: the load-bearing number deciding PR4/5 (demote)
 # vs receipts-as-trust. Needs a VERIFIED runner receipt (dogfood has one).
-OPENCLAW_RECEIPTJOIN_MODE = "shadow"
+SIGILIX_RECEIPTJOIN_MODE = "shadow"
 
 # SIG-476 PR2 (2026-06-19): in-worker self-confirmation gate — "off" | "shadow" |
 # "on". Flipped off -> "shadow" to START the GO/NO-GO measurement: the PR-1 helper
@@ -849,12 +859,12 @@ OPENCLAW_RECEIPTJOIN_MODE = "shadow"
 # finding against OUR OWN in-worker deterministic AST engine and persists the
 # confirmed/uplift distribution to VerificationMetricsDO under the `selfconfirm`
 # category. SHADOW IS MEASURE-ONLY — it NEVER mutates the trust tier (the tier
-# ANNOTATE is gated to "on"; OPENCLAW_TRUST_LEDGER is "on" in prod, so a shadow
+# ANNOTATE is gated to "on"; SIGILIX_TRUST_LEDGER is "on" in prod, so a shadow
 # mutation would be a live render change). NO render change in any mode (PR3). Read
 # GET /metrics/verification -> `selfConfirm.confirmedFraction` + `.upliftFraction`:
 # THE number deciding whether `deterministic-confirmed` earns a distinct pill (PR3)
 # or should be a GROUNDED sub-state. Rollback: set "off".
-OPENCLAW_SELFCONFIRM_MODE = "shadow"
+SIGILIX_SELFCONFIRM_MODE = "shadow"
 
 # SIG-477: execution-sandbox reproduce mode — "off" | "shadow" | "on".
 # "shadow": eligibility + the QuickJS harness run and telemeter (reproduce_eligibility /
@@ -866,7 +876,7 @@ OPENCLAW_SELFCONFIRM_MODE = "shadow"
 # GROUNDED first, and the model-authored `failureExample` overclaim is suppressed under
 # REPRODUCED. Rollback: set "shadow" (or "off"). Read GET /metrics/verification ->
 # reproduceEligibility / reproduceResult.
-OPENCLAW_REPRODUCE_MODE = "on"
+SIGILIX_REPRODUCE_MODE = "on"
 
 # SIG Trust Ledger v0: "off" (default) | "shadow" | "on". `shadow` attaches the
 # per-finding trust tier (worker-token-confirmed / runner-confirmed / deterministic-
@@ -881,7 +891,7 @@ OPENCLAW_REPRODUCE_MODE = "on"
 # MODEL pills + the body restructure: PR-level section + collapsed outside-diff
 # dropdown) is now VISIBLE on every review. Rollback: "shadow" (keep measuring, no
 # render) or "off".
-OPENCLAW_TRUST_LEDGER = "on"
+SIGILIX_TRUST_LEDGER = "on"
 
 # SIG-290 v1: anti-hallucination absence-grounding gate. Suppress/downgrade
 # "absence-claim" findings (e.g. "lacks tests", "no null check", "missing
@@ -897,7 +907,7 @@ OPENCLAW_TRUST_LEDGER = "on"
 # now runs + emits the `pr-review-finding-rejected-validation` (gate:"absence-
 # grounding") telemetry on every review, but KEEPS every finding inline — zero
 # behavior change. Read the firing rate + suppression-fp-rate before "enforce".
-OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
+SIGILIX_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 
 # SIG-293 v1: security-grounding gate (secrets-exposure). The deeper root of
 # Pattern A (#248): where Pattern A only de-alarmed the "revoke and rotate"
@@ -923,7 +933,7 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # secrets-exposure finding whose cited line holds NO credential token. FN-safety
 # confirmed live (3 e2e reviews kept every real injection/secrets finding) + by
 # the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
-OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
+SIGILIX_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 
 # SIG-311 Layers A+B: security USAGE-vs-MENTION validator. Enforce demotes a
 # sev>=4 injection/xss finding to body-only only when path-is-detector/test/doc
@@ -931,7 +941,7 @@ OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 # family). Real child_process/HTML sinks always keep inline, including inside
 # security-tooling paths. Promoted shadow->enforce after K=12 live corpus +
 # regression coverage; rollback: "shadow" (observe only) or "off".
-OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "enforce"
+SIGILIX_SECURITY_USAGE_VALIDATOR_MODE = "enforce"
 
 # Cross-cutting over-fire Option B: window-blindness validator. Shadow-first —
 # logs the would-demote (`pr-review-finding-rejected-validation`, gate
@@ -943,7 +953,7 @@ OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "enforce"
 # lines. The deterministic backstop to PR #327's prompt fence. Flip to "enforce"
 # after a clean shadow window (the would-demotes are genuine misreads, not real
 # bugs). Rollback: "off".
-OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
+SIGILIX_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
 
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no
@@ -955,19 +965,19 @@ OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
 # recall guard and initially over-flags legit findings lacking a rationale —
 # read the would-flag rate (while the Phase 1 prompt trains the model to fill
 # `independentAssessment`) before "enforce". Rollback: set "off".
-OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
+SIGILIX_LOGIC_REFUTATION_MODE = "shadow"
 # SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only when
 # its control-flow ("unconditional"/"double-response") or sync-race ("TOCTOU")
 # claim is PROVABLY false against the cited AST (the two stable v4-pro priors).
 # Fails open; "enforce" + a reason allowlist drops only the listed shapes.
 # Rollback: set "off" (or clear the allowlist below).
-OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE = "enforce"
+SIGILIX_LOGIC_CLAIM_REFUTATION_MODE = "enforce"
 # SIG-392: reason-scoped enforce allowlist (comma list of LogicClaimDropReason).
 # Empty ⇒ in "enforce" NO reason drops; a listed reason drops while the other
 # shapes stay shadow. balance-sign graduated 2026-06-13 after a clean shadow soak
 # (product-wide probe #39: the refuter fired on the lone balance FP and nothing
 # else). The other 5 claim shapes remain shadow (NOT listed here).
-OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS = "balance-sign-claim-refuted-by-correct-accounting-direction"
+SIGILIX_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS = "balance-sign-claim-refuted-by-correct-accounting-direction"
 
 # SIG-325: the GENERALIZED refutation-survival gate (evaluateRefutationSurvival).
 # Extends the SIG-308 refute-first discipline to SELF-ORIGINATED findings on
@@ -980,7 +990,7 @@ OPENCLAW_LOGIC_CLAIM_REFUTATION_ENFORCE_REASONS = "balance-sign-claim-refuted-by
 # Read the would-demote rate (while the Phase 1 prompt trains the model to fill
 # `independentAssessment` with the confirmed source→sink→type) before "enforce"
 # (which DEMOTES to the body, never hard-drops). Rollback: set "off".
-OPENCLAW_REFUTATION_SURVIVAL_MODE = "shadow"
+SIGILIX_REFUTATION_SURVIVAL_MODE = "shadow"
 
 # SIG-108: the security EVIDENCE gate (evaluateSecurityFinding). A sev>=4
 # security finding citing a fabricated/absent/out-of-range scanner evidenceId
@@ -994,7 +1004,7 @@ OPENCLAW_REFUTATION_SURVIVAL_MODE = "shadow"
 # sibling validator-mode flag, which are plain vars, and the value is not
 # sensitive) — migrated here as a reviewable, version-controlled var. Rollback:
 # set "shadow" (or remove the line). Read via `/metrics/validation` modes.security.
-OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
+SIGILIX_SECURITY_VALIDATOR_MODE = "enforce"
 # SIG-392 (2026-06-12, e2e-frontend#20): at the SIG-108 evidence gate's demote
 # branch, a failing sev>=4 security finding that articulates a CONCRETE
 # mechanism (non-empty failureExample) is recategorized to `logic` and kept
@@ -1008,7 +1018,7 @@ OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
 # refutation-survival backstop (the reclass is the controlling adjudication
 # of its evidence-absence), so flipping REFUTATION_SURVIVAL_MODE to enforce
 # cannot re-demote it. Pinned by interaction tests.
-OPENCLAW_SECURITY_RECLASS = "on"
+SIGILIX_SECURITY_RECLASS = "on"
 
 # SIG-111 / SIG-245: tests-specialist coverage-FP gate. The dominant labeled-FP
 # class (21/31 in the SIG-161 corpus) is the tests specialist over-firing "X
@@ -1020,7 +1030,7 @@ OPENCLAW_SECURITY_RECLASS = "on"
 # `wrangler secret put` flag (default shadow) — migrated here as a reviewable
 # var, same as the security flag above. Rollback: set "shadow" (or remove the
 # line). Read via `/metrics/validation` modes.tests.
-OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
+SIGILIX_TESTS_VALIDATOR_MODE = "enforce"
 
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
@@ -1045,7 +1055,7 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # no schema change. Worst-case observable regression: a docs-only-no-
 # fences PR shows a "Sigilix · Approved — no issues found" check with
 # no inline findings (which is correct for a docs PR).
-OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
+SIGILIX_ENSEMBLE_ROUTER_ENABLED = "on"
 
 # SIG-224/227b: dynamic dispatcher mode. Flipped shadow -> "enforce_rules" 2026-06-03
 # for CONCURRENT-REVIEW LATENCY RELIEF (#66): under Ollama-Turbo contention reviews
@@ -1064,7 +1074,7 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # is the tradeoff the founder accepted ("worth it long-term"). Flip to "enforce"
 # (the actual prune / cost-saving) once the shadow trail validates the picks;
 # "enforce_rules" (rules-only, no LLM call) or "off" reverts.
-OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
+SIGILIX_DYNAMIC_DISPATCHER_MODE = "shadow"
 
 # SIG-418 Phase 2 (Design B′): in-invocation multi-batch review for large PRs.
 # "off" | "shadow" | "on". "shadow": on a PR that spills past the single-batch
@@ -1082,28 +1092,28 @@ OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
 # observable in prod via the `multibatch-enforce-summary` event (spilloverFilesReviewed /
 # spilloverFindingCount / batchesLaunched / haltReason / elapsedMs). Rollback: "shadow"
 # (telemetry only, output unchanged) or "off" (inert).
-OPENCLAW_REVIEW_MULTIBATCH_MODE = "on"
+SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 
 # SIG-437: `@sigilix summary` webhook feature. "on" => the trigger enqueues a job
 # that writes a structured PR summary into the PR description. A webhook/product
 # flag (NOT the review pipeline), parsed by parsePrSummaryMode. Default-off => the
 # trigger never enqueues (pure no-op). ON in prod per founder (2026-06-15).
-OPENCLAW_PR_SUMMARY_MODE = "on"
+SIGILIX_PR_SUMMARY_MODE = "on"
 
 # SIG-104: conversational Learnings (per-repo memory). "off" (default, DARK) =
 # commands inert, no injection. "shadow" = @sigilix remember/forget/list + capture
 # active + would-inject telemetry, but the posted review/prompts are UNCHANGED
 # (bake the store). "on" = inject learned per-repo guidance into specialist + synth
 # prompts. Parsed by resolveLearningsMode (@/features/learnings).
-OPENCLAW_LEARNINGS_MODE = "on"
+SIGILIX_LEARNINGS_MODE = "on"
 
 # Capture master switch (write-side). "on" lets capture run for repos that ALSO opt in
 # via their sigilix.json (reviewMemory.enabled | captureOnly) — per-repo opt-in is the SOC2
 # control. Enables the SIG-104 inline-reply Learnings auto-capture (the no-command
-# "natural conversation" core; the learning is gated additionally by OPENCLAW_LEARNINGS_MODE)
+# "natural conversation" core; the learning is gated additionally by SIGILIX_LEARNINGS_MODE)
 # AND the review-memory dismissal-signal corpus. Behaviorally write-only: retrieval/soften is
 # SEPARATELY gated by OPENCLAW_REVIEW_MEMORY_ENABLED (unset = off), so nothing softens yet.
-OPENCLAW_REVIEW_MEMORY_CAPTURE = "on"
+SIGILIX_REVIEW_MEMORY_CAPTURE = "on"
 
 # SIG-439: incremental PR re-review. "on" => a re-review only looks at files that
 # CHANGED (blob-sha differs) or were NEVER reviewed yet; files already reviewed at
@@ -1113,7 +1123,7 @@ OPENCLAW_REVIEW_MEMORY_CAPTURE = "on"
 # full review. Code default is off; ON in prod per founder (2026-06-15 — the
 # dribble is the top product-trust problem). "shadow" measures coverage without
 # filtering.
-OPENCLAW_INCREMENTAL_REVIEW_MODE = "on"
+SIGILIX_INCREMENTAL_REVIEW_MODE = "on"
 
 # SIG-452: adversarial-framing hardening. "off" (default, DARK) = the "removed
 # guarding test for a CHANGED symbol" signal is not computed, no prompt block,
@@ -1130,7 +1140,7 @@ OPENCLAW_INCREMENTAL_REVIEW_MODE = "on"
 # `data`) coincidentally matched in a deleted assertion — soft (a question, not a P0/P1
 # blocker), bounded by the per-PR cap (8). Watch /metrics/fp-rate; revert to "shadow" if it
 # spikes. The K>=12 live FP eval + production-seam byte-identity test remain follow-ups (SIG-452).
-OPENCLAW_ADVERSARIAL_FRAMING_MODE = "enforce"
+SIGILIX_ADVERSARIAL_FRAMING_MODE = "enforce"
 
 # SIG-436: deterministic inline anchor-precision pass. "on" re-homes an inline
 # finding off a comment/blank/structural/header line onto the substantive code
@@ -1139,7 +1149,7 @@ OPENCLAW_ADVERSARIAL_FRAMING_MODE = "enforce"
 # aggregate exact-line 40%→80%, wrong-line (hallucination-equiv) rate DROPS
 # (recall-safe). Only re-homes to a real changed RIGHT line; no confident target
 # → unchanged. Code default is off (parseEnsembleConfig).
-OPENCLAW_ANCHOR_PRECISION = "on"
+SIGILIX_ANCHOR_PRECISION = "on"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
@@ -1163,7 +1173,7 @@ OPENCLAW_ANCHOR_PRECISION = "on"
 # when it matters. Rollback: flip to "off" or remove this line — no
 # schema change, no migration. Default-off in dev/test (the env var
 # is unset there).
-OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
+SIGILIX_SYNTH_BYPASS_ENABLED = "on"
 # SIG-393 — region re-sweep (dense-PR recall lever). Three-state rollout:
 #   "off"     — phase is inert: no gate evaluation, no model calls, no
 #               telemetry; specialist verdicts pass through by reference
@@ -1186,7 +1196,7 @@ OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
 # clone delta (`evals score --pr --baseline`), post-gate high-sev FP
 # flat, default-lane p50 unmoved. Rollback = flip back to "shadow"
 # (telemetry only) or "off" (inert); both are safe one-line changes.
-OPENCLAW_RESWEEP_MODE = "shadow"
+SIGILIX_RESWEEP_MODE = "shadow"
 # SIG-395 — invariant lens (cross-cutting recall lever). Three-state rollout:
 #   "off"     — phase is inert: no dispatch evaluation, no model calls, no
 #               telemetry; verdicts pass through by reference (the pinned
@@ -1215,7 +1225,7 @@ OPENCLAW_RESWEEP_MODE = "shadow"
 # clone via `evals score --pr --baseline` + hi-sev FP within bar + p50
 # unmoved. Rollback = flip back to "shadow" (telemetry only) or "off"
 # (inert); both are safe one-line changes.
-OPENCLAW_INVARIANT_LENS_MODE = "on"
+SIGILIX_INVARIANT_LENS_MODE = "on"
 # SIG-369(b): route the SECOND-PASS logic re-runs (invariant-lens + resweep) to a
 # cheaper strong reasoner (deepseek/deepseek-v4-pro) instead of the primary logic
 # model — these passes are the dominant logic-input cost on dense PRs (~142K of
@@ -1223,7 +1233,7 @@ OPENCLAW_INVARIANT_LENS_MODE = "on"
 # "on" swaps ONLY the second-pass model; the primary logic specialist is unaffected.
 # Recall gauge = the live Sigilix review of a real substantive PR (#440) — keep on
 # if recall holds, else flip back to "off" (one-line, inert). Code default off.
-OPENCLAW_SECONDPASS_REASONER_MODE = "on"
+SIGILIX_SECONDPASS_REASONER_MODE = "on"
 # SIG-392 — recall-eliciting LOGIC prompt (#508). "on" appends the recall
 # directive to the logic specialist's system prompt. Per-PR logic bake-off
 # (dense fixture, K=6, citation-judged): default prompt 6.0/20 logic recall →
@@ -1237,14 +1247,14 @@ OPENCLAW_SECONDPASS_REASONER_MODE = "on"
 # a fresh dense-fixture clone (`evals score --pr --baseline`) + p50 unmoved.
 # Rollback = flip to "off" (inert, byte-identical to the default prompt) — a
 # safe one-line change.
-OPENCLAW_LOGIC_RECALL_MODE = "on"
+SIGILIX_LOGIC_RECALL_MODE = "on"
 
 # ── SIG-406 OpenRouter ALPHA lineup tunings ─────────────────────────────────
 # The deployed alpha runs the SIG-399-tuned lineup on OpenRouter (see
 # ENGINEERING.md §"The model lineup" + src/lib/ensemble/adapters/model-provider.ts).
 # These [vars] turn ON the per-role reasoning + recall/reasoning prompt suffixes the
 # tuning sweep validated; the code defaults stay OFF so local runs + the test suite
-# stay byte-identical without them. (OPENCLAW_LOGIC_RECALL_MODE above is part of this
+# stay byte-identical without them. (SIGILIX_LOGIC_RECALL_MODE above is part of this
 # lineup.)
 #   - reasoning EFFORT (SIG-287 harness): logic at HIGH, tests at medium. SIG-450 added
 #     the per-role `role:level` token so logic (Kimi K2.7, screened at high) can run a
@@ -1254,11 +1264,11 @@ OPENCLAW_LOGIC_RECALL_MODE = "on"
 #     — it collapses flash; the suffix carries the lift instead).
 #   - LOGIC reasoning-PROMPT suffix (SIG-399): enumerate-then-judge / verify-the-value
 #     (validated on o3; carried forward to the Kimi logic specialist, SIG-450).
-OPENCLAW_REASONING_MODE = "on"
-OPENCLAW_REASONING_ROLES = "logic:high,tests"
-OPENCLAW_REASONING_LEVEL = "medium"
-OPENCLAW_SECURITY_RECALL_MODE = "on"
-OPENCLAW_LOGIC_REASONING_PROMPT_MODE = "on"
+SIGILIX_REASONING_MODE = "on"
+SIGILIX_REASONING_ROLES = "logic:high,tests"
+SIGILIX_REASONING_LEVEL = "medium"
+SIGILIX_SECURITY_RECALL_MODE = "on"
+SIGILIX_LOGIC_REASONING_PROMPT_MODE = "on"
 
 # SIG-235 — min-specialists early exit. Three-state rollout:
 #   "off"     — fan-out waits for ALL dispatched specialists to settle.
@@ -1280,7 +1290,7 @@ OPENCLAW_LOGIC_REASONING_PROMPT_MODE = "on"
 # in a follow-up one-line PR. Rollback = flip back to "off"; per-role
 # AbortControllers are added in either mode, but the cancel logic only
 # fires on "on", so flipping back is safe.
-OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
+SIGILIX_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
 
 # SIG-236 — surgical prompt-budget telemetry for the logic specialist.
 # Three-state rollout:
@@ -1305,14 +1315,14 @@ OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
 # SIG-287: ENFORCE (was "shadow") — the logic specialist was timing out on
 # ~every review (prompt-bound 60s), so reviews ran degraded and the bot
 # fake-approved. Enforcing the ≤6K budget lets logic actually return a verdict.
-OPENCLAW_LOGIC_PROMPT_BUDGET = "enforce"
+SIGILIX_LOGIC_PROMPT_BUDGET = "enforce"
 
 # SIG-369(b): measure WHERE the logic specialist's model input goes (~140K input
 # tokens on a ~13K diff) so the follow-up can cut the biggest low-recall-value
 # block safely. "shadow" = TELEMETRY-ONLY (no extra model calls, zero cost):
 # emits `logic-input-composition` + attaches `logicInputComposition` to the
 # review-telemetry record. "off" reverts (default-off in code).
-OPENCLAW_LOGIC_INPUT_COMPOSITION = "shadow"
+SIGILIX_LOGIC_INPUT_COMPOSITION = "shadow"
 
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
@@ -1329,7 +1339,7 @@ OPENCLAW_LOGIC_INPUT_COMPOSITION = "shadow"
 #   KV key  config:gate-model:v1       JSON    (logistic-regression coefs;
 #                                               default null = use hand-blend)
 # Cache TTL 60s in the Worker so updates take effect on the next request.
-OPENCLAW_GATE = "shadow"
+SIGILIX_GATE = "shadow"
 
 # SIG-196: Sigilix Slack agent mode. "off" (default) | "shadow" | "on".
 # Secrets (SLACK_SIGNING_SECRET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET,
@@ -1345,7 +1355,7 @@ SIGILIX_SLACK_SCOPE_MAP = '{"T0AFVBGRDRD:C0BEL8ZAARE":{"repos":["sigilix/sigilix
 # installation token and hands the task to the AgentRunnerContainer. The only caller
 # today is the admin-gated POST /admin/agent-run (bearer OPENCLAW_ADMIN_TOKEN); no
 # automatic trigger exists until B3 (Linear-assignee). Flip back to dark to kill.
-OPENCLAW_AGENT_RUNNER_MODE = "on"
+SIGILIX_AGENT_RUNNER_MODE = "on"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

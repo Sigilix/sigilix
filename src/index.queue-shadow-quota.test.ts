@@ -83,7 +83,9 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     await run
 
     // quota check was directly awaited (not via waitUntil)
-    expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
+    // queue() passes the normalizeEnv()'d env (a SIGILIX_/OPENCLAW_-mirrored SUPERSET of
+    // the input) to checkShadowQuota, so assert containment rather than exact shape.
+    expect(checkShadowQuotaMock).toHaveBeenCalledWith(expect.objectContaining(env), 42)
     // review still dispatched — never blocks
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
     expect(message.ack).toHaveBeenCalledTimes(1)
@@ -95,7 +97,9 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     const { run } = runQueue(env, message)
     await run
 
-    expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
+    // queue() passes the normalizeEnv()'d env (a SIGILIX_/OPENCLAW_-mirrored SUPERSET of
+    // the input) to checkShadowQuota, so assert containment rather than exact shape.
+    expect(checkShadowQuotaMock).toHaveBeenCalledWith(expect.objectContaining(env), 42)
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 
@@ -107,7 +111,9 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     const { run } = runQueue(env, message)
     await run
 
-    expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
+    // queue() passes the normalizeEnv()'d env (a SIGILIX_/OPENCLAW_-mirrored SUPERSET of
+    // the input) to checkShadowQuota, so assert containment rather than exact shape.
+    expect(checkShadowQuotaMock).toHaveBeenCalledWith(expect.objectContaining(env), 42)
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 
@@ -129,7 +135,9 @@ describe("queue() shadow-quota wire (SIG-543 Task 4)", () => {
     const { run } = runQueue(env, message)
     await run
 
-    expect(checkShadowQuotaMock).toHaveBeenCalledWith(env, 42)
+    // queue() passes the normalizeEnv()'d env (a SIGILIX_/OPENCLAW_-mirrored SUPERSET of
+    // the input) to checkShadowQuota, so assert containment rather than exact shape.
+    expect(checkShadowQuotaMock).toHaveBeenCalledWith(expect.objectContaining(env), 42)
     expect(dispatchJobMock).toHaveBeenCalledTimes(1)
   })
 

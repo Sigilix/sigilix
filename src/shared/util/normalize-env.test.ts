@@ -51,12 +51,22 @@ describe("normalizeEnv", () => {
     expect(legacyOnly.SIGILIX_CODE_INDEX).toBe(openclawIndex)
   })
 
-  it("leaves a SIGILIX-native var untouched and never invents an OPENCLAW_ sibling for it", () => {
+  it("mirrors a SIGILIX_-only var back to the OPENCLAW_ name (config renamed ahead of readers)", () => {
+    // This is the config-first rename case: a [vars] key renamed OPENCLAW_ → SIGILIX_
+    // while the ~1,600 call sites still read env.OPENCLAW_X. The bidirectional mirror
+    // fills the OPENCLAW_ sibling from the SIGILIX_ value so those readers keep working.
+    const out = rec(asEnv({ SIGILIX_ENTITLEMENTS_MODE: "enforce" }))
+    expect(out.SIGILIX_ENTITLEMENTS_MODE).toBe("enforce")
+    expect(out.OPENCLAW_ENTITLEMENTS_MODE).toBe("enforce")
+  })
+
+  it("mirrors a SIGILIX-native var's (unread) OPENCLAW_ sibling — harmless, nothing reads it", () => {
     const out = rec(asEnv({ SIGILIX_FAIRNESS_MODE: "enforce" }))
     expect(out.SIGILIX_FAIRNESS_MODE).toBe("enforce")
-    // Critical: no spurious OPENCLAW_FAIRNESS_MODE key (there is no legacy reader for it,
-    // and inventing one changes the env shape passed downstream).
-    expect("OPENCLAW_FAIRNESS_MODE" in out).toBe(false)
+    // The reverse mirror fills OPENCLAW_FAIRNESS_MODE from the live SIGILIX_ value. No
+    // code reads that legacy name and no code branches on env-key presence, so this is
+    // inert; the mirror stays uniform rather than maintaining an exception list.
+    expect(out.OPENCLAW_FAIRNESS_MODE).toBe("enforce")
   })
 
   it("does not mutate the input env", () => {

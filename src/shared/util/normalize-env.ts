@@ -2,32 +2,40 @@
 // rebrand of the Worker's config vars, secrets, and resource bindings.
 //
 // The Worker historically read `env.OPENCLAW_*` everywhere. The rebrand introduces
-// the new canonical `SIGILIX_*` name for each, but the LIVE Cloudflare deployment
-// still holds the values under the OPENCLAW_ names (committed [vars], `wrangler
-// secret put` secrets, and KV/Vectorize/Queue bindings). Rewriting the ~5,000 call
-// sites in one PR would be enormous and risky, so instead we normalize `env` ONCE at
-// each entry point (the fetch/queue/scheduled handlers + each config-reading Durable
-// Object constructor).
+// the new canonical `SIGILIX_*` name for each, but the ~1,600 `env.OPENCLAW_<X>` call
+// sites are NOT rewritten in one PR (enormous and risky). Instead we normalize `env`
+// ONCE at each entry point (the fetch/queue/scheduled handlers + each config-reading
+// Durable Object constructor) so BOTH the legacy `OPENCLAW_<X>` name and the new
+// `SIGILIX_<X>` name resolve to a single value — whichever the deploy actually holds.
 //
-// For every LEGACY `OPENCLAW_<X>` key present on `env`, the value is resolved
-// SIGILIX_-PREFERRED with OPENCLAW_ FALLBACK (`env.SIGILIX_<X> ?? env.OPENCLAW_<X>`)
-// and written back under BOTH names. So:
-//   - Today (only the OPENCLAW_ name set): behavior is byte-identical — the resolved
-//     value is just the OPENCLAW_ value, and existing `env.OPENCLAW_<X>` reads are
-//     unchanged.
-//   - Once the founder ALSO sets the new `SIGILIX_<X>` secret/var (keeping the
-//     OPENCLAW_ one during the transition), it WINS, and existing `env.OPENCLAW_<X>`
+// The mirror is BIDIRECTIONAL and SIGILIX_-preferred. For every prefixed key present on
+// `env` — reached from EITHER side of a pair — the value is resolved
+// `SIGILIX_<X> ?? OPENCLAW_<X>` and written back under BOTH names. So:
+//   - Legacy holds only OPENCLAW_<X> (a secret / resource binding still under its old
+//     name): behavior is byte-identical — the resolved value is the OPENCLAW_ one, and
+//     the new `env.SIGILIX_<X>` alias is filled from it.
+//   - Config now holds only SIGILIX_<X> (a [vars] key already renamed to SIGILIX_): the
+//     value is mirrored BACK to `env.OPENCLAW_<X>`, so the legacy `env.OPENCLAW_<X>`
 //     call sites transparently pick it up — no call-site edits.
+//   - Both set (the transition, e.g. mid secret cutover): SIGILIX_ WINS.
 //
-// The mirror deliberately iterates only OPENCLAW_ keys, so SIGILIX_-NATIVE vars (ones
-// that never had an OPENCLAW_ form — SIGILIX_FAIRNESS_MODE, SIGILIX_USAGE_*, …) are
-// left exactly as-is: no spurious OPENCLAW_ sibling is invented for them. It is purely
-// additive over legacy names — it never deletes a key and never lowers a value.
+// The OPENCLAW_→SIGILIX_ direction lets code MIGRATE readers to SIGILIX_ ahead of the
+// config/secret rename; the SIGILIX_→OPENCLAW_ direction lets the config/secret rename
+// land AHEAD of the reader migration (the case that renamed the [vars] to SIGILIX_ while
+// call sites still read `env.OPENCLAW_<X>`). Either migration order is safe.
 //
-// NOTE (transition contract): the OPENCLAW_ names must be RETAINED alongside any new
-// SIGILIX_ ones until the coordinated full migration (which also renames the Cloudflare
-// RESOURCES). Removing an OPENCLAW_ secret/var before then would leave its legacy
-// reader unresolved — that is the end-state this first pass intentionally defers.
+// The mirror only ever fills a sibling when a value EXISTS (`??`, and it skips
+// `resolved === undefined`), so an ABSENT pair invents nothing. A SIGILIX-native key
+// whose OPENCLAW_ form was never deployed DOES get its (unread) OPENCLAW_ sibling filled
+// from the live SIGILIX_ value — harmless, since nothing reads that legacy name and no
+// code branches on env-key presence. It is purely additive: it never deletes a key and
+// never lowers a value.
+//
+// NOTE (transition contract): the SECRETS and RESOURCE bindings are still deployed under
+// their OPENCLAW_ names; re-setting each secret as SIGILIX_ and re-indexing each
+// Vectorize/KV/Queue/R2 resource as sigilix-* are deliberately deferred to their own
+// coordinated steps. This shim keeps BOTH names resolving throughout, so a value can move
+// from the OPENCLAW_ name to the SIGILIX_ name one at a time without breaking any reader.
 
 import type { Env, NormalizedEnv } from "@/src/shared/types/env"
 
@@ -35,10 +43,11 @@ const SIGILIX_PREFIX = "SIGILIX_"
 const OPENCLAW_PREFIX = "OPENCLAW_"
 
 /**
- * Resolve every legacy `OPENCLAW_<X>` on a shallow clone of `env` to a single value
- * (`SIGILIX_<X> ?? OPENCLAW_<X>`), written back under BOTH names. Bindings
- * (KV/Vectorize/Queue/DO) are mirrored the same way — the clone copies the live binding
- * reference, so the fallback is a no-op object copy.
+ * Resolve every legacy/new pair on a shallow clone of `env` to a single value
+ * (`SIGILIX_<X> ?? OPENCLAW_<X>`), written back under BOTH names. The pair is reached
+ * from whichever side is present on `env`, so a value set under EITHER name is mirrored
+ * to the other. Bindings (KV/Vectorize/Queue/DO) are mirrored the same way — the clone
+ * copies the live binding reference, so the fallback is a no-op object copy.
  *
  * Pure over its input: returns a new object, never mutates `env`. Runs once per
  * entry-point invocation (O(number of env keys), ~200) — negligible.
@@ -46,14 +55,26 @@ const OPENCLAW_PREFIX = "OPENCLAW_"
 export function normalizeEnv(env: Env): NormalizedEnv {
   const out = { ...(env as unknown as Record<string, unknown>) }
 
+  // Snapshot the keys first (Object.keys): the loop writes sibling keys onto `out`, and
+  // each pair is fully resolved the first time it is reached, so re-processing the newly
+  // written sibling would be redundant.
   for (const key of Object.keys(out)) {
-    if (!key.startsWith(OPENCLAW_PREFIX)) continue
-    const sigilixKey = SIGILIX_PREFIX + key.slice(OPENCLAW_PREFIX.length)
+    let sigilixKey: string
+    let openclawKey: string
+    if (key.startsWith(SIGILIX_PREFIX)) {
+      sigilixKey = key
+      openclawKey = OPENCLAW_PREFIX + key.slice(SIGILIX_PREFIX.length)
+    } else if (key.startsWith(OPENCLAW_PREFIX)) {
+      openclawKey = key
+      sigilixKey = SIGILIX_PREFIX + key.slice(OPENCLAW_PREFIX.length)
+    } else {
+      continue
+    }
     // SIGILIX_-preferred, OPENCLAW_ fallback. `??` (not `||`) so an intentional
     // empty-string override is honored, matching the documented reader contract.
-    const resolved = out[sigilixKey] ?? out[key]
+    const resolved = out[sigilixKey] ?? out[openclawKey]
     if (resolved === undefined) continue
-    out[key] = resolved // legacy readers (env.OPENCLAW_X) see the SIGILIX_-first value
+    out[openclawKey] = resolved // legacy readers (env.OPENCLAW_X) see the SIGILIX_-first value
     out[sigilixKey] = resolved // new readers (env.SIGILIX_X) + the NormalizedEnv type
   }
 

@@ -28,7 +28,10 @@ function makeKV(initial: Record<string, string> = {}) {
   }
 }
 
-function mockGitHubFetch(user: Record<string, unknown>) {
+// `emails` (when given) is served from GET /user/emails — matched BEFORE the
+// broader `/user` branch since both URLs contain "api.github.com/user".
+// `emailsStatus` forces a non-200 to exercise the fail-soft fallback.
+function mockGitHubFetch(user: Record<string, unknown>, opts: { emails?: unknown; emailsStatus?: number } = {}) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
     if (url.includes("github.com/login/oauth/access_token")) {
@@ -37,11 +40,35 @@ function mockGitHubFetch(user: Record<string, unknown>) {
         headers: { "content-type": "application/json" },
       })
     }
+    if (url.includes("api.github.com/user/emails")) {
+      return new Response(JSON.stringify(opts.emails ?? []), {
+        status: opts.emailsStatus ?? 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
     if (url.includes("api.github.com/user")) {
       return new Response(JSON.stringify(user), { status: 200, headers: { "content-type": "application/json" } })
     }
     throw new Error(`unexpected fetch: ${url}`)
   })
+}
+
+function callbackReqFor(state: string) {
+  const url = new URL("https://api.sigilix.ai/auth/github/callback")
+  url.searchParams.set("code", "c1")
+  url.searchParams.set("state", state)
+  return new Request(url.toString(), { headers: { cookie: `__Host-sigilix_oauth_state=${state}` } })
+}
+
+function identityEnv(kv: KVNamespace, db: ReturnType<typeof makeD1>) {
+  return {
+    OPENCLAW_STATE: kv,
+    SIGILIX_PLATFORM_DB: db,
+    GITHUB_OAUTH_CLIENT_ID: "Iv1.x",
+    GITHUB_OAUTH_CLIENT_SECRET: "s",
+    OPENCLAW_SESSION_ENCRYPTION_KEY: KEY,
+    OPENCLAW_BASE_URL: "https://api.sigilix.ai",
+  } as unknown as Parameters<typeof handleGitHubAuthCallback>[1]
 }
 
 describe("GitHub callback persists identity on login", () => {
@@ -84,5 +111,72 @@ describe("GitHub callback persists identity on login", () => {
     expect(session.userId).toBe(identity!.userId)
     expect(session.email).toBe("alice@example.com")
     expect(session.provider).toBe("github")
+  })
+
+  it("private-email user (/user email null) resolves the primary+verified address from /user/emails and completes login", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    const { kv, store } = makeKV({ "auth_state:n2": JSON.stringify({ createdAt: Date.now() }) })
+    mockGitHubFetch(
+      { login: "bob", id: 777, name: "Bob", email: null, avatar_url: "https://a/2" },
+      {
+        emails: [
+          { email: "bob-noreply@users.noreply.github.com", primary: false, verified: true },
+          { email: "bob@example.com", primary: true, verified: true },
+        ],
+      },
+    )
+
+    const res = await handleGitHubAuthCallback(callbackReqFor("n2"), identityEnv(kv, db))
+    expect(res.status).toBe(302)
+
+    const identity = await findByGithubUserId(db, "777")
+    expect(identity).not.toBeNull()
+    expect(identity!.email).toBe("bob@example.com")
+
+    const sessionKey = [...store.keys()].find((k) => k.startsWith("auth_session:"))!
+    const session = JSON.parse(store.get(sessionKey)!)
+    expect(session.email).toBe("bob@example.com")
+  })
+
+  it("selection precedence: primary+verified wins over a non-primary verified email", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    const { kv } = makeKV({ "auth_state:n3": JSON.stringify({ createdAt: Date.now() }) })
+    mockGitHubFetch(
+      { login: "carol", id: 888, email: null },
+      {
+        emails: [
+          { email: "verified-nonprimary@example.com", primary: false, verified: true },
+          { email: "primary-verified@example.com", primary: true, verified: true },
+        ],
+      },
+    )
+
+    const res = await handleGitHubAuthCallback(callbackReqFor("n3"), identityEnv(kv, db))
+    expect(res.status).toBe(302)
+
+    const identity = await findByGithubUserId(db, "888")
+    expect(identity!.email).toBe("primary-verified@example.com")
+  })
+
+  it("/user/emails failure falls through soft — login is NOT blocked and no email is captured", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    const { kv, store } = makeKV({ "auth_state:n4": JSON.stringify({ createdAt: Date.now() }) })
+    mockGitHubFetch({ login: "dave", id: 999, email: null }, { emailsStatus: 404, emails: { message: "Not Found" } })
+
+    const res = await handleGitHubAuthCallback(callbackReqFor("n4"), identityEnv(kv, db))
+    // Login still completes.
+    expect(res.status).toBe(302)
+
+    const identity = await findByGithubUserId(db, "999")
+    expect(identity).not.toBeNull()
+    expect(identity!.email).toBeNull()
+
+    // No email threaded onto the session → portal still prompts for one.
+    const sessionKey = [...store.keys()].find((k) => k.startsWith("auth_session:"))!
+    const session = JSON.parse(store.get(sessionKey)!)
+    expect("email" in session).toBe(false)
   })
 })

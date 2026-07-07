@@ -23,6 +23,12 @@
 import type { Env } from "@/src/shared/types/env"
 import type { ScmReviewEventInput } from "@/src/lib/ensemble/ports"
 import { selectScmProvider } from "@/src/index-scm-provider"
+import { getProjectWebhookSecret } from "@/src/lib/gitlab-connect"
+
+/** Cap the pre-auth body parse (Codex sign-off #2). GitLab MR webhook payloads
+ *  carry only MR metadata + commit list — comfortably under 1 MB. An oversized
+ *  body is rejected before we spend cycles parsing it to pick a candidate secret. */
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000
 
 /** GitLab "Merge Request Hook" payload — only the fields this ingress reads. */
 interface GitLabMergeRequestEvent {
@@ -51,35 +57,61 @@ interface GitLabMergeRequestEvent {
 const DRAFT_TITLE_PREFIX = /^\s*(draft|wip):/i
 
 export async function handleGitLabWebhook(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-  const secret = env.SIGILIX_GITLAB_WEBHOOK_SECRET
-  if (!secret) {
-    // Unconfigured deploy — no webhook secret to verify against. 503 so the
-    // sender retries once configured, mirroring the GitHub handler's 503 gate.
-    // NOTE (PR-3): the API TOKEN is NOT required here — it is resolved
-    // per-project in the consumer (KV `gitlab-project-token:<projectId>` first,
-    // global `SIGILIX_GITLAB_TOKEN` fall-back), so a per-project-token-only
-    // tenant (no global token) still ingests; the consumer logs + no-ops if no
-    // token resolves for the project.
-    return new Response("gitlab not configured\n", { status: 503 })
+  const rawBody = await request.text()
+  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) {
+    return new Response("payload too large\n", { status: 413 })
   }
 
-  const scm = selectScmProvider("gitlab")
-
-  const rawBody = await request.text()
   // GitLab sends the shared secret verbatim in this header (no HMAC). Pass it
   // through the port's `signature` field; the provider constant-time-compares it.
   const token = request.headers.get("x-gitlab-token") ?? ""
   const event = request.headers.get("x-gitlab-event") ?? ""
 
+  // Parse the body BEFORE verifying so we can pick which secret to compare
+  // against. A malformed body just yields no project id -> we fall back to the
+  // global-env secret (or 503 when neither is configured). Only `project.id` is
+  // read pre-auth, and it never changes the failure response (Codex sign-off #2:
+  // non-enumerating — an unknown/unconnected project 401s exactly like a wrong
+  // token), so this can't leak which projects are connected.
+  let payload: GitLabMergeRequestEvent | null = null
+  try {
+    payload = JSON.parse(rawBody) as GitLabMergeRequestEvent
+  } catch {
+    payload = null
+  }
+
+  // sig-gitlab-connector: resolve the webhook secret per project — a project
+  // onboarded through the portal's connect flow has its OWN generated secret in
+  // KV (`gitlab-webhook-secret:<projectId>`); fall back to the global env secret
+  // so the existing single-secret deploy behaves EXACTLY as before.
+  const projectIdForSecret = payload?.project?.id
+  let secret: string | undefined
+  // The per-project secret lives in KV. Guard the binding + a read blip: a
+  // missing OPENCLAW_STATE or a transient KV error must NEVER drop the global
+  // secret path (fail-safe — a project connected via the global secret still
+  // verifies). A connect-flow project always has OPENCLAW_STATE bound in prod.
+  if (typeof projectIdForSecret === "number" && env.OPENCLAW_STATE) {
+    try {
+      secret = (await getProjectWebhookSecret(env, projectIdForSecret)) ?? undefined
+    } catch {
+      secret = undefined
+    }
+  }
+  if (!secret) secret = env.SIGILIX_GITLAB_WEBHOOK_SECRET
+  if (!secret) {
+    // Unconfigured deploy — no webhook secret to verify against (neither a
+    // per-project connect secret nor the global env one). 503 so the sender
+    // retries once configured, mirroring the GitHub handler's 503 gate.
+    return new Response("gitlab not configured\n", { status: 503 })
+  }
+
+  const scm = selectScmProvider("gitlab")
   const verified = await scm.verifyWebhook({ rawBody, signature: token, secret })
   if (!verified) {
     return new Response("invalid token\n", { status: 401 })
   }
 
-  let payload: GitLabMergeRequestEvent
-  try {
-    payload = JSON.parse(rawBody) as GitLabMergeRequestEvent
-  } catch {
+  if (!payload) {
     return new Response("invalid json\n", { status: 400 })
   }
 

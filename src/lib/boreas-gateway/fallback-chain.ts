@@ -6,8 +6,8 @@
 //   1. Vertex MaaS         — the existing leg, unchanged behavior.
 //   2. Ollama Turbo        — per-token/serverless; env-configurable per-model
 //                            substitute model id, sensible built-in defaults
-//                            for Boreas/Astraeus, NONE for Pyroeis (no guessed
-//                            Gemma tag).
+//                            for Boreas/Astraeus, NONE for Pyroeis (Gemini is
+//                            Vertex-only — no Ollama Gemini tag to default to).
 //   3. AWS Bedrock         — per-token/serverless; SCAFFOLD, skipped entirely
 //                            until OPENCLAW_AWS_* creds + a per-model Bedrock
 //                            model id are all configured.

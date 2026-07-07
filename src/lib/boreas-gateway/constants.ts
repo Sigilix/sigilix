@@ -28,8 +28,22 @@ export const ASSERTION_AUDIENCE = "sigilix-vertex-gateway"
 /** Forced Vertex model id for the Boreas route — the gateway pins it; the caller can't override it. */
 export const VERTEX_MODEL = "qwen/qwen3-next-80b-a3b-instruct-maas"
 
-/** Forced Vertex model id for the Pyroeis route — same gateway/SA/token mint, different model. */
-export const PYROEIS_MODEL = "google/gemma-4-26b-a4b-it-maas"
+/**
+ * BUILT-IN DEFAULT forced Vertex model id for the Pyroeis route — Gemini 3.5 Flash
+ * served on Vertex AI, addressed via the SAME OpenAI-compat chat/completions endpoint
+ * the other legs use (first-party Gemini is `google/gemini-<version>`, NO `-maas`
+ * suffix — that suffix is only for open/partner MaaS models like Qwen/Gemma/GLM).
+ * Gemini needs NO request/response adapter: Vertex serves it over the exact same
+ * `endpoints/openapi/chat/completions` endpoint with the same Bearer-SA-token auth
+ * and the same OpenAI body/stream shape, so this is a pure model-id swap.
+ *
+ * ⚠️ Unlike the Boreas/Astraeus pins, this is a DEFAULT, not a hard pin: the exact
+ * Gemini 3.5 Flash version string (e.g. a `-001`/date suffix) can't be confirmed
+ * without live Vertex access, so the Pyroeis route resolves `SIGILIX_PYROEIS_MODEL`
+ * over this default (see api-pyroeis-route.ts) — correcting the id is a config flip,
+ * not a code change.
+ */
+export const DEFAULT_PYROEIS_MODEL = "google/gemini-3.5-flash"
 
 /** Forced Vertex model id for the Astraeus route — same gateway/SA/token mint, different model. */
 export const ASTRAEUS_MODEL = "zai-org/glm-5-maas"
@@ -87,9 +101,9 @@ export const DEFAULT_BOREAS_FALLBACK_TURBO_MODEL = "qwen3-coder-next:cloud"
 export const DEFAULT_ASTRAEUS_FALLBACK_TURBO_MODEL = "glm-5.2:cloud"
 
 // NOTE: Pyroeis has NO built-in default Turbo fallback model. Its Vertex model is
-// Gemma 4 26B (google/gemma-4-26b-a4b-it-maas); there is no confirmed Gemma tag on
-// Ollama Turbo in this codebase today, and guessing one risks silently routing to a
-// model that doesn't exist. OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL must be set
+// Gemini 3.5 Flash (google/gemini-3.5-flash, a first-party Google model); there is no
+// Gemini tag on Ollama Turbo (Gemini is Vertex-only), so guessing one risks silently
+// routing to a model that doesn't exist. OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL must be set
 // explicitly to enable a Turbo leg for Pyroeis — unset means Pyroeis has only the
 // Vertex leg (plus Bedrock, once configured).
 

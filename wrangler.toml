@@ -513,6 +513,19 @@ SIGILIX_LINEAR_AGENT_RUN_MODE = "on"
 # is the integer per-tenant concurrent-review ceiling (default 2 in code).
 SIGILIX_FAIRNESS_MODE = "shadow"
 SIGILIX_TENANT_CONCURRENCY_CAP = "2"
+
+# Pyroeis served model (POST /v1/pyroeis/chat/completions) — Gemini 3.5 Flash on
+# Vertex AI, addressed over the SAME OpenAI-compat chat/completions endpoint the
+# other gateway legs use (first-party Gemini = `google/gemini-<version>`, no `-maas`
+# suffix; no request/response adapter needed). Overrides the code default
+# DEFAULT_PYROEIS_MODEL. Unlike Boreas/Astraeus (hard-pinned constants), Pyroeis is
+# env-driven because the EXACT Gemini 3.5 Flash version string (e.g. a `-001`/date
+# suffix) can't be confirmed without live Vertex access — correcting it is this
+# one-line flip, not a code change.
+# ⚠️ CONFIRM against live Vertex (`gcloud ... models list` in project sigilix-496118)
+# that Gemini 3.5 Flash is enabled and this id/version string is exact.
+SIGILIX_PYROEIS_MODEL = "google/gemini-3.5-flash"
+
 # SIG-455 PR B: provider backpressure cooldown mode. "off" (default) | "shadow" | "enforce".
 SIGILIX_PROVIDER_COOLDOWN_MODE = "shadow"
 

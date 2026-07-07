@@ -309,8 +309,9 @@ export default {
     }
 
     // SIG-545: Pyroeis CLI gateway — same keyless-WIF Vertex proxy as Boreas above,
-    // forcing a different model (Gemma 4 26B serverless MaaS). Same 503-until-configured
-    // + static-bearer auth + server-side SA-token mint + model forcing.
+    // forcing a different model (Gemini 3.5 Flash on Vertex AI, env-overridable via
+    // SIGILIX_PYROEIS_MODEL). Same 503-until-configured + static-bearer auth +
+    // server-side SA-token mint + model forcing.
     if (request.method === "POST" && url.pathname === "/v1/pyroeis/chat/completions") {
       return handlePyroeisApiRoute(request, env, ctx)
     }

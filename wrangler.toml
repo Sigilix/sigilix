@@ -539,7 +539,7 @@ SIGILIX_TRAINING_RETENTION_MODE = "off"
 # traffic first). "enforce" actually gates an un-entitled installation. Ships dark;
 # flip to "shadow" to validate, then "enforce". Committed [vars] mode string like
 # the other feature flags; do NOT also `wrangler secret put` the same name.
-OPENCLAW_ENTITLEMENTS_MODE = "off"
+OPENCLAW_ENTITLEMENTS_MODE = "enforce"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

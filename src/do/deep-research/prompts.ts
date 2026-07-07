@@ -185,6 +185,24 @@ or unverified, respond with exactly CONTINUE. Respond with only that one word.
   }
 }
 
+/** Direct-answer prompt (no-search graceful degradation) — used when NO search
+ *  provider is configured, so the engine answers from the model's own knowledge
+ *  instead of erroring out. Honest about the lack of live sources; handles casual
+ *  messages (a greeting) naturally rather than forcing a research report. */
+export function buildDirectAnswerPrompt(question: string): { system: string; user: string } {
+  return {
+    system: `
+You are Sigilix Research answering WITHOUT live web search — no external sources were retrieved for
+this message. Answer directly from your own knowledge in clear markdown: lead with a short
+bottom-line summary, then supporting detail. Be honest about uncertainty — flag anything that may be
+version-specific, time-sensitive, or that you cannot confirm without live sources, and never invent
+citations, URLs, or specific facts. If the message is casual (a greeting or small talk), just reply
+naturally and briefly instead of writing a report.
+`.trim(),
+    user: question,
+  }
+}
+
 /** Final-report prompt — a cited markdown answer. Adapted from Tongyi WebWeaver
  *  write_prompt_multi_hop_2 (analytical, well-cited, takeaway-first markdown),
  *  re-tuned for a developer-facing engineering answer. */

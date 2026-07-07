@@ -12,6 +12,7 @@
 
 import {
   buildClassifyPrompt,
+  buildDirectAnswerPrompt,
   buildExtractionPrompt,
   buildFinalReportPrompt,
   buildPlanPrompt,
@@ -30,7 +31,9 @@ export interface EngineDeps {
   question: string
   runId: string
   config: ResearchConfig
-  /** Whether at least one search provider is configured (fail-fast if not). */
+  /** Whether at least one search provider is configured. When false the loop
+   *  degrades gracefully to a model-only answer (see `runWithoutSearch`) instead
+   *  of running the search rounds. */
   hasSearchProvider: boolean
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
@@ -49,12 +52,16 @@ const NO_INFO = "NO RELEVANT INFORMATION"
  * Run the full research loop, emitting the SSE event contract in order. Never
  * throws — any internal failure is surfaced as an `error` event followed by
  * `done`. Always emits a terminal `done`.
+ *
+ * When NO search provider is configured we DEGRADE GRACEFULLY rather than
+ * erroring: the run answers from the model's own knowledge and surfaces a clear
+ * (non-error) note, so a user with Deep Research on still gets a real answer
+ * instead of a dead error. See `runWithoutSearch`.
  */
 export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   try {
     if (!deps.hasSearchProvider) {
-      // The single `done` is emitted by the finally below — do not double-emit.
-      await deps.emit({ type: "error", message: "no search provider configured" })
+      await runWithoutSearch(deps)
       return
     }
     await runInner(deps)
@@ -63,6 +70,29 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   } finally {
     await deps.emit({ type: "done" })
   }
+}
+
+/**
+ * Graceful degradation when no search provider is configured: emit the same
+ * first `status` (so the UI still gets the resolved model + effort), a clear
+ * non-error `note` explaining live search is off, then answer straight from the
+ * model and emit a `final` with an empty source list. The caller's `finally`
+ * emits the single terminal `done`.
+ */
+async function runWithoutSearch(deps: EngineDeps): Promise<void> {
+  const { config } = deps
+  await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  await deps.emit({
+    type: "note",
+    text: "Live web search isn't enabled — answering from the model's knowledge.",
+  })
+  if (deps.isCancelled()) return cancel(deps)
+  await deps.emit({ type: "status", phase: "finalizing", round: 0 })
+  const answer = await deps.model("finalReport", toMessages(buildDirectAnswerPrompt(deps.question)))
+  // Re-check after the (awaited) model call so a /cancel that lands mid-answer
+  // wins the race — emit the cancel note instead of a stale final.
+  if (deps.isCancelled()) return cancel(deps)
+  await deps.emit({ type: "final", markdown: answer.text, sources: [] })
 }
 
 async function runInner(deps: EngineDeps): Promise<void> {

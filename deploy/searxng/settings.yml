@@ -1,0 +1,61 @@
+# Sigilix SearXNG configuration — the `selfhost` search provider for Deep Research.
+#
+# `use_default_settings: true` inherits upstream's full defaults; only the keys
+# below are overridden. Upstream default settings:
+# https://github.com/searxng/searxng/blob/master/searx/settings.yml
+use_default_settings: true
+
+general:
+  instance_name: "Sigilix Search"
+  # Don't expose the public /stats + /metrics dashboards on a machine backend.
+  enable_metrics: false
+
+server:
+  # The Docker entrypoint replaces `ultrasecretkey` with $SEARXNG_SECRET at start.
+  # Set that secret at deploy time (`fly secrets set SEARXNG_SECRET=...`); never
+  # commit a real key here.
+  secret_key: "ultrasecretkey"
+  # Rate limiter is OFF by default because it REQUIRES a Valkey/Redis backend
+  # (SEARXNG_REDIS_URL) to function — a single-container deploy has none, and an
+  # enabled-but-backendless limiter only logs warnings without limiting. This
+  # instance is a PRIVATE backend, so protect it at the edge instead (bearer token
+  # via SIGILIX_SELFHOST_SEARCH_TOKEN + a reverse proxy / Cloudflare Access, or
+  # Fly private networking). To turn ON real rate limiting, add a Valkey and flip
+  # this to `true` (see README "Rate limiting" + limiter.toml).
+  limiter: false
+  # No image proxying — we only consume the JSON results, never render thumbnails.
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  # THIS is what turns on the machine-readable API the adapter calls
+  # (GET /search?q=...&format=json). Without "json" here the endpoint 403s.
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true
+
+# A sane, reliable engine set for engineering research. Keeping the list curated
+# (rather than upstream's full ~200) reduces flaky/slow legs and rate-limit noise.
+# Everything not listed keeps its upstream default enabled/disabled state.
+engines:
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: github
+    disabled: false
+  - name: stackoverflow
+    disabled: false
+  - name: mdn
+    disabled: false

@@ -104,15 +104,50 @@ describe("happy path", () => {
     }
   })
 
-  it("fails fast with an error event when no search provider is configured", async () => {
+  it("degrades gracefully (no error) when no search provider is configured", async () => {
     const { deps, events } = makeDeps({ hasSearchProvider: false })
     await runResearchLoop(deps)
-    expect(events.some((e) => e.type === "error")).toBe(true)
-    expect(typesOf(events)[typesOf(events).length - 1]).toBe("done")
-    // Exactly ONE done — the fail-fast path must not double-emit (regression).
+    const types = typesOf(events)
+    // NOT an error — the user still gets a real, model-only answer.
+    expect(events.some((e) => e.type === "error")).toBe(false)
+    // A clear, non-error note explains that live search is off.
+    expect(events.some((e) => e.type === "note" && /live web search isn't enabled/i.test(e.text))).toBe(true)
+    // Ends with a model-only final (empty sources) then the single done.
+    expect(types[types.length - 1]).toBe("done")
+    expect(types[types.length - 2]).toBe("final")
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources : null).toEqual([])
+    // Exactly ONE done — the degraded path must not double-emit (regression).
     expect(events.filter((e) => e.type === "done")).toHaveLength(1)
-    // The loop never ran.
+    // The first status still carries model + effort for the UI.
+    expect(events[0]).toEqual({ type: "status", phase: "planning", round: 0, model: "astraeus", effort: "medium" })
+    // The search loop never ran.
     expect(countSearching(events)).toBe(0)
+  })
+
+  it("degraded path honors cancellation before the model call (note, no final)", async () => {
+    const { deps, events } = makeDeps({ hasSearchProvider: false, isCancelled: () => true })
+    await runResearchLoop(deps)
+    expect(events.some((e) => e.type === "note" && /cancelled by request/i.test(e.text))).toBe(true)
+    expect(events.some((e) => e.type === "final")).toBe(false)
+    expect(typesOf(events)[typesOf(events).length - 1]).toBe("done")
+  })
+
+  it("degraded path — a cancel that lands DURING the model answer wins (no stale final)", async () => {
+    let cancelled = false
+    const { deps, events } = makeDeps({
+      hasSearchProvider: false,
+      isCancelled: () => cancelled,
+      // /cancel arrives while the model is producing the answer.
+      model: async () => {
+        cancelled = true
+        return { text: "answer that must not ship", tokens: 1 }
+      },
+    })
+    await runResearchLoop(deps)
+    expect(events.some((e) => e.type === "final")).toBe(false)
+    expect(events.some((e) => e.type === "note" && /cancelled by request/i.test(e.text))).toBe(true)
+    expect(typesOf(events)[typesOf(events).length - 1]).toBe("done")
   })
 
   it("emits exactly one done on the happy path too", async () => {

@@ -1,0 +1,27 @@
+# SearXNG bot-detection / rate-limiter tuning.
+#
+# ONLY takes effect when `server.limiter: true` in settings.yml AND a Valkey/Redis
+# backend is configured (SEARXNG_REDIS_URL). With the default single-container
+# deploy (limiter off) this file is inert — it's here so enabling the limiter is a
+# one-line flip, not a re-derivation.
+#
+# Docs: https://docs.searxng.org/admin/searx.limiter.html
+
+[real_ip]
+# Trust one proxy hop (Fly.io / Cloudflare sits in front). Adjust if you add more.
+x_for = 1
+ipv4_prefix = 32
+ipv6_prefix = 48
+
+[botdetection.ip_limit]
+# `link_token` injects a JS-fetched token to prove a real browser — it BREAKS
+# non-browser/JSON API clients (our worker has no JS runtime to fetch it). Keep it
+# OFF so the /search?format=json API stays reachable while the standard
+# suspicious-request throttling still applies.
+link_token = false
+
+[botdetection.ip_lists]
+# Optional allow/deny lists (CIDR). Add the worker's egress range to `pass_ip` to
+# exempt it from throttling if you enable the limiter and see 429s.
+pass_ip = []
+block_ip = []

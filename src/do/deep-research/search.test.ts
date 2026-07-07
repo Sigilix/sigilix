@@ -304,6 +304,87 @@ describe("self-hosted leg (overflow lane)", () => {
   })
 })
 
+describe("self-hosted SearXNG env resolution (SIGILIX_ first, OPENCLAW_ fallback)", () => {
+  it("configures the leg from the SIGILIX_ name alone (no OPENCLAW_ set)", () => {
+    expect(hasAnySearchProvider(env({ SIGILIX_SELFHOST_SEARCH_URL: "https://x" }))).toBe(true)
+  })
+
+  it("serves off the SIGILIX_ url and parses SearXNG's results[].content shape", async () => {
+    const fake = routedFetch()
+    const res = await searchWeb({
+      query: "q",
+      runId: "run",
+      tenant: "t1",
+      env: env({ SIGILIX_SELFHOST_SEARCH_URL: "https://search.sigilix.ai" }),
+      fetchImpl: fake,
+    })
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.provider).toBe("selfhost")
+      // SearXNG's /search?format=json returns results[].{url,title,content} — content → snippet.
+      expect(res.hits[0]!.snippet).toBe("selfhost content")
+    }
+  })
+
+  it("SIGILIX_ url WINS over the OPENCLAW_ url when both are set", async () => {
+    let sawUrl = ""
+    const fake: SearchFetchLike = async (url) => {
+      sawUrl = url
+      return jsonResponse(SELFHOST_CONTENT_BODY)
+    }
+    await searchWeb({
+      query: "q",
+      runId: "run",
+      tenant: "t1",
+      env: env({
+        SIGILIX_SELFHOST_SEARCH_URL: "https://new.sigilix.ai",
+        OPENCLAW_SELFHOST_SEARCH_URL: "https://legacy.sigilix.ai",
+      }),
+      fetchImpl: fake,
+    })
+    expect(sawUrl).toContain("new.sigilix.ai")
+    expect(sawUrl).not.toContain("legacy.sigilix.ai")
+  })
+
+  it("falls back to the OPENCLAW_ url when only it is set", async () => {
+    let sawUrl = ""
+    const fake: SearchFetchLike = async (url) => {
+      sawUrl = url
+      return jsonResponse(SELFHOST_CONTENT_BODY)
+    }
+    await searchWeb({
+      query: "q",
+      runId: "run",
+      tenant: "t1",
+      env: env({ OPENCLAW_SELFHOST_SEARCH_URL: "https://legacy.sigilix.ai" }),
+      fetchImpl: fake,
+    })
+    expect(sawUrl).toContain("legacy.sigilix.ai")
+  })
+
+  it("sends the SIGILIX_ bearer token (preferred over the OPENCLAW_ one) and never leaks it", async () => {
+    let sawAuth: string | null = null
+    const fake: SearchFetchLike = async (_url, init) => {
+      sawAuth = new Headers(init.headers).get("authorization")
+      return jsonResponse(SELFHOST_CONTENT_BODY)
+    }
+    await searchWeb({
+      query: "q",
+      runId: "run",
+      tenant: "t1",
+      env: env({
+        SIGILIX_SELFHOST_SEARCH_URL: "https://search.sigilix.ai",
+        SIGILIX_SELFHOST_SEARCH_TOKEN: "sig-token",
+        OPENCLAW_SELFHOST_SEARCH_TOKEN: "legacy-token",
+      }),
+      fetchImpl: fake,
+    })
+    expect(sawAuth).toBe("Bearer sig-token")
+    const allLines = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]))
+    for (const line of allLines) expect(line).not.toContain("sig-token")
+  })
+})
+
 describe("metering", () => {
   it("attributes the metered line to the tenant", async () => {
     const fake = routedFetch()

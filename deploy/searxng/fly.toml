@@ -1,0 +1,24 @@
+# Fly.io app config for the Sigilix SearXNG instance.
+# Rename `app` to your chosen unique name before `fly launch`/`fly deploy`.
+app = "sigilix-searxng"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Public base URL of the instance — set to your final hostname after first deploy
+  # (Fly assigns https://<app>.fly.dev). Used by SearXNG to build absolute URLs.
+  SEARXNG_BASE_URL = "https://sigilix-searxng.fly.dev/"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Scale to zero when idle (Deep Research is bursty); Fly cold-starts on request.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

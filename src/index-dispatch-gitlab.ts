@@ -38,6 +38,43 @@ const GITLAB_REVIEW_FAILED_NOTE =
   "Sigilix could not complete this review (an internal error or a degraded/truncated diff). " +
   "This is **not** a clean pass — nothing was verified. Re-push or re-open the MR to retry."
 
+/** KV-key prefix (in `OPENCLAW_STATE`) marking a `(projectId, mrIid, headSha)`
+ *  that has already been REVIEWED to completion — the GitLab stand-in for the
+ *  GitHub `PrReviewRunDO` `/enqueue` dedup (GitLab has no DO). Keyed by headSha,
+ *  so a real new push (new head) never collides with a prior mark. */
+const GITLAB_REVIEW_DONE_KV_PREFIX = "gitlab-mr-review-done:"
+/** TTL for the done-marker: long enough to swallow a late webhook redelivery /
+ *  queue re-delivery, bounded because the key is head-scoped anyway. */
+const GITLAB_REVIEW_DONE_TTL_SECONDS = 6 * 60 * 60
+
+function gitlabReviewDoneKey(job: Extract<JobMessage, { type: "gitlab-mr-review" }>): string {
+  return `${GITLAB_REVIEW_DONE_KV_PREFIX}${job.projectId}:${job.mrIid}:${job.headSha}`
+}
+
+/**
+ * Whether this exact `(projectId, mrIid, headSha)` was already reviewed to
+ * completion (a duplicate webhook / queue re-delivery). FAILS OPEN: a KV read
+ * error returns `false` so a blip can never SUPPRESS a review — recall over
+ * de-dup (unlike the token read, which fails closed for tenant isolation).
+ */
+async function alreadyReviewedThisHead(env: Env, key: string): Promise<boolean> {
+  try {
+    return (await env.OPENCLAW_STATE.get(key)) !== null
+  } catch {
+    return false
+  }
+}
+
+/** Mark this head reviewed (best-effort; only on a NON-errored terminal state so
+ *  a genuine retry after failure is never dedup-suppressed). */
+async function markReviewedThisHead(env: Env, key: string): Promise<void> {
+  try {
+    await env.OPENCLAW_STATE.put(key, "1", { expirationTtl: GITLAB_REVIEW_DONE_TTL_SECONDS })
+  } catch {
+    /* best-effort — a failed mark only risks a duplicate review, never a miss */
+  }
+}
+
 /**
  * Split a GitLab `group[/subgroup...]/project` path into (owner, repo) such that
  * `${owner}/${repo}` reconstructs the full path the `GitLabClient` URL-encodes as
@@ -77,6 +114,16 @@ export async function dispatchGitLabMrReview(
     // Allowed but no token configured anywhere — cannot authenticate to GitLab,
     // so there is no MR handle to post to. Log loudly (never a silent success).
     console.error(JSON.stringify({ event: "gitlab-mr-review-misconfigured", reason: "no_gitlab_token", ...logTag }))
+    return
+  }
+
+  // ── 1b. dedup: a duplicate webhook / queue re-delivery of a head we already
+  // reviewed to completion must not re-run the whole ensemble (double notes +
+  // double model spend). The GitHub path gets this from PrReviewRunDO; GitLab
+  // has no DO, so we use a head-scoped KV marker. FAILS OPEN (see the helper).
+  const doneKey = gitlabReviewDoneKey(job)
+  if (await alreadyReviewedThisHead(env, doneKey)) {
+    console.log(JSON.stringify({ event: "gitlab-mr-review-deduped", ...logTag }))
     return
   }
 
@@ -211,5 +258,13 @@ export async function dispatchGitLabMrReview(
       const exhaustive: never = result.status
       console.error(JSON.stringify({ event: "gitlab-mr-review-unknown-status", status: String(exhaustive), ...logTag }))
     }
+  }
+
+  // Dedup marker: set only on a NON-errored terminal outcome. An errored run is
+  // left UNMARKED so a genuine re-delivery gets another chance to complete
+  // (recall over dedup); a duplicate delivery of a successfully-reviewed head is
+  // suppressed by the `alreadyReviewedThisHead` gate above.
+  if (result.status !== "errored") {
+    await markReviewedThisHead(env, doneKey)
   }
 }

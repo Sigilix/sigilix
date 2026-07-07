@@ -97,10 +97,15 @@ function makeEnv(over: Partial<Env> = {}, kv: Record<string, string> = {}): Env 
     SIGILIX_GITLAB_TOKEN: "glpat-global",
     OPENCLAW_STATE: {
       get: async (key: string) => kv[key] ?? null,
+      put: async (key: string, value: string) => {
+        kv[key] = value
+      },
     } as unknown as Env["OPENCLAW_STATE"],
     ...over,
   } as unknown as Env
 }
+
+const doneKey = (headSha = "c".repeat(40)) => `gitlab-mr-review-done:42:7:${headSha}`
 
 const JOB: Extract<JobMessage, { type: "gitlab-mr-review" }> = {
   type: "gitlab-mr-review",
@@ -280,6 +285,57 @@ describe("dispatchJob — gitlab-mr-review tenant-isolation + lifecycle guards (
     // Every recorded call hits /projects/42/, never the encoded path.
     expect(calls.length).toBeGreaterThan(0)
     for (const c of calls) expect(c.url).toContain("/projects/42/")
+  })
+})
+
+describe("dispatchJob — gitlab-mr-review dedup (GitLab stand-in for PrReviewRunDO)", () => {
+  it("DEDUPES a duplicate delivery of an already-reviewed head (no ensemble, nothing posted)", async () => {
+    ensembleMock.mockImplementation(postingEnsemble)
+    // A prior run marked this (projectId, mrIid, headSha) done.
+    const env = makeEnv({}, { [doneKey()]: "1" })
+    await dispatchJob(JOB, env)
+    expect(ensembleMock).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(0)
+  })
+
+  it("marks the head reviewed after a posted run so a re-delivery is deduped", async () => {
+    ensembleMock.mockImplementation(postingEnsemble)
+    const store: Record<string, string> = {}
+    await dispatchJob(JOB, makeEnv({}, store))
+    expect(store[doneKey()]).toBe("1")
+
+    // Second (duplicate) delivery with the same store -> deduped.
+    ensembleMock.mockClear()
+    calls.length = 0
+    await dispatchJob(JOB, makeEnv({}, store))
+    expect(ensembleMock).not.toHaveBeenCalled()
+  })
+
+  it("does NOT mark an errored head (a genuine re-delivery may retry — recall over dedup)", async () => {
+    ensembleMock.mockResolvedValue({
+      status: "errored",
+      telemetry: { internalError: "boom" },
+    } as unknown as EnsembleResult)
+    const store: Record<string, string> = {}
+    await dispatchJob(JOB, makeEnv({}, store))
+    expect(store[doneKey()]).toBeUndefined()
+  })
+
+  it("dedup FAILS OPEN: a KV read error on the dedup key still runs the review (never suppresses)", async () => {
+    ensembleMock.mockImplementation(postingEnsemble)
+    // get throws ONLY for the dedup key; the token lookup (different key) succeeds.
+    const env = {
+      SIGILIX_GITLAB_TOKEN: "glpat-global",
+      OPENCLAW_STATE: {
+        get: async (key: string) => {
+          if (key.startsWith("gitlab-mr-review-done:")) throw new Error("kv blip")
+          return null
+        },
+        put: async () => {},
+      },
+    } as unknown as Env
+    await dispatchJob(JOB, env)
+    expect(ensembleMock).toHaveBeenCalledTimes(1) // ran despite the dedup KV error
   })
 })
 

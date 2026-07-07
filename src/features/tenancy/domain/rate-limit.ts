@@ -101,11 +101,16 @@ export function resolveRateLimitCap(tier?: string | null): number {
       return 2
     case "pro":
       return 5
+    case "max":
+      return 10
     case "pro_plus":
     case "pro+":
       return 10
     case "enterprise":
       return 12
+    case "ultra":
+      // Highest paid consumer tier (see ENTITLED_TIERS = {pro, max, ultra}).
+      return 20
     default:
       return DEFAULT_RATE_LIMIT_CAP
   }

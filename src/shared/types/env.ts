@@ -1292,6 +1292,29 @@ export interface Env {
   // via `wrangler secret put SIGILIX_TRAINING_RETENTION_MODE on`.
   SIGILIX_TRAINING_RETENTION_MODE?: string
 
+  // SIG-41 (Stripe paid tier): the Stripe integration. ALL optional — unset
+  // SIGILIX_STRIPE_WEBHOOK_SECRET keeps POST /stripe/webhook returning 503 (inert), so
+  // a deploy without Stripe configured is unaffected. Resolved SIGILIX_-first via the
+  // normalizeEnv shim like every other SIGILIX_ var.
+  //   SIGILIX_STRIPE_SECRET_KEY     — the Stripe API secret (`sk_live_…` / `sk_test_…`).
+  //                                   Reserved for outbound Stripe calls (subscription
+  //                                   fetch, portal sessions); the webhook itself needs
+  //                                   only the signing secret below. Set via
+  //                                   `wrangler secret put SIGILIX_STRIPE_SECRET_KEY`.
+  //   SIGILIX_STRIPE_WEBHOOK_SECRET — the `whsec_…` signing secret Stripe shows after
+  //                                   you save the webhook destination. HMAC-verifies
+  //                                   every delivery; unset → the route 503s. Set via
+  //                                   `wrangler secret put SIGILIX_STRIPE_WEBHOOK_SECRET`.
+  //   SIGILIX_STRIPE_PRICE_PRO / _MAX / _ULTRA — the Stripe price ids (`price_…`) that
+  //                                   map a subscription to the Sigilix pro/max/ultra
+  //                                   tier. A price with no id match falls back to a
+  //                                   `lookup_key`/`nickname` containing pro|max|ultra.
+  SIGILIX_STRIPE_SECRET_KEY?: string
+  SIGILIX_STRIPE_WEBHOOK_SECRET?: string
+  SIGILIX_STRIPE_PRICE_PRO?: string
+  SIGILIX_STRIPE_PRICE_MAX?: string
+  SIGILIX_STRIPE_PRICE_ULTRA?: string
+
   // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
   // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";
   // absent/invalid OPENCLAW_PER_SEAT_PRICE surfaces perSeatMonthly=null ("billing

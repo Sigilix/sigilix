@@ -31,7 +31,12 @@ export {
   DEFAULT_TRIAGE_RATE_LIMIT_CAP,
 } from "./domain/rate-limit"
 export type { RateLimitMode } from "./domain/rate-limit"
-export { upsertTenantAndRepo, readTenantConfig, lookupRepoByFullName } from "./adapters/d1-tenant-store"
+export {
+  upsertTenantAndRepo,
+  upsertTenantTier,
+  readTenantConfig,
+  lookupRepoByFullName,
+} from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"
 export { appendUsage } from "./adapters/d1-usage-ledger"
 export { readTenantUsageSince, readUsageRollupSince } from "./adapters/d1-usage-read"

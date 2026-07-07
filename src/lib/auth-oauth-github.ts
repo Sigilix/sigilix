@@ -157,6 +157,68 @@ interface GitHubUserResponse {
   avatar_url?: string | null
 }
 
+// One entry of `GET /user/emails` (the private-email fallback below).
+interface GitHubEmailEntry {
+  email?: string | null
+  primary?: boolean
+  verified?: boolean
+  visibility?: string | null
+}
+
+// Pick the best email from a `/user/emails` payload. Precedence:
+//   primary AND verified → first verified → primary → first entry.
+// Returns null when the array carries no usable (non-empty) address.
+export function selectGithubEmail(entries: GitHubEmailEntry[]): string | null {
+  const valid = entries.filter((e): e is GitHubEmailEntry & { email: string } => {
+    // Guard non-object entries (a malformed `[null]` / `["x"]` payload) so a
+    // bad shape returns null (fail-soft) instead of throwing and blocking login.
+    return typeof e === "object" && e !== null && typeof e.email === "string" && e.email.trim().length > 0
+  })
+  if (valid.length === 0) return null
+  const primaryVerified = valid.find((e) => e.primary === true && e.verified === true)
+  if (primaryVerified) return primaryVerified.email
+  const verified = valid.find((e) => e.verified === true)
+  if (verified) return verified.email
+  const primary = valid.find((e) => e.primary === true)
+  if (primary) return primary.email
+  return valid[0]!.email
+}
+
+// Fetch the OAuth user's private email via `GET /user/emails` when `/user`
+// returned no public email (email-privacy enabled). Uses the SAME access token
+// + headers as the `/user` call. FAIL-SOFT: any transport / HTTP / shape fault
+// returns null so login is never blocked — the caller then falls through to the
+// email-capture prompt exactly as before. Never logs an email body (PII).
+async function fetchGithubPrimaryEmail(accessToken: string): Promise<string | null> {
+  let res: Response
+  try {
+    res = await fetch("https://api.github.com/user/emails", {
+      headers: {
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": "sigilix-worker",
+      },
+    })
+  } catch (e) {
+    console.error("github user emails fetch threw", { error: String(e) })
+    return null
+  }
+  if (!res.ok) {
+    console.error("github user emails fetch http error", { status: res.status })
+    return null
+  }
+  let payload: unknown
+  try {
+    payload = await res.json()
+  } catch (e) {
+    console.error("github user emails parse failed", { error: String(e) })
+    return null
+  }
+  if (!Array.isArray(payload)) return null
+  return selectGithubEmail(payload as GitHubEmailEntry[])
+}
+
 export async function handleGitHubAuthCallback(request: Request, env: AuthOauthEnv): Promise<Response> {
   const misconfigured = isMisconfigured(env)
   if (misconfigured) {
@@ -327,9 +389,20 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
   let identityUserId: string | undefined
   let identityEmail: string | undefined
   if (env.SIGILIX_PLATFORM_DB) {
+    // Capture the email. GitHub returns `/user.email = null` for accounts with
+    // email privacy on, which used to dead-end the user at the "add a work
+    // email" prompt. We already hold the `user:email` scope, so fall back to
+    // `GET /user/emails` (primary+verified → verified → primary → first) when
+    // the profile carries no public address. Fail-soft: a null result just
+    // keeps the existing email-capture path.
+    let resolvedEmail: string | null =
+      typeof user.email === "string" && user.email.trim().length > 0 ? user.email : null
+    if (!resolvedEmail) {
+      resolvedEmail = await fetchGithubPrimaryEmail(accessToken)
+    }
     const identity = await upsertGithubIdentity(env.SIGILIX_PLATFORM_DB, {
       githubUserId: String(user.id),
-      email: user.email ?? null,
+      email: resolvedEmail,
       name: displayName ?? null,
       avatarUrl: avatarUrl ?? null,
       nowIso: new Date().toISOString(),

@@ -7,6 +7,7 @@ import {
   handleGitHubAuthKickoff,
   handleLogout,
   safeRedirectAfter,
+  selectGithubEmail,
 } from "@/src/lib/auth-oauth-github"
 import { base64urlEncode } from "@/src/lib/auth-session"
 
@@ -95,6 +96,59 @@ describe("safeRedirectAfter", () => {
   it("rejects raw paths that don't start with /", () => {
     expect(safeRedirectAfter("relative/path", base)).toBe("/auth/welcome")
     expect(safeRedirectAfter("welcome", base)).toBe("/auth/welcome")
+  })
+})
+
+describe("selectGithubEmail (private-email fallback precedence)", () => {
+  it("returns null for an empty array", () => {
+    expect(selectGithubEmail([])).toBeNull()
+  })
+
+  it("skips entries with no usable email address", () => {
+    expect(selectGithubEmail([{ email: null, primary: true, verified: true }, { email: "  " }])).toBeNull()
+  })
+
+  it("returns null (does not throw) on malformed non-object entries", () => {
+    // A defensive fail-soft: GitHub always returns objects, but a proxy/shape
+    // fault must never throw and block login.
+    const malformed = [null, "x", 42] as unknown as Parameters<typeof selectGithubEmail>[0]
+    expect(selectGithubEmail(malformed)).toBeNull()
+  })
+
+  it("prefers primary AND verified over a non-primary verified email", () => {
+    expect(
+      selectGithubEmail([
+        { email: "verified-nonprimary@x.com", primary: false, verified: true },
+        { email: "primary-verified@x.com", primary: true, verified: true },
+      ]),
+    ).toBe("primary-verified@x.com")
+  })
+
+  it("falls to the first verified email when none is primary+verified", () => {
+    expect(
+      selectGithubEmail([
+        { email: "primary-unverified@x.com", primary: true, verified: false },
+        { email: "verified@x.com", primary: false, verified: true },
+      ]),
+    ).toBe("verified@x.com")
+  })
+
+  it("falls to a primary (unverified) email when none is verified", () => {
+    expect(
+      selectGithubEmail([
+        { email: "other@x.com", primary: false, verified: false },
+        { email: "primary@x.com", primary: true, verified: false },
+      ]),
+    ).toBe("primary@x.com")
+  })
+
+  it("falls to the first entry when nothing is primary or verified", () => {
+    expect(
+      selectGithubEmail([
+        { email: "first@x.com", primary: false, verified: false },
+        { email: "second@x.com", primary: false, verified: false },
+      ]),
+    ).toBe("first@x.com")
   })
 })
 

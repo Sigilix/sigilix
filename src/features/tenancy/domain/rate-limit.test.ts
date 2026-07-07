@@ -66,6 +66,24 @@ describe("resolveRateLimitCap", () => {
     expect(resolveRateLimitCap("pro")).toBe(5)
   })
 
+  it('returns 10 for "max"', () => {
+    expect(resolveRateLimitCap("max")).toBe(10)
+  })
+
+  it('returns 20 for "ultra" (the highest paid consumer tier)', () => {
+    expect(resolveRateLimitCap("ultra")).toBe(20)
+  })
+
+  it("caps ascend free < pro < max < ultra", () => {
+    expect(resolveRateLimitCap("free")).toBeLessThan(resolveRateLimitCap("pro"))
+    expect(resolveRateLimitCap("pro")).toBeLessThan(resolveRateLimitCap("max"))
+    expect(resolveRateLimitCap("max")).toBeLessThan(resolveRateLimitCap("ultra"))
+  })
+
+  it("is case-insensitive: 'ULTRA' → 20", () => {
+    expect(resolveRateLimitCap("ULTRA")).toBe(20)
+  })
+
   it('returns 10 for "pro_plus"', () => {
     expect(resolveRateLimitCap("pro_plus")).toBe(10)
   })

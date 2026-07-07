@@ -14,6 +14,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { checkRateLimit } from "@/src/features/tenancy"
 import type { RateLimitDecision } from "@/src/features/tenancy"
+import { readInstallationPlan } from "@/src/features/entitlements"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { attachExistingCheckRun, completeCheckRun } from "@/src/lib/pr-review-check-run"
@@ -47,10 +48,30 @@ export async function runRateLimitGate(
     checkRunId: number | undefined
   },
 ): Promise<RateLimitGateResult> {
+  // Resolve the installation's plan/tier so `resolveRateLimitCap` uses the tenant's
+  // real cap (a `pro`/`max`/`ultra` org is NOT free-capped at 2). readInstallationPlan
+  // THROWS on a missing binding or a D1 fault — catch it and fall back to the default
+  // (free) cap so a transient tier-read fault never widens the cap silently, and the
+  // gate stays fail-open on the review-blocking path.
+  let tier: string | null = null
+  try {
+    tier = await readInstallationPlan(env, args.installationId)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "rate-limit-tier-read-failed",
+        installationId: args.installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    tier = null
+  }
+
   const rateLimit = await checkRateLimit(env, {
     installationId: args.installationId,
     authorLogin: args.authorLogin,
     nowMs: Date.now(),
+    tier,
     ...(args.bypassClosedSkip === true ? { bypassReason: "slash-command-rerun" } : {}),
   })
 

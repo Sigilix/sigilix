@@ -32,14 +32,32 @@ const EFFORT_PRESETS: Record<
   high: { maxRounds: 12, maxQueriesPerRound: 5, maxPagesPerRound: 6, maxTimeMs: 480_000 },
 }
 
-/** Named model tier → default model id for the HEAVY roles. Only Boreas exists
- *  today; pyroeis/astraeus are named tiers. astraeus = the flagship reasoning
- *  default (glm-5.2:cloud-class), pyroeis = a mid-tier (glm-5.1:cloud, the
- *  repo's DEFAULT_MODEL across triage), boreas = the cheap tier (gpt-oss). */
+/** Named model tier → DEFAULT model id for the HEAVY roles. Deep research routes
+ *  every model call through OpenRouter (the OPENROUTER_API_KEY provider): these are
+ *  OpenRouter catalog ids (provider-prefixed with "/"), which the model-adapter seam
+ *  (`chat` → `isOpenRouterModel`) dispatches to OpenRouter — so the SELECTED tier's
+ *  real model does the actual research. astraeus = the flagship reasoning default
+ *  (GLM-5.2), pyroeis = the mid-tier (Gemini 3.5 Flash, switched from GLM per #812),
+ *  boreas = the cheap tier (Qwen3-Next-80B, matching the gateway's forced Boreas model,
+ *  tier). Each id is env-overridable via `SIGILIX_DEEPRESEARCH_<TIER>_MODEL` for a
+ *  one-line flip. Ids verified present in the OpenRouter catalog
+ *  (https://openrouter.ai/api/v1/models) on 2026-07-06. */
 export const TIER_MODELS: Record<ResearchTier, string> = {
-  boreas: "gpt-oss:120b-cloud",
-  pyroeis: "glm-5.1:cloud",
-  astraeus: "glm-5.2:cloud",
+  boreas: "qwen/qwen3-next-80b-a3b-instruct",
+  pyroeis: "google/gemini-3.5-flash",
+  astraeus: "z-ai/glm-5.2",
+}
+
+/** Resolve a tier's default heavy-role model id, honoring its
+ *  `SIGILIX_DEEPRESEARCH_<TIER>_MODEL` env override (trimmed non-empty wins). */
+function resolveTierModel(env: Env, tier: ResearchTier): string {
+  const override =
+    tier === "boreas"
+      ? env.SIGILIX_DEEPRESEARCH_BOREAS_MODEL
+      : tier === "pyroeis"
+        ? env.SIGILIX_DEEPRESEARCH_PYROEIS_MODEL
+        : env.SIGILIX_DEEPRESEARCH_ASTRAEUS_MODEL
+  return modelOr(override, TIER_MODELS[tier])
 }
 
 /** Per-run request options that steer config defaults. */
@@ -67,8 +85,8 @@ function modelOr(raw: string | undefined, def: string): string {
  *  (cheap) — unless the tier IS boreas, in which case everything is Boreas
  *  naturally. Per-role env overrides always win. */
 function resolveModels(env: Env, tier: ResearchTier): ResearchModelConfig {
-  const heavy = TIER_MODELS[tier]
-  const cheap = TIER_MODELS.boreas
+  const heavy = resolveTierModel(env, tier)
+  const cheap = resolveTierModel(env, "boreas")
   return {
     planner: modelOr(env.OPENCLAW_RESEARCH_PLANNER_MODEL, heavy),
     synthesis: modelOr(env.OPENCLAW_RESEARCH_SYNTHESIS_MODEL, heavy),

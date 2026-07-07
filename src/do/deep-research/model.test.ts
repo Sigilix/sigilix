@@ -19,7 +19,9 @@ import { buildModelFn, MissingModelKeyError } from "./model"
 import { resolveResearchConfig, TIER_MODELS } from "./config"
 
 function env(over: Partial<Env> = {}): Env {
-  return { OLLAMA_API_KEY: "ollama-key", ...over } as unknown as Env
+  // Deep-research tier models are OpenRouter ids, so the OpenRouter key is the one
+  // that matters; keep an Ollama key too for the `:cloud` override case.
+  return { OPENROUTER_API_KEY: "openrouter-key", OLLAMA_API_KEY: "ollama-key", ...over } as unknown as Env
 }
 
 beforeEach(() => chatMock.mockClear())
@@ -58,8 +60,17 @@ describe("buildModelFn — per-role tier routing", () => {
     expect(chatMock.mock.calls[0]![0].model).toBe(TIER_MODELS.pyroeis)
   })
 
-  it("selects the Ollama key for :cloud model ids", async () => {
+  it("selects the OpenRouter key for OpenRouter tier ids", async () => {
     const cfg = resolveResearchConfig(env(), { model: "astraeus" })
+    const fn = buildModelFn(env({ OPENROUTER_API_KEY: "the-openrouter-key" }), cfg)
+    await fn("planner", [{ role: "user", content: "x" }])
+    expect(chatMock.mock.calls[0]![0].apiKey).toBe("the-openrouter-key")
+  })
+
+  it("still selects the Ollama key for a :cloud model override", async () => {
+    const cfg = resolveResearchConfig(env({ SIGILIX_DEEPRESEARCH_ASTRAEUS_MODEL: "glm-5.2:cloud" }), {
+      model: "astraeus",
+    })
     const fn = buildModelFn(env({ OLLAMA_API_KEY: "the-ollama-key" }), cfg)
     await fn("planner", [{ role: "user", content: "x" }])
     expect(chatMock.mock.calls[0]![0].apiKey).toBe("the-ollama-key")
@@ -67,7 +78,8 @@ describe("buildModelFn — per-role tier routing", () => {
 
   it("throws MissingModelKeyError when the selected provider key is unset", async () => {
     const cfg = resolveResearchConfig(env(), { model: "astraeus" })
-    const fn = buildModelFn({ OLLAMA_API_KEY: "" } as unknown as Env, cfg)
+    // astraeus is an OpenRouter id, so the OpenRouter key is the one that must be present.
+    const fn = buildModelFn({ OPENROUTER_API_KEY: "" } as unknown as Env, cfg)
     await expect(fn("planner", [{ role: "user", content: "x" }])).rejects.toBeInstanceOf(MissingModelKeyError)
   })
 })

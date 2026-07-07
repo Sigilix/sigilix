@@ -13,7 +13,7 @@ import {
   GENERATE_ACCESS_TOKEN_URL,
   VERTEX_CHAT_COMPLETIONS_URL,
   VERTEX_MODEL,
-  PYROEIS_MODEL,
+  DEFAULT_PYROEIS_MODEL,
   ASTRAEUS_MODEL,
 } from "@/src/lib/boreas-gateway/constants"
 import { makeEnv, makeCtx } from "@/src/lib/boreas-gateway/boreas-gateway.test-helpers"
@@ -136,7 +136,7 @@ describe("handleAstraeusApiRoute — proxy", () => {
     expect(sent.model).toBe("zai-org/glm-5-maas")
     expect(sent.model).not.toBe("attacker/chosen-model")
     expect(sent.model).not.toBe(VERTEX_MODEL) // NOT the Boreas (qwen) model
-    expect(sent.model).not.toBe(PYROEIS_MODEL) // NOT the Pyroeis (Gemma) model
+    expect(sent.model).not.toBe(DEFAULT_PYROEIS_MODEL) // NOT the Pyroeis (Gemini) model
     // Authorization is the minted SA token, not the caller's bearer.
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer sa-token")
 
@@ -249,14 +249,14 @@ describe("regression — the shared refactor did NOT swap the three routes' mode
     expect(pyroeisRes.status).toBe(200)
     const pyroeisCall = f.mock.calls.find((c) => String(c[0]) === VERTEX_CHAT_COMPLETIONS_URL)
     const pyroeisSent = JSON.parse((pyroeisCall![1] as RequestInit).body as string) as { model?: string }
-    expect(pyroeisSent.model).toBe(PYROEIS_MODEL)
+    expect(pyroeisSent.model).toBe(DEFAULT_PYROEIS_MODEL)
     expect(pyroeisSent.model).not.toBe(ASTRAEUS_MODEL)
   })
 
   it("the three forced model constants are distinct", () => {
-    expect(VERTEX_MODEL).not.toBe(PYROEIS_MODEL)
+    expect(VERTEX_MODEL).not.toBe(DEFAULT_PYROEIS_MODEL)
     expect(VERTEX_MODEL).not.toBe(ASTRAEUS_MODEL)
-    expect(PYROEIS_MODEL).not.toBe(ASTRAEUS_MODEL)
+    expect(DEFAULT_PYROEIS_MODEL).not.toBe(ASTRAEUS_MODEL)
     expect(ASTRAEUS_MODEL).toBe("zai-org/glm-5-maas")
   })
 })

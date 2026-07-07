@@ -1,8 +1,9 @@
 # boreas-gateway (SIG-545)
 
 An authenticated Worker gateway that proxies CLI requests to **Google Vertex AI**
-(Boreas → `qwen/qwen3-next-80b-a3b-instruct-maas`, Pyroeis → `google/gemma-4-26b-a4b-it-maas`,
-Astraeus → `zai-org/glm-5-maas`; project `sigilix-496118`, location `global`) using **keyless
+(Boreas → `qwen/qwen3-next-80b-a3b-instruct-maas`, Pyroeis → `google/gemini-3.5-flash`
+(env-overridable via `SIGILIX_PYROEIS_MODEL`), Astraeus → `zai-org/glm-5-maas`; project
+`sigilix-496118`, location `global`) using **keyless
 Workload Identity Federation** — no service-account key
 ever exists (org policy `disableServiceAccountKeyCreation` blocks them). Users hit
 the Sigilix Worker with the shared `SIGILIX_API_KEY`; the Worker mints GCP creds
@@ -49,9 +50,13 @@ server-side. Users never touch GCP.
   `handleVertexChatRoute` pinning the Boreas model (`qwen/qwen3-next-80b-a3b-instruct-maas`),
   counter key `boreas:count:<day>`, and `OPENCLAW_BOREAS_DAILY_LIMIT`.
 - `api-pyroeis-route.ts` — `POST /v1/pyroeis/chat/completions`. The same wrapper pinning the
-  Pyroeis model (`google/gemma-4-26b-a4b-it-maas` — Gemma 4 26B serverless MaaS), counter key
-  `pyroeis:count:<day>`, and `OPENCLAW_PYROEIS_DAILY_LIMIT`. Same project / SA / WIF token
-  mint as Boreas — only the forced model and the metering counter/limit differ.
+  Pyroeis model — Gemini 3.5 Flash on Vertex AI: the built-in default `DEFAULT_PYROEIS_MODEL`
+  (`google/gemini-3.5-flash`, first-party Gemini so **no** `-maas` suffix, served over the
+  same OpenAI-compat `chat/completions` endpoint — no adapter), **env-overridable via
+  `SIGILIX_PYROEIS_MODEL`** (the exact version string isn't confirmable without live Vertex,
+  so a correction is a config flip). Counter key `pyroeis:count:<day>`, ceiling
+  `OPENCLAW_PYROEIS_DAILY_LIMIT`. Same project / SA / WIF token mint as Boreas — only the
+  forced model and the metering counter/limit differ.
 - `api-astraeus-route.ts` — `POST /v1/astraeus/chat/completions`. The same wrapper pinning the
   Astraeus model (`zai-org/glm-5-maas` — GLM-5.2 serverless MaaS), counter key
   `astraeus:count:<day>`, and `OPENCLAW_ASTRAEUS_DAILY_LIMIT`. Same project / SA / WIF token
@@ -70,8 +75,8 @@ per-token/serverless legs instead of a single hard dependency on Vertex:
    env-configurable (`OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL` default
    `qwen3-coder-next:cloud`, `OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL` default
    `glm-5.2:cloud`, `OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL` — **no built-in
-   default**, since there is no confirmed Gemma tag on Ollama Turbo in this
-   codebase; Pyroeis needs it set explicitly or it has no Turbo leg).
+   default**, since Gemini is Vertex-only (no Gemini tag on Ollama Turbo);
+   Pyroeis needs it set explicitly or it has no Turbo leg).
 3. **AWS Bedrock** (`bedrock-chat.ts` + `aws-sigv4.ts`) — a SCAFFOLD, disabled at
    launch. Requires `OPENCLAW_AWS_REGION` + `OPENCLAW_AWS_ACCESS_KEY_ID` +
    `OPENCLAW_AWS_SECRET_ACCESS_KEY` + a per-model

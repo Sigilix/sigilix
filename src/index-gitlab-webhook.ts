@@ -52,9 +52,14 @@ const DRAFT_TITLE_PREFIX = /^\s*(draft|wip):/i
 
 export async function handleGitLabWebhook(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
   const secret = env.SIGILIX_GITLAB_WEBHOOK_SECRET
-  if (!secret || !env.SIGILIX_GITLAB_TOKEN) {
-    // Unconfigured deploy — no webhook secret and/or no API token. 503 so the
+  if (!secret) {
+    // Unconfigured deploy — no webhook secret to verify against. 503 so the
     // sender retries once configured, mirroring the GitHub handler's 503 gate.
+    // NOTE (PR-3): the API TOKEN is NOT required here — it is resolved
+    // per-project in the consumer (KV `gitlab-project-token:<projectId>` first,
+    // global `SIGILIX_GITLAB_TOKEN` fall-back), so a per-project-token-only
+    // tenant (no global token) still ingests; the consumer logs + no-ops if no
+    // token resolves for the project.
     return new Response("gitlab not configured\n", { status: 503 })
   }
 

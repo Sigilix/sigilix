@@ -90,9 +90,17 @@ export interface Env {
   //     GitHub installation -> token) is the pre-launch follow-up.
   //   - SIGILIX_GITLAB_BASE_URL — REST origin WITHOUT `/api/v4` (default
   //     `https://gitlab.com`); a self-managed instance sets its own origin.
+  //   - SIGILIX_GITLAB_ALLOWED_PROJECTS — PR-3 pre-launch project gate. A
+  //     comma-separated list of numeric project ids and/or `group/project` paths.
+  //     When set, ONLY listed projects (plus any with their own per-project token)
+  //     are reviewed; everything else is ignored + logged. Unset -> all projects
+  //     allowed (back-compat with the single global token). See
+  //     `isGitLabProjectAllowlisted`. Per-project tokens live in KV OPENCLAW_STATE
+  //     under `gitlab-project-token:<projectId>` (see `resolveGitLabProjectToken`).
   SIGILIX_GITLAB_WEBHOOK_SECRET?: string
   SIGILIX_GITLAB_TOKEN?: string
   SIGILIX_GITLAB_BASE_URL?: string
+  SIGILIX_GITLAB_ALLOWED_PROJECTS?: string
 
   // Phase 5 user-OAuth (ARC-163). Same GitHub App as GITHUB_APP_ID — its
   // OAuth credentials live on the App settings page next to the JWT

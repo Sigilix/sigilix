@@ -30,7 +30,7 @@ import {
 } from "@/src/lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "@/src/lib/triage-pr-stale-mark"
 import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
-import { dispatchGitLabMrReviewDeferred } from "@/src/index-dispatch-gitlab"
+import { dispatchGitLabMrReview } from "@/src/index-dispatch-gitlab"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import { recordValidationMetrics } from "@/src/lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
@@ -983,10 +983,11 @@ export async function dispatchJob(
       // trigger was an AgentSessionEvent) routes the ack to a Linear agent activity.
       return runLinearAgentRun(job.issueId, env, job.sessionId)
     case "gitlab-mr-review":
-      // sig-gitlab-adapter (GitLab PR 2): ingress + client land here; the
-      // consumer that runs the SCM-agnostic ensemble via GitLabScmProvider is
-      // PR-3. Deferring is recall-safe (no prior GitLab review is suppressed).
-      return dispatchGitLabMrReviewDeferred(job)
+      // sig-gitlab-adapter (GitLab PR 3): resolve the per-project token + run the
+      // allowlist gate, build the GitLab review client via GitLabScmProvider, and
+      // run the SAME SCM-agnostic ensemble GitHub uses (posting through the GitLab
+      // client). Recall-safety is enforced inside (an errored run surfaces a note).
+      return dispatchGitLabMrReview(job, env, backgroundWaitUntil)
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at

@@ -5,6 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GitLabClient } from "@/src/shared/adapters/gitlab"
+import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
+import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { SubmitReviewBody } from "@/src/shared/types/github"
 
 const BASE = "https://gitlab.example.com"
@@ -97,6 +99,14 @@ describe("GitLabClient — auth + base URL", () => {
     // grp/sub/proj -> grp%2Fsub%2Fproj
     expect(findCall(() => true).url).toContain("projects/grp%2Fsub%2Fproj/")
   })
+
+  it("addresses the project by its numeric id when configured (rename-stable; ignores owner/repo for the :id)", async () => {
+    installFetch([(r) => (r.url.includes("/repository/branches/") ? res(200, { commit: { id: "abc" } }) : undefined)])
+    const byId = new GitLabClient({ token: "glpat-xxx", baseUrl: BASE, projectId: 42 })
+    await byId.getBranch("some/wrong/path", "ignored", "main")
+    expect(findCall(() => true).url).toContain("projects/42/")
+    expect(findCall(() => true).url).not.toContain("wrong")
+  })
 })
 
 describe("GitLabClient — read verbs", () => {
@@ -187,11 +197,28 @@ describe("GitLabClient — read verbs", () => {
     expect(await client().getMergeBase("grp", "proj", "main", "feat")).toBeNull()
   })
 
-  it("listPullRequestReviews returns [] (GitLab has no review objects)", async () => {
+  it("listPullRequestReviews REJECTS (GitLab has no review objects -> verification is inconclusive, not a false empty)", async () => {
     installFetch([])
-    expect(await client().listPullRequestReviews("grp", "proj", 7)).toEqual([])
-    // no network call — safe degrade
+    // Throwing routes the generic GitHub-shaped verifier to its inconclusive
+    // branch (verified=true) instead of misreading `[]` as "submit did not
+    // persist" and double-posting a comment fallback. dismissPriorReviews
+    // catches it and no-ops. No network call is made.
+    await expect(client().listPullRequestReviews("grp", "proj", 7)).rejects.toThrow(/no PR-review objects/)
     expect(calls).toHaveLength(0)
+  })
+
+  // Regression (PR-3, Codex P1): the orchestrator's post-submit visibility check
+  // runs `verifyReviewPersisted(client, ...)` after `submitReview` on the GitLab
+  // path too. When the client returned `[]`, verify read it as "not persisted"
+  // and the publish phase double-posted a comment fallback. The client now
+  // rejects, so verify defaults to persisted=true — correct, because a returned
+  // GitLab `submitReview` already confirmed the note POST was 2xx.
+  it("verifyReviewPersisted returns true for a GitLab client (no false not-persisted -> no double-post)", async () => {
+    installFetch([])
+    const gitlab = client() as unknown as GitHubClient
+    await expect(
+      verifyReviewPersisted(gitlab, "grp", "proj", 7, 111, "inline-anchored", "REQUEST_CHANGES"),
+    ).resolves.toBe(true)
   })
 })
 

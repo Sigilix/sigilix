@@ -41,6 +41,16 @@ export interface GitLabClientOptions {
    * (e.g. `https://gitlab.example.com`).
    */
   baseUrl?: string
+  /**
+   * The immutable NUMERIC GitLab project id. When set, EVERY REST call addresses
+   * the project by this id (`/projects/<id>/…`) instead of the URL-encoded
+   * `owner/repo` path. Preferred on the review path (Codex PR-3 hardening): the
+   * numeric id is rename/move-stable AND pins the client to exactly the onboarded
+   * project whose per-tenant token we resolved — a group/PAT token that can reach
+   * many projects can't be steered to a different `owner/repo` than the one the
+   * (verified) webhook identified. Absent → the path-encoded fallback (#815).
+   */
+  projectId?: number
 }
 
 /** GitLab's merge-request `diff_refs` — the SHAs an inline `position` pins to. */
@@ -83,15 +93,20 @@ const DEFAULT_BASE_URL = "https://gitlab.com"
 export class GitLabClient {
   private readonly token: string
   private readonly apiBase: string
+  private readonly configuredProjectId: number | undefined
 
   constructor(opts: GitLabClientOptions) {
     this.token = opts.token
     const origin = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
     this.apiBase = `${origin}/api/v4`
+    this.configuredProjectId = opts.projectId
   }
 
-  /** URL-encode `group/project` into the `:id` path segment GitLab accepts. */
+  /** The `:id` path segment: the immutable numeric project id when one was
+   *  configured (rename-stable + pins the client to the onboarded project),
+   *  else the URL-encoded `group/project` path GitLab also accepts. */
   private projectId(owner: string, repo: string): string {
+    if (this.configuredProjectId !== undefined) return String(this.configuredProjectId)
     return encodeURIComponent(`${owner}/${repo}`)
   }
 
@@ -366,20 +381,44 @@ export class GitLabClient {
   /**
    * GitHub-only concept: a PR "review" object (APPROVED / CHANGES_REQUESTED
    * with an id). GitLab has no equivalent — approvals + discussions are
-   * separate primitives and carry no matching shape. Returning `[]` is a
-   * SAFE degrade: the only consumers are GitHub-specific stale-review dismissal
-   * + post-submit visibility verification, neither of which is on the GitLab
-   * automatic ingress path. It drops NO finding — a review is still fully
-   * posted via `submitReview` below.
+   * separate primitives and carry no matching shape, so a GitLab review CANNOT
+   * be enumerated this way. We THROW (rather than return `[]`) so the generic,
+   * GitHub-shaped consumers reach their INCONCLUSIVE branch instead of reading
+   * an empty list as a definitive answer:
+   *
+   *   - `verifyReviewPersisted` (PR-3 posted path): the empty list would be read
+   *     as "the submit did not persist" and trigger a duplicate comment-fallback
+   *     re-post. On a throw it defaults to `verified = true` — which is CORRECT
+   *     for GitLab: unlike GitHub's occasionally-silent submit, `submitReview`
+   *     here already rethrows unless the note POST returned 2xx, so a returned
+   *     submit IS confirmed-posted.
+   *   - `dismissPriorSigilixReviews`: catches and no-ops (`{dismissed:0}`) — the
+   *     same net "nothing to dismiss" as the old `[]`, and GitLab has no review
+   *     object to dismiss anyway.
+   *
+   * KNOWN LIMITATION (PR-4 follow-up): the invariant-lens AMENDMENT lane
+   * (`OPENCLAW_INVARIANT_LENS_MODE=on|shadow`, DEFAULT OFF) dedupes + verifies via
+   * this method and, on a throw, aborts before posting (`dedupe-lookup-failed`),
+   * so amendment findings would not post on GitLab. That lane is GitHub-review-
+   * object-shaped and needs its own note/discussion-based dedupe for GitLab; it is
+   * off on the default GitLab review path.
+   *
+   * Recall-safe on the default path: no finding is dropped — the review is fully
+   * posted via `submitReview` (summary note + inline discussions), which fails LOUDLY.
    */
-  async listPullRequestReviews(
+  listPullRequestReviews(
     _owner: string,
     _repo: string,
     _prNumber: number,
   ): Promise<
     Array<{ id: number; state: string; user: { login: string } | null; body: string; commitId: string | null }>
   > {
-    return []
+    return Promise.reject(
+      new GitLabHttpError(
+        501,
+        "listPullRequestReviews: GitLab has no PR-review objects to enumerate; verification is inconclusive.",
+      ),
+    )
   }
 
   // ---------------------------------------------------------------------------

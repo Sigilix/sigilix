@@ -50,17 +50,90 @@ export function mapGitLabActionToGitHubAction(action: string): string | null {
   }
 }
 
+/** KV-key prefix (in `OPENCLAW_STATE`) for a per-project GitLab access token —
+ *  the GitLab counterpart of GitHub's installation -> token resolution. Keyed by
+ *  the numeric GitLab project id: `gitlab-project-token:<projectId>`. */
+const GITLAB_PROJECT_TOKEN_KV_PREFIX = "gitlab-project-token:"
+
 /**
- * GitLab `ScmProvider`. Auth model (v0): a single per-tenant GitLab access token
- * (`SIGILIX_GITLAB_TOKEN`, a Project/Group Access Token or PAT) sent as the
- * `PRIVATE-TOKEN` header against REST v4 at `SIGILIX_GITLAB_BASE_URL`
- * (default `https://gitlab.com`; self-managed instances override it).
+ * Resolve the GitLab access token for a project (PR-3 per-tenant mapping). Reads
+ * a per-project token from KV (`gitlab-project-token:<projectId>`) first — the
+ * multi-tenant path, mirroring GitHub's per-installation token — and falls back
+ * to the single global `SIGILIX_GITLAB_TOKEN` so an existing single-token deploy
+ * keeps working. Returns `null` when neither is configured. `source` lets the
+ * caller tell an explicitly-onboarded project (per-project) apart from the shared
+ * global token (used by the allowlist gate: a per-project token IS onboarding).
+ */
+export async function resolveGitLabProjectToken(
+  env: Env,
+  projectId: number,
+): Promise<{ token: string; source: "per-project" | "global" } | null> {
+  let perProject: string | null
+  try {
+    perProject = await env.OPENCLAW_STATE.get(`${GITLAB_PROJECT_TOKEN_KV_PREFIX}${projectId}`)
+  } catch (err) {
+    // FAIL CLOSED (Codex PR-3): a KV read blip must NOT silently degrade a
+    // per-project-onboarded tenant to the global token (wrong credential) or to
+    // an allowlist skip. Rethrow so the queue RETRIES this job when KV recovers,
+    // rather than reviewing with the wrong identity or dropping the review.
+    console.warn(
+      JSON.stringify({
+        event: "gitlab-project-token-kv-read-failed",
+        project_id: projectId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    throw err instanceof Error ? err : new Error(String(err))
+  }
+  if (typeof perProject === "string" && perProject.length > 0) {
+    return { token: perProject, source: "per-project" }
+  }
+  const globalToken = env.SIGILIX_GITLAB_TOKEN
+  if (typeof globalToken === "string" && globalToken.length > 0) {
+    return { token: globalToken, source: "global" }
+  }
+  return null
+}
+
+/**
+ * The pre-launch project gate (#815 flagged this as the multi-tenant blocker):
+ * whether a GitLab project is allowed to be reviewed.
  *
- * FOR THE FOUNDER — before customer/multi-tenant launch this single global
- * token needs either a project allowlist or a `projectId -> token` mapping
- * (mirroring GitHub's installation -> token, e.g. keyed in KV). `buildReviewClient`
- * takes the `installationId` the port passes so that per-tenant lookup can slot
- * in without a signature change. Alternatives weighed in the PR body.
+ *   - A project that has its OWN per-project token (`hasPerProjectToken`) is
+ *     ALWAYS allowed — configuring a token IS onboarding it.
+ *   - Otherwise, when `SIGILIX_GITLAB_ALLOWED_PROJECTS` is set (a comma-separated
+ *     list of numeric project ids and/or `group/project` paths), ONLY listed
+ *     projects are reviewed; everything else is ignored.
+ *   - When that env var is unset/empty, ALL projects are allowed — back-compat
+ *     with the single-global-token deploy #815 shipped.
+ *
+ * Pure + exported so the gate is unit-testable in isolation.
+ */
+export function isGitLabProjectAllowlisted(
+  env: Env,
+  projectId: number,
+  projectPath: string,
+  hasPerProjectToken: boolean,
+): boolean {
+  if (hasPerProjectToken) return true
+  const raw = env.SIGILIX_GITLAB_ALLOWED_PROJECTS
+  if (typeof raw !== "string" || raw.trim().length === 0) return true // no allowlist configured -> allow all
+  const allow = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  )
+  return allow.has(String(projectId)) || allow.has(projectPath)
+}
+
+/**
+ * GitLab `ScmProvider`. Auth model (PR-3): a per-project GitLab access token
+ * resolved KV-first (`gitlab-project-token:<projectId>`) with a fall-back to the
+ * global `SIGILIX_GITLAB_TOKEN` (see `resolveGitLabProjectToken`), sent as the
+ * `PRIVATE-TOKEN` header against REST v4 at `SIGILIX_GITLAB_BASE_URL` (default
+ * `https://gitlab.com`; self-managed instances override it). The project gate
+ * lives in `isGitLabProjectAllowlisted` + the consumer.
  */
 export class GitLabScmProvider implements ScmProvider {
   readonly kind = "gitlab" as const
@@ -77,16 +150,20 @@ export class GitLabScmProvider implements ScmProvider {
     return decidePullRequestJobs({ ...input, action: ghAction })
   }
 
-  // GitLab has no App-installation token. `_installationId` is accepted to match
-  // the port signature (and to host the future per-tenant token lookup); the v0
-  // client is built from the env-configured token + base URL.
-  buildReviewClient(env: Env, _installationId: number): Promise<GitLabClient> {
-    const token = env.SIGILIX_GITLAB_TOKEN
+  // The port's `installationId` is the GitLab numeric project id here — the
+  // per-tenant key `resolveGitLabProjectToken` reads. `resolvedToken` is an
+  // optional pre-resolved token (the consumer already read it, alongside the
+  // allowlist gate, so we don't hit KV twice); omitted callers re-resolve.
+  async buildReviewClient(env: Env, projectId: number, resolvedToken?: string): Promise<GitLabClient> {
+    const token = resolvedToken ?? (await resolveGitLabProjectToken(env, projectId))?.token
     if (!token) {
-      throw new Error("SIGILIX_GITLAB_TOKEN required to build a GitLab review client")
+      throw new Error("SIGILIX_GITLAB_TOKEN (or a per-project token) required to build a GitLab review client")
     }
     const baseUrl = env.SIGILIX_GITLAB_BASE_URL
-    return Promise.resolve(new GitLabClient(baseUrl ? { token, baseUrl } : { token }))
+    // Address the project by its immutable numeric id (Codex hardening): a
+    // group/PAT token can't be steered to a different `owner/repo` than the
+    // webhook-identified project, and renames/moves don't break the client.
+    return new GitLabClient({ token, projectId, ...(baseUrl ? { baseUrl } : {}) })
   }
 }
 

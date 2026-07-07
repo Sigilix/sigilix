@@ -43,6 +43,41 @@ describe("tier → heavy-role model mapping (addendum §1)", () => {
   })
 })
 
+describe("deep-research tier models route through OpenRouter", () => {
+  it("every tier default is an OpenRouter catalog id (provider-prefixed with '/')", () => {
+    for (const tier of ["boreas", "pyroeis", "astraeus"] as const) {
+      expect(TIER_MODELS[tier]).toContain("/")
+    }
+  })
+
+  it("defaults to the current tier models (GLM-5.2 / Gemini 3.5 Flash / gpt-oss-120b)", () => {
+    expect(TIER_MODELS.astraeus).toBe("z-ai/glm-5.2")
+    expect(TIER_MODELS.pyroeis).toBe("google/gemini-3.5-flash")
+    expect(TIER_MODELS.boreas).toBe("openai/gpt-oss-120b")
+  })
+
+  it("SIGILIX_DEEPRESEARCH_<TIER>_MODEL overrides the tier's heavy-role default", () => {
+    const cfg = resolveResearchConfig(env({ SIGILIX_DEEPRESEARCH_ASTRAEUS_MODEL: "vendor/next-flagship" }), {
+      model: "astraeus",
+    })
+    expect(cfg.models.planner).toBe("vendor/next-flagship")
+    expect(cfg.models.synthesis).toBe("vendor/next-flagship")
+  })
+
+  it("the boreas env override applies to classify/extract at every tier", () => {
+    const cfg = resolveResearchConfig(env({ SIGILIX_DEEPRESEARCH_BOREAS_MODEL: "vendor/cheap" }), { model: "astraeus" })
+    expect(cfg.models.classify).toBe("vendor/cheap")
+    expect(cfg.models.extract).toBe("vendor/cheap")
+    // Heavy roles still track the astraeus default.
+    expect(cfg.models.planner).toBe(TIER_MODELS.astraeus)
+  })
+
+  it("a blank tier override falls back to the default", () => {
+    const cfg = resolveResearchConfig(env({ SIGILIX_DEEPRESEARCH_PYROEIS_MODEL: "  " }), { model: "pyroeis" })
+    expect(cfg.models.planner).toBe(TIER_MODELS.pyroeis)
+  })
+})
+
 describe("effort → budget presets (addendum §2)", () => {
   it("low", () => {
     const c = resolveResearchConfig(env(), { effort: "low" })
